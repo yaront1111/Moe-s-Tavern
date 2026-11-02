@@ -5750,6 +5750,318 @@ wtr_run remote-base
   || wtr_fail remote-base "W's branch does not start at origin's main tip"
 echo "[worktree reuse] ok"
 
+# --- [WT-14] Worktree removal at DONE and the orphan sweep (twin: the [WT-14] block
+# in postflight.ps1). wt14_fixture is the one builder: a control checkout on BRANCH
+# (moe/control, or a shared moe/work-* branch) whose .serena/memories and
+# .claude/skills hold sentinels, and per task a W made exactly as WT-04 makes it,
+# linked as WT-06 links it (the manifest line first, then the link), with one task
+# commit squash-landed on main. A QA seat claims task-postflight as DONE with its
+# completion recorded at main's tip. Teardown unlinks every link it made. ---
+echo "[WT-14] a QA approval removes a fully landed W; anything else is left in place"
+WT14_RUN=0
+WT14_LINKS="$TMP_DIR/wt14-links"
+: > "$WT14_LINKS"
+wt14_fail() { cat "$WT14_OUT" >&2 2>/dev/null || true; echo "WT-14 FAILED ($1): $2" >&2; exit 1; }
+wt14_git() { git -C "$WT14_P" -c user.name='Moe Test' -c user.email=moe@test.local -c commit.gpgsign=false -c core.autocrlf=false "$@"; }
+wt14_wgit() { local w="$1"; shift; git -C "$w" -c user.name='Moe Test' -c user.email=moe@test.local -c commit.gpgsign=false -c core.autocrlf=false "$@"; }
+# wt14_fixture NAME BRANCH TASK... -- a fresh control checkout $WT14_P on BRANCH, one landed W per TASK.
+wt14_fixture() {
+  local name="$1" branch="$2" tid w rel tree sha man
+  shift 2
+  WT14_P="$TMP_DIR/wt14-$name"; WT14_OUT="$TMP_DIR/wt14-$name.out"
+  mkdir -p "$WT14_P/src" "$WT14_P/.moe/messages" "$WT14_P/.serena/memories" "$WT14_P/.claude/skills/s"
+  printf '.worktrees/\n.mcp.json\nlogs/\n' > "$WT14_P/.gitignore"
+  printf 'seed\n' > "$WT14_P/src/seed.txt"
+  printf '{"id":"proj-wt14","name":"postflight-wt14","settings":{"autoCommit":false}}\n' > "$WT14_P/.moe/project.json"
+  : > "$WT14_P/.moe/messages/chan-general.jsonl"
+  printf 'memory sentinel\n' > "$WT14_P/.serena/memories/sentinel.md"
+  printf 'skill sentinel\n' > "$WT14_P/.claude/skills/s/SKILL.md"
+  # The repo's own identity, as the other fixtures set it: the sweep's rescue refs are commit-trees.
+  { wt14_git init -q && wt14_git config user.name 'Moe Test' && wt14_git config user.email moe@test.local \
+      && wt14_git config commit.gpgsign false && wt14_git config core.autocrlf false \
+      && wt14_git symbolic-ref HEAD refs/heads/main && wt14_git add .gitignore src .moe/project.json \
+      && wt14_git commit -qm seed && wt14_git switch -q -c "$branch"; } || wt14_fail "$name" "could not build the control checkout"
+  man="$(wt14_git rev-parse --path-format=absolute --git-common-dir)/moe/worktree"
+  mkdir -p "$man"
+  for tid in "$@"; do
+    w="$WT14_P/.worktrees/$tid"
+    { wt14_git worktree add -q --lock --reason "moe $tid" --no-checkout --no-track -b "moe/task/$tid" "$w" main \
+        && MSYS2_ARG_CONV_EXCL='*' git -C "$w" sparse-checkout set --no-cone '/*' '!/.moe/' && git -C "$w" read-tree -mu HEAD; } \
+      || wt14_fail "$name" "could not add W for $tid"
+    mkdir -p "$w/.serena" "$w/.claude"
+    for rel in .serena/memories .claude/skills; do
+      printf '%s\n' "$rel" >> "$man/$tid.links"
+      "$NODE_FOR_TEST" -e 'require("fs").symlinkSync(process.argv[1],process.argv[2],process.platform==="win32"?"junction":"dir")' "$WT14_P/$rel" "$w/$rel"
+      printf '%s\n' "$w/$rel" >> "$WT14_LINKS"
+    done
+    : > "$man/$tid.control-dirt"
+    printf '%s work\n' "$tid" > "$w/src/$tid.txt"
+    { wt14_wgit "$w" add "src/$tid.txt" && wt14_wgit "$w" commit -qm "work $tid" \
+        && tree=$(wt14_git merge-tree --write-tree main "moe/task/$tid") && sha=$(wt14_git commit-tree "$tree" -p main -m "land $tid") \
+        && wt14_git update-ref refs/heads/main "$sha"; } || wt14_fail "$name" "could not land $tid on main"
+  done
+}
+# wt14_qa NAME [VAR=VALUE...] -- one QA seat: task-postflight is DONE, its completion recorded at main's tip.
+wt14_qa() {
+  local land
+  land=$(wt14_git rev-parse main)
+  shift
+  set +e
+  env PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_TASK_STATUS=DONE \
+    FAKE_CTX_LANDING="{\"lastCompletion\":{\"sha\":\"$land\",\"ref\":\"refs/heads/main\",\"pushed\":false,\"recordedAt\":\"2026-11-02T00:00:00.000Z\"}}" \
+    "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" --project "$WT14_P" --worker-id qa-wt14 --role qa --team Smoke \
+    --no-start-daemon --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$WT14_OUT" 2>&1
+  WT14_CODE=$?
+  set -e
+}
+# wt14_listed TASK -- 0 when git lists a worktree at .worktrees/TASK.
+wt14_listed() {
+  local list
+  list=$(wt14_git worktree list --porcelain) || return 2
+  grep -Eq "^worktree .*/\.worktrees/$1\$" <<< "$list"
+}
+# wt14_gone NAME TASK -- W is off disk and unlisted; its branch, manifest and control-dirt are deleted.
+wt14_gone() {
+  local w="$WT14_P/.worktrees/$2" man rc=0
+  man="$(wt14_git rev-parse --path-format=absolute --git-common-dir)/moe/worktree/$2"
+  [ ! -e "$w" ] && [ ! -L "$w" ] || wt14_fail "$1" "$w is still on disk"
+  wt14_listed "$2" || rc=$?
+  [ "$rc" -eq 1 ] || wt14_fail "$1" "$w is still registered (or git worktree list failed)"
+  ! wt14_git rev-parse -q --verify "refs/heads/moe/task/$2" > /dev/null || wt14_fail "$1" "moe/task/$2 still exists"
+  [ ! -e "$man.links" ] && [ ! -e "$man.control-dirt" ] || wt14_fail "$1" "$2's manifest or control-dirt is still there"
+}
+# wt14_kept NAME TASK -- W is on disk and registered, its branch, manifest and both links intact.
+wt14_kept() {
+  local w="$WT14_P/.worktrees/$2" man
+  man="$(wt14_git rev-parse --path-format=absolute --git-common-dir)/moe/worktree/$2.links"
+  [ -d "$w" ] && wt14_listed "$2" || wt14_fail "$1" "$w was removed or unregistered"
+  wt14_git rev-parse -q --verify "refs/heads/moe/task/$2" > /dev/null || wt14_fail "$1" "moe/task/$2 was deleted"
+  [ -s "$man" ] && [ -L "$w/.serena/memories" ] && [ -L "$w/.claude/skills" ] || wt14_fail "$1" "$2's manifest or a link is gone"
+}
+# wt14_sentinels NAME -- the control's .serena/memories and .claude/skills bytes are unchanged.
+wt14_sentinels() {
+  { printf 'memory sentinel\n' | cmp -s - "$WT14_P/.serena/memories/sentinel.md" \
+      && printf 'skill sentinel\n' | cmp -s - "$WT14_P/.claude/skills/s/SKILL.md"; } || wt14_fail "$1" "a control sentinel changed"
+}
+# wt14_left NAME DETAIL -- exit 0 and W left to the sweep with DETAIL (an ERE) in the reason.
+wt14_left() {
+  [ "$WT14_CODE" -eq 0 ] || wt14_fail "$1" "exit $WT14_CODE, expected 0"
+  grep -Eq "\[worktree\] left .*/\.worktrees/task-postflight to the orphan sweep: .*$2" "$WT14_OUT" || wt14_fail "$1" "no left-to-the-sweep line matching '$2'"
+}
+
+echo "[scenario WT14A] a QA approval of a fully landed task removes W and its branch"
+wt14_fixture a moe/control task-postflight
+wt14_qa WT14A
+[ "$WT14_CODE" -eq 0 ] || wt14_fail WT14A "exit $WT14_CODE, expected 0"
+grep -Eq '\[worktree\] removed .*/\.worktrees/task-postflight on moe/task/task-postflight$' "$WT14_OUT" || wt14_fail WT14A "no [worktree] removed line"
+wt14_gone WT14A task-postflight
+wt14_sentinels WT14A
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14A] ok"
+
+echo "[scenario WT14B] a fully landed W holding .moe/x keeps W, its branch, its manifest and .moe/x"
+wt14_fixture b moe/control task-postflight
+mkdir -p "$WT14_P/.worktrees/task-postflight/.moe"
+printf 'x\n' > "$WT14_P/.worktrees/task-postflight/.moe/x"
+wt14_qa WT14B
+wt14_left WT14B 'MOE_WORKTREE_MOE_PRESENT'
+wt14_kept WT14B task-postflight
+printf 'x\n' | cmp -s - "$WT14_P/.worktrees/task-postflight/.moe/x" || wt14_fail WT14B "W/.moe/x lost its bytes"
+wt14_sentinels WT14B
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14B] ok"
+
+echo "[scenario WT14C] a W with a modified tracked file is left to the orphan sweep"
+wt14_fixture c moe/control task-postflight
+printf 'edited\n' > "$WT14_P/.worktrees/task-postflight/src/task-postflight.txt"
+wt14_qa WT14C
+wt14_left WT14C 'non-DENY dirty path'
+wt14_kept WT14C task-postflight
+printf 'edited\n' | cmp -s - "$WT14_P/.worktrees/task-postflight/src/task-postflight.txt" || wt14_fail WT14C "the edit lost its bytes"
+wt14_sentinels WT14C
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14C] ok"
+
+echo "[scenario WT14U] a W whose branch holds an unlanded commit is left to the orphan sweep"
+wt14_fixture u moe/control task-postflight
+printf 'unlanded\n' > "$WT14_P/.worktrees/task-postflight/src/unlanded.txt"
+{ wt14_wgit "$WT14_P/.worktrees/task-postflight" add src/unlanded.txt \
+    && wt14_wgit "$WT14_P/.worktrees/task-postflight" commit -qm unlanded; } || wt14_fail WT14U "could not commit in W"
+wt14_qa WT14U
+wt14_left WT14U 'moe/task/task-postflight is not fully landed in main'
+wt14_kept WT14U task-postflight
+wt14_sentinels WT14U
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14U] ok"
+
+wt14_expected=6
+if [ "$(id -u)" = 0 ]; then
+  echo "[scenario WT14D] SKIP (root ignores mode bits)"; wt14_expected=$((wt14_expected - 1))
+elif case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) true ;; *) false ;; esac; then
+  echo "[scenario WT14D] SKIP (msys: mode bits do not deny an unlink; the ps1 twin denies it with icacls)"; wt14_expected=$((wt14_expected - 1))
+else
+  echo "[scenario WT14D] an unlink that fails refuses with MOE_WORKTREE_REMOVE_REFUSED and keeps W registered"
+  wt14_fixture d moe/control task-postflight
+  chmod 0555 "$WT14_P/.worktrees/task-postflight/.serena"
+  wt14_qa WT14D
+  chmod 0755 "$WT14_P/.worktrees/task-postflight/.serena"
+  [ "$WT14_CODE" -eq 0 ] || wt14_fail WT14D "exit $WT14_CODE, expected 0"
+  grep -Eq 'MOE_WORKTREE_REMOVE_REFUSED: .*/\.worktrees/task-postflight: .*\.serena/memories' "$WT14_OUT" || wt14_fail WT14D "no REMOVE_REFUSED line naming the link"
+  ! grep -q '\[worktree\] removed' "$WT14_OUT" || wt14_fail WT14D "a refused removal printed a removed line"
+  wt14_kept WT14D task-postflight
+  wt14_sentinels WT14D
+  WT14_RUN=$((WT14_RUN + 1))
+  echo "[scenario WT14D] ok"
+fi
+
+echo "[scenario WT14S] a shared-mode control checkout removes nothing and prints no worktree line"
+wt14_fixture s moe/work-wt14 task-postflight
+wt14_qa WT14S
+[ "$WT14_CODE" -eq 0 ] || wt14_fail WT14S "exit $WT14_CODE, expected 0"
+! grep -Eq 'MOE_WORKTREE_|\[worktree\]' "$WT14_OUT" || wt14_fail WT14S "shared mode printed a MOE_WORKTREE_ or [worktree] line"
+wt14_kept WT14S task-postflight
+wt14_sentinels WT14S
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14S] ok"
+
+# The orphan sweep: one idle seat (no claim, a 5s taskless wait), so the loop top's sweep
+# is all a run does. The interval is unset unless a case passes it; FAKE_TASK_STATUS_MAP
+# answers the status reads.
+wt14_sweep() {   # NAME [VAR=VALUE...]
+  local name="$1"
+  shift
+  set +e
+  env -u MOE_WORKTREE_SWEEP_INTERVAL_SEC PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 \
+    FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" --project "$WT14_P" \
+    --worker-id worker-wt14 --role worker --team Smoke --no-start-daemon --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$WT14_OUT" 2>&1
+  WT14_CODE=$?
+  set -e
+  [ "$WT14_CODE" -eq 0 ] || wt14_fail "$name" "exit $WT14_CODE, expected 0"
+}
+wt14_admin() { printf '%s/moe/worktree' "$(wt14_git rev-parse --path-format=absolute --git-common-dir)"; }
+wt14_rows() { grep -c "$1" "$WT14_P/.moe/messages/chan-general.jsonl" || true; }
+
+echo "[scenario WT14E] the sweep parks an unlanded commit and W's dirt on rescue refs, then removes W; an unknown task's W goes too"
+wt14_fixture e moe/control task-e1 task-e2
+wt14_w="$WT14_P/.worktrees/task-e1"
+printf 'unlanded\n' > "$wt14_w/src/unlanded.txt"
+{ wt14_wgit "$wt14_w" add src/unlanded.txt && wt14_wgit "$wt14_w" commit -qm unlanded; } || wt14_fail WT14E "could not commit in W"
+wt14_t=$(wt14_git rev-parse refs/heads/moe/task/task-e1)
+printf 'edited\n' > "$wt14_w/src/task-e1.txt"
+printf 'untracked\n' > "$wt14_w/src/new.txt"
+wt14_sweep WT14E MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=task-e1=DONE,task-e2=NOT_FOUND
+wt14_refs=$(wt14_git for-each-ref --format='%(objectname) %(refname)' refs/moe/rescue/task-e1/)
+[ "$(grep -c "^$wt14_t " <<< "$wt14_refs")" = 1 ] || wt14_fail WT14E "no single rescue ref at the unlanded commit $wt14_t: $wt14_refs"
+grep -Eq "MOE_RESCUE_REF task=task-e1 ref=refs/moe/rescue/task-e1/[^ ]+ sha=$wt14_t reason=worktree-orphan" "$WT14_P/.moe/messages/chan-general.jsonl" \
+  || wt14_fail WT14E "no #general MOE_RESCUE_REF row for the unlanded commit"
+wt14_d=$(grep -v "^$wt14_t " <<< "$wt14_refs" | cut -d' ' -f2 || true)
+[ -n "$wt14_d" ] && [ "$(grep -c . <<< "$wt14_d")" = 1 ] || wt14_fail WT14E "no single second rescue ref for W's dirt: $wt14_refs"
+{ [ "$(wt14_git rev-parse "$wt14_d^")" = "$wt14_t" ] && [ "$(wt14_git show "$wt14_d:src/task-e1.txt")" = edited ] \
+    && [ "$(wt14_git show "$wt14_d:src/new.txt")" = untracked ]; } || wt14_fail WT14E "the dirt ref $wt14_d does not hold both dirty files on the unlanded commit"
+[ -z "$(wt14_git for-each-ref refs/moe/rescue/task-e2/)" ] || wt14_fail WT14E "a clean, landed W got a rescue ref"
+[ "$(grep -c '\[worktree\] removed ' "$WT14_OUT")" = 2 ] || wt14_fail WT14E "not exactly two removed lines"
+wt14_gone WT14E task-e1
+wt14_gone WT14E task-e2
+wt14_sentinels WT14E
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14E] ok"
+
+echo "[scenario WT14F] at most 5 removals a pass; WORKING, an open attempt and W/.moe are kept; a held lock skips the pass, a 3h-old one is broken"
+wt14_fixture f moe/control task-a1 task-d1 task-d2 task-d3 task-d4 task-d5 task-d6 task-m1 task-w1
+mkdir -p "$WT14_P/.moe/attempts" "$WT14_P/.worktrees/task-m1/.moe"
+printf '{"id":"attempt-a1","taskId":"task-a1","workerId":"worker-x","generation":1,"phase":"running"}\n' > "$WT14_P/.moe/attempts/attempt-a1.json"
+printf '{"id":"attempt-d0","taskId":"task-d1","workerId":"worker-x","generation":1,"phase":"closed"}\n' > "$WT14_P/.moe/attempts/attempt-d0.json"
+printf 'm1\n' > "$WT14_P/.worktrees/task-m1/.moe/x"
+wt14_map=task-a1=DONE,task-d1=DONE,task-d2=DONE,task-d3=DONE,task-d4=DONE,task-d5=DONE,task-d6=ARCHIVED,task-m1=DONE,task-w1=WORKING
+wt14_sweep WT14F MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=$wt14_map
+[ "$(grep -c '\[worktree\] removed ' "$WT14_OUT")" = 5 ] || wt14_fail WT14F "not exactly five removed lines in one pass"
+for wt14_t in task-d1 task-d2 task-d3 task-d4 task-d5; do wt14_gone WT14F "$wt14_t"; done
+for wt14_t in task-d6 task-a1 task-m1 task-w1; do wt14_kept WT14F "$wt14_t"; done
+mkdir "$(wt14_admin)/sweep.lock"
+wt14_sweep WT14F MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=$wt14_map
+grep -q '\[worktree\] sweep skipped: lock held' "$WT14_OUT" || wt14_fail WT14F "a held lock did not skip the pass"
+[ -d "$(wt14_admin)/sweep.lock" ] || wt14_fail WT14F "a held lock was taken over"
+wt14_kept WT14F task-d6
+"$NODE_FOR_TEST" -e 'const t=new Date(Date.now()-3*3600e3);require("fs").utimesSync(process.argv[1],t,t)' "$(wt14_admin)/sweep.lock"
+wt14_sweep WT14F MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=$wt14_map
+! grep -q 'sweep skipped' "$WT14_OUT" || wt14_fail WT14F "a 3h-old lock was not broken"
+[ ! -e "$(wt14_admin)/sweep.lock" ] || wt14_fail WT14F "the sweep left its lock behind"
+grep -Eq '\[worktree\] sweep left .*/\.worktrees/task-m1: W/\.moe exists \(MOE_WORKTREE_MOE_PRESENT\)' "$WT14_OUT" || wt14_fail WT14F "no sweep-left line for W/.moe"
+wt14_gone WT14F task-d6
+for wt14_t in task-a1 task-m1 task-w1; do wt14_kept WT14F "$wt14_t"; done
+printf 'm1\n' | cmp -s - "$WT14_P/.worktrees/task-m1/.moe/x" || wt14_fail WT14F "W/.moe/x lost its bytes"
+[ -z "$(wt14_git for-each-ref refs/moe/rescue/)" ] || wt14_fail WT14F "a clean, landed W got a rescue ref"
+wt14_sentinels WT14F
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14F] ok"
+
+echo "[scenario WT14G] an unregistered .worktrees/task-* directory is named and alerted once a day; .worktrees/stray is not"
+wt14_fixture g moe/control
+mkdir -p "$WT14_P/.worktrees/stray" "$WT14_P/.worktrees/task-ghost"
+printf 'stray\n' > "$WT14_P/.worktrees/stray/f.txt"
+printf 'ghost\n' > "$WT14_P/.worktrees/task-ghost/f.txt"
+for wt14_n in 1 2; do
+  wt14_sweep WT14G MOE_WORKTREE_SWEEP_INTERVAL_SEC=0
+  grep -Eq 'MOE_WORKTREE_UNREGISTERED: .*/\.worktrees/task-ghost: not a registered worktree; left on disk' "$WT14_OUT" \
+    || wt14_fail WT14G "run $wt14_n: no MOE_WORKTREE_UNREGISTERED line for task-ghost"
+  ! grep -q 'stray' "$WT14_OUT" || wt14_fail WT14G "run $wt14_n: a line names .worktrees/stray"
+done
+[ "$(wt14_rows 'MOE_WORKTREE_UNREGISTERED: ')" = 1 ] || wt14_fail WT14G "not exactly one #general alert across two runs"
+[ "$(wt14_rows 'stray')" = 0 ] || wt14_fail WT14G "an alert names .worktrees/stray"
+{ printf 'stray\n' | cmp -s - "$WT14_P/.worktrees/stray/f.txt" && printf 'ghost\n' | cmp -s - "$WT14_P/.worktrees/task-ghost/f.txt"; } \
+  || wt14_fail WT14G "an unregistered directory lost its bytes"
+wt14_sentinels WT14G
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14G] ok"
+
+echo "[scenario WT14H] a failed status read aborts the pass; the interval holds a fresh stamp back; a bad interval warns and uses 3600"
+wt14_fixture h moe/control task-h1 task-h2
+wt14_sweep WT14H MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=task-h1=FAIL,task-h2=DONE
+grep -q 'the worktree sweep stopped' "$WT14_OUT" || wt14_fail WT14H "a failed status read did not stop the pass"
+for wt14_t in task-h1 task-h2; do wt14_kept WT14H "$wt14_t"; done
+[ -z "$(wt14_git for-each-ref refs/moe/rescue/)" ] || wt14_fail WT14H "an aborted pass wrote a rescue ref"
+wt14_now=$(date +%s)
+printf '%s\n' "$wt14_now" > "$(wt14_admin)/sweep.last"
+wt14_sweep WT14H FAKE_TASK_STATUS_MAP=task-h1=DONE,task-h2=DONE
+! grep -Eq 'MOE_WORKTREE_|\[worktree\]' "$WT14_OUT" || wt14_fail WT14H "an unset interval swept within the hour"
+wt14_sweep WT14H MOE_WORKTREE_SWEEP_INTERVAL_SEC=abc FAKE_TASK_STATUS_MAP=task-h1=DONE,task-h2=DONE
+grep -q "MOE_WORKTREE_SWEEP_INTERVAL_SEC='abc'" "$WT14_OUT" || wt14_fail WT14H "no [WARN] for an invalid interval"
+! grep -q '\[worktree\]' "$WT14_OUT" || wt14_fail WT14H "an invalid interval swept within the hour"
+for wt14_t in task-h1 task-h2; do wt14_kept WT14H "$wt14_t"; done
+printf '%s\n' "$((wt14_now - 3601))" > "$(wt14_admin)/sweep.last"
+wt14_sweep WT14H MOE_WORKTREE_SWEEP_INTERVAL_SEC=abc FAKE_TASK_STATUS_MAP=task-h1=DONE,task-h2=DONE
+for wt14_t in task-h1 task-h2; do wt14_gone WT14H "$wt14_t"; done
+wt14_sentinels WT14H
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14H] ok"
+
+echo "[scenario WT14I] registered .worktrees/feature-x and .worktrees/task-z on their own branches and an unregistered .worktrees/scratch are never touched or named"
+wt14_fixture i moe/control
+wt14_git worktree add -q -b feature-x "$WT14_P/.worktrees/feature-x" main || wt14_fail WT14I "could not add feature-x"
+wt14_git worktree add -q -b feature-z "$WT14_P/.worktrees/task-z" main || wt14_fail WT14I "could not add task-z"
+printf 'wip\n' > "$WT14_P/.worktrees/feature-x/wip.txt"
+mkdir -p "$WT14_P/.worktrees/scratch"
+printf 'scratch\n' > "$WT14_P/.worktrees/scratch/f.txt"
+wt14_sweep WT14I MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=feature-x=DONE,task-z=DONE
+! grep -Eq 'MOE_WORKTREE_|\[worktree\]' "$WT14_OUT" || wt14_fail WT14I "the sweep named something outside its candidates"
+[ "$(wt14_rows 'MOE_WORKTREE_\|MOE_RESCUE_REF\|feature-\|task-z\|scratch')" = 0 ] || wt14_fail WT14I "the sweep posted to #general"
+{ wt14_listed feature-x && wt14_git rev-parse -q --verify refs/heads/feature-x > /dev/null \
+    && wt14_listed task-z && wt14_git rev-parse -q --verify refs/heads/feature-z > /dev/null \
+    && printf 'wip\n' | cmp -s - "$WT14_P/.worktrees/feature-x/wip.txt" && printf 'scratch\n' | cmp -s - "$WT14_P/.worktrees/scratch/f.txt"; } \
+  || wt14_fail WT14I "feature-x, task-z or scratch was touched"
+[ -z "$(wt14_git for-each-ref refs/moe/rescue/)" ] || wt14_fail WT14I "a rescue ref was written"
+wt14_sentinels WT14I
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14I] ok"
+
+while IFS= read -r wt14_l; do [ ! -L "$wt14_l" ] || rm -f -- "$wt14_l"; done < "$WT14_LINKS"
+wt14_expected=$((wt14_expected + 5))
+if [ "$WT14_RUN" -ne "$wt14_expected" ]; then
+  echo "Expected $wt14_expected WT-14 scenarios (WT14A, WT14B, WT14C, WT14U, WT14D (needs a non-root POSIX user), WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $WT14_RUN" >&2
+  exit 1
+fi
+echo "[WT-14] ok: $WT14_RUN scenarios"
+
 # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the JetBrains
 # launcher sets beside MOE_PROXY_PATH and MOE_DAEMON_PATH) runs exactly those
 # files or refuses before any MCP config, daemon, proxy or CLI. It never falls

@@ -3022,6 +3022,55 @@ worktree_stop() {
     exit 1
 }
 
+# wt_porcelain TOP find W -- `git worktree list --porcelain -z` in TOP, parsed
+# into worktree and branch records, paths matched under probe_daemon_health's
+# rule (D:/x is /mnt/d/x): `found<US>RAW<US>REF` for W's record, else `absent`.
+# wt_porcelain TOP sweep BASE (BASE = TOP/.worktrees; WT-14's orphan sweep):
+# `C<TAB>TID` per record at BASE/TID on refs/heads/moe/task/TID (TID a task
+# id), then `U<TAB>KEY<TAB>PATH` per BASE/task-* directory no record names
+# (KEY: 16 hex of the SHA-1 of its matched form; control characters in PATH
+# print as ?), both sorted. Nothing else under BASE is listed. 1 when git,
+# python or listing BASE fails. Shared by provision_worktree and WT-14.
+wt_porcelain() {
+    (set -o pipefail; git -C "$1" worktree list --porcelain -z 2>/dev/null | $PYTHON_CMD -c '
+import ntpath, posixpath, re, sys
+WINDOWS = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]")
+def comparable(p):
+    p = p.strip()
+    if WINDOWS.match(p):
+        return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+    p = posixpath.normpath(p)
+    m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
+    return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
+mode, recs = sys.argv[1], []
+for f in sys.stdin.buffer.read().decode("utf-8", "surrogateescape").split("\0"):
+    if f.startswith("worktree "):
+        recs.append([f[9:], ""])
+    elif f.startswith("branch ") and recs:
+        recs[-1][1] = f[7:]
+if mode == "find":
+    want = comparable(sys.argv[2])
+    hit = [r for r in recs if comparable(r[0]) == want]
+    out = "found\x1f" + hit[0][0] + "\x1f" + hit[0][1] if hit else "absent"
+elif mode == "sweep":
+    import hashlib, os
+    base, TID = sys.argv[2], re.compile(r"task-[A-Za-z0-9_-]{1,128}")
+    reg = set(comparable(r[0]) for r in recs)
+    names = [re.split(r"[\\/]", r[0].rstrip("\\/"))[-1] for r in recs]
+    rows = ["C\t" + n for n in sorted(set(n for n, r in zip(names, recs) if TID.fullmatch(n)
+            and r[1] == "refs/heads/moe/task/" + n and comparable(r[0]) == comparable(base + "/" + n)))]
+    for n in sorted(os.listdir(base)):
+        full = base + "/" + n
+        if n.startswith("task-") and os.path.isdir(full) and comparable(full) not in reg:
+            key = hashlib.sha1(comparable(full).encode("utf-8", "surrogateescape")).hexdigest()[:16]
+            rows.append("U\t" + key + "\t" + re.sub(r"[\x00-\x1f\x7f]", "?", full))
+    out = "\n".join(rows)
+else:
+    sys.exit(2)
+sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
+' "$2" "${3:-}")
+}
+
 # provision_worktree -- worker pre-flight, design §1.1-§1.6. The fresh claim's
 # workspace (WT-01), else get_context's (WT-02), names the mode; none is shared.
 # Shared mode refuses only an unlanded moe/task/<id> branch and touches nothing
@@ -3104,26 +3153,7 @@ sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\
             fi ;;
     esac
     # W's registration, matched under probe_daemon_health's path rule (D:/x is /mnt/d/x).
-    found=$(set -o pipefail; git -C "$MOE_TOP" worktree list --porcelain -z 2>/dev/null | $PYTHON_CMD -c '
-import ntpath, posixpath, re, sys
-WINDOWS = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]")
-def comparable(p):
-    p = p.strip()
-    if WINDOWS.match(p):
-        return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
-    p = posixpath.normpath(p)
-    m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
-    return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
-want, recs = comparable(sys.argv[1]), []
-for f in sys.stdin.buffer.read().decode("utf-8", "surrogateescape").split("\0"):
-    if f.startswith("worktree "):
-        recs.append([f[9:], ""])
-    elif f.startswith("branch ") and recs:
-        recs[-1][1] = f[7:]
-hit = [r for r in recs if comparable(r[0]) == want]
-out = "found\x1f" + hit[0][0] + "\x1f" + hit[0][1] if hit else "absent"
-sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
-' "$w") || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree list failed in $MOE_TOP"
+    found=$(wt_porcelain "$MOE_TOP" find "$w") || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree list failed in $MOE_TOP"
     IFS=$'\x1f' read -r found raw ref <<< "$found" || true
     if [ "$found" = found ]; then
         verb=reused
@@ -6637,24 +6667,25 @@ control_worktree_mode() {
     [ "$head" = refs/heads/moe/control ]
 }
 
-# control_alert CODE DETAIL -- a [WARN] line on every call, plus a #general alert
-# at most once an hour per code for the whole checkout (every seat of it): the
-# stamp <gitdir>/moe/control-alert-CODE holds the last alert's UTC epoch (one
+# control_alert CODE DETAIL [KEY [WINDOW]] -- a [WARN] line on every call, plus
+# a #general alert at most once per WINDOW seconds (default 3600) per KEY
+# (default CODE) for the whole checkout (every seat of it): the stamp
+# <gitdir>/moe/control-alert-KEY holds the last alert's UTC epoch (one
 # that is unreadable or in the future counts as old), read and updated only
 # under the exclusive-create lock file control-alert.lock. A held lock is
 # skipped, never waited on; one older than 10 minutes was left by a killed seat
 # and is removed. No failure here stops a follow or a landing.
 # Twin: Send-MoeControlAlert.
 control_alert() {
-    local dir lock stamp now last args won=false
+    local dir lock stamp now last args won=false key="${3:-$1}" window="${4:-3600}"
     echo -e "${YELLOW}[WARN]${NC} $1: $2"
     [ -n "${GENERAL_CHANNEL_ID:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
-    dir="$MOE_GITDIR/moe"; lock="$dir/control-alert.lock"; stamp="$dir/control-alert-$1"; now=$(date +%s)
+    dir="$MOE_GITDIR/moe"; lock="$dir/control-alert.lock"; stamp="$dir/control-alert-$key"; now=$(date +%s)
     mkdir -p "$dir" 2>/dev/null || return 0
     find "$lock" -maxdepth 0 -type f -mmin +10 -exec rm -f {} + 2>/dev/null || true
     ( set -C; : > "$lock" ) 2>/dev/null || return 0
     last=$(cat "$stamp" 2>/dev/null) || last=""
-    if ! [[ "$last" =~ ^[0-9]{1,12}$ ]] || [ "$last" -gt "$now" ] || [ $((now - last)) -ge 3600 ]; then
+    if ! [[ "$last" =~ ^[0-9]{1,12}$ ]] || [ "$last" -gt "$now" ] || [ $((now - last)) -ge "$window" ]; then
         printf '%s\n' "$now" > "$stamp" 2>/dev/null && won=true
     fi
     rm -f "$lock" 2>/dev/null || true
@@ -7719,6 +7750,373 @@ control_seat_postflight() {
     [ "$ROLE" != qa ] || board_snapshot "$LAND_TASK_ID" "$LAND_STATUS"
 }
 
+# ---- worktree removal (WT-14; design §1.7, §1.9, §1.10) ----------------------
+# wt_registration TOP W REF -- W's record in wt_porcelain: 0 when W is
+# registered on REF, after `git worktree repair` when git recorded it in the
+# other OS's spelling (as provision_worktree does); 1 when W is not registered;
+# 3 when it is on another branch (WT_REG_REF); 2 when the list or the repair
+# fails (WT_REG_ERR).
+wt_registration() {
+    local out found raw
+    WT_REG_REF=""; WT_REG_ERR=""
+    if ! out=$(wt_porcelain "$1" find "$2"); then WT_REG_ERR="git worktree list failed in $1"; return 2; fi
+    IFS=$'\x1f' read -r found raw WT_REG_REF <<< "$out" || true
+    [ "$found" = found ] || return 1
+    [ "$WT_REG_REF" = "$3" ] || return 3
+    [ "$raw" != "$2" ] || return 0
+    if ! out=$(git -C "$1" worktree repair "$2" 2>&1); then WT_REG_ERR="git worktree repair failed: ${out##*$'\n'}"; return 2; fi
+}
+
+# wt_admin_dir TOP -- print <common git dir>/moe/worktree: WT-06's link
+# manifests (<taskId>.links), WT-07's <taskId>.control-dirt, the sweep lock.
+wt_admin_dir() {
+    local common
+    common=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ -n "$common" ] || return 1
+    printf '%s/moe/worktree' "$common"
+}
+
+# worktree_lock_take DIR / worktree_lock_drop -- the sweep lock DIR/sweep.lock:
+# one mkdir, never waited on, so a held lock returns 1. One whose mtime is over
+# 2 h old was left by a killed seat: it is removed once (rmdir) and the mkdir
+# retried once. Only the process that took the lock drops it.
+worktree_lock_take() {
+    WT_LOCK_HELD=""
+    mkdir -p "$1" 2>/dev/null || return 1
+    if ! mkdir "$1/sweep.lock" 2>/dev/null; then
+        [ -n "$(find "$1/sweep.lock" -maxdepth 0 -type d -mmin +120 2>/dev/null)" ] || return 1
+        rmdir "$1/sweep.lock" 2>/dev/null && mkdir "$1/sweep.lock" 2>/dev/null || return 1
+    fi
+    WT_LOCK_HELD="$1/sweep.lock"
+}
+worktree_lock_drop() {
+    [ -z "${WT_LOCK_HELD:-}" ] || rmdir "$WT_LOCK_HELD" 2>/dev/null || true
+    WT_LOCK_HELD=""
+}
+
+# wt_manifest_read W FILE -- WT-06's manifest FILE (one W-relative path per
+# line) into WT_MANIFEST_RELS; a missing FILE lists nothing. 1 with WT_RM_ERR
+# when FILE is not a readable regular file, a line is not a plain relative
+# path (absolute, a drive letter or backslash, an empty, '.' or '..'
+# segment), or a parent of an entry inside W is a link.
+wt_manifest_read() {
+    local rel p part re='^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+    WT_MANIFEST_RELS=(); WT_RM_ERR=""
+    if [ ! -e "$2" ] && [ ! -L "$2" ]; then return 0; fi
+    if [ -L "$2" ] || [ ! -f "$2" ] || [ ! -r "$2" ]; then WT_RM_ERR="$2 is not a readable regular file"; return 1; fi
+    while IFS= read -r rel || [ -n "$rel" ]; do
+        rel="${rel%$'\r'}"
+        [ -n "$rel" ] || continue
+        if ! [[ "$rel" =~ $re ]] || [[ "/$rel/" == */./* || "/$rel/" == */../* ]]; then
+            WT_RM_ERR="manifest line '$rel' in $2 is not a plain W-relative path"; return 1
+        fi
+        p="$1"; part="$rel"
+        while [[ "$part" == */* ]]; do
+            p="$p/${part%%/*}"; part="${part#*/}"
+            if [ -L "$p" ]; then WT_RM_ERR="$p, a parent of manifest entry $rel, is a link"; return 1; fi
+        done
+        WT_MANIFEST_RELS+=("$rel")
+    done < "$2"
+}
+
+# worktree_dirt_scan W DIR TID -- WT-07's worktree attribution of W into DIR
+# under the same local MOE_TOP/MOE_REL/MOE_GITDIR shadow: DIR/attr/candidates
+# lists W's non-DENY dirt, the paths a checkpoint would land, and WT_DIRT_N
+# counts them. 1 when git status or the attribution fails, or a status entry
+# is missing from the snapshot (a control character in its path, a nested
+# repository): bytes the snapshot cannot carry never reach a rescue ref, so
+# they keep W.
+worktree_dirt_scan() {
+    local MOE_TOP="$1" MOE_REL="" MOE_GITDIR n rows k v
+    WT_DIRT_N=""
+    MOE_GITDIR=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$MOE_GITDIR" ] || return 1
+    rm -rf "$2" 2>/dev/null || true
+    mkdir -p "$2" && git_dirty_snapshot "$2/S.tsv" || return 1
+    n=$(set -o pipefail; git -C "$1" status --porcelain=v1 -z --untracked-files=all --no-renames 2>/dev/null | tr -cd '\0' | wc -c) || return 1
+    rows=$(wc -l < "$2/S.tsv") || return 1
+    [ "$((rows))" -eq "$((n))" ] || return 1
+    resolve_attribution worktree "$3" "$2/S.tsv" "" "" "" "" "$2/attr" "" && [ -f "$2/attr/candidates" ] || return 1
+    while IFS='=' read -r k v; do [ "$k" != N_CANDIDATES ] || WT_DIRT_N="${v%$'\r'}"; done < "$2/attr/summary" || return 1
+    [[ "$WT_DIRT_N" =~ ^[0-9]+$ ]]
+}
+
+# wt_remove_refused W DETAIL -- the removal engine's refusal line.
+wt_remove_refused() { echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_REMOVE_REFUSED: $1: $2"; }
+
+# remove_task_worktree TOP TID [TIP] -- the one removal engine. W is
+# TOP/.worktrees/TID: neither W nor TOP/.worktrees a link, registered on
+# refs/heads/moe/task/TID (wt_registration), no W/.moe, and every line of its
+# manifest checked first (wt_manifest_read). Each listed link is unlinked
+# (`rm --`, never a recursion) and proved gone, so git's recursion never
+# reaches a link target; a missing entry is skipped and a non-link is W's own.
+# Then `worktree remove --force --force` (a locked W too: with no separate
+# unlock, a failed remove keeps the lock), exactly TID.links and
+# TID.control-dirt, and `branch -D` while the branch is still at TIP (default:
+# its tip here). A failed guard prints MOE_WORKTREE_REMOVE_REFUSED and returns
+# 1 with W registered and the branch kept. Callers hold the sweep lock and
+# have proved every byte landed or rescued. Twin: Remove-MoeTaskWorktree.
+remove_task_worktree() {
+    local top="$1" tid="$2" tip="${3:-}" w="$1/.worktrees/$2" d rel p cur out rc=0
+    if ! [[ "$tid" =~ ^task-[A-Za-z0-9_-]{1,128}$ ]]; then wt_remove_refused "$w" "'$tid' is not a task id"; return 1; fi
+    if [ -L "$top/.worktrees" ] || [ -L "$w" ]; then wt_remove_refused "$w" "W or $top/.worktrees is a link"; return 1; fi
+    wt_registration "$top" "$w" "refs/heads/moe/task/$tid" || rc=$?
+    case "$rc" in
+        0) ;;
+        1) wt_remove_refused "$w" "it is not a registered worktree"; return 1 ;;
+        3) wt_remove_refused "$w" "it is registered on ${WT_REG_REF:-a detached HEAD}, not refs/heads/moe/task/$tid"; return 1 ;;
+        *) wt_remove_refused "$w" "$WT_REG_ERR"; return 1 ;;
+    esac
+    if [ -e "$w/.moe" ] || [ -L "$w/.moe" ]; then wt_remove_refused "$w" "W/.moe exists (MOE_WORKTREE_MOE_PRESENT)"; return 1; fi
+    [ -n "$tip" ] || tip=$(git -C "$top" rev-parse -q --verify "refs/heads/moe/task/$tid^{commit}" 2>/dev/null) || tip=""
+    if [ -z "$tip" ]; then wt_remove_refused "$w" "refs/heads/moe/task/$tid does not resolve"; return 1; fi
+    if ! d=$(wt_admin_dir "$top"); then wt_remove_refused "$w" "git rev-parse --git-common-dir failed in $top"; return 1; fi
+    if ! wt_manifest_read "$w" "$d/$tid.links"; then wt_remove_refused "$w" "$WT_RM_ERR"; return 1; fi
+    for rel in ${WT_MANIFEST_RELS[@]+"${WT_MANIFEST_RELS[@]}"}; do
+        p="$w/$rel"
+        [ -L "$p" ] || continue
+        rm -f -- "$p" 2>/dev/null || true
+        if [ -e "$p" ] || [ -L "$p" ]; then wt_remove_refused "$w" "the link $rel could not be unlinked"; return 1; fi
+    done
+    if ! out=$(git -C "$top" worktree remove --force --force "$w" 2>&1); then
+        wt_remove_refused "$w" "git worktree remove failed: ${out%%$'\n'*}"; return 1
+    fi
+    for p in "$d/$tid.links" "$d/$tid.control-dirt"; do
+        rm -f -- "$p" 2>/dev/null || true
+        if [ -e "$p" ] || [ -L "$p" ]; then echo -e "${YELLOW}[WARN]${NC} could not delete $p; $w is already removed."; fi
+    done
+    cur=$(git -C "$top" rev-parse -q --verify "refs/heads/moe/task/$tid^{commit}" 2>/dev/null) || cur=""
+    if [ "$cur" != "$tip" ]; then
+        echo -e "${YELLOW}[WARN]${NC} moe/task/$tid moved from $tip to ${cur:-nothing} while $w was removed; the branch is kept."
+    elif ! out=$(git -C "$top" branch -D "moe/task/$tid" 2>&1); then
+        echo -e "${YELLOW}[WARN]${NC} git branch -D moe/task/$tid failed: ${out%%$'\n'*}; $w is already removed."
+    fi
+    printf '[worktree] removed %s on moe/task/%s\n' "$w" "$tid"
+}
+
+# qa_done_worktree_removal TID -- design §1.7, a QA seat after qa_approve left
+# TID DONE: in a worktree-mode control checkout at the repository top, a
+# registered W of TID is removed (remove_task_worktree, under the sweep lock)
+# when W/.moe is absent, W is on moe/task/TID, W holds no non-DENY dirt
+# (worktree_dirt_scan) and the branch is fully landed in refs/heads/<target>
+# (task_branch_landed, WT-13's target rule). Otherwise `[worktree] left W to
+# the orphan sweep: <reason>`. Silent when the checkout or W does not qualify;
+# never a rescue or any other deletion. Twin: Invoke-MoeQaWorktreeRemoval.
+qa_done_worktree_removal() {
+    local tid="$1" target="${CS_CONSOLIDATION_BRANCH:-main}" w d scan tip="" reason="" rc=0
+    case "$target" in *'?'*|*'['*) target=main ;; esac
+    { control_worktree_mode && git_top && [ -z "$MOE_REL" ]; } || return 0
+    [[ "$tid" =~ ^task-[A-Za-z0-9_-]{1,128}$ ]] || return 0
+    w="$MOE_TOP/.worktrees/$tid"; scan="$(create_secure_temp)/wt-qa-$$"
+    wt_registration "$MOE_TOP" "$w" "refs/heads/moe/task/$tid" || rc=$?
+    case "$rc" in
+        0) ;;
+        1) return 0 ;;
+        3) reason="it is registered on ${WT_REG_REF:-a detached HEAD}, not refs/heads/moe/task/$tid" ;;
+        *) { [ -e "$w" ] || [ -L "$w" ]; } || return 0; reason="$WT_REG_ERR" ;;
+    esac
+    if [ -n "$reason" ]; then :
+    elif [ -e "$w/.moe" ] || [ -L "$w/.moe" ]; then reason="W/.moe exists (MOE_WORKTREE_MOE_PRESENT)"
+    elif ! worktree_dirt_scan "$w" "$scan" "$tid"; then reason="git status or the attribution failed in W"
+    elif [ -s "$scan/attr/candidates" ]; then reason="it holds $WT_DIRT_N non-DENY dirty path(s)"
+    elif ! tip=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/moe/task/$tid^{commit}" 2>/dev/null) \
+        || ! task_branch_landed "refs/heads/$target" "$tid"; then reason="moe/task/$tid is not fully landed in $target"
+    elif ! d=$(wt_admin_dir "$MOE_TOP") || ! worktree_lock_take "$d"; then reason="the sweep lock is held"
+    fi
+    if [ -n "$reason" ]; then printf '[worktree] left %s to the orphan sweep: %s\n' "$w" "$reason"; return 0; fi
+    rc=0
+    remove_task_worktree "$MOE_TOP" "$tid" "$tip" || rc=1
+    worktree_lock_drop
+    return "$rc"
+}
+
+# ---- the orphan sweep (WT-14; design §1.9, §1.10) -----------------------------
+# general_channel_lookup -- GENERAL_CHANNEL_ID from moe.chat_channels for a
+# caller ahead of pre-flight's own lookup (the loop-top sweep); empty on any
+# failure, which only drops the #general rows.
+general_channel_lookup() {
+    local resp
+    GENERAL_CHANNEL_ID=""
+    resp=$(moe_rpc chat_channels "{}" 2>/dev/null) || return 0
+    GENERAL_CHANNEL_ID=$(printf '%s' "$resp" | $PYTHON_CMD -c 'import json, sys
+try:
+    print(next((c.get("id", "") for c in json.load(sys.stdin).get("channels", []) if c.get("name") == "general"), ""))
+except Exception:
+    pass' 2>/dev/null) || GENERAL_CHANNEL_ID=""
+}
+
+# wt_open_attempts -- the taskId of every open attempt record (phase not
+# closed) under $PROJECT/.moe/attempts, one per line, read as utf-8-sig. 1 when
+# a record cannot be listed, read or parsed: a pass that cannot see every
+# attempt removes nothing.
+wt_open_attempts() {
+    $PYTHON_CMD -c 'import json, os, sys
+root, out = sys.argv[1], set()
+for n in (os.listdir(root) if os.path.lexists(root) else []):
+    if n.endswith(".json"):
+        with open(os.path.join(root, n), encoding="utf-8-sig") as fh:
+            d = json.load(fh)
+        if not isinstance(d, dict):
+            sys.exit(1)
+        if d.get("phase") != "closed":
+            out.add(str(d.get("taskId")))
+print("\n".join(sorted(out)))' "$PROJECT/.moe/attempts" 2>/dev/null
+}
+
+# wt_task_status TID -- WT_TASK_STATUS from the daemon's status view
+# (moe.get_context {taskId, view:'status'}, unserved, so no session receipt):
+# the status of an answer naming TID, or UNKNOWN for the daemon's
+# TASK_NOT_FOUND refusal alone. 1 on anything else (no proxy or daemon,
+# another refusal, an answer about another task): an RPC failure never counts
+# as unknown to the daemon.
+wt_task_status() {
+    local args out err rc=0
+    WT_TASK_STATUS=""
+    args=$($PYTHON_CMD -c 'import json, sys; print(json.dumps({"taskId": sys.argv[1], "view": "status"}))' "$1" 2>/dev/null) || return 1
+    err="$(create_secure_temp)/wt-status-$$.err"
+    out=$(moe_rpc_unserved get_context "$args" 2>"$err") || rc=$?
+    WT_TASK_STATUS=$(printf '%s' "$out" | $PYTHON_CMD -c 'import json, sys
+tid, rc, errf = sys.argv[1:4]
+if rc != "0":
+    with open(errf, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(e, dict) and isinstance(e.get("data"), dict) and e["data"].get("codeName") == "TASK_NOT_FOUND":
+                print("UNKNOWN")
+                sys.exit(0)
+    sys.exit(1)
+t = json.load(sys.stdin).get("task")
+s = t.get("status") if isinstance(t, dict) and t.get("id") == tid else None
+if not isinstance(s, str) or not s:
+    sys.exit(1)
+print(s)' "$1" "$rc" "$err" 2>/dev/null) || WT_TASK_STATUS=""
+    rm -f "$err" 2>/dev/null || true
+    [ -n "$WT_TASK_STATUS" ]
+}
+
+# wt_sweep_due STAMP INTERVAL -- 0 when a pass is due: INTERVAL is 0, or STAMP
+# (epoch seconds) is unreadable, malformed, in the future, or INTERVAL old.
+wt_sweep_due() {
+    local last now
+    [ "$2" -gt 0 ] || return 0
+    last=$(cat "$1" 2>/dev/null) || return 0
+    last="${last%$'\r'}"
+    [[ "$last" =~ ^[0-9]{1,12}$ ]] || return 0
+    now=$(date +%s)
+    [ "$((10#$last))" -le "$now" ] || return 0
+    [ $((now - 10#$last)) -ge "$2" ]
+}
+
+# worktree_orphan_sweep -- design §1.9 at the loop top: in a worktree-mode
+# control checkout at the repository top with a real TOP/.worktrees, one pass
+# at most every MOE_WORKTREE_SWEEP_INTERVAL_SEC (unset or blank: 3600; 0: every
+# loop top; anything else warns once and uses 3600) for the whole checkout:
+# <admin>/sweep.last holds the last pass's epoch, checked first without the
+# lock, then again under it, and written (temp + mv) before the pass. A held
+# sweep lock skips the pass. Shared mode runs nothing. Twin: Invoke-MoeWorktreeSweep.
+WT_SWEEP_INTERVAL_WARNED=""
+worktree_orphan_sweep() {
+    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" GENERAL_CHANNEL_ID="${GENERAL_CHANNEL_ID:-}" iv="${MOE_WORKTREE_SWEEP_INTERVAL_SEC:-}" d stamp
+    { control_worktree_mode && git_top && [ -z "$MOE_REL" ]; } || return 0
+    [ -d "$MOE_TOP/.worktrees" ] && [ ! -L "$MOE_TOP/.worktrees" ] || return 0
+    if [ -z "${iv//[[:space:]]/}" ]; then
+        iv=3600
+    elif ! [[ "$iv" =~ ^[0-9]{1,9}$ ]]; then
+        [ "$WT_SWEEP_INTERVAL_WARNED" = "$iv" ] \
+            || echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_SWEEP_INTERVAL_SEC='$iv' is not a whole number of seconds; the orphan sweep runs at most every 3600s."
+        WT_SWEEP_INTERVAL_WARNED="$iv"; iv=3600
+    fi
+    d=$(wt_admin_dir "$MOE_TOP") || return 0
+    stamp="$d/sweep.last"
+    wt_sweep_due "$stamp" "$iv" || return 0
+    if ! worktree_lock_take "$d"; then printf '[worktree] sweep skipped: lock held\n'; return 0; fi
+    if ! wt_sweep_due "$stamp" "$iv"; then :
+    elif ! { date +%s > "$stamp.tmp.$$" && mv -f "$stamp.tmp.$$" "$stamp"; } 2>/dev/null; then
+        rm -f "$stamp.tmp.$$" 2>/dev/null || true
+        echo -e "${YELLOW}[WARN]${NC} could not write $stamp; the orphan sweep skips this pass."
+    else
+        [ -n "$GENERAL_CHANNEL_ID" ] || general_channel_lookup
+        worktree_sweep_pass "$MOE_TOP" || true
+    fi
+    worktree_lock_drop
+}
+
+# worktree_sweep_pass TOP -- one pass under the sweep lock. Lists TOP/.worktrees
+# (wt_porcelain sweep): an unregistered task-* directory is named
+# (MOE_WORKTREE_UNREGISTERED, one #general alert per path a day) and left on
+# disk. Each candidate, in task-id order, is skipped while W is missing, an
+# attempt of its task is open or the daemon says neither DONE nor ARCHIVED; a
+# link W is refused and a W/.moe is left. The rest (DONE, ARCHIVED or unknown
+# to the daemon), at most 5 a pass, go to worktree_sweep_remove. A failed list,
+# attempt read or status read stops the pass (1).
+worktree_sweep_pass() {
+    local top="$1" out kind a b tid w open n=0
+    local -a cands=()
+    if ! out=$(wt_porcelain "$top" sweep "$top/.worktrees"); then
+        echo -e "${YELLOW}[WARN]${NC} the worktree sweep stopped: git worktree list or a listing of $top/.worktrees failed."; return 1
+    fi
+    while IFS=$'\t' read -r kind a b; do
+        case "$kind" in
+            C) cands+=("$a") ;;
+            U) control_alert MOE_WORKTREE_UNREGISTERED "$b: not a registered worktree; left on disk" "MOE_WORKTREE_UNREGISTERED-$a" 86400 ;;
+        esac
+    done <<< "$out"
+    [ "${#cands[@]}" -gt 0 ] || return 0
+    if ! open=$(wt_open_attempts); then
+        echo -e "${YELLOW}[WARN]${NC} the worktree sweep stopped: an attempt record under $PROJECT/.moe/attempts cannot be read."; return 1
+    fi
+    for tid in "${cands[@]}"; do
+        [ "$n" -lt 5 ] || break
+        w="$top/.worktrees/$tid"
+        if [ -L "$w" ]; then wt_remove_refused "$w" "W is a link"; continue; fi
+        [ -d "$w" ] || continue
+        if [ -e "$w/.moe" ] || [ -L "$w/.moe" ]; then printf '[worktree] sweep left %s: W/.moe exists (MOE_WORKTREE_MOE_PRESENT)\n' "$w"; continue; fi
+        case $'\n'"$open"$'\n' in *$'\n'"$tid"$'\n'*) continue ;; esac
+        if ! wt_task_status "$tid"; then
+            echo -e "${YELLOW}[WARN]${NC} the worktree sweep stopped: moe.get_context gave no status for $tid."; return 1
+        fi
+        case "$WT_TASK_STATUS" in DONE|ARCHIVED|UNKNOWN) ;; *) continue ;; esac
+        n=$((n + 1))
+        worktree_sweep_remove "$top" "$tid" || true
+    done
+}
+
+# worktree_sweep_remove TOP TID -- a sweep candidate whose task is DONE,
+# ARCHIVED or unknown. W's non-DENY dirt goes to a rescue ref on W's HEAD
+# (rescue_ref, reason worktree-orphan), and a branch tip not fully landed in
+# the target to a second one (rescue_ref_from_commit); each must hold every
+# byte and resolve to the commit just written, else MOE_WORKTREE_REMOVE_REFUSED
+# with W and its branch kept. Then the attempts are read again and
+# remove_task_worktree runs. Landing globals are shadowed: the loop top's
+# pre-flight state is untouched and the rescue records no session.
+worktree_sweep_remove() {
+    local top="$1" tid="$2" w="$1/.worktrees/$2" target="${CS_CONSOLIDATION_BRANCH:-main}" tip scan open
+    local MOE_TOP="$1/.worktrees/$2" MOE_REL="" MOE_GITDIR="" MOE_WT_MODE="" MOE_SID="$WORKER_ID@unknown" ATTR_DIR="" FROZEN_TREE=""
+    local LAND_TASK_ID="$2" LAND_TITLE="worktree orphan" LAND_STATUS="" LAND_TOOL_FILE_EFFECTIVE="" LAND_CLI_EXIT="" LAND_TREE=""
+    local LAND_RESCUE_REF="" LAND_RESCUE_SHA="" RESCUE_STAGED_FILE="" TI_INDEX="" TI_N_STAGED=0 TI_N_INFERRED=0
+    case "$target" in *'?'*|*'['*) target=main ;; esac
+    tip=$(git -C "$top" rev-parse -q --verify "refs/heads/moe/task/$tid^{commit}" 2>/dev/null) || tip=""
+    MOE_GITDIR=$(git -C "$w" rev-parse --absolute-git-dir 2>/dev/null) || MOE_GITDIR=""
+    if [ -z "$tip" ] || [ -z "$MOE_GITDIR" ]; then wt_remove_refused "$w" "W's git dir or refs/heads/moe/task/$tid does not resolve"; return 1; fi
+    scan="$(create_secure_temp)/wt-sweep-$$"
+    if ! worktree_dirt_scan "$w" "$scan" "$tid"; then wt_remove_refused "$w" "git status or the attribution failed in W"; return 1; fi
+    if [ "$WT_DIRT_N" -gt 0 ] && { ! rescue_ref worktree-orphan "$scan/attr/candidates" || [ "$TI_N_STAGED" != "$WT_DIRT_N" ] \
+        || [ -z "$LAND_RESCUE_SHA" ] || [ "$(git -C "$top" rev-parse -q --verify "$LAND_RESCUE_REF" 2>/dev/null)" != "$LAND_RESCUE_SHA" ]; }; then
+        wt_remove_refused "$w" "rescue failed: W's $WT_DIRT_N dirty path(s) are not all on a rescue ref"; return 1
+    fi
+    if ! task_branch_landed "refs/heads/$target" "$tid"; then
+        RESCUE_STAGED_FILE=""; LAND_RESCUE_REF=""
+        if ! rescue_ref_from_commit "$tip" worktree-orphan || [ -z "$LAND_RESCUE_REF" ] \
+            || [ "$(git -C "$top" rev-parse -q --verify "$LAND_RESCUE_REF^{commit}" 2>/dev/null)" != "$tip" ]; then
+            wt_remove_refused "$w" "rescue failed: no rescue ref holds moe/task/$tid at $tip"; return 1
+        fi
+    fi
+    if ! open=$(wt_open_attempts); then wt_remove_refused "$w" "an attempt record under $PROJECT/.moe/attempts cannot be read"; return 1; fi
+    case $'\n'"$open"$'\n' in *$'\n'"$tid"$'\n'*) printf '[worktree] sweep left %s: an attempt of %s opened\n' "$w" "$tid"; return 0 ;; esac
+    remove_task_worktree "$top" "$tid" "$tip"
+}
+
 # ---- pre-flight --------------------------------------------------------------
 # preflight_landing TASKID TITLE STATUS_HINT launch|idle
 #   1. scope (preflight)  2. DONE/ARCHIVED/notFound -> drop baseline  3. lingering
@@ -8638,6 +9036,11 @@ while [ "$LOOP_RUNNING" = true ]; do
     CURRENT_LAUNCH_FAILED=false
     # This iteration's launch is a taskless launch probe (launch outage mode).
     LAUNCH_PROBE=false
+
+    # WT-14 (§1.9): the orphan sweep, at most once per MOE_WORKTREE_SWEEP_INTERVAL_SEC
+    # for the whole checkout. A worktree-mode control checkout only, so shared mode
+    # runs nothing new; it never stops the seat or changes this iteration.
+    worktree_orphan_sweep || true
 
     # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
     # Claim the next task, fetch context, read chat backlog.
@@ -10886,10 +11289,12 @@ except Exception:
         # and parks the bytes on a rescue ref, it never aborts the loop.
         LANDING_MODE="none"
         LANDING_STATUS=""
+        MOE_CONTROL_SEAT=false
         # Worktree mode (design §3) never reaches the shared landing below.
         if [ "${MOE_WT_MODE:-}" = worktree ]; then
             worktree_postflight
         elif { [ "$ROLE" = architect ] || [ "$ROLE" = qa ]; } && control_worktree_mode; then
+            MOE_CONTROL_SEAT=true
             control_seat_postflight
         elif [ "$CS_AUTO_COMMIT" != "true" ]; then
             echo -e "${BLUE}[info]${NC} settings.autoCommit=false -- no git activity for task $PREFLIGHT_TASK_ID (no completion, checkpoint or rescue); baseline deleted."
@@ -11036,6 +11441,12 @@ except Exception:
         # deliberately KEPT for the next pre-flight to recover -- which only
         # works if the marker is gone. Same as the ps1 twin.
         live_marker_remove "$PREFLIGHT_TASK_ID"
+        # WT-14: the approved task's worktree goes now, or waits for the orphan
+        # sweep. A control seat only, so shared mode runs nothing new; it never
+        # changes the landing outcome, the loop decision or the exit code.
+        if [ "$MOE_CONTROL_SEAT" = true ] && [ "$ROLE" = qa ] && [ "$FINAL_STATUS" = DONE ]; then
+            qa_done_worktree_removal "$PREFLIGHT_TASK_ID" || true
+        fi
     elif [ "$AUTO_CLAIM" = true ] && [ "$MOE_SKIP_LAUNCH" = false ] && [ -n "$PYTHON_CMD" ]; then
         # -------- Adoption boundary (the alarm, not the fix) --------
         # This session launched WITHOUT a task baseline. It may still retain
