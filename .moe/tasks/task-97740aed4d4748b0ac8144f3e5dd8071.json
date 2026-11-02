@@ -87,7 +87,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -100,7 +100,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:58:23.710Z",
-  "updatedAt": "2026-11-02T21:59:24.260Z",
+  "updatedAt": "2026-11-02T22:03:49.010Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T20:58:35.395Z",
@@ -110,11 +110,14 @@
     "firstClaimAt": "2026-11-02T21:41:26.592Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T22:03:27.530Z",
+    "wallClockMs": 1320938
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-8cf0816c"
+    "worker-8cf0816c",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -225,9 +228,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-02T21:51:05Z",
-    "at": "2026-11-02T21:59:24.260Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T22:00:58Z",
+    "at": "2026-11-02T22:03:49.010Z"
+  },
+  "completedAt": "2026-11-02T22:03:27.530Z",
+  "reviewCompletedAt": "2026-11-02T22:03:27.530Z",
+  "reviewSummary": "Reviewed completion 59457a40 (contained in control HEAD; +169/-3, 3 files, 166 net, under the 400 cap). Re-ran task.verification verbatim from control HEAD in a fresh git-archive snapshot (3 owned files cmp-checked; the unrelated red providerDescriptor.contract.test.ts rm'd as the worker disclosed, task-8c40a8fe): exit 0, tsc --noEmit clean, focused governanceFeatures+chatSystemFeed+claimNextTask 3 files / 125 passed, full npm test 227 files, 6852 passed | 20 skipped (matches worker). Independent RED: with claimNextTask.ts reverted to the parent in that snapshot, 'collision notice' = 2 failed | 12 passed; exactly (h) and (h2) fail, (a)-(g),(i)x3,(j),(k) pass, so new rows are mutation-resistant and the rest pin today's behavior. DoD1: worktreeOnlyCollision skips the #workers post only when claimedAttempt.workspaceMode==='worktree' and every liveAssignee peer's open attempt is 'worktree'; (h) captures every #workers MESSAGE_CREATED, so a reworded or mention-less notice would fail. Skip-not-quiet-post is correct (mention-less system line routes to every busy seat). DoD2: shared claimer, worktreeMode off, shared/legacy/no-attempt peer all page exactly as before ((i),(j) assert mentions, targets, 'Coordinate before either of you lands.'); chatSystemFeed.test.ts untouched, governanceFeatures diff is additions only. DoD3: collisionNotice/markLivePeers/computeFileCollisions unchanged; fileCollision (liveAssignee included) asserted equal in (h),(h2),(i),(j),(k); decision and post both inside the existing try/catch and (k) shows a rejecting postToRoleChannel still returns hasNext:true with task-B assigned. DoD4: docs/MCP_SERVER.md one hunk (+1/-1), fileCollision[] paragraph only, old sentences intact. DoD5: counts above. Rails clean: no forbidden patterns, no npm in the shared checkout, no moe-agent.* change. Complexity pass: nothing to cut. Non-blocking: QA REVIEW claims open shared attempts so their notices still page (out of DoD, worker noted it).",
+  "requiredCheckAtDone": null
 }

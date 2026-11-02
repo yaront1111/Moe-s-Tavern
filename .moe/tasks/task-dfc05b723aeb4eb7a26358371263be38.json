@@ -15,36 +15,56 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (RED). Edit packages/moe-daemon/src/state/massDeletionHeal.test.ts only. Keep the existing describe and its 3 cases byte-identical (DoD 2). Add a second describe with its own beforeEach fixture: a board-tracking project's store.\n\nFixture:\n- 50 tasks + 1 epic written as files, as the existing beforeEach does (reuse its JSON shapes); then `await state.load()`.\n- Then through the real APIs:\n  - 4 workers: state.createWorker({ id, type: 'CLAUDE', projectId: 'proj-heal', epicId: 'epic-heal', currentTaskId: null, status: 'IDLE' }), as governanceFeatures.test.ts does;\n  - 1 team: state.createTeam({ name: 'team-heal', role: 'worker' });\n  - 3 PENDING proposals via state.createProposal, shaped like StateManager.test.ts's createTestProposal. They must be PENDING, because load() runs purgeResolvedProposals;\n  - one resource with a granted lease: acquireResource(state, { resourceId: 'box-heal', taskId: <task 0>, workerId: <worker 0> }) from './resourceStore.js', asserting granted;\n  - one open attempt: openAttempt(state, { taskId: <task 1>, workerId: <worker 1>, runnerId: <worker 1>, workspace: testDir }) from './attemptStore.js'.\n- Snapshot each map as `JSON.parse(JSON.stringify([...state.<map>.entries()]))`: workers, teams, proposals, resources, attempts.\n\nCases:\n(w) Wipe: rmSync({ recursive: true, force: true }) the workers/, teams/, proposals/, resources/ and attempts/ dirs.\n- expect(await healMassDeletion(state)).toBe(10), i.e. 4 + 1 + 3 + 1 + 1.\n- Then `await state.load()`, the FileWatcher order (DoD 1). Each of the 5 maps deep-equals its snapshot, and every entity's `<dir>/<id>.json` exists.\n- Also: state.tasks.size is 50, and resources.get('box-heal').holders has the lease.\n(x) One worker file deleted: heal returns 0. After load(), workers is the other 3 exactly and the deleted id is absent (DoD 2).\n(y) Two proposal files deleted: heal returns 0. After load(), proposals holds exactly the third one (DoD 2).\n\nThe combined rule cannot fire here: 8 missing of 59 combined-kind entities is under 20%. That is what makes (w) RED today.\n\nRED run in a snapshot only (GLOBAL rule [0]; mem:gotcha-daemon-linux-snapshot-gate), from the worktree in WSL bash:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/packages/moe-daemon/src/state/massDeletionHeal.test.ts\" \"$S/packages/moe-daemon/src/state/\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/state/massDeletionHeal.test.ts'\n\nExpected: only (w) fails (expected 0 to be 10); (x), (y) and the 3 old cases pass. Quote the failure in the completion summary (DoD 3).\nerror handling: if a fixture API refuses (a team or proposal shape), fix the fixture, never the expectation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ],
+      "note": "Added a second describe (board-tracking fixture: 50 tasks, 1 epic, 4 workers, 1 team, 3 PENDING proposals, a leased resource, an open attempt) with cases (w), (x), (y), plus a 4th case pinning that tasks/epics never trip the per-kind rule (11 of 50 task files deleted returns 0). The existing describe and its 3 cases are untouched; only 3 import lines were added. RED run against the unchanged heal in a git-archive snapshot (/tmp/tmp.cRFhb1ueFF, npm ci there, never in the shared checkout): (w) fails with \"AssertionError: expected +0 to be 10\" at massDeletionHeal.test.ts:151; (x), (y), the board-kind case and the 3 old cases pass (6 passed, 1 failed of 7). Note: the plan said 6 cases total; there are 7 because of the extra board-kinds invariant case.",
+      "startedAt": "2026-11-02T22:00:54.040Z",
+      "completedAt": "2026-11-02T22:02:04.586Z"
     },
     {
       "stepId": "step-2",
       "description": "FIX. Edit packages/moe-daemon/src/state/massDeletionHeal.ts only (DoD 5). Keep MASS_DELETION_MIN = 3 and MASS_DELETION_FRACTION = 0.2.\n\n1. Replace KINDS with a STORES table: one [dir, (s: StateManager) => Map<string, unknown>] row for every map load() replaces (StateManager.ts about :1063-1119). The rows are tasks, epics, workers, teams, proposals, channels, decisions, resources, attempts, candidates, reviews, ['checks', s => s.checkRuns] and receipts. Use accessors, not string indexing, so `tsc --noEmit` checks every field.\n2. One pass over STORES. For each store with entries:\n   - dirGone = !fs.existsSync(join(moePath, dir));\n   - an entity is missing when dirGone or its `<dir>/<id>.json` is absent (loadEntities keys by the entity's id field).\n3. Keep the combined rule exactly as today: only over tasks, epics, teams, workers and proposals, missing >= MIN and >= FRACTION x their total.\n4. Add the per-kind rule for every store EXCEPT tasks and epics: dirGone, or that kind's missing >= MIN and >= FRACTION x its own size.\n   - tasks and epics are the board kinds the wrappers commit under settings.commitBoardState, so a git checkout or pull changes them on purpose.\n5. On either rule, rewrite EVERY missing entity of EVERY store with state.writeEntity(dir, id, entity), then log the restored count per kind and which rule fired. Rewriting only some kinds would let the next load() empty the rest.\n6. Otherwise return 0, so the caller reloads as before.\n\nUpdate the header comment. It names the board-commit case (git clean -fdx / git stash --all delete only the ignored runtime dirs), states the two rules, and names the gaps:\n- messages/ and pins/ are not in memory and cannot be restored;\n- checks/dispatches and checks/observations load lazily (checkObservationStore) and are not replaced by load().\n\nRe-run step 1's command with massDeletionHeal.ts copied in as well: every case passes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/massDeletionHeal.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.ts"
+      ],
+      "note": "massDeletionHeal.ts: KINDS replaced by a STORES table of accessors for all 13 maps load() replaces (tasks, epics, workers, teams, proposals, channels, decisions, resources, attempts, candidates, reviews, checks→checkRuns, receipts). scanStores does one pass with one existsSync per entity plus one per dir; the combined rule keeps its arithmetic over tasks/epics/teams/workers/proposals only (isWipe = missing>=MIN && missing>=total*FRACTION, same as the old inverted check). The new per-kind rule covers every store except tasks/epics: dir gone while memory holds entries, or the kind lost >=3 and >=20% of its own. On either rule every missing entity of every store is rewritten via writeEntity, and the log names restoredByKind, the rule, and the wiped kinds. MIN/FRACTION values and exports unchanged. Header comment documents the board-commit case, both rules, and the gaps (messages/pins not in memory; checks/dispatches|observations lazy). GREEN in snapshot /tmp/tmp.cRFhb1ueFF: tsc --noEmit ok; massDeletionHeal.test.ts 7/7 pass.",
+      "startedAt": "2026-11-02T22:02:06.372Z",
+      "completedAt": "2026-11-02T22:03:01.198Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY: run the DoD 4 gate once, in a fresh git-archive snapshot of HEAD with only the 2 files copied in and cmp-checked. Never run npm in the shared checkout. From the worktree root in WSL bash:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/massDeletionHeal.ts packages/moe-daemon/src/state/massDeletionHeal.test.ts; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/state/massDeletionHeal.test.ts src/state/StateManager.test.ts'\n\nExpected: exit 0. massDeletionHeal.test.ts has 6 cases (3 old + 3 new), and StateManager.test.ts passes unchanged.\n- Submit complete_task verification as { command: that exact line, exitCode: 0, outputTail: the vitest summary }, with the step-1 RED quote.\n- DoD 5: `git status --porcelain` lists only the 2 files outside .moe/.\n\nerror handling:\n- A failure in StateManager.test.ts that also fails on an unmodified snapshot belongs to a peer's checkpoint: follow mem:gotcha-snapshot-gate-peer-wip-checkpoint and disclose it.\n- Any other failure is this task's to fix.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/massDeletionHeal.ts",
         "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.ts",
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ],
+      "note": "DoD 4 gate run fresh in a git-archive snapshot of HEAD (/tmp/tmp.tgzRfzQ4J9) with only the 2 files copied in and cmp-checked: npm ci, npx tsc --noEmit, then vitest run src/state/massDeletionHeal.test.ts src/state/StateManager.test.ts → EXIT=0, Test Files 2 passed (2), Tests 150 passed (150) (massDeletionHeal 7 = 3 old + 4 new; StateManager 143, unchanged). git status --porcelain lists only the 2 files. No npm in the shared checkout.",
+      "startedAt": "2026-11-02T22:03:02.807Z",
+      "completedAt": "2026-11-02T22:03:26.413Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff as an attacker. Check:\n- 1-2 deleted files of any kind still reload (DoD 2), and a single-entity kind whose FILE is deleted (dir kept) still reloads.\n- A deleted board file (tasks or epics) never trips the per-kind rule, and the combined rule is byte-for-byte the old arithmetic.\n- An empty in-memory kind with a missing dir is no wipe.\n- The rewrite covers every map load() replaces: any kind left out empties on the next reload.\n- The heal runs under state.mutex, and writeEntity's ignorePath keeps it from re-triggering the watcher.\n- Counting stays O(entities) with one existsSync per entity.\n- The fixture's PENDING proposals survive purgeResolvedProposals, and the tests deep-compare whole entities, not just counts.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 3's command if code changed, then call complete_task.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/state/massDeletionHeal.ts",
         "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-02T22:03:28.271Z"
     }
   ],
   "planRevision": 1,
@@ -61,7 +81,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:26.244Z",
-  "updatedAt": "2026-11-02T21:59:41.865Z",
+  "updatedAt": "2026-11-02T22:03:28.271Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:22.389Z",
@@ -70,7 +90,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T21:52:13.611Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -80,7 +101,11 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T21:55:36.363Z",
   "executionContract": {
@@ -140,5 +165,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T21:55:36.400Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T22:00:54.040Z"
 }
