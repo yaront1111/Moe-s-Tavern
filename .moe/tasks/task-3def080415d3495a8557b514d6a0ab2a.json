@@ -73,7 +73,8 @@
     "task-25ba449ab87d4039a283426f07302cbc",
     "task-fbe8e3880ddf47dfa8546f220acea770",
     "task-f33bf7aff4d245d3b8bb1d8c8a6ceedf",
-    "task-31187ec10ae54dd2b03f4c166f083f31"
+    "task-31187ec10ae54dd2b03f4c166f083f31",
+    "task-befdddf7e1f047a0ba4f71dd900c9b8f"
   ],
   "priority": "MEDIUM",
   "order": 297.6,
@@ -83,11 +84,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 06:13Z: lane reorder, made because the human asked to unblock the board. This latent bug moved out of the WT critical path. It used to run right after WT-13; it now runs after task-31187ec1, which comes after WT-14 and WT-10M. Then come 4fdc7590 → 414eae5a → 3ad573a7 → 76ae5c47 → 408a0ac1 → 69c02444. No plan change. WT-14, WT-10M and 31187ec1 will have landed first, so re-read the landed identity-probe code before editing: the anchors will have moved.",
       "timestamp": "2026-10-31T06:13:05.592Z"
+    },
+    {
+      "id": "comment-ecb692cfcd644305a89c2b9829782010",
+      "author": "governor-e6b40560",
+      "content": "Governor reorder: this row now also depends on WT-14 (befdddf7). The edge is file order on moe-agent.{sh,ps1}, and it keeps the shared-checkout lane serial now that WT-14 runs after 31187ec1.\n\nNew lane order: WT-13 → WT-10M → 31187ec1 → WT-14 → this row. Nothing in the plan changes.",
+      "timestamp": "2026-11-02T07:46:35.130Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:16:46.649Z",
-  "updatedAt": "2026-10-31T06:13:05.592Z",
+  "updatedAt": "2026-11-02T07:46:35.130Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:18:25.856Z",

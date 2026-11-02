@@ -1,0 +1,35 @@
+{
+  "id": "task-cfa129252343438d903de1e67ae6073c",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-18c] Docs: worker role docs for the unlanded route, LANDING-CONFLICT/RETRY resume and WT-10 gate wording",
+  "description": "This is the second worker-role-doc slice split from WT-18 (task-1b2e6fe3ba1343c8ab02271510131155). Its shape follows architect-0fcb7226 in #architects msg-ba081c4f.\n\nIt runs once WT-10 (task-5c2e6cdf2494412ca0c2bc40e26d9da3), WT-11 (task-dd1ee586b90d4fc785434454b1423e76) and WT-18a (task-692a12df337c43edacb59fd0599ecff2) have landed. It touches no wrapper-lane file, so it can run alongside WT-12/WT-13. It must land before this project's worktree switch; the human approved that early switch (flip checklist pinned in #general msg-717a48e0).\n\nObjective: document for workers what HEAD's landed wrappers do, and only that:\n- the unlanded route (finalize_attempt outcome 'unlanded', the rescue ref, task.landingRetry), as a row in worker.reference.md's commits table;\n- the practical rule for a session whose prompt starts with LANDING-CONFLICT: or LANDING-RETRY:, as WT-11's wrappers implement it;\n- any completion-gate wording that WT-10 changed.\n\nFiles:\n- docs/roles/worker.md\n- docs/roles/worker.reference.md\n- packages/moe-daemon/src/generated/initFiles.ts, regenerated from a `git clone --shared` snapshot as in WT-18a. The GLOBAL no-in-place-build rail applies.\n\nNOT in scope: CLAUDE.md, scripts/CLAUDE.md and docs/ARCHITECTURE.md (WT-18), and any behaviour that is not on HEAD.",
+  "definitionOfDone": [
+    "worker.reference.md's commits table has an unlanded-route row matching HEAD's WT-11 wrappers: finalize_attempt outcome 'unlanded', the rescue ref and task.landingRetry, with codes spelled as on HEAD.",
+    "worker.md or worker.reference.md states the rule for a session whose prompt starts with LANDING-CONFLICT: or LANDING-RETRY:, as HEAD's WT-11 wrappers implement it, plus any completion-gate wording WT-10 changed; nothing beyond HEAD is presented as shipped.",
+    "`npm run lint` passes (40-line cap); worker.md contains no concrete task id and keeps its test sentinels.",
+    "packages/moe-daemon/src/generated/initFiles.ts equals the generator output from a snapshot and changes only the worker-doc entries; the targetedContextGuidance, qaCommitPolicy and initFiles vitest files pass there.",
+    "The verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+    "task-dd1ee586b90d4fc785434454b1423e76",
+    "task-692a12df337c43edacb59fd0599ecff2"
+  ],
+  "priority": "HIGH",
+  "order": 25.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T07:58:49.603Z",
+  "updatedAt": "2026-11-02T07:58:49.603Z"
+}

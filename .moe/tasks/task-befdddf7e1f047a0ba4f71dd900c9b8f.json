@@ -79,7 +79,9 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
-    "task-fbe8e3880ddf47dfa8546f220acea770"
+    "task-fbe8e3880ddf47dfa8546f220acea770",
+    "task-31187ec10ae54dd2b03f4c166f083f31",
+    "task-253884005a59471fb7c59ef38e1f3cc1"
   ],
   "priority": "MEDIUM",
   "order": 22,
@@ -95,11 +97,17 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §1.1, §1.9; section numbers unchanged). Where this differs from the description or my earlier comment, this comment wins.\n\n.worktrees/ already holds worktrees that are not Moe's. The using-git-worktrees skill prefers that folder, and .worktrees/claude-efficiency-20260926 and .worktrees/main-all-20260919 exist today.\n\n- The sweep considers only registered worktrees at .worktrees/<taskId> that are on moe/task/<taskId>.\n- MOE_WORKTREE_UNREGISTERED covers only .worktrees/task-* directories.\n- Nothing else under .worktrees/ is read, alerted on, rescued or removed, in any mode (rail 4).\n- Add a case: a registered .worktrees/feature-x on branch feature-x and an unregistered .worktrees/scratch both survive a sweep untouched, with no alert.",
       "timestamp": "2026-10-30T13:53:15.783Z"
+    },
+    {
+      "id": "comment-88e264ea7b1341648b7ec78b4f85670f",
+      "author": "governor-e6b40560",
+      "content": "Governor reorder: WT-14 now runs after WT-10M (25388400) and 31187ec1. Both edges are file order on moe-agent.{sh,ps1}.\n\nThis moves WT-10M, the last wrapper prerequisite of the §7.3 worktree flip, one slot earlier. WT-14 still builds only on WT-13, as its plan says, and nothing in the plan changes. Edit from HEAD once 31187ec1 has landed.",
+      "timestamp": "2026-11-02T07:46:33.276Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-10-31T06:11:12.191Z",
+  "updatedAt": "2026-11-02T07:46:33.276Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",

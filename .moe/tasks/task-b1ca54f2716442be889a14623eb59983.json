@@ -92,7 +92,6 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-e27456ad67b64bc292080ea3a8b92f26",
     "task-9a39bf6a2c4444b4b0799cd16dc2a9f1",
     "task-c20464ff64ca49fca4371dd9b5194364",
     "task-c4cccb84948c472d93263c9de60fed1d",
@@ -111,7 +110,8 @@
     "task-cda65eb0efb244efa8a506969bac47f9",
     "task-a28c66bbd21448c7b25daec49a3fa217",
     "task-1b2e6fe3ba1343c8ab02271510131155",
-    "task-31187ec10ae54dd2b03f4c166f083f31"
+    "task-31187ec10ae54dd2b03f4c166f083f31",
+    "task-5ac436aa967740d89c440d0f6f120547"
   ],
   "priority": "HIGH",
   "order": 27,
@@ -175,11 +175,23 @@
       "author": "governor-ce2f28b9",
       "content": "STEP-3 GO RECORDED. Governor-ce2f28b9, 2026-10-31 20:31Z. This supersedes the \"no governor approves it\" line in comment-837bd761, because the human has now delegated this decision explicitly.\n\n**The human's words.** In the governor's TUI session the human was asked about open item 4, \"WT-19 worktree default: decision dec-eb7b8337 has been open since 10-30\". They answered \"2 yes 3 ok rest decide\" (item 4 falls under \"rest decide\"), then \"go\". That TUI exchange has no board id. The governor's ruling, below and in #general msg-1e79f940, is its record.\n\n**Ruling: dec-eb7b8337 is APPROVED for (a) and (b) as posted.**\n- (a) The product-wide default flip.\n- (b) The recommended gate-aware answer. Unset resolves to 'on' only when settings.qualityGate is non-blank after trim, else 'off'. Explicit 'on' and 'off' are honored. Explicit 'on' with no gate stays a WT-16 doctor failure, not a runtime refusal.\n- The stricter claim-refusal option is NOT chosen.\n\n**Step 3 reading.** This comment is the citable go. Continue to step 4 as written, and quote this comment id and msg-1e79f940 in your step note. The record of dec-eb7b8337 itself may still say 'proposed', because only the human's UI resolves it; that does not void this go.\n\n**Override.** Only a later human row comment, or the human rejecting dec-eb7b8337, overrides it. In that case follow step 3's \"picks another (b)\" path.",
       "timestamp": "2026-10-31T20:30:46.731Z"
+    },
+    {
+      "id": "comment-681536b7508c447ba1ac1b3a3290c485",
+      "author": "governor-e6b40560",
+      "content": "Governor note, no plan change yet. This project's own switch to worktree mode now happens BEFORE this row (\"lets dop it\", 11-02; pinned #general msg-717a48e0). It follows WT-10M and WT-16, through the §7.3 runbook with explicit settings. The product default flip and dec-eb7b8337 stay with this row.\n\nTwo parts of this row move earlier:\n1. **§8 file-only edge drops:** the governor applies them once a WORKING claim's get_context shows workspace.mode 'worktree'. When you run step 3, list each edge as kept, dropped by you, or already dropped by the governor, with the governor's reason.\n2. **Throwaway-repo end-to-end run (DoD 5):** an architect is splitting a pre-flip dry run out of it. Your own run stays as the final re-check.",
+      "timestamp": "2026-11-02T07:53:43.020Z"
+    },
+    {
+      "id": "comment-79757ad147d14d3a8b4de4aa24e77686",
+      "author": "governor-e6b40560",
+      "content": "Governor note, per architect-0fcb7226's msg-27859513. Step 2's file, scripts/tests/worktree-e2e.cjs, now comes from **WT-19a** (task-5ac436aa967740d89c440d0f6f120547). WT-19a is the pre-flip dry run: the same file name and CLI, the sh engine, scenarios (a) parallel and (b) conflict-resume.\n- This row now depends on WT-19a. I swapped out WT-02, which is DONE, to stay under the 20-id cap.\n- When you run, step 2 shrinks to two things: the ps1 engine leg, and scenario (c), the remote race, but only if the WT-08T and WT-09 suites don't already cover it. Extend the file WT-19a lands; don't recreate it.\n- Step 6's gate line and this row's DoD stay as they are. Your DoD 5 run becomes the final re-check on the full suite.",
+      "timestamp": "2026-11-02T08:13:27.236Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-10-31T20:31:00.943Z",
+  "updatedAt": "2026-11-02T08:13:27.236Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",
