@@ -1,0 +1,28 @@
+{
+  "id": "task-e54bab27129c4a52a98d7fe4e3036a38",
+  "epicId": "epic-be924fb8",
+  "title": "bug: prompt-cache-launcher.test.mjs PowerShell \"compact window\" rows fail on HEAD 717c4019 (22 of 99 on Windows): the extracted keeper block reads $script:MoeScriptRoot, which 373dc3d4 added and the fixture never sets",
+  "description": "Found while planning task-2f22237b, whose DoD needs this suite green through Windows node.exe.\n\nEvidence: a pure `git archive 717c4019` with Windows node.exe, `node --test scripts/tests/prompt-cache-launcher.test.mjs` gives 99 tests, 77 pass, 22 fail. All 22 are the `<engine>: <role> <kind> compact window over ...` rows, for both powershell.exe and pwsh.exe. Each fails with \"Join-Path : Cannot bind argument to parameter 'Path' because it is null\" at `$moeKeeperDir = Join-Path $script:MoeScriptRoot 'mods\\moe-compaction-keeper'`.\n\nCause:\n- 373dc3d4 (task-69c02444, still in REVIEW) replaced $PSScriptRoot with $script:MoeScriptRoot in the compaction-keeper and account-switch lines (moe-agent.ps1:10085 and :10092).\n- The fixture (prompt-cache-launcher.test.mjs:406-434) writes the extracted block to <dir>/compact.ps1 and relied on $PSScriptRoot being <dir>.\n- This is the same class as f6d9c532 (landed in 717c4019): the heartbeatStop fixture lacked a helper that 373dc3d4 added.\n\nReach:\n- The suite runs in CI's build-all-platforms matrix (step \"Test agent runtime discovery\"). windows-latest fails, and ubuntu/macos fail too wherever pwsh is installed.\n- The WSL env -i gate hides it, because it has no pwsh.\n\nFix direction: test-only. The PowerShell script prelude in the fixture sets `$script:MoeScriptRoot = $PSScriptRoot`, so the mods paths resolve under <dir> as before. The wrapper and the assertions stay unchanged.",
+  "definitionOfDone": [
+    "scripts/tests/prompt-cache-launcher.test.mjs exits 0 through Windows node.exe, with every PowerShell compact-window row (powershell.exe and pwsh.exe) passing, and also exits 0 under Linux node.",
+    "The diff is the fixture's PowerShell prelude only: scripts/moe-agent.ps1, every assertion and every other row stay byte-identical.",
+    "A mutant that drops the new prelude line fails the compact-window rows again on Windows."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 347.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:31:07.414Z",
+  "updatedAt": "2026-11-02T23:31:07.414Z"
+}

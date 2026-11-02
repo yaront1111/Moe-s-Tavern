@@ -100,8 +100,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -132,7 +132,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-02T22:39:37.526Z",
+  "updatedAt": "2026-11-02T23:31:25.642Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
@@ -306,6 +306,24 @@
       "status": "REVIEW",
       "pushed": false,
       "message": "MOE_RESCUE_REF task=task-3ad573a754574dfd92083b2e813c0bff ref=refs/moe/rescue/task-3ad573a754574dfd92083b2e813c0bff/20261102T223851Z sha=378781a528b9632ab5daae8a1589cb4301214cbb reason=conflict"
+    },
+    {
+      "sha": "a0269bcdc4fa5a3f9c81140307545a3636fd7fb0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-02T22:39:34Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-team.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "scripts/tests/literal-project-path.test.mjs"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-02T23:31:25.163Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -317,11 +335,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "failed",
+    "outcome": "committed",
     "kind": "completion",
-    "code": "MOE_COMMIT_FAILED_CONFLICT",
-    "sessionId": "worker-d6c1cb7a@2026-11-02T22:20:19Z",
-    "at": "2026-11-02T22:38:53.094Z"
+    "sessionId": "worker-d6c1cb7a@2026-11-02T22:39:34Z",
+    "at": "2026-11-02T23:31:25.163Z"
   },
   "workStartedAt": "2026-11-02T19:45:29.085Z",
   "blockedReason": null,
@@ -329,23 +346,14 @@
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "reviewStartedAt": "2026-11-02T22:27:56.487Z",
+  "reviewStartedAt": "2026-11-02T23:29:59.550Z",
   "verification": {
     "command": "R=$(pwd) && mkdir -p /mnt/d/moe-scratch && W=$(mktemp -d /mnt/d/moe-scratch/literal-XXXX) && B=$(git rev-parse -q --verify MERGE_HEAD || echo HEAD) && git archive \"$B\" scripts | tar -x -C \"$W\" && cp scripts/moe-agent.ps1 scripts/moe-team.ps1 \"$W/scripts/\" && cp scripts/tests/literal-project-path.test.mjs scripts/tests/daemon-json-cap.test.mjs \"$W/scripts/tests/\" && cd \"$W\" && node --test scripts/tests/literal-project-path.test.mjs && bash scripts/tests/parity-check.sh && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$W/scripts/tests/literal-project-path.test.mjs\")\" && WSLENV=\"$WSLENV:MOE_POSTFLIGHT_TIMEOUT_SEC\" MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$W/scripts/tests/postflight-safe.mjs\")\" powershell; rc=$?; cd \"$R\"; rm -rf \"$W\"; echo \"VERIFY_EXIT=$rc\"; [ \"$rc\" -eq 0 ]",
     "exitCode": 0,
-    "outputTail": "ℹ tests 8\nℹ pass 3\nℹ fail 0\nℹ skipped 5\nPASS parity-check.sh\n✔ moe-agent.ps1: G1 literal filesystem paths; G2 escaped process working directory (59.538ms)\n✔ moe-team.ps1: G1 literal filesystem paths; G2 escaped process working directory (0.6399ms)\n✔ scanner pins the exact flags, including nested arguments and exemptions (0.2338ms)\n✔ powershell.exe claude: literal project launch and completion (5923.8298ms)\n✔ powershell.exe codex: literal project launch and completion (5213.3686ms)\n✔ powershell.exe gemini: literal project launch and completion (5472.5074ms)\n✔ powershell.exe grok: literal project launch and completion (5603.5248ms)\n✔ pwsh.exe claude: literal project launch and completion (6813.3466ms)\nℹ tests 8\nℹ pass 8\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ duration_ms 29201.7698\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nVERIFY_EXIT=0",
-    "reportedAt": "2026-11-02T22:27:56.487Z",
+    "outputTail": "ℹ tests 8\nℹ pass 3\nℹ fail 0\nℹ skipped 5\nPASS parity-check.sh\n✔ moe-agent.ps1: G1 literal filesystem paths; G2 escaped process working directory (68.9561ms)\n✔ moe-team.ps1: G1 literal filesystem paths; G2 escaped process working directory (0.9718ms)\n✔ scanner pins the exact flags, including nested arguments and exemptions (0.409ms)\n✔ powershell.exe claude: literal project launch and completion (8228.6404ms)\n✔ powershell.exe codex: literal project launch and completion (8503.0493ms)\n✔ powershell.exe gemini: literal project launch and completion (6371.8024ms)\n✔ powershell.exe grok: literal project launch and completion (6091.9865ms)\n✔ pwsh.exe claude: literal project launch and completion (7628.8324ms)\nℹ tests 8\nℹ pass 8\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ duration_ms 37027.6861\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nVERIFY_EXIT=0",
+    "reportedAt": "2026-11-02T23:29:59.550Z",
     "source": "agent-reported"
   },
-  "completionSummary": "PowerShell launchers now treat every filesystem path literally, so a project dir named \"control é [x] $;'\" is discovered, configured, launched for all 4 CLIs and landed.\n\nChanges:\n- scripts/moe-agent.ps1: 70 path cmdlet calls go from -Path/positional to -LiteralPath, including Resolve-Path $Project (the reported 'Project path not found') and the worktree Push-Location sites. The daemon Start-Process gains -WorkingDirectory ([WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath)), because PS 5.1 resolves the inherited cwd as a wildcard. Every other flag and branch is unchanged (flag multiset checked); New-Item -Path and Env: are untouched. BOM and LF kept.\n- scripts/moe-team.ps1: 4 path sites and 3 escaped Start-Process -WorkingDirectory; still ASCII.\n- New scripts/tests/literal-project-path.test.mjs:\n  - static G1/G2 guard plus an exact-set scanner self-test;\n  - Windows real-wrapper launches: PS 5.1 x claude/codex/gemini/grok and pwsh 7 x claude, checking model, role doc, known issues, agents mirror, Serena source, memories, the codex/gemini/grok configs, the daemon start and the landing commit.\n- .github/workflows/ci.yml: one new step, \"Test launcher literal project paths\", in build-all-platforms.\n- scripts/tests/daemon-json-cap.test.mjs: its ps1 anchor follows the -LiteralPath check (architect comment b85be178).\n\nIntegration: the worktree holds a pending merge of origin target 96c4ee19 (which includes blocker 8c875cc8), resolved keeping both sides. The target has since moved 9 commits. merge-tree against the tip is clean, and the static guard passes 3/3 there.\n\nEvidence:\n- The verification ran in step 5 (21:32-22:17Z) on the same bytes: Linux 3 pass/5 skip, parity PASS, Windows 8/8 (0 skip), postflight-safe PS 5.1 exit 0 / NONE.\n- Fresh rerun of the fast legs now gives the same counts. Gate parity+lint passes; diff --check is clean.\n- RED: pristine Windows 5/5 'Project path not found'.\n- Mutants:\n  - A (4 reverts): the static test fails nam",
-  "landingRetry": {
-    "reason": "conflict",
-    "rescueRef": "refs/moe/rescue/task-3ad573a754574dfd92083b2e813c0bff/20261102T223851Z",
-    "targetTip": "091c7dd03f16f5679d209095fd000fc39f227b46",
-    "paths": [
-      "scripts/moe-agent.ps1"
-    ],
-    "count": 1,
-    "at": "2026-11-02T22:38:53.775Z"
-  }
+  "completionSummary": "Landing-conflict resolution for the literal project-path fix. The earlier completion is unchanged; this session only resolved the merge.\n\nThe wrapper merged origin/moe/work-2026-10-24 (MERGE_HEAD 603b46bb) into the worktree, leaving 3 conflict hunks in scripts/moe-agent.ps1. All 3 come from the same overlap with task-69c02444's daemon-root change: this task changed `Resolve-Path (Join-Path $PSScriptRoot \"..\")` to -LiteralPath, while the target changed $PSScriptRoot to $script:MoeScriptRoot. I resolved each with the Edit tool, keeping both changes: `Resolve-Path -LiteralPath (Join-Path $script:MoeScriptRoot \"..\")`. That covers the proxy root, the daemon root and $pluginRoot, which keeps its -ErrorAction SilentlyContinue. No other byte changed and no git command was run. The task's files have no conflict markers, the BOM is kept with 0 CR, and git diff --check against MERGE_HEAD is clean.\n\nDiff against the target tip 603b46bb:\n- moe-agent.ps1 +72/-70: 70 -LiteralPath, 2 comments, 1 escaped -WorkingDirectory. Flag multiset unchanged otherwise.\n- moe-team.ps1 +7/-7.\n- ci.yml +3 (one new step).\n- daemon-json-cap.test.mjs: 1 anchor line.\n- New literal-project-path.test.mjs.\nThe static guard passes on the merged bytes, so the target's new code added no non-literal path cmdlets.\n\nFresh verification, the plan recipe archiving MERGE_HEAD plus this task's files (22:43-23:29Z):\n- Linux node --test: 3 pass / 5 Windows skips / 0 fail.\n- parity PASS.\n- Windows node: 8/8 pass, 0 skip (PS 5.1 x claude/codex/gemini/grok, pwsh 7 claude).\n- postflight-safe PS 5.1: exit 0, failureClass NONE.\n- VERIFY_EXIT=0.\n- Quality gate `parity-check && npm run lint`: exit 0.\n\nThe earlier RED and mutant evidence still holds; see the step-5/6 notes.",
+  "landingRetry": null
 }

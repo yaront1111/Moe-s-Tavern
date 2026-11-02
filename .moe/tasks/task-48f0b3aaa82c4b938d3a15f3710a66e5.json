@@ -98,8 +98,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -183,7 +183,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-11-02T23:26:42.306Z",
+  "updatedAt": "2026-11-02T23:31:20.118Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",
@@ -193,7 +193,9 @@
     "firstClaimAt": "2026-10-30T14:02:59.763Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T23:31:20.116Z",
+    "wallClockMs": 293300353
   },
   "contextFetchedBy": [
     "architect-76a2c8bb",
@@ -305,5 +307,9 @@
     "reportedAt": "2026-11-02T22:50:45.191Z",
     "source": "agent-reported"
   },
-  "completionSummary": "WT-16 is delivered. Task-wide it adds about 526 net lines across exactly the 4 waiver files (TASK rail ≤560).\n\nSteps 1-2 (prior session, checkpoint 8f059bec):\n- New doctorWorktree.ts with seven probes: worktree mode, git version, project root, control branch, target, quality gate and stale task worktrees.\n- They are hard checks when resolveWorktreeMode(settings) is 'on' and [INFO] when it is 'off'.\n- The stale probe is WARN only.\n- doctor.ts gains the 'info' symbol and runs these as probe 9.\n\nStep 3: docs/TROUBLESHOOTING.md gets TOC item 8 \"Worktree Mode\" and \"### Worktree mode: flip on / roll back\" (+78/-1).\n- A readiness table maps each doctor line to its meaning.\n- Flip on: drain, then the rescue-ref check, then the settings (qualityGate, plus resources git-land-main {1, 7200000, releaseOnDeregister true} and the git-land-<target> id rule).\n- Then the human-only migration landing: `scripts/moe-agent.sh --land-branch` / `-LandBranch`, the ancestor precondition, and a code table from WT-10M's landed code.\n- Then `git switch -c moe/control main`, worktreeMode on with consolidationBranch main, doctor, and relaunch.\n- Branch-target variant (this project's 11-02 switch).\n- Rollback: mode off, UNSET consolidationBranch, `git switch -c moe/work-<date> main`, and keep worktrees and rescue refs. It does not assume WT-14's sweep has landed.\n- The runbook has no manual merge or push to main and no force/reset advice.\n\nStep 4: the exact gate passes. A native-Windows run caught a defect in my own test: GIT_CONFIG_GLOBAL=os.devNull is `\\\\.\\nul`, which Git for Windows rejects. Fixed to the repo's 'NUL' convention.\n\nStep 5 self-review fixes:\n- The control-branch FAIL hint now names the resolved target instead of always main. It is RED-first tested.\n- The runbook says to use main instead of origin/main when there is no remote.\n\nEvidence, fresh after the last edit:\n- Exact gate exit 0: 65/65, PASS parity.\n- Native Windows (node 24.16, git 2.54.windows): 63 passed, 2 skipped by desi"
+  "completionSummary": "WT-16 is delivered. Task-wide it adds about 526 net lines across exactly the 4 waiver files (TASK rail ≤560).\n\nSteps 1-2 (prior session, checkpoint 8f059bec):\n- New doctorWorktree.ts with seven probes: worktree mode, git version, project root, control branch, target, quality gate and stale task worktrees.\n- They are hard checks when resolveWorktreeMode(settings) is 'on' and [INFO] when it is 'off'.\n- The stale probe is WARN only.\n- doctor.ts gains the 'info' symbol and runs these as probe 9.\n\nStep 3: docs/TROUBLESHOOTING.md gets TOC item 8 \"Worktree Mode\" and \"### Worktree mode: flip on / roll back\" (+78/-1).\n- A readiness table maps each doctor line to its meaning.\n- Flip on: drain, then the rescue-ref check, then the settings (qualityGate, plus resources git-land-main {1, 7200000, releaseOnDeregister true} and the git-land-<target> id rule).\n- Then the human-only migration landing: `scripts/moe-agent.sh --land-branch` / `-LandBranch`, the ancestor precondition, and a code table from WT-10M's landed code.\n- Then `git switch -c moe/control main`, worktreeMode on with consolidationBranch main, doctor, and relaunch.\n- Branch-target variant (this project's 11-02 switch).\n- Rollback: mode off, UNSET consolidationBranch, `git switch -c moe/work-<date> main`, and keep worktrees and rescue refs. It does not assume WT-14's sweep has landed.\n- The runbook has no manual merge or push to main and no force/reset advice.\n\nStep 4: the exact gate passes. A native-Windows run caught a defect in my own test: GIT_CONFIG_GLOBAL=os.devNull is `\\\\.\\nul`, which Git for Windows rejects. Fixed to the repo's 'NUL' convention.\n\nStep 5 self-review fixes:\n- The control-branch FAIL hint now names the resolved target instead of always main. It is RED-first tested.\n- The runbook says to use main instead of origin/main when there is no remote.\n\nEvidence, fresh after the last edit:\n- Exact gate exit 0: 65/65, PASS parity.\n- Native Windows (node 24.16, git 2.54.windows): 63 passed, 2 skipped by desi",
+  "completedAt": "2026-11-02T23:31:20.116Z",
+  "reviewCompletedAt": "2026-11-02T23:31:20.116Z",
+  "reviewSummary": "Reviewed checkpoint 8f059bec plus completion b99e31c2. Both are on moe/work-2026-10-24, and HEAD 717c4019 contains them. Size: 526 net non-board lines across exactly the 4 TASK-rail files (test +252, doctorWorktree.ts +192, doctor.ts +11/-6, docs +78/-1), within the 560 waiver.\n\nGate: ran the exact verification command in a git-archive snapshot of b99e31c2 (tree 93ba93a4 = candidate treeSha), under env -i, node 24.21.0, after npm ci. No build in the shared checkout. EXIT 0: build OK, doctor.test.ts 65/65, PASS parity.\n\nLive: the snapshot's built doctor, run read-only on this project (mode on, target moe/work-2026-10-24), shows all 7 worktree lines [OK] and exits 0. The stale line matches the board: 18 DONE worktrees, all under 24h.\n\nDoD:\n1. With mode on, each failing case gives [FAIL] on the named probe, every other probe [OK], exit 1: old git (stub), nested toplevel, HEAD on main, target checked out (elsewhere and at the root). All passing exits 0. A real-repo fixture covers the target case and proves doctor is read-only.\n2. Off, absent and missing settings give [INFO] with exit 0, and existing health failures still fail.\n3. DONE/ARCHIVED over 24h gives [WARN] with exit 0; boundary rows are covered.\n4. The runbooks have moe/control, `git switch -c moe/control main`, the settings keys and the human-only --land-branch step. Table codes match the landed sh and ps1.\n5. Gate above.\n\nRails: no forbidden patterns, wrapper or .moe edits; shared mode unchanged.\n\nNon-blocking: doctor.ts is 363 lines (358 before). The runbook's \"unset consolidationBranch\" means the empty string via UPDATE_SETTINGS.",
+  "requiredCheckAtDone": null
 }
