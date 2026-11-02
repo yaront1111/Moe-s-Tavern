@@ -99,7 +99,7 @@ export async function deleteTeam(state: StateManager, teamId: string): Promise<T
   // otherwise be left pointing at a now-deleted team.
   for (const worker of state.workers.values()) {
     if (worker.teamId === teamId) {
-      await state.updateWorker(worker.id, { teamId: null });
+      await state.updateWorker(worker.id, { teamId: null, lastActivityAt: worker.lastActivityAt });
     }
   }
 
@@ -235,7 +235,7 @@ export async function removeTeamMember(state: StateManager, teamId: string, work
   // stale member of this team's memberIds while its real team is another.
   const worker = state.workers.get(workerId);
   if (worker && worker.teamId === teamId) {
-    await state.updateWorker(workerId, { teamId: null });
+    await state.updateWorker(workerId, { teamId: null, lastActivityAt: worker.lastActivityAt });
   }
 
   // Leaving is deliberate: drop any eviction tombstone so the next claim does
