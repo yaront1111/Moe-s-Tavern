@@ -60,7 +60,11 @@
     # applies to the `claude` CLI; codex/gemini pick their own model. Grok gets
     # `-m <model>` only when one is explicit (-Model, settings.models.<role>,
     # MOE_GROK_MODEL) - the per-role default below is never passed to grok.
-    [string]$Model = ""
+    [string]$Model = "",
+
+    # Land this branch on main as one qualityGate-gated merge commit, then exit
+    # (WT-10M, Invoke-MoeMigrationLanding): no daemon, team, task or RPC.
+    [string]$LandBranch
 )
 
 # ---- Hot-reload supervisor --------------------------------------------------
@@ -107,6 +111,12 @@ if ($Loop -and $NoLoop) {
     # terminating error and the script dies with exit 1 before reaching exit 2.
     [Console]::Error.WriteLine("Conflicting switches: -Loop and -NoLoop cannot be used together. Choose -Loop for polling mode or -NoLoop for single-shot mode.")
     exit 2
+}
+# WT-10M: a migration starts no daemon and joins no team (Invoke-MoeMigrationLanding).
+$moeMigration = $PSBoundParameters.ContainsKey('LandBranch')
+if ($moeMigration) {
+    if (-not $LandBranch) { [Console]::Error.WriteLine('MOE_MIGRATION_BAD_ARGS: -LandBranch needs a branch name'); exit 2 }
+    $NoStartDaemon = [switch]$true
 }
 
 # WT-13 (design §6.1), twin of moe_wrapper_in_worktree in moe-agent.sh: a copy in
@@ -548,7 +558,7 @@ if ($script:MoeRuntimeProtected) {
 # makes it idempotent (finally + handler must not double-fire). Defined here,
 # before any exit can occur, so the flag/function always exist; Invoke-MoeRpc is
 # resolved lazily at call time (it's defined further down).
-$script:MoeDeregistered = $false
+$script:MoeDeregistered = $moeMigration # a migration registered nothing and sends no RPC
 # Set by Start-HeartbeatSidecar (defined later) to whatever heartbeat job is
 # CURRENTLY running, so an async Ctrl+C/exit handler firing mid-task can reach
 # it — a local try/finally around one CLI invocation only covers normal
@@ -1626,7 +1636,7 @@ function Invoke-MoeRpcRaw {
     return $null
 }
 
-if ($Team) {
+if ($Team -and -not $moeMigration) {
     Write-Host "Setting up team '$Team' for role '$Role'..."
     # Team creation is idempotent on (name, role). enter_governance strictly requires
     # team.role === 'governor', so the governor role gets a role-bound team. For
@@ -5477,8 +5487,9 @@ function New-MoeFrozenCandidate([hashtable]$Git,[string]$Tree,[string]$Base) {
         CandidateId=('cand-'+[guid]::NewGuid().ToString('N')) }
 }
 # Without -WorktreeMode this is today's full shared checkout (rail 4); -WorktreeMode
-# is the .moe-free sparse arm WT-10 calls (WT-S §2.2 L6).
-function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Command,[switch]$WorktreeMode) {
+# is the .moe-free sparse arm WT-10 calls (WT-S §2.2 L6). -NoEvidence (the migration,
+# WT-10M) records no CheckRun, an interrupted run included.
+function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Command,[switch]$WorktreeMode,[switch]$NoEvidence) {
     if (-not $Command) { return $true }
     $integrity='Test-MoeGateIntegrity'
     if ($WorktreeMode) {
@@ -5492,7 +5503,7 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
     $null = Remove-MoeGateWorkspace # an earlier leftover never blocks this candidate's gate
     $root=Join-Path ([IO.Path]::GetTempPath()) ('moe-gate-'+[guid]::NewGuid().ToString('N'))
     $script:MoeGate=@{ Root=$root; Top=$Git.Top; Workspace=(Join-Path $root 'tree'); Log=(Join-Path $root 'output.log')
-        Command=$Command; CheckId=('check-'+[guid]::NewGuid().ToString('N')); Started=$false; Finished=$false; Recorded=$false; ExitCode=0; Outcome=$null; Process=$null }
+        Command=$Command; CheckId=('check-'+[guid]::NewGuid().ToString('N')); Started=$false; Finished=$false; Recorded=[bool]$NoEvidence; ExitCode=0; Outcome=$null; Process=$null }
     $gate=$script:MoeGate
     try {
         New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
@@ -5530,7 +5541,7 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
             try { if (& $integrity $Frozen) { $gate.Outcome='passed' } } catch { }
         }
         $gate.Recorded=$true
-        if (-not (Send-MoeCheckRun $Frozen $gate)) { throw 'qualityGate check persistence failed' }
+        if (-not $NoEvidence -and -not (Send-MoeCheckRun $Frozen $gate)) { throw 'qualityGate check persistence failed' }
         if ($gate.ExitCode -ne 0) { throw "qualityGate failed (exit $($gate.ExitCode))" }
         if ($gate.Outcome -cne 'passed') { throw 'qualityGate tracked tree/index/HEAD mutation' }
         Write-Host '[OK] qualityGate passed.' -ForegroundColor Green
@@ -6671,32 +6682,40 @@ function Set-MoeJournalPushResult([string]$Path, [string]$Result) {
 
 # L9 (design §2.2): ONE non-forced push of $C, never via Push-MoeBranch (so no
 # MOE_PUSH_REBASE), read from the porcelain line for the target whatever git's exit
-# code; no definite answer goes to Resolve-MoePushOutcome. 0 published (the journal
-# says 'pushed …', L10 mirrored $C); 1 the round ends; 2 final: [remote rejected]
-# (MOE_PUSH_FAILED), or unknown (§2.6): the journal kept as 'push unknown: …', $C on
-# a push-unknown rescue ref, and no row or finalize. Twin: wt_publish.
-function Publish-MoeWorktreeLanding([hashtable]$Git, [string]$Journal, [hashtable]$Res, [hashtable]$L, [hashtable]$M, [string]$B, [string]$C) {
-    $t = $Res.Branch; $ref = "refs/heads/$t"; $rc = 3; $sum = ''
-    foreach ($line in @((Invoke-MoeGit -Top $Git.Top -GitArgs @('push', '--porcelain', 'origin', "${C}:$ref")).Out)) {
+# code; no definite answer goes to Resolve-MoePushOutcome. 0 published; 1
+# [rejected]; 2 [remote rejected]; 3 reconciled as never applying; 4 unknown (§2.6).
+# 2 and 4 set $script:MoePushDetail. It moves no local ref. Twin: wt_push_target.
+function Send-MoeLandPush([string]$Top, [string]$T, [string]$B, [string]$C) {
+    $ref = "refs/heads/$T"
+    foreach ($line in @((Invoke-MoeGit -Top $Top -GitArgs @('push', '--porcelain', 'origin', "${C}:$ref")).Out)) {
         $f = @("$line" -split "`t", 3)
         if ($f.Count -lt 2 -or $f[1].Substring($f[1].LastIndexOf([char]':') + 1) -cne $ref) { continue }
         $sum = if ($f.Count -gt 2) { $f[2] } else { '' }; $k = $f[0] + $sum
-        if ($k -cmatch '^[ *=]') { $rc = 0 } elseif ($k -cmatch '^!\[rejected\]') { $rc = 1 } elseif ($k -cmatch '^!\[remote rejected\]') { $rc = 2 }
+        if ($k -cmatch '^[ *=]') { return 0 } elseif ($k -cmatch '^!\[rejected\]') { return 1 }
+        elseif ($k -cmatch '^!\[remote rejected\]') { $script:MoePushDetail = "origin refused ${C}: $sum"; return 2 }
         break
     }
+    $rc = Resolve-MoePushOutcome $Top $T $B $C
+    if ($rc -ne 0) { $rc += 2 }
+    return $rc
+}
+# L9 through Send-MoeLandPush. 0 published (the journal says 'pushed …', L10
+# mirrored $C); 1 the round ends; 2 final: [remote rejected] (MOE_PUSH_FAILED), or
+# unknown (§2.6): the journal kept as 'push unknown: …', $C on a push-unknown
+# rescue ref, and no row or finalize. Twin: wt_publish.
+function Publish-MoeWorktreeLanding([hashtable]$Git, [string]$Journal, [hashtable]$Res, [hashtable]$L, [hashtable]$M, [string]$B, [string]$C) {
+    $t = $Res.Branch; $rc = Send-MoeLandPush $Git.Top $t $B $C
     if ($rc -eq 3) {
-        $rc = Resolve-MoePushOutcome $Git.Top $t $B $C
-        if ($rc -eq 1) {
-            Write-Host "[WARN] MOE_PUSH_FAILED: task $preflightTaskId -- origin's $t moved past $B without $C, which can never apply." -ForegroundColor Yellow
-        } elseif ($rc -eq 2) {
-            Write-Host "[WARN] MOE_PUSH_OUTCOME_UNKNOWN: task $preflightTaskId -- the push of $C to origin's $t is unsettled ($($script:MoePushDetail)); no ref moves, and the attempt stays finalizing until a pre-flight replay settles it." -ForegroundColor Yellow
-            Set-MoeJournalPushResult $Journal "push unknown: $($script:MoePushDetail)"
-            $r = Invoke-MoeRescueRef -Git $Git -TaskId $preflightTaskId -Reason 'push-unknown' -Title $M.Title -Status $M.Status -Sid $M.Sid -Sha $C
-            if ($r) { $Res.Ref = $r.Ref; $Res.Sha = $r.Sha }
-            $script:MoeFinalizeDone = $true; $script:MoeFinalizeRc = $true; $Res.Code = 'MOE_PUSH_OUTCOME_UNKNOWN'; $L.Msg = $script:MoePushDetail
-        }
+        $rc = 1; Write-Host "[WARN] MOE_PUSH_FAILED: task $preflightTaskId -- origin's $t moved past $B without $C, which can never apply." -ForegroundColor Yellow
+    } elseif ($rc -eq 4) {
+        $rc = 2
+        Write-Host "[WARN] MOE_PUSH_OUTCOME_UNKNOWN: task $preflightTaskId -- the push of $C to origin's $t is unsettled ($($script:MoePushDetail)); no ref moves, and the attempt stays finalizing until a pre-flight replay settles it." -ForegroundColor Yellow
+        Set-MoeJournalPushResult $Journal "push unknown: $($script:MoePushDetail)"
+        $r = Invoke-MoeRescueRef -Git $Git -TaskId $preflightTaskId -Reason 'push-unknown' -Title $M.Title -Status $M.Status -Sid $M.Sid -Sha $C
+        if ($r) { $Res.Ref = $r.Ref; $Res.Sha = $r.Sha }
+        $script:MoeFinalizeDone = $true; $script:MoeFinalizeRc = $true; $Res.Code = 'MOE_PUSH_OUTCOME_UNKNOWN'; $L.Msg = $script:MoePushDetail
     } elseif ($rc -eq 2) {
-        Remove-Item -LiteralPath $Journal -Force -ErrorAction SilentlyContinue; $Res.Code = 'MOE_PUSH_FAILED'; $L.Msg = "origin refused ${C}: $sum"
+        Remove-Item -LiteralPath $Journal -Force -ErrorAction SilentlyContinue; $Res.Code = 'MOE_PUSH_FAILED'; $L.Msg = $script:MoePushDetail
     }
     if ($rc -ne 0) { return $rc }
     Set-MoeJournalPushResult $Journal "pushed $C to origin/$t"
@@ -6829,6 +6848,69 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
     }
     $Res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'; $L.Msg = "$Ref moved under all $rounds rounds"
     return $false
+}
+
+# ---- Migration landing (WT-10M; design §7.3) ---------------------------------
+# -LandBranch: $Br lands on main as ONE gated merge commit C, tree M =
+# merge-tree(B, tip) and parents exactly [B, tip]: L4-L7, L9 and L10 of §2.2, at
+# most 2 rounds. It owns no task, so it takes no land lease and sends no RPC; no
+# journal, rescue ref or ledger row, and the branch never moves. Returns the exit
+# code: 0 landed or nothing to land, 1 refused or failed (nothing published), 2 bad
+# arguments. A throw prints the code of the step it ends. Twin: run_migration_landing.
+function Invoke-MoeMigrationLanding([string]$Br) {
+    $code = 'MOE_MIGRATION_BAD_ARGS'; $exit = 2; $top = "$projectPath"
+    $out = { param([string[]]$A) $r = Invoke-MoeGit -Top $top -GitArgs $A; if ($r.Rc -eq 0) { ($r.Out -join '').Trim() } else { '' } }
+    try {
+        $tip = if (-not $Br.Equals('main') -and (& $out @('check-ref-format', '--branch', $Br))) { & $out @('rev-parse', '-q', '--verify', "refs/heads/$Br^{commit}") } else { '' }
+        if (-not $tip) { throw "'$Br' is not a local branch other than main" }
+        $exit = 1; $code = 'MOE_MIGRATION_NO_GATE'; $cmd = (Read-MoeCommitSettings).qualityGate   # blank under MOE_DISABLE_QUALITY_GATE=1
+        if (-not $cmd) { throw 'settings.qualityGate is blank or MOE_DISABLE_QUALITY_GATE=1, and a migration always runs the gate' }
+        $code = 'MOE_COMMIT_FAILED'; $git = Get-MoeGitTop
+        if (-not $git) { throw "$projectPath is not a SHA-1 git repository" }
+        $top = $git.Top; $co = Test-MoeTargetCheckedOut $top 'main'; if ($co -eq 0) { $code = 'MOE_LAND_TARGET_CHECKED_OUT' }
+        if ($co -ne 1) { throw 'refs/heads/main is checked out in a worktree, or git worktree list failed' }
+        $L = @{ Remote = -not (Test-MoeNoRemote $top) }; $res = @{ Code = '' }
+        foreach ($round in 1, 2) {
+            $code = 'MOE_COMMIT_FAILED'; $res.Code = ''; $L.Msg = ''
+            $b = Sync-MoeLandTarget $top 'main' $res $L
+            if (-not $b) { if ($res.Code) { $code = $res.Code }; throw $L.Msg }
+            $bt = & $out @('rev-parse', '-q', '--verify', "$b^{tree}")
+            if (-not $bt) { throw "$b has no tree" }
+            $mt = Invoke-MoeGit -Top $top -GitArgs @('merge-tree', '--write-tree', '-z', '--name-only', $b, $tip)
+            $z = @(($mt.Out -join "`n").Split([char]0)); $m = $z[0]
+            if ($mt.Rc -eq 1 -and $m -cmatch '^[0-9a-f]{40}$') {
+                $names = @(); for ($i = 1; $i -lt $z.Count -and $z[$i]; $i++) { $names += $z[$i] }
+                $code = 'MOE_COMMIT_FAILED_CONFLICT'; throw "merging $tip into main conflicts in: $($names -join ' ')"
+            }
+            if ($mt.Rc -ne 0 -or $m -cnotmatch '^[0-9a-f]{40}$' -or -not (& $out @('cat-file', '-t', $m)).Equals('tree')) { throw "git merge-tree exited $($mt.Rc)" }
+            if ($m.Equals($bt)) { Write-Host "[info] MOE_COMMIT_NOTHING_TO_COMMIT: main ($b) already holds $Br ($tip); nothing to land." -ForegroundColor Cyan; return 0 }
+            $code = 'MOE_COMMIT_FAILED_GATE'
+            if (-not (Invoke-MoeFrozenGate $git (New-MoeFrozenCandidate $git $m $b) $cmd -WorktreeMode -NoEvidence)) { throw "the merged tree $m on $b did not pass the qualityGate" }
+            $code = 'MOE_COMMIT_FAILED'; $c = & $out @('commit-tree', $m, '-p', $b, '-p', $tip, '-m', "chore(migration): land $Br on main")
+            if (-not $c) { throw 'git commit-tree failed' }
+            $co = Test-MoeTargetCheckedOut $top 'main'; if ($co -eq 0) { $code = 'MOE_LAND_TARGET_CHECKED_OUT' }
+            if ($co -ne 1) { throw 'refs/heads/main is checked out in a worktree, or git worktree list failed' }
+            # 0 published; 1 or 3 main moved (the next round); 2 [remote rejected]; 4 unknown; 5 unreadable.
+            if ($L.Remote) { $p = Send-MoeLandPush $top 'main' $b $c }
+            elseif ((Invoke-MoeGit -Top $top -GitArgs @('update-ref', '-m', "moe: migrate $Br", 'refs/heads/main', $c, $b)).Rc -eq 0) { $p = 0 }
+            else {
+                $now = & $out @('rev-parse', '-q', '--verify', 'refs/heads/main^{commit}')
+                $p = if ($now) { (Invoke-MoeGit -Top $top -GitArgs @('merge-base', '--is-ancestor', $c, $now)).Rc } else { 5 }; if ($p -gt 1) { $p = 5 }
+            }
+            if ($p -eq 0) {
+                if ($L.Remote) { Update-MoeLandTargetMirror $top 'main' $c }
+                Write-Host "[OK] MOE_MIGRATION_LANDED branch=$Br target=main base=$b commit=$c" -ForegroundColor Green; return 0
+            }
+            if ($p -eq 2) { $code = 'MOE_PUSH_FAILED'; throw $script:MoePushDetail }
+            if ($p -eq 4) { $code = 'MOE_PUSH_OUTCOME_UNKNOWN'; throw "the push of $c is unsettled ($($script:MoePushDetail)); no local ref moved, and a rerun settles it" }
+            if ($p -eq 5) { throw 'refs/heads/main could not be read after a lost CAS' }
+            Write-Host "[branch] main moved while migrating $Br (round $round/2); rebuilding on the new tip." -ForegroundColor Yellow
+        }
+        $code = 'MOE_COMMIT_FAILED_REF_CONTENTION'; throw 'main moved under both rounds'
+    } catch {
+        Write-Host "[WARN] ${code}: migration of $Br onto main -- $($_.Exception.Message)" -ForegroundColor Yellow
+        return $exit
+    } finally { $null = Remove-MoeGateWorkspace }
 }
 
 # L11-L12 once C is on the target (Ctrl+C deferred): sync the task branch
@@ -7758,6 +7840,11 @@ function Complete-MoeToolWrite($Result) {
     foreach ($path in $paths) { $script:MoeToolWritten[(Get-MoePathKey $path)] = $path }
 }
 
+# WT-10M: every helper the migration calls is defined above; it launches no CLI.
+if ($moeMigration) {
+    try { $moeRc = Invoke-MoeMigrationLanding $LandBranch } finally { Remove-Item -LiteralPath $mcpConfigFile -Force -ErrorAction SilentlyContinue }
+    exit $moeRc
+}
 Write-Host "Launching $cliType CLI..."
 if ($cliType -eq "codex") {
     if ($CodexExec) {

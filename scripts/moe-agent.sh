@@ -218,8 +218,9 @@ cleanup_temp() {
     # NO idle-timeout fallback for hard crashes where this trap never runs: the
     # task stays assigned until daemon restart, deregister, or an explicit
     # release. WORKER_ID/PROJECT are set later in the script but read here at
-    # exit time.
-    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
+    # exit time. A migration run (--land-branch) registered nothing and sends no
+    # RPC, so a --worker-id naming a live seat is never torn down.
+    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ "${MIGRATION:-false}" != true ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
         # Via bash, not direct exec: bundled copies can lose the exec bit
         # (e.g. a bundler writeFile), which would silently skip deregister.
         bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
@@ -279,6 +280,7 @@ GEMINI_EXEC=false
 GROK_EXEC=false
 INTERACTIVE_REQUESTED=""
 MODEL=""
+MIGRATION=false; MIGRATION_BRANCH=""
 
 # Launch argv for the self-restart's `exec` (see "Self-restart when this
 # script's own bytes change on disk"). Captured BEFORE the parser below, which
@@ -362,6 +364,12 @@ while [[ $# -gt 0 ]]; do
             MODEL="$2"
             shift 2
             ;;
+        --land-branch)
+            # WT-10M: no daemon is started, no team joined, no task claimed (run_migration_landing).
+            MIGRATION=true; MIGRATION_BRANCH="${2-}"; NO_START_DAEMON=true
+            [ -n "$MIGRATION_BRANCH" ] || { echo -e "${RED}MOE_MIGRATION_BAD_ARGS: --land-branch needs a branch name${NC}" >&2; exit 2; }
+            shift 2
+            ;;
         --help|-h)
             echo "Moe Agent Wrapper"
             echo ""
@@ -386,6 +394,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --interactive            Force Claude into interactive TUI (default: on for architect/governor)"
             echo "  --no-interactive         Force one-shot --print mode (default for worker/qa; fresh CLI per task)"
             echo "  --model MODEL            Claude model override (default: all roles = claude-opus-5-5)"
+            echo "  --land-branch BRANCH     Land BRANCH on main as one qualityGate-gated merge commit, then exit"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -1974,7 +1983,7 @@ if [ -z "$TEAM" ]; then
         governor)  TEAM="Governors" ;;
     esac
 fi
-if [ -n "$TEAM" ]; then
+if [ -n "$TEAM" ] && [ "$MIGRATION" != true ]; then
     echo -e "${BLUE}Setting up team '$TEAM' for role '$ROLE'...${NC}"
 
     # Find proxy script
@@ -2289,9 +2298,11 @@ if [ "$LOOP_ENABLED" = true ]; then
 fi
 
 # Trap SIGINT/SIGTERM to exit cleanly from the loop
-# exit 0 triggers the EXIT trap which runs cleanup_temp
+# exit 0 triggers the EXIT trap which runs cleanup_temp. An interrupted
+# --land-branch migration landed nothing, so it exits 130 instead.
 LOOP_RUNNING=true
-trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM
+if [ "$MIGRATION" = true ]; then trap 'exit 130' INT TERM
+else trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM; fi
 
 # moe_rpc TOOL ARGS_JSON
 # Calls an MCP tool via the proxy and prints the tool's result text to stdout.
@@ -5470,10 +5481,12 @@ freeze_candidate() {
         FROZEN_COMMIT=$(printf '%s\n' 'Moe frozen candidate snapshot' | git -C "$MOE_TOP" commit-tree "$tree") || return 1
     fi
     FROZEN_CANDIDATE_ID=$($PYTHON_CMD -c 'import uuid;print("cand-"+uuid.uuid4().hex)') || return 1
-    record_candidate_rpc
+    # noevidence (the migration, WT-10M): no Candidate record, and nothing else changes.
+    [ "${3:-}" = noevidence ] || record_candidate_rpc
 }
-# run_frozen_gate [worktree]: no argument is today's full shared checkout (rail 4);
-# `worktree` is the .moe-free sparse arm WT-10 calls (WT-S §2.2 L6).
+# run_frozen_gate [worktree [noevidence]]: no argument is today's full shared checkout
+# (rail 4); `worktree` is the .moe-free sparse arm WT-10 calls (WT-S §2.2 L6), and
+# `noevidence` (the migration) records no CheckRun, an interrupted run included.
 run_frozen_gate() {
     [ -n "${QUALITY_GATE:-}" ] || return 0
     local integrity=gate_integrity
@@ -5489,6 +5502,7 @@ run_frozen_gate() {
     GATE_ROOT=$(mktemp -d -t moe-gate.XXXXXXXX) || return 1
     GATE_WORKSPACE="$GATE_ROOT/tree"; GATE_LOG="$GATE_ROOT/output.log"
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
+    [ "${2:-}" != noevidence ] || GATE_RECORDED=true
     GATE_RC=0; GATE_OUTCOME=""; GATE_OUT=""; GATE_PID=""
     if [ "$integrity" = gate_integrity_wt ]; then
         # Sparse from the start, never a full checkout: .moe/ is never written. The
@@ -5524,7 +5538,7 @@ run_frozen_gate() {
     elif $integrity; then GATE_OUTCOME=passed
     else GATE_OUTCOME=inconclusive; fi
     GATE_RECORDED=true
-    record_check_run_rpc || return 1
+    [ "${2:-}" = noevidence ] || record_check_run_rpc || return 1
     if [ "$GATE_RC" -ne 0 ]; then
         echo "[WARN] qualityGate failed (exit $GATE_RC); refusing branch commit." >&2; return 1
     fi
@@ -7199,31 +7213,38 @@ wt_journal_push_result() {
     receipt_journal_write "$1" "$($PYTHON_CMD -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); d["pushResult"]=sys.argv[2]; print(json.dumps(d))' "$1" "$2" 2>/dev/null)"
 }
 
-# wt_publish JOURNAL B C -- L9 (design §2.2): ONE non-forced push of C, never via
+# wt_push_target TARGET B C -- L9 (design §2.2): ONE non-forced push of C, never via
 # push_branch (so no MOE_PUSH_REBASE), read from the porcelain line for the target
-# whatever git's exit code; no definite answer goes to reconcile_push. 0 published
-# (the journal says 'pushed …', L10 mirrored C); 1 the round ends; 2 final: [remote
-# rejected] (MOE_PUSH_FAILED), or unknown (§2.6): the journal kept as 'push unknown:
-# …', C on a push-unknown rescue ref, and no row or finalize.
-wt_publish() {
-    local out flag dst sum rc=3 ref="refs/heads/$LAND_BRANCH"
+# whatever git's exit code; no definite answer goes to reconcile_push. 0 published;
+# 1 [rejected]; 2 [remote rejected]; 3 reconciled as never applying; 4 unknown (§2.6).
+# 2 and 4 set LAND_PUSH_DETAIL. It moves no local ref. Twin: Send-MoeLandPush.
+wt_push_target() {
+    local out flag dst sum rc=5 ref="refs/heads/$1"
     out=$(git -C "$MOE_TOP" push --porcelain origin "$3:$ref" 2>/dev/null) || true
     while IFS=$'\t' read -r flag dst sum; do
         [ "${dst##*:}" = "$ref" ] || continue
-        case "$flag$sum" in ' '*|'*'*|'='*) rc=0 ;; '![rejected]'*) rc=1 ;; '![remote rejected]'*) rc=2 ;; esac
+        case "$flag$sum" in ' '*|'*'*|'='*) rc=0 ;; '![rejected]'*) rc=1 ;; '![remote rejected]'*) rc=2; LAND_PUSH_DETAIL="origin refused $3: $sum" ;; esac
         break
     done <<< "$out"
+    [ "$rc" = 5 ] || return "$rc"
+    rc=0; reconcile_push "$1" "$2" "$3" || rc=$?
+    [ "$rc" = 0 ] || return $((rc + 2))
+}
+# wt_publish JOURNAL B C -- L9 through wt_push_target. 0 published (the journal says
+# 'pushed …', L10 mirrored C); 1 the round ends; 2 final: [remote rejected]
+# (MOE_PUSH_FAILED), or unknown (§2.6): the journal kept as 'push unknown: …', C on a
+# push-unknown rescue ref, and no row or finalize.
+wt_publish() {
+    local rc=0
+    wt_push_target "$LAND_BRANCH" "$2" "$3" || rc=$?
     if [ "$rc" = 3 ]; then
-        rc=0; reconcile_push "$LAND_BRANCH" "$2" "$3" || rc=$?
-        if [ "$rc" = 1 ]; then
-            echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_FAILED: task $LAND_TASK_ID -- origin's $LAND_BRANCH moved past $2 without $3, which can never apply."
-        elif [ "$rc" = 2 ]; then
-            echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_OUTCOME_UNKNOWN: task $LAND_TASK_ID -- the push of $3 to origin's $LAND_BRANCH is unsettled ($LAND_PUSH_DETAIL); no ref moves, and the attempt stays finalizing until a pre-flight replay settles it."
-            wt_journal_push_result "$1" "push unknown: $LAND_PUSH_DETAIL"; rescue_ref_from_commit "$3" push-unknown || true
-            MOE_FINALIZE_DONE=true; MOE_FINALIZE_RC=0; LAND_CODE=MOE_PUSH_OUTCOME_UNKNOWN; LAND_MESSAGE="$LAND_PUSH_DETAIL"
-        fi
+        rc=1; echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_FAILED: task $LAND_TASK_ID -- origin's $LAND_BRANCH moved past $2 without $3, which can never apply."
+    elif [ "$rc" = 4 ]; then
+        rc=2; echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_OUTCOME_UNKNOWN: task $LAND_TASK_ID -- the push of $3 to origin's $LAND_BRANCH is unsettled ($LAND_PUSH_DETAIL); no ref moves, and the attempt stays finalizing until a pre-flight replay settles it."
+        wt_journal_push_result "$1" "push unknown: $LAND_PUSH_DETAIL"; rescue_ref_from_commit "$3" push-unknown || true
+        MOE_FINALIZE_DONE=true; MOE_FINALIZE_RC=0; LAND_CODE=MOE_PUSH_OUTCOME_UNKNOWN; LAND_MESSAGE="$LAND_PUSH_DETAIL"
     elif [ "$rc" = 2 ]; then
-        rm -f "$1"; LAND_CODE=MOE_PUSH_FAILED; LAND_MESSAGE="origin refused $3: $sum"
+        rm -f "$1"; LAND_CODE=MOE_PUSH_FAILED; LAND_MESSAGE="$LAND_PUSH_DETAIL"
     fi
     [ "$rc" = 0 ] || return "$rc"
     wt_journal_push_result "$1" "pushed $3 to origin/$LAND_BRANCH"
@@ -7323,6 +7344,73 @@ wt_land_rounds() {
     LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; LAND_MESSAGE="$ref moved under all $rounds rounds"
     return 1
 }
+
+# ---- migration landing (WT-10M; design §7.3) ----------------------------------
+# run_migration_landing -- --land-branch: MIGRATION_BRANCH lands on main as ONE gated
+# merge commit C, tree M = merge-tree(B, tip) and parents exactly [B, tip]: L4-L7, L9
+# and L10 of §2.2, at most 2 rounds. It owns no task, so it takes no land lease and
+# sends no RPC; no journal, rescue ref or ledger row, and the branch never moves.
+# Exit 0 landed or nothing to land, 1 refused or failed (nothing published), 2 bad
+# arguments. Twin: Invoke-MoeMigrationLanding.
+migration_fail() { # $1 why, $2 exit code (default 1); LAND_CODE names the outcome
+    echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: migration of $MIGRATION_BRANCH onto main -- $1"
+    exit "${2:-1}"
+}
+migration_target_free() {
+    local rc=0; wt_target_checked_out main || rc=$?
+    [ "$rc" -ne 0 ] || LAND_CODE=MOE_LAND_TARGET_CHECKED_OUT
+    [ "$rc" -eq 1 ] || migration_fail "refs/heads/main is checked out in a worktree, or git worktree list failed"
+}
+run_migration_landing() {
+    local br="$MIGRATION_BRANCH" tip b bt m c rc round p names z="$SECURE_TEMP_DIR/migration-merge.z"
+    LAND_CODE=MOE_MIGRATION_BAD_ARGS
+    [ "$br" != main ] && git -C "$PROJECT" check-ref-format --branch "$br" >/dev/null 2>&1 \
+        && tip=$(git -C "$PROJECT" rev-parse -q --verify "refs/heads/$br^{commit}" 2>/dev/null) \
+        || migration_fail "'$br' is not a local branch other than main" 2
+    read_commit_settings; QUALITY_GATE="$CS_QUALITY_GATE"; LAND_CODE=MOE_MIGRATION_NO_GATE
+    [ -n "$QUALITY_GATE" ] && [ "${MOE_DISABLE_QUALITY_GATE:-0}" != 1 ] \
+        || migration_fail "settings.qualityGate is blank or MOE_DISABLE_QUALITY_GATE=1, and a migration always runs the gate"
+    LAND_CODE=MOE_COMMIT_FAILED
+    git_top || migration_fail "$PROJECT is not a SHA-1 git repository"
+    migration_target_free
+    if no_git_remote; then LAND_WT_PUB=local; else LAND_WT_PUB=remote; fi
+    for round in 1 2; do
+        LAND_CODE=MOE_COMMIT_FAILED; LAND_MESSAGE=""
+        sync_land_target main || migration_fail "$LAND_MESSAGE"
+        b="$LAND_B"; bt=$(git -C "$MOE_TOP" rev-parse -q --verify "$b^{tree}" 2>/dev/null) || migration_fail "$b has no tree"
+        rc=0; git -C "$MOE_TOP" merge-tree --write-tree -z --name-only "$b" "$tip" > "$z" 2>/dev/null || rc=$?
+        names=""; { IFS= read -r -d '' m; while IFS= read -r -d '' p && [ -n "$p" ]; do names="$names $p"; done; } < "$z" 2>/dev/null || true
+        if [ "$rc" -eq 1 ] && [[ $m =~ ^[0-9a-f]{40}$ ]]; then
+            LAND_CODE=MOE_COMMIT_FAILED_CONFLICT; migration_fail "merging $tip into main conflicts in:$names"
+        elif [ "$rc" -ne 0 ] || ! [[ $m =~ ^[0-9a-f]{40}$ ]] || [ "$(git -C "$MOE_TOP" cat-file -t "$m" 2>/dev/null)" != tree ]; then
+            migration_fail "git merge-tree exited $rc"
+        fi
+        if [ "$m" = "$bt" ]; then
+            echo -e "${BLUE}[info]${NC} MOE_COMMIT_NOTHING_TO_COMMIT: main ($b) already holds $br ($tip); nothing to land."; exit 0
+        fi
+        LAND_CODE=MOE_COMMIT_FAILED_GATE
+        freeze_candidate "$b" "$m" noevidence && run_frozen_gate worktree noevidence || migration_fail "the merged tree $m on $b did not pass the qualityGate"
+        LAND_CODE=MOE_COMMIT_FAILED
+        c=$(git -C "$MOE_TOP" commit-tree "$m" -p "$b" -p "$tip" -m "chore(migration): land $br on main" 2>/dev/null) || migration_fail "git commit-tree failed"
+        migration_target_free
+        if [ "$LAND_WT_PUB" = remote ]; then rc=0; wt_push_target main "$b" "$c" || rc=$?
+        elif git -C "$MOE_TOP" update-ref -m "moe: migrate $br" refs/heads/main "$c" "$b" >/dev/null 2>&1; then rc=0
+        elif ! p=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/main^{commit}" 2>/dev/null); then rc=5
+        else rc=0; git -C "$MOE_TOP" merge-base --is-ancestor "$c" "$p" 2>/dev/null || rc=$?; [ "$rc" -le 1 ] || rc=5
+        fi
+        case "$rc" in
+            0) [ "$LAND_WT_PUB" = local ] || mirror_land_target main "$c"
+               echo -e "${GREEN}[OK]${NC} MOE_MIGRATION_LANDED branch=$br target=main base=$b commit=$c"; exit 0 ;;
+            2) LAND_CODE=MOE_PUSH_FAILED; migration_fail "$LAND_PUSH_DETAIL" ;;
+            4) LAND_CODE=MOE_PUSH_OUTCOME_UNKNOWN; migration_fail "the push of $c is unsettled ($LAND_PUSH_DETAIL); no local ref moved, and a rerun settles it" ;;
+            5) migration_fail "refs/heads/main could not be read after a lost CAS" ;;
+        esac
+        echo -e "${YELLOW}[branch]${NC} main moved while migrating $br (round $round/2); rebuilding on the new tip."
+    done
+    LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; migration_fail "main moved under both rounds"
+}
+# Every helper above is defined, and the loop below is never entered.
+if [ "$MIGRATION" = true ]; then run_migration_landing; exit 1; fi
 
 # wt_land_published W BRANCH JOURNAL -- L11-L12 once C is on the target (signals
 # deferred): sync BRANCH (best-effort), send the journal's exact completion row
