@@ -97,8 +97,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -153,7 +153,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:35:19.557Z",
-  "updatedAt": "2026-11-02T21:43:08.505Z",
+  "updatedAt": "2026-11-02T22:35:01.540Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:12.579Z",
@@ -163,7 +163,9 @@
     "firstClaimAt": "2026-10-30T13:46:37.034Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T22:35:01.538Z",
+    "wallClockMs": 290904504
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
@@ -294,5 +296,9 @@
     "reportedAt": "2026-11-02T21:41:11.336Z",
     "source": "agent-reported"
   },
-  "completionSummary": "WT-10M adds the gated migration landing CLI to both wrappers: `moe-agent.sh --land-branch <b>` and `moe-agent.ps1 -LandBranch <b>`.\n- It lands a branch on main as ONE merge commit C, with tree M = merge-tree(B, tip) and parents exactly [B, tip].\n- M always passes the .moe-free frozen gate (noevidence), whatever the scope, and there are at most 2 rounds.\n- Publication is a non-forced `push --porcelain origin C:refs/heads/main` with reconcile, or a local update-ref CAS with an ancestry check.\n- It takes no lease and sends no RPC. It writes no journal, rescue ref, Candidate, CheckRun or ledger row, and the source branch never moves.\n- Codes: BAD_ARGS (exit 2), NO_GATE (before any fetch), CONFLICT, GATE, REF_CONTENTION, PUSH_FAILED, PUSH_OUTCOME_UNKNOWN, LAND_TARGET_CHECKED_OUT, NOTHING_TO_COMMIT (exit 0), and MOE_MIGRATION_LANDED (exit 0).\n\nStep-5 fix: an interrupt during the sh startup window printed \"Agent stopped.\" and exited 0 for an unlanded migration. The startup trap is now migration-aware and exits 130. A new sh `signal` case went RED with the old trap and GREEN with the fix; a startup-window injection showed exit 0 on HEAD and 130 on the fix.\n\nTests:\n- postflight-migration.cjs: 12/12 on sh, 11/11 on ps1 (`signal` is sh-only).\n- Exact step-4 gate, on the worktree and on merged tree M2 (current target 3e092cff + this branch): failureClass NONE, held-out worktree-landing 18/18, PASS parity, empty code diff, exit 0.\n- Project qualityGate (`parity-check.sh && npm run lint`) exit 0.\n- Held-out tests: worktree-landing.ps1 is byte-identical to WT-08T 8ad04de7. worktree-landing.sh differs only by task-3c4be125's 7c60841f.\n\nWindows: this is NOT a native Windows seat (WSL). Through interop, Windows PowerShell 5.1 ran postflight-safe powershell on a snapshot of HEAD 16d6ea4e (NONE). The ps1 bytes equal the final ones; the only later change is the sh-only cjs case. It also ran migration 11/11 and worktree-landing.ps1 18/18 on M2 with the final cjs.\n\nNet 390 non-board LOC ("
+  "completionSummary": "WT-10M adds the gated migration landing CLI to both wrappers: `moe-agent.sh --land-branch <b>` and `moe-agent.ps1 -LandBranch <b>`.\n- It lands a branch on main as ONE merge commit C, with tree M = merge-tree(B, tip) and parents exactly [B, tip].\n- M always passes the .moe-free frozen gate (noevidence), whatever the scope, and there are at most 2 rounds.\n- Publication is a non-forced `push --porcelain origin C:refs/heads/main` with reconcile, or a local update-ref CAS with an ancestry check.\n- It takes no lease and sends no RPC. It writes no journal, rescue ref, Candidate, CheckRun or ledger row, and the source branch never moves.\n- Codes: BAD_ARGS (exit 2), NO_GATE (before any fetch), CONFLICT, GATE, REF_CONTENTION, PUSH_FAILED, PUSH_OUTCOME_UNKNOWN, LAND_TARGET_CHECKED_OUT, NOTHING_TO_COMMIT (exit 0), and MOE_MIGRATION_LANDED (exit 0).\n\nStep-5 fix: an interrupt during the sh startup window printed \"Agent stopped.\" and exited 0 for an unlanded migration. The startup trap is now migration-aware and exits 130. A new sh `signal` case went RED with the old trap and GREEN with the fix; a startup-window injection showed exit 0 on HEAD and 130 on the fix.\n\nTests:\n- postflight-migration.cjs: 12/12 on sh, 11/11 on ps1 (`signal` is sh-only).\n- Exact step-4 gate, on the worktree and on merged tree M2 (current target 3e092cff + this branch): failureClass NONE, held-out worktree-landing 18/18, PASS parity, empty code diff, exit 0.\n- Project qualityGate (`parity-check.sh && npm run lint`) exit 0.\n- Held-out tests: worktree-landing.ps1 is byte-identical to WT-08T 8ad04de7. worktree-landing.sh differs only by task-3c4be125's 7c60841f.\n\nWindows: this is NOT a native Windows seat (WSL). Through interop, Windows PowerShell 5.1 ran postflight-safe powershell on a snapshot of HEAD 16d6ea4e (NONE). The ps1 bytes equal the final ones; the only later change is the sh-only cjs case. It also ran migration 11/11 and worktree-landing.ps1 18/18 on M2 with the final cjs.\n\nNet 390 non-board LOC (",
+  "completedAt": "2026-11-02T22:35:01.538Z",
+  "reviewCompletedAt": "2026-11-02T22:35:01.538Z",
+  "reviewSummary": "APPROVE WT-10M. Reviewed completion d6cbb405 on moe/work-2026-10-24 (+origin); tree bda36ef0 = candidate treeSha, parent 96c4ee19 = baseRevision. 5 declared files, +442/-52 = 390 net (<400), no scope creep.\nExact task.verification on a hash-verified git-archive snapshot of d6cbb405 (/tmp, MOE_/CLAUDE scrubbed): postflight-safe bash NONE (Z), worktree-landing.sh 18/18, PASS parity, code-family diff empty, EXIT 0 (26.4 min).\nSame-revision Windows PS 5.1.26100 Desktop via interop on a D: archive of d6cbb405: ps1 parse 0 errors + BOM, postflight-safe powershell NONE exit 0 (44.8 min), worktree-landing.ps1 18/18. Held-out suites untouched by d6cbb405.\nDirect migration suite sh 12/12. Mutants: sh 22/22 killed (parents, gate tree, evidence RPCs, NO_GATE/MOE_DISABLE, checked-out guards, rejected-final, unknown-as-success, CAS old value, startup trap, dereg/team guards, nothing-to-commit, mirror, main, --force, 1/3 rounds); ps1 4/5 killed. 9 extra sh probes (live-seat MOE_ATTEMPT/WORKER env, fetch fail, diverged, gate writes .moe, nested project, role governor, empty arg): zero RPC, nothing published on failure.\nDoD 1-6 met: C tree = merge-tree(B,tip), parents [B,tip]; NO_GATE before any fetch; gate ignores scope; no Candidate/CheckRun/ledger/claim/RPC (TASK-rail reading of DoD 3); conflict/gate/2 rejected rounds/unknown publish nothing; rerun NOTHING_TO_COMMIT; gates green on both engines. Epic + global rails hold; matches WT-S 7.3.\nNon-blocking: ps1 $script:MoeDeregistered=$moeMigration is defensive only (dispatch :7844 precedes outer try :8216, mutant unobservable); sh moe_rpc in migration mode cannot reach the MOE_PROXY_PATH tripwire (TEAM_PROXY unset), so a stray evidence RPC fails closed; success-path cases catch it.\nContention: 12/13 seats live, gradle leases free, tasklist end node 18/powershell 10/java 2 (proxy, not CPU); load 6 -> 13.7 -> 7.7; start samples not taken.",
+  "requiredCheckAtDone": null
 }

@@ -11,21 +11,29 @@
     {
       "stepId": "step-1",
       "description": "TDD red: write the twin regression test first, then wire it into CI. Create scripts/tests/intent-journal.test.mjs modeled on scripts/tests/push-failure-message.test.mjs. Reuse its `slice(source, start, end)` helper, which asserts both markers are found, and its engine matrix: win32 runs bash 'C:/Program Files/Git/bin/bash.exe', 'powershell.exe' and 'pwsh.exe'; other platforms run '/bin/bash' and 'pwsh', skipping pwsh when `spawnSync(pwsh, ['-NoProfile','-Command','exit 0']).status !== 0`.\n\nSlice the REAL writers out of the wrapper sources, never a copy: ps1 from 'function Write-MoeIntentJournal(' up to 'function Get-MoeBaselineLandedFlag('; sh from 'intent_journal_write() {' up to 'receipt_send() {'.\n\nFor every engine run three cases. Each case gets its own mkdtemp dir, removed by t.after(() => rmSync(dir, {recursive:true, force:true})) so cleanup runs even on failure. The journal lives at <dir>/gitdir/moe/receipt/task-fixture.json.\n(a) overwrite: the receipt dir exists and the journal holds '{\"stale\":true}';\n(b) create: neither the journal nor moe/receipt exists;\n(c) directory: an existing empty directory sits at the journal path.\n\nBash script: `PYTHON_CMD=<'python' on win32, else 'python3'>`, then the sh slice, then `if intent_journal_write \"$JOURNAL_PATH\" \"$JOURNAL_REPORT\"; then echo RESULT=ok; else echo RESULT=fail; fi`. JOURNAL_REPORT is a fixed compact JSON string with no '/' characters, which keeps MSYS2 argument path conversion out of Git Bash.\n\nPowerShell script: write it with a '\\ufeff' prefix and run it with -NoProfile -NonInteractive -File. Body: `$ErrorActionPreference='Stop'`, then the ps1 slice, then an [ordered] report {taskId, attemptId, generation (an int), ledger=[ordered]@{sessionId; role; status}} and `$ok = Write-MoeIntentJournal $env:JOURNAL_PATH $r; 'RESULT=' + [string]$ok`. Matching an exact 'RESULT=True' or 'RESULT=False' line also catches a leaked pipeline value.\n\nPass both values by env, using JOURNAL_PATH and JOURNAL_REPORT, never MOE_* names. Forward-slash the path for bash, as the template does.\n\nAssertions, mutation-resistant, with error handling for a missing engine or a timeout: assert.ifError(result.error), then status 0, with stdout+stderr in each message.\n- (a) and (b): the success line. The file does not start with a UTF-8 BOM. The sh bytes equal JOURNAL_REPORT exactly; for PowerShell, JSON.parse of the file deep-equals the report object. readdirSync(receipt dir) deep-equals ['task-fixture.json']: no *.tmp.* and no backup.\n- (c): the failure line. The journal path is still an empty directory, and the receipt dir lists only it.\n\nCI: append scripts/tests/intent-journal.test.mjs to the node --test list of the 'Test agent runtime discovery' step in .github/workflows/ci.yml, beside push-failure-message.test.mjs. That step runs on ubuntu, windows and macOS.\n\nWrite both files with the Write/Edit tools only. ci.yml is declared by other open rows, and a shell write leaves no witness, so the path would be held at landing.\n\nRed evidence: from WSL, run `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/intent-journal.test.mjs` against the UNFIXED wrapper. Exactly the powershell and pwsh overwrite cases must fail (RESULT=False). Every bash case and every create/directory case must pass. Put the failing case names in the step note. If any other case fails, fix the test, not the wrapper.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".github/workflows/ci.yml"
       ],
       "newFiles": [
         "scripts/tests/intent-journal.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/intent-journal.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Red evidence on unfixed wrapper via Windows node.exe: only \"powershell: intent journal overwrite\" and \"pwsh: intent journal overwrite\" fail (RESULT=False); all bash cases and the create/directory cases pass. WSL node: bash 3 pass, pwsh 3 skipped. ci.yml node --test list now includes intent-journal.test.mjs.",
+      "startedAt": "2026-11-02T22:34:20.765Z",
+      "completedAt": "2026-11-02T22:34:55.442Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix scripts/moe-agent.ps1 Write-MoeIntentJournal by changing ONLY `[IO.File]::Replace($tmp, $Path, $null)` to `[IO.File]::Replace($tmp, $Path, [NullString]::Value)`.\n\nWhy: PowerShell passes $null to a .NET string parameter as \"\", and File.Replace rejects that. Verified 2026-10-31: PS 5.1.26100 says 'The path is not of a legal form' and pwsh 7.6.9 says 'The path is empty'. [NullString]::Value overwrites on both and leaves no tmp file. So every overwrite of an existing strong journal returned $false, and the landing refused with MOE_COMMIT_REFUSED_INTENT_UNWRITABLE, while sh's os.replace overwrites.\n\nKeep File.Replace, the atomic replace that CQ-V07 chose. Do NOT switch to Move-Item -Force: the function's own comment says it deletes first. Do NOT use File.Move's 3-argument overload either: it does not exist in PS 5.1's .NET Framework.\n\nAdd one line to the function's comment explaining why [NullString]::Value is needed, citing task-f6228433.\n\nChange nothing else: not the error handling (the catch removes the tmp and returns $false), not the call site in Invoke-MoeLanding, not scripts/moe-agent.sh.\n\nEdit with the Edit tool only. Many open rows declare this file, and a shell write leaves no TOOL witness, so the path would be held at landing. Keep the UTF-8 BOM and LF line endings.\n\nTDD green: re-run the step-1 node.exe command; every case passes.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T22:34:56.194Z"
     },
     {
       "stepId": "step-3",
@@ -42,7 +50,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -65,7 +73,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T14:18:10.500Z",
-  "updatedAt": "2026-11-02T19:41:19.936Z",
+  "updatedAt": "2026-11-02T22:34:56.194Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T15:03:15.203Z",
@@ -74,16 +82,20 @@
   "metrics": {
     "firstClaimAt": "2026-10-31T15:05:14.015Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-8419009e"
+    "architect-8419009e",
+    "worker-8cf0816c"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T15:14:57.647Z",
   "executionContract": {
@@ -153,5 +165,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-8419009e@2026-10-31T15:05:16Z",
     "at": "2026-10-31T15:27:23.972Z"
-  }
+  },
+  "workStartedAt": "2026-11-02T22:34:20.765Z"
 }

@@ -108,8 +108,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -153,7 +153,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T22:32:29.082Z",
+  "updatedAt": "2026-11-02T22:35:01.596Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
@@ -277,22 +277,49 @@
       "treeId": "13ed0056961e50d2dc1712849cd3b6ef231ca74d",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "373dc3d4d5d3da4ef70d815caeb74671abe09e7a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-02T22:18:36Z",
+      "paths": [
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-02T22:35:01.596Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "scripts/CLAUDE.md",
-    "scripts/moe-agent.ps1",
-    "scripts/moe-agent.sh",
     "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
-    "scripts/tests/postflight.sh"
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-ed0f6a9e@2026-11-02T22:15:29Z",
-    "at": "2026-11-02T22:18:00.639Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-02T22:18:36Z",
+    "at": "2026-11-02T22:35:01.596Z"
+  },
+  "reviewStartedAt": "2026-11-02T22:33:19.847Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-69c024444381492c85878307df40c6e2 && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-69c02444.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js scripts/CLAUDE.md; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\"",
+    "exitCode": 0,
+    "outputTail": "pped: this host cannot create symlinks\n[scenario AD] ok\n[scenario AE] skipped: this host cannot create symlinks\n[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle\n[scenario AF] ok\n[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy\n[scenario AG] ok\n[scenario AH] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs\n[scenario AH] ok\n[scenario AI] a held contested path reaches record_commit on both nothing landings\n[scenario AI] ok\n[scenario AJ] peel failures and rescue records retain held contested paths\n[scenario AJ1] ok\n[scenario AJ2] ok\n[scenario AJ] ok\n[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named\n[scenario AK] ok\n[scenario AL] a contested hold names the peer that caused it: editing, then active, then idle\n[scenario AL] ok\n[scenario AM] a codex exec seat's completed file_change or Serena edit witnesses its path; a failed or outside one does not\n[scenario AM] ok\ncommit-scope scenarios run: 44\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\n[worktree reuse] a half-made W is finished, an emptied index is kept, a failed budget probe refuses\n[worktree reuse] ok\n[protected runtime] a protected launch runs the exact runtime paths or refuses\n[protected runtime] ok\nPASS postflight.ps1",
+    "reportedAt": "2026-11-02T22:33:19.847Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "A hot reload now loads only committed bytes. After the ls-files/diff gate, the wrapper copies itself into a private moe-wrapper-pin.* folder and checks the copy's hash-object against HEAD:./<leaf>. Only then does it parse and run the copy (sh: exec \"$BASH\" <pin>; ps1: & $global:MoeWrapperReloadPin). The copy deletes itself after the launch hash. A copy without the hand-over marker reloads from the checkout, as before.\n\nLines changed:\n- moe-agent.sh: +74/-15\n- moe-agent.ps1: +99/-27\n- postflight.sh: +65\n- postflight.ps1: +84\n- postflight-fake-proxy.js: +8\n- scripts/CLAUDE.md: +1/-1\nNet +288.\n\nRED before any wrapper edit: /mnt/d/moe-scratch/red-69c02444.HXkfgr.{sh,ps1}.log. Both exited 1 with 'HOT RELOAD (RACE) FAILED: the restart loaded bytes written after the committed check'.\n\nGREEN: gate-69c02444.205923 ran 11-02 20:59-22:13Z, exit 0. parity-check, postflight.sh and postflight.ps1 all pass, and [hot reload race] is ok on both (sequence crcccrcccrccc). It was not rerun because the 6 files are cmp-identical to its snapshot v-69c02444.x2uOsC. This session I reran bash -n and parity-check: green. The gate runs from the task worktree because in worktree mode the task bytes exist only on the task branch.\n\nDeviations from the plan:\n- The sh self-delete runs when BASH_SOURCE != MOE_WRAPPER_FILE.\n- Added a wrapper_pin_stage helper.\n- The refusal-path substitution is quoted (bash 5.2 patsub &).\n- The ps1 pin is global-only.\n- Deletes are non-recursive.\n- The ps1 copy deletes itself after the launch hash.\n- Phase B asserts the self-delete.\n- Docs say six [hot reload*] arms.\n\nStep-7 review: checklist a-g clean, no code change. PS 5.1 and pwsh 7 probes with TEMP set to 't ëmp' and 'tmp [x]' pass, and WriteAllBytes adds no Zone.Identifier. The theoretical risks are in the step-7 note. The target is now 863629c8, and merge-tree onto it is clean (tree 4cff99f5)."
 }

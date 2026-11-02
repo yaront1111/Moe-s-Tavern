@@ -19,7 +19,17 @@
       "affectedFiles": [
         "packages/moe-daemon/src/tools/archiveEpic.test.ts",
         "packages/moe-daemon/src/tools/reportBlocked.test.ts"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "RED tests first (test-driven-development). Write both test files with the Edit tool only (customRule: shell writes leave no TOOL witness). A reference copy of these exact cases, the simulated runtime diff and the architect's RED/GREEN output are in /mnt/d/moe-scratch/5988c226-plan/ (README.md, ae-case.ts, rb-cases.ts, simulated-fix.diff). They are suggestions; the DoD is the contract.\n\n(a) archiveEpic.test.ts: add `import { setTaskStatusTool } from './setTaskStatus.js';`. New case 'clears a BLOCKED row's block fields exactly as archive_task does; un-archiving carries none of them':\n- h.createEpic({ id: 'epic-2' }); h.createTask({ id: 'task-dep', epicId: 'epic-2', status: 'WORKING' }); h.createTask({ id: 'task-done', status: 'DONE' }); h.createTask({ id: 'task-bk', status: 'BLOCKED', blockedReason: 'needs PostgreSQL', blockedResourceId: 'pg-box', blockedOnTaskIds: ['task-dep'], blockedFromStatus: 'WORKING', blockedAt: '2026-09-05T22:22:00.000Z' }); await h.state.load().\n- Archive epic-1 and expect archivedTaskCount 2.\n- task-bk toMatchObject { status: 'ARCHIVED', priorBlockedReason: 'needs PostgreSQL', blockedReason: null, blockedResourceId: null, blockedOnTaskIds: null, blockedFromStatus: null, blockedAt: null }.\n- task-done is ARCHIVED and (priorBlockedReason ?? null) is null: non-BLOCKED rows archive as before.\n- set_task_status task-bk ARCHIVED→WORKING, then expect { status: 'WORKING', blockedOnTaskIds: null, blockedFromStatus: null }.\nEvery block field starts non-null, so each assertion can fail. The prerequisite sits in ANOTHER epic on purpose: updateTask runs runDependencyUnblock on every DONE/ARCHIVED transition, so a prerequisite archived by the same call could restore task-bk mid-loop, depending on readdir order (flaky across platforms). blockedResourceId also keeps that scan off the row.\n\n(b) reportBlocked.test.ts, first describe, just before the it.each 'drops dependency cycles and alerts #governors (explicit=%s)':\n- Case A 'a WORKING row carrying a stale DONE blockedOnTaskIds entry blocks on [] alone: parked dep-less, stale ids cleared'. Setup: const stale = await state.createTask({ epicId: 'epic-1', title: 'Old prerequisite', status: 'DONE' }); then state.tasks.set('task-1', { ...state.getTask('task-1')!, blockedOnTaskIds: [stale.id] }), a fixture write like the one in 'auto-unblocks on the real dependency…'. Call: result = await report({ reason: 'staging DB is down', blockedOnTaskIds: [] }). Expect:\n  - result.blocked not.toBe(false); result.dependenciesSatisfied undefined; result.taskStatus 'BLOCKED';\n  - result.blockedOnTaskIds and result.satisfiedBlockedOnTaskIds undefined; result.seatFreed true;\n  - result.blockResolution toContain 'No unmet blockedOnTaskIds were recorded';\n  - result.notified toEqual { target: '@governors', via: 'governors-fallback' } (the fixture has no architect), and one mentionedGeneralPosts() entry contains 'blocked on task-1' and the reason;\n  - stored task-1 has status 'BLOCKED' and (blockedOnTaskIds ?? null) null;\n  - await runDependencyUnblock(state) returns [] and task-1 stays BLOCKED.\n- Case B 'a stale OPEN id on a WORKING row is not unioned into an explicit list: the row waits on the real blocker only'. Setup: stale and real are both WORKING; fixture task-1 blockedOnTaskIds [stale.id]. Call: report({ reason: `waiting on ${real.id}`, blockedOnTaskIds: [real.id] }). Expect result.blockedOnTaskIds and the stored ids toEqual [real.id]. Fixture stale → DONE: runDependencyUnblock returns []. Fixture real → DONE: it returns ['task-1'].\n\nDoD 3's 'asserts blocked:true' is read as pinned by TASK rail proposal prop-583816507c344cfeaa139033c7c6193c (approved or pending). The Blocked answer has no `blocked` key, so case A asserts blocked is not false, dependenciesSatisfied undefined and taskStatus 'BLOCKED'. Do not add a `blocked` response field.\n\nRED: build a whole-repo snapshot OUTSIDE the shared checkout from the task worktree (never npm or vitest in place). Overlay an EXPLICIT list of this task's owned files, never `git diff --name-only`, which can carry a peer's half-done edits if the session ever runs shared (mem:gotcha-daemon-linux-snapshot-gate). At this step the list is the two test files only, so the runtime is still unchanged. Guard every cd:\n  W=$(git rev-parse --show-toplevel) || exit 1; SNAP=$(mktemp -d) || exit 1\n  git -C \"$W\" archive HEAD | tar -x -C \"$SNAP\" || exit 1\n  for f in packages/moe-daemon/src/tools/archiveEpic.test.ts packages/moe-daemon/src/tools/reportBlocked.test.ts; do cp \"$W/$f\" \"$SNAP/$f\" && cmp \"$W/$f\" \"$SNAP/$f\" || exit 1; done\n  cd \"$SNAP/packages/moe-daemon\" || exit 1\n  env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts'\nOn a native Windows seat, use the equivalent steps. A bare `git archive HEAD` with no overlay runs the unchanged files and proves nothing. Expected: exactly the 3 new cases fail and every existing case passes (architect run: 3 failed | 65 passed). Quote each failure in complete_step. The expected shapes are:\n- archiveEpic: expected { id: 'task-bk', …(25) } to match object { status: 'ARCHIVED', …(6) };\n- case A: expected false not to be false;\n- case B: expected [ …(2) ] to deeply equal [ Array(1) ].\nKeep the log under /mnt/d/moe-scratch/5988c226-<workerId>/.",
+          "reason": "Snapshot recipe hardened before any worker started: overlay an explicit list of owned files instead of `git diff --name-only` (mem:gotcha-daemon-linux-snapshot-gate), archive the whole repo, and run under env -i with NO_COLOR. Test content is unchanged.",
+          "amendedBy": "architect-24611a0a",
+          "amendedAt": "2026-11-02T22:34:33.417Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -45,7 +55,17 @@
       "affectedFiles": [
         "packages/moe-daemon/src/tools/archiveEpic.test.ts",
         "packages/moe-daemon/src/tools/reportBlocked.test.ts"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification, run once. Build a FRESH whole-repo snapshot from the task worktree with the step-1 recipe. This time the explicit overlay list is all five owned files, each cmp-checked: packages/moe-daemon/src/tools/archiveEpic.ts, archiveTask.ts, reportBlocked.ts, archiveEpic.test.ts and reportBlocked.test.ts. Run `npm ci --no-audit --no-fund` under env -i (HOME, NO_COLOR=1, and the nvm node v24.21.0 bin first on PATH). Never run it in place in the shared control checkout (customRule: the daemon runs from packages/moe-daemon/dist). Then run exactly:\n  cd packages/moe-daemon && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/setTaskStatus.test.ts\nIt must exit 0 with 4 files passed: 91 tests at HEAD ecf00c18 plus the new cases. The architect's run with the three cases above passed 94; if a later landing changed one of these files, report base + N. That command, its exit code and its output tail are the complete_task verification evidence (DoD 4).\n\nIn the same snapshot also run `npx tsc --noEmit -p .` (vitest does not typecheck the helper's Pick signature) and report its exit 0 beside the evidence.\n\nThen `git -C <worktree> diff --stat HEAD` must list only archiveEpic.ts, archiveTask.ts, reportBlocked.ts, archiveEpic.test.ts and reportBlocked.test.ts under packages/moe-daemon/src/tools (DoD 5). Declare those five as modifiedFiles.",
+          "reason": "Same hardening as step 1: a whole-repo snapshot with an explicit five-file overlay, each file cmp-checked, under env -i with NO_COLOR. The gate command and the expected counts are unchanged.",
+          "amendedBy": "architect-24611a0a",
+          "amendedAt": "2026-11-02T22:34:33.466Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-5",
@@ -57,9 +77,9 @@
       ]
     }
   ],
-  "planRevision": 1,
+  "planRevision": 3,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-fdb2af60",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -78,7 +98,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:52.279Z",
-  "updatedAt": "2026-11-02T22:31:12.822Z",
+  "updatedAt": "2026-11-02T22:34:33.467Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:25.066Z",
@@ -90,7 +110,8 @@
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-fdb2af60"
   ],
   "tier": "standard",
   "effort": "high",
