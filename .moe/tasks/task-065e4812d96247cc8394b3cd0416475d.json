@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:33.390Z",
-  "updatedAt": "2026-11-02T12:01:12.230Z",
+  "updatedAt": "2026-11-02T12:01:52.729Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:31:41.158Z",
     "plannedStepCount": 5,
@@ -208,7 +208,40 @@
   },
   "filesModified": [
     "moe-vscode/tests/accounts-corpus.test.cjs",
+    "moe-vscode/src/util/AccountPresentation.ts",
+    ".moe/tasks/task-065e4812d96247cc8394b3cd0416475d.json",
+    ".moe/tasks/task-6fbd08111de142508fb0402d06f24e3f.json"
+  ],
+  "completionSummary": "VS Code now has a pure TypeScript port of JetBrains' Accounts presentation, and it passes the shared accounts corpus unchanged. NEW moe-vscode/src/util/AccountPresentation.ts (258 lines, no import, no vscode word): parseAccountRotation(unknown) with MoeJson's rules (windows in a Map; first duplicate id wins; switchAtPercent whole 1..100 else 90; unknown signIn reads signed_out; vmToken only a real boolean), rows, chips, actions, isValidLabel (daemon rule: trim, <=64, no U+0000..1F/7F; C1 controls pass), ACCOUNT_TEXT (23 keys equal to MoeBundle.properties) and resolveAccountText (single-pass {n}, unknown key shown as the key). Time/zone are parameters (Intl h23, unknown zone reads UTC, non-ISO text shown as sent). NEW moe-vscode/tests/accounts-corpus.test.cjs (138 lines, 5 tests): loads the module under node:vm with a require that throws on every name, replays all 15 rotation rows (failing ids reported together) and 14 label cases, checks the resolver and every ACCOUNT_TEXT template against the bundle, and one extra test pins parse rules and never-throws behaviour the corpus does not pin. Net 396 lines under the 400 cap. Evidence: RED at HEAD (module missing, ENOENT), GREEN after overlay; DoD mutant moveUp index>=0 fails exactly C04, C06, C11, C13; 36-mutant sweep, no survivor after the extra test; checkRef verbatim in a fresh git-archive snapshot EXIT=0, lint 0, compile 0, npm test 527 tests / 523 pass / 4 skip (Windows) / 0 fail. The first checkRef run failed lint (no-control-regex on the label pattern); fixed with a charCode check. client-accounts.json (sha256 e08b58c8...95fc), MoeBundle.properties and every moe-jetbrains file are untouched (git diff --exit-code 0). Also exported types AccountRow, AccountActions and PresentedWindow (declaration emit needs them nameable). Not pinned by the corpus: zone is UTC-only, and Kotlin strips U+001C..U+001F at the edges while JS strips U+FEFF.",
+  "commits": [
+    {
+      "sha": "b863458abe0d8ccdcd7a048544236921bd61d549",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T11:53:38Z",
+      "paths": [
+        ".moe/tasks/task-065e4812d96247cc8394b3cd0416475d.json",
+        ".moe/tasks/task-6fbd08111de142508fb0402d06f24e3f.json",
+        "moe-vscode/src/util/AccountPresentation.ts",
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T12:01:52.729Z",
+      "treeId": "c7fcbceeec2531783f860dc10f1d3fa4458a10ed",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/accounts-corpus.test.cjs",
     "moe-vscode/src/util/AccountPresentation.ts"
   ],
-  "completionSummary": "VS Code now has a pure TypeScript port of JetBrains' Accounts presentation, and it passes the shared accounts corpus unchanged. NEW moe-vscode/src/util/AccountPresentation.ts (258 lines, no import, no vscode word): parseAccountRotation(unknown) with MoeJson's rules (windows in a Map; first duplicate id wins; switchAtPercent whole 1..100 else 90; unknown signIn reads signed_out; vmToken only a real boolean), rows, chips, actions, isValidLabel (daemon rule: trim, <=64, no U+0000..1F/7F; C1 controls pass), ACCOUNT_TEXT (23 keys equal to MoeBundle.properties) and resolveAccountText (single-pass {n}, unknown key shown as the key). Time/zone are parameters (Intl h23, unknown zone reads UTC, non-ISO text shown as sent). NEW moe-vscode/tests/accounts-corpus.test.cjs (138 lines, 5 tests): loads the module under node:vm with a require that throws on every name, replays all 15 rotation rows (failing ids reported together) and 14 label cases, checks the resolver and every ACCOUNT_TEXT template against the bundle, and one extra test pins parse rules and never-throws behaviour the corpus does not pin. Net 396 lines under the 400 cap. Evidence: RED at HEAD (module missing, ENOENT), GREEN after overlay; DoD mutant moveUp index>=0 fails exactly C04, C06, C11, C13; 36-mutant sweep, no survivor after the extra test; checkRef verbatim in a fresh git-archive snapshot EXIT=0, lint 0, compile 0, npm test 527 tests / 523 pass / 4 skip (Windows) / 0 fail. The first checkRef run failed lint (no-control-regex on the label pattern); fixed with a charCode check. client-accounts.json (sha256 e08b58c8...95fc), MoeBundle.properties and every moe-jetbrains file are untouched (git diff --exit-code 0). Also exported types AccountRow, AccountActions and PresentedWindow (declaration emit needs them nameable). Not pinned by the corpus: zone is UTC-only, and Kotlin strips U+001C..U+001F at the edges while JS strips U+FEFF."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T11:53:38Z",
+    "at": "2026-11-02T12:01:52.729Z"
+  }
 }
