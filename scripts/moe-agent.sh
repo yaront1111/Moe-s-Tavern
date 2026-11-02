@@ -507,11 +507,11 @@ protected_trusted_dir() { # $1 = directory, $2 = project's real path
     done
     printf '%s\n' "$real"
 }
-protected_path_lookup() { # $1 = name, $2 = project directory
+protected_path_lookup() { # $1 = name, $2 = project directory, $3 = msys/cygwin extensions (default .exe .cmd)
     local entries entry real ext exts="" project_real
     [ -n "$2" ] || return 1
     project_real=$(cd -- "$2" 2>/dev/null && pwd -P) || return 1
-    case "$OSTYPE" in msys*|cygwin*) exts=".exe .cmd" ;; esac
+    case "$OSTYPE" in msys*|cygwin*) exts="${3-.exe .cmd}" ;; esac
     IFS=: read -r -a entries <<< "$PATH"
     for entry in "${entries[@]}"; do
         real=$(protected_trusted_dir "$entry" "$project_real") || continue
@@ -525,22 +525,26 @@ protected_path_lookup() { # $1 = name, $2 = project directory
     return 1
 }
 protected_pin_interpreters() {
-    local project project_real="" candidate real
+    local project project_real="" candidate real exe=""
+    case "$OSTYPE" in msys*|cygwin*) exe=".exe" ;; esac
     project=$(normalize_path "$PROJECT")
     if [ -n "$project" ]; then
         project_real=$(cd -- "$project" 2>/dev/null && pwd -P) || project_real=""
     fi
     NODE_CMD=""
+    # use_node puts only the pinned file's dir first on PATH, while moe-call.sh and
+    # env shebangs look up the NAME node: pin only a file that name resolves to.
     for candidate in "${MOE_NODE_COMMAND:-}" "$HOME/.local/share/moe/node/current/bin/node"; do
         [ -n "$project_real" ] || break
         case "$candidate" in /*) ;; *) continue ;; esac
+        case "${candidate##*/}" in node|"node$exe") ;; *) continue ;; esac
         [ -f "$candidate" ] && [ -x "$candidate" ] || continue
         real=$(protected_trusted_dir "${candidate%/*}/" "$project_real") || continue
         NODE_CMD="$real/${candidate##*/}"
         break
     done
     if [ -z "$NODE_CMD" ]; then
-        NODE_CMD=$(protected_path_lookup node "$project") || refuse_protected_agent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start."
+        NODE_CMD=$(protected_path_lookup node "$project" "$exe") || refuse_protected_agent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start."
     fi
     use_node
     PYTHON_CMD=$(protected_path_lookup python3 "$project") || refuse_protected_agent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: python3 was not found on an absolute PATH entry outside the project; refusing to start."

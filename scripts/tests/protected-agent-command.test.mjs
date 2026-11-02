@@ -56,9 +56,15 @@ function fixture(t) {
     runtime: path.join(root, 'runtime.js'), ran: path.join(root, 'ran.log'), rpc: path.join(root, 'rpc.log'), mcp: path.join(root, 'mcp-snapshot.json') };
   for (const d of [fx.home, fx.tmp, path.join(fx.project, '.moe'), path.join(fx.project, 'bin'), fx.trusted, fx.empty, fx.custom]) mkdirSync(d, { recursive: true });
   // PS removes its temp config on exit; capture the actual bytes at the RPC boundary.
+  // FAKE_RPC_TOOLS=1 (sh rows: every call pipes its request in) also logs each tool.
   writeFileSync(fx.runtime, `const fs = require('fs'); fs.appendFileSync(${JSON.stringify(fx.rpc)}, 'rpc\\n');
 for (const f of fs.readdirSync(${JSON.stringify(fx.tmp)})) if (/^moe-mcp-config-.*\\.json$/.test(f))
-  fs.copyFileSync(require('path').join(${JSON.stringify(fx.tmp)}, f), ${JSON.stringify(fx.mcp)});\n`);
+  fs.copyFileSync(require('path').join(${JSON.stringify(fx.tmp)}, f), ${JSON.stringify(fx.mcp)});
+if (process.env.FAKE_RPC_TOOLS === '1') {
+  let input = ''; process.stdin.on('data', (d) => { input += d; }).on('end', () =>
+    fs.appendFileSync(${JSON.stringify(fx.rpc)}, 'tool ' + (/"name":"([^"]*)"/.exec(input) || ['', '?'])[1] + '\\n'));
+  setTimeout(() => process.exit(0), 5000).unref();
+}\n`);
   // moe-agent.sh puts its node's own dir first on PATH; a dir holding only node
   // keeps a host-wide codex next to the real node out of the rows.
   fx.node = windows ? 'node' : path.join(root, 'nodebin', 'node');
@@ -155,6 +161,10 @@ function assertRuntime(fx, r) {
   assert.ok(existsSync(fx.rpc), `no runtime call\n${show(r)}`);
   assert.doesNotMatch(existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8') : '', /^project /m, show(r));
 }
+// sh exit: moe-call.sh found a real node by name, built the request and reached the runtime.
+function assertDeregistered(fx, r) {
+  assert.match(readFileSync(fx.rpc, 'utf8'), /^tool moe\.deregister_worker$/m, show(r));
+}
 function assertMcpNode(engine, fx) {
   const file = engine.kind === 'sh' ? path.join(fx.project, '.mcp.json') : fx.mcp;
   const config = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
@@ -168,9 +178,15 @@ for (const engine of ENGINES) {
     test(name(`N1 pins interpreters past a planted ${label} entry through runtime and exit`), opts, async (t) => {
       const fx = fixture(t); plantInterpreters(fx);
       cliStub(fx, fx.trusted, 'claude', 'trusted');
-      const r = await run(engine, fx, { command: 'claude', pathEntries: [entry(fx), fx.empty, nodeBin(fx), fx.trusted, ...TAIL], env: { MOE_NODE_COMMAND: undefined } });
+      const sh1 = engine.kind === 'sh';
+      // The sh exit deregister, moe-call.sh, stops at a missing daemon.json before it runs node.
+      if (sh1) writeFileSync(path.join(fx.project, '.moe', 'daemon.json'), '{}');
+      const r = await run(engine, fx, { command: 'claude', pathEntries: [entry(fx), fx.empty, nodeBin(fx), fx.trusted, ...TAIL], env: { MOE_NODE_COMMAND: undefined, ...(sh1 && { FAKE_RPC_TOOLS: '1' }) } });
       assertRuntime(fx, r); assertNode(engine, fx, r); assertMcpNode(engine, fx);
-      if (engine.kind === 'sh') assert.ok(lines(r).includes(`[OK] Using python3: ${path.join(realpathSync('/usr/bin'), 'python3')}`), show(r));
+      if (sh1) {
+        assert.ok(lines(r).includes(`[OK] Using python3: ${path.join(realpathSync('/usr/bin'), 'python3')}`), show(r));
+        assertDeregistered(fx, r);
+      }
     });
   }
   test(name('N2 skips direct, linked and dot-dot in-project node directories'), opts, async (t) => {
@@ -230,6 +246,19 @@ for (const override of ['node', './node', 'project', 'outside', 'managed']) {
     }
     const r = await run(sh, fx, { command: 'claude', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL], stopOn: 'MOE_PROTECTED_AGENT_CLI:', env: { MOE_NODE_COMMAND: value } });
     assertResolved(fx, r, 'claude', path.join(fx.trusted, 'claude')); assertNode(sh, fx, r, expected);
+  });
+}
+// use_node puts only the pinned file's dir first on PATH, while moe-call.sh and env
+// shebangs look up the NAME node: an override with another name must be skipped.
+for (const [label, entry] of plantedEntries) {
+  test(`bash: N5 skips a trusted override not named node, so a planted ${label} node never runs at exit`, { skip: sh.skip }, async (t) => {
+    const fx = fixture(t); plantInterpreters(fx);
+    cliStub(fx, fx.trusted, 'claude', 'trusted');
+    writeFileSync(path.join(fx.project, '.moe', 'daemon.json'), '{}');
+    const alt = path.join(fx.root, 'altnode', 'nodejs');
+    mkdirSync(path.dirname(alt)); symlinkSync(process.execPath, alt);
+    const r = await run(sh, fx, { command: 'claude', pathEntries: [entry(fx), nodeBin(fx), fx.trusted, ...TAIL], env: { MOE_NODE_COMMAND: alt, FAKE_RPC_TOOLS: '1' } });
+    assertRuntime(fx, r); assertNode(sh, fx, r); assertDeregistered(fx, r);
   });
 }
 for (const [label, entry] of plantedEntries) {
