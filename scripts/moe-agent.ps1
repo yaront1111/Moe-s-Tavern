@@ -3592,7 +3592,8 @@ function Write-MoeReceiptJournal([string]$Path, $Report) {
 # rests on the file system (NTFS journals it). A crash before the rename leaves
 # only a *.tmp.* file, which nothing reads. $false on any failure, with the tmp
 # file removed and $Path untouched: the caller then moves no ref.
-# Twin: intent_journal_write.
+# File.Replace takes [NullString]::Value for "no backup": a plain $null binds as ""
+# and throws (task-f6228433). Twin: intent_journal_write.
 function Write-MoeIntentJournal([string]$Path, $Report) {
     if (-not $Path) { return $false }
     $tmp = "$Path.tmp.$PID"
@@ -3601,7 +3602,7 @@ function Write-MoeIntentJournal([string]$Path, $Report) {
         $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($Report | ConvertTo-Json -Depth 5 -Compress))
         $fs = New-Object IO.FileStream($tmp, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
         try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
-        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($tmp, $Path, $null) } else { [IO.File]::Move($tmp, $Path) }
+        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { [IO.File]::Move($tmp, $Path) }
         return $true
     } catch {
         Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
