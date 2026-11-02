@@ -386,6 +386,9 @@ const refusals=[
   ['shared-unlanded','MOE_WORKTREE_MODE_MISMATCH',()=>({FAKE_CLAIM_WORKSPACE:null}),p=>{
     const c=commitOn(p,p.branch,{'src/b.txt':'unlanded\n'});
     return ()=>assert.equal(revOf(p.top,p.branch),c,'the unlanded task branch moved');}],
+  // task-31187ec1: a worktree claim whose get_context fails cannot run the §7.2 ledger guard.
+  ['ctx-unread','MOE_WORKTREE_CONTEXT_FAILED',()=>({FAKE_GET_CONTEXT_FAIL:'error'}),
+    ()=>p=>assert.equal(revOf(p.top,p.branch),null,'a task branch was created')],
 ];
 async function refusal(name,code,knobs,setup=()=>{},opts){
   const p=repo(name,opts),extra=setup(p),before=control(p.top);
@@ -407,6 +410,48 @@ async function sharedLanded(){
   const rec=rows(record).pop();
   assert.ok(rec&&rec.context.includes('memory_total=')&&!rec.context.includes(DEPS_LINE),'shared mode got the worktree dependency line, or no session context'+tail(r.log));
   assert.ok(same(serenaOf(win?rec.mcpConfig.replace(/^﻿/,''):cfgText(path.join(p.dir,'.mcp.json'))),p.dir),'shared mode no longer roots Serena at the project');
+  controlSame(p,before);
+  assert.equal(r.code,0,`exit code ${r.code}`+tail(r.log));
+}
+// task-31187ec1, shape 1: a resume (no workspace on the claim) whose get_context read fails, answers {}
+// or answers for another task, on moe/control, refuses: no W, no task branch, the control untouched.
+async function resumeUnread(){
+  const p=repo('resume-unread',{task:'task-resume'}),before=control(p.top);
+  for(const fail of ['error','empty','mismatch']){
+    try{
+      refused(await launch(p,'resume-unread-'+fail,{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_GET_CONTEXT_FAIL:fail}),
+        'MOE_WORKTREE_CONTEXT_FAILED','task-resume');
+      controlSame(p,before);
+      assert.ok(!entry(p)&&!present(p.W),'W is registered or exists');
+      assert.equal(revOf(p.top,p.branch),null,'a task branch was created');
+    }catch(e){e.message=`${fail}: ${e.message}`;throw e;}
+  }
+}
+// task-31187ec1, shape 2: moe/task/<id> holds nothing HEAD lacks (so it reads as landed) and W is
+// dirty. A resume whose get_context fails refuses; W stays registered, locked and dirty; the branch stays.
+async function resumeDirty(){
+  const p=repo('resume-dirty',{task:'task-resume'}),before=control(p.top),main=revOf(p.top,'refs/heads/main');
+  const knobs={FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null};
+  provisioned(p,await launch(p,'resume-dirty-add',{...knobs,FAKE_CTX_WORKSPACE:p.ws()}),'created',before,main);
+  write(path.join(p.W,'dirt.txt'),'dirt\n');write(path.join(p.W,'src','a.txt'),'task edit\n');
+  if(git(p.top,'rev-list','--count','HEAD..'+p.branch).trim()!=='0')throw new Error('fixture: the task branch holds commits HEAD lacks');
+  refused(await launch(p,'resume-dirty-unread',{...knobs,FAKE_GET_CONTEXT_FAIL:'error'}),'MOE_WORKTREE_CONTEXT_FAILED','task-resume');
+  const e=entry(p);
+  assert.ok(e,'W was unregistered');
+  assert.deepEqual([e.branch,e.locked],[p.branch,'moe task-resume'],`W's worktree record ${JSON.stringify(e)}`);
+  assert.deepEqual([readOr(path.join(p.W,'dirt.txt')),readOr(path.join(p.W,'src','a.txt'))],['dirt\n','task edit\n'],"W's dirt changed");
+  assert.equal(revOf(p.top,p.branch),main,'the task branch moved');
+  controlSame(p,before);
+}
+// task-31187ec1, epic rail 4: the same failed resume read off moe/control is today's shared run.
+async function resumeSharedUnread(){
+  const p=repo('resume-shared-unread',{task:'task-resume'});git(p.top,'switch','-q','-c','moe/work-2026-10-24');
+  const before=control(p.top);
+  const r=await launch(p,'resume-shared-unread',{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_GET_CONTEXT_FAIL:'error'});
+  assert.ok(r.cliRan,'the CLI did not run'+tail(r.log));
+  assert.equal(r.blocked.length,0,'report_blocked was called'+tail(r.log));
+  assert.ok(!r.log.includes('MOE_WORKTREE_'),'a MOE_WORKTREE_ line in a shared-mode run'+tail(r.log));
+  assert.ok(!present(p.W),'shared mode made a worktree');
   controlSame(p,before);
   assert.equal(r.code,0,`exit code ${r.code}`+tail(r.log));
 }
@@ -780,6 +825,26 @@ async function wtCompletion(){
   controlFollowed(p,before);
   assert.equal(probe(p.top,'status','--porcelain','--','src'),'0:','src/ on disk is not HEAD after L13');
 }
+// A project that TRACKS .serena/project.yml: WT-06 rewrites W's copy (project_name <name>@<taskId>) at every
+// launch, so W shows it as ' M'. That copy is tooling's, never task bytes: neither the checkpoint nor the
+// completion may carry the renamed name (task-f977d76e).
+async function wtSerenaYml(){
+  const p=repo('wt-serena-yml',{settings:LANDS}),f='.serena/project.yml',yml='project_name: fixture\nlanguages: [x]\n';
+  write(path.join(p.dir,f),yml);git(p.top,'add','-f','--',f);git(p.top,'commit','-qm','track project.yml');git(p.top,'update-ref','refs/heads/main','HEAD');
+  const main=mainOf(p);
+  let r=await landRun(p,'wt-serena-yml-1',{'src/a.txt':'task a\n'});
+  const head=revOf(p.top,p.branch);
+  assert.ok(r.code===0&&head!==main,`exit code ${r.code}; no checkpoint on the task branch`+tail(r.log));
+  assert.equal(readOr(path.join(p.W,f)),'project_name: "fixture@'+TASK+'"\nlanguages: [x]\n','W lacks the WT-06 copy: the premise of this case');
+  assert.equal(git(p.top,'show',head+':'+f),yml,'the checkpoint carried the WT-06 copy to the task branch');
+  assert.equal(git(p.top,'show',head+':src/a.txt'),'task a\n','the checkpoint lost the task bytes');
+  assert.match(r.log,/MOE_ATTR_EXCLUDED/,'no MOE_ATTR_EXCLUDED line'+tail(r.log));
+  assert.match(git(p.W,'status','--porcelain','--',f),/^ M /,'the WT-06 copy is not W dirt, or was landed and refreshed');
+  r=await landRun(p,'wt-serena-yml-2',{'src/a.txt':'done\n'},REVIEW);
+  const c=mainOf(p);
+  assert.ok(r.code===0&&c!==main,`exit code ${r.code}, or main did not move`+tail(r.log));
+  assert.deepEqual([git(p.top,'show',c+':'+f),git(p.top,'show',c+':src/a.txt')],[yml,'done\n'],'the completion carried the WT-06 copy to the target');
+}
 // commitHooks: the hook runs on the merged tree (peer and task bytes, no .moe); a staged or unstaged
 // hook edit, or a hook that moves HEAD, is refused (failed, T rescued, main unmoved); a no-op hook
 // lands C; no hook worktree is left behind and the control checkout is untouched.
@@ -1080,13 +1145,15 @@ async function wtResume(){
 }
 // The marker scan, from this wrapper's own function: each marker shape (CRLF too), a path out of W and a linked parent
 // (out of W, or in W over a missing file) are hits, as are a file link and a FIFO (never opened) under sh and a name
-// Windows cannot parse under ps1; a resolved deletion (absent) and marker look-alikes are not.
+// Windows cannot parse under ps1; a resolved deletion (absent) and marker look-alikes are not. sh builds under the suite's
+// temp dir because a FIFO needs a filesystem that supports one, and drvfs (/mnt/<drive>) does not.
 function markerScan(){
-  const w=path.join(root,'marker-scan'),out=path.join(root,'marker-scan-out'),q=s=>"'"+s.replace(/'/g,"''")+"'";
+  const base=win?root:path.join(wrapperTmp,'marker scan'),w=path.join(base,'marker-scan'),out=path.join(base,'marker-scan-out'),q=s=>"'"+s.replace(/'/g,"''")+"'";
   const files={'lt.txt':'a\n<<<<<<< HEAD\n','gt.txt':'>>>>>>> theirs\r\n','eq.txt':'a\r\n=======\r\nb\r\n','ok.txt':'<<<<<<<x\n ======= \n=======x\n','sub/ok.txt':'b\n'};
   for(const [f,b] of Object.entries(files))write(path.join(w,f),b);
   write(path.join(out,'x.txt'),'clean\n');fs.symlinkSync(out,path.join(w,'out'),'junction');fs.symlinkSync(path.join(w,'sub'),path.join(w,'in'),'junction');
-  if(!win){fs.symlinkSync('ok.txt',path.join(w,'fl.txt'));cp.execFileSync('mkfifo',[path.join(w,'fifo.txt')]);}
+  if(!win){fs.symlinkSync('ok.txt',path.join(w,'fl.txt'));
+    try{cp.execFileSync('mkfifo',[path.join(w,'fifo.txt')],{stdio:'pipe'});}catch(e){throw new Error(`mkfifo under ${base} failed; point TMPDIR at a filesystem that supports FIFOs: ${String(e.stderr||e.message).trim()}`);}}
   const more=['../x','in/gone.txt','out/x.txt',...(win?(winHost?['a<b.txt']:[]):['fifo.txt','fl.txt'])],args=[...Object.keys(files),'gone.txt',...more],o={encoding:'utf8',timeout:60000};
   const r=win?cp.spawnSync(engine,['-NoProfile','-NonInteractive','-Command',`${wrapperFn('Find-MoeConflictMarkers')}\nFind-MoeConflictMarkers ${q(w)} @(${args.map(q).join(',')})`],o)
     :cp.spawnSync(engine,['-c',`${wrapperFn('wt_marker_scan')}\nwt_marker_scan "$@"`,'_',w,...args],{...o,env:{...inherited,PYTHON_CMD:py}});
@@ -1379,6 +1446,46 @@ async function wtFollowRace(){
   assert.deepEqual([revOf(p.top,'HEAD'),present(path.join(p.top,'.moe','landed.json')),mainOf(p)],[tip,false,later],
     'the control HEAD went past the checked tip'+tail(r.log));
 }
+// Real git (no PATH stub): count follow merges and release the lock relative to its first try.
+async function wtFollowLock(){
+  const merges=f=>(readOr(f)||'').split('\n').filter(l=>/trace: built-in: git merge .*--no-autostash/.test(l)).length;
+  const behinds=r=>(r.log.match(/^\[WARN\] MOE_CONTROL_CHECKOUT_BEHIND: /gm)||[]).length;
+  const lockOf=p=>path.join(git(p.top,'rev-parse','--absolute-git-dir').trim(),'index.lock');
+  for(const name of ['released','held','other']){
+    const p=repo('wt-follow-lock-'+name),old=mainOf(p),edit=path.join(p.top,'src','a.txt');
+    if(name==='other')write(edit,'human edit\n');
+    const tip=commitOn(p,'refs/heads/main',name==='other'?{'src/a.txt':'landed\n'}:{'src/b.txt':'b\n'});
+    const lock=lockOf(p),trace=path.join(root,'wt-follow-lock-'+name+'.trace');
+    if(name!=='other')write(lock,'');
+    let started=0,removed=false,gone=false;
+    const signal=()=>{
+      if(!started&&merges(trace)>=1)started=Date.now();
+      if(name==='released'&&started&&!removed&&Date.now()-started>=3000){
+        gone=!present(lock);fs.rmSync(lock,{force:true});removed=true;
+      }
+      return false;
+    };
+    try{
+      const r=await launch(p,'wt-follow-lock-'+name,{GIT_TRACE:trace},{signal});
+      const why=s=>name+': '+s+tail(r.log);
+      if(name==='released'){
+        assert.deepEqual([...new Set(r.log.match(/MOE_CONTROL_[A-Z_]+/g)||[])],['MOE_CONTROL_ADVANCED'],why('the MOE_CONTROL_ codes'));
+        assert.deepEqual(r.log.match(/^\[OK\] MOE_CONTROL_ADVANCED .*$/gm),[`[OK] MOE_CONTROL_ADVANCED ${old}..${tip}`],why('no single ADVANCED old..tip line'));
+        assert.ok(removed&&!gone,why('the lock was not released, or the wrapper deleted index.lock'));
+        assert.ok(merges(trace)>=2,why('no merge retry'));
+        assert.deepEqual([probe(p.top,'symbolic-ref','-q','HEAD').trim(),revOf(p.top,'HEAD'),mainOf(p)],['0:'+MC,tip,tip],why('HEAD, its commit, or main'));
+      }else{
+        assert.ok(behinds(r)>=1,why('no BEHIND warning'));
+        assert.equal(merges(trace),(name==='held'?5:1)*behinds(r),why('wrong merge tries per follow'));
+        assert.ok(!r.log.includes('MOE_CONTROL_ADVANCED'),why('unexpected ADVANCED line'));
+        assert.equal(revOf(p.top,'HEAD'),old,why('HEAD moved'));
+        if(name==='held')assert.ok(present(lock),why('the wrapper deleted index.lock'));
+        else assert.equal(read(edit),'human edit\n',why('the local edit was lost'));
+      }
+      assert.ok(r.code===0&&r.cliRan,why(`exit ${r.code}; the CLI ran: ${r.cliRan}`));
+    }finally{if(name!=='other')fs.rmSync(lock,{force:true});}
+  }
+}
 // WT-13 §6.4: a QA claim in the control checkout launches only once the task's recorded completion C
 // (get_context task.landing.lastCompletion, never its checkpoint) is in the control HEAD after the follow;
 // otherwise MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI. The prompt names C's own diff, since
@@ -1433,13 +1540,16 @@ function codes(){
 const cases={lifecycle,resume,'half-made':halfMade,
   ...Object.fromEntries(refusals.map(c=>[c[0],()=>refusal(...c)])),'shared-landed':sharedLanded,
   'wt-config-lock':wtConfigLock,'wt-config-lock-exhausted':wtConfigLockExhausted,'wt-config-other':wtConfigOther,'wt-config-preset':wtConfigPreset};
+Object.assign(cases,{'resume-unread':resumeUnread,'resume-dirty':resumeDirty,'resume-shared-unread':resumeSharedUnread});
 for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchAs(t);
 Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
+  'wt-serena-yml':wtSerenaYml,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
   'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
   'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});
+cases['wt-follow-lock']=wtFollowLock;
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;

@@ -1256,6 +1256,8 @@ FROZENJS
 if printenv MOE_FROZEN_TEST_ONLY >/dev/null; then exit 0; fi
 # Owner guard cases (one suite shared with postflight.ps1).
 "$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-owner-guard.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
+# Migration landing cases (one suite shared with postflight.ps1).
+"$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-migration.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
 # Worktree provisioning cases (one suite shared with postflight.ps1).
 "$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-worktree.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
 
@@ -2004,6 +2006,71 @@ if grep -q 'MOE_WRAPPER_RELOAD_DEFERRED' "$TMP_DIR/wrapper-reload.out"; then rel
 [ "$(follow_git rev-parse HEAD)" = "$reload_main" ] && [ "$(follow_git symbolic-ref HEAD)" = refs/heads/moe/control ] \
   && follow_git diff --quiet HEAD -- scripts/moe-agent.sh || reload_fail 'the control checkout is not on moe/control at main with the wrapper equal to HEAD'
 echo "[hot reload follow] ok: followed $reload_main, restarted once, no deferral (sequence $reload_final)"
+
+# --- Hot reload race (task-69c02444; twin in postflight.ps1). A restart loads
+# the bytes it verified as committed. The fake proxy rewrites the wrapper inside
+# the restart's own deregister (FAKE_RELOAD_RACE_SRC/_DST): after the check and
+# before the load. The seat restarts on the committed bytes (a private
+# moe-wrapper-pin.* copy) and reloads the racing write only once it is committed,
+# again from a copy. Committed bytes that no longer name the MOE_WRAPPER_SOURCE
+# hand-over (a revert) reload from the checkout path, and no copy is left behind.
+echo "[hot reload race] a write after the committed check is never loaded"
+RELOAD_DIR="$TMP_DIR/reload-race"
+RELOAD_PROJECT="$RELOAD_DIR/project"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+RACE_TMP="$RELOAD_DIR/tmp"
+RACE_SRC="$RELOAD_DIR/race.src"
+mkdir -p "$RELOAD_PROJECT/.moe/messages" "$RACE_TMP"
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+chmod +x "$RELOAD_WRAPPER"
+reload_repo
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+: > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+# Edit A appends '# race A'; race.src is edit A with a marked idle line.
+"$NODE_FOR_TEST" -e 'const fs=require("fs"),[f,o]=process.argv.slice(1),a="Agent idle, checking for tasks in",t=fs.readFileSync(f,"utf8")+"# race A\n";
+if(t.split(a).length!==2)process.exit(3);fs.writeFileSync(o,t.replace(a,"MOE_TEST_RACE_LOADED from ${BASH_SOURCE[0]}, checking for tasks in"));' \
+  "$RELOAD_WRAPPER" "$RACE_SRC" || { echo 'HOT RELOAD FAILED: the idle line is not in the wrapper exactly once' >&2; exit 1; }
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+  TMPDIR="$RACE_TMP" FAKE_RELOAD_RACE_SRC="$RACE_SRC" FAKE_RELOAD_RACE_DST="$RELOAD_WRAPPER" \
+  "$RELOAD_WRAPPER" --project "$RELOAD_PROJECT" --worker-id worker-reload-race --role worker --no-start-daemon \
+  --command /bin/true --loop --poll-interval 1 >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+reload_live_before="$LIVE_PIDS"
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+reload_wait 0 '^c'
+printf '# race A\n' >> "$RELOAD_WRAPPER"
+reload_commit 'race A'
+reload_wait 1 '^c+rc{3,}$'
+[ ! -e "$RACE_SRC" ] || reload_fail 'the restart deregister did not write the racing bytes'
+grep -Fq MOE_TEST_RACE_LOADED "$RELOAD_WRAPPER" || reload_fail 'the racing bytes are not on disk'
+race_rc=0
+reload_git diff --quiet -- moe-agent.sh || race_rc=$?
+[ "$race_rc" = 1 ] || reload_fail "the racing bytes must stay uncommitted (git diff exited $race_rc)"
+if grep -Fq MOE_TEST_RACE_LOADED "$TMP_DIR/wrapper-reload.out"; then
+  reload_fail 'the restart loaded bytes written after the committed check'
+fi
+# Committed, the racing bytes reload once, from a private copy.
+reload_commit 'race write'
+reload_wait 2 '^c+rc+rc{3,}$'
+grep -Eq 'MOE_TEST_RACE_LOADED from .*/moe-wrapper-pin\.[^/]+/moe-agent\.sh,' "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail 'the committed racing bytes did not run from a moe-wrapper-pin copy'
+[ -z "$(find "$RACE_TMP" -maxdepth 1 -name 'moe-wrapper-pin.*' -print)" ] || reload_fail 'the running copy did not delete itself once loaded'
+# Bytes without the hand-over would resolve their helpers beside a copy.
+"$NODE_FOR_TEST" -e 'const fs=require("fs"),f=process.argv[1],t=fs.readFileSync(f,"utf8").split("MOE_WRAPPER_SOURCE");
+if(t.length<2)process.exit(3);fs.writeFileSync(f,t.join("MOE_WRAPPER_ORIGIN"));' "$RELOAD_WRAPPER" \
+  || reload_fail 'the wrapper does not name MOE_WRAPPER_SOURCE'
+reload_commit 'drop hand-over'
+reload_wait 3 '^c+rc+rc+rc{3,}$'
+reload_final="$(reload_seq)"
+kill -KILL "$reload_pid" 2>/dev/null || true
+wait "$reload_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+grep -Fq "MOE_TEST_RACE_LOADED from $RELOAD_WRAPPER," "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail 'bytes without the hand-over did not reload from the checkout path'
+race_left="$(find "$RACE_TMP" -maxdepth 1 -name 'moe-wrapper-pin.*' -print)"
+[ -z "$race_left" ] || reload_fail "private copies left behind: $race_left"
+echo "[hot reload race] ok: restarted on the committed bytes, loaded the racing write from a copy once committed (sequence $reload_final)"
 
 # --- Stale offset: bash parses incrementally, so the loop and its own tail
 # must be one group. No ps1 twin: PowerShell parses the whole file up front.
@@ -5235,8 +5302,10 @@ try {
   echo "[scenario AI] ok"
 
   # Scenario AJ -- held paths survive BOTH peel-failure sends and the rescue
-  # ledger row. Twin: scenario AJ in postflight.ps1 (task-dfbda1a8). Every
-  # row is checked: ps1's no-candidate peel adds a second, finally-block row.
+  # ledger row. Twin: scenario AJ in postflight.ps1 (task-dfbda1a8). The ledger
+  # must hold EXACTLY the expected rows on both wrappers (AJ2: one failed PEEL
+  # row); ps1's finally used to add a second one (task-4fdc7590), so the whole
+  # sequence is compared, never a tail of it.
   # AJ2 owns nothing but a TOOL-witnessed held.txt, so ps1's completion refuses
   # NO_OWNED_PATHS and takes its no-candidate peel (sh has one such branch).
   echo "[scenario AJ] peel failures and rescue records retain held contested paths"
@@ -5256,8 +5325,7 @@ const [f,run]=process.argv.slice(1),assert=require("assert");
 const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse);
 const expected=run==="1"?[["committed","peel-failed","rescue"],["failed","MOE_COMMIT_FAILED_PEEL","completion"]]:[["failed","MOE_COMMIT_FAILED_PEEL","completion"]];
 try {
-  assert.ok(rows.length>=expected.length,"missing ledger rows");
-  rows.slice(-expected.length).forEach((r,i)=>assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],expected[i].join("/")));
+  assert.deepStrictEqual(rows.map(r=>[r.outcome,r.code,r.kind]),expected,"ledger rows: exactly one failed row per landing");
   rows.forEach(r=>{
     const label=[r.outcome,r.code,r.kind].join("/");
     assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),label+": skipped and contested must be JSON arrays");

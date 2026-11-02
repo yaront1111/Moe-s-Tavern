@@ -329,6 +329,35 @@ function collisionNotice(taskId: string, collisions: CollisionEntry[], claimerId
   return `${page}⚠️ file collision on ${taskId}. Live: ${list(live)}${tail}. Coordinate before either of you lands.`;
 }
 
+/**
+ * True when the #workers heads-up has nothing to ask of anyone: the claimer's
+ * attempt and every LIVE colliding peer's open attempt run in a worktree.
+ * Each such task edits its own .worktrees/<taskId>, completions land one at a
+ * time (merge-tree + CAS), and a true conflict parks the bytes on a rescue ref
+ * and routes the row back, so "coordinate before either of you lands" asks for
+ * something no seat can do, and the page only costs each seat a turn.
+ *
+ * The notice is skipped, not posted without @mentions: a mention-less system
+ * line in a role channel routes to every busy seat (chatSystemFeed.test.ts
+ * 'keeps routing the file collision banner to busy seats'), so a quiet post
+ * would page MORE seats. Dormant-only collisions are skipped too: "every live
+ * peer" is vacuously true, and they route to every busy seat the same way.
+ *
+ * A live peer with no open attempt, or one without workspaceMode (a legacy
+ * record), counts as shared and keeps today's paging, as does every claimer
+ * that is not in a worktree (REVIEW/PLANNING claims, worktreeMode off, no
+ * workerId). The mode is pinned per attempt and the setting only picks a
+ * fresh attempt's mode, so this reads attempts, never the live setting.
+ */
+function worktreeOnlyCollision(
+  state: StateManager,
+  claimed: ExecutionAttempt | null,
+  collisions: CollisionEntry[]
+): boolean {
+  if (claimed?.workspaceMode !== 'worktree') return false;
+  return collisions.every((c) => !c.liveAssignee || currentAttempt(state, c.task)?.workspaceMode === 'worktree');
+}
+
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.claim_next_task',
@@ -818,7 +847,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       // and a failure of it, like of the post, is swallowed (the claim already
       // wrote its assignment and attempt). We post a heads-up to #workers if
       // there's any overlap, @mentioning the seats live on a colliding peer and
-      // the claimer so they can coordinate before either lands.
+      // the claimer so they can coordinate before either lands. The one
+      // exception is worktree mode (worktreeOnlyCollision): when the claimer and
+      // every live peer each run in their own worktree there is nothing to
+      // coordinate, so nothing is posted and no seat is paged.
       // Append-only files (CHANGELOG.md by default) are filtered out so the
       // expected shared-file overlap doesn't drown the real ones. `??` — never
       // `||` — because an explicit `[]` deliberately disables suppression.
@@ -831,7 +863,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       }
       if (fileCollision.length > 0) {
         try {
-          await state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId));
+          if (worktreeOnlyCollision(state, claimedAttempt, fileCollision)) {
+            logger.info(
+              { taskId: task.id, peers: fileCollision.map((c) => c.task) },
+              'claim_next_task: worktree-mode file collision; no #workers heads-up'
+            );
+          } else {
+            await state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId));
+          }
         } catch { /* never block tool */ }
       }
 

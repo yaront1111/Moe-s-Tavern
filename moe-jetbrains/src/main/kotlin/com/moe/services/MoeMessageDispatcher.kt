@@ -456,7 +456,13 @@ class MoeMessageDispatcher(
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val decisionsArray = payload.get("decisions")?.takeIf { it.isJsonArray }?.asJsonArray ?: return
                 try {
-                    val decisions = decisionsArray.map { MoeJson.parseDecision(it.asJsonObject) }
+                    val decisions = decisionsArray.mapNotNull { element ->
+                        val obj = element?.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+                        if (obj.get("id").stringOrNull().isNullOrBlank()) return@mapNotNull null
+                        MoeJson.parseDecision(obj)
+                    }
+                    val skipped = decisionsArray.size() - decisions.size
+                    if (skipped > 0) log.warn("Skipped $skipped malformed DECISIONS entries")
                     publishDecisions(decisions)
                 } catch (e: Exception) {
                     log.warn("Failed to parse DECISIONS payload", e)

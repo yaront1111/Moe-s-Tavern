@@ -524,6 +524,9 @@ const CONTRACT = [
   ['/home/qa/OtherProject', '/home/qa/OtherProject'], ['/home/qa/otherproject', '/home/qa/otherproject'],
   ['/home//u/./x/../p/', '/home/u/p'],
   ['\\\\srv\\share\\proj', '//srv/share/proj'], ['//SRV/SHARE/PROJ/', '//srv/share/proj'], ['//srv/share/../../b', '//srv/share/b'],
+  ['//srv//share/proj', '//srv/share/proj'], ['\\\\srv\\\\share\\proj', '//srv/share/proj'],
+  ['//SRV//SHARE', '//srv/share'], ['//srv//share/../../b', '//srv/share/b'],
+  ['//srv//..//share/x', '//srv/share/x'], ['//srv///share//proj//', '//srv/share/proj'],
 ];
 const WSL_SHARES = [
   ['\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj'], ['//wsl$/Ubuntu/home/u/proj', '/home/u/proj'],
@@ -546,6 +549,8 @@ const NOT_WSL_SHARES = [
   ['//wsl$evil/Ubuntu/Proj', '//wsl$evil/ubuntu/proj'],
   ['//w\u017fl$/Ubuntu/Proj', '//w\u017fl$/ubuntu/proj'],
   ['//w\u017fl.localhost/Ubuntu/Proj', '//w\u017fl.localhost/ubuntu/proj'],
+  ['//wsl$//home/u/Proj', '//wsl$/home/u/proj'], ['\\\\wsl$\\\\home\\u\\Proj', '//wsl$/home/u/proj'],
+  ['//wsl.localhost//Ubuntu/home', '//wsl.localhost/ubuntu/home'],
 ];
 // Maps the rows' inputs to keys in ONE child process, which reads them as JSON on stdin. A
 // failed spawn, a non-zero exit, unparseable output or a wrong row count fails the test.

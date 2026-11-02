@@ -59,6 +59,8 @@ Send JSON-RPC 2.0 messages via stdin:
 
 The wrappers' RPC helpers pipe one bare `tools/call` into a fresh proxy and close stdin. In a session that never sent `initialize`, stdin EOF lets a pending blocking call (the three tools above) finish up to its deadline instead of the usual drain. It fails at once if the daemon socket is lost. Initialized MCP sessions, ordinary calls and queued (unsent) messages keep the 2-second drain, and SIGINT/SIGTERM cap any drain at 2 seconds.
 
+The proxy exits 0 only after its stdout has drained, so a reader that starts late still gets all of a reply bigger than the OS pipe buffer (about 64 KiB on Linux). A reader that stops reading gets 2 seconds; then the proxy exits 1, because the reply may be incomplete. A reader that closes the pipe (EPIPE) gets exit 1, as before.
+
 When `MOE_PROXY_ONESHOT_DEADLINE_MS` passes, the proxy writes one `Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)` error for each pending request id (one null-id error when none is pending, as before the first connect) and exits 1. No late success follows.
 
 ## Execution identity

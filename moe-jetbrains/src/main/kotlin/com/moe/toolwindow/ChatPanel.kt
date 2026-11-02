@@ -215,6 +215,7 @@ class ChatPanel(private val project: Project) : JBPanel<ChatPanel>(BorderLayout(
                 if (disposed) return
                 if (connected) {
                     service.requestChannels()
+                    service.requestDecisions()
                 }
             }
 

@@ -14,7 +14,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A hot reload runs a private copy of the committed bytes from a moe-wrapper-pin.*
+# folder and names the checkout's wrapper in MOE_WRAPPER_SOURCE (task-69c02444).
+# Honour it only there, and never pass it on.
+MOE_WRAPPER_FILE="${BASH_SOURCE[0]:-$0}"
+case "$MOE_WRAPPER_FILE" in */moe-wrapper-pin.*/*) MOE_WRAPPER_FILE="${MOE_WRAPPER_SOURCE:-$MOE_WRAPPER_FILE}" ;; esac
+unset MOE_WRAPPER_SOURCE
+SCRIPT_DIR="$(cd "$(dirname "$MOE_WRAPPER_FILE")" && pwd)"
 # WT-13 (design §6.1): a seat runs only the control checkout's wrapper. A copy in a
 # task worktree, <repo>/.worktrees/task-*/ (a registered W, or a plain directory
 # there), refuses before any daemon, config or claim side effect. git answers with
@@ -34,7 +40,7 @@ moe_wrapper_in_worktree() {
 # can run them from its own task worktree. Exactly '1' skips this one refusal and
 # nothing else reads it; no launch path (IDE plugins, moe-team, operators, runbooks) sets it.
 if [ "${MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:-}" != 1 ] && moe_wrapper_in_worktree "$SCRIPT_DIR"; then
-    echo -e "${RED}[ERROR] MOE_WRAPPER_IN_WORKTREE: ${BASH_SOURCE[0]} is inside a task worktree; launch the control checkout's scripts/moe-agent.sh${NC}" >&2
+    echo -e "${RED}[ERROR] MOE_WRAPPER_IN_WORKTREE: $MOE_WRAPPER_FILE is inside a task worktree; launch the control checkout's scripts/moe-agent.sh${NC}" >&2
     exit 1
 fi
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -218,8 +224,9 @@ cleanup_temp() {
     # NO idle-timeout fallback for hard crashes where this trap never runs: the
     # task stays assigned until daemon restart, deregister, or an explicit
     # release. WORKER_ID/PROJECT are set later in the script but read here at
-    # exit time.
-    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
+    # exit time. A migration run (--land-branch) registered nothing and sends no
+    # RPC, so a --worker-id naming a live seat is never torn down.
+    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ "${MIGRATION:-false}" != true ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
         # Via bash, not direct exec: bundled copies can lose the exec bit
         # (e.g. a bundler writeFile), which would silently skip deregister.
         bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
@@ -229,6 +236,8 @@ cleanup_temp() {
     if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
         rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
     fi
+    # A hot-reload copy staged but never run (task-69c02444).
+    if [ "$(type -t wrapper_pin_drop)" = function ]; then wrapper_pin_drop; fi
 }
 trap cleanup_temp EXIT
 
@@ -279,6 +288,7 @@ GEMINI_EXEC=false
 GROK_EXEC=false
 INTERACTIVE_REQUESTED=""
 MODEL=""
+MIGRATION=false; MIGRATION_BRANCH=""
 
 # Launch argv for the self-restart's `exec` (see "Self-restart when this
 # script's own bytes change on disk"). Captured BEFORE the parser below, which
@@ -362,6 +372,12 @@ while [[ $# -gt 0 ]]; do
             MODEL="$2"
             shift 2
             ;;
+        --land-branch)
+            # WT-10M: no daemon is started, no team joined, no task claimed (run_migration_landing).
+            MIGRATION=true; MIGRATION_BRANCH="${2-}"; NO_START_DAEMON=true
+            [ -n "$MIGRATION_BRANCH" ] || { echo -e "${RED}MOE_MIGRATION_BAD_ARGS: --land-branch needs a branch name${NC}" >&2; exit 2; }
+            shift 2
+            ;;
         --help|-h)
             echo "Moe Agent Wrapper"
             echo ""
@@ -386,6 +402,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --interactive            Force Claude into interactive TUI (default: on for architect/governor)"
             echo "  --no-interactive         Force one-shot --print mode (default for worker/qa; fresh CLI per task)"
             echo "  --model MODEL            Claude model override (default: all roles = claude-opus-5-5)"
+            echo "  --land-branch BRANCH     Land BRANCH on main as one qualityGate-gated merge commit, then exit"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -1643,7 +1660,9 @@ if [ "$CLI_TYPE" = "grok" ]; then write_grok_config "$PROJECT" "$SERENA_PROJECT"
 # 503 reply naming another ABSOLUTE project exits 3 and prints that path (one
 # line, at most 300 chars). A relative or missing projectPath cannot be judged.
 # Paths compare by moe-proxy's comparableProjectPath (D:\x == D:/x == /mnt/d/x),
-# with ntpath/posixpath, never os.path, so Windows python agrees. WSL shares
+# Drive/UNC use a port of comparableProjectPath's collapse rule: drop empty and
+# '.' segments; '..' never climbs past the drive or UNC server and share.
+# POSIX uses posixpath, never os.path, so Windows python agrees. WSL shares
 # strip host/distro, preserving POSIX tail case before /mnt mapping. Bounded:
 # 3 s total (the watchdog also covers a trickled reply) and 64 KiB of body.
 # Resolve a name once and dial its first address: the /health guard refuses
@@ -1653,20 +1672,32 @@ probe_daemon_health() {
     local port="$2"
     local project="${3:-}"
     $PYTHON_CMD -c '
-import ipaddress, json, ntpath, os, posixpath, re, socket, sys, threading, urllib.error, urllib.request
+import ipaddress, json, os, posixpath, re, socket, sys, threading, urllib.error, urllib.request
 watchdog = threading.Timer(3, os._exit, (1,))
 watchdog.daemon = True
 watchdog.start()
 WINDOWS = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]")
+def collapse(p, keep):
+    kept = []
+    for s in p.split("/"):
+        if s in ("", "."):
+            continue
+        if s != "..":
+            kept.append(s)
+        elif len(kept) > keep:
+            kept.pop()
+    return "/".join(kept)
 def absolute(p):
     return isinstance(p, str) and (bool(WINDOWS.match(p)) or p.startswith("/"))
 def comparable(p):
     p = p.strip()
     if WINDOWS.match(p):
+        s = p.replace("\\", "/")
         share = re.match(r"//(?:wsl\$|wsl\.localhost)/[^/]+(/.*)?$",
-                         p.replace("\\", "/"), re.IGNORECASE | re.ASCII)
+                         s, re.IGNORECASE | re.ASCII)
         if not share:
-            return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+            unc = s.startswith("//")
+            return (("//" if unc else "") + collapse(s, 2 if unc else 1)).lower()
         p = "/" + (share.group(1) or "").lstrip("/")
     p = posixpath.normpath(p)
     m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
@@ -1974,7 +2005,7 @@ if [ -z "$TEAM" ]; then
         governor)  TEAM="Governors" ;;
     esac
 fi
-if [ -n "$TEAM" ]; then
+if [ -n "$TEAM" ] && [ "$MIGRATION" != true ]; then
     echo -e "${BLUE}Setting up team '$TEAM' for role '$ROLE'...${NC}"
 
     # Find proxy script
@@ -2289,9 +2320,11 @@ if [ "$LOOP_ENABLED" = true ]; then
 fi
 
 # Trap SIGINT/SIGTERM to exit cleanly from the loop
-# exit 0 triggers the EXIT trap which runs cleanup_temp
+# exit 0 triggers the EXIT trap which runs cleanup_temp. An interrupted
+# --land-branch migration landed nothing, so it exits 130 instead.
 LOOP_RUNNING=true
-trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM
+if [ "$MIGRATION" = true ]; then trap 'exit 130' INT TERM
+else trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM; fi
 
 # moe_rpc TOOL ARGS_JSON
 # Calls an MCP tool via the proxy and prints the tool's result text to stdout.
@@ -3143,7 +3176,12 @@ enable_worktree_config() {
 }
 
 # provision_worktree -- worker pre-flight, design §1.1-§1.6. The fresh claim's
-# workspace (WT-01), else get_context's (WT-02), names the mode; none is shared.
+# workspace (WT-01) names the mode, else get_context's (WT-02), read only from a
+# context that answered for this task (its task.id is the claimed id); on such a
+# context no workspace is shared. With neither (a failed, empty or foreign read)
+# the mode is unknown: shared, unless the control checkout is on moe/control,
+# where it refuses MOE_WORKTREE_CONTEXT_FAILED (task-31187ec1). Worktree mode
+# refuses the same without that context, whose task.commits its ledger guard reads.
 # Shared mode refuses only an unlanded moe/task/<id> branch and touches nothing
 # else (epic rail 4). Worktree mode runs the guards, then reuses, re-adds or
 # creates the locked sparse worktree W = <git top>/.worktrees/<id> on
@@ -3151,7 +3189,7 @@ enable_worktree_config() {
 # the shared checkout. It never deletes a branch, W/.moe, or a W it did not add
 # in this session. Sets MOE_WT_MODE/PATH/BRANCH/TARGET. Twin: Initialize-MoeWorktree.
 provision_worktree() {
-    local tid="$PREFLIGHT_TASK_ID" parsed mode target foreign ver head w branch base found raw ref out verb longest sha fref fail
+    local tid="$PREFLIGHT_TASK_ID" parsed mode ctxread target foreign ver head w branch base found raw ref out verb longest sha fref fail
     local added=false finish=false
     local -a rows=()
     # The claim and context travel on stdin: one env string is capped at 128 KiB.
@@ -3166,11 +3204,17 @@ def load(s):
         return {}
     return d if isinstance(d, dict) else {}
 claim, ctx = load(claim), load(ctx)
-ws = claim.get("workspace") if isinstance(claim.get("workspace"), dict) else ctx.get("workspace")
+task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+# Read: get_context answered for THIS task. An error, {} or another task proves nothing.
+read = task.get("id") == tid
+if not read:
+    ctx, task = {}, {}
+cws = claim.get("workspace")
+ws = cws if isinstance(cws, dict) else ctx.get("workspace")
 ws = ws if isinstance(ws, dict) else {}
+mode = "worktree" if ws.get("mode") == "worktree" else "shared" if isinstance(cws, dict) or read else "unknown"
 t = ws.get("target").strip() if isinstance(ws.get("target"), str) else ""
 t = "?" if re.search(r"[\x00-\x1f\x7f]", t) else t
-task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
 own = {"moe/task/" + tid, "refs/heads/moe/task/" + tid, t, "refs/heads/" + t}
 out = []
 for r in task.get("commits") if isinstance(task.get("commits"), list) else []:
@@ -3179,11 +3223,16 @@ for r in task.get("commits") if isinstance(task.get("commits"), list) else []:
     sha, ref = r.get("sha"), r.get("ref") if isinstance(r.get("ref"), str) else ""
     if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha) and ref not in own:
         out.append(sha.lower() + ":" + (re.sub(r"[^A-Za-z0-9._/@-]", "_", ref) or "-"))
-sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\x1f" + t + "\x1f" + " ".join(out))
+sys.stdout.write(mode + "\x1f" + ("1" if read else "0") + "\x1f" + t + "\x1f" + " ".join(out))
 ' "$tid" 2>/dev/null) || parsed=""
-    IFS=$'\x1f' read -r mode target foreign <<< "$parsed" || true
+    IFS=$'\x1f' read -r mode ctxread target foreign <<< "$parsed" || true
+    # A failed parse (no python, a crash) is unknown, never shared or worktree.
+    case "$mode" in worktree|shared) ;; *) mode=unknown ;; esac
     if [ "$mode" != worktree ]; then
         git_top || return 0
+        if [ "$mode" = unknown ] && control_worktree_mode; then
+            worktree_stop MOE_WORKTREE_CONTEXT_FAILED "get_context gave no context for $tid and the claim names no workspace, while the control checkout is on moe/control; unblock the task once get_context answers"
+        fi
         if git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/moe/task/$tid" > /dev/null && ! task_branch_landed HEAD "$tid"; then
             worktree_stop MOE_WORKTREE_MODE_MISMATCH "shared-mode claim, but moe/task/$tid holds worktree bytes HEAD lacks; land or rescue that branch first"
         fi
@@ -3207,6 +3256,7 @@ sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\
         || ! git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$target^{commit}" > /dev/null; then
         worktree_stop MOE_WORKTREE_CREATE_FAILED "the claim's target '$target' is not a local branch"
     fi
+    [ "$ctxread" = 1 ] || worktree_stop MOE_WORKTREE_CONTEXT_FAILED "get_context gave no context for $tid, so its commits cannot be checked against $target; unblock the task once get_context answers"
     read -ra rows <<< "$foreign" || true
     for sha in "${rows[@]}"; do
         fref="${sha#*:}"; sha="${sha%%:*}"
@@ -4507,11 +4557,14 @@ if mode == 'carry':
 if mode == 'worktree':
     # A task worktree holds this task's bytes only (design §3.2): no baseline,
     # no tiers. Every dirty path lands except DENY = denied() plus
-    # .claude/skills/** (the link the launch makes), .moe/** with no BOARD
+    # .claude/skills/** (the link the launch makes), .serena/project.yml (WT-06
+    # rewrites W's copy to project_name <name>@<taskId> at every launch, so it is
+    # tooling's, never task bytes, even when the project tracks it and git shows
+    # ' M'; denied() holds .serena/** only while untracked), .moe/** with no BOARD
     # exception. Ps1 twin: Test-MoeDenyPathWorktree.
     def denied_wt(p, xy):
         pk = key(p)
-        return denied(p, xy) or any(pk == pre + '.claude/skills' or pk.startswith(pre + '.claude/skills/') for pre in roots)
+        return denied(p, xy) or any(pk == pre + '.claude/skills' or pk.startswith(pre + '.claude/skills/') or pk == pre + '.serena/project.yml' for pre in roots)
     held = set(pk for pk in S if denied_wt(S[pk][0], S[pk][2]))
     recs = {'candidates': [('WORKTREE', S[pk][1], S[pk][0]) for pk in sorted(S) if pk not in held],
             'skipped': [('MOE_ATTR_EXCLUDED', S[pk][0]) for pk in sorted(held)],
@@ -5470,10 +5523,12 @@ freeze_candidate() {
         FROZEN_COMMIT=$(printf '%s\n' 'Moe frozen candidate snapshot' | git -C "$MOE_TOP" commit-tree "$tree") || return 1
     fi
     FROZEN_CANDIDATE_ID=$($PYTHON_CMD -c 'import uuid;print("cand-"+uuid.uuid4().hex)') || return 1
-    record_candidate_rpc
+    # noevidence (the migration, WT-10M): no Candidate record, and nothing else changes.
+    [ "${3:-}" = noevidence ] || record_candidate_rpc
 }
-# run_frozen_gate [worktree]: no argument is today's full shared checkout (rail 4);
-# `worktree` is the .moe-free sparse arm WT-10 calls (WT-S §2.2 L6).
+# run_frozen_gate [worktree [noevidence]]: no argument is today's full shared checkout
+# (rail 4); `worktree` is the .moe-free sparse arm WT-10 calls (WT-S §2.2 L6), and
+# `noevidence` (the migration) records no CheckRun, an interrupted run included.
 run_frozen_gate() {
     [ -n "${QUALITY_GATE:-}" ] || return 0
     local integrity=gate_integrity
@@ -5489,6 +5544,7 @@ run_frozen_gate() {
     GATE_ROOT=$(mktemp -d -t moe-gate.XXXXXXXX) || return 1
     GATE_WORKSPACE="$GATE_ROOT/tree"; GATE_LOG="$GATE_ROOT/output.log"
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
+    [ "${2:-}" != noevidence ] || GATE_RECORDED=true
     GATE_RC=0; GATE_OUTCOME=""; GATE_OUT=""; GATE_PID=""
     if [ "$integrity" = gate_integrity_wt ]; then
         # Sparse from the start, never a full checkout: .moe/ is never written. The
@@ -5524,7 +5580,7 @@ run_frozen_gate() {
     elif $integrity; then GATE_OUTCOME=passed
     else GATE_OUTCOME=inconclusive; fi
     GATE_RECORDED=true
-    record_check_run_rpc || return 1
+    [ "${2:-}" = noevidence ] || record_check_run_rpc || return 1
     if [ "$GATE_RC" -ne 0 ]; then
         echo "[WARN] qualityGate failed (exit $GATE_RC); refusing branch commit." >&2; return 1
     fi
@@ -6799,7 +6855,7 @@ control_alert() {
 # force or clean: a refusal is an alert, nothing moves, and the caller goes on.
 # Twin: Invoke-MoeControlFollow.
 follow_control_checkout() {
-    local target="${CS_CONSOLIDATION_BRANCH:-main}" head old tip mc sw hooks err new rc=0
+    local target="${CS_CONSOLIDATION_BRANCH:-main}" head old tip mc sw hooks err new attempt rc=0
     case "$target" in *'?'*|*'['*) target=main ;; esac
     [ -n "${MOE_TOP:-}" ] || git_top || return 0
     head=$(git -C "$MOE_TOP" symbolic-ref -q HEAD 2>/dev/null) || head=""
@@ -6833,13 +6889,18 @@ follow_control_checkout() {
         control_alert MOE_CONTROL_CHECKOUT_BEHIND "$old..$tip changes daemon-owned ${MOE_REL}.moe paths (or the diff failed); moe/control stays at $old"; return 0
     fi
     # The checked tip, not the ref: a target that moved since carries unchecked .moe paths.
-    err=$(git -C "$MOE_TOP" -c core.hooksPath="$hooks" merge -q --ff-only --no-autostash "$tip" 2>&1 >/dev/null) || rc=$?
-    new=$(git -C "$MOE_TOP" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || new=""
-    if [ "$rc" -ne 0 ]; then
+    # A held .git/index.lock (the IDE's git, a peer's landing or follow) is retried like
+    # index_refresh: at most 5 tries, 2 s apart. Any other failure is final. Never delete the lock.
+    for attempt in 1 2 3 4 5; do
+        rc=0
+        err=$(git -C "$MOE_TOP" -c core.hooksPath="$hooks" merge -q --ff-only --no-autostash "$tip" 2>&1 >/dev/null) || rc=$?
+        new=$(git -C "$MOE_TOP" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || new=""
+        [ "$rc" -ne 0 ] || break
         # A peer's follow that held the index lock may already have moved HEAD to the tip.
         [ -n "$new" ] && git -C "$MOE_TOP" merge-base --is-ancestor "$tip" "$new" 2>/dev/null && return 0
+        if [ "$attempt" -lt 5 ] && [[ "$err" == *index.lock* ]]; then sleep 2; continue; fi
         control_alert MOE_CONTROL_CHECKOUT_BEHIND "moe/control stays at $old, behind $target at $tip: ${err:0:1500}"; return 0
-    fi
+    done
     [ "$new" = "$old" ] || echo -e "${GREEN}[OK]${NC} MOE_CONTROL_ADVANCED $old..$new"
 }
 
@@ -7199,31 +7260,38 @@ wt_journal_push_result() {
     receipt_journal_write "$1" "$($PYTHON_CMD -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); d["pushResult"]=sys.argv[2]; print(json.dumps(d))' "$1" "$2" 2>/dev/null)"
 }
 
-# wt_publish JOURNAL B C -- L9 (design §2.2): ONE non-forced push of C, never via
+# wt_push_target TARGET B C -- L9 (design §2.2): ONE non-forced push of C, never via
 # push_branch (so no MOE_PUSH_REBASE), read from the porcelain line for the target
-# whatever git's exit code; no definite answer goes to reconcile_push. 0 published
-# (the journal says 'pushed …', L10 mirrored C); 1 the round ends; 2 final: [remote
-# rejected] (MOE_PUSH_FAILED), or unknown (§2.6): the journal kept as 'push unknown:
-# …', C on a push-unknown rescue ref, and no row or finalize.
-wt_publish() {
-    local out flag dst sum rc=3 ref="refs/heads/$LAND_BRANCH"
+# whatever git's exit code; no definite answer goes to reconcile_push. 0 published;
+# 1 [rejected]; 2 [remote rejected]; 3 reconciled as never applying; 4 unknown (§2.6).
+# 2 and 4 set LAND_PUSH_DETAIL. It moves no local ref. Twin: Send-MoeLandPush.
+wt_push_target() {
+    local out flag dst sum rc=5 ref="refs/heads/$1"
     out=$(git -C "$MOE_TOP" push --porcelain origin "$3:$ref" 2>/dev/null) || true
     while IFS=$'\t' read -r flag dst sum; do
         [ "${dst##*:}" = "$ref" ] || continue
-        case "$flag$sum" in ' '*|'*'*|'='*) rc=0 ;; '![rejected]'*) rc=1 ;; '![remote rejected]'*) rc=2 ;; esac
+        case "$flag$sum" in ' '*|'*'*|'='*) rc=0 ;; '![rejected]'*) rc=1 ;; '![remote rejected]'*) rc=2; LAND_PUSH_DETAIL="origin refused $3: $sum" ;; esac
         break
     done <<< "$out"
+    [ "$rc" = 5 ] || return "$rc"
+    rc=0; reconcile_push "$1" "$2" "$3" || rc=$?
+    [ "$rc" = 0 ] || return $((rc + 2))
+}
+# wt_publish JOURNAL B C -- L9 through wt_push_target. 0 published (the journal says
+# 'pushed …', L10 mirrored C); 1 the round ends; 2 final: [remote rejected]
+# (MOE_PUSH_FAILED), or unknown (§2.6): the journal kept as 'push unknown: …', C on a
+# push-unknown rescue ref, and no row or finalize.
+wt_publish() {
+    local rc=0
+    wt_push_target "$LAND_BRANCH" "$2" "$3" || rc=$?
     if [ "$rc" = 3 ]; then
-        rc=0; reconcile_push "$LAND_BRANCH" "$2" "$3" || rc=$?
-        if [ "$rc" = 1 ]; then
-            echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_FAILED: task $LAND_TASK_ID -- origin's $LAND_BRANCH moved past $2 without $3, which can never apply."
-        elif [ "$rc" = 2 ]; then
-            echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_OUTCOME_UNKNOWN: task $LAND_TASK_ID -- the push of $3 to origin's $LAND_BRANCH is unsettled ($LAND_PUSH_DETAIL); no ref moves, and the attempt stays finalizing until a pre-flight replay settles it."
-            wt_journal_push_result "$1" "push unknown: $LAND_PUSH_DETAIL"; rescue_ref_from_commit "$3" push-unknown || true
-            MOE_FINALIZE_DONE=true; MOE_FINALIZE_RC=0; LAND_CODE=MOE_PUSH_OUTCOME_UNKNOWN; LAND_MESSAGE="$LAND_PUSH_DETAIL"
-        fi
+        rc=1; echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_FAILED: task $LAND_TASK_ID -- origin's $LAND_BRANCH moved past $2 without $3, which can never apply."
+    elif [ "$rc" = 4 ]; then
+        rc=2; echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_OUTCOME_UNKNOWN: task $LAND_TASK_ID -- the push of $3 to origin's $LAND_BRANCH is unsettled ($LAND_PUSH_DETAIL); no ref moves, and the attempt stays finalizing until a pre-flight replay settles it."
+        wt_journal_push_result "$1" "push unknown: $LAND_PUSH_DETAIL"; rescue_ref_from_commit "$3" push-unknown || true
+        MOE_FINALIZE_DONE=true; MOE_FINALIZE_RC=0; LAND_CODE=MOE_PUSH_OUTCOME_UNKNOWN; LAND_MESSAGE="$LAND_PUSH_DETAIL"
     elif [ "$rc" = 2 ]; then
-        rm -f "$1"; LAND_CODE=MOE_PUSH_FAILED; LAND_MESSAGE="origin refused $3: $sum"
+        rm -f "$1"; LAND_CODE=MOE_PUSH_FAILED; LAND_MESSAGE="$LAND_PUSH_DETAIL"
     fi
     [ "$rc" = 0 ] || return "$rc"
     wt_journal_push_result "$1" "pushed $3 to origin/$LAND_BRANCH"
@@ -7323,6 +7391,73 @@ wt_land_rounds() {
     LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; LAND_MESSAGE="$ref moved under all $rounds rounds"
     return 1
 }
+
+# ---- migration landing (WT-10M; design §7.3) ----------------------------------
+# run_migration_landing -- --land-branch: MIGRATION_BRANCH lands on main as ONE gated
+# merge commit C, tree M = merge-tree(B, tip) and parents exactly [B, tip]: L4-L7, L9
+# and L10 of §2.2, at most 2 rounds. It owns no task, so it takes no land lease and
+# sends no RPC; no journal, rescue ref or ledger row, and the branch never moves.
+# Exit 0 landed or nothing to land, 1 refused or failed (nothing published), 2 bad
+# arguments. Twin: Invoke-MoeMigrationLanding.
+migration_fail() { # $1 why, $2 exit code (default 1); LAND_CODE names the outcome
+    echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: migration of $MIGRATION_BRANCH onto main -- $1"
+    exit "${2:-1}"
+}
+migration_target_free() {
+    local rc=0; wt_target_checked_out main || rc=$?
+    [ "$rc" -ne 0 ] || LAND_CODE=MOE_LAND_TARGET_CHECKED_OUT
+    [ "$rc" -eq 1 ] || migration_fail "refs/heads/main is checked out in a worktree, or git worktree list failed"
+}
+run_migration_landing() {
+    local br="$MIGRATION_BRANCH" tip b bt m c rc round p names z="$SECURE_TEMP_DIR/migration-merge.z"
+    LAND_CODE=MOE_MIGRATION_BAD_ARGS
+    [ "$br" != main ] && git -C "$PROJECT" check-ref-format --branch "$br" >/dev/null 2>&1 \
+        && tip=$(git -C "$PROJECT" rev-parse -q --verify "refs/heads/$br^{commit}" 2>/dev/null) \
+        || migration_fail "'$br' is not a local branch other than main" 2
+    read_commit_settings; QUALITY_GATE="$CS_QUALITY_GATE"; LAND_CODE=MOE_MIGRATION_NO_GATE
+    [ -n "$QUALITY_GATE" ] && [ "${MOE_DISABLE_QUALITY_GATE:-0}" != 1 ] \
+        || migration_fail "settings.qualityGate is blank or MOE_DISABLE_QUALITY_GATE=1, and a migration always runs the gate"
+    LAND_CODE=MOE_COMMIT_FAILED
+    git_top || migration_fail "$PROJECT is not a SHA-1 git repository"
+    migration_target_free
+    if no_git_remote; then LAND_WT_PUB=local; else LAND_WT_PUB=remote; fi
+    for round in 1 2; do
+        LAND_CODE=MOE_COMMIT_FAILED; LAND_MESSAGE=""
+        sync_land_target main || migration_fail "$LAND_MESSAGE"
+        b="$LAND_B"; bt=$(git -C "$MOE_TOP" rev-parse -q --verify "$b^{tree}" 2>/dev/null) || migration_fail "$b has no tree"
+        rc=0; git -C "$MOE_TOP" merge-tree --write-tree -z --name-only "$b" "$tip" > "$z" 2>/dev/null || rc=$?
+        names=""; { IFS= read -r -d '' m; while IFS= read -r -d '' p && [ -n "$p" ]; do names="$names $p"; done; } < "$z" 2>/dev/null || true
+        if [ "$rc" -eq 1 ] && [[ $m =~ ^[0-9a-f]{40}$ ]]; then
+            LAND_CODE=MOE_COMMIT_FAILED_CONFLICT; migration_fail "merging $tip into main conflicts in:$names"
+        elif [ "$rc" -ne 0 ] || ! [[ $m =~ ^[0-9a-f]{40}$ ]] || [ "$(git -C "$MOE_TOP" cat-file -t "$m" 2>/dev/null)" != tree ]; then
+            migration_fail "git merge-tree exited $rc"
+        fi
+        if [ "$m" = "$bt" ]; then
+            echo -e "${BLUE}[info]${NC} MOE_COMMIT_NOTHING_TO_COMMIT: main ($b) already holds $br ($tip); nothing to land."; exit 0
+        fi
+        LAND_CODE=MOE_COMMIT_FAILED_GATE
+        freeze_candidate "$b" "$m" noevidence && run_frozen_gate worktree noevidence || migration_fail "the merged tree $m on $b did not pass the qualityGate"
+        LAND_CODE=MOE_COMMIT_FAILED
+        c=$(git -C "$MOE_TOP" commit-tree "$m" -p "$b" -p "$tip" -m "chore(migration): land $br on main" 2>/dev/null) || migration_fail "git commit-tree failed"
+        migration_target_free
+        if [ "$LAND_WT_PUB" = remote ]; then rc=0; wt_push_target main "$b" "$c" || rc=$?
+        elif git -C "$MOE_TOP" update-ref -m "moe: migrate $br" refs/heads/main "$c" "$b" >/dev/null 2>&1; then rc=0
+        elif ! p=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/main^{commit}" 2>/dev/null); then rc=5
+        else rc=0; git -C "$MOE_TOP" merge-base --is-ancestor "$c" "$p" 2>/dev/null || rc=$?; [ "$rc" -le 1 ] || rc=5
+        fi
+        case "$rc" in
+            0) [ "$LAND_WT_PUB" = local ] || mirror_land_target main "$c"
+               echo -e "${GREEN}[OK]${NC} MOE_MIGRATION_LANDED branch=$br target=main base=$b commit=$c"; exit 0 ;;
+            2) LAND_CODE=MOE_PUSH_FAILED; migration_fail "$LAND_PUSH_DETAIL" ;;
+            4) LAND_CODE=MOE_PUSH_OUTCOME_UNKNOWN; migration_fail "the push of $c is unsettled ($LAND_PUSH_DETAIL); no local ref moved, and a rerun settles it" ;;
+            5) migration_fail "refs/heads/main could not be read after a lost CAS" ;;
+        esac
+        echo -e "${YELLOW}[branch]${NC} main moved while migrating $br (round $round/2); rebuilding on the new tip."
+    done
+    LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; migration_fail "main moved under both rounds"
+}
+# Every helper above is defined, and the loop below is never entered.
+if [ "$MIGRATION" = true ]; then run_migration_landing; exit 1; fi
 
 # wt_land_published W BRANCH JOURNAL -- L11-L12 once C is on the target (signals
 # deferred): sync BRANCH (best-effort), send the journal's exact completion row
@@ -8643,38 +8778,78 @@ account_after_exit() {
 # captured a peer's live mutation drill into HEAD -- were produced by wrappers
 # launched BEFORE the pathspec fix landed, while every copy on disk had the fix.
 #
-# The hash is captured ONCE, here, so one on-disk change triggers exactly one
-# restart: the re-exec'd process captures the new hash and cannot thrash.
-# Only load committed bytes: on 2026-10-30 three seats re-exec'd onto
-# task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit.
-MOE_WRAPPER_PATH="${BASH_SOURCE[0]:-$0}"
+# The hash is captured ONCE, here, from the bytes this process loaded, so one
+# on-disk change triggers exactly one restart: the re-exec'd process captures the
+# new hash and cannot thrash. Only load committed bytes: on 2026-10-30 three seats
+# re-exec'd onto task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit. And
+# load them from a private copy: a write landing after the check is not loaded.
+MOE_WRAPPER_PATH="$SCRIPT_DIR/${MOE_WRAPPER_FILE##*/}"
 MOE_WRAPPER_LAUNCH_HASH=""
 MOE_WRAPPER_REFUSED_HASH=""
 MOE_WRAPPER_DEFERRED_HASH=""
-# Twin: Test-MoeWrapperReloadDeferred. Return 0 to defer, 1 to reload.
+MOE_WRAPPER_PIN=""
+# Drop the private copy MOE_WRAPPER_PIN names: rm -f + rmdir, only in a
+# moe-wrapper-pin.* folder.
+wrapper_pin_drop() {
+    local dir="${MOE_WRAPPER_PIN%/*}"
+    case "${dir##*/}" in moe-wrapper-pin.*) rm -f "$MOE_WRAPPER_PIN" 2>/dev/null || true; rmdir "$dir" 2>/dev/null || true ;; esac
+    MOE_WRAPPER_PIN=""
+}
+# Copy the wrapper into a new moe-wrapper-pin.* folder and check the copy's blob is
+# HEAD's. Return 0 (MOE_WRAPPER_PIN is the copy), 1 when the bytes moved after the
+# diff, or 2 on a failure that MOE_WRAPPER_PIN_ERR names.
+wrapper_pin_stage() {
+    local leaf="${MOE_WRAPPER_PATH##*/}" pin want got rc=0
+    MOE_WRAPPER_PIN_ERR="private copy failed"
+    pin="$(mktemp -d "${TMPDIR:-/tmp}/moe-wrapper-pin.XXXXXX" 2>/dev/null)" || return 2
+    MOE_WRAPPER_PIN="$pin/$leaf"
+    cp "$MOE_WRAPPER_PATH" "$MOE_WRAPPER_PIN" 2>/dev/null || return 2
+    want="$(git -C "$SCRIPT_DIR" rev-parse --verify -q "HEAD:./$leaf" 2>/dev/null)" || rc=$?
+    MOE_WRAPPER_PIN_ERR="git rev-parse exited $rc"
+    [ "$rc" -eq 0 ] || return 2
+    got="$(git -C "$SCRIPT_DIR" hash-object "--path=$leaf" -- "$MOE_WRAPPER_PIN" 2>/dev/null)" || rc=$?
+    MOE_WRAPPER_PIN_ERR="git hash-object exited $rc"
+    [ "$rc" -eq 0 ] || return 2
+    [ "$want" = "$got" ] || return 1
+}
+# Twin: Test-MoeWrapperReloadDeferred. Return 0 to defer, 1 to reload: from the
+# MOE_WRAPPER_PIN copy, or from the checkout path when that is empty.
 wrapper_reload_deferred() {
-    local rc=0 git_cmd=ls-files
+    local rc=0 git_cmd=ls-files reason
+    wrapper_pin_drop
     git -C "$SCRIPT_DIR" ls-files --error-unmatch -- "${MOE_WRAPPER_PATH##*/}" >/dev/null 2>&1 || rc=$?
     if [ "$rc" -eq 0 ]; then
         git_cmd=diff
         git -C "$SCRIPT_DIR" diff --quiet HEAD -- "${MOE_WRAPPER_PATH##*/}" >/dev/null 2>&1 || rc=$?
-        [ "$rc" -ne 0 ] || return 1
+    fi
+    reason="git $git_cmd exited $rc"
+    if [ "$rc" -eq 0 ]; then
+        wrapper_pin_stage || rc=$?
+        reason="$MOE_WRAPPER_PIN_ERR"
+        if [ "$rc" -eq 0 ]; then
+            # Bytes without the hand-over (a revert) would resolve helpers beside the copy.
+            grep -Fq MOE_WRAPPER_SOURCE "$MOE_WRAPPER_PIN" 2>/dev/null || wrapper_pin_drop
+            return 1
+        fi
+        wrapper_pin_drop
     fi
     if [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_DEFERRED_HASH" ]; then
         MOE_WRAPPER_DEFERRED_HASH="$MOE_WRAPPER_CURRENT_HASH"
         if [ "$rc" -eq 1 ]; then
             echo "[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits; staying on the current bytes until they are committed"
         else
-            echo "[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed (git $git_cmd exited $rc); staying on the current bytes" >&2
+            echo "[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed ($reason); staying on the current bytes" >&2
         fi
     fi
     return 0
 }
-if [ -f "$MOE_WRAPPER_PATH" ]; then
+if [ -f "${BASH_SOURCE[0]:-$0}" ]; then
     # FAIL-OPEN: a wrapper that dies because it could not hash itself is a fleet
     # outage; a stale wrapper is merely the status quo this guard improves on.
-    MOE_WRAPPER_LAUNCH_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
+    MOE_WRAPPER_LAUNCH_HASH="$(sha256sum "${BASH_SOURCE[0]:-$0}" 2>/dev/null | cut -d' ' -f1 || true)"
 fi
+# A pinned seat runs its copy from the open file: the copy itself can go now.
+if [ "${BASH_SOURCE[0]:-$0}" != "$MOE_WRAPPER_FILE" ]; then MOE_WRAPPER_PIN="${BASH_SOURCE[0]:-$0}"; wrapper_pin_drop; fi
 
 # Bash reads scripts incrementally from a saved file offset. An in-place save
 # (same inode: editor/apply_patch) could end the loop on NEW bytes at the OLD
@@ -8726,10 +8901,14 @@ while [ "$LOOP_RUNNING" = true ]; do
             # keeps serving the bytes it already parsed. The `||` keeps set -e
             # from ending the seat on the very failure this guards.
             MOE_WRAPPER_PARSE_RC=0
-            MOE_WRAPPER_PARSE_ERR="$(bash -n "$MOE_WRAPPER_PATH" 2>&1)" || MOE_WRAPPER_PARSE_RC=$?
+            MOE_WRAPPER_PARSE_ERR="$(bash -n "${MOE_WRAPPER_PIN:-$MOE_WRAPPER_PATH}" 2>&1)" || MOE_WRAPPER_PARSE_RC=$?
             if [ "$MOE_WRAPPER_PARSE_RC" -ne 0 ]; then
                 MOE_WRAPPER_REFUSED_HASH="$MOE_WRAPPER_CURRENT_HASH"
                 MOE_WRAPPER_PARSE_ERR=${MOE_WRAPPER_PARSE_ERR%%$'\n'*}
+                # bash names the file it parsed: name the checkout, not the copy
+                # (quoted, so bash 5.2 never reads an & in the path as the match).
+                [ -z "$MOE_WRAPPER_PIN" ] || MOE_WRAPPER_PARSE_ERR=${MOE_WRAPPER_PARSE_ERR//"$MOE_WRAPPER_PIN"/"$MOE_WRAPPER_PATH"}
+                wrapper_pin_drop
                 echo "[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: ${MOE_WRAPPER_PARSE_ERR:-bash -n exited $MOE_WRAPPER_PARSE_RC}" >&2
             else
                 echo "wrapper source changed on disk; restarting to load it"
@@ -8741,6 +8920,7 @@ while [ "$LOOP_RUNNING" = true ]; do
                 stop_heartbeat_sidecar
                 if [ -n "$HEARTBEAT_PID" ]; then
                     echo "[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle." >&2
+                    wrapper_pin_drop
                     continue
                 fi
                 if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
@@ -8751,7 +8931,13 @@ while [ "$LOOP_RUNNING" = true ]; do
                 if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
                     rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
                 fi
-                exec "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
+                # Run the verified copy and hand it the checkout's path; bytes
+                # without the hand-over run from the checkout path.
+                if [ -n "$MOE_WRAPPER_PIN" ]; then
+                    MOE_WRAPPER_SOURCE="$MOE_WRAPPER_PATH" exec "$BASH" "$MOE_WRAPPER_PIN" "${MOE_WRAPPER_ARGV[@]}"
+                else
+                    exec "$BASH" "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
+                fi
                 echo "wrapper relaunch failed; continuing on current bytes"
             fi
         fi
