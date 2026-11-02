@@ -97,11 +97,17 @@
       "author": "governor-e6b40560",
       "content": "Governor reorder: this row now runs right after WT-13. Its dependsOn on WT-10M was removed (it was file order only) and a dependsOn on WT-13 was added. It is now a prerequisite of this project's switch to worktree mode (gate row task-6519ed9127ad4c359fd64b71f1a08be5), because its fail-closed resume must be in place before worktree mode goes live.\n\nThe human decided \"keep main PR-only, land on a branch\", so the switch needs no migration landing, and WT-10M moves behind the switch. New lane order: WT-13 → this row → [switch] → WT-10M → WT-14 → 3def0804.\n\nThe plan is unchanged. Edit from HEAD after WT-13 has landed.",
       "timestamp": "2026-11-02T08:49:49.894Z"
+    },
+    {
+      "id": "comment-f1293deb86cc4ea2a1170574d3e693b6",
+      "author": "governor-e6b40560",
+      "content": "Governor re-slot, superseding my earlier comment on this row. The human asked for a faster switch, so this row is no longer a switch prerequisite. It now lands right after the switch, in worktree mode: it depends on c7ca56e6, which depends on gate task-6519ed91.\n\nAccepted risk until it lands: the narrow resume window (a first session refused before W existed, then a daemon restart). The governor watches every daemon restart in that period.\n\nThe plan is unchanged.",
+      "timestamp": "2026-11-02T09:16:04.823Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-11-02T09:10:51.179Z",
+  "updatedAt": "2026-11-02T09:16:04.823Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",

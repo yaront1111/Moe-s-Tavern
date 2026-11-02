@@ -1,0 +1,165 @@
+{
+  "id": "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: two worker seats provisioning their first worktrees at once race on .git/config, and one refuses with MOE_WORKTREE_CREATE_FAILED",
+  "description": "Found by architect-0fcb7226 while planning WT-19b (task-48aafb880ede4b22a3e26115c07f8470), 2026-11-02.\n\nCause: provision_worktree (sh) and Initialize-MoeWorktree (ps1) run `git -C W sparse-checkout set --no-cone '/*' '!/.moe/'` on a fresh W. If the repo's config lacks extensions.worktreeConfig, git first enables it in the COMMON .git/config and takes .git/config.lock to do so. When two seats provision at the same moment, one fails with `error: could not lock config file .git/config: File exists`. The wrapper then refuses that seat with MOE_WORKTREE_CREATE_FAILED (report_blocked, no CLI launch).\n\nRepro (git 2.43, scratch dir outside the repo): create 20 fresh repos, add two `worktree add --no-checkout` worktrees to each, then run both `sparse-checkout set` calls in parallel. 2 of the 40 calls failed with that error.\n\nImpact:\n- This repo has extensions.worktreeConfig unset and no linked worktree, so the first concurrent worker claims after the switch can hit the race.\n- WT-19b's parallel scenario would flake on it, about 10% of runs.\n- Once the extension is set, it is per-worktree config and the race is gone.\n\nFix (wrapper lane files; twins):\n- Before the sparse-checkout, when `git config --get extensions.worktreeConfig` is not `true`, run `git config extensions.worktreeConfig true`.\n- Retry only the config-lock collision, a few times with a short backoff. If another seat already set it to true, that counts as success.\n- Any other failure keeps today's MOE_WORKTREE_CREATE_FAILED refusal.\n\nInterim workaround for the switch checklist: run `git config extensions.worktreeConfig true` in the control checkout before relaunching seats.\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh (plus, on a Windows seat, node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "provision_worktree and Initialize-MoeWorktree make sure extensions.worktreeConfig is true before W's first sparse-checkout. They retry only a config-lock collision, with a bounded number of attempts, and still refuse with MOE_WORKTREE_CREATE_FAILED on any other failure. bash scripts/tests/parity-check.sh passes.",
+    "A postflight-worktree.cjs case (sh and ps1 engines) deterministically forces the config-lock collision on the first write, and the seat still provisions W. A second case, with the extension already true, makes no config write.",
+    "Existing postflight-worktree.cjs and held-out worktree-landing cases pass unchanged.",
+    "The verification command exits 0; on a Windows seat, postflight-safe.mjs powershell passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/moe-agent.sh: add a helper `enable_worktree_config` and call it in provision_worktree. Read mem:gotcha-worktree-first-sparse-checkout-config-race first.\n\nThe call goes inside the existing `if [ \"$added\" = true ] || [ \"$finish\" = true ]` block, right before W's `sparse-checkout set` (moe-agent.sh ~:3119-3128 at HEAD 204cacb8). A reused W runs no sparse-checkout and no helper.\n\nHelper semantics:\n- `git -C \"$MOE_TOP\" config --get --type=bool extensions.worktreeConfig` already `true` → return 0 with no write. Never touch config otherwise.\n- If the common config sets core.worktree, or core.bare is true, do NOT pre-set; return 0 so git's own sparse-checkout init runs as today. Reason: git's init_worktree_config relocates those two settings into config.worktree, and a plain config write would skip that. Say so in a comment.\n- Otherwise, up to 5 attempts of `LC_ALL=C git -C \"$MOE_TOP\" config extensions.worktreeConfig true`. LC_ALL=C keeps the message matchable under any locale.\n  - Success → 0.\n  - Output containing `could not lock config file` → if a re-read now gives true (another seat won), return 0. Otherwise print `[info] MOE_WORKTREE_CONFIG_RETRY attempt=<n>/5: .git/config is locked by another git process` and sleep a short jittered backoff (about 0.2-0.6 s; fractional sleep works in GNU, macOS and Git Bash), then retry.\n  - Any other output → return 1 at once with git's last line.\n  - Attempts exhausted → return 1 naming the lock.\n\nError handling: a helper failure takes the SAME path as a failed sparse-checkout:\n- the existing removal of an added W with no commits;\n- then `worktree_stop MOE_WORKTREE_CREATE_FAILED \"…\"` with the helper's detail.\nThere is no silent fallback to an unchecked sparse-checkout. Call the helper from the main shell, not inside $(...), so worktree_stop still exits the seat. The design comment above provision_worktree explains why. Twin comment: name the ps1 function.\n\nLeave the gate arm (:5330) and the hooked scratch (:5171) alone. A worker's pre-flight provisioning always runs before them in the same repo and sets the extension; say so in the comment.\n\nThe gotcha: git returns 255 with `error: could not lock config file .git/config: File exists` (planner-verified). Match the message, not the exit code.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.ps1: twin `Enable-MoeWorktreeConfig`, called in Initialize-MoeWorktree right before W's sparse-checkout (~:2978), with exactly the step-1 semantics:\n- the same 5 attempts;\n- the same `MOE_WORKTREE_CONFIG_RETRY attempt=<n>/5: …` line, byte-identical text (parity-check compares the MOE_WORKTREE_ code sets; also read mem:gotcha-parity-check-literals);\n- the same core.worktree/core.bare skip;\n- the same failure route into `Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' …` with the existing added-W cleanup.\n\nUse the file's existing Invoke-MoeGit helper with -MergeStderr. Set `$env:LC_ALL='C'` only around the write, in try/finally, restoring the previous value (or removing it if unset). Sleep with Start-Sleep -Milliseconds and a jitter.\n\nWindows PowerShell 5.1 compatible: no ternary, no `??`, no pipeline-chain operators.\n\nKeep the file UTF-8 with BOM: edit with the Edit tool only, never a shell rewrite. bash scripts/tests/parity-check.sh must pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/tests/postflight-worktree.cjs: deterministic cases for both engines; the suite is shared by postflight.sh and postflight.ps1.\n\n(a) Extend the PATH stub (stub() ~:120) in BOTH its sh `git` and its `git.ps1` with WT_GIT_CONFIG_LOCK=<count file>. When argv holds `config` and `extensions.worktreeConfig` without `--get`, and the file holds a number above 0:\n- decrement it;\n- print `error: could not lock config file .git/config: File exists` to stderr;\n- exit 255.\nOtherwise pass through to the real git. Make launch() (~:191) install the stub when WT_GIT_CONFIG_LOCK is set.\n\n(b) Cases, all on a fresh repo() fixture whose config lacks the extension unless stated:\n- `wt-config-lock` (count 1): `[worktree] created …` appears; exactly one MOE_WORKTREE_CONFIG_RETRY line; `git config --get extensions.worktreeConfig` == true; W's sparse patterns are `/*` and `!/.moe/`; no report_blocked; the CLI ran.\n- `wt-config-lock-exhausted` (count 99): MOE_WORKTREE_CREATE_FAILED via refused(); exactly 4 retry lines (5 attempts); the CLI did not run; no W directory or registration is left behind.\n- `wt-config-other` (WT_GIT_FAIL=extensions.worktreeConfig): an immediate MOE_WORKTREE_CREATE_FAILED with no retry line.\n- `wt-config-preset`: the fixture sets extensions.worktreeConfig=true first. Provisioning succeeds; .git/config is byte-identical before and after; no retry line.\n\nAssertions must fail if the helper is removed. Prove it in step 5's mutant run.\n\nDo not edit the held-out worktree-landing.{sh,ps1}.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run ONCE, fresh, from the repo root, as ONE command: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`.\n\nRun it in place only if `git status --short scripts/` shows nothing but this task's three files. Otherwise run it from a `git archive HEAD` snapshot with exactly those files copied in and cmp-checked (mem:gotcha-gate-hermetic-snapshot-from-wsl).\n\npostflight-safe takes about 15-25 min. Run it under nohup with a log and an .exit file, and poll it in the foreground until it finishes. Never end the turn with it running.\n\nWindows leg (DoD 4): `node.exe scripts/tests/postflight-safe.mjs powershell` from a /mnt/d copy of the same bytes, per mem:gotcha-qa-windows-launcher-tests-from-wsl and mem:gotcha-postflight-worktree-mutant-copy.\n\nRecord in the summary:\n- the exit codes;\n- postflight-safe's JSON summary, with failureClass NONE and no SKIP;\n- the worktree-landing counts;\n- parity PASS;\n- the Windows result.\n\nA faster dev loop while iterating: `MOE_WORKTREE_ONLY=wt-config-lock,wt-config-lock-exhausted,wt-config-other,wt-config-preset node scripts/tests/postflight-worktree.cjs sh scripts/moe-agent.sh <tmp>/fake-proxy.js <tmp> \"$(command -v bash)\"`.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, then complete_task.\n\nMutant check, in a scratch copy of scripts/ outside the repo (mem:gotcha-postflight-worktree-mutant-copy):\n- drop the helper call → wt-config-lock and wt-config-lock-exhausted must fail with AssertionErrors;\n- make every error retryable → wt-config-other must fail.\nAn unmutated control must pass. Record the results.\n\nChecklist:\n- Two seats at once: the retry, plus the re-read that treats another seat's write as success.\n- The lock held by a human's git: bounded, then the old refusal.\n- Localized git: LC_ALL=C on the write only.\n- core.worktree or core.bare=true: today's path.\n- A reused W: no write.\n- PS 5.1 syntax, BOM kept, parity PASS.\n- Shared mode untouched: the helper runs only in worktree provisioning.\n- No new failure mode: every failure still lands on MOE_WORKTREE_CREATE_FAILED with the existing cleanup.\n\nFix anything found, rerun step 4's command fresh, and submit that output.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-fbe8e3880ddf47dfa8546f220acea770",
+    "task-6519ed9127ad4c359fd64b71f1a08be5"
+  ],
+  "priority": "HIGH",
+  "order": 36,
+  "comments": [
+    {
+      "id": "comment-449eaedcba8e45138bc6fe185ec91dac",
+      "author": "governor-e6b40560",
+      "content": "Governor slotting: this row now also depends on the switch gate, task-6519ed9127ad4c359fd64b71f1a08be5. Until the switch, the project runs in shared-checkout mode, and with only the WT-13 edge this row would have become claimable alongside 31187ec1. Two coders would then edit moe-agent.{sh,ps1} at once.\n\nAt the switch, the governor applies your interim workaround: `git config extensions.worktreeConfig true` in the control checkout before seats relaunch. So the race can't hit the switch, and this fix runs right after it in worktree mode. It stays HIGH, and nothing in the plan changes.\n\nThanks, architect-0fcb7226: this is exactly the relaunch moment the switch would have hit.",
+      "timestamp": "2026-11-02T09:10:13.773Z"
+    },
+    {
+      "id": "comment-fe1b17c389084b52abade9ca1a87ce4e",
+      "author": "governor-e6b40560",
+      "content": "Correction to my comment above: the gate edge was **refused**, because architect-0fcb7226 had already made WT-19b depend on this row, so adding it would close a cycle. This row therefore lands before the switch, and the dry run runs on the fixed wrapper.\n\nLane order, set now so the shared checkout stays serial: WT-13 → this row → 31187ec1 → [switch]. 31187ec1 now depends on this row, and WT-19b can run in parallel with 31187ec1 once this row is DONE.\n\nI'm still adding the `git config extensions.worktreeConfig true` step to the switch checklist as belt-and-braces. Nothing in the plan changes.",
+      "timestamp": "2026-11-02T09:10:51.222Z"
+    },
+    {
+      "id": "comment-4f013b28563d44638d46cc454d36eb12",
+      "author": "governor-e6b40560",
+      "content": "Governor re-slot, final. It supersedes both of my earlier comments here.\n\nThe human asked for a faster switch, so this row now lands **after** the switch. It depends on gate task-6519ed91, with no cycle now: WT-19b no longer depends on this row, per the planner's own offer in msg-d30fd02c.\n- The switch relies on the interim workaround, `git config extensions.worktreeConfig true` before seats relaunch, which is on the gate's checklist. WT-19b's fixture sets the same key.\n- This row runs first thing after the switch, in worktree mode.\n\nThe plan, the DoD and the forced-collision test cases are unchanged; they still prove the fix for projects without the workaround.",
+      "timestamp": "2026-11-02T09:16:02.025Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:09:43.239Z",
+  "updatedAt": "2026-11-02T09:18:30.489Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T09:13:29.502Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T09:18:30.457Z",
+  "executionContract": {
+    "intendedBehavior": "Two worker seats provisioning their first task worktrees at once never refuse because of the shared .git/config lock. Before W's first sparse-checkout, provisioning makes sure extensions.worktreeConfig is true, retrying only a config-lock collision (bounded). git's sparse-checkout then writes only the per-worktree config.worktree. Any other failure still refuses with MOE_WORKTREE_CREATE_FAILED as today.",
+    "acceptanceCriteria": [
+      "DoD 1: provision_worktree and Initialize-MoeWorktree run the twin helper before W's first sparse-checkout.\n- It makes no write when the extension is already true.\n- It skips the pre-set (today's git path) when the common config sets core.worktree or core.bare=true.\n- It makes at most 5 attempts, retrying only on `could not lock config file` and printing MOE_WORKTREE_CONFIG_RETRY.\n- Any other failure gives MOE_WORKTREE_CREATE_FAILED with the existing cleanup.\n- parity-check passes.",
+      "DoD 2: postflight-worktree.cjs cases wt-config-lock (provisions after one forced collision) and wt-config-preset (no config write; .git/config byte-identical) pass on sh and ps1, together with wt-config-lock-exhausted and wt-config-other.",
+      "DoD 3: existing postflight-worktree.cjs cases and the held-out worktree-landing cases pass unchanged.",
+      "DoD 4: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh` exits 0, and `postflight-safe.mjs powershell` passes on Windows."
+    ],
+    "invariants": [
+      "Shared mode is unchanged: the helper runs only in worktree provisioning.",
+      "A config value is written only when the extension is not already true, and only extensions.worktreeConfig, never anything else.",
+      "No path skips the refusal: an exhausted or non-lock failure refuses as today and leaves no added W behind.",
+      "The wrappers stay in string parity, and moe-agent.ps1 keeps its BOM."
+    ],
+    "compatibility": [
+      "Repos whose common config sets core.worktree or core.bare=true keep git's own sparse-checkout upgrade path.",
+      "The gate arm and the hooked scratch sparse-checkouts are untouched; provisioning precedes them."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: enable_worktree_config plus its call in provision_worktree",
+      "scripts/moe-agent.ps1: Enable-MoeWorktreeConfig plus its call in Initialize-MoeWorktree",
+      "scripts/tests/postflight-worktree.cjs: the WT_GIT_CONFIG_LOCK stub knob and 4 wt-config-* cases"
+    ],
+    "reuse": [
+      "The existing provision_worktree/Initialize-MoeWorktree failure and cleanup path.",
+      "worktree_stop / Stop-MoeWorktreeSeat.",
+      "Invoke-MoeGit.",
+      "postflight-worktree.cjs's stub(), launch(), repo() and refused() helpers."
+    ],
+    "sourceAssumptions": [
+      "moe-agent.sh provision_worktree runs `sparse-checkout set --no-cone '/*' '!/.moe/'` only when added or finish (~:3119-3128 at 204cacb8). ps1 Initialize-MoeWorktree does the same at ~:2978. A reused W skips it.",
+      "git's first sparse-checkout in a linked worktree enables extensions.worktreeConfig in the common .git/config under config.lock. With two at once, one fails; reproduced 2/40 with git 2.43.",
+      "A lock collision prints `error: could not lock config file .git/config: File exists` with exit 255 (planner-verified with LC_ALL=C). git honors extensions.worktreeConfig at repositoryformatversion 0 (setup.c handle_extension_v0).",
+      "git's init_worktree_config moves core.worktree, and core.bare=true, into config.worktree, which a plain config write would skip. Hence the skip.",
+      "postflight-worktree.cjs stub() (~:120) has sh and ps1 forms with WT_GIT_VERSION/FAIL/SWAP knobs; launch() installs it only when one of those is set (~:191)."
+    ],
+    "checkRefs": [
+      "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Retrying `sparse-checkout set` itself on the lock error: rejected. The DoD requires the extension to be true BEFORE the first sparse-checkout, and a pre-set leaves sparse-checkout writing only config.worktree.\n- Pre-setting it in fixtures or the switch checklist only: rejected as the fix, because it hides the race in tests. It stays as the governor's interim checklist step.\n- Also guarding the gate arm and the hooked scratch: rejected (YAGNI). Worker pre-flight provisioning always runs first in the same repo.\n- A real two-process race test in postflight-worktree.cjs: rejected, because the shared fake is single-seat. The deterministic stub covers it, and WT-19b's e2e runs real concurrent seats.",
+    "codebaseInsights": "- Provisioning's sparse-checkout runs only for an added or finished W.\n- Its failure path already removes an added W with no commits before worktree_stop.\n- The stub git has sh and ps1 twins, and launch() enables it per knob.\n- parity-check compares MOE_WORKTREE_* code sets across the twins.",
+    "risks": "- PS 5.1 syntax and the BOM: use the Edit tool.\n- Localized git messages: LC_ALL=C on the write.\n- A helper inside $(...) cannot exit the seat: call it in the main shell.\n- Backoff must be fractional sleep, available everywhere.\n- postflight-safe runs 15-25 min: nohup plus a poll.\n- The Windows leg needs node.exe from WSL (memories cited in step 4).",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/parity-check.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "2a20b85257a0507cb714f1ff7b09fc211089eece",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T09:18:30.489Z",
+  "approvedPlanRevision": 1
+}
