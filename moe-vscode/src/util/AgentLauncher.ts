@@ -7,7 +7,16 @@ import type { DeclaredProfile, ReadinessFailure, ReadinessReply } from '../servi
 export type AgentProvider = 'claude' | 'codex' | 'gemini' | 'grok' | 'custom';
 export type AgentRole = 'architect' | 'worker' | 'qa' | 'governor';
 type ReadinessSource = () => Promise<ReadinessReply>;
-type LaunchOptions = { customCommand?: string; teamName?: string; readiness?: ReadinessSource };
+type LaunchOptions = {
+    customCommand?: string;
+    teamName?: string;
+    readiness?: ReadinessSource;
+    /**
+     * Called once per terminal a launch creates, right after createTerminal and before the command is sent,
+     * so a terminal that closes at once is still tracked (VSC-21, AgentSeatTracker).
+     */
+    onLaunched?: (workerId: string, terminal: vscode.Terminal) => void;
+};
 
 interface ResolvedScript {
     scriptPath: string;
@@ -379,6 +388,15 @@ async function launchRole(
             name: terminalName,
             cwd: workspacePath,
         });
+        if (options?.onLaunched) {
+            // A tracking failure never stops a launch: the seat still starts, and the user is told once.
+            try {
+                options.onLaunched(workerId, terminal);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                vscode.window.showWarningMessage(`Moe started the ${role} agent, but could not track its terminal: ${message}`);
+            }
+        }
         terminal.sendText(terminalCommand);
         terminal.show();
     } catch (err) {

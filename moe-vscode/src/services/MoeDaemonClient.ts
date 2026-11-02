@@ -639,6 +639,10 @@ export class MoeDaemonClient implements vscode.Disposable {
     private readonly _onMetrics = new vscode.EventEmitter<MetricsAggregate>();
     public readonly onMetrics = this._onMetrics.event;
 
+    /** Fires with the worker id the daemon answered to DEREGISTER_WORKER. */
+    private readonly _onWorkerDeregistered = new vscode.EventEmitter<string>();
+    public readonly onWorkerDeregistered = this._onWorkerDeregistered.event;
+
     /** Fires with the latest rotation (undefined when the snapshot carried none). */
     private readonly _onAccountsChanged = new vscode.EventEmitter<AccountRotationView | undefined>();
     public readonly onAccountsChanged = this._onAccountsChanged.event;
@@ -1023,6 +1027,19 @@ export class MoeDaemonClient implements vscode.Disposable {
             payload.reason = reason;
         }
         return this.sendMessage('RELEASE_TASK', payload);
+    }
+
+    /**
+     * Deregister an agent seat whose terminal this window lost (JetBrains
+     * MoeCommandSender.deregisterWorker parity). Quiet when not connected:
+     * sendMessage returns false before any send, with no log and no onError,
+     * because AgentSeatTracker re-sends at the next connect until the daemon
+     * acks. The daemon (packages/moe-daemon/src/server/WebSocketServer.ts, case
+     * 'DEREGISTER_WORKER') runs moe.deregister_worker and answers
+     * WORKER_DEREGISTERED { workerId, alreadyDead, releasedTaskIds }.
+     */
+    deregisterWorker(workerId: string, reason: string): boolean {
+        return this.sendMessage('DEREGISTER_WORKER', { workerId, reason });
     }
 
     // =========================================================================
@@ -1578,6 +1595,16 @@ export class MoeDaemonClient implements vscode.Disposable {
                     }
                     break;
 
+                case 'WORKER_DEREGISTERED': {
+                    // The daemon's direct reply to DEREGISTER_WORKER. Cached state is
+                    // untouched: the daemon's own worker broadcasts do that.
+                    const workerId = payload?.workerId;
+                    if (typeof workerId === 'string' && workerId.length > 0) {
+                        this._onWorkerDeregistered.fire(workerId);
+                    }
+                    break;
+                }
+
                 case 'ACCOUNTS_UPDATED':
                     // JetBrains MoeMessageDispatcher parity: nothing before the first
                     // snapshot, and a malformed payload keeps the last good rotation.
@@ -1892,6 +1919,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         this._onDecisionResolved.dispose();
         this._onError.dispose();
         this._onMetrics.dispose();
+        this._onWorkerDeregistered.dispose();
         this._onAccountsChanged.dispose();
         this._onAccountAdded.dispose();
     }

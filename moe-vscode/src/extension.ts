@@ -16,6 +16,8 @@ import { TaskDetailPanel } from './panels/TaskDetailPanel';
 import { launchAgent, launchAllAgents, AgentProvider, AgentRole } from './util/AgentLauncher';
 import { isAntigravity, registerMcpServer } from './util/AntigravityIntegration';
 import { registerTaskNotifier } from './util/TaskNotifier';
+import { AgentSeatTracker, wireAgentSeats } from './util/AgentSeatTracker';
+import { SeatPids, isProcessAlive } from './util/SeatSurvival';
 
 let daemonClient: MoeDaemonClient | undefined;
 let statusBar: ConnectionStatusBar | undefined;
@@ -38,6 +40,50 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Task status notices, matching JetBrains MoeMessageDispatcher (VSC-1). Registered once per activation.
     context.subscriptions.push(registerTaskNotifier(daemonClient, vscode.window, vscode.commands));
+
+    // Agent seats (VSC-21, matching JetBrains MoeProjectService.agentSeats). A wrapper killed with its terminal never
+    // runs the exit trap that deregisters it, so this window deregisters the seats whose terminal it lost.
+    const persist = (key: string, value: unknown): void => {
+        context.workspaceState.update(key, value).then(undefined, err =>
+            outputChannel.appendLine(`Moe could not save ${key}: ${err instanceof Error ? err.message : String(err)}`));
+    };
+    const seatPids = new SeatPids(
+        () => context.workspaceState.get('moe.agentSeatPids'),
+        pids => persist('moe.agentSeatPids', pids)
+    );
+    const seatTracker = new AgentSeatTracker(
+        () => context.workspaceState.get<string[]>('moe.agentSeats', []),
+        ids => { persist('moe.agentSeats', ids); seatPids.keep(ids); },
+        workerId => { daemonClient?.deregisterWorker(workerId, 'terminal_closed'); }
+    );
+    // Unlike a JetBrains restart, a window reload (persistent terminal sessions) or Restart Extensions leaves seat
+    // terminals running. A saved seat whose shell is still alive is open in this session too, so the first connect
+    // must not deregister it.
+    for (const workerId of seatPids.surviving(context.workspaceState.get<string[]>('moe.agentSeats', []), isProcessAlive)) {
+        seatTracker.launched(workerId);
+    }
+    const seatTerminals = new WeakMap<vscode.Terminal, string>();
+    const mapSurvivor = (terminal: vscode.Terminal): void => {
+        terminal.processId.then(pid => {
+            const workerId = seatPids.seatOf(pid);
+            if (workerId && !seatTerminals.has(terminal)) { seatTerminals.set(terminal, workerId); }
+        }, () => undefined);
+    };
+    vscode.window.terminals.forEach(mapSurvivor);
+    // A persistent terminal can reconnect after activation.
+    context.subscriptions.push(vscode.window.onDidOpenTerminal(mapSurvivor));
+    context.subscriptions.push(wireAgentSeats({
+        tracker: seatTracker,
+        onDidCloseTerminal: vscode.window.onDidCloseTerminal,
+        workerIdOf: terminal => seatTerminals.get(terminal),
+        onConnected: daemonClient.onConnectionChanged,
+        onAcked: daemonClient.onWorkerDeregistered,
+    }));
+    const onLaunched = (workerId: string, terminal: vscode.Terminal): void => {
+        seatTerminals.set(terminal, workerId);
+        seatTracker.launched(workerId);
+        terminal.processId.then(pid => seatPids.record(workerId, pid), () => undefined);
+    };
 
     // Initialize board view provider
     const boardProvider = new BoardViewProvider(context.extensionUri, daemonClient);
@@ -344,6 +390,7 @@ export function activate(context: vscode.ExtensionContext) {
                         customCommand: providerChoice.customCommand,
                         teamName,
                         readiness,
+                        onLaunched,
                     });
                     vscode.window.showInformationMessage('Starting all agents...');
                 } else if (selected.role) {
@@ -351,6 +398,7 @@ export function activate(context: vscode.ExtensionContext) {
                         customCommand: providerChoice.customCommand,
                         teamName,
                         readiness,
+                        onLaunched,
                     });
                 }
             } catch (err) {
@@ -371,6 +419,7 @@ export function activate(context: vscode.ExtensionContext) {
                     customCommand: providerChoice.customCommand,
                     teamName,
                     readiness,
+                    onLaunched,
                 });
                 vscode.window.showInformationMessage('Starting all agents (architect, worker, qa, governor)...');
             } catch (err) {
