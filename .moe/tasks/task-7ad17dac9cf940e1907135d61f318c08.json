@@ -88,7 +88,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,7 +108,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T16:04:09.916Z",
-  "updatedAt": "2026-11-02T17:02:13.073Z",
+  "updatedAt": "2026-11-02T17:04:36.853Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T16:10:46.686Z",
@@ -118,11 +118,14 @@
     "firstClaimAt": "2026-11-02T16:53:09.698Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T17:04:36.853Z",
+    "wallClockMs": 687155
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-b49a5155"
+    "worker-b49a5155",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "medium",
@@ -203,7 +206,48 @@
     "moe-vscode/README.md",
     "moe-vscode/CHANGELOG.md",
     "moe-vscode/MANUAL_TESTS.md",
+    "docs/plans/2026-11-02-vscode-reuse.md",
+    ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+    ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json"
+  ],
+  "completionSummary": "Docs only, 4 files. (a) README: all three Known issues lines removed. VSC-23 is fully fixed (panel re-renders Delivery and Release Agent on every update). VSC-25: the only remaining case (no rotation received) matches JetBrains AccountsPanel.render, so it is parity, not a known issue. VSC-27: shellPath powershell.exe at both createTerminal sites. (b) MANUAL_TESTS: Delivery step 6 is now a live-refresh check; Claude accounts step 3 rewritten for rows and CLI sign-in while disconnected; new section 'Windows terminals use Windows PowerShell' with one step (defaultProfile.windows). (c) CHANGELOG Fixed: three bullets added, no lines removed (VSC-24 unchanged). (d) Reuse doc table: VSC-23..27 DONE with 17ebbe81, 8122d0b9, fb0b5ab9, 2850a73a, b86c9077; statuses sentence and Wave 1 clause updated. (e) The description's verification command exits 0 (the combined checkRef printed ok). The wrapper also lands the task's own .moe/tasks board record; QA should check DoD 5 with git show --stat <completion> -- ':!.moe'.",
+  "commits": [
+    {
+      "sha": "db163180693cefd0e3422a3ffdd6ed09fa1fa472",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T17:00:30Z",
+      "paths": [
+        ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+        ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+        "docs/plans/2026-11-02-vscode-reuse.md",
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/MANUAL_TESTS.md",
+        "moe-vscode/README.md"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T17:02:41.575Z",
+      "treeId": "b447b644ef774bb82da658b76496c229d1d5b1fe",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/README.md",
+    "moe-vscode/CHANGELOG.md",
+    "moe-vscode/MANUAL_TESTS.md",
     "docs/plans/2026-11-02-vscode-reuse.md"
   ],
-  "completionSummary": "Docs only, 4 files. (a) README: all three Known issues lines removed. VSC-23 is fully fixed (panel re-renders Delivery and Release Agent on every update). VSC-25: the only remaining case (no rotation received) matches JetBrains AccountsPanel.render, so it is parity, not a known issue. VSC-27: shellPath powershell.exe at both createTerminal sites. (b) MANUAL_TESTS: Delivery step 6 is now a live-refresh check; Claude accounts step 3 rewritten for rows and CLI sign-in while disconnected; new section 'Windows terminals use Windows PowerShell' with one step (defaultProfile.windows). (c) CHANGELOG Fixed: three bullets added, no lines removed (VSC-24 unchanged). (d) Reuse doc table: VSC-23..27 DONE with 17ebbe81, 8122d0b9, fb0b5ab9, 2850a73a, b86c9077; statuses sentence and Wave 1 clause updated. (e) The description's verification command exits 0 (the combined checkRef printed ok). The wrapper also lands the task's own .moe/tasks board record; QA should check DoD 5 with git show --stat <completion> -- ':!.moe'."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b49a5155@2026-11-02T17:00:30Z",
+    "at": "2026-11-02T17:02:41.575Z"
+  },
+  "completedAt": "2026-11-02T17:04:36.853Z",
+  "reviewCompletedAt": "2026-11-02T17:04:36.853Z",
+  "reviewSummary": "Reviewed completion db163180 (moe/work-2026-10-24, kind=completion, pushed). `git show --stat db163180 -- ':!.moe'` = exactly the 4 permitted docs (README -3, MANUAL_TESTS +4/-3, CHANGELOG +3, reuse doc +7/-7); .moe/tasks files are BOARD paths. ~25 docs lines, no size issue. Re-ran task.verification (combined checkRef) from repo root: `ok`, exit 0; re-ran the description's command verbatim: exit 0. DoD1: three README Known issues lines removed, nothing else touched; reasons verified in completion diffs: VSC-23 17ebbe81 (updateTask carries deliveryDisplay + releaseAgentLabel, live re-render), VSC-25 fb0b5ab9 (parts() lists latest rotation whatever the connection; no-rotation is 'unsupported' only when connected&&isStateReady, same as JetBrains AccountsPanel.render, so parity), VSC-27 b86c9077 (shellPath powershell.exe at both createTerminal sites). DoD2: 'Known limit (row VSC-23)' gone; Delivery step 6 is a live-refresh check; accounts step 3 rewritten and checked against AccountPresentation.actions (edit=usable&&connected gates add/rename/move/removeOnly/switchAt; cli gates signIn/signOut/signOutAndRemove/check); new numbered Windows step (defaultProfile.windows). DoD3: CHANGELOG Fixed +3 bullets, 0 removed lines, VSC-24 bullet untouched. DoD4: table VSC-23..27 DONE with 17ebbe81, 8122d0b9, fb0b5ab9, 2850a73a, b86c9077, each found by `git log --grep 'Moe-Task: <id>'` in the verification loop. DoD5: only the 4 docs changed. Other lines byte-identical per diff. Docs-only, no test suite applies. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
