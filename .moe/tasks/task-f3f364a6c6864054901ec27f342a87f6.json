@@ -17,10 +17,11 @@
     {
       "stepId": "step-1",
       "description": "Read the landed epic, then write docs/ARCHITECTURE.md. This task starts only after CQ-RF01..RF06 are DONE, through the dependsOn chain RF05 and RF06 → RF02, RF04 → RF03 → RF01.\n\n1. Collect the epic's facts, read-only:\n   - For each row (RF01 task-fd653cfb, RF02 task-f3485ac9, RF03 task-ec64165c, RF04 task-de91373a, RF05 task-b439d7fb, RF06 task-98ffe33f), read through moe.get_context: completionSummary, reviewSummary and commits.\n   - Read each completion commit with git show.\n   - Note the exact landed names: ProtectedStateStore and its root (<IDE system dir>/moe/protected-state, sha-256 file names), the RF01 spawn record and the RF02 profile record formats, the RF03 replacement flow and dialog, RF04's Windows restart behaviour, RF06's VS Code state location and rules, and the RF05 record (docs/design/protected-profile-threat-model.md).\n   - Document what LANDED. Where a row's plan and its landed bytes differ, the landed bytes win.\n2. docs/ARCHITECTURE.md: extend the '## Security Notes' section that RF05 added, with one short paragraph each on:\n   - the persistent provenance and downgrade-pin state: where it lives, that it is owner-only, and that it fails closed;\n   - the unverified-daemon replacement flow: always confirmed, only through the installed CLI's stop, with a bounded wait that includes the old supervisor, then a start with fresh provenance;\n   - the Windows Restart Daemon behaviour, as RF04 landed it;\n   - VS Code parity, as RF06 landed it.\n   Keep the existing link to the RF05 decision, and change no unrelated line.\n\nError handling: a fact you cannot confirm from landed bytes is left out, never guessed. If a row is not DONE, stop and moe.report_blocked naming it.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/ARCHITECTURE.md"
-      ]
+      ],
+      "startedAt": "2026-11-02T22:07:36.844Z"
     },
     {
       "stepId": "step-2",
@@ -117,7 +118,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-11-02T22:05:56.247Z",
+  "updatedAt": "2026-11-02T22:07:36.844Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",
@@ -145,7 +146,8 @@
     "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-c9368191"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -175,5 +177,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T07:19:14.177Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T22:07:36.844Z"
 }

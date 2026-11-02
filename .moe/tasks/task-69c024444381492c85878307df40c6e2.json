@@ -83,9 +83,11 @@
     {
       "stepId": "step-6",
       "description": "Verification: run ONCE, fresh, in a snapshot. Never npm build/test in the shared checkout. The command (also checkRefs):\ncd /mnt/d/projexts/moes && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-69c02444.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js scripts/CLAUDE.md; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\"\nIf it outlives the tool timeout, run it in the background with `tee` to a log and report exit code + tail.\n- Expected: exit 0. `[hot reload race] ok` in BOTH twins, and every pre-existing [hot reload*] / [stale offset] arm still ok with unchanged assertions.\n- complete_task evidence: this command, its exit code and tail, plus the two RED logs from steps 1-2.\n- Budget: net non-board diff ≤300 LOC (QA cap 400, tests included). Report per-file +/- in the completion summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-02T20:20:26.225Z"
+      "note": "Verification step: it changed no repo bytes, so the MODIFIED-FILES-OMITTED fallback warning is expected noise.\n\nGATE GREEN: exit 0.\n- Run: gate-69c02444.205923, 2026-11-02 20:59:23Z to 22:13:12Z, snapshot /mnt/d/moe-scratch/v-69c02444.x2uOsC. Log at /mnt/d/moe-scratch/gate-69c02444.205923.log; exit status in the matching .exit file.\n- The command is the plan's checkRef verbatim except for the first `cd`, which points at this task's worktree /mnt/d/projexts/moes/.worktrees/task-69c024444381492c85878307df40c6e2. In worktree mode the 6 changed files live only there. The control checkout /mnt/d/projexts/moes is on moe/control 58c760f4 and does not have them, so `cp` from it would have tested unchanged bytes. After landing, QA can run the plan's form from the control checkout.\n\nResults:\n- PASS parity-check.sh.\n- PASS postflight.sh:\n  - [worktree] 56 ok, 0 failed;\n  - all six [hot reload*] arms ok, including `[hot reload race] ok: restarted on the committed bytes, loaded the racing write from a copy once committed (sequence crcccrcccrccc)`;\n  - [stale offset] ok;\n  - 106 frozen-candidate, 16 owner-guard and 45 commit-scope scenarios.\n- PASS postflight.ps1 on PS 5.1.26100:\n  - [worktree] 56 ok;\n  - the same six reload arms ok, race sequence crcccrcccrccc;\n  - 44 commit-scope scenarios.\n\nAn earlier launch, gate-69c02444.203304, failed only at `SCENARIO W FAILED: a teardown rescue must never move HEAD`. That was a launch artifact: `( setsid nohup … & )` starts the tree with SIGINT ignored (SigIgn=0x7), bash cannot trap a signal ignored on entry, and the CLI landed normally with no 'Agent stopped.' line (`mem:gotcha-qa-session-env-and-signals-leak-into-harness`). The probe gave 0x7 for that launch style and 0x5 under `set -m`. Relaunched with `( set -m; … )` at SigIgn=0x5, W passed. Every reload arm had already passed in the failed run too.\n\nIntegration check:\n- The target moved 4 commits (0d8422ce→58c760f4, touching both wrappers). My diff `git apply`s cleanly with offsets only.\n- On the merged snapshot: bash -n OK, PS 5.1 parse 0 errors, parity PASS.\n- CI's 25 wrapper-reading node suites, merged and baseline: identical 945 tests / 780 pass / 30 fail / 135 skipped, and the same 31 environmental ✖ names (no docs/, moe-jetbrains/ or packages/ in a scripts-only snapshot).\n\nLOC (`git diff --numstat HEAD`):\n\n| file | + | - |\n|---|---|---|\n| moe-agent.sh | 74 | 15 |\n| moe-agent.ps1 | 99 | 27 |\n| postflight.sh | 65 | 0 |\n| postflight.ps1 | 84 | 0 |\n| postflight-fake-proxy.js | 8 | 0 |\n| CLAUDE.md | 1 | 1 |\n\nNet +288, within the 300 budget (QA cap 400).",
+      "startedAt": "2026-11-02T20:20:26.225Z",
+      "completedAt": "2026-11-02T22:13:52.225Z"
     },
     {
       "stepId": "step-7",
@@ -140,7 +142,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T20:20:26.225Z",
+  "updatedAt": "2026-11-02T22:13:52.225Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
@@ -150,7 +152,7 @@
     "firstClaimAt": "2026-10-30T13:39:36.046Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -168,7 +170,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:08.343Z",

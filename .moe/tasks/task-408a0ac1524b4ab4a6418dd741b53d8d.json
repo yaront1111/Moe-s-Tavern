@@ -13,19 +13,30 @@
     {
       "stepId": "step-1",
       "description": "Test first (RED). Use test-driven-development. Read these first: mem:task-task-408a0ac1524b4ab4a6418dd741b53d8d-handoff, mem:task-task-76ae5c472f6a4651a45478b1893e07dc-handoff, mem:gotcha-agent-git-guard-runtime-config, and this row's planner comment (comment-29bee9da).\n\nIn scripts/tests/agent-git-guard.test.mjs, add ONE case.\n- Seat: cli 'custom', headless (interactive false), commitHooks false, status REVIEW, mode 'spaced-temp'. This is the seat the planner measured RED.\n- Title: include 'spaced temp', so that `--test-name-pattern 'spaced temp'` selects exactly this case.\n\nReuse what task-76ae5c47 (dependsOn, lands first) added for its two 'non-ascii-temp' cases: the optional 5th matrix element (mode), the TMP/TEMP env plumbing, and its extra assertions. Re-read the file at start_step and mirror whatever shape it actually landed.\n- Only the directory name differs: path.join(root, 'My Temp'), ASCII with a space. Create it before launch, inside the fixture root that t.after removes.\n- If that plumbing is inline under mode === 'non-ascii-temp', key the directory name by mode, e.g. { 'non-ascii-temp': 'témp', 'spaced-temp': 'My Temp' }. The non-ascii-temp cases must keep the same directory, env and assertions.\n- Its CP 850 driver and stub pins stay on its own mode. This case uses the default stub and driver.\n\nEnv:\n- Windows: delete every f.env key matching /^(TMP|TEMP)$/i, then set TMP and TEMP to the directory. GetTempPath reads TMP first, and a spread process.env is no longer case-insensitive.\n- Linux: set TMPDIR to the directory.\n\nAssertions:\n- Every matrix assertion.\n- core.hooksPath (observed.hooks) resolves under the directory: compare path.resolve'd strings, case-insensitively on Windows.\n- After exit, a recursive walk of the directory finds no entry whose name starts with moe-git-guard-.\n\nRED message:\n- The shared check's `codes=` lists the MOE_ codes found in r.stdout only, but the wrapper's refusal goes to stderr (measured: codes=null).\n- So for this case only, before the shared check, assert fs.existsSync(f.result) with the message `CLI did not run: exit=${r.status}; codes=${(r.stdout + r.stderr).match(/MOE_[A-Z_]+/g)}`. The RED then names both 'CLI did not run' and MOE_AGENT_GIT_GUARD_FAILED, as the DoD requires.\n- Leave the shared check and every other case unchanged. If 76ae5c47 already widened the shared check, reuse it.\n\nRED proof on native Windows (recipe in step 3):\n- Take a snapshot of the parent (HEAD at start, unfixed ps1) with only this test file overlaid.\n- Run node.exe --test on the three gate files.\n- Expect exactly one failure: this case, failing with 'CLI did not run' and MOE_AGENT_GIT_GUARD_FAILED. Keep that line.\n- The per-file counts, minus this case, are the parent's Windows counts for the summary.\n- On Linux the case passes before and after the fix. The planner measured all 24 existing cases passing under a spaced TMPDIR on HEAD (51 s).\n- Never put scratch copies inside the checkout.\n\nError handling: everything the case creates stays inside the fixture root, and no env change leaks into other cases, because f.env is per fixture.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/agent-git-guard.test.mjs"
       ],
-      "startedAt": "2026-11-02T19:45:58.626Z"
+      "modifiedFiles": [
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "note": "Worktree was 14 commits behind moe/work-2026-10-24 (no 76ae5c47 bytes); fast-forwarded the clean task branch with `git merge --ff-only moe/work-2026-10-24` (no commit, no push) so 76ae5c47's encoding try/finally and non-ascii-temp plumbing are on disk. Added one case 'PS5.1|bash custom headless plumbing completion spaced temp ...' (mode 'spaced-temp', temp dir 'My Temp'); the temp-dir plumbing is now keyed by mode ({non-ascii-temp:'témp', spaced-temp:'My Temp'}), CP850 pins and .codepage assertions stay on non-ascii-temp only; the hooks-under-temp assertion message is now mode-neutral ('seat temp'). 76ae5c47 already widened the shared 'CLI did not run' message to stdout+stderr, so no case-specific pre-check was needed. RED on native PS5.1 (parent snapshot, ps1 unfixed): narrow run 5 s: 'CLI did not run: exit=1; codes=MOE_AGENT_GIT_GUARD_FAILED,...' plus the throw at the ps1 guard line. Parent counts on native Windows (3 gate files, test overlaid): 155 tests = 154 pass + 1 fail (this case), 0 skipped, 197 s; so parent = 154 (guard 28 + launchers 126).",
+      "startedAt": "2026-11-02T19:45:58.626Z",
+      "completedAt": "2026-11-02T22:13:34.461Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix scripts/moe-agent.ps1, function Initialize-MoeAgentGitGuard. In the line that pipes the embedded program into `& node - $projectPath ...`, change the single token `([IO.Path]::GetTempPath())` to `([IO.Path]::GetTempPath() + '.')`. Nothing else in the runtime changes.\n\nKeep exactly as landed:\n- task-76ae5c47's [Console]::OutputEncoding save/set/restore around that line (QA has said it will check this at review);\n- the MOE_AGENT_GIT_GUARD_FAILED throw on a nonzero exit;\n- the env.json read.\n\nAdd one short ASCII comment above the line saying why:\n- PS 5.1 wraps a native argument that contains a space in double quotes but does not double its trailing backslash, so node read 'C:\\x y\\' as 'C:\\x y\"' and mkdtemp failed closed.\n- GetTempPath() always ends in a separator, so '.' names the same directory.\n- TrimEnd('\\') would turn a drive root into the drive-relative 'C:'.\n\nOut of scope, leave untouched:\n- the embedded program, which is byte-identical with moe-agent.sh's MOE_GIT_GUARD_JS heredoc;\n- $projectPath: the trailing-backslash -Project finding is reported on this row (comment-29bee9da), not fixed here;\n- Invoke-MoeGuardedCommand and Remove-MoeAgentGitGuard, the span the launcher harnesses cut;\n- every launch line, which codexDescriptor.ts pins;\n- scripts/moe-agent.sh: its working tree holds a peer's uncommitted edits, so never stage, revert or overlay it.\n\nUse the Edit tool only, so the UTF-8 BOM and LF line endings survive.\n\nPlanner measurements on PS 5.1.26100.9711:\n- Node receives 'C:\\…\\x y\\.' and path.join gives 'C:\\…\\x y\\moe-git-guard-'.\n- 'C:\\' + '.' joins to 'C:\\moe-git-guard-'.\n- '\\\\srv\\share\\x y\\' + '.' stays UNC.\n- With only this change, all 24 existing guard cases pass under a spaced TMP/TEMP (134 s).\n- PS 7.3+ passes 'C:\\x y\\.' through intact as well.\n\nError handling: a node failure still throws MOE_AGENT_GIT_GUARD_FAILED and never launches unguarded.\n\nThen re-run the step 1 case under native Windows node. It must pass, with no moe-git-guard- entry left in the spaced directory.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "scripts/moe-agent.ps1 Initialize-MoeAgentGitGuard: node call now passes ([IO.Path]::GetTempPath() + '.') plus a 2-line ASCII comment; nothing else changed (76ae5c47's OutputEncoding try/finally, the rc throw and the env.json read intact; embedded program, launch lines, moe-agent.sh untouched). Edit tool only: BOM ef bb bf intact, 0 CR bytes before and after. Native PS5.1 re-run of the new case on a snapshot with the two owned files overlaid and cmp-verified: 1 test, 1 pass, 0 fail, 0 skipped (9 s).",
+      "startedAt": "2026-11-02T22:13:36.897Z",
+      "completedAt": "2026-11-02T22:14:15.240Z"
     },
     {
       "stepId": "step-3",
@@ -48,7 +59,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-2dc72348",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -77,21 +88,26 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:06:05.143Z",
-  "updatedAt": "2026-11-02T21:59:47.572Z",
+  "updatedAt": "2026-11-02T22:14:15.240Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T19:06:13.181Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-26483323"
+    "worker-26483323",
+    "worker-2dc72348"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T19:19:32.324Z",
   "planningNotes": {

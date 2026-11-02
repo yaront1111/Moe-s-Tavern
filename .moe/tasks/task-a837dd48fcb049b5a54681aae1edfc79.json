@@ -57,20 +57,25 @@
     {
       "stepId": "step-4",
       "description": "VERIFY. First, the fast loop on both engines:\n- the step-1 sh command, now printing 'wt-follow-lock ok' and 'wt-follow ok';\n- the same two cases under Windows PowerShell 5.1, from a D: tmp (mem:gotcha-postflight-worktree-mutant-copy):\nT=$(mktemp -d /mnt/d/moe-scratch/a837-XXXX) && cp scripts/tests/postflight-fake-proxy.js \"$T/fake-proxy.js\" && MOE_WORKTREE_ONLY=wt-follow-lock,wt-follow WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$T\")\\fake-proxy.js\" \"$(wslpath -w \"$T\")\" powershell\n\nThen run the ONE verification command, fresh, from the task worktree root (DoD 5):\nbash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh && node.exe scripts/tests/postflight-safe.mjs powershell\nIt takes about 50 min (postflight.sh about 20, the PS 5.1 harness about 30). Run it detached, as mem:gotcha-qa-windows-launcher-tests-from-wsl describes for the bash leg:\n( set -m; nohup env -i HOME=\"$HOME\" PATH=\"$PATH\" LANG=C.UTF-8 WSL_INTEROP=\"$WSL_INTEROP\" WSL_DISTRO_NAME=\"$WSL_DISTRO_NAME\" bash -c '<command>; echo $? > <exit file>' > <log> 2>&1 < /dev/null & )\n- set -m keeps SIGINT un-ignored, which postflight scenario W needs.\n- env -i keeps the seat's MOE_* out of the wrappers under test.\nPoll the exit file in the foreground with bounded waits; never end the turn while it runs.\n\nExpect:\n- parity PASS;\n- postflight.sh ending in 'PASS postflight.sh', with '[worktree] wt-follow-lock ok', '[worktree] wt-follow ok' and 'N ok, 0 failed';\n- the ps1 runner's line {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",...}.\nThe log tail and the exit code 0 are the complete_task evidence. No npm build, install or test anywhere (global rails).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-02T20:44:17.140Z"
+      "note": "Fresh exact verification command passed exit 0: bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh && node.exe scripts/tests/postflight-safe.mjs powershell. Evidence /tmp/a837-verification-mVwWk7/{gate.log,start,end,exit}. Bash PASS including wt-follow and wt-follow-lock; native PS5.1 closed result exit=0,lastScenario=Z,failureClass=NONE. Focused sh and PS5.1 both 2 ok/0 failed beforehand. Worktree qualityGate bash scripts/tests/parity-check.sh && npm run lint separately passed (all role-doc limits). No npm package install/build/test ran.",
+      "startedAt": "2026-11-02T20:44:17.140Z",
+      "completedAt": "2026-11-02T22:07:51.194Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW of your own diff, then handoff.\n(1) Mutants. Put each in its own copy of the snapshot's whole scripts/ (mem:gotcha-postflight-worktree-mutant-copy), and run an unmutated control copy first. Use the sh subset MOE_WORKTREE_ONLY=wt-follow-lock.\n- M1: drop the `[[ \"$err\" == *index.lock* ]]` test, so every failure retries. It must fail 'other'.\n- M2: cap at 3 tries. It must fail 'held'.\n- M3: remove `sleep 2`. It must fail 'released'.\n- On ps1, run M1 on a BOM-preserving copy. It must fail 'other'.\nA mutant that drops the in-loop HEAD re-check is expected to survive. A merge with HEAD already at the tip exits 0 without taking the lock (probed, git 2.43), so the shortcut is reachable only between a failed merge and the next HEAD read; confirm it by reading both twins.\n(2) Re-read both twins and confirm:\n- every try merges the checked $tip;\n- sh resets rc on each try;\n- there is no sleep after the last try;\n- the ps1 returns stay inside the try/finally;\n- no path deletes a lock;\n- the non-lock BEHIND text and the hourly alert throttle are unchanged.\n`git diff` must touch only the two follow blocks, the sh local line, the new case and its registration line.\n(3) Edges:\n- an IDE lock held for more than 8 s ends BEHIND exactly as today, and the QA landed gate then stops the seat as today;\n- with two followers at once, each takes the lock in turn, and the loser's retry or its HEAD re-check covers it;\n- the worst-case added delay is 8 s per follow, at the loop top and at pre-flight.\n(4) Serena write_memory 'task-task-a837dd48fcb049b5a54681aae1edfc79-handoff', with the timings and the mutant results. Then complete_task with step 4's evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial diff review complete; only approved 3 files (+60/-9). All planned mutants killed against passing whole-scripts sh/PS controls: M1-sh other 10!=2 (72s), M2-sh held 6!=10 (35s), M3-sh released BEHIND+ADVANCED (11s), M1-PS other 10!=2 (60s). Evidence /mnt/d/moe-scratch/a837-mutants-BH4de0. Verified checked tip invariant, rc reset, <=4 sleeps, per-failure HEAD recheck, PS finally cleanup, no lock deletion, unchanged error/throttle. Existing follows table and PATH stub byte-identical. HEAD-shortcut mutant intentionally not claimed as dynamic coverage (Git already-up-to-date succeeds without lock). Wrote task-task-a837dd48fcb049b5a54681aae1edfc79-handoff and gotcha-control-follow-lock-retry memories. No project paths changed in this review-only step.",
+      "startedAt": "2026-11-02T22:08:08.213Z",
+      "completedAt": "2026-11-02T22:13:13.804Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -82,12 +87,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:16:59.695Z",
-  "updatedAt": "2026-11-02T20:44:17.140Z",
+  "updatedAt": "2026-11-02T22:14:12.996Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T20:19:50.362Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -100,7 +105,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T20:31:33.123Z",
@@ -168,5 +175,44 @@
   },
   "planApprovedAt": "2026-11-02T20:31:33.168Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T20:41:59.406Z"
+  "workStartedAt": "2026-11-02T20:41:59.406Z",
+  "reviewStartedAt": "2026-11-02T22:13:26.762Z",
+  "verification": {
+    "command": "bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh && node.exe scripts/tests/postflight-safe.mjs powershell",
+    "exitCode": 0,
+    "outputTail": "[scenario AL] ok\n[scenario AM] a codex exec seat's completed file_change or Serena edit witnesses its path; a failed or outside one does not\n[scenario AM] ok\ncommit-scope scenarios run: 45\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\n[worktree reuse] a half-made W is finished, an emptied index is kept, a failed budget probe refuses\n[worktree reuse] ok\n[protected runtime] a protected launch runs the exact runtime paths or refuses\n[protected runtime] ok\n[prompt overflow] a claimed_task_context over 128 KiB reaches the CLI through a private file\n[prompt overflow] ok\nPASS postflight.sh\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}",
+    "reportedAt": "2026-11-02T22:13:26.762Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "Both control-follow twins now retry index.lock-only failures up to 5 times, 2 s apart, preserving the checked tip and per-failure HEAD shortcut; no lock deletion or changed refusal codes. Added real-git transient/held/non-lock regression without modifying existing cases or PATH stub. RED reproduced; focused Bash and PS5.1 each 2/2 passed. Full gate exit 0 (76m57s): Bash worktree 61/61, frozen 106, owner guard 16, commit-scope 45; native PS5.1 exit 0/NONE. Parse checks on Bash, PS5.1, pwsh and worktree qualityGate passed. Four planned mutants killed with intended assertions after both unmutated controls passed. Scope: 3 files +60/-9. Handoff and gotcha saved in Serena; evidence /tmp/a837-verification-mVwWk7 and /mnt/d/moe-scratch/a837-mutants-BH4de0. Wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "ecf00c18d8684d4abd44c53355d4017ef67728f6",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-02T20:39:47Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-02T22:14:12.996Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-02T20:39:47Z",
+    "at": "2026-11-02T22:14:12.996Z"
+  }
 }
