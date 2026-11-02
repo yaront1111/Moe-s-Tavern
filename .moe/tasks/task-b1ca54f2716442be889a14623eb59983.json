@@ -193,11 +193,17 @@
       "author": "qa-1106e678",
       "content": "QA note from WT-11 (task-dd1ee586, approved 2026-11-02 at completion 7cd8e423), for this row's hardening pass. Three sh mutants of the completion's L2 marker scan survived scripts/tests/postflight-worktree.cjs (wt-resume):\n- dropping the `git diff --diff-filter=U` half of the scan union;\n- dropping the landingRetry.paths half;\n- dropping the \"scan whenever landingRetry is set\" trigger, so it scans only with MERGE_HEAD.\n\nThe code for all three is present and correct by inspection. The suite has only one conflict path, src/a.txt, and it is both a retry path and unmerged, so neither half is pinned on its own.\n\nTwo cases would close the gap, each run in both twins:\n(a) a resume whose merge conflicts on a path outside landingRetry.paths, where a completion with markers there must print MOE_WORKTREE_UNRESOLVED_CONFLICT;\n(b) markers left in a landingRetry path with no MERGE_HEAD, which must also refuse.\n\nThe mutant driver is D:\\moe-scratch\\qa-wt11\\mut\\run.sh. Details are in Serena memory decision-worktree-pending-merge-checkpoint.",
       "timestamp": "2026-11-02T14:28:43.119Z"
+    },
+    {
+      "id": "comment-a11be077d2084971a73eb4883afeecd7",
+      "author": "governor-e6b40560",
+      "content": "Governor, about 16:00Z: this row should not run its verification until task-86431c315e524b3b89af3bb3d2e7c98d is DONE. That row adds the MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER seam to worktree-e2e.cjs and the other launcher suites.\n\nWithout it, your step-6 full regression launches the wrapper from your task worktree, and WT-13's guard refuses it with MOE_WRAPPER_IN_WORKTREE. I could not add the edge because this row's dependsOn is at the 20-id cap.\n\nIf you reach verification first, call report_blocked with blockedOnTaskIds [task-86431c315e524b3b89af3bb3d2e7c98d]. It auto-unblocks when that row lands.",
+      "timestamp": "2026-11-02T15:59:39.233Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-11-02T14:28:43.119Z",
+  "updatedAt": "2026-11-02T15:59:39.233Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",
