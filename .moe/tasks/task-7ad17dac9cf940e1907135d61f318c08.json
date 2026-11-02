@@ -13,9 +13,82 @@
   "taskRails": [
     "Docs only. Edit nothing outside moe-vscode/README.md, moe-vscode/MANUAL_TESTS.md, moe-vscode/CHANGELOG.md and docs/plans/2026-11-02-vscode-reuse.md, and use the Edit tool only."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Read what shipped, then update README Known issues and the CHANGELOG. Use the Edit tool only; this task is docs only.\n\nPhase 0 (no edits):\n- All five dependencies are DONE. Their landing (completion) commits are:\n  - VSC-23: 17ebbe81\n  - VSC-24: 8122d0b9\n  - VSC-25: fb0b5ab9\n  - VSC-26: 2850a73a\n  - VSC-27: b86c9077\n  Confirm each with `git log --abbrev=8 --format='%h %s' --grep 'Moe-Task: <task id>'`.\n- The wip commits after them are post-QA board checkpoints, not the landing: 105bff1f, e5f61abe, 7473f31f and ff7247f3.\n- Read the VSC-23, VSC-25 and VSC-27 completion diffs before you write anything (`git show <sha>`). Here is the planner's reading of each:\n  - VSC-23 (17ebbe81): with the panel open, every state update re-renders two things. The Delivery section is rebuilt in place after the blocker section, and removed when there are no rows. The Release Agent button follows assignedWorkerId. No limit remains, so remove the README line.\n  - VSC-25 (fb0b5ab9): AccountsTreeProvider.parts() lists the latest rotation whatever the connection.\n    - AccountPresentation.actions keeps the command-line actions on while disconnected: signIn, signOut, signOutAndRemove and check.\n    - It turns the list edits off: add, rename, moveUp, moveDown, removeOnly and switchAt.\n    - With no rotation, the view shows 'unsupported' only when connected && isStateReady, and notConnected otherwise. That is the same rule as JetBrains AccountsPanel.render (AccountsPanel.kt:177-178), so the remaining no-rotation case is shared with JetBrains rather than a VS Code known issue. Remove the README line.\n  - VSC-27 (b86c9077): both createTerminal sites (AgentLauncher.launchAgent and AccountsTreeProvider.runCli) pass shellPath 'powershell.exe' on win32. Remove the README line.\n  If a diff shows otherwise, rewrite that line to the narrower limit instead of deleting it. Change the matching marker in step 4's command, and say so in the summary.\n\nEdits:\n(a) moe-vscode/README.md, ## Known issues: delete these three lines (lines 71-73 at planning time) and nothing else:\n- The task detail panel's Delivery section and Release Agent button show the task as it was when the panel opened; reopen the panel to refresh them\n- On Windows, agent and account terminals expect PowerShell as the default terminal profile\n- While disconnected, the Claude accounts view lists no accounts, so a CLI-only sign-in is not offered (the JetBrains Accounts tab still offers it)\n\n(b) moe-vscode/CHANGELOG.md, ## [Unreleased] > ### Fixed: directly after the last Fixed bullet, the one starting `- Terminal commands refuse every C0 control character and DEL.`, add these three bullets verbatim:\n- Task detail refreshes its **Delivery** section and **Release Agent** button live while the panel is open, instead of showing the task as it was when the panel opened.\n- While disconnected, the **Claude accounts** view keeps the accounts from the last rotation it received: **Sign in** and **Sign out and remove** still run the accounts CLI in the \"Claude accounts\" terminal, and the list edits come back when the daemon reconnects. With no rotation received yet it shows \"Not connected to the Moe daemon.\", as JetBrains does.\n- On Windows, agent and account terminals always open in Windows PowerShell (`powershell.exe`), whatever the default terminal profile is.\nOnly add lines. VSC-24's bullet (`- Chat channel auto-selection matches JetBrains: ...`) and every other line stay byte-identical.\n\nerror handling: the Edit tool refuses an old_string that is missing or not unique, so a drifted file fails loudly instead of being edited in the wrong place. Re-read the section and anchor again, never guess.\n\ntest: the README part of step 4's command passes on its own: `! grep -nE \"show the task as it was when the panel opened|lists no accounts, so a CLI-only sign-in is not offered|expect PowerShell as the default terminal profile\" moe-vscode/README.md`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/README.md",
+        "moe-vscode/CHANGELOG.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/README.md",
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/MANUAL_TESTS.md",
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "note": "All doc edits done and verified (ok, exit 0); steps 2-5 folded in.",
+      "startedAt": "2026-11-02T17:01:06.102Z",
+      "completedAt": "2026-11-02T17:01:52.384Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. moe-vscode/MANUAL_TESTS.md: one live-refresh step, one disconnected-accounts step and one Windows-terminal step. Edit tool only.\n\n(a) In ## Task detail: Delivery and Release Agent, replace the whole line `6. Known limit (row VSC-23): the Delivery section and the button reflect the task as of panel open. Reopen the panel after a change.` with:\n6. Keep the panel open while the task changes: a check run or receipt is recorded, the delivery evidence is cleared, an agent claims the task, or it is released from the board. Expected: the Delivery section and the **Release Agent** button update in place without reopening the panel. The section disappears when the task has no delivery evidence, and the button disappears when no worker is assigned.\n\n(b) In ## Claude accounts view, replace the whole line `3. Disconnect. Expected: the view shows a single \"Not connected to the Moe daemon.\" item, not stale rows. Reconnect, and the rows return.` with:\n3. Disconnect. Expected: the rows and the chips line stay, from the last rotation the view received. **Sign in** still runs the accounts CLI `login <id>` in the \"Claude accounts\" terminal, and **Remove...** offers only **Sign out and remove**. **Add...**, **Rename...**, **Move up**, **Move down** and **Set Switch Percent...** are not offered. Reconnect, and the list edits return. A window opened while the daemon is down has no rotation yet, so it shows the single \"Not connected to the Moe daemon.\" item.\nThe old step 3 ('not stale rows') contradicts VSC-25, so it is rewritten rather than kept beside the new one. Check the action names against package.json's command titles and AccountsTreeProvider.remove(): it offers only the choices that `allowed` enables.\n\n(c) Add this new section directly before `## Remote-WSL (VS Code's answer to JetBrains' \"Run Agents in WSL\")`, with one blank line after it as between the other sections:\n## Windows terminals use Windows PowerShell\n1. On native Windows (not Remote-WSL), set `terminal.integrated.defaultProfile.windows` to **Command Prompt** or **Git Bash**. Run `Moe: Start Agent` → worker, and **Sign in** on an account in the **Claude accounts** view. Expected: both terminals open in Windows PowerShell whatever the default profile: the agent terminal runs the `-EncodedCommand` line and its seat registers, and the \"Claude accounts\" terminal runs the accounts CLI line.\n\nKeep every other line and the numbering of the edited sections as they are.\n\nerror handling: same as step 1. A missing or non-unique anchor stops the edit; re-read, never guess.\n\ntest: the MANUAL_TESTS part of step 4's command passes. That covers `! grep -n \"Known limit (row VSC-23)\"` plus the 'without reopening the panel', 'last rotation the view received' and 'defaultProfile.windows' markers.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/MANUAL_TESTS.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/MANUAL_TESTS.md"
+      ],
+      "startedAt": "2026-11-02T17:01:59.491Z",
+      "completedAt": "2026-11-02T17:01:59.903Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. docs/plans/2026-11-02-vscode-reuse.md: final status and landing commit for VSC-23 to VSC-27. Edit tool only.\n\n(a) In ### Follow-ups filed during the epic, on each of the five rows, replace the trailing cells `| VSC-18 | PLANNING | not landed (open) |` with `| VSC-18 | DONE | <sha> |`. Write the sha in backticks, as the other rows do. Keep the Label, Task id and Title cells as they are.\n- VSC-23 (`task-921ca494...`): `17ebbe81`\n- VSC-24 (`task-d2a3532e...`): `8122d0b9`\n- VSC-25 (`task-3c485081...`): `fb0b5ab9`\n- VSC-26 (`task-83515358...`): `2850a73a`\n- VSC-27 (`task-e1024bb3...`): `b86c9077`\nThese are the completion (feat) commits recorded in each row's landing.lastCompletion, and `git log --grep 'Moe-Task: <id>'` finds each one.\n\n(b) Replace `Statuses as of this row's writing (2026-11-02).` with:\nStatuses as of this row's writing (2026-11-02). VSC-28 (`task-7ad17dac9cf940e1907135d61f318c08`) updated the VSC-23 to VSC-27 rows after they landed.\n\n(c) In the **Wave 1** note, replace the clause `; VSC-23 to VSC-27 are open follow-ups.` with `; VSC-23 to VSC-27, open follow-ups at the close, have since landed (see the table).`\n\nNothing else in the doc changes.\n\nerror handling: same as step 1. The Edit tool fails on a drifted anchor; re-read, never guess.\n\ntest: the table loop in step 4's command passes. For each id it checks that git log finds the sha and that the row reads `| DONE |` with that sha.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "startedAt": "2026-11-02T17:02:00.812Z",
+      "completedAt": "2026-11-02T17:02:01.403Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Verification: run once, fresh, from the repo root /mnt/d/projexts/moes. Use this command verbatim; it is the complete_task evidence:\nF=docs/plans/2026-11-02-vscode-reuse.md;M=moe-vscode/MANUAL_TESTS.md;C=moe-vscode/CHANGELOG.md;! grep -nE \"show the task as it was when the panel opened|lists no accounts, so a CLI-only sign-in is not offered|expect PowerShell as the default terminal profile\" moe-vscode/README.md&&! grep -n \"Known limit (row VSC-23)\" $M&&grep -q \"without reopening the panel\" $M&&grep -q \"last rotation the view received\" $M&&grep -q \"defaultProfile.windows\" $M&&grep -q \"refreshes its \\*\\*Delivery\\*\\*\" $C&&grep -q \"accounts from the last rotation\" $C&&grep -q \"always open in Windows PowerShell\" $C&&for p in \"921ca494fac241aa96b85cb9ae3e63ab 17ebbe81\" \"d2a3532ec05c49d384214ae15b01ba7e 8122d0b9\" \"3c4850819cad458d9edb59809d00e400 fb0b5ab9\" \"83515358babb403480bbef769d9726f2 2850a73a\" \"e1024bb3e6194b828fcbf905babfebae b86c9077\";do set -- $p;git log --abbrev=8 --format=%h --grep \"Moe-Task: task-$1\"|grep -qx $2&&grep -F \"task-$1\" $F|grep -F '| DONE |'|grep -qF \"\\`$2\\`\"||{ echo \"FAIL $1\";exit 1;};done&&echo ok\n\nExpected: it prints `ok` and exits 0. The planner dry-ran it on simulated edits: 998 chars, exit 0.\n\nWhat it checks:\n- It includes the description's two greps unchanged: the three README sentences are gone, and \"Known limit (row VSC-23)\" is gone.\n- The three MANUAL_TESTS markers and the three CHANGELOG markers are present.\n- For each of VSC-23 to VSC-27, `git log --grep 'Moe-Task: <id>'` finds the sha, and the table row shows `| DONE |` with that sha (DoD 4).\n\nAlso run the description's verification command verbatim (DoD 5) and record its exit code:\n! grep -nE \"show the task as it was when the panel opened|lists no accounts, so a CLI-only sign-in is not offered|expect PowerShell as the default terminal profile\" moe-vscode/README.md && ! grep -n \"Known limit (row VSC-23)\" moe-vscode/MANUAL_TESTS.md\n\nerror handling: the command is an && chain that fails closed. A missing marker or a wrong sha prints `FAIL <id>`, or exits non-zero at the failing grep. Fix that doc and re-run; never edit the command to pass, except for the rewrite case in step 1, which you record.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/README.md",
+        "moe-vscode/MANUAL_TESTS.md",
+        "moe-vscode/CHANGELOG.md",
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "note": "Verification command printed ok, exit 0.",
+      "startedAt": "2026-11-02T17:02:02.271Z",
+      "completedAt": "2026-11-02T17:02:02.869Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Adversarial self-review, then complete_task. Load adversarial-self-review, then check:\n(1) `git diff -U0 HEAD -- moe-vscode/CHANGELOG.md | grep '^-[^-]'` prints nothing. The CHANGELOG only gained lines, so VSC-24's entry is unchanged (DoD 3).\n(2) `git diff --stat HEAD -- moe-vscode/README.md moe-vscode/MANUAL_TESTS.md moe-vscode/CHANGELOG.md docs/plans/2026-11-02-vscode-reuse.md` shows your four files, and you edited no other file. The shared checkout may list peers' files in `git status`; those are not yours.\n(3) Every claim in the new text matches the diff it rests on. Re-read the VSC-23, VSC-25 and VSC-27 hunks against your CHANGELOG bullets and manual steps: action names, the 'Not connected' text and powershell.exe.\n(4) The Markdown still renders: list numbering in the two edited sections is unchanged, the new section has a heading and a numbered step, and each of the five table rows keeps its six cells.\n\nThen call complete_task:\n- verification: step 4's command, with its command, exitCode and outputTail.\n- modifiedFiles: exactly the four docs.\n- summary, which must state:\n  (a) for each README line, removed or rewritten, and why. VSC-23 is fully fixed. VSC-25's remaining no-rotation case matches JetBrains AccountsPanel.render. VSC-27 uses shellPath powershell.exe at both terminal sites.\n  (b) the three manual steps;\n  (c) the three CHANGELOG bullets;\n  (d) the five table shas;\n  (e) the exit code of the description's command.\n\nThe wrapper also lands this task's own .moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json as a BOARD path. That is the board record, not a docs change. Say so in the summary, so that QA checks DoD 5 with `git show --stat <completion> -- ':!.moe'`.\n\nThis step adds no error handling of its own: any failure loops back to step 4.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/README.md",
+        "moe-vscode/MANUAL_TESTS.md",
+        "moe-vscode/CHANGELOG.md",
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "note": "Self-review: CHANGELOG has no removed lines; diff stat shows only the four docs.",
+      "startedAt": "2026-11-02T17:02:03.731Z",
+      "completedAt": "2026-11-02T17:02:04.335Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,10 +108,102 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T16:04:09.916Z",
-  "updatedAt": "2026-11-02T16:10:46.686Z",
+  "updatedAt": "2026-11-02T17:02:13.073Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T16:10:46.686Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T16:53:09.698Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-b49a5155"
+  ],
+  "tier": "standard",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T17:00:15.028Z",
+  "executionContract": {
+    "intendedBehavior": "moe-vscode's docs stop describing the limits that VSC-23, VSC-25 and VSC-27 fixed:\n- README Known issues drops its three sentences.\n- MANUAL_TESTS checks three things: that the Delivery section and the Release Agent button refresh live; that the accounts rows and CLI sign-in are still there while disconnected; and that Windows terminals open in Windows PowerShell whatever the default profile.\n- The CHANGELOG [Unreleased] Fixed list gains one bullet per row.\n- The reuse doc's follow-up table shows VSC-23 to VSC-27 as DONE, each with its landing commit.\nThe task is docs only, in four files.",
+    "acceptanceCriteria": [
+      "moe-vscode/README.md no longer contains the VSC-23, VSC-25 or VSC-27 sentence quoted in the description. Each is removed, or rewritten to a narrower limit the row's diff shows, with the reason given in the summary.",
+      "moe-vscode/MANUAL_TESTS.md has no 'Known limit (row VSC-23)'. Delivery and Release Agent step 6 is a live-refresh check ('without reopening the panel'). Claude accounts view step 3 checks the rows from the last rotation and CLI sign-in while disconnected. A new numbered step checks Windows terminals under a non-PowerShell default profile (terminal.integrated.defaultProfile.windows).",
+      "moe-vscode/CHANGELOG.md [Unreleased] Fixed has one bullet each for VSC-23, VSC-25 and VSC-27, and the file only gains lines (VSC-24's bullet is unchanged).",
+      "In the reuse doc's follow-up table, VSC-23 to VSC-27 read DONE with landing commits 17ebbe81, 8122d0b9, fb0b5ab9, 2850a73a and b86c9077. git log --grep 'Moe-Task: <id>' finds each one.",
+      "Step 4's command and the description's verification command both exit 0."
+    ],
+    "invariants": [
+      "Only moe-vscode/README.md, moe-vscode/MANUAL_TESTS.md, moe-vscode/CHANGELOG.md and docs/plans/2026-11-02-vscode-reuse.md change; the wrapper adds the task's own board record as a BOARD path.",
+      "No code, test, JetBrains doc, or file on the epic's avoid list changes."
+    ],
+    "compatibility": [
+      "The other README Known issues lines, the other MANUAL_TESTS sections and the other follow-up table rows stay byte-identical."
+    ],
+    "approvedScope": [
+      "README Known issues: delete three lines. CHANGELOG Fixed: add three bullets. MANUAL_TESTS: replace Delivery step 6 and Claude accounts step 3, and add one Windows section with one numbered step. Reuse doc: five table rows, the statuses sentence and one clause of the Wave 1 note."
+    ],
+    "checkRefs": [
+      "F=docs/plans/2026-11-02-vscode-reuse.md;M=moe-vscode/MANUAL_TESTS.md;C=moe-vscode/CHANGELOG.md;! grep -nE \"show the task as it was when the panel opened|lists no accounts, so a CLI-only sign-in is not offered|expect PowerShell as the default terminal profile\" moe-vscode/README.md&&! grep -n \"Known limit (row VSC-23)\" $M&&grep -q \"without reopening the panel\" $M&&grep -q \"last rotation the view received\" $M&&grep -q \"defaultProfile.windows\" $M&&grep -q \"refreshes its \\*\\*Delivery\\*\\*\" $C&&grep -q \"accounts from the last rotation\" $C&&grep -q \"always open in Windows PowerShell\" $C&&for p in \"921ca494fac241aa96b85cb9ae3e63ab 17ebbe81\" \"d2a3532ec05c49d384214ae15b01ba7e 8122d0b9\" \"3c4850819cad458d9edb59809d00e400 fb0b5ab9\" \"83515358babb403480bbef769d9726f2 2850a73a\" \"e1024bb3e6194b828fcbf905babfebae b86c9077\";do set -- $p;git log --abbrev=8 --format=%h --grep \"Moe-Task: task-$1\"|grep -qx $2&&grep -F \"task-$1\" $F|grep -F '| DONE |'|grep -qF \"\\`$2\\`\"||{ echo \"FAIL $1\";exit 1;};done&&echo ok",
+      "! grep -nE \"show the task as it was when the panel opened|lists no accounts, so a CLI-only sign-in is not offered|expect PowerShell as the default terminal profile\" moe-vscode/README.md && ! grep -n \"Known limit (row VSC-23)\" moe-vscode/MANUAL_TESTS.md"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Each README line was weighed: remove it, or rewrite it to a narrower limit.\n- VSC-23: no limit remains.\n- VSC-27: shellPath powershell.exe is set at both createTerminal sites.\n- VSC-25: one case remains: no rotation received yet, so the view shows Not connected. That is the same rule as JetBrains AccountsPanel.render (hasState && connected gives unsupported, else not connected), so it is parity, not a VS Code known issue.\nAll three lines are therefore removed.\n\nOn MANUAL_TESTS: the Claude accounts step 3 ('not stale rows') contradicts VSC-25, so it is rewritten into the VSC-25 check rather than kept next to a new step. VSC-27 gets a new one-step section. The DoD asks for one numbered step each, so there is exactly one.\n\nThe README release notes stay as they are; that is not in the DoD.",
+    "codebaseInsights": "Landing commits are the feat(task-<id>) completions recorded in landing.lastCompletion:\n- VSC-23: 17ebbe81\n- VSC-24: 8122d0b9\n- VSC-25: fb0b5ab9\n- VSC-26: 2850a73a\n- VSC-27: b86c9077\nThe later wip commits are post-QA board checkpoints.\n\nWhile disconnected with a cached rotation, AccountPresentation.actions behaves as follows:\n- edit = usable && connected. This gates add, rename, moveUp/Down, removeOnly and switchAt.\n- cli = usable && rotation.cli !== null. This gates signIn, signOut, signOutAndRemove, check and the vmToken actions.\n- The Remove... dialog lists only the allowed choices, so it shows Sign out and remove alone.\n\nNo open row declares any of the four docs, and all four were clean in the shared checkout at planning time.",
+    "risks": "DoD 5 reading: the completion commit also carries this task's .moe/tasks/<id>.json board record, which commitBoardState stages as a BOARD path. QA should check with `git show --stat <completion> -- ':!.moe'`.\n\nIf a peer row edits one of the four docs before this lands, an Edit anchor may drift. Re-read and re-anchor; never overwrite a peer's line.\n\nThe verification markers tie step 4 to the prescribed text. If a fact forces a wording change, keep the marker phrase or update the command, and record it.",
+    "keyFiles": [
+      "moe-vscode/README.md",
+      "moe-vscode/MANUAL_TESTS.md",
+      "moe-vscode/CHANGELOG.md",
+      "docs/plans/2026-11-02-vscode-reuse.md",
+      "moe-vscode/src/providers/AccountsTreeProvider.ts",
+      "moe-vscode/src/util/AccountPresentation.ts",
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7473f31f5d820d2a19dea437074108c311df201a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T17:00:15.054Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T17:01:06.102Z",
+  "reviewStartedAt": "2026-11-02T17:02:13.071Z",
+  "verification": {
+    "command": "F=docs/plans/2026-11-02-vscode-reuse.md;M=moe-vscode/MANUAL_TESTS.md;C=moe-vscode/CHANGELOG.md;! grep -nE \"show the task as it was when the panel opened|lists no accounts, so a CLI-only sign-in is not offered|expect PowerShell as the default terminal profile\" moe-vscode/README.md&&! grep -n \"Known limit (row VSC-23)\" $M&&grep -q \"without reopening the panel\" $M&&grep -q \"last rotation the view received\" $M&&grep -q \"defaultProfile.windows\" $M&&grep -q \"refreshes its \\*\\*Delivery\\*\\*\" $C&&grep -q \"accounts from the last rotation\" $C&&grep -q \"always open in Windows PowerShell\" $C&&for p in \"921ca494fac241aa96b85cb9ae3e63ab 17ebbe81\" \"d2a3532ec05c49d384214ae15b01ba7e 8122d0b9\" \"3c4850819cad458d9edb59809d00e400 fb0b5ab9\" \"83515358babb403480bbef769d9726f2 2850a73a\" \"e1024bb3e6194b828fcbf905babfebae b86c9077\";do set -- $p;git log --abbrev=8 --format=%h --grep \"Moe-Task: task-$1\"|grep -qx $2&&grep -F \"task-$1\" $F|grep -F '| DONE |'|grep -qF \"\\`$2\\`\"||{ echo \"FAIL $1\";exit 1;};done&&echo ok",
+    "exitCode": 0,
+    "outputTail": "ok",
+    "reportedAt": "2026-11-02T17:02:13.071Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/README.md",
+    "moe-vscode/CHANGELOG.md",
+    "moe-vscode/MANUAL_TESTS.md",
+    "docs/plans/2026-11-02-vscode-reuse.md"
+  ],
+  "completionSummary": "Docs only, 4 files. (a) README: all three Known issues lines removed. VSC-23 is fully fixed (panel re-renders Delivery and Release Agent on every update). VSC-25: the only remaining case (no rotation received) matches JetBrains AccountsPanel.render, so it is parity, not a known issue. VSC-27: shellPath powershell.exe at both createTerminal sites. (b) MANUAL_TESTS: Delivery step 6 is now a live-refresh check; Claude accounts step 3 rewritten for rows and CLI sign-in while disconnected; new section 'Windows terminals use Windows PowerShell' with one step (defaultProfile.windows). (c) CHANGELOG Fixed: three bullets added, no lines removed (VSC-24 unchanged). (d) Reuse doc table: VSC-23..27 DONE with 17ebbe81, 8122d0b9, fb0b5ab9, 2850a73a, b86c9077; statuses sentence and Wave 1 clause updated. (e) The description's verification command exits 0 (the combined checkRef printed ok). The wrapper also lands the task's own .moe/tasks board record; QA should check DoD 5 with git show --stat <completion> -- ':!.moe'."
 }

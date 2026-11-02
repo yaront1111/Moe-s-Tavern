@@ -124,7 +124,7 @@ VSC-18 added the last two columns and checked each Area cell against the files t
 
 ### Follow-ups filed during the epic
 
-Statuses as of this row's writing (2026-11-02).
+Statuses as of this row's writing (2026-11-02). VSC-28 (`task-7ad17dac9cf940e1907135d61f318c08`) updated the VSC-23 to VSC-27 rows after they landed.
 
 | Label | Task id | Title | Filed by | Status | Landing commit |
 |---|---|---|---|---|---|
@@ -134,15 +134,15 @@ Statuses as of this row's writing (2026-11-02).
 | bug | `task-26a3dacde03c4195bfcd3e01e3c59efd` | VS Code AgentLauncher lets terminal control characters through to sendText (bash path unchecked) | VSC-15 (self-review) | DONE | `519720ca` |
 | bug | `task-2f4b224f9afe47b4a5e382d5da7bb16c` | PowerShell quoting in both plugins lets curly quotes (and, in JetBrains, a backtick) break out of agent arguments | planning of `task-26a3dacd` | DONE | `12ef9ffb` |
 | bug | `task-76d4500abc1047d5b51d63f2a2dc92bc` | JetBrains PowerShell -Command route drops ASCII double quotes on Windows PowerShell 5.1, and its WSL wrap lets ! expand bash history | planning of `task-2f4b224f` | DONE | `53685817` |
-| VSC-23 | `task-921ca494fac241aa96b85cb9ae3e63ab` | VS Code task detail: refresh the Delivery section and Release Agent button live, and pin blocker labels to MoeBundle | VSC-18 | PLANNING | not landed (open) |
-| VSC-24 | `task-d2a3532ec05c49d384214ae15b01ba7e` | VS Code chat: prefer the general channel when auto-selecting, and dedupe CHANNEL_CREATED by id | VSC-18 | PLANNING | not landed (open) |
-| VSC-25 | `task-3c4850819cad458d9edb59809d00e400` | VS Code Accounts view: one copy of shell quoting and account text, and rows while disconnected so CLI-only sign-in works | VSC-18 | PLANNING | not landed (open) |
-| VSC-26 | `task-83515358babb403480bbef769d9726f2` | JetBrains: show delivery check exit codes outside the Int range, matching the daemon and VS Code | VSC-18 | PLANNING | not landed (open) |
-| VSC-27 | `task-e1024bb3e6194b828fcbf905babfebae` | VS Code on Windows: agent and account terminals assume a PowerShell default shell | VSC-18 | PLANNING | not landed (open) |
+| VSC-23 | `task-921ca494fac241aa96b85cb9ae3e63ab` | VS Code task detail: refresh the Delivery section and Release Agent button live, and pin blocker labels to MoeBundle | VSC-18 | DONE | `17ebbe81` |
+| VSC-24 | `task-d2a3532ec05c49d384214ae15b01ba7e` | VS Code chat: prefer the general channel when auto-selecting, and dedupe CHANNEL_CREATED by id | VSC-18 | DONE | `8122d0b9` |
+| VSC-25 | `task-3c4850819cad458d9edb59809d00e400` | VS Code Accounts view: one copy of shell quoting and account text, and rows while disconnected so CLI-only sign-in works | VSC-18 | DONE | `fb0b5ab9` |
+| VSC-26 | `task-83515358babb403480bbef769d9726f2` | JetBrains: show delivery check exit codes outside the Int range, matching the daemon and VS Code | VSC-18 | DONE | `2850a73a` |
+| VSC-27 | `task-e1024bb3e6194b828fcbf905babfebae` | VS Code on Windows: agent and account terminals assume a PowerShell default shell | VSC-18 | DONE | `b86c9077` |
 
 Notes on the table:
 
-- **Wave 1** is VSC-1, 2, 3, 4, 5, 6, 7, 16 and 19. They have no dependencies and pairwise-disjoint files, so several coders can claim them at once in shared-checkout mode. At the epic's close every slice except VSC-18 is DONE and landed, and so are VSC-21a, VSC-22 and the four bug rows; VSC-23 to VSC-27 are open follow-ups.
+- **Wave 1** is VSC-1, 2, 3, 4, 5, 6, 7, 16 and 19. They have no dependencies and pairwise-disjoint files, so several coders can claim them at once in shared-checkout mode. At the epic's close every slice except VSC-18 is DONE and landed, and so are VSC-21a, VSC-22 and the four bug rows; VSC-23 to VSC-27, open follow-ups at the close, have since landed (see the table).
 - **Serialization-only edges.** VSC-12 depends on VSC-6, and VSC-21 on VSC-6 and VSC-1, only to serialize edits to `MoeDaemonClient.ts` and `extension.ts` in shared-checkout mode. A governor may drop them after the worktree switch, when a shared file stops being a dependency.
 - **Shared files by order.** Rows that share `TaskDetailPanel.ts` (VSC-8, 9, 11) or `package.json` (VSC-2, 14, 15) are sequenced by their `order` values.
 - **VSC-18** is the single final integration-and-hardening row, the epic's `finalTaskId`. Its `dependsOn` is capped at 20 entries, so it lists the other 20 slices and VSC-0 (this doc) is not in it.

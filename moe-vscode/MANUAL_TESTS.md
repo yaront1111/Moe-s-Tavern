@@ -54,12 +54,12 @@
 3. Open a task with an assigned worker. Expected: a **Release Agent** button. A task with no worker shows none.
 4. Click **Release Agent** and dismiss the dialog. Expected: nothing is sent and the task keeps its worker.
 5. Click it again and confirm. Expected: the daemon releases the task (`assignedWorkerId` cleared; a WORKING task stays WORKING) with the reason "Released from board", and no success toast appears.
-6. Known limit (row VSC-23): the Delivery section and the button reflect the task as of panel open. Reopen the panel after a change.
+6. Keep the panel open while the task changes: a check run or receipt is recorded, the delivery evidence is cleared, an agent claims the task, or it is released from the board. Expected: the Delivery section and the **Release Agent** button update in place without reopening the panel. The section disappears when the task has no delivery evidence, and the button disappears when no worker is assigned.
 
 ## Claude accounts view
 1. Open the **Claude accounts** view in the Moe sidebar while connected to a daemon that reports a rotation.
 2. Expected: one item per account, `<position>. <label>`, with its status and 5-hour and weekly usage. The tooltip lists the five columns, and the view description shows the `Claude: ...` chips line.
-3. Disconnect. Expected: the view shows a single "Not connected to the Moe daemon." item, not stale rows. Reconnect, and the rows return.
+3. Disconnect. Expected: the rows and the chips line stay, from the last rotation the view received. **Sign in** still runs the accounts CLI `login <id>` in the "Claude accounts" terminal, and **Remove...** offers only **Sign out and remove**. **Add...**, **Rename...**, **Move up**, **Move down** and **Set Switch Percent...** are not offered. Reconnect, and the list edits return. A window opened while the daemon is down has no rotation yet, so it shows the single "Not connected to the Moe daemon." item.
 4. Change the board, for example by moving a task. Expected: the view re-renders, and relative reset times update.
 5. Use the title-bar **Add...**, enter a name and confirm. Expected: a "Claude accounts" terminal opens and runs the daemon's accounts CLI `login <new id>`, so the account can be signed in with a Claude subscription.
 6. On an account, run **Sign in**, **Rename...**, **Move up**, **Move down** and **Remove...** (both **Sign out and remove** and **Remove only**), plus the title-bar **Set Switch Percent...**. Expected: each change shows up in the view after the daemon's ACCOUNTS_UPDATED. Sign in and Sign out and remove run in the "Claude accounts" terminal. A move that is not allowed (the first account's Move up) is not offered.
@@ -81,6 +81,9 @@
 ## Deleted chat channel
 1. Select a non-general channel in the Chat view, then delete that channel on the daemon side.
 2. Expected: the channel leaves the list, the selection falls back to the general channel (the first general-type channel in list order), else the first listed channel, as in JetBrains, and nothing can be sent to the deleted one. With no channel left, the view shows "Select a channel to start chatting" and the input stays disabled.
+
+## Windows terminals use Windows PowerShell
+1. On native Windows (not Remote-WSL), set `terminal.integrated.defaultProfile.windows` to **Command Prompt** or **Git Bash**. Run `Moe: Start Agent` → worker, and **Sign in** on an account in the **Claude accounts** view. Expected: both terminals open in Windows PowerShell whatever the default profile: the agent terminal runs the `-EncodedCommand` line and its seat registers, and the "Claude accounts" terminal runs the accounts CLI line.
 
 ## Remote-WSL (VS Code's answer to JetBrains' "Run Agents in WSL")
 1. Install Node.js and the agent CLI inside the WSL distro. From Windows VS Code, open the project with **WSL: Open Folder in WSL** (Remote-WSL).

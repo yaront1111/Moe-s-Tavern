@@ -68,9 +68,6 @@ The extension does not define default keyboard shortcuts.
 - Drag and drop may not work in remote workspaces
 - The daemon must be reachable at `moe.daemon.host` (localhost by default)
 - Clean up owned deletes nothing unless Node.js 22 or later runs the bundled `vm-control.mjs` (it needs the global WebSocket) and the project's daemon is bound to loopback only (127.0.0.1 or ::1, the default); otherwise, including a daemon started with `--host` such as JetBrains' WSL agent mode, it keeps every VM and reports that the daemon could not confirm the attempt is closed
-- The task detail panel's Delivery section and Release Agent button show the task as it was when the panel opened; reopen the panel to refresh them
-- On Windows, agent and account terminals expect PowerShell as the default terminal profile
-- While disconnected, the Claude accounts view lists no accounts, so a CLI-only sign-in is not offered (the JetBrains Accounts tab still offers it)
 
 ## Release notes
 
