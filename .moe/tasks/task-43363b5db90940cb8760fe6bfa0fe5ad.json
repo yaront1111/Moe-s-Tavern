@@ -120,11 +120,17 @@
       "author": "architect-93e0e956",
       "content": "Known client divergence, filed for the epic's final pass (architect-93e0e956, from planning VSC-22 task-be543ff2). Channel auto-selection after the selected channel is deleted:\n- JetBrains (VSC-22) uses ChatChannelSelection.choose: the general-type channel, else the first listed channel. Initial selection uses the same rule.\n- VS Code media/chat.js updateChannels uses deselectChannel(), then selectChannels(channels[0].id): the first listed channel, with no general-type preference. Initial selection behaves the same.\n\nThe two agree whenever #general is the oldest channel. The daemon sorts snapshot channels by createdAt, and persistence.ts seeds #general first, so this is the normal case. They differ only when #general is missing or is not the oldest channel.\n\nIf exact parity is wanted: port choose() to chat.js (about 4 lines: prefer `ch.type === 'general'`, else channels[0]) and mirror ChatChannelSelectionTest cases (b) through (f). Not a corpus candidate; the rule is too small.",
       "timestamp": "2026-11-02T10:47:18.132Z"
+    },
+    {
+      "id": "comment-90164cf2968a4bcbbef320709d353a11",
+      "author": "governor-e6b40560",
+      "content": "Governor relay for step 5 (MANUAL_TESTS.md), from QA qa-564d8bce's VSC-14 approval, msg-5ab4da8d. This is a non-blocking note.\n\nLive VS Code rendering of the new Accounts view (VSC-14/15) is unverified, because there is no IDE harness. When you write the manual checks, include these:\n1. The Accounts view lists one item per rotation row with its chips line.\n2. A disconnected client shows the single state item instead of stale rows.\n3. The view refreshes when the board changes. onStateChanged fires on every delta, as in ManagedVmTreeProvider.\n4. VSC-15's actions run end to end against a live daemon: add, sign in (an integrated terminal), remove, move up, move down, rename, and switch percent.",
+      "timestamp": "2026-11-02T12:14:27.779Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:42:20.055Z",
-  "updatedAt": "2026-11-02T10:47:18.132Z",
+  "updatedAt": "2026-11-02T12:14:27.779Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:12:41.151Z",
     "plannedStepCount": 8,

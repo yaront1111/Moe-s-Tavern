@@ -125,6 +125,7 @@ export function activate(context: vscode.ExtensionContext) {
     const accountsView = vscode.window.createTreeView('moe.accounts', { treeDataProvider: accountsProvider });
     accountsProvider.attach(accountsView);
     context.subscriptions.push(accountsProvider, accountsView, vscode.commands.registerCommand('moe.accounts.refresh', () => accountsProvider.refresh()));
+    context.subscriptions.push(...accountsProvider.registerCommands());
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('moe.connect', async () => {
