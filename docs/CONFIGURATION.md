@@ -486,6 +486,13 @@ The **host certification store** also lives outside every project, at `<OS accou
 
 The daemon reads only this store, and only a report for its own platform and arch (`packages/moe-daemon/src/delivery/certificationEvidence.ts`). Without one, its readiness evaluation lists `isolated-agent-and-qa-vms` and `isolated-check-vm` as missing. A filed report never enables `verified-local` by itself. Recorded reports are in [CERTIFICATION.md](CERTIFICATION.md).
 
+The **JetBrains protected state store** also lives outside every project, at `<IDE system directory>/moe/protected-state` (`PathManager.getSystemPath()`, so each IDE product and profile has its own). The plugin writes it only under the protected execution profile (`util/ProtectedStateStore.kt`):
+- The directory must be owner-only (rwx------, or on Windows an ACL whose every entry allows the owner). Each file must be owner-only (rw-------), a regular file reached without a link, and at most 64 KiB. Its name is a sha-256 plus `.json`, so no name comes from a path.
+- Per project there are at most two files. One holds the **daemon provenance**: `version`, `project` (the project's real path as the IDE compares it), and `records`, each with the `pid`, `start`, `supervisor` flag and installed `daemon` path of a process this IDE started. The other holds the **profile pin**: `version`, `project` and `profile` (`protected` or `legacy`).
+- A record that fails any rule reads as untrusted, and the plugin falls back to the refusal or to the protected profile. A store root inside the project (a `runIde` sandbox) is never written.
+
+These files are not settings: never edit them by hand. [TROUBLESHOOTING.md](TROUBLESHOOTING.md#protected-profile-project-stays-protected-after-a-legacy-declaration) describes the one last-resort deletion. VS Code keeps no such store: its protected pin lives in memory for one window session.
+
 ---
 
 ## IDE Plugin Settings

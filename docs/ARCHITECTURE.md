@@ -415,7 +415,11 @@ and `verified-local` stays refused until certification and the client gates pass
 - **Protected control plane.** Under the protected profile the JetBrains plugin (`util/RuntimeSelectionPolicy.kt`)
   runs only the daemon, proxy and wrapper installed with the plugin and an absolute node outside the project, never the
   project's copies or a PATH lookup, and sets `MOE_RUNTIME_PROTECTED=1`: `moe-agent.{sh,ps1}` and `moe-call.sh` then
-  run exactly `MOE_DAEMON_PATH` and `MOE_PROXY_PATH` or refuse. Candidate source becomes Git objects only
+  run exactly `MOE_DAEMON_PATH` and `MOE_PROXY_PATH` or refuse. They also start only `claude`, `codex`, `gemini` or
+  `grok`, by name, and take that CLI and node (sh also python3) only from an absolute PATH entry outside the project
+  (`MOE_PROTECTED_AGENT_COMMAND_REFUSED`, `MOE_PROTECTED_AGENT_CLI_NOT_FOUND`, `MOE_PROTECTED_INTERPRETER_NOT_FOUND`).
+  VS Code (`services/MoeDaemonClient.ts`, `util/AgentLauncher.ts`) selects the same way from
+  `<extensionPath>/bundled`. Candidate source becomes Git objects only
   (`admission.mjs`); branch writes stay in the wrappers' landing. A guest gets no daemon address: the host session
   (`guest-session.mjs`) forwards its requests, and the runner client (`runner-client.mjs`) dials, only a daemon whose
   own `/health` reports a loopback bind.
@@ -425,10 +429,11 @@ and `verified-local` stays refused until certification and the client gates pass
   and preserve a record whose attempt or job lease is not proven closed. `vm-control.mjs status|reconcile|cleanup
   --project <path>` is the IDE contract.
 - **Pinned bootstrap and readiness** (`guest-bootstrap.mjs`, `provision.mjs`, `guest-readiness.mjs`). The image is
-  verified against its sha256 pin and launched as a local file. The cloud-init user-data travels only on the launch's
-  stdin and installs the root-owned supervisor, the MCP shim and the locked job identities `moe-agent` and `moe-check`.
-  Readiness needs a clean cloud-init `done`, then zero mounts, the installed hashes, the credential denied to both
-  identities, locked unprivileged identities and bounded resources.
+  verified against its sha256 pin and launched as the verified local file (on Windows as `release:<pin sha256>`, whose
+  reported `image_hash` must equal the pin, else `IMAGE_PROVIDER_HASH_MISMATCH`). The cloud-init user-data travels
+  only on the launch's stdin and installs the root-owned supervisor, the MCP shim and the locked job identities
+  `moe-agent` and `moe-check`. Readiness needs a clean cloud-init `done`, then zero mounts, the installed hashes, the
+  credential denied to both identities, locked unprivileged identities and bounded resources.
 - **Supervisor modes** (`guest-supervisor.py`, run as root over the guest SSH route; its header defines every code).
   `bridge` runs one agent job, `check` one approved check, `materialize` copies a snapshot into the workspace, `export`
   streams the workspace's changes back, `verify` compares the workspace with its manifest, and `agents`, `toolchain` and
@@ -503,6 +508,58 @@ and `verified-local` stays refused until certification and the client gates pass
 - On the live daemon, a file under the project, `.moe/daemon.json` included, may add a refusal but never an
   admission. Trust in the live daemon comes from the daemon itself, or from owner-only state outside the
   repository.
+- **JetBrains protected state** (`util/ProtectedStateStore.kt`, CQ-RF01 and CQ-RF02). State that must outlive the IDE
+  session lives in `<IDE system directory>/moe/protected-state`, never in the repository. The root and each file must
+  be owner-only (rwx------ and rw-------, or an ACL whose every entry allows the owner). Each file must be a regular
+  file reached without a link, at most 64 KiB, and named by a sha-256. Anything else reads as untrusted, and a root
+  inside the project (a `runIde` sandbox) is never written. Per project the store holds:
+  - **Daemon provenance.** The pid, start time and supervisor flag of each process this IDE started from the installed
+    daemon, with that daemon's real path. Under the protected profile the plugin connects only when the pid
+    `.moe/daemon.json` names, or its direct parent supervisor, matches a record by pid and start time. The record
+    comes from this session or, after an IDE restart, from the store, and it must name the daemon installed now.
+    Records whose process died or whose pid was reused are pruned. Any other daemon is refused: "the running Moe
+    daemon (pid N) was not started by this IDE from the installed Moe runtime. Stop it, then use Restart Daemon."
+  - **Profile pin.** A project read as `verified-local` is recorded protected. A later legacy or absent declaration
+    keeps it protected and asks once per session (**Moe: Execution Profile Downgrade**, default **Keep Protected**).
+    An allowed downgrade takes effect after an IDE restart. An unreadable `project.json`, or a pin the IDE would not
+    have written, reads as protected. On Windows, a folder pinned under another spelling (subst, mapped drive, share
+    or device path) is matched by file identity (task-9a1da6f6). A pin is read even when the store cannot be placed,
+    because a read only restricts. The pin is per IDE system directory: another JetBrains product or IDE profile has
+    none, like a fresh machine, and follows the declaration as written. Open: task-6d5d3db2 (a same-session
+    re-declaration after an allowed downgrade).
+- **Unverified-daemon replacement (JetBrains).** When the protected plugin finds such a daemon it asks first
+  (**Moe: Unverified Daemon**, default **Keep It**), because VS Code or a terminal agent may be using it. **Keep It**
+  leaves it running, and the plugin stays disconnected. **Stop and Replace** runs the installed CLI's `stop`,
+  bounded at 20 s, with `NODE_OPTIONS` and `NODE_PATH` removed and PATH reduced to its protected entries. It then waits
+  up to 15 s until the process and its parent have exited and `.moe/daemon.json` is cleared, and only then starts the
+  installed daemon and records it. A failed attempt keeps the captured identities, so a retry cannot start a second
+  daemon beside a survivor.
+- **Restart Daemon on Windows** (`MoeDaemonSupervisor.stopWindowsRestart`, CQ-RF04). A pid that is absent, dead or
+  0 is never signalled. Under the protected profile a daemon whose provenance does not verify is not stopped: "Restart
+  Daemon did not stop pid N … this IDE did not start it from the installed Moe runtime." Otherwise the plugin runs
+  the installed `stop`. It then terminates the old process tree, roots first: the supervisor this IDE spawned and,
+  under protected, the daemon's genuine parent; under legacy a foreign parent is only watched. The descendants follow,
+  within the same bounded wait. A process still running afterwards refuses the new start ("pid N is still running
+  after the stop, and it could restart the old one"), and so does a tree a previous attempt could not resolve. A
+  second click while a stop is in flight is refused. On other hosts the protected restart destroys only a captured
+  handle whose provenance verifies.
+- **VS Code parity** (CQ-RF06, `services/MoeDaemonClient.ts`). Selection takes only `<extensionPath>/bundled` and an
+  absolute node outside the project, and fails closed. Windows bases that are not plain local paths are refused with
+  the JetBrains words. Two gaps are open:
+  - VS Code has no running-daemon provenance. Its connect checks only the `/health` project identity, so it attaches
+    to a same-project daemon that something else started, or to the host and port that `moe.daemon.host` and
+    `moe.daemon.port` name, which a trusted workspace's `.vscode/settings.json` can set (task-648a5916).
+  - Its verified-local pin is held in memory only, so a `project.json` edit between sessions downgrades with no
+    confirmation (task-98c81a27).
+- **Accepted Windows costs** (task-52fb6178, task-08bb7723, task-dd545bf1, task-9a1da6f6). Under the protected
+  profile the plugins refuse:
+  - a project on a share, a `\\wsl$` path, a device path or a mapped network drive. Clone to an unmapped local drive,
+    run the IDE inside the distro for WSL, or stay on the legacy profile;
+  - a node or plugin install on a share. Share and device PATH entries are skipped.
+
+  A state root on a share cannot be proved outside the project, so its state is session-only. A dangling or
+  trailing-dot root reads as empty, and a downgrade confirmed under an unprovable store is asked again after each
+  restart.
 - Accepted gaps: the daemon.json port↔pid binding, and the CQ-R08 per-request re-check window. The record
   lists the open follow-ups.
 - Plain HTTP `GET /health` answers only a request with no Host header, or one whose Host (port optional) is
