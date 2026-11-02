@@ -23,6 +23,12 @@ interface ResolvedScript {
     envOverrides?: Record<string, string>;
 }
 
+/**
+ * The win32 launch line is PowerShell, so its terminal starts powershell.exe itself rather than typing into the user's
+ * default profile (Command Prompt, Git Bash, WSL). No shellArgs: the profile can still set PATH for node and claude.
+ */
+const WINDOWS_SHELL = 'powershell.exe';
+
 const TERMINAL_NAMES: Record<AgentRole, string> = {
     architect: 'Moe Planner',
     worker: 'Moe Coder',
@@ -405,6 +411,7 @@ async function launchRole(
         const terminal = vscode.window.createTerminal({
             name: terminalName,
             cwd: workspacePath,
+            ...(isWin ? { shellPath: WINDOWS_SHELL } : {}),
         });
         if (options?.onLaunched) {
             // A tracking failure never stops a launch: the seat still starts, and the user is told once.

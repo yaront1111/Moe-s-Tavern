@@ -277,10 +277,12 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
     private runCli(args: string[]): void {
         const rotation = parseAccountRotation(this.client.accountRotation);
         if (rotation === null || rotation.cli === null) { return; }
-        const line = accountsCommandLine(rotation.cli, rotation.registryFile, args, process.platform === 'win32'); // throws on a C0 control or DEL
+        const windows = process.platform === 'win32';
+        const line = accountsCommandLine(rotation.cli, rotation.registryFile, args, windows); // throws on a C0 control or DEL
         let terminal: vscode.Terminal;
         try {
-            terminal = vscode.window.createTerminal({ name: text('moe.accounts.terminal.tab') });
+            // The win32 line is PowerShell, so the terminal starts powershell.exe whatever the default profile is (AgentLauncher WINDOWS_SHELL).
+            terminal = vscode.window.createTerminal({ name: text('moe.accounts.terminal.tab'), ...(windows ? { shellPath: 'powershell.exe' } : {}) });
         } catch {
             void vscode.env.clipboard.writeText(line);
             void vscode.window.showWarningMessage(text('moe.accounts.terminal.unavailable', line));
