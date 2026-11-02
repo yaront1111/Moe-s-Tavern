@@ -73,7 +73,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -86,16 +86,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:05.695Z",
-  "updatedAt": "2026-11-02T10:12:14.360Z",
+  "updatedAt": "2026-11-02T10:15:42.012Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:53:57.310Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T10:15:42.011Z",
+    "wallClockMs": 1304701
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "high",
@@ -183,7 +186,48 @@
   },
   "filesModified": [
     "moe-jetbrains/src/test/resources/client-delivery.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt",
+    ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+    ".moe/tasks/task-a3e414a3dce848e6939081e5cbf941ce.json",
+    ".moe/tasks/task-a5f39d5535404f6e9e59f762c046f5e0.json",
+    ".moe/tasks/task-be543ff20bbc4f30ac7ac895ae0b4d13.json"
+  ],
+  "completionSummary": "Added moe-jetbrains/src/test/resources/client-delivery.json (version 1, 16 rows D01..D16 covering every DoD case, wire JSON in, 4-member expect entries out) and DeliveryCorpusTest.kt (3 tests: well-formed; every row renders via both MoeJson.parseTask and parseState then DeliveryPresentation.rows, all failing ids reported at once; label keys equal the bundle's 13 moe.delivery.* row keys, each non-empty). Mutant in the snapshot copy (exit 0 => passed) fails exactly D09 and D10; clean snapshot passes. No DeliveryPresentation.kt bug found; diff is only the two new files. Out-of-scope note: MoeJson drops exit codes outside Int range (not pinned either way).",
+  "commits": [
+    {
+      "sha": "287d86c5b049711ed6c788f8ee61a36d07ce87be",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T10:08:34Z",
+      "paths": [
+        ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+        ".moe/tasks/task-a3e414a3dce848e6939081e5cbf941ce.json",
+        ".moe/tasks/task-a5f39d5535404f6e9e59f762c046f5e0.json",
+        ".moe/tasks/task-be543ff20bbc4f30ac7ac895ae0b4d13.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt",
+        "moe-jetbrains/src/test/resources/client-delivery.json"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T10:12:46.860Z",
+      "treeId": "ad1a764db3104a3466ee1dcb06434e8cf8ac2f14",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/resources/client-delivery.json",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt"
   ],
-  "completionSummary": "Added moe-jetbrains/src/test/resources/client-delivery.json (version 1, 16 rows D01..D16 covering every DoD case, wire JSON in, 4-member expect entries out) and DeliveryCorpusTest.kt (3 tests: well-formed; every row renders via both MoeJson.parseTask and parseState then DeliveryPresentation.rows, all failing ids reported at once; label keys equal the bundle's 13 moe.delivery.* row keys, each non-empty). Mutant in the snapshot copy (exit 0 => passed) fails exactly D09 and D10; clean snapshot passes. No DeliveryPresentation.kt bug found; diff is only the two new files. Out-of-scope note: MoeJson drops exit codes outside Int range (not pinned either way)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T10:08:34Z",
+    "at": "2026-11-02T10:12:46.860Z"
+  },
+  "completedAt": "2026-11-02T10:15:42.011Z",
+  "reviewCompletedAt": "2026-11-02T10:15:42.011Z",
+  "reviewSummary": "Reviewed completion commit 287d86c5 (on moe/work-2026-10-24, pushed, kind=completion). Diff: two new files, client-delivery.json (203 LOC) and DeliveryCorpusTest.kt (160), plus daemon .moe/tasks JSONs. DeliveryPresentation.kt, DeliveryPresentationTest, ClientVerdictCorpusTest, client-verdicts.json, MoeJson, bundle, moe-vscode and daemon are untouched. No JetBrains bug found.\n\nRe-ran in a fresh git-archive snapshot under the jetbrains-gradle lease, with the three checkRef files overlaid and cmp-identical to the commit: `cmd.exe gradlew.bat test --rerun`. BUILD SUCCESSFUL in 48s, :test executed. JUnit total: 549 tests, 0 failures, 0 errors, 0 skipped. DeliveryCorpusTest: 3/3.\n\nMutants (snapshot only, discarded; lease released):\n1. `val passed = code == 0` fails exactly D09 and D10, as the DoD requires.\n2. shortSha preferred over treeSha fails D03, D05, D15, D16.\n\nDoD:\n1. Version 1, 16 rows D01..D16, unique ids matching D[0-9]{2}. Every case in the description is covered. I checked the expected values against DeliveryPresentation.kt.\n2. Each row is replayed via MoeJson.parseTask and parseState, which must agree. Rows are compared to expect by list equality (order included), and all diverging ids are reported at once.\n3. The corpus label-key set equals the bundle's 13 moe.delivery.* row keys, each non-empty.\n4. Mutant gate: shown above. 5. Full suite: shown above. 6. Diff scope: only the two new files.\n\nTests use exact assertEquals. The well-formedness check whitelists daemon member names and requires exactly four members per expect entry. Nothing was weakened.\n\nNon-blocking: MoeJson drops exit codes outside the Int range, so the corpus does not pin that case (documented in mem:decision-client-corpus-conventions). The worker wrote the step-2 file before start_step. Complexity pass found nothing to cut.",
+  "requiredCheckAtDone": null
 }
