@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -140,7 +140,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-11-02T22:05:31.754Z",
+  "updatedAt": "2026-11-02T22:39:25.743Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",
@@ -150,7 +150,9 @@
     "firstClaimAt": "2026-10-30T19:53:43.609Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T22:38:24.713Z",
+    "wallClockMs": 269081104
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -250,10 +252,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-02T21:31:04Z",
-    "at": "2026-11-02T22:05:05.503Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T22:05:16Z",
+    "at": "2026-11-02T22:39:25.743Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -350,5 +353,9 @@
     "source": "agent-reported"
   },
   "completionSummary": "LANDING-CONFLICT resolution. No new behaviour; the scope is the same 4 files.\n\nThe first completion (21:30Z) was refused with MOE_COMMIT_FAILED_CONFLICT. Rescue ref: refs/moe/rescue/task-31187ec1…/20261102T213024Z. The wrapper merged origin/moe/work-2026-10-24 (96c4ee19) into the task worktree. That left 2 conflict hunks, both resolved by keeping both sides:\n- scripts/moe-agent.sh, provision_worktree `local` line: this row's `ctxread` plus the target's `fail` (WT config-lock retry).\n- scripts/tests/postflight-worktree.cjs, `cases` map: the target's wt-config-lock/-lock-exhausted/-other/-preset entries plus this row's resume-unread/resume-dirty/resume-shared-unread Object.assign line.\nNo conflict markers remain.\n\nChecked: the merged tree differs from MERGE_HEAD only in this row's 4 files (moe-agent.sh, moe-agent.ps1, postflight-fake-proxy.js, postflight-worktree.cjs; +106/-17). Its -U0 change lines are identical to the task's own diff 0d8422ce..5fb9cfce, except that one resolved `local` line.\n\nContract (unchanged from the first completion):\n- The mode is known only from the fresh claim's workspace, or from a get_context whose task.id is the claimed id.\n- An unknown mode on a control checkout on refs/heads/moe/control refuses with MOE_WORKTREE_CONTEXT_FAILED: one report_blocked, no CLI, nothing touched, exit 1.\n- An unknown mode elsewhere is today's shared path, with no new output.\n- Worktree mode with an unread context refuses with the same code.\n\nEvidence, fresh run on the merged bytes: EXIT=0. Codes diff empty, parity PASS, sh 64 ok / 0 failed, PS 5.1 64 ok / 0 failed. The 4 new cases and the target's 4 wt-config-* cases are ok in both engines; path-long is n/a off win32, and wt-lease-signal is n/a for ps1. `npm run lint` is ok.\n\nVerification deviation (setup only): the snapshot is built from the merged working tree's tracked scripts/ (git ls-files | tar) instead of `git archive HEAD scripts`. HEAD is pre-merge, so the plan's form would pair the old parity-check.sh",
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-02T22:38:24.713Z",
+  "reviewCompletedAt": "2026-11-02T22:38:24.713Z",
+  "reviewSummary": "APPROVED: completion ebb06b85 (tree e8cfc0ba = candidate treeSha), on moe/work-2026-10-24 and origin. 4 files, +106/-17 (89 net), all in approvedScope. ps1 keeps its UTF-8 BOM; the .cjs and fake-proxy changes are add-only.\n\nRe-run: the plan's step-4 command on `git archive ebb06b85 scripts`, MOE_*/CLAUDE* unset, sh fixtures under /tmp (drvfs mkfifo, task-93bcb459). 22:06-22:33Z, EXIT=0, log /mnt/d/moe-scratch/qa-31187ec1.jsk0mg/verify.log.\n- bash -n ok, codes diff empty, PASS parity-check.sh.\n- sh and PS 5.1: 64 ok, 0 failed each. The 4 new cases are ok in both.\n- npm run lint ok.\n\nACs:\n- AC1: resume-unread loops error, empty and mismatch. It asserts one report_blocked for the task and seat with the reason starting with the code, no CLI, exit 1, no W or branch, and the control unchanged.\n- AC2: resume-dirty proves HEAD..branch = 0. W stays registered and locked, the dirt is byte-identical, and the tip is unchanged.\n- AC3: resume-shared-unread: the CLI ran, 0 blocks, no MOE_WORKTREE_ line, exit 0.\n- AC4: ctx-unread, with the check placed before the Foreign loop and any W work.\n- AC5: no existing case, helper or fake answer changed.\n- AC6: codes diff empty.\n\nTwins match: the same id predicate and mode table, and identical details. A failed parse is unknown, and stops are main-shell only. The real get_context carries task.id. The postflight.sh/.ps1 empty/mismatch cases run in non-moe/control repos (rail 4 holds).\n\nNote: in worktree mode the ctxread stop follows WT-13's follow switch, a fast-forward to the target. That is the plan's placement and the same as the sibling refusals.",
+  "requiredCheckAtDone": null
 }

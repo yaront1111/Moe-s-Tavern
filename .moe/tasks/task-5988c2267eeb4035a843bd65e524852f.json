@@ -71,12 +71,21 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once. Build a FRESH snapshot from the task worktree with the step-1 overlay recipe; it now carries all five changed files. Never run it in place in the shared control checkout (customRule: the daemon runs from packages/moe-daemon/dist). Run exactly:\n  cd packages/moe-daemon && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/setTaskStatus.test.ts\nIt must exit 0 with 4 files passed: 91 tests at HEAD ecf00c18 plus the new cases. The architect's run with the three cases above passed 94; if a later landing changed one of these files, report base + N. That command, its exit code and its output tail are the complete_task verification evidence (DoD 4).\n\nIn the same snapshot also run `npx tsc --noEmit -p .` (vitest does not typecheck the helper's Pick signature) and report its exit 0 beside the evidence.\n\nThen `git -C <worktree> diff --stat HEAD` must list only archiveEpic.ts, archiveTask.ts, reportBlocked.ts, archiveEpic.test.ts and reportBlocked.test.ts under packages/moe-daemon/src/tools (DoD 5). Declare those five as modifiedFiles.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/archiveEpic.test.ts",
         "packages/moe-daemon/src/tools/reportBlocked.test.ts"
       ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "note": "Fresh whole-repo snapshot /tmp/5988c226-green.* from worktree HEAD with explicit cmp-checked five-file overlay; npm ci --prefer-offline --no-audit --no-fund, tests and tsc under env -i HOME/NO_COLOR=1/pinned Node PATH. Named four-file vitest gate exited 0: 4 files, 94/94 tests; npx tsc --noEmit -p . exit 0. Worktree qualityGate bash scripts/tests/parity-check.sh && npm run lint also exit 0. Repeated RED with amended whole-repo/test-only-overlay/hermetic recipe: exactly 3 failed | 65 passed, same quoted failures, log red-amended.log. Diff scope exactly five approved files, 84 insertions/16 deletions, git diff --check clean. Logs under /mnt/d/moe-scratch/5988c226-worker-fdb2af60/{green,quality,red-amended}.log.",
       "startedAt": "2026-11-02T22:36:46.867Z",
+      "completedAt": "2026-11-02T22:38:03.728Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -91,16 +100,26 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff, once (load adversarial-self-review). Record it in the final complete_step.\n(a) Parity: archive_epic and archive_task now write the same clearing through one helper. set_task_status's BLOCKED exit (setTaskStatus.ts:179-188) clears the same five fields and sets priorBlockedReason.\n(b) The already-BLOCKED repeat arm still unions stored ids, satisfied ones included: 'a repeat carrying NEW blockedOnTaskIds…' and 'the reason-update arm on an already-BLOCKED row KEEPS satisfied ids…' pass unchanged.\n(c) A fresh flip never leaves an earlier list: it writes the recorded ids, otherwise null, on resource and non-resource flips alike.\n(d) Concurrency: both tools run under the global state mutex, and the new guard reads the post-await task.\n(e) blockedOnTaskIds that is null, undefined, [] or not an array gives stored [] on every status.\n(f) Mutation check in a scratch copy of the snapshot, never in the worktree. Revert each runtime hunk on its own and confirm a new case fails:\n  - the status guard → cases A and B;\n  - the null write → case A's stored-ids assertion;\n  - archiveUpdates in archive_epic → the archiveEpic case.\n  Then confirm the restored copy passes.\n(g) Put residuals in the handoff, not in code. release_task's refusal cascade and set_task_status's un-archive still leave block fields on a non-BLOCKED row. Those stale ids still feed dependencyEdges/findDependencyPath (a false DEPENDENCY_CYCLE drop) and get_context's declared prerequisites.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/archiveEpic.ts",
         "packages/moe-daemon/src/tools/reportBlocked.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "note": "Adversarial self-review completed against all five scoped diffs: shared archiveUpdates matches archive_task/set_task_status clearing (truthy prose preserved; five operational fields nulled); all archive refusal/finalizing/idempotency/API paths unchanged. Already-BLOCKED repeat-union and satisfied-ID tests pass untouched. Fresh flips overwrite ids on both resource/non-resource paths; null/undefined/[]/non-array stored inputs safely yield []. MCP global state.runExclusive serialization verified; guard reads post-await row. No new IO, cleanup obligation, input parsing, or failure/partial-write behavior. Scratch-only independent mutation checks: revert status guard => A+B fail (2 failed/66 passed); revert null write => A fails 'expected [ Array(1) ] to be null' (1/67); revert archive_epic helper call => archive test fails (1/67). Restored copy: named four-file suite exit 0, 94/94. Logs status-guard.log/null-write.log/archive-clearing.log/restored-green.log under /mnt/d/moe-scratch/5988c226-worker-fdb2af60. Residuals deliberately unchanged per scope: release_task refusal cascade and legacy un-archive retain stale fields; dependencyEdges/findDependencyPath and get_context may still consume those stale ids. Handoff records them. No new in-scope issue found; diff --check clean.",
+      "startedAt": "2026-11-02T22:38:03.760Z",
+      "completedAt": "2026-11-02T22:39:13.225Z"
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -119,7 +138,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:52.279Z",
-  "updatedAt": "2026-11-02T22:36:46.867Z",
+  "updatedAt": "2026-11-02T22:39:13.510Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:25.066Z",
@@ -129,7 +148,7 @@
     "firstClaimAt": "2026-11-02T22:17:19.136Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -142,7 +161,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:31:04.067Z",
@@ -207,5 +228,21 @@
   },
   "planApprovedAt": "2026-11-02T22:31:04.105Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T22:35:11.635Z"
+  "workStartedAt": "2026-11-02T22:35:11.635Z",
+  "reviewStartedAt": "2026-11-02T22:39:13.507Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/setTaskStatus.test.ts",
+    "exitCode": 0,
+    "outputTail": "Fresh isolated whole-repo snapshot with cmp-checked five-file worktree overlay; hermetic env -i, NO_COLOR=1, Node v24.21.0. Restored mutation-copy final gate:\n Test Files  4 passed (4)\n      Tests  94 passed (94)\n   Start at  00:38:20\n   Duration  4.96s\nAlso npx tsc --noEmit -p . exit 0 and bash scripts/tests/parity-check.sh && npm run lint exit 0. Independent mutations: status-guard 2 failed/66 passed; null-write 1 failed/67 passed; archive-clearing 1 failed/67 passed. Logs /mnt/d/moe-scratch/5988c226-worker-fdb2af60/.",
+    "reportedAt": "2026-11-02T22:39:13.507Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+    "packages/moe-daemon/src/tools/archiveTask.ts",
+    "packages/moe-daemon/src/tools/archiveEpic.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.ts"
+  ],
+  "completionSummary": "Fixed archive_epic BLOCKED-field clearing via shared archiveUpdates; report_blocked ignores stale IDs on fresh blocks and explicitly clears empty IDs. Added three regression cases, demonstrated RED (3 failed/65 passed), GREEN 94/94 across four files, tsc clean, parity/lint clean; three independent runtime-hunk mutations fail as intended and restored suite passes 94/94. Only five approved files changed (+84/-16); no API/docs changes. DoD3 interpretation follows planner comment and proposal prop-583816507c344cfeaa139033c7c6193c (existing Blocked response has no blocked:true field). Review and residual scope notes in task handoff; wrapper owns landing."
 }

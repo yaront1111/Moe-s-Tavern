@@ -51,10 +51,11 @@
     {
       "stepId": "step-3",
       "description": "3. Write the operator runbook (DoD4, corrected by latest comments). Add TOC entry and `Worktree mode: flip on / roll back` section to TROUBLESHOOTING.md from FINAL landed WT-S §7.3/7.4 and actual WT10M CLI. Explain info/off vs hard/on probes, required fast-per-landing qualityGate, git>=2.38/root/moe/control/free target, and soft stale warning (no automatic doctor cleanup). Flip: stop/drain all seats/open attempts and let REVIEW land/finalize; inspect git for-each-ref refs/moe/rescue and recover/archive live tasks first; through supported operator settings declare resources.git-land-main {capacity:1,maxLeaseMs:7200000,releaseOnDeregister:true} and configure gate; human runs Bash `scripts/moe-agent.sh --land-branch moe/work-2026-10-24` or PS `scripts/moe-agent.ps1 -LandBranch moe/work-2026-10-24`. Explain target must be ancestor of branch before flip so switch preserves dirty daemon files; conflict recovery merges main INTO the shared branch, never directly into main. Migration always gates in .moe-free candidate workspace, no task lease (drain), two-parent C, CAS/nonforced publish, no task ledger; on any failure/unknown stop flip, unknown settled by rerun, no force/manual push/reset. After confirmed branch inclusion use exact `git switch -c moe/control main`, set worktreeMode on and consolidationBranch main, run `node packages/moe-daemon/dist/index.js doctor`, restart only after pass. Rollback: drain, land remaining task branches or human preserve/merge them into non-main shared branch; set mode off, UNSET consolidationBranch (main is shared-mode opt-in), switch explicitly `git switch -c moe/work-<date> main` using fresh branch name; preserve worktrees/rescue refs until recovery, normal sweep handles terminal tasks. Pinned mismatch blocks for human. Rollback never moves main. No generic 'let peel run' alternative, no manual merge/push to main, no setting-default flip or wrappers edited by this task.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "startedAt": "2026-11-02T22:37:55.761Z"
     },
     {
       "stepId": "step-4",
@@ -163,7 +164,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-11-02T22:36:08.640Z",
+  "updatedAt": "2026-11-02T22:37:55.761Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",

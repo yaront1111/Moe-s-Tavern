@@ -31,18 +31,25 @@
     {
       "stepId": "step-2",
       "description": "docs/TROUBLESHOOTING.md and docs/CONFIGURATION.md: the operator view.\n\ndocs/TROUBLESHOOTING.md, under '## Plugin Issues', gets one '###' entry per symptom, each with cause → fix in the file's existing style, using the landed texts:\n- The protected profile refuses a running daemon that 'was not started by this IDE':\n  - after an IDE restart, RF01 recognizes the IDE's own daemon;\n  - otherwise open the Moe tool window for the replacement dialog ('Stop and Replace'), or stop the process yourself and use Restart Daemon.\n- The project stays protected after project.json says legacy. This is the RF02 confirmation: 'Allow Downgrade' takes effect after an IDE restart. An unreadable record keeps the project protected; as a last resort, a human may delete that record file from the store.\n- Restart Daemon on Windows, as RF04 landed it.\n- The same symptoms for VS Code, if RF06 added user-visible texts.\nLink docs/design/protected-profile-threat-model.md from the first entry, and update the Table of Contents.\n\ndocs/CONFIGURATION.md, under '## File Structure' (or '## IDE Plugin Settings' if it fits better), lists each new state location: the JetBrains store <IDE system dir>/moe/protected-state/ (owner-only, sha-256 file names, never in the repository), with what each record holds, and RF06's VS Code location. Say that these are not settings: nobody edits them by hand.\n\nError handling: docs only. Every text quoted from a dialog or refusal must match the landed source exactly; grep for it.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/TROUBLESHOOTING.md",
         "docs/CONFIGURATION.md"
       ],
-      "startedAt": "2026-11-02T22:32:31.228Z"
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "docs/TROUBLESHOOTING.md, under ## Plugin Issues: five new ### entries, each with symptom, cause and solution.\n- Protected profile: daemon was not started by this IDE. Covers the verifyProvenance refusal and the Moe: Unverified Daemon dialog (Keep It / Stop and Replace, the 15 s wait). Links docs/design/protected-profile-threat-model.md and states the single-user-host assumption.\n- Protected profile: project stays protected after a legacy declaration. Covers the ProfileDowngradeDialog text and buttons, and when the question returns after every restart (store not writable or not placeable). The last-resort deletion is one record, found by its \"project\"/\"profile\" fields.\n- Restart Daemon refuses or starts nothing. Covers all five landed refusals (in-progress, survivor, incomplete, protected NOT_STARTED_HERE/STOP_FAILED, WSL boundary), the Windows supervisor-respawn cause, and the fix.\n- Protected profile: path is not a plain local Windows path. Covers BASE_NOT_PLAIN and the installed/node variants, the accepted costs, and the fix text.\n- Protected profile in VS Code. Covers both VS Code refusal texts, the selection rules, and the gaps task-648a5916 and task-98c81a27.\nThe ToC lists them as nested items under Plugin Issues. Three rows were added after MOE_RUNTIME_PROTECTED_PATH_MISSING: MOE_PROTECTED_AGENT_COMMAND_REFUSED, MOE_PROTECTED_AGENT_CLI_NOT_FOUND and MOE_PROTECTED_INTERPRETER_NOT_FOUND (architect-54e5eb09's ask).\n\ndocs/CONFIGURATION.md, under ## File Structure: a JetBrains protected state store paragraph. It gives the <IDE system directory>/moe/protected-state root, owner-only/regular/no-link/64 KiB/sha-256 names, and the two per-project record formats (provenance and profile pin), checked against recordsJson and persist. It says these files are not settings and are never hand-edited. VS Code keeps no store (in-memory pin).\n\nChecks: every quoted dialog or refusal text was grepped and found in the Kotlin or TS source (23 fragments, all present). Every in-doc anchor resolves (node slug check). git diff --check docs/ is clean. npm run lint exit 0. scripts/tests/account-trust-docs.test.mjs 5/5.",
+      "startedAt": "2026-11-02T22:32:31.228Z",
+      "completedAt": "2026-11-02T22:37:15.558Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY: the full regression, once and fresh, with counts. This is the epic's gate.\n\nRun each command below. Record its exit code, its counts (passed, failed, skipped) and the last lines of its output. Every one must exit 0.\n\n1. Daemon vitest. packages/moe-daemon/node_modules holds only the win32 rolldown binding, so run it in a Linux scratch copy, as the CQ-R epic's archive regression did. Never npm install or npm ci inside the shared checkout. The recipe:\n   S=<scratchpad>/rf07; rm -rf \"$S\"; mkdir -p \"$S\"; git archive HEAD | tar -x -C \"$S\"; cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\" sh -c 'npm ci && npm run build && npm test'\n   If this task changed daemon bytes, copy those files over the archive first.\n2. JetBrains. Hold the jetbrains-gradle lease (moe.acquire_resource; if it is busy, moe.report_blocked with that resourceId), run cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", then release the lease. Take the counts from build/test-results/test/*.xml, not from the console, and label the run as Windows evidence.\n3. VS Code: cd moe-vscode && npm test && npm run compile, under the same env -i Node 24 PATH. If a Windows-only module blocks it, run the same command through cmd.exe and label it.\n4. bash scripts/tests/postflight.sh from the repo root. It takes 12 minutes or more; raise MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box. If peers' in-flight script edits break it, re-run from the step-1 archive and say so.\n5. npm run lint at the repo root.\n\nAny failure: check whether it is this epic's. A failure in a file the epic never touched is reported with its output, and that file is never edited here. Fix this epic's failures in code, never by weakening an assertion.\n\nThen run `git diff --check` over the three docs. A read-only `git status --short` must show only this task's files. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nThe commands, exit codes, counts and tails together are complete_task's verification evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-02T22:37:25.792Z"
     },
     {
       "stepId": "step-4",
@@ -124,7 +131,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-11-02T22:32:31.228Z",
+  "updatedAt": "2026-11-02T22:37:25.792Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",
@@ -150,7 +157,7 @@
     "firstClaimAt": "2026-10-30T07:17:11.675Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -162,7 +169,8 @@
   "codexModel": "gpt-6-astra",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:19:14.155Z",

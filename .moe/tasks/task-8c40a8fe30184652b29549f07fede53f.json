@@ -8,10 +8,42 @@
     "providerDescriptor.contract.test.ts passes on a git-archive snapshot of the landed tree, with the full daemon suite counts in the completion evidence."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Bring the descriptor fact to the launcher (DoD 1); daemon-only. Edit only packages/moe-daemon/src/providers/codexDescriptor.ts with the Edit tool (customRule). Touch neither wrapper nor providerDescriptor.contract.test.ts: no assertion may be removed or loosened.\n\nFirst re-anchor on the bytes in your worktree:\n- `grep -nF 'command = \"$nodeForToml\"' scripts/moe-agent.ps1` must show a line inside `function Write-MoeCodexConfig {`. At target 091c7dd0 that is :1228, inside the writer that opens at :1186.\n- `grep -cF nodeForToml scripts/moe-agent.sh` must print 0.\n- If a later landing changed what Write-MoeCodexConfig emits on its command line, use that literal instead and say so in complete_step.\n\nIn the config.proxyCommand fact (~:360-368), change three strings:\n1. onlyInPowershell becomes ['command = \"$nodeForToml\"', 'args = [\"$proxyScriptForToml\"]']. Only the first literal changes. It replaces 'command = \"node\"', which 0863b6c6 (task-64809b19) removed from the ps1 writer.\n2. powershell becomes: 'command = \"$nodeForToml\": the node pinned under MOE_RUNTIME_PROTECTED ($script:MoeNode, forward slashes), else bare node; args is always emitted'. Source: ps1 :537-540 sets $script:MoeNode only when $script:MoeRuntimeProtected; the writer builds $nodeForToml from it, else 'node'.\n3. divergenceReason becomes: 'The bash writer resolves the proxy command (node plus the script, or a direct proxy binary with no args line); the PowerShell writer always runs node -- the MOE_RUNTIME_PROTECTED pin, else bare node -- with the proxy script as args. The two wrappers can emit structurally different [mcp_servers.moe] blocks for the same project.' This keeps the parity explanation: bash's TOML_PROXY_CMD is NODE_CMD plus TOML_PROXY_ARGS, or a direct PROXY_CMD with the args line omitted.\n\nThe bash prose, onlyInBash, every other fact and every emitterEvidence entry stay byte-identical. The simulated diff is in /mnt/d/moe-scratch/8c40a8fe-plan/simulated-fix.diff (a suggestion).\n\nThe dated spike record docs/plans/2026-09-11-provider-registry-spike.md:52 still says PowerShell hardcodes node. Leave it: it is a historical plan, and the DoD scopes this row to the descriptor.\n\nError handling: this is a data-only change with no runtime path. The contract test's problem list is the failure surface. It is red on HEAD with exactly one problem (config.proxyCommand: \"command = \\\"node\\\"\" missing from the codex branches + config writer of scripts/moe-agent.ps1), and that is this task's RED proof; quote it in complete_step from your own snapshot run.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "note": "Re-anchored: ps1 :1228 emits command = \"$nodeForToml\"; moe-agent.sh has 0 nodeForToml. Changed only powershell, onlyInPowershell[0], divergenceReason in config.proxyCommand.",
+      "startedAt": "2026-11-02T22:38:28.098Z",
+      "completedAt": "2026-11-02T22:38:36.974Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once (DoD 2). From the task worktree, run this ONE command fresh. It builds a whole-repo snapshot outside the checkout (never npm or vitest in place: customRule), overlays only the owned file and cmp-checks it, then runs the contract test and the full daemon suite under env -i:\n  bash -c 'set -eu; W=$(git rev-parse --show-toplevel); S=$(mktemp -d); F=packages/moe-daemon/src/providers/codexDescriptor.ts; git -C \"$W\" rev-parse HEAD; git -C \"$W\" archive HEAD | tar -x -C \"$S\"; cp \"$W/$F\" \"$S/$F\"; cmp \"$W/$F\" \"$S/$F\"; cd \"$S/packages/moe-daemon\"; env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c \"npm ci --no-audit --no-fund && npx vitest run src/providers/providerDescriptor.contract.test.ts && npx vitest run\"'\nIt must exit 0.\n- Contract test: 24 passed (24).\n- Full suite: 0 failed. Architect's runs: ecf00c18 + fix gave 228 files passed, 6881 passed | 20 skipped; at 091c7dd0 + fix the contract test gave 24/24. Report the counts you see.\n- That command, its exit code and its output tail with both summaries are the complete_task evidence.\n\nThis snapshot is the tree the completion commit will carry. QA re-runs the same suites on `git archive <completion sha>` with no overlay, which is the landed-tree check DoD 2 names.\n\nLoad flake (mem:gotcha-daemon-linux-snapshot-gate): if src/benchmarks/baselineRun.test.ts E2 times out while the host is busy, rerun that file alone, then the suite once, before calling it a regression.\n\nAlso confirm `git -C <worktree> diff --stat HEAD` lists only codexDescriptor.ts, and declare it as modifiedFiles.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "startedAt": "2026-11-02T22:38:37.371Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) The contract test file and both wrappers are unchanged; `git diff --stat` shows only codexDescriptor.ts.\n(b) The new literal is checked in both directions by the existing test: present at the ps1 codex site (codex branches + Write-MoeCodexConfig) and absent from the whole comment-stripped moe-agent.sh.\n(c) The powershell prose matches both branches of $nodeForToml (protected pin vs bare node), and the divergenceReason still explains why the two [mcp_servers.moe] blocks can differ.\n(d) Mutation check in a scratch copy of the snapshot, never in the worktree:\n  - put back 'command = \"node\"': the test must fail with the original problem line;\n  - use a literal that bash also contains, e.g. 'command = ': the test must report that it is NOT powershell-only;\n  - then confirm the restored copy passes.\n(e) No other fact's evidence was touched, so emitter pinning and site scoping stay as strong as before.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -23,16 +55,72 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:56:23.239Z",
-  "updatedAt": "2026-11-02T22:31:30.616Z",
+  "updatedAt": "2026-11-02T22:38:37.371Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:11.206Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T22:31:27.066Z"
+    "firstClaimAt": "2026-11-02T22:31:27.066Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-8cf0816c"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T22:37:32.737Z",
+  "executionContract": {
+    "intendedBehavior": "codexDescriptor.ts config.proxyCommand describes the PowerShell codex writer as it now emits: `command = \"$nodeForToml\"` (the MOE_RUNTIME_PROTECTED node pin, else bare node) with args always emitted. Its bash-vs-PowerShell divergence explanation still holds, and providerDescriptor.contract.test.ts is green again.",
+    "acceptanceCriteria": [
+      "providerDescriptor.contract.test.ts: 24 passed on a whole-repo snapshot with the fix (it is red, 1 failed | 23 passed, without it).",
+      "The full daemon vitest suite has 0 failures in the same snapshot; the counts are in the completion evidence."
+    ],
+    "invariants": [
+      "scripts/moe-agent.ps1, scripts/moe-agent.sh and providerDescriptor.contract.test.ts are unchanged.",
+      "Only the proxyCommand fact's powershell, onlyInPowershell[0] and divergenceReason strings change."
+    ],
+    "compatibility": [
+      "The descriptor is an internal registry read only by its contract test; no MCP contract or .moe state is involved."
+    ],
+    "checkRefs": [
+      "bash -c 'set -eu; W=$(git rev-parse --show-toplevel); S=$(mktemp -d); F=packages/moe-daemon/src/providers/codexDescriptor.ts; git -C \"$W\" rev-parse HEAD; git -C \"$W\" archive HEAD | tar -x -C \"$S\"; cp \"$W/$F\" \"$S/$F\"; cmp \"$W/$F\" \"$S/$F\"; cd \"$S/packages/moe-daemon\"; env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c \"npm ci --no-audit --no-fund && npx vitest run src/providers/providerDescriptor.contract.test.ts && npx vitest run\"'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Edit moe-agent.ps1 back to a literal `command = \"node\"`. Rejected: 0863b6c6 pinned the interpreter on purpose (MOE_RUNTIME_PROTECTED), protected-agent-command.test.mjs:283-292 asserts that no bare node literal remains, and the row says daemon-only. 2) Move proxyCommand into GLOBAL_FACT_PATHS or loosen the site check. Rejected: it weakens the contract test, which every earlier descriptor-fix row was told not to do. 3) Also edit the dated spike plan doc. Rejected: it is a historical record outside the DoD.",
+    "codebaseInsights": "providerDescriptor.contract.test.ts checks each onlyInPowershell literal for presence in the comment-stripped codex branches plus `function Write-MoeCodexConfig {` (through the next flush-left `}`), and for absence from the whole comment-stripped moe-agent.sh. The ps1 grok writer emits \"command = `\\\"$nodeForToml`\\\"\" with backticks, so the codex literal stays unique there and is outside the site anyway. A full daemon suite needs a WHOLE-repo archive, because many tests read docs/, scripts/ and .gitignore (mem:gotcha-daemon-linux-snapshot-gate).",
+    "risks": "(1) Many open rows edit scripts/moe-agent.ps1 (CQ-M07n*, WT-14, 408a0ac1 …). None touches the codex writer's command line today, but if one lands first and changes it, re-anchor on what Write-MoeCodexConfig emits. (2) Under host load, baselineRun.test.ts E2 can time out; rerun before calling it a regression. (3) Do not overlay `git diff --name-only`; overlay the one owned file.",
+    "keyFiles": [
+      "packages/moe-daemon/src/providers/codexDescriptor.ts",
+      "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/protected-agent-command.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "091c7dd03f16f5679d209095fd000fc39f227b46",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T22:37:32.767Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T22:38:28.098Z"
 }
