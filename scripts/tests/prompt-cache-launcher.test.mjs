@@ -416,7 +416,7 @@ for (const [ext, engine] of engines) {
         const block = between(read('ps1'), '            if (-not $env:CLAUDE_CODE_PROMPT_CACHE_TTL)', '            # Inline stream-json parser.');
         keeperDir = path.join(dir, 'mods', 'moe-compaction-keeper');
         switchDir = path.join(dir, 'mods', 'moe-account-switch');
-        script = `$ErrorActionPreference='Stop'\n$Role='${role}'\n$AutoClaim=$${autoClaim}\n$claudeInteractive=$${seat.interactive}\n$loopEnabled=$${seat.loop}\n${block}\n${block}\n[Console]::Write("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW|$env:MOE_COMPACT_WINDOW_DEFAULT|$env:CLAUDE_CODE_PLUGIN_DIRS|$env:MOE_SESSION_ENDS_WHEN_IDLE")`;
+        script = `$ErrorActionPreference='Stop'\n$script:MoeScriptRoot=$PSScriptRoot\n$Role='${role}'\n$AutoClaim=$${autoClaim}\n$claudeInteractive=$${seat.interactive}\n$loopEnabled=$${seat.loop}\n${block}\n${block}\n[Console]::Write("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW|$env:MOE_COMPACT_WINDOW_DEFAULT|$env:CLAUDE_CODE_PLUGIN_DIRS|$env:MOE_SESSION_ENDS_WHEN_IDLE")`;
       } else {
         const block = between(read('sh'), '        if [ "$CLI_TYPE" = "claude" ]; then\n            export CLAUDE_CODE_PROMPT_CACHE_TTL', '        # Per-task one-shot mode');
         keeperDir = `${dir.replaceAll('\\', '/')}/mods/moe-compaction-keeper`;
