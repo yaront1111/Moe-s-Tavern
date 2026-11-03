@@ -76,7 +76,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,16 +89,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T14:04:49.282Z",
-  "updatedAt": "2026-11-03T14:26:51.478Z",
+  "updatedAt": "2026-11-03T14:29:22.999Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T14:04:59.017Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T14:29:01.999Z",
+    "wallClockMs": 1442982
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-8cf0816c"
+    "worker-8cf0816c",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -180,10 +183,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T14:19:35.219Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T14:18:47Z",
-    "at": "2026-11-03T14:26:51.477Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T14:27:02Z",
+    "at": "2026-11-03T14:29:22.999Z"
   },
   "reviewStartedAt": "2026-11-03T14:26:03.869Z",
   "verification": {
@@ -215,5 +219,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T14:29:01.999Z",
+  "reviewCompletedAt": "2026-11-03T14:29:01.999Z",
+  "reviewSummary": "APPROVED. Completion 946358a8 (moe/work-2026-10-24, pushed; contained in control HEAD): 2 files +247/-8, net 239 (<400); owned files byte-identical to the commit.\nRe-ran task.verification verbatim in a git-archive snapshot outside the shared checkout (env -i, node v24.21.0, npm ci): tsc ok, tsc -p tt.json ok, resourceStore* 6 files/77 tests, full daemon suite 237 files/7060 passed/24 skipped, EXIT=0. Epic-final gate in place: parity-check.sh PASS, npm run lint OK.\nRed-first by me: pre-fix resourceStore.ts in the snapshot makes landing replay (\"expected [] to deeply equal [['task-b','worker-b']]\") and 'unreadable record' fail (2 of 9); with the fix all 9 pass.\nDoD1: replay uses real completeTaskTool (REVIEW, unassigned, finalizing attempt, seat IDLE), real parked wait_for_resource; asserts granted pair, persisted holders/queue, RESOURCE_GRANTED activity, waiter resolves granted. DoD2: 8-seed it.each (no attempt, closed, running, DEAD, deregistered, another seat's attempt, malformed, unreadable): live waiter gets the slot, task-r entry keeps requestedAt; fixtures assert seeded state; existing resourceStore tests untouched and green. DoD3: currentAttempt in try/catch -> logger.warn + pass-over, tested (exactly one warn, no throw).\nInvariants: assignee branch unchanged; worker-record check (missing/DEAD) precedes attempt comparison so blank workerId can't match a malformed attempt; needs phase finalizing and attempt.workerId === entry workerId; acquire/release/reap/restore/resume and MCP/schema shapes untouched; single caller passes next.workerId.\nAccepted residual risk (named by worker): hard-crashed seat that never deregisters still gets the lease; bounded by git-land maxLeaseMs 2h, droppable via release_resource force. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
