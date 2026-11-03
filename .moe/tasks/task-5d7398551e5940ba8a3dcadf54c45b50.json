@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,17 +78,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:44:05.533Z",
-  "updatedAt": "2026-11-03T21:48:41.508Z",
+  "updatedAt": "2026-11-03T22:06:21.753Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:05:34.534Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:05:50.663Z",
+    "wallClockMs": 3616129
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
     "worker-2dc72348",
-    "qa-af7be174"
+    "qa-af7be174",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -191,9 +194,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T21:10:34Z",
-    "at": "2026-11-03T21:16:20.739Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T22:04:22Z",
+    "at": "2026-11-03T22:06:21.753Z"
+  },
+  "completedAt": "2026-11-03T22:05:50.663Z",
+  "reviewCompletedAt": "2026-11-03T22:05:50.663Z",
+  "reviewSummary": "Reviewed completion ab9b5237 (recorded, kind=completion, pushed, contained in moe/control HEAD a3330bce and on moe/work-2026-10-24). Diff = exactly packages/moe-daemon/src/util/metrics.ts (+6/-3) and metrics.test.ts (+61/-1), net 62 LOC, no size issue; listMetrics.ts sort and docs/MCP_SERVER.md untouched. Fix: sinceIso key is now metrics.doneAt ?? updatedAt ?? metrics.firstClaimAt ?? createdAt, with a comment that matches the 'last touched' contract. Re-ran in a git-archive snapshot of ab9b5237 outside the shared checkout (npm ci there): tsc --noEmit exit 0; vitest run src/util/metrics.test.ts src/tools/governanceFeatures.test.ts -> Test Files 2 passed, Tests 39 passed (matches the worker's evidence). Negative control: snapshot of ab9b5237^ (old metrics.ts) with the new metrics.test.ts overlaid -> 'Tests 1 failed | 10 passed (11)', only (w1) fails. DoD 1: (w1) keeps WORKING/REVIEW/BLOCKED rows with firstClaimAt 48h and updatedAt 1h, red at base. DoD 2: (w2) DONE row doneAt 48h/updatedAt 1h stays out, (w3) all-48h row stays out. DoD 3: the vitest command passes in a snapshot. Extra (w4) pins DONE-1h kept and the legacy no-updatedAt fallback to firstClaimAt then createdAt. Tests use exact toEqual on id lists, so mutants (updatedAt first, firstClaimAt first, firstClaimAt dropped) are each killed. Only two callers (listMetrics.ts, WebSocketServer GET_METRICS) share the helper; no new throw path, invalid sinceIso still refused at the edges. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

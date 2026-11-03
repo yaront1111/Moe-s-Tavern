@@ -59,7 +59,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -72,16 +72,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:42:26.509Z",
-  "updatedAt": "2026-11-03T21:20:44.715Z",
+  "updatedAt": "2026-11-03T22:06:20.365Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:03:10.634Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:05:48.748Z",
+    "wallClockMs": 3758114
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -153,10 +156,11 @@
   "workStartedAt": "2026-11-03T21:11:29.492Z",
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T21:13:37Z",
-    "at": "2026-11-03T21:20:44.715Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:04:11Z",
+    "at": "2026-11-03T22:06:20.365Z"
   },
   "reviewStartedAt": "2026-11-03T21:19:14.449Z",
   "verification": {
@@ -187,5 +191,9 @@
       "status": "REVIEW",
       "pushed": true
     }
-  ]
+  ],
+  "completedAt": "2026-11-03T22:05:48.748Z",
+  "reviewCompletedAt": "2026-11-03T22:05:48.748Z",
+  "reviewSummary": "Reviewed completion 716b7bc6 (on moe/control and moe/work-2026-10-24; 2 files, +83/-2, net 81 LOC): completeStep.ts runs normalizeAffectedFiles(params.modifiedFiles,'modifiedFiles') right after the unchanged count cap and before strict recordStepCompletion/any write; stores the normalized, deduped list only when non-empty; MODIFIED-FILES-OMITTED now derives from normalized length. completeStep.test.ts and completeStep.modifiedFiles.test.ts untouched. Re-ran task.verification in git-archive snapshots outside the checkout, EXIT=0: tsc --noEmit + tt.json typecheck clean; vitest completeStep*, getCommitScope, declareFiles, completionAuthorization, enforcement.integration, lifecycleFixes, taskTimestamps, governanceFeatures, util/attributionTiers = Test Files 11 passed (11), Tests 234 passed (234); red-at-base (completeStep.ts pinned ac3ea38f) = Tests 6 failed | 2 passed (8), exactly p1-p5/n1 red, RED-AT-BASE. DoD1: pathShape p1-p5 assert INVALID_INPUT for absolute, '../x.ts', 'C:\\\\x.ts', {path} entry, bare string, task file byte-identical, step IN_PROGRESS, note undefined, stepsCompleted []. DoD2: n1 stores ['src/a.ts','src/b.ts'] and get_commit_scope asserted has both. DoD3: named vitest files pass. Tests are mutation-resistant; controls c1 (relative stored as given, no warning) and c2 (omitted keeps warning + fallback, no key stored). No non-test caller passes modifiedFiles, no forbidden patterns, scope is exactly the two planned files. Note, not a defect: 51 duplicates are refused by the cap before dedup (deliberate). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
