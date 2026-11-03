@@ -855,8 +855,9 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
 
       // Record firstClaimAt the first time a worker picks this task up, so
       // budget/aggregate metrics can compute wall-clock duration. Idempotent:
-      // we never overwrite an existing timestamp.
-      if (!task.metrics?.firstClaimAt) {
+      // we never overwrite an existing timestamp. A peek (no workerId) claimed
+      // nothing, so it stamps nothing: wall-clock starts at the real claim.
+      if (params.workerId && !task.metrics?.firstClaimAt) {
         const nextMetrics = { ...(task.metrics ?? {}), firstClaimAt: new Date().toISOString() };
         try {
           task = await state.updateTask(task.id, { metrics: nextMetrics }, undefined, params.workerId);
@@ -883,7 +884,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       } catch (error) {
         logger.warn({ error, taskId: task.id }, 'claim_next_task: file-collision scan failed; claim continues');
       }
-      if (fileCollision.length > 0) {
+      // A peek still reports fileCollision in its answer, but pages nobody.
+      if (params.workerId && fileCollision.length > 0) {
         try {
           if (worktreeOnlyCollision(state, claimedAttempt, fileCollision) || controlSeatClaim(state, task)) {
             logger.info(
