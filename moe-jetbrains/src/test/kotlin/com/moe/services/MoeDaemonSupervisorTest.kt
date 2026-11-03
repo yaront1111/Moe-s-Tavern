@@ -1283,6 +1283,74 @@ class MoeDaemonSupervisorTest {
         }
     }
 
+    // W36-W39 (RF04 QA probes QA1-QA4): no other row lets a supervisor ROOT survive, so dropping `roots` from OldTree.survivor() passed the suite.
+    @Test
+    fun `W36 a root that survives its kill refuses and gates starts in both profiles`() {
+        for (profile in RuntimeProfile.values()) WinRestart(profile).use { f ->
+            val s = f.proc(S, survives = true)
+            f.proc(R, s, 1)
+            f.own(s)
+            f.stop = { 0 }
+            assertEquals(profile.name, survivor(S), f.restart(null))
+            assertTrue(profile.name, s.alive)
+            assertFalse(profile.name, f.service.ensureDaemonRunning())
+            assertEquals(profile.name, 0, f.starts)
+        }
+    }
+
+    @Test
+    fun `W37 a protected stop failure signals nothing, gates starts, and a later restart clears it`() =
+        WinRestart(RuntimeProfile.PROTECTED).use { f ->
+            f.verified()
+            val s = f.proc(S)
+            val r = f.proc(f.self, s, 1)
+            f.own(s)
+            f.stop = { 1 }
+            assertEquals(restartRefusal(f.self, STOP_FAILED), f.restart(f.self))
+            assertTrue(f.signals().none { it.startsWith("kill:") })
+            assertFalse(f.service.ensureDaemonRunning())
+            assertEquals(0, f.starts)
+            r.alive = false
+            f.stop = { 0 }
+            assertNull(f.restart(f.self))
+            assertFalse(s.alive)
+            assertEquals(2, f.stops.size)
+            assertFalse("the fake starter refuses, but is reached", f.service.ensureDaemonRunning())
+            assertEquals(1, f.starts)
+        }
+
+    @Test
+    fun `W38 an unverified protected daemon refusal keeps the retained tree and signals nothing`() =
+        WinRestart(RuntimeProfile.PROTECTED).use { f ->
+            val s = f.proc(S)
+            val d = f.proc(D, s, 1, survives = true)
+            f.own(s)
+            f.stop = { 0 }
+            assertEquals(survivor(D), f.restart(null))
+            val before = f.events.toList()
+            val x = f.proc(f.self, startSec = 2)
+            assertEquals(restartRefusal(f.self, NOT_STARTED_HERE), f.restart(f.self))
+            assertEquals("nothing stopped, read or signaled", before, f.events)
+            assertEquals(0, x.kills)
+            assertEquals(1, f.stops.size)
+            assertFalse(f.service.ensureDaemonRunning())
+            assertEquals(0, f.starts)
+            d.alive = false
+            x.alive = false
+            assertNull(f.restart(null))
+            assertEquals(2, f.stops.size)
+        }
+
+    @Test
+    fun `W39 a non-positive daemon json pid is never looked up or signaled on Windows`() {
+        for (profile in RuntimeProfile.values()) for (pid in listOf(0L, -1L)) WinRestart(profile).use { f ->
+            f.lookup = { error("no lookup for pid $it") }
+            assertNull("$profile $pid", f.restart(pid))
+            assertEquals("$profile $pid", emptyList<String>(), f.events)
+            assertTrue("$profile $pid", f.stops.isEmpty())
+        }
+    }
+
     /** Local, drive-less alias: exercises selection without contacting a share or launching node. */
     private fun volumeSpelling(file: File): String {
         val real = file.toPath().toRealPath().toString()
