@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:39:02.411Z",
-  "updatedAt": "2026-11-03T21:15:56.014Z",
+  "updatedAt": "2026-11-03T21:18:22.780Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T20:57:45.753Z",
@@ -184,5 +184,30 @@
     "packages/moe-daemon/src/tools/releaseTask.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "release_task without force now refuses a supplied workerId that is blank, whitespace-only or not a string ('', null, 0, false, 123, {}, []) with INVALID_INPUT before any read, lock or write; only an omitted workerId is the human/board path. Files: releaseTask.ts (+9/-1: one guard directly after the 0adea941 force gate, and the tool description's 'Anyone can call' sentence replaced by the real ownership rules), docs/MCP_SERVER.md (release_task paragraph only: 'no ownership check' replaced by an Ownership paragraph containing 'before anything is read or written: the proxy injects'), releaseForceGate.test.ts (+33: (n1) x8 malformed ids against task-idle/task-peer/task-missing with spies proving getTask/runExclusive/touchWorker/appendActivity are never called and tasks/workers/resources unchanged; (n2) omitted-id release between steps plus the holder's own mid-step release; (n3) well-formed non-holder still RELEASE_NOT_ASSIGNEE). claimGuards.ts untouched. GREEN (snapshot of HEAD + scripts, the 3 changed files overlaid, outside the repo, run fresh with its own exit code): tsc --noEmit clean, Test Files 15 passed (15), Tests 513 passed (513), exit 0. RED-AT-BASE (base 395172f0 + the new test file): '(n1) ... FAIL' for exactly the 8 malformed ids, 'Tests 8 failed | 36 passed (44)', (n2)/(n3) green, printed RED-AT-BASE. Self-review found no defects; one theoretical note: the wrappers' launch_outage_release always sends the seat's real WORKER_ID, so a blank WORKER_ID there would now be INVALID_INPUT instead of the human path, on a best-effort never-force call. My snapshot dirs under /tmp were removed."
+  "completionSummary": "release_task without force now refuses a supplied workerId that is blank, whitespace-only or not a string ('', null, 0, false, 123, {}, []) with INVALID_INPUT before any read, lock or write; only an omitted workerId is the human/board path. Files: releaseTask.ts (+9/-1: one guard directly after the 0adea941 force gate, and the tool description's 'Anyone can call' sentence replaced by the real ownership rules), docs/MCP_SERVER.md (release_task paragraph only: 'no ownership check' replaced by an Ownership paragraph containing 'before anything is read or written: the proxy injects'), releaseForceGate.test.ts (+33: (n1) x8 malformed ids against task-idle/task-peer/task-missing with spies proving getTask/runExclusive/touchWorker/appendActivity are never called and tasks/workers/resources unchanged; (n2) omitted-id release between steps plus the holder's own mid-step release; (n3) well-formed non-holder still RELEASE_NOT_ASSIGNEE). claimGuards.ts untouched. GREEN (snapshot of HEAD + scripts, the 3 changed files overlaid, outside the repo, run fresh with its own exit code): tsc --noEmit clean, Test Files 15 passed (15), Tests 513 passed (513), exit 0. RED-AT-BASE (base 395172f0 + the new test file): '(n1) ... FAIL' for exactly the 8 malformed ids, 'Tests 8 failed | 36 passed (44)', (n2)/(n3) green, printed RED-AT-BASE. Self-review found no defects; one theoretical note: the wrappers' launch_outage_release always sends the seat's real WORKER_ID, so a blank WORKER_ID there would now be INVALID_INPUT instead of the human path, on a best-effort never-force call. My snapshot dirs under /tmp were removed.",
+  "commits": [
+    {
+      "sha": "b995dd6832f8b567a88906be0c77e045dd857457",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T21:10:18Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T21:18:22.779Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T21:10:18Z",
+    "at": "2026-11-03T21:18:22.779Z"
+  }
 }

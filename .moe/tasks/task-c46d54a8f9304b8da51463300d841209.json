@@ -63,8 +63,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -76,7 +76,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:44:47.676Z",
-  "updatedAt": "2026-11-03T21:16:59.286Z",
+  "updatedAt": "2026-11-03T21:17:05.703Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:08:53.337Z",
     "plannedStepCount": 4,
@@ -153,5 +153,18 @@
   },
   "planApprovedAt": "2026-11-03T21:13:18.769Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T21:15:29.556Z"
+  "workStartedAt": "2026-11-03T21:15:29.556Z",
+  "reviewStartedAt": "2026-11-03T21:17:05.701Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/qaReject{.ts,.failedDodItems.test.ts} \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/{qaReject,qaOwnership,qaApprove,reviewLoopActor,echoedReasonNotices,governanceFeatures,taskTimestamps} src/delivery/reviewBinding src/util/qaCommitPolicy src/state/attemptHandback ) && ( red-at-base leg: qaReject.ts pinned at 6ded0c93, new test file only ); both legs are checkRefs[0] and checkRefs[1] of the task, run as one command in snapshots outside the repo",
+    "exitCode": 0,
+    "outputTail": " Test Files  11 passed (11)\n      Tests  284 passed | 3 skipped (287)\n FAIL  src/tools/qaReject.failedDodItems.test.ts > ... (r1)(r2)(r3)(r4)(r5) [at base]\n      Tests  5 failed | 2 passed (7)\nRED-AT-BASE\nEXIT=0",
+    "reportedAt": "2026-11-03T21:17:05.701Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/qaReject.failedDodItems.test.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts"
+  ],
+  "completionSummary": "qa_reject now validates failedDodItems before any lookup or write: a non-array, a non-string entry, or an entry over 1000 trimmed chars is refused with a coded INVALID_INPUT naming failedDodItems[i]. Entries are refused, not truncated. The 'too many items (max 20)' text is unchanged, and null/undefined/[] still mean no failed items. Added qaReject.failedDodItems.test.ts (hunt repro ported as c1/r1/r2 plus r3-r5 and c2). Gate leg: tsc and the tt.json typecheck are clean; Test Files 11 passed (11), Tests 284 passed | 3 skipped (287). Red-at-base leg (qaReject.ts pinned at 6ded0c93): Tests 5 failed | 2 passed (7), with only c1 and c2 green, printed RED-AT-BASE. Self-review found no real risks; only the two planned files changed."
 }
