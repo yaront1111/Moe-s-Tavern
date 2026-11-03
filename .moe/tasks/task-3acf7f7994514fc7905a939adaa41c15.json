@@ -108,8 +108,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:41:12.507Z",
-  "updatedAt": "2026-11-03T07:54:07.954Z",
+  "updatedAt": "2026-11-03T08:03:25.083Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:57.870Z",
@@ -256,19 +256,45 @@
       "treeId": "d5e8f0c3faea2d2fa787820819a82553571dfdc1",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "87609414ebede4da63f7315beaea2a3fd4b79c56",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T07:50:35Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T08:03:25.083Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "docs/ARCHITECTURE.md",
     "scripts/moe-agent.ps1",
     "scripts/moe-agent.sh",
-    "scripts/tests/protected-agent-command.test.mjs"
+    "scripts/tests/protected-agent-command.test.mjs",
+    "docs/ARCHITECTURE.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-33f67e5b@2026-11-03T07:25:21Z",
-    "at": "2026-11-03T07:49:57.447Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T07:50:35Z",
+    "at": "2026-11-03T08:03:25.083Z"
+  },
+  "reviewStartedAt": "2026-11-03T08:02:00.196Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && bash -n scripts/moe-call.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && R=$(git rev-parse --show-toplevel) && cd \"$R\" && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && R=$(git rev-parse --show-toplevel) && cd \"$R\" && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$R/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 && bash scripts/tests/parity-check.sh && npm run lint && R=$(git rev-parse --show-toplevel) && cd \"$R\" && T=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/fake-proxy.js\" && { env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_WORKTREE_ONLY=tooling,project-yml,wt-guard,board-snapshot,board-race,board-push node scripts/tests/postflight-worktree.cjs sh \"$R/scripts/moe-agent.sh\" \"$T/fake-proxy.js\" \"$T\" \"$(command -v bash)\" 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && R=$(git rev-parse --show-toplevel) && cd \"$R\" && W=$(mktemp -d /mnt/d/moe-scratch/3acf7f79-gate.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$W/fake-proxy.js\" && { MOE_WORKTREE_ONLY=wt-guard,project-yml,board-snapshot WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$R/scripts/tests/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$R/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$W/fake-proxy.js\")\" \"$(wslpath -w \"$W\")\" powershell 2>&1 | tr -d '\\r' | tail -6; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }",
+    "exitCode": 0,
+    "outputTail": "Linux node --test: tests 206 / pass 173 / fail 0 / skipped 33\nWindows node.exe --test: tests 314 / pass 262 / fail 0 / skipped 52\n(PS 5.1 ParseFile: no errors)\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n[worktree] tooling ok\n[worktree] project-yml ok\n[worktree] board-snapshot ok\n[worktree] board-race ok\n[worktree] board-push ok\n[worktree] wt-guard ok\n[worktree] 6 ok, 0 failed\n[worktree] project-yml ok\n[worktree] board-snapshot ok\n[worktree] wt-guard ok\n[worktree] 3 ok, 0 failed\nGATE_EXIT=0 (finished 08:00:55Z, fresh run in the resumed session; log /mnt/d/moe-scratch/3acf7f79-work/gate2.log)",
+    "reportedAt": "2026-11-03T08:02:00.196Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, moe-agent.ps1 now rewrites PATH before its first bare-name command, keeping only the entries Find-MoeProtectedFile trusts. Both wrappers' worktree-launch and board-snapshot Node programs spawn only an absolute MOE_PROTECTED_GIT.\n\nDiff: 4 files, +198/-34, in approvedScope (checkpoint 40487c4d).\n- ps1: Find-MoeProtectedFile list mode (an empty -Name emits each trusted entry's untrimmed real path, in PATH order). An empty scrub refuses with the existing node MOE_PROTECTED_INTERPRETER_NOT_FOUND line, and PATH is never set to ''.\n- ps1: the WT-13 block becomes Assert-MoeWrapperNotInWorktree with the same body. Legacy calls it at its old spot (when $env:MOE_RUNTIME_PROTECTED -cne '1'); under the marker it runs right after the scrub.\n- ps1: MOE_PROTECTED_GIT is set in the node-pin block.\n- sh: the export goes in protected_pin_interpreters.\n- Both program pairs: the guard idiom (strict ? MOE_PROTECTED_GIT : 'git', isAbsolute throw). Each pair stays identical and ASCII, and the argv layout is unchanged.\n- ARCHITECTURE.md bullet updated.\n\nTests (appended after I2):\n- W3/W4 on PS 5.1 and PS 7, Windows: whole-exe-log check, legacy non-vacuous.\n- X2 on every engine.\n- X1 on Linux and Windows node.\n- RED on the HEAD bytes; GREEN now.\n\nGate: the joined step-6 command, rerun fresh in this resumed session, exit 0.\n- Linux: 206 / 173 pass / 0 fail / 33 skip.\n- Windows: 314 / 262 / 0 / 52.\n- ParseFile OK, parity PASS, lint OK.\n- Worktree harness: sh 6 ok / 0 failed; ps1 PS 5.1 3 ok / 0 failed.\n- W3, W4 and X2 ran unskipped on both PS engines (mut/wcontrol.win.tap, scripts/ byte-identical to the worktree).\n\nMutants M1-M9 + M6b: all KILLED by AssertionError, controls green (evidence in /mnt/d/moe-scratch/3acf7f79-work).\n\nAccepted residuals:\n- POSIX pwsh re-prepends the node dir on each reload pass (pre-existing).\n- X2 on Windows assumes no git.exe in TAIL.\n- Under Git Bash the variable relies on MSYS env conversion and fails closed when unconverted.\n- Unde"
 }

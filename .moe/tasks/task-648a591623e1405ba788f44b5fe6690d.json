@@ -75,11 +75,18 @@
     {
       "stepId": "step-5",
       "description": "Verification, run once (DoD 3). This row is gated by dependsOn on task-137bab15 (the daemon answers the challenge) and task-98c81a27 (the store), and tests the client against a stubbed proof. Run ONE command fresh from the task worktree. It runs both legs and its output tail is the complete_task evidence:\n\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly moe-vscode/src/services/MoeDaemonClient.ts and moe-vscode/tests/protected-daemon-provenance.test.cjs, each `cp` then `cmp`. Then `cd \"$S/moe-vscode\" || exit 1` and run `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'`.\n- Windows leg: the same archive plus overlay into a fresh dir under /mnt/d/moe-scratch/ (Windows-native node_modules, never shared). Then `cmd.exe /d /c \"cd /d D:\\\\moe-scratch\\\\<dir>\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\"`. POSIX-mode cases skip on Windows.\n\nBoth legs must exit 0. Report each leg's tests / pass / fail / skipped: the base at your HEAD (including task-98c81a27's tests) plus the new cases. Never run npm in the shared control checkout.\n\nAlso run `npm run lint` in the Linux snapshot. The diff must touch only those two files. Declare them as modifiedFiles. Size: within prop-bd7d6ccfae674e019941ac59491ce1b7 (at most 520 net).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
       ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "note": "Fresh run from the task worktree: `bash /mnt/d/moe-scratch/648a-verify2.sh` exited 0. It takes git archive HEAD (c7bc13a3) into a fresh Linux dir and a fresh D:\\moe-scratch dir, cp+cmp overlays exactly MoeDaemonClient.ts, protected-daemon-provenance.test.cjs and protected-daemon-spawn.test.cjs (amend-1), then runs the plan's legs in parallel:\n- Linux /tmp/moe-648a-v2-linux.pDMp56 (env -i, node v24.21.0): npm ci && npm test && npm run compile && npm run lint (moe-vscode eslint) exit 0. tests 669 / pass 665 / fail 0 / skipped 4.\n- Windows D:\\moe-scratch\\648a-v2-win.dLV62r (native npm ci): npm ci && npm test && npm run compile exit 0. tests 665 / pass 658 / fail 0 / skipped 7 (the POSIX mode/symlink cases).\n- Root parity-check.sh && npm run lint in the Linux snapshot: exit 0.\nThe prior worker's base was 666/659/3 fail (Linux) and 662/652/3 fail (Windows). The 3 fixed failures are the authorized protected-daemon-spawn.test.cjs adaptation (governor comment-d4217a23). New cases: 47 in the provenance file.\nedc27e14 (task-20a64797's containment fix) is NOT an ancestor of the verified HEAD c7bc13a3 (merge-base --is-ancestor exit 1). Supplementary merged check, /tmp/moe-648a-merged.sh: archive of origin target edc27e14 + this task's diff from b4cfae12 via patch -p1. It applies cleanly (one hunk offset 15, no fuzz). npm test && npm run compile exit 0: 671 / 667 / 0 fail / 4 skipped.\nThird file, protected-daemon-spawn.test.cjs: +5/-2, within the governor's limits. D1 adds MOE_SPAWN_PROOF_KEY (64-hex checked) to the exact expected env. The two ENOENT-after-disconnect/dispose tests cancel at the stub spawn's push, so they still expect exactly 1 spawn. Nothing else changed.\nSize from b4cfae12: +454/-9, net 445, under prop-35eadcbd's 520 cap. The verified tree already holds this session's step-6 review fixes, listed there.",
       "startedAt": "2026-11-03T06:41:58.636Z",
+      "completedAt": "2026-11-03T08:02:42.044Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -94,11 +101,12 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) Admission: no path admits without an HMAC match against a session or owner-only store record that names the installed daemon. daemon.json, /health identity, pid and port can only refuse.\n(b) Fail closed: untrusted store state, a malformed record, a probe timeout, a cancelled connect, an install change and a store inside the project all refuse after a restart, and none opens a socket.\n(c) Secrets: the key appears only in the session map, the owner-only store record (0600 on POSIX) and the spawned daemon's env. The stop and legacy spawns never carry it. Grep the diff for any log or message that could print it.\n(d) Concurrency: connect re-entry, a cancel during the modal or the stop, and two windows. Window B's newer record must still admit B's daemon in window A through the stored-record fallback.\n(e) The replace flow stops only through the installed CLI, kills only its own stop child on timeout, and its bounded wait cannot spin past the budget.\n(f) The strict-map suites still pass: no new top-level import.\n(g) Mutation check in a scratch copy of the Linux snapshot:\n  - admit on a mismatched proof: case (4) must fail;\n  - drop the env key: cases (1) and (7) must fail;\n  - skip the confirmation: case (6) must fail.\n  Then confirm the restored copy passes.\n(h) The residual matches JetBrains: no port↔pid binding beyond what the HMAC over the dialled port already proves.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/protected-daemon-provenance.test.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T08:02:45.271Z"
     }
   ],
   "planRevision": 4,
@@ -170,7 +178,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T07:49:50.022Z",
+  "updatedAt": "2026-11-03T08:02:45.271Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -180,7 +188,7 @@
     "firstClaimAt": "2026-11-02T22:37:43.536Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -199,7 +207,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:58:16.854Z",
