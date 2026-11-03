@@ -87,8 +87,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -119,12 +119,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:20:35.156Z",
-  "updatedAt": "2026-11-03T19:37:31.558Z",
+  "updatedAt": "2026-11-03T19:42:38.264Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:34:40.391Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T19:42:06.453Z",
+    "wallClockMs": 4046062
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -217,10 +219,11 @@
   "planApprovedAt": "2026-11-03T18:59:54.494Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T18:59:53Z",
-    "at": "2026-11-03T19:36:51.936Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T19:37:15Z",
+    "at": "2026-11-03T19:42:38.264Z"
   },
   "workStartedAt": "2026-11-03T19:04:07.259Z",
   "reviewStartedAt": "2026-11-03T19:15:45.501Z",
@@ -257,5 +260,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T19:42:06.453Z",
+  "reviewCompletedAt": "2026-11-03T19:42:06.453Z",
+  "reviewSummary": "Reviewed completion 5681b6db on moe/work-2026-10-24 (pushed; tree dbcbe1db = candidate). 4 files, +330/-73, net 257 LOC, in approvedScope. No forbidden patterns.\n\nRe-ran task.verification on the commit's bytes (git archive 5681b6db, npm ci, env -i, node 24.21): exit 0. Chat files: 121/121 passed. Full daemon suite: 249 files, 7135 passed, 24 skipped.\n\nDoD 2: reproduced RED myself. c99801aa plus the landed test file gives 7 failed / 29 passed, exactly rows a-f and the adapted :252, all on assertions.\n\nDoD 1: the drain admits via chatWaitAdmits plus routedToCaller (parseMentions over the roster; a line naming nobody counts only for system/human). Watched channels deliver everything. skipAfter/skipLead stop before the next deliverable line, so no cursor passes an undelivered line (row f). The MAX_SKIP_PAGES paging covers filtered channels only (row d). A skip-only entry drain writes cursors before entryDrainDone, so no wake can write concurrently (row e). Live isRelevant uses the same rule (routingTargets unchanged). The noSkip guard is covered by row g.\n\nDoD 3: rows 06cf7baf, 5902a670 and 8b0b3edc are unchanged and green. Only :252 and :364 changed, as the architect comment decided. Wire shapes and stored state are unchanged. Docs touch only the chat_wait Notes.\n\nNon-blocking notes:\n(1) chat_decision without a workerId posts as sender 'unknown'. The router broadcasts it as human, but the drain skips it. This follows the documented never-treat-unknown-as-human decision, and the proxy always injects workerId.\n(2) isRouted parses even watched-channel lines; it could short-circuit.\n(3) chatBacklog.ts is 369 lines, over the 300 soft cap.",
+  "requiredCheckAtDone": null
 }

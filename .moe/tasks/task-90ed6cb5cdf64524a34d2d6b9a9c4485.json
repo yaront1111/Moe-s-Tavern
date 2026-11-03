@@ -71,15 +71,18 @@
     {
       "stepId": "step-5",
       "description": "Verification gate, run once after steps 1-4 from the task worktree root. Run each checkRef exactly as written, one at a time: they share the moe-daemon-test tag, and port 19876 must be free.\n1. `green`. It is the complete_task verification.command, and its printed lines are the outputTail.\n   - It snapshots HEAD's packages/moe-daemon and .moe, and overlays the working-tree Dockerfile and docker.yml.\n   - It extracts the 'Test Docker image' run script with PyYAML, asserting the step is still PR-only.\n   - It runs that script with `bash -e` from the snapshot root. That builds the real image and starts it with the snapshot mounted at its own path.\n   - Expected: 'healthy: <snapshot path>', 'image HEALTHCHECK passed', and exit 0.\n2. `static`, for DoD 1 and 2. It checks:\n   - the ENV line, and a count of 0 for `\"--project\", \"/project\"`;\n   - the 127.0.0.1 HEALTHCHECK;\n   - that the DoD grep prints nothing;\n   - that every docker run in both docs carries the three flags;\n   - that both phrases are in each doc;\n   - that `docker compose config` resolves.\n   Expected: the compose lines, then STATIC-OK.\n3. `red`, for DoD 3's 'HEAD's image fails that curl'. It runs the same step script against the Dockerfile pinned at af8ca2bb. Expected: 'Expected a healthy daemon serving … got: no answer', then RED-ON-HEAD-IMAGE.\n4. `repro`, for DoD 1's runtime half. It runs the hunt's docker-cmd-repro.sh on a snapshot of the fix with MOE_BIND_HOST=0.0.0.0. Expected: a `LISTEN … 0.0.0.0:19876` line, two `-> exit=0 {` lines (loopback and eth0), then DOD1-BIND-OK.\nAfter the four runs, `docker ps -a --filter name=moe-daemon-health` must list nothing. Quote the output of 2-4 in the completion summary.\n\nThe gate is narrow per the epic ruling msg-bbf4f109. These files have no vitest suite, so the four legs are the whole gate; the landing qualityGate still runs.\n\nNever run npm in the shared checkout; repro builds dist only in its mktemp snapshot. Never pattern-kill anything: the step removes only its own named container, and the repro script kills only PIDs it recorded.\n\nError handling for a red run: on a non-zero exit, read step.log or d.log in the printed mktemp snapshot, fix the owned files, and rerun the whole command. Never cite a partial or edited command.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T19:39:40.637Z"
+      "note": "All four checkRefs run fresh, one at a time, each exactly as written. green: 'healthy: /tmp/tmp.bJJ73BxAmh', 'image HEALTHCHECK passed', exit 0. static: compose lines (MOE_PROJECT_PATH /srv/p, host_ip 127.0.0.1, user 1001:1001, source/target /srv/p) then STATIC-OK. red (Dockerfile pinned at af8ca2bb): 'Expected a healthy daemon serving /tmp/tmp.fouYiLYpJz on 127.0.0.1, got: no answer', then RED-ON-HEAD-IMAGE. repro: 'LISTEN 0 511 0.0.0.0:19876', both '-> exit=0 {' lines (127.0.0.1 and 172.26.208.246), then DOD1-BIND-OK. Afterwards: 0 moe-daemon-health containers, nothing listening on 19876, and git status shows only the 5 owned files.",
+      "startedAt": "2026-11-03T19:39:40.637Z",
+      "completedAt": "2026-11-03T19:41:15.068Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review over this task's own diff only (load the adversarial-self-review skill):\n1. `git diff --stat $(git merge-base HEAD moe/work-2026-10-24)` lists exactly the 5 owned paths. No daemon source, no test file and no docs/MCP_SERVER.md.\n2. Exposure: nothing publishes on a non-loopback host address. No bare 9876:9876 remains, comments and prose included, and the CI step publishes on 127.0.0.1 only.\n3. Under `bash -e`, every exit path ends in the trap, which removes the container and keeps the status. The paths: docker run fails, the container crashes, curl runs out of tries, bad JSON, wrong projectPath, failed HEALTHCHECK. Also check that `$$` and `${port##*:}` survived, and that the `if` still reads github.event_name == 'pull_request'.\n4. Twice or concurrently: the per-shell container name and the Docker-assigned host port mean two runs never collide.\n5. Empty or odd input: an empty HEALTH (no answer) or a non-JSON body takes the 'Expected a healthy daemon' path and never crashes the check. A project path with spaces stays quoted (\"$PWD\") everywhere.\n6. Compatibility:\n   - an image run without MOE_PROJECT_PATH still serves /project;\n   - `docker run <image> --version` is unchanged;\n   - compose defaults to the image's own uid.\n7. No added line contains a project.json globalRails.forbiddenPatterns string.\nFix anything you find, then rerun checkRefs `green` and `static` before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T19:41:16.278Z"
     }
   ],
   "planRevision": 1,
@@ -96,12 +99,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:11:21.835Z",
-  "updatedAt": "2026-11-03T19:39:40.637Z",
+  "updatedAt": "2026-11-03T19:41:16.278Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:15:40.612Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -115,7 +118,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:36:40.142Z",
