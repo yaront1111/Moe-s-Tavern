@@ -1313,6 +1313,8 @@ Create a rail change proposal and store it in `.moe/proposals/`.
 
 A supplied nonempty `workerId` is recorded as `proposal.workerId`, even when it differs from the task assignee. An omitted or empty caller ID falls back to the task assignee, then `'unknown'` if unassigned. Existing proposal records are not rewritten.
 
+`currentValue` is required for `MODIFY_RAIL` and `REMOVE_RAIL` and must match one stored rail, exactly or up to trailing whitespace. For `GLOBAL` it is looked up in `globalRails.customRules`, `forbiddenPatterns` and `requiredPatterns` (the two lists `moe.submit_plan` enforces): exactly one list must hold it, and approval re-resolves it and edits that list. `ADD_RAIL` on `GLOBAL` appends to `customRules`. `EPIC` and `TASK` proposals edit `epicRails` and `taskRails`, which `moe.submit_plan` does not enforce, so they cannot lift a rail refusal. A value in no list is refused `NOT_FOUND` (`Rail not found for proposal …`), and one held by two lists or matching two entries `INVALID_INPUT` (`Ambiguous rail match for proposal …`); neither writes a proposal.
+
 **Returns:**
 ```typescript
 { success: true, proposalId, status: "PENDING", message }

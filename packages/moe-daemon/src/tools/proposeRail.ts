@@ -2,7 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { generateId } from '../util/ids.js';
 import { notFound, invalidInput } from '../util/errors.js';
-import { findRailIndex } from '../state/railChange.js';
+import { findRailIndex, resolveGlobalRail } from '../state/railChange.js';
 import { MAX_EPIC_RAIL_CHARS, validateStringValue } from '../state/validators.js';
 
 export function proposeRailTool(_state: StateManager): ToolDefinition {
@@ -15,7 +15,7 @@ export function proposeRailTool(_state: StateManager): ToolDefinition {
         taskId: { type: 'string', description: 'The task the proposal came up in' },
         proposalType: { type: 'string', enum: ['ADD_RAIL', 'MODIFY_RAIL', 'REMOVE_RAIL'], description: 'Add a new rail, modify an existing one, or remove one' },
         targetScope: { type: 'string', enum: ['GLOBAL', 'EPIC', 'TASK'], description: 'Which rail list the change applies to' },
-        currentValue: { type: 'string', description: 'The existing rail text (for MODIFY_RAIL / REMOVE_RAIL)' },
+        currentValue: { type: 'string', description: 'The existing rail text (for MODIFY_RAIL / REMOVE_RAIL). For GLOBAL it may be a customRules, forbiddenPatterns or requiredPatterns entry; exactly one of those lists must hold it' },
         proposedValue: { type: 'string', description: `The new rail text. For EPIC ADD_RAIL/MODIFY_RAIL it must be a single line of at most ${MAX_EPIC_RAIL_CHARS} characters; longer text is refused, never truncated` },
         reason: { type: 'string', description: 'Why the rail should change' },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
@@ -56,12 +56,10 @@ export function proposeRailTool(_state: StateManager): ToolDefinition {
       const proposalId = generateId('prop');
       if (params.proposalType !== 'ADD_RAIL') {
         if (!params.currentValue) throw invalidInput('currentValue', 'required for MODIFY_RAIL or REMOVE_RAIL');
-        const rails = params.targetScope === 'GLOBAL'
-          ? state.project?.globalRails.customRules || []
-          : params.targetScope === 'EPIC'
-            ? state.getEpic(task.epicId)?.epicRails || []
-            : task.taskRails || [];
-        findRailIndex(rails, params.currentValue, proposalId);
+        // A GLOBAL value may sit in customRules, forbiddenPatterns or requiredPatterns (the two
+        // lists submit_plan enforces); exactly one list must hold it, else the refusal is coded.
+        if (params.targetScope === 'GLOBAL') resolveGlobalRail(state.project?.globalRails, params.currentValue, proposalId);
+        else findRailIndex(params.targetScope === 'EPIC' ? state.getEpic(task.epicId)?.epicRails || [] : task.taskRails || [], params.currentValue, proposalId);
       }
 
       const proposal = {
