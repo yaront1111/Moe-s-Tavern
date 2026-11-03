@@ -13,19 +13,27 @@
     {
       "stepId": "step-1",
       "description": "chat_who and chat_join resolve the channel reference (chatWho.ts, chatJoin.ts).\n\nchat_who:\n- Keep today's truthiness test on params.channel, so an omitted or empty channel still lists every online seat.\n- When a channel is given: refuse a non-string with invalidInput('channel', 'must be a string') (the chatDecision.ts:47 pattern). Resolve once with `state.resolveChannelRef(params.channel)`, and throw `notFound('Channel', params.channel)` on null (the chatRead.ts:76-81 pattern).\n- Key pass 1 (:39 `worker.chatCursors[...]`) and pass 2 (:69 `waiter.channels.has(...)`) on `channel.id`. Reason: chat_read stores cursors under the canonical id (chatRead.ts:98), and chat_wait's waiter sets hold canonical ids (resolveChannelFilter, chatWait.ts:346-360).\n\nchat_join:\n- Keep the missingRequired and worker-identity checks first.\n- Replace `state.getChannel(params.channel)` (:35) with the same string check and resolution.\n- Use `channel.id` for the idempotency scan (:42), for the join post (:52), and for the returned `channel` (:70). The reply then reports the canonical id, as chat_wait does; an id caller sees no change.\n- Keep the join line text `${workerId} joined #${channel.name}`, so the idempotency marker still matches earlier joins.\n\nBoth files:\n- Import notFound and invalidInput from '../util/errors.js'.\n- Set the inputSchema channel description to chat_send's wording: 'Channel id, or name in either \"general\" or \"#general\" form'.\n\nError handling: both refusals happen before any read or write, so a refused chat_join posts nothing. An ambiguous name (two channels share it) resolves to null and is refused NOT_FOUND, as in chat_read; never pick one of the two. The tests for this step are in step 3.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatWho.ts",
         "packages/moe-daemon/src/tools/chatJoin.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts",
+        "packages/moe-daemon/src/tools/chatJoin.ts"
+      ],
+      "note": "chat_who and chat_join resolve the channel reference up front via state.resolveChannelRef (non-string -> INVALID_INPUT, unresolved/ambiguous -> NOT_FOUND before any read/write). chat_who keys cursor and waiter lookups on channel.id; chat_join uses channel.id for the idempotency scan, the join post and the reply. Join-line text unchanged. inputSchema channel descriptions updated to chat_send's wording. Tests land in step 3; gate runs in step 5.",
+      "startedAt": "2026-11-03T19:34:15.646Z",
+      "completedAt": "2026-11-03T19:34:59.048Z"
     },
     {
       "stepId": "step-2",
       "description": "chat_resync resolves the reference and caps the response (chatResync.ts).\n\n(a) Resolve the reference.\n- When params.channel is truthy, apply the same string check, resolution and notFound as step 1.\n- Place this after the limit/maxContentChars validation and BEFORE the first `state.updateWorker` (:73), so a refused resync clears no cursor. Today an unknown channel clears nothing and then throws an uncoded Error from chatStore.ts:296.\n- Use `channel.id` for the cursor delete (:69) and for the fetch (:78).\n\n(b) Cap the response.\n- Apply the cap after the fetch, in both the single-channel and the all-channel branch, and BEFORE the cursor loop (:91-96).\n- Keep the NEWEST messages that fit MAX_CHAT_RESPONSE_CHARS, the same trim chat_read does (chatRead.ts:140-151). Reuse the helper reversed: `capChatMessagesToResponseBudget([...messages].reverse(), maxContentChars).delivered.reverse()` (util/chatPayload.ts:88).\n- Do NOT call the helper unreversed. It keeps the OLDEST prefix (chat_wait's drain semantics), which would park the cursor on an old message and contradict DoD 2.\n- The helper always keeps at least one message, so a single oversized message is still returned alone.\n- Derive cursors only from the returned messages, so each one points at the newest message returned.\n- messagesCount reports the returned count.\n\n(c) Give the channel inputSchema description the step 1 wording.\n\nError handling: leave the workerId, limit and maxContentChars refusals as they are. A non-string channel is INVALID_INPUT, never a TypeError from resolveChannelRef's startsWith. An unresolvable channel is -32001 NOT_FOUND. The tests for this step are in steps 3 and 4.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatResync.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T19:35:00.615Z"
     },
     {
       "stepId": "step-3",
@@ -77,14 +85,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:10:57.784Z",
-  "updatedAt": "2026-11-03T19:33:21.405Z",
+  "updatedAt": "2026-11-03T19:35:00.615Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:12:59.296Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
+    "architect-1dd28c7c",
+    "worker-c9368191"
   ],
   "dependsOn": [
     "task-a4970220f1334dbb80278f265961f209"
@@ -93,7 +103,9 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:20:08.729Z",
   "executionContract": {
@@ -158,5 +170,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T19:20:08.763Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T19:34:15.646Z"
 }

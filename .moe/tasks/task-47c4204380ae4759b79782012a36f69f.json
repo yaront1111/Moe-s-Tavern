@@ -81,14 +81,23 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this row's diff. Load adversarial-self-review, then check:\n1. 'system' is refused NOT_ALLOWED before the registry lookup, and 'human' (or an omitted workerId) skips the lookup.\n2. A refused unpin leaves the pin, the pins file and the activity log untouched.\n3. Payloads are unchanged: pinnedBy stays in PIN_CREATED, and nothing is added to PIN_REMOVED.\n4. The /ws pin path still records 'human'. The /ws unpin path still works, now with no actor, exactly as before.\n5. No inputSchema property is required that was not required before (No breaking changes to MCP tool API contracts).\n6. Concurrency: unpinMessage still runs inside state.mutex.runExclusive, and the actor is a value, not shared state.\n7. No added line contains any string from the project.json globalRails.forbiddenPatterns list.\n8. `git status --short` lists only the 5 files.\nFix anything this finds, then re-run the step 5 command before complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T19:33:16.645Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/chatUnpin.ts",
+        "packages/moe-daemon/src/tools/chatPin.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial review, all 8 items clean; no edits after the green gate run. Noted, not changed: (1) an explicit workerId \"\" on chat_unpin is treated as omitted (\"human\"), per the plan's `params.workerId || 'human'`; chat_pin still refuses \"\". (2) A seat whose id is neither in memory nor on disk now gets INVALID_INPUT on chat_unpin where it used to succeed; that is the DoD's requested guard, identical to chat_pin. (3) /ws UNPIN_MESSAGE still passes no actor, so a board unpin records none, as before. git status lists exactly the 5 files; no forbidden pattern in any added line.",
+      "startedAt": "2026-11-03T19:33:16.645Z",
+      "completedAt": "2026-11-03T19:33:37.008Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -103,12 +112,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:22:41.722Z",
-  "updatedAt": "2026-11-03T19:33:16.645Z",
+  "updatedAt": "2026-11-03T19:35:07.408Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:24:33.842Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -123,7 +132,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:28:15.039Z",
@@ -185,5 +195,48 @@
   },
   "planApprovedAt": "2026-11-03T19:28:15.076Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T19:30:21.834Z"
+  "workStartedAt": "2026-11-03T19:30:21.834Z",
+  "reviewStartedAt": "2026-11-03T19:33:50.275Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/{chatStore,StateManager}.ts packages/moe-daemon/src/tools/{chatUnpin.ts,chatPin.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatPin.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/chatPin.test.ts src/tools/chat src/tools/getActivityLog.test.ts src/tools/registry.test.ts src/state/StateManager.test.ts src/server/WebSocketServer.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "npm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\n Test Files  11 passed (11)\n      Tests  388 passed (388)\nexit=0",
+    "reportedAt": "2026-11-03T19:33:50.275Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/chatStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/chatUnpin.ts",
+    "packages/moe-daemon/src/tools/chatPin.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "PIN_CREATED and PIN_REMOVED now carry the caller as the activity event's workerId, so get_activity_log { workerId } returns a seat's pin and unpin events. Payloads are unchanged (pinnedBy kept in PIN_CREATED; PIN_REMOVED stays { channelId, messageId }).\n\nChanges (5 files):\n- state/chatStore.ts: pinMessage passes pinnedBy (already the validated caller on chat_pin and /ws 'human') as appendActivity's 7th arg; unpinMessage gains a trailing optional actorWorkerId forwarded to PIN_REMOVED.\n- state/StateManager.ts: unpinMessage(channelId, messageId, actorWorkerId?) wrapper; the 2-arg /ws call still works and records no actor, as before.\n- tools/chatUnpin.ts: optional workerId (not in required, additive). actor = workerId || 'human'; 'system' -> NOT_ALLOWED before the registry lookup; an id that is not 'human', not in memory and not on disk -> INVALID_INPUT 'Unknown sender'; a non-string -> INVALID_INPUT. Every refusal precedes channel resolution and the store call, so a refused unpin writes no pins file, emits no PINS_UPDATED and appends no PIN_REMOVED.\n- tools/chatPin.test.ts: new describe a1-a6 (actor + unchanged payloads, get_activity_log per seat, refusals leave pin and log untouched, 'human' and omitted record 'human', board path with no actor records none).\n- docs/MCP_SERVER.md: chat_pin and chat_unpin sections only (channel wording, workerId rule, actor note).\n\nVerification (snapshot outside the shared checkout, the plan's exact command): tsc clean, tt.json clean, vitest 11 files / 388 tests passed, exit 0 (chatPin, chat family, getActivityLog, registry, StateManager, WebSocketServer). Red-at-base (HEAD chatStore/StateManager/chatUnpin + new test): 6 failed (a1-a6) | 7 passed (p1-p7).\n\nNotes for QA: a3/a5 sort their results because get_activity_log reads newest-first. An explicit workerId \"\" on chat_unpin counts as omitted ('human'), per the plan; chat_pin still refuses \"\". A seat unknown to the registry and disk now gets INVALID_INPUT on chat_unpin (the DoD's requ",
+  "commits": [
+    {
+      "sha": "499f80b493469fce97c8db87184e543cdce6f936",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T19:29:01Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/tools/chatPin.test.ts",
+        "packages/moe-daemon/src/tools/chatUnpin.ts"
+      ],
+      "recordedBy": "architect-1dd28c7c",
+      "recordedAt": "2026-11-03T19:35:07.408Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T19:29:01Z",
+    "at": "2026-11-03T19:35:07.408Z"
+  }
 }
