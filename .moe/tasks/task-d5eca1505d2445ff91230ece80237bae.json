@@ -94,8 +94,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -110,7 +110,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:28.153Z",
-  "updatedAt": "2026-11-03T09:03:39.467Z",
+  "updatedAt": "2026-11-03T09:05:52.601Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:30:35.858Z",
     "plannedStepCount": 5,
@@ -190,5 +190,46 @@
   },
   "planApprovedAt": "2026-11-03T08:36:36.138Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T08:56:04.507Z"
+  "workStartedAt": "2026-11-03T08:56:04.507Z",
+  "reviewStartedAt": "2026-11-03T09:04:24.453Z",
+  "verification": {
+    "command": "set -euo pipefail\nR=$(git rev-parse --show-toplevel)\nL=$(mktemp -d /tmp/d5eca150-linux.XXXXXX)\nW=$(mktemp -d /mnt/d/moe-scratch/d5eca150-win.XXXXXX)\nfor S in \"$L\" \"$W\"; do\n  git -C \"$R\" archive HEAD | tar -x -C \"$S\"\n  for f in moe-vscode/src/util/AgentLauncher.ts moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/tests/protected-runtime.test.cjs moe-vscode/tests/verified-local-launch.test.cjs; do\n    cp \"$R/$f\" \"$S/$f\"\n    cmp \"$R/$f\" \"$S/$f\"\n  done\ndone\necho \"LINUX_SNAPSHOT=$L WINDOWS_SNAPSHOT=$W\"\n(cd \"$L/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile') > \"$L/verification.log\" 2>&1\ntail -16 \"$L/verification.log\"\necho LINUX_EXIT=0\ncmd.exe /d /c \"cd /d $(wslpath -w \"$W\")\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\" > \"$W/verification.log\" 2>&1\ntail -16 \"$W/verification.log\"\necho WINDOWS_EXIT=0\ncd \"$R\"\nbash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "LINUX_SNAPSHOT=/tmp/d5eca150-linux.HZKXyh\nnpm ci --no-audit --no-fund && npm test && npm run compile\nℹ tests 685\nℹ pass 676\nℹ fail 0\nℹ skipped 9\nnpm notice run tsc -p ./\nLINUX_EXIT=0\nWINDOWS_SNAPSHOT=/mnt/d/moe-scratch/d5eca150-win.DCbq6H\nnpm ci --no-audit --no-fund && npm test && npm run compile\nℹ tests 681\nℹ pass 669\nℹ fail 0\nℹ skipped 12\n> tsc -p ./\nWINDOWS_EXIT=0\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nCombined command exit code: 0",
+    "reportedAt": "2026-11-03T09:04:24.453Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/protected-runtime.test.cjs",
+    "moe-vscode/tests/verified-local-launch.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/src/util/AgentLauncher.ts"
+  ],
+  "completionSummary": "Pinned protected/VM VS Code wrapper interpreters to validated absolute system paths outside the workspace, including win32 shellPath; rejection creates no terminal. Legacy launch lines/options unchanged. Exactly four files +140/-25 (net115); installedExecutable default error messages preserved. Added 14 native resolver/refusal/quoting/control rows and updated only protected expectations. RED recorded (68 tests,11 expected failures), all six required mutants killed, restored copies pass. Final fresh combined snapshot gate exits0: Linux 685 tests/676 pass/0 fail/9 skipped; Windows 681/669/0/12; both compile, parity and lint pass. No edits after final gate. Initial unrelated provenance fixture timing flake filed as task-787437bb0aef472eb61cd138bef5109e. Serena handoff saved; wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "4693e017ec3968c821db54b5accb06c8e339298b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T08:52:20Z",
+      "paths": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T09:05:52.601Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T08:52:20Z",
+    "at": "2026-11-03T09:05:52.601Z"
+  }
 }

@@ -80,14 +80,24 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")`.\n\n(a) Mutation check in a scratch copy of the step-4 snapshot. Each mutant must fail at least one case; then restore and confirm green. Quote every run.\n- Drop the option at each of the six sites, one mutant per site.\n- Make chatStore's postToRoleChannel ignore opts.\n- Make the StateManager wrapper drop opts.\n- Make postToRoleChannel always pass parseMentions false: case (e) and the #governors assertion in (c) must catch it.\n- Add the option to release_task's #governors copy: the #governors assertion must catch it.\nThe architect's dry run killed all ten.\n(b) Every posted text is byte-identical: on each posting line the only change is the added argument, plus the comments.\n(c) The contract is intact: no response shape, field, error or nextAction changed; the #governors and #architects posts are untouched; no existing postToRoleChannel caller changed.\n(d) Never-throw holds: every post is still inside its own try/catch, and the helper still swallows and logs.\n(e) Size: `git diff --numstat` against the merge-base. Expect about +150/-10, far under the 400 net-LOC cap.\n\nRecord the review in complete_step.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T09:02:22.840Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/echoedReasonNotices.test.ts"
+      ],
+      "note": "Adversarial review on git diff 66f43585 (merge-base with moe/work-2026-10-24).\n(a) Mutants, run in /tmp/echo-mut/snap (a copy of the step-4 snapshot), each an exact-once replace, vitest on the new file:\n- M1 qa-reject option dropped: 1 failed (a).\n- M2 replan option dropped: 1 failed (b).\n- M3 auto-route #general dropped: 1 failed (d), caught by the spy.\n- M4 auto-route #workers dropped: 1 failed (d).\n- M5 released #general dropped: 1 failed (c).\n- M6 released #workers dropped: 1 failed (c).\n- M7 helper ignores opts: 3 failed (c)(d)(e).\n- M8 wrapper drops opts: 3 failed (c)(d)(e).\n- M9 helper always false: 2 failed (c)(e).\n- M10 #governors copy given the option: 1 failed (c).\nRESTORED: exit 0, Tests 5 passed (5). cmp confirms all six scratch files are identical to the worktree.\n(b) Texts are byte-identical: on each posting line the only change is the appended `, { parseMentions: false }`; the rest of the diff is comments.\n(c) Contract: no return, response field, error or nextAction changed. The qa_reject #governors/#architects posts, the request_replan #architects post, and the release_task #governors and cascade posts are unchanged. grep shows only the two new 3-arg postToRoleChannel calls (releaseTask.ts:256, :376); the other callers are untouched.\n(d) Never-throw holds: each post is still inside its own try/catch, and chatStore.postToRoleChannel keeps its catch and logger.warn.\n(e) Size: git diff --numstat gives runtime +26/-11 across 5 files, plus the new 126-line test file. About +152/-11 total, far under the 400 cap.\nTheoretical (intended): the #workers released and auto-route copies no longer bump busy seats' unread counts or wake unfiltered chat_wait waiters. A channel-filtered #workers waiter still sees them as ambient traffic. Idle claimers are woken by task events, not chat, so a released task is still picked up.",
+      "startedAt": "2026-11-03T09:02:22.840Z",
+      "completedAt": "2026-11-03T09:03:48.526Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,12 +109,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:23.746Z",
-  "updatedAt": "2026-11-03T09:02:22.841Z",
+  "updatedAt": "2026-11-03T09:04:53.494Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:38:33.924Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -121,7 +131,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:55:10.385Z",
@@ -203,5 +214,22 @@
     "sessionId": "architect-24611a0a@2026-11-03T08:38:29Z",
     "at": "2026-11-03T08:57:35.044Z"
   },
-  "workStartedAt": "2026-11-03T08:58:33.008Z"
+  "workStartedAt": "2026-11-03T08:58:33.008Z",
+  "reviewStartedAt": "2026-11-03T09:04:53.491Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && D='packages docs scripts moe-jetbrains moe-vscode' && T=packages/moe-daemon/src/tools/echoedReasonNotices.test.ts && X=$( { git diff --name-only \"$B\" -- $D; git ls-files --others --exclude-standard -- $D; } | grep -vxF -e packages/moe-daemon/src/state/chatStore.ts -e packages/moe-daemon/src/state/StateManager.ts -e packages/moe-daemon/src/tools/qaReject.ts -e packages/moe-daemon/src/tools/requestReplan.ts -e packages/moe-daemon/src/tools/releaseTask.ts -e \"$T\" || true) && { [ -z \"$X\" ] || { echo \"FAIL: out of scope vs $B: $X\"; exit 1; }; } && { [ -f \"$T\" ] || { echo \"FAIL: missing $T\"; exit 1; }; } && { ! grep -qF '@' \"$T\" || { echo \"FAIL: at-sign spelled in $T\"; exit 1; }; } && echo 'C0 OK' && cd \"$(git rev-parse --show-toplevel)\" && H=$(git rev-parse HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && for f in packages/moe-daemon/src/state/chatStore.ts packages/moe-daemon/src/state/StateManager.ts packages/moe-daemon/src/tools/qaReject.ts packages/moe-daemon/src/tools/requestReplan.ts packages/moe-daemon/src/tools/releaseTask.ts packages/moe-daemon/src/tools/echoedReasonNotices.test.ts; do cp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npx vitest run src/tools/echoedReasonNotices.test.ts src/tools/qaReject.test.ts src/tools/releaseTask.test.ts src/tools/completeStep.test.ts src/tools/chatSystemFeed.test.ts src/state/reloadHold.test.ts && npx tsc --noEmit' && echo 'C1 OK'",
+    "exitCode": 0,
+    "outputTail": "C0 OK\n ✓ src/tools/echoedReasonNotices.test.ts (5 tests) 361ms\n ✓ src/tools/chatSystemFeed.test.ts (16 tests) 1361ms\n ✓ src/tools/completeStep.test.ts (25 tests) 1398ms\n ✓ src/tools/qaReject.test.ts (24 tests) 1420ms\n ✓ src/state/reloadHold.test.ts (25 tests) 2341ms\n ✓ src/tools/releaseTask.test.ts (59 tests) 3080ms\n Test Files  6 passed (6)\n      Tests  154 passed (154)\n   Duration  3.92s (tests 69%, transform 27%, import 4%)\nnpm notice run 'tsc' --noEmit\nC1 OK\nEXIT=0",
+    "reportedAt": "2026-11-03T09:04:53.491Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/echoedReasonNotices.test.ts",
+    "packages/moe-daemon/src/state/chatStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts",
+    "packages/moe-daemon/src/tools/requestReplan.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts"
+  ],
+  "completionSummary": "qa_reject's 'QA rejected: <reason>', request_replan's 'Replan requested…: <reason>', and release_task's released line and auto-route line (#general and #workers copies) are now posted with { parseMentions: false }. An at-token in a reason, a title or a handoff summary now records mentions [] and pages no seat.\n- chatStore.postToRoleChannel takes an optional SystemPostOptions. It is forwarded to sendMessage only when parseMentions is false, so the 47 existing two-argument callers still send exactly { channel, sender, content }. The StateManager wrapper forwards opts only when given.\n- Every posted text is byte-identical. No tool response, error or nextAction changed.\n- The #governors and #architects role posts are deliberately untouched and still parse mentions: qa_reject's cross-post and escalations, request_replan's #architects line, and release_task's #governors copy and cascade post.\n- Diff: runtime +26/-11 over 5 files, plus the new src/tools/echoedReasonNotices.test.ts (126 lines, at-sign built at runtime).\n- RED on base 66f43585: 5/5 cases fail. GREEN: checkRefs [0]+[1] give C0 OK, then 154/154 tests across 6 files (echoedReasonNotices 5, chatSystemFeed 16, completeStep 25, qaReject 24, reloadHold 25, releaseTask 59). tsc --noEmit is clean, then C1 OK.\n- 10/10 planned mutants were killed in a scratch snapshot: each of the six sites dropped; helper ignores opts; wrapper drops opts; helper always off; #governors given the option.\n- Intended side effect: the #workers release and auto-route copies no longer bump busy seats' unread counts or wake unfiltered chat_wait."
 }
