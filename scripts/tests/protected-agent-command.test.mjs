@@ -478,3 +478,71 @@ test('bash: G2 the agent Git guard never runs a git that only an in-project PATH
     assert.equal(parents.includes('node'), guardRan, `${parents.join(',')}\n${show(r)}`);
   }
 });
+
+// task-0b2ea570: PATH scrubbing covers every bare-name tool, not just interpreters.
+const TOOLS = ['dirname', 'git', 'sed', 'mktemp', 'basename', 'uname', 'grep', 'tr', 'wc', 'cat', 'rm', 'mkdir', 'date', 'bash']
+  .map((tool) => [tool, TAIL.map((d) => path.join(d, tool)).find((f) => existsSync(f))]).filter(([, real]) => real);
+function plantTools(fx) {
+  for (const dir of [fx.project, path.join(fx.project, 'bin')]) for (const [tool, real] of TOOLS) {
+    const file = path.join(dir, tool);
+    writeFileSync(file, `#!/bin/sh\necho 'project ${tool}' >> '${fx.ran}'\nexec '${real}' "$@"\n`);
+    chmodSync(file, 0o755);
+  }
+}
+const ranLines = (fx) => (existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8') : '').split('\n').filter(Boolean);
+for (const [label, entry] of plantedEntries) {
+  test(`bash: W1 a tool planted on a ${label} PATH entry never runs under the marker; legacy still reaches it`, { skip: sh.skip }, async (t) => {
+    const fx = fixture(t); plantTools(fx);
+    cliStub(fx, fx.trusted, 'claude', 'trusted');
+    for (const marker of ['1', null]) {
+      rmSync(fx.ran, { force: true });
+      const r = await run(sh, fx, { command: 'claude', marker, role: 'governor', pathEntries: [entry(fx), nodeBin(fx), fx.trusted, ...TAIL], env: { MOE_NODE_COMMAND: undefined } });
+      assert.equal(r.code, 0, show(r));
+      const got = ranLines(fx);
+      assert.ok(got.includes('trusted claude'), show(r));
+      if (marker) assert.deepEqual(got.filter((l) => l.startsWith('project ')), [], show(r));
+      else assert.ok(got.includes('project dirname'), `the plant is unreachable\n${show(r)}`);
+    }
+  });
+}
+test('bash: W2 under the marker a PATH with no trusted entry refuses before any bare-name command', { skip: sh.skip }, async (t) => {
+  const fx = fixture(t); plantTools(fx);
+  const r = await run(sh, fx, { command: 'claude', role: 'governor', pathEntries: ['.'], nodeDir: false });
+  assertRefused(sh, fx, r, interpreterNotFound('python3'));
+});
+for (const [label, entry] of [...plantedEntries, ['only a dot', null]]) {
+  test(`bash: M2 protected moe-call never runs a node planted on ${label} PATH entry`, { skip: sh.skip }, async (t) => {
+    const fx = fixture(t); plantInterpreters(fx);
+    writeFileSync(path.join(fx.project, '.moe', 'daemon.json'), '{}');
+    const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(MOE_|CLAUDE|FAKE_)/i.test(k)));
+    const pathEntries = entry ? [entry(fx), nodeBin(fx), ...TAIL] : ['.'];
+    for (const marker of ['1', null]) {
+      rmSync(fx.ran, { force: true }); rmSync(fx.rpc, { force: true });
+      const env = { ...base, HOME: fx.home, MOE_PROXY_PATH: fx.runtime, PATH: pathEntries.join(SEP) };
+      if (marker) env.MOE_RUNTIME_PROTECTED = marker;
+      const r = await launch(sh.exe, [CALL, 'get_context', '{}', '--project', fx.project], fx, env);
+      if (!marker) { assert.match(ranLines(fx).join('\n'), /^project /m, `the plant is unreachable\n${show(r)}`); continue; }
+      assert.equal(r.code, 1, show(r));
+      assert.deepEqual(ranLines(fx), [], show(r));
+      if (entry) { assertRuntime(fx, r); assert.equal(r.stderr, 'Error: no response from daemon\n', show(r)); }
+      else { assert.equal(existsSync(fx.rpc), false, show(r)); assert.equal(r.stderr, 'Error: node not found\n', show(r)); }
+    }
+  });
+}
+
+test('S2 POSIX PowerShell children find the protected node pin first', () => {
+  const src = readFileSync(PS1, 'utf8').replace(/^\s*#.*$/gm, '');
+  const statement = "if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) { $env:PATH = [IO.Path]::GetDirectoryName($script:MoeNode) + [IO.Path]::PathSeparator + $env:PATH }";
+  assert.equal(src.split(statement).length - 1, 1);
+  const pin = src.indexOf('Set-Alias -Name node -Value $script:MoeNode -Scope Script');
+  const prepend = src.indexOf(statement);
+  assert.ok(pin >= 0 && pin < prepend);
+  assert.ok(prepend < src.indexOf('$script:MoeProtectedCli = $null'));
+});
+test('S3 the protected trusted-directory helper is byte-identical in both sh scripts', () => {
+  const helper = (file) => /protected_trusted_dir\(\) \{[\s\S]*?\n}\n/.exec(readFileSync(file, 'utf8'))?.[0];
+  const agent = helper(SH), call = helper(CALL);
+  assert.ok(agent, 'moe-agent.sh has the trusted-directory helper');
+  assert.ok(call, 'moe-call.sh has the trusted-directory helper');
+  assert.equal(call, agent);
+});

@@ -14,6 +14,73 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Path normalization for cross-platform support
+# Converts Windows paths (backslashes) to Unix paths (forward slashes)
+normalize_path() {
+    local path="$1"
+    # Convert backslashes to forward slashes
+    path="${path//\\//}"
+    # Handle Windows drive letters (C: -> /c or /mnt/c in WSL)
+    if [[ "$path" =~ ^([A-Za-z]):/ ]]; then
+        local drive="${BASH_REMATCH[1],,}" # lowercase
+        local rest="${path:3}"
+        if [ -d "/mnt/$drive" ]; then
+            # WSL style path
+            path="/mnt/$drive/$rest"
+        else
+            # Git Bash / MSYS style path
+            path="/$drive/$rest"
+        fi
+    fi
+    echo "$path"
+}
+# Trust directories, not PATH lookup results: links/case cannot hide the project.
+protected_trusted_dir() { # $1 = directory, $2 = project's real path
+    local real up
+    case "$1" in /*) ;; *) return 1 ;; esac
+    real=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+    up="$real"
+    while :; do
+        [ "$up" -ef "$2" ] && return 1
+        [ "$up" != / ] || break
+        up="${up%/*}"; [ -n "$up" ] || up=/
+    done
+    printf '%s\n' "$real"
+}
+# task-0b2ea570: under MOE_RUNTIME_PROTECTED=1, before the first bare-name command
+# (dirname, git and sed below), PATH keeps only the entries protected_trusted_dir
+# accepts for every project an argument names (-p/--project), as real paths in order.
+# Builtins only. An empty PATH makes bash search the current directory (the project),
+# so a scrub that keeps nothing refuses with the line python3 pinning would print.
+protected_scrub_path() { # $@ = the real paths of the projects the arguments name
+    local entries entry real project keep="" ok
+    [ $# -gt 0 ] || set -- ""
+    IFS=: read -r -a entries <<< "$PATH"
+    for entry in "${entries[@]}"; do
+        ok=1
+        for project in "$@"; do
+            real=$(protected_trusted_dir "$entry" "$project") || { ok=0; break; }
+        done
+        [ "$ok" = 1 ] && keep="${keep:+$keep:}$real"
+    done
+    if [ -z "$keep" ]; then
+        printf '%s\n' "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: python3 was not found on an absolute PATH entry outside the project; refusing to start." >&2
+        exit 1
+    fi
+    export PATH="$keep"
+}
+if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then
+    MOE_PROTECTED_PROJECTS=()
+    moe_prev=""
+    for moe_arg in "$@"; do
+        case "$moe_prev" in
+            -p|--project) moe_real=$(cd -- "$(normalize_path "$moe_arg")" 2>/dev/null && pwd -P) && MOE_PROTECTED_PROJECTS+=("$moe_real") ;;
+        esac
+        moe_prev=$moe_arg
+    done
+    protected_scrub_path "${MOE_PROTECTED_PROJECTS[@]}"
+fi
+
 # A hot reload runs a private copy of the committed bytes from a moe-wrapper-pin.*
 # folder and names the checkout's wrapper in MOE_WRAPPER_SOURCE (task-69c02444).
 # Honour it only there, and never pass it on.
@@ -71,6 +138,8 @@ if [ -d "$HOME/.local/share/moe/npm/bin" ]; then
         *) export PATH="${PATH:+$PATH:}$HOME/.local/share/moe/npm/bin" ;;
     esac
 fi
+
+[ "$RUNTIME_PROTECTED" != 1 ] || protected_scrub_path "${MOE_PROTECTED_PROJECTS[@]}"
 
 # Auto-detect node binary from common installation locations
 find_node() {
@@ -252,27 +321,6 @@ cleanup_temp() {
     if [ "$(type -t wrapper_pin_drop)" = function ]; then wrapper_pin_drop; fi
 }
 trap cleanup_temp EXIT
-
-# Path normalization for cross-platform support
-# Converts Windows paths (backslashes) to Unix paths (forward slashes)
-normalize_path() {
-    local path="$1"
-    # Convert backslashes to forward slashes
-    path="${path//\\//}"
-    # Handle Windows drive letters (C: -> /c or /mnt/c in WSL)
-    if [[ "$path" =~ ^([A-Za-z]):/ ]]; then
-        local drive="${BASH_REMATCH[1],,}" # lowercase
-        local rest="${path:3}"
-        if [ -d "/mnt/$drive" ]; then
-            # WSL style path
-            path="/mnt/$drive/$rest"
-        else
-            # Git Bash / MSYS style path
-            path="/$drive/$rest"
-        fi
-    fi
-    echo "$path"
-}
 
 # Detect if running in WSL
 is_wsl() {
@@ -522,19 +570,6 @@ refuse_protected_agent() { # $1 = the line
     printf '%s\n' "$1" >&2
     WORKER_ID=""
     exit 1
-}
-# Trust directories, not PATH lookup results: links/case cannot hide the project.
-protected_trusted_dir() { # $1 = directory, $2 = project's real path
-    local real up
-    case "$1" in /*) ;; *) return 1 ;; esac
-    real=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
-    up="$real"
-    while :; do
-        [ "$up" -ef "$2" ] && return 1
-        [ "$up" != / ] || break
-        up="${up%/*}"; [ -n "$up" ] || up=/
-    done
-    printf '%s\n' "$real"
 }
 protected_path_lookup() { # $1 = name, $2 = project directory, $3 = msys/cygwin extensions (default .exe .cmd)
     local entries entry real ext exts="" project_real

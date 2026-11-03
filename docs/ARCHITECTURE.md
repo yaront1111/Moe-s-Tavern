@@ -424,8 +424,11 @@ and `verified-local` stays refused until certification and the client gates pass
   entry. So the agent Git guard's Node program gets git's absolute path, from an absolute PATH entry outside the
   project, and runs `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`; with no such git the guard refuses
   the launch (`MOE_AGENT_GIT_GUARD_FAILED`). The remaining residual is the agent CLI's own bare-name spawns: they
-  inherit the variable, but Moe controls neither the CLI's PATH walk nor a CLI runtime that ignores it. The launchers'
-  own lookups through such PATH entries are open: task-0b2ea570 (sh) and task-3acf7f79 (ps1).
+  inherit the variable, but Moe controls neither the CLI's PATH walk nor a CLI runtime that ignores it. Under the marker,
+  `moe-agent.sh` and `moe-call.sh` rewrite PATH, before their first bare-name command, to absolute entries outside the
+  project. A rewrite that keeps no entry refuses, because an empty PATH makes bash search the current directory.
+  So neither they nor the agent CLI they start finds a tool through a `.`, relative or in-project entry. The ps1
+  launcher's own lookups stay open (task-3acf7f79); on POSIX it puts the pinned node's directory first on PATH.
   VS Code (`services/MoeDaemonClient.ts`, `util/AgentLauncher.ts`) selects the same way from
   `<extensionPath>/bundled`. Candidate source becomes Git objects only
   (`admission.mjs`); branch writes stay in the wrappers' landing. A guest gets no daemon address: the host session

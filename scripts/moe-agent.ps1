@@ -565,6 +565,9 @@ if ($script:MoeRuntimeProtected) {
     $script:MoeNode = Find-MoeProtectedFile 'node' $nodeExtensions
     if (-not $script:MoeNode) { Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start." }
     Set-Alias -Name node -Value $script:MoeNode -Scope Script
+    # On POSIX, a CLI's /usr/bin/env node shebang and its children use PATH, not the alias.
+    # Like sh's use_node, put the successfully pinned node directory first for them.
+    if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) { $env:PATH = [IO.Path]::GetDirectoryName($script:MoeNode) + [IO.Path]::PathSeparator + $env:PATH }
     Write-Host "[OK] Using node: $script:MoeNode"
 }
 $script:MoeProtectedCli = $null

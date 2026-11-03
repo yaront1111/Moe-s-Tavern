@@ -103,8 +103,33 @@ find_python() {
     echo ""
     return 1
 }
+# Trust directories, not PATH lookup results: links/case cannot hide the project.
+protected_trusted_dir() { # $1 = directory, $2 = project's real path
+    local real up
+    case "$1" in /*) ;; *) return 1 ;; esac
+    real=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+    up="$real"
+    while :; do
+        [ "$up" -ef "$2" ] && return 1
+        [ "$up" != / ] || break
+        up="${up%/*}"; [ -n "$up" ] || up=/
+    done
+    printf '%s\n' "$real"
+}
 if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then
     PYTHON_CMD="" # Only the legacy install-path fallback needs Python.
+    # task-0b2ea570: as moe-agent.sh does, keep only absolute PATH entries outside the
+    # project before the first bare-name command (node). With no project real path no
+    # entry can be proven outside it, and an empty PATH makes bash search the current
+    # directory: keeping nothing refuses as a missing node does.
+    PROJECT_REAL=$(cd -- "$PROJECT" 2>/dev/null && pwd -P) || PROJECT_REAL=""
+    KEEP=""
+    IFS=: read -r -a PATH_ENTRIES <<< "$PATH"
+    for ENTRY in ${PATH_ENTRIES[@]+"${PATH_ENTRIES[@]}"}; do
+        REAL=$(protected_trusted_dir "$ENTRY" "$PROJECT_REAL") && [ -n "$PROJECT_REAL" ] && KEEP="${KEEP:+$KEEP:}$REAL"
+    done
+    [ -n "$KEEP" ] || { echo "Error: node not found" >&2; exit 1; }
+    export PATH="$KEEP"
 else
     PYTHON_CMD=$(find_python)
     if [ -z "$PYTHON_CMD" ]; then
