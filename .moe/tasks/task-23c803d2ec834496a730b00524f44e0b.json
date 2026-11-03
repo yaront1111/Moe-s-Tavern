@@ -110,9 +110,14 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's diff. Load adversarial-self-review.\n\n**Checklist.**\n- Can the host CLI run on ANY VM-route path? Check: a seat-start failure, a missing token, codex, a missing attempt id, a shared claim, a resume of a held task, the launch-outage probe, -AutoClaim:$false, and -Loop on a second iteration.\n- Can the token reach an argv, env, file, log, transcript or exception message, on either engine? Check error paths: ConvertTo-Json errors, and a native call that throws mid-pipe.\n- Is the env restored after every seat-* spawn, on every path?\n- Can a legacy iteration ever carry executionRoute, or run seat-start?\n- Does seat-stop run exactly once per held instance, and never with a stale one after a reload?\n- Does 5.1 parse an ErrorRecord as the outcome?\n- Is the runner token with spaces passed as one argument?\n\n**Three mutants**, on a scratch copy only, never the tracked file.\n- Setup: `mkdir -p /mnt/d/moe-scratch/n3-mut/docs && cp -r scripts /mnt/d/moe-scratch/n3-mut/ && cp -r docs/roles /mnt/d/moe-scratch/n3-mut/docs/`. Mutate byte-safely, keeping the BOM. Run the copy's postflight-vm-route.ps1 by its D:\\ path on 5.1. Delete the copy afterwards.\n- (1) Pass the token as an argv value: V3 must fail.\n- (2) Mutate $claimRpcArgs in place instead of a copy: n1's legacy T row or V1 must fail.\n- (3) Drop the seat-stop call from the finally: V1 or V4 must fail.\n\n**Size.** Measure `git diff --numstat -- scripts/moe-agent.ps1 scripts/tests/postflight-vm-route.ps1`. Expect about 150 wrapper lines and about 300 test lines. Over 400 changed lines, file the EPIC ADD_RAIL size waiver before complete_task, with moe.propose_rail and the CQ-M07k rail template with per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Never trim rows to fit.\n\n**Fresh evidence.** If any tracked byte changed in this step, rerun step 4.\n\n**Handoff.** Write the Serena note task-task-23c803d2ec834496a730b00524f44e0b-handoff for CQ-M07n: the function names, the instance variable, the scrub helper, the stub seam, and the reload-branch ordering it must fix.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
+      "modifiedFiles": [
+        ".serena/memories/task-task-23c803d2ec834496a730b00524f44e0b-handoff.md"
+      ],
+      "note": "Adversarial review complete: traced fail-closed dispatch/taskless/resume/loop and both copied claim sites; fixed-code diagnostics, stdout-only final outcome parsing, token lifetime, five-var and encoding restoration, start ownership deferral, and clear-before-stop idempotence. No further tracked changes. Three final-byte scratch mutants all rejected at VR-happy with exit 1: argv token leak, missing credential scrub, missing finally stop. Logs n3-mut-{argv,env,stop}.log retained; scratch copies removed. Verified scratch-base SHA256 matched task bytes. Full task diff is +163/-8 wrapper and +220/-5 harness: 396 changed, net 370, so no >400 waiver required. BOM/diff checks clean. Final gate remains fresh (3 route PASS, 1 full postflight PASS, 1 parity PASS; lint also green). Handoff records functions/seam/state and the explicitly deferred CQ-M07n hot-reload stop-before-early-deregister ordering.",
       "startedAt": "2026-11-03T23:10:50.994Z",
+      "completedAt": "2026-11-03T23:13:36.791Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -126,8 +131,8 @@
     }
   ],
   "planRevision": 5,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-af7be174",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -150,12 +155,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:34:00.801Z",
-  "updatedAt": "2026-11-03T23:10:50.995Z",
+  "updatedAt": "2026-11-03T23:14:53.200Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:55:43.120Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-12ae794e",
@@ -169,7 +174,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T19:02:54.498Z",
@@ -257,17 +263,43 @@
       "treeId": "a4c87059b77d53e883ae8eee32dc940abe84e8c0",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "2e96f697069e3d1cf717d4c1ea82424e4055d06b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T19:30:32Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T23:14:52.299Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
+    "scripts/tests/postflight-vm-route.ps1",
     "scripts/moe-agent.ps1",
-    "scripts/tests/postflight-vm-route.ps1"
+    ".serena/memories/gotcha-powershell-seat-native-boundaries.md",
+    ".serena/memories/task-task-23c803d2ec834496a730b00524f44e0b-handoff.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-fdb2af60@2026-11-03T19:08:25Z",
-    "at": "2026-11-03T19:29:54.741Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-03T19:30:32Z",
+    "at": "2026-11-03T23:14:52.299Z"
+  },
+  "reviewStartedAt": "2026-11-03T23:13:54.969Z",
+  "verification": {
+    "command": "L=/mnt/d/moe-scratch/n3-verified-gate.log; env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=\"$(wslpath -w \"$PWD\")\\scripts\\tests\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh' > \"$L\" 2>&1; rc=$?; echo \"exit=$rc\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c; exit \"$rc\"",
+    "exitCode": 0,
+    "outputTail": "exit=0\n      1 PASS parity-check.sh\n      3 PASS postflight-vm-route.ps1\n      1 PASS postflight.ps1\nFull harness details: PASS frozen candidate scenarios: 106; PASS owner guard scenarios: 16; PASS migration landing scenarios: 11; [worktree] 75 ok, 0 failed; commit-scope scenarios run: 45. Existing Windows symlink/signal exclusions remain.",
+    "reportedAt": "2026-11-03T23:13:54.969Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Ported M07m3's PowerShell happy-path VM seat lifecycle: marked copied claims, stdin-only credential transfer, no host CLI fallback, validated job outcomes, admitted-tree landing, QA no-landing, and bounded finally cleanup. Added PS5.1/pwsh7 rows and fixed a full-harness-discovered BOM/Unicode pipe bug with scoped native encoding restoration. Fresh final gate: 3 VM-route PASS, 1 full PS5.1 postflight PASS, 1 parity PASS; independent parity/lint also green. All 3 security/lifecycle mutants rejected at VR-happy. Final scope 396 changed lines, net 370 across the two approved scripts; BOM intact and diff clean. Serena handoff records evidence and the explicitly deferred CQ-M07n hot-reload ordering. No actual VM isolation or profile activation claimed."
 }
