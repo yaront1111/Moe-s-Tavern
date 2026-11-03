@@ -67,8 +67,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -93,12 +93,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:32.139Z",
-  "updatedAt": "2026-11-03T16:49:37.320Z",
+  "updatedAt": "2026-11-03T16:51:36.622Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T16:33:24.277Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:51:13.246Z",
+    "wallClockMs": 1068969
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -217,9 +219,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T16:43:00Z",
-    "at": "2026-11-03T16:49:20.353Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:49:21Z",
+    "at": "2026-11-03T16:51:36.622Z"
+  },
+  "completedAt": "2026-11-03T16:51:13.246Z",
+  "reviewCompletedAt": "2026-11-03T16:51:13.246Z",
+  "reviewSummary": "Reviewed completion f830b4cd (on moe/work-2026-10-24; 3 paths, +192/-16, 176 net) via git show. Re-ran the exact checkRef in a /tmp git-archive snapshot (lock-identical Linux node_modules; nothing run in the shared checkout): vitest on transitions + WebSocketServer + setTaskStatus tests -> 3 files, 150/150 pass, exit 0; tsc --noEmit exit 0.\nMutation proof (snapshot only): parent f830b4cd^ WebSocketServer.ts (inline table) -> new tests fail 4/4, parity names \"BACKLOG -> REVIEW: table allows, set_task_status ok, /ws table-refused (... Allowed: PLANNING, WORKING, ARCHIVED)\". Fix restored and cmp-checked.\nDoD 1: /ws BACKLOG->REVIEW stores REVIEW, replies TASK_UPDATED, observer gets the broadcast; BACKLOG->DONE refused with exactly \"Cannot move task from BACKLOG to DONE. Allowed: PLANNING, WORKING, REVIEW, ARCHIVED\", status stays BACKLOG.\nDoD 2: no inline table in WebSocketServer.ts; it imports the exported readonly VALID_TRANSITIONS (content unchanged) from setTaskStatus.ts, which does not import WebSocketServer (no cycle). Parity test covers all 56 pairs with exact refusal text, one annotated exception (AWAITING_APPROVAL->WORKING plan-approval route); old table fails it.\nDoD 3: WebSocketServer.test.ts and setTaskStatus.test.ts have an empty diff. DoD 4: command exits 0.\nPlan checks: needsHumanReview clear only on a move into REVIEW, inside withMutex, after the client-updates spread; BACKLOG->REVIEW and BLOCKED->REVIEW both tested. Refusal text, BLOCKED effectiveFrom gate, WIP, approval and reopen routes untouched; no docs/client edits; test has no .only/fixed sleeps and closes all sockets/servers. I did not re-run the landing qualityGate (no docs/scripts changed; wrapper runs it).\nComplexity: nothing to cut. Governor follow-up (out of scope): JetBrains BoardMoves.kt still mirrors the old table, so no direct BACKLOG->REVIEW drag there.",
+  "requiredCheckAtDone": null
 }
