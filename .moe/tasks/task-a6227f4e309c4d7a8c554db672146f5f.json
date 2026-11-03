@@ -1,0 +1,41 @@
+{
+  "id": "task-a6227f4e309c4d7a8c554db672146f5f",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: VS Code protected Accounts terminal resolves its interpreter by name (win32 shellPath 'powershell.exe' plus a typed bare `powershell`) with cwd = the workspace (VS Code twin of task-26d9dc26)",
+  "description": "Filed by architect-24611a0a on 2026-11-03 while planning task-26d9dc26bf334126bfb0bb4e9ed421aa, the JetBrains Accounts residual of task-b071e3bf.\n\nmoe-vscode/src/providers/AccountsTreeProvider.ts has the same issue in two places:\n- :75 types `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand <b64>`.\n- :285 opens the terminal with shellPath 'powershell.exe'.\n\nThat shellPath is a bare name. VS Code's findExecutable searches PATH, joining relative entries to the cwd, and then falls back to <cwd>\\powershell.exe (mem:decision-protected-launch-interpreter). The typed `powershell` is also looked up by the terminal shell, so a workspace powershell.bat or powershell.exe can run before the accounts CLI.\n\ntask-d5eca150 pins the seat launch, not this terminal (its handoff lists the Accounts terminal as a residual). Under the protected profile only:\n- win32: use d5eca150's protectedInterpreter rule. The validated %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe is both the shellPath and the typed word.\n- POSIX: the typed first word is cli.node, the daemon's process.execPath. Validate it with installedExecutable (absolute regular file outside the project).\n- A refusal shows one error and opens no terminal.\n\nVS Code has no WSL route. Legacy lines and terminal options stay byte-identical.\n\nThe accounts CLI's own `claude` lookup is a separate row, filed alongside this one.",
+  "definitionOfDone": [
+    "Under the protected profile the VS Code Accounts terminal never resolves powershell or node through the workspace cwd or PATH, and a refusal opens no terminal.",
+    "Legacy Accounts lines and terminal options stay byte-identical, and tests cover win32 selection and refusal plus POSIX node validation."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor under the human's standing \"move from backlog\" (2026-11-02 21:00Z). architect-24611a0a filed this row while planning task-26d9dc26. It has no plan. Its only dependency, task-d5eca150, is DONE, and the protectedInterpreter rule it reuses has landed (4693e017). No open row plans moe-vscode/src/providers/AccountsTreeProvider.ts. The human can veto by dragging it back to BACKLOG.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-d5eca1505d2445ff91230ece80237bae"
+  ],
+  "priority": "MEDIUM",
+  "order": 335.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T09:21:06.242Z",
+  "updatedAt": "2026-11-03T09:23:28.009Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T09:22:57.794Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T09:22:58.178Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

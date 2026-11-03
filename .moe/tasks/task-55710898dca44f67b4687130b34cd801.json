@@ -1,0 +1,30 @@
+{
+  "id": "task-55710898dca44f67b4687130b34cd801",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: under the protected profile the accounts CLI started from an IDE Accounts tab finds `claude` through the terminal's PATH, and on Windows claude.cmd finds `node` in the project cwd, so a project copy can run during sign-in",
+  "description": "Filed by architect-24611a0a on 2026-11-03 while planning task-26d9dc26bf334126bfb0bb4e9ed421aa. That task pins only the interpreter that starts the accounts CLI. Once the CLI is running, packages/moe-daemon/src/accounts/claudeAuth.ts resolves `claude` itself: MOE_CLAUDE_BIN, else `claude` on PATH.\n\n- Windows: findWindowsCommand walks the PATH entries times PATHEXT. A '.' or relative entry resolves against the cwd, which is the project. A claude.cmd then runs through cmd.exe, and the npm shim inside it finds `node` in the current directory first unless NoDefaultCurrentDirectoryInExePath is set. That is the task-2f22237b vector, already fixed for the wrappers.\n- POSIX: spawnSync uses execvp over the terminal's unfiltered PATH. The claude npm shim's `#!/usr/bin/env node` uses the same PATH.\n- WSL agent mode is already covered: task-26d9dc26's in-WSL PATH filter is inherited by node and claude.\n- `claude auth login` also runs with cwd = the project, so decide whether a protected Accounts terminal should open outside the project, for example in the user's home, so the project's .claude settings are never read during sign-in.\n\nPossible shapes:\n- The IDE passes a protected marker and the project path, and the CLI drops empty, '.', relative and in-project PATH entries and sets NoDefaultCurrentDirectoryInExePath before it resolves claude.\n- Or the IDE passes an absolute, validated MOE_CLAUDE_BIN.\n\nCover JetBrains (TerminalAgentLauncher.kt, after task-26d9dc26) and VS Code (after its twin row). Legacy behaviour stays unchanged.",
+  "definitionOfDone": [
+    "Under the protected profile, an accounts CLI started from either IDE never runs a claude or node reached through the project cwd or an empty, '.', relative or in-project PATH entry, and it refuses with a clear message when no such claude exists outside the project.",
+    "Legacy accounts CLI behaviour and Accounts lines are unchanged, and tests cover the Windows lookup (PATHEXT, the cmd shim) and the POSIX lookup."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-26d9dc26bf334126bfb0bb4e9ed421aa"
+  ],
+  "priority": "MEDIUM",
+  "order": 336.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T09:21:15.725Z",
+  "updatedAt": "2026-11-03T09:21:15.725Z"
+}

@@ -53,8 +53,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -73,7 +73,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:53:22.002Z",
-  "updatedAt": "2026-11-03T09:18:33.192Z",
+  "updatedAt": "2026-11-03T09:23:24.235Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:57:54.018Z",
@@ -83,7 +83,9 @@
     "firstClaimAt": "2026-11-03T08:58:02.359Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T09:22:37.466Z",
+    "wallClockMs": 1475107
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -156,10 +158,11 @@
   "planApprovedAt": "2026-11-03T09:09:32.875Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T09:10:07Z",
-    "at": "2026-11-03T09:17:40.900Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T09:17:56Z",
+    "at": "2026-11-03T09:23:24.235Z"
   },
   "workStartedAt": "2026-11-03T09:12:33.274Z",
   "reviewStartedAt": "2026-11-03T09:16:02.639Z",
@@ -190,5 +193,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T09:22:37.466Z",
+  "reviewCompletedAt": "2026-11-03T09:22:37.466Z",
+  "reviewSummary": "Reviewed completion 9dee717a (git show; contained in moe/control, moe/work-2026-10-24). Diff: scripts/tests/local-runner-bundle.test.mjs only, +13/-1 (net 12, well under the 400 cap); git diff --check clean. Re-ran the task's verification in a git-archive snapshot of 9dee717a under env -i: Linux node v24.21.0 tests 15/pass 15/fail 0 (exit 0); Windows node.exe tests 15/pass 15/fail 0 (exit 0); parity-check.sh PASS; npm run lint OK (architect 39, worker 30, qa 36 lines). RED reproduced: the pre-fix test file (9dee717a^) in the same snapshot gives tests 15/pass 6/fail 9. Mutants on a scratch copy, all killed: dropping exclude(distTestExcludes) from the from(bundledDaemonDir) block fails the Gradle row with 'bundledDaemonDir copy must exclude compiled tests and specs'; dropping '**/*.spec.*' from distTestExcludes fails with 'distTestExcludes must list **/*.spec.*'; removing the lockfile puts gives pass 7/fail 8 (the eight bundler rows). DoD 1: every row passes on Linux and Windows node.exe. DoD 2: the fixture seeds packages/{moe-daemon,moe-proxy}/package-lock.json in npm v3 shape (one non-dev node_modules/dependency) plus the installed dependency/package.json, and the Gradle row now resolves distTestExcludes, asserts both patterns, and asserts each dist copy applies exclude(distTestExcludes); nothing weakened. Invariants: bundle-assets.mjs, build.gradle.kts and bundle-manifest.json untouched (commit touches one file); the scripts list incl. moe-serena-ignore.mjs and every other row are unchanged in the diff. build.gradle.kts:32 matches the regex (val distTestExcludes = listOf(...)). Not run: nothing in the shared checkout was built or installed; no real bundler was run against moe-vscode/bundled. Complexity pass: nothing to cut (13 added lines reuse put() and the existing node_modules/dependency dir).",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
