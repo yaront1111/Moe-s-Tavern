@@ -31,29 +31,43 @@
     {
       "stepId": "step-2",
       "description": "JetBrains implementation (DoD 1). Keep edits inside the areas named here. Placement note: task-37e03b91 and task-ac587df5 edit other parts of these files.\n\n(a) model/Models.kt: edit ProjectSettings ONLY (:43-63).\n- Add a defaulted `val worktreeMode: String? = null`. It holds the raw stored value when it is exactly \"on\" or \"off\", else null.\n- Add a class body with computed properties that mirror packages/moe-daemon/src/state/validators.ts:301-311:\n  - `val worktreeModeFromDefault: Boolean get() = worktreeMode == null && qualityGate.isNotBlank()`. qualityGate is already strictly parsed and trimmed, so a non-string gate is \"\".\n  - `val worktreeModeOn: Boolean get() = worktreeMode == \"on\" || worktreeModeFromDefault`.\n  - `val worktreeTarget: String get() = consolidationBranch.takeIf { it.isNotEmpty() && it.none { c -> c == '*' || c == '?' || c == '[' } } ?: \"main\"`.\n- Add a KDoc line. Explain that a malformed stored mode reads as unset here, while the daemon refuses it, and that this display copy degrades instead of throwing.\n- UPDATE_SETTINGS (MoeCommandSender.kt:81-92) sends only four allowlisted keys, so this display-only field never reaches project.json. Do not add it there.\n\n(b) util/MoeJson.kt: edit parseProjectSettings ONLY (:278-308).\n- Set `worktreeMode = settings.getStrictStringOrNull(\"worktreeMode\")?.takeIf { it == \"on\" || it == \"off\" }`.\n- Error handling: no read may throw. A JSON null, number, object or unknown string all yield null, which means the gate rule. That is the KDoc rule at :271-276.\n\n(c) toolwindow/MoeSettingsDialog.kt, effectivePolicyRows (:177-232).\n- Compute `val wt = s.worktreeModeOn` once.\n- When wt is true:\n  - insert the mode row directly before the Landing branch row;\n  - swap in the worktree variants of Landing branch (a new private worktreeLandingRow(s) beside landingBranchRow), Commit board state and Quality gate scope.\n- Use the exact strings from step 1. When wt is false, build the list exactly as today.\n- landingBranchRow keeps its shared-mode `contains(\"*\")` test unchanged. Only worktreeTarget uses the daemon's `*?[` set.\n\nThen re-run the step 1 command until it is green.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt"
       ],
-      "startedAt": "2026-11-03T16:05:33.502Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt"
+      ],
+      "note": "Models.kt: ProjectSettings gains defaulted worktreeMode: String? (exactly \"on\"/\"off\" else null) plus a class body with computed worktreeModeFromDefault / worktreeModeOn / worktreeTarget mirroring validators.ts resolveWorktreeMode/resolveWorktreeTarget (KDoc notes the daemon refuses a malformed mode while this display copy degrades). MoeJson.kt parseProjectSettings: worktreeMode = getStrictStringOrNull(\"worktreeMode\")?.takeIf on/off (never throws). MoeSettingsDialog.kt: effectivePolicyRows uses listOfNotNull with val wt = s.worktreeModeOn; on → worktreeBoardRow, worktreeModeRow before Landing branch, worktreeLandingRow, WORKTREE_GATE_SCOPE_ROW; off → the exact pre-existing rows. landingBranchRow untouched (keeps contains(\"*\")). Dialog file held at 300 lines. GREEN: `gradlew.bat test --tests com.moe.util.MoeJsonTest --tests com.moe.toolwindow.SettingsPolicyCorpusTest --tests com.moe.toolwindow.MoeSettingsDialogTest --rerun` exit 0, BUILD SUCCESSFUL; XML: MoeSettingsDialogTest 11/0/0, SettingsPolicyCorpusTest 2/0/0, MoeJsonTest 34/0/0 (timestamps 16:07:20Z, fresh). UPDATE_SETTINGS untouched (4 keys).",
+      "startedAt": "2026-11-03T16:05:33.502Z",
+      "completedAt": "2026-11-03T16:07:35.704Z"
     },
     {
       "stepId": "step-3",
       "description": "VS Code twin, DoD 2. Edit moe-vscode/src/panels/SettingsPanel.ts. It replays the same corpus through moe-vscode/tests/settings-policy-corpus.test.cjs, which reads the JSON by path. The test file needs no edit.\n\n1. Mirror the rule next to landingBranchRow (:49-58):\n   - Write a `worktreeModeOf(s)` that returns `{ on, fromDefault }`.\n   - A stored mode counts only when it is exactly the string 'on' or 'off'.\n   - Any other value, null included, reads as unset. Then `fromDefault = trimmedString(s.qualityGate) !== ''`.\n   - Write a `worktreeTarget(branch)` that returns the trimmed branch when it is non-empty and has no `*`, `?` or `[` (the regex /[*?\\[]/ from validators.ts:310), else 'main'.\n2. In effectivePolicyRows (:91-121), when the mode is on:\n   - add the mode row before Landing branch;\n   - swap the three rows to the exact strings from step 1.\n   When it is off, return the array exactly as today.\n\nError handling: the function must never throw on hand-edited input. It already guards every type with isJsonObject and trimmedString.\n\nDo not edit the corpus test, TaskDetail, or any other VS Code file.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/panels/SettingsPanel.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts"
+      ],
+      "note": "SettingsPanel.ts: worktreeModeOf(s) → {on, fromDefault} (stored counts only when exactly 'on'/'off'; else unset → trimmedString(qualityGate) !== ''), worktreeTarget(branch) with /[*?\\[]/, worktreeLandingRow, gateScopeRow; effectivePolicyRows swaps the board toggle details, spreads [modeRow, worktreeLandingRow] vs [landingBranchRow], and gateScopeRow(mode.on, everyTask). Mode off returns the same rows as before. Corpus test file not edited. Quick replay (scratch /tmp/t40813/quick.cjs, shared-checkout TS6 transpile, read-only): new panel P01-P15 all ok, exit 0, and it does not throw on worktreeMode {} or null; HEAD panel fails P11, P12, P14, P15 (red evidence). The full `npm ci && npm test && npm run compile` gate runs in step 5's snapshot. SettingsPanel.ts was already 405 lines and is now 448 (pre-existing over the 300 bar; the additions are small helper functions).",
+      "startedAt": "2026-11-03T16:07:36.890Z",
+      "completedAt": "2026-11-03T16:08:38.843Z"
     },
     {
       "stepId": "step-4",
       "description": "Docs, DoD 3. Edit docs/CONFIGURATION.md at the current target tip only.\n- In the Settings Reference intro (:176-181), add `worktreeMode` to the list of keys the JetBrains dialog shows as read-only effective values. Add one clause: when worktreeMode resolves to `on`, the Landing branch, Commit board state and Quality gate scope rows describe worktree landing.\n- In the worktreeMode row (:206), prefix the description with `**Dialog: Worktree mode.**`, matching the other rows' labels. The dialog shows the mode row only when the mode resolves on, so the label should say that.\n- Change nothing else. task-f9874361's REVIEW hunks also sit in this file, so keep this hunk to those two spots.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "startedAt": "2026-11-03T16:08:39.998Z"
     },
     {
       "stepId": "step-5",
@@ -87,12 +101,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:46:49.581Z",
-  "updatedAt": "2026-11-03T16:05:33.502Z",
+  "updatedAt": "2026-11-03T16:08:39.998Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:55:39.579Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -106,7 +120,9 @@
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T15:59:57.397Z",

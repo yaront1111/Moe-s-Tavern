@@ -76,7 +76,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,16 +89,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:42:40.727Z",
-  "updatedAt": "2026-11-03T16:04:24.599Z",
+  "updatedAt": "2026-11-03T16:08:47.522Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:43:19.555Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:08:29.675Z",
+    "wallClockMs": 1510120
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -184,10 +187,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T16:00:47.483Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T15:59:05Z",
-    "at": "2026-11-03T16:04:24.599Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:07:10Z",
+    "at": "2026-11-03T16:08:47.522Z"
   },
   "reviewStartedAt": "2026-11-03T16:03:35.443Z",
   "verification": {
@@ -223,5 +227,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T16:08:29.675Z",
+  "reviewCompletedAt": "2026-11-03T16:08:29.675Z",
+  "reviewSummary": "Reviewed recorded completion ef5c7101 (on moe/work-2026-10-24) via git show, not the dirty tree. Scope: 4 owned paths, net ~146 LOC (source +5/-4 in addComment/amendPlanStep/releaseTask; new 145-line taskEventActor.test.ts), under the 400 cap, no .moe paths, no deleted or weakened tests. Diff is exactly params.workerId as updateTask's 4th arg at add_comment, amend_plan_step and BOTH release_task WORKER_RELEASED sites (:249 repair, :332 assigned); grep shows no other updateTask call in those files. Not comment.author ('agent') nor actors.actor ('unknown'), so caller-less calls record no workerId and keep the 'by unknown' notice.\n\nRe-ran task.verification in a fresh git-archive snapshot of ef5c7101 outside the repo (/tmp/e977-qa.rweX): tsc --noEmit clean, tsc -p tt.json (test typecheck) clean, vitest 6 files = Test Files 6 passed, Tests 109 passed. Independent RED: reverted the 3 source files to ef5c7101^ in the snapshot; new test gives Tests 1 failed | 1 passed with exactly the 9 expected AssertionErrors (4 null actors, 4 empty get_activity_log seat queries, #general notices). Restored fix; mutants.sh: 7/7 killed at their named checks, restored Tests 2 passed, source byte-identical to ef5c7101 (cmp).\n\nDoD1 (actor on all three events, get_activity_log {workerId} returns them, never 'unknown'): exact toEqual assertions. DoD2 (REVIEW notice 'by <releaser>', caller-less 'by unknown'): exact #general notice lists, holder and repair paths. DoD3 (new test, fails on HEAD, command passes outside shared checkout): verified above. No contract/schema/docs change, no new throw or IO path. Not run by me: quality gate (parity-check + lint); worker reports exit 0, unaffected by daemon-only TS edits. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
