@@ -1307,11 +1307,12 @@ function kpi(label: string, value: string): string {
     return `<div class="kpi"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${escapeHtml(value)}</div></div>`;
 }
 
+// The title matches the JetBrains header (TaskDetailDialog.handoffBlocks): "#N released by X (time): reason",
+// each part only when its field is a non-blank string, so a malformed note renders "#N" instead of throwing.
 function renderHandoff(index: number, h: HandoffNote): string {
-    const title = `#${index}` +
-        (h.from ? ` from ${escapeHtml(h.from)}` : '') +
-        (h.to ? ` → ${escapeHtml(h.to)}` : '') +
-        (h.createdAt ? `  (${escapeHtml(h.createdAt)})` : '');
+    const part = (prefix: string, value: unknown, suffix = ''): string =>
+        typeof value === 'string' && value.trim() ? prefix + escapeHtml(value) + suffix : '';
+    const title = `#${index}` + part(' released by ', h.releasedBy) + part(' (', h.releasedAt, ')') + part(': ', h.reason);
     function block(label: string, value: string | undefined): string {
         const body = value && value.trim() ? escapeHtml(value) : '—';
         return `<div class="handoff-section">

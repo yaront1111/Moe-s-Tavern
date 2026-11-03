@@ -199,10 +199,11 @@ export interface TaskMetrics {
   doneAt?: string;
 }
 
+/** release_task hand-off note, keyed as HandoffNote in packages/moe-daemon/src/types/schema.ts. */
 export interface HandoffNote {
-  from?: string;
-  to?: string;
-  createdAt?: string;
+  releasedBy?: string;
+  releasedAt?: string;
+  reason?: string;
   whatIsDone?: string;
   whatRemains?: string;
   pitfalls?: string;

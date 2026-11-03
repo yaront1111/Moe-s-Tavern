@@ -33,6 +33,7 @@ VS Code parity with JetBrains and shared client behaviour (epic-aabc654d; see `d
 - Task detail refreshes its **Delivery** section and **Release Agent** button live while the panel is open, instead of showing the task as it was when the panel opened.
 - While disconnected, the **Claude accounts** view keeps the accounts from the last rotation it received: **Sign in** and **Sign out and remove** still run the accounts CLI in the "Claude accounts" terminal, and the list edits come back when the daemon reconnects. With no rotation received yet it shows "Not connected to the Moe daemon.", as JetBrains does.
 - On Windows, agent and account terminals always open in Windows PowerShell (`powershell.exe`), whatever the default terminal profile is.
+- Each **Prior hand-offs** card in task detail is titled with who released the task, when and why (`#1 released by <worker> (<time>): <reason>`), as in JetBrains. Before, the title was only `#1`, `#2` and so on.
 
 ## [0.8.0] - 2026-09-07
 

@@ -221,7 +221,7 @@ const richTask = () => makeTask({
     metrics: { plannedStepCount: 3, executedStepCount: 2, reopenCount: 2, rejectCount: 1, firstClaimAt: at('08:00'), doneAt: at('09:30') },
     planCritiqueResult: { verdict: 'block', concerns: ['Scope <too> wide'], reviewedBy: 'governor-1', reviewedAt: at('07:00') },
     failedDodItems: [{ item: 'Tests pass' }, { item: 'Tests pass' }, { item: 'Docs & notes' }],
-    priorHandoffs: [{ from: 'worker-<a>', to: 'worker-b', createdAt: at('08:30'),
+    priorHandoffs: [{ releasedBy: 'worker-<a>', releasedAt: at('08:30'), reason: 'context <budget> & "quota"',
         whatIsDone: 'Steps 1-2', whatRemains: 'Step 3', pitfalls: ' ', openQuestions: 'None' }]
 });
 
@@ -291,9 +291,20 @@ test('task detail keeps every live metric, critique, failed DoD item and handoff
         + '<div class="field-label" style="margin-top:8px;">Failed DoD items</div>'
         + '<ul class="failed-dod-list"><li>Tests pass (2 failures)</li><li>Docs &amp; notes</li></ul>'
         + '<div class="field-label" style="margin-top:8px;">Prior hand-offs (1)</div><div class="handoff-card">'
-        + `<div class="handoff-card-title">#1 from worker-&lt;a&gt; → worker-b  (${at('08:30')})</div>`
+        + `<div class="handoff-card-title">#1 released by worker-&lt;a&gt; (${at('08:30')}): context &lt;budget&gt; &amp; &quot;quota&quot;</div>`
         + section('What is done', 'Steps 1-2') + section('What remains', 'Step 3')
         + section('Pitfalls', '—') + section('Open questions', 'None') + '</div>');
+});
+
+// The title reads release_task's releasedBy/releasedAt/reason, as the JetBrains header does (d5f36e82). Legacy
+// from/to/createdAt keys, blank strings and non-string values add nothing, so such a card is titled just "#N".
+test('task detail handoff titles read releasedBy, releasedAt and reason, never from/to/createdAt', () => {
+    const priorHandoffs = [{ releasedBy: 'a' }, { releasedAt: '<ts>' }, { reason: 'why' }, {},
+        { from: 'x', to: 'y', createdAt: 'z' }, { releasedBy: ' ', releasedAt: '', reason: '\t' },
+        { releasedBy: null, releasedAt: ['ts'], reason: {} }, { releasedBy: 'b', from: 'x', to: 'y', createdAt: 'z' }];
+    const html = renderDetail(makeTask({ priorHandoffs }));
+    const titles = Array.from(html.matchAll(/<div class="handoff-card-title">(.*?)<\/div>/g), match => match[1]);
+    assert.deepEqual(titles, ['#1 released by a', '#2 (&lt;ts&gt;)', '#3: why', '#4', '#5', '#6', '#7', '#8 released by b']);
 });
 
 test('task title stays escaped next to the elapsed badge and in the detail', () => {
