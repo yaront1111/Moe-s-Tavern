@@ -117,11 +117,14 @@ export function filterTasksForMetrics(tasks: Iterable<Task>, filter: MetricsFilt
   for (const t of tasks) {
     if (filter.epicId && t.epicId !== filter.epicId) continue;
     if (sinceMs !== undefined) {
-      // Use the most recent lifecycle timestamp available so newly-claimed
-      // tasks aren't excluded just because they haven't reached DONE.
+      // "Last touched" is list_metrics' sinceIso contract. A finished row keys
+      // on doneAt, so a later comment, board edit or archive never pulls it
+      // back into the window. Every other row keys on updatedAt, its most
+      // recent touch, which is never older than firstClaimAt; firstClaimAt,
+      // then createdAt, only stand in for a legacy row with no updatedAt.
       const ts = t.metrics?.doneAt
-        ?? t.metrics?.firstClaimAt
         ?? t.updatedAt
+        ?? t.metrics?.firstClaimAt
         ?? t.createdAt;
       const tsMs = ts ? Date.parse(ts) : NaN;
       if (!Number.isFinite(tsMs) || tsMs < sinceMs) continue;

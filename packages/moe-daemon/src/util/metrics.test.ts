@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeMetricsAggregate, computeDashboardAggregate } from './metrics.js';
+import { computeMetricsAggregate, computeDashboardAggregate, filterTasksForMetrics } from './metrics.js';
 import type { Task } from '../types/schema.js';
 
 // Pins the wire unit of firstPassApprovalPct: an integer percentage on 0..100.
@@ -96,5 +96,64 @@ describe('computeDashboardAggregate firstPassApprovalPct unit', () => {
     expect(computeMetricsAggregate(tasks).firstPassApprovalPct).toBe(0);
     expect(dashboard.firstPassApprovalPct).toBeUndefined();
     expect(Object.keys(JSON.parse(JSON.stringify(dashboard)))).not.toContain('firstPassApprovalPct');
+  });
+});
+
+// list_metrics / GET_METRICS sinceIso keeps "tasks last touched at/after this
+// time" (task-5d739855): a finished row keys on doneAt, every other row on
+// updatedAt. Fixed stamps: filterTasksForMetrics never reads the clock.
+describe('filterTasksForMetrics sinceIso window', () => {
+  const NOW_MS = Date.parse('2026-11-03T20:00:00.000Z');
+  const hoursAgo = (hours: number): string => new Date(NOW_MS - hours * 3_600_000).toISOString();
+  const SINCE = hoursAgo(24);
+
+  function row(id: string, status: string, stamps: {
+    createdAt: string; updatedAt?: string; firstClaimAt?: string; doneAt?: string;
+  }): Task {
+    const metrics: Record<string, string> = {};
+    if (stamps.firstClaimAt) metrics.firstClaimAt = stamps.firstClaimAt;
+    if (stamps.doneAt) metrics.doneAt = stamps.doneAt;
+    return {
+      id,
+      epicId: 'epic-metrics-fixture',
+      title: `fixture ${id}`,
+      status,
+      createdAt: stamps.createdAt,
+      updatedAt: stamps.updatedAt,
+      metrics,
+    } as unknown as Task;
+  }
+  const kept = (...tasks: Task[]): string[] =>
+    filterTasksForMetrics(tasks, { sinceIso: SINCE }).map((t) => t.id);
+
+  it('(w1) keeps WORKING, REVIEW and BLOCKED rows first claimed 48 h ago but touched 1 h ago', () => {
+    const stamps = { createdAt: hoursAgo(72), firstClaimAt: hoursAgo(48), updatedAt: hoursAgo(1) };
+    expect(kept(
+      row('task-working', 'WORKING', stamps),
+      row('task-review', 'REVIEW', stamps),
+      row('task-blocked', 'BLOCKED', stamps),
+    )).toEqual(['task-working', 'task-review', 'task-blocked']);
+  });
+
+  it('(w2) leaves out a DONE row done 48 h ago, although it was touched 1 h ago', () => {
+    expect(kept(row('task-done-old', 'DONE', {
+      createdAt: hoursAgo(72), firstClaimAt: hoursAgo(60), doneAt: hoursAgo(48), updatedAt: hoursAgo(1),
+    }))).toEqual([]);
+  });
+
+  it('(w3) leaves out a row whose every stamp is 48 h old', () => {
+    expect(kept(row('task-stale', 'WORKING', {
+      createdAt: hoursAgo(48), firstClaimAt: hoursAgo(48), updatedAt: hoursAgo(48),
+    }))).toEqual([]);
+  });
+
+  it('(w4) keeps a DONE row done 1 h ago; a legacy row without updatedAt falls back to firstClaimAt, then createdAt', () => {
+    expect(kept(
+      row('task-done-new', 'DONE', {
+        createdAt: hoursAgo(72), firstClaimAt: hoursAgo(60), doneAt: hoursAgo(1), updatedAt: hoursAgo(1),
+      }),
+      row('task-legacy-claimed', 'WORKING', { createdAt: hoursAgo(72), firstClaimAt: hoursAgo(1) }),
+      row('task-legacy-unclaimed', 'BACKLOG', { createdAt: hoursAgo(48) }),
+    )).toEqual(['task-done-new', 'task-legacy-claimed']);
   });
 });
