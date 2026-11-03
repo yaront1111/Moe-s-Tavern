@@ -210,8 +210,10 @@ interface ProjectSettings {
 
   // WorktreeMode = 'off' | 'on'. 'on' runs each new WORKING claim in
   // <projectPath>/.worktrees/<taskId> on moe/task/<taskId>. Read once at
-  // claim time and pinned on the attempt's workspaceMode. Absent means 'off'
-  // (resolveWorktreeMode, state/validators.ts); any other value is refused.
+  // claim time and pinned on the attempt's workspaceMode. Absent resolves
+  // (resolveWorktreeMode, state/validators.ts) to 'on' when qualityGate is
+  // non-blank after trim, else 'off', so the default never lands a gate-less
+  // project ungated; any other value is refused.
   worktreeMode?: WorktreeMode;
 
   // Plan-size thresholds enforced by moe.submit_plan: warn past the warn

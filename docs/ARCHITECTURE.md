@@ -286,9 +286,11 @@ clone that wrote it:
 
 ### Worktree mode
 
-`settings.worktreeMode` is `'off'` by default (`resolveWorktreeMode`). While it
-is `'on'`, `claim_next_task` pins `workspaceMode: 'worktree'` on the attempt a
-WORKING claim opens (every other claim pins `'shared'`), and both
+An unset `settings.worktreeMode` resolves (`resolveWorktreeMode`) to `'on'` when
+`qualityGate` is non-blank after trim, else `'off'`, so the default never lands
+a gate-less project ungated. While it resolves to `'on'`, `claim_next_task` pins
+`workspaceMode: 'worktree'` on the attempt a WORKING claim opens (every other
+claim pins `'shared'`), and both
 `claim_next_task` and `get_context` expose that attempt's
 `workspace: { mode, path, branch, target }` (`resolveAttemptWorkspace`). The
 target is a literal `settings.consolidationBranch`, else `main`, and

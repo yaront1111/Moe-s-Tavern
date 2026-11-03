@@ -1223,9 +1223,10 @@ export LOG_RETENTION_COUNT=3
 
 ### Worktree mode: flip on / roll back
 
-With `settings.worktreeMode: 'on'`, every WORKING claim runs in its own `.worktrees/task-<id>` on branch
-`moe/task/<id>`, and the wrapper lands it on the **target**: the literal `consolidationBranch`, else `main`. Both
-switches below are stop-the-world and human-run (design: `docs/plans/2026-10-30-per-task-worktrees.md` §7.3, §7.4).
+With `settings.worktreeMode: 'on'` (unset means `'on'` when a non-blank `qualityGate` is set, else `'off'`), every
+WORKING claim runs in its own `.worktrees/task-<id>` on branch `moe/task/<id>`, and the wrapper lands it on the
+**target**: the literal `consolidationBranch`, else `main`. Both switches below are stop-the-world and human-run
+(design: `docs/plans/2026-10-30-per-task-worktrees.md` §7.3, §7.4).
 No Moe seat ever merges a `moe/work-*` branch into `main`: the only `main` move is the human-run migration landing.
 Change settings through the daemon (the plugin's `UPDATE_SETTINGS`), never by editing `.moe/project.json` by hand.
 
@@ -1248,7 +1249,7 @@ the exit code.
 
 1. **Drain.** Stop every seat once no task is WORKING or REVIEW with an open attempt. Let each REVIEW land and finalize first.
 2. **Rescue refs.** `git for-each-ref refs/moe/rescue` must show no rescue ref of a live task still waiting for shared-mode recovery ([Recovering from `refs/moe/rescue/*`](#recovering-from-refsmoerescue)). Land or archive those tasks first.
-3. **Settings.** Set a `qualityGate` if none is set, fast enough to run on every landing. Declare the land lease:
+3. **Settings.** Set a `qualityGate` if none is set, fast enough to run on every landing. With `worktreeMode` unset, that gate already resolves the mode to `'on'` at the next WORKING claim, so keep the seats drained until step 6; set `worktreeMode: 'off'` first to add the gate without switching. Declare the land lease:
    `resources: { "git-land-main": { "capacity": 1, "maxLeaseMs": 7200000, "releaseOnDeregister": true } }`.
    The id is `git-land-<target>` with every character outside `[A-Za-z0-9._-]` made `-` (target `moe/work-2026-10-24` → `git-land-moe-work-2026-10-24`).
 4. **Migration landing (the human-only merge step).** First `git merge-base --is-ancestor origin/main moe/work-2026-10-24` must hold (`main` instead of `origin/main` when there is no remote). If it does not, merge `main` **into the branch** (never into `main`) and check again. Then a human runs, from the control checkout:
