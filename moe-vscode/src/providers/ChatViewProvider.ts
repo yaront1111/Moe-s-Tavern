@@ -86,6 +86,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 this.postToWebview({ type: 'updateConnection', status });
                 if (status === 'connected') {
                     daemonClient.requestChannels();
+                    // DECISIONS only answers GET_DECISIONS, so a page that was ready before this
+                    // connection opened, or that missed an outage, must ask again (JetBrains ChatPanel twin).
+                    daemonClient.requestDecisions();
                 }
             })
         );
@@ -133,6 +136,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                     this.postToWebview({ type: 'updateConnection', status: this.daemonClient.connectionState });
                     if (this.daemonClient.connectionState === 'connected') {
                         this.daemonClient.requestChannels();
+                        this.daemonClient.requestDecisions();
                     }
                 }
             })
