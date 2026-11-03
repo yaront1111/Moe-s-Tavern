@@ -93,8 +93,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -119,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:08:50.369Z",
-  "updatedAt": "2026-11-03T08:34:13.554Z",
+  "updatedAt": "2026-11-03T08:34:54.511Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:59.859Z",
@@ -259,13 +259,22 @@
     }
   ],
   "filesModified": [
-    "docs/CONFIGURATION.md",
-    "docs/MCP_SERVER.md",
-    "docs/SCHEMA.md",
-    "scripts/CLAUDE.md",
     "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
-    "scripts/tests/postflight.sh"
+    "scripts/CLAUDE.md",
+    "docs/MCP_SERVER.md",
+    "docs/CONFIGURATION.md",
+    "docs/SCHEMA.md"
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-11-03T08:34:54.508Z",
+  "verification": {
+    "command": "LINUX: L=$(mktemp -d /tmp/moe-f81c-XXXXXX) && git archive HEAD | tar -x -C \"$L\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/CLAUDE.md docs/MCP_SERVER.md docs/CONFIGURATION.md docs/SCHEMA.md; do cp \"$f\" \"$L/$f\"; done && cd \"$L\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=240 bash -c 'bash scripts/tests/parity-check.sh && node scripts/tests/postflight-safe.mjs bash && node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund && NO_COLOR=1 npx vitest run'   ;;   WINDOWS: P=$(mktemp -d /mnt/d/moe-scratch/f81c-XXXXXX) && git archive HEAD | tar -x -C \"$P\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$P/$f\"; done && cmd.exe /d /c D:\\moe-scratch\\f81c-win.cmd   (run.cmd: cd /d <P as D:\\moe-scratch\\f81c-...> & set MOE_POSTFLIGHT_TIMEOUT_SEC=240 & \"C:\\Program Files\\nodejs\\node.exe\" \"<P>\\scripts\\tests\\postflight-safe.mjs\" powershell)",
+    "exitCode": 0,
+    "outputTail": "LINUX (GATE_EXIT=0):\nPASS parity-check.sh\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nℹ tests 5 ℹ pass 5 ℹ fail 0   (account-trust-docs)\n ✓ src/state/reloadHold.test.ts (25 tests) 3168ms\n Test Files  230 passed (230)\n      Tests  6974 passed | 20 skipped (6994)\nGATE_EXIT=0\n\nWINDOWS (Windows PowerShell 5.1):\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nX_EXIT=0\nWINDONE",
+    "reportedAt": "2026-11-03T08:34:54.508Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "This row proves and documents task-4ddbfb31's reload hold (a13eb354). It has no runtime changes: scripts/moe-agent.{sh,ps1} are untouched.\n\n- postflight-fake-proxy.js gains FAKE_CLAIM_MODE=reload-hold.\n  - The holder file is created only with 'wx'. Every answer is appended to claim-answers.jsonl.\n  - deregister_worker mirrors deregisterWorker.ts: heldTaskIds/holdUntil on a wrapper_restart from the holder, and a release on any other reason. Other modes are byte-identical.\n- postflight.sh and postflight.ps1 gain a [hot reload hold] arm.\n  - worker-reload claims, launches twice, then hot-reloads on one committed edit. Its re-exec'd process gets alreadyAssigned, and a fresh '[resume] ... (attempt 1/' line follows 'restarting to load it'. In sh, the last launch carries the RESUME prompt.\n  - worker-peer polls the same fake from an unedited copy after the reload and gets only 'none'.\n  - Asserted: a sequence of ^c+rc+$; answers claimed, then only resumed; one answer per claim; no release_task; exactly one deregister, worker-reload's wrapper_restart.\n  - The keepsHold=false mutant fails sh at (b) and ps1 at (c).\n  - Only the recorded PIDs are killed: sh by kill -KILL, ps1 by taskkill /T /F /PID.\n  - reload-sequence.cjs (argv[3]) and Get-ReloadSequence (-Worker) take an optional filter; without it the output is unchanged.\n- Docs now describe the landed hold: the scripts/CLAUDE.md Hot reload bullet and its 7-arm Tests sentence; MCP_SERVER moe.deregister_worker \"A hot reload holds its tasks\" plus heldTaskIds/holdUntil in Returns; the CONFIGURATION reloadHoldMs row (120000 default, 0 disables, 1800000 cap); SCHEMA Worker.reloadHoldUntil.\n\nGate, both legs exit 0:\n- Linux: parity PASS; postflight-safe bash failureClass NONE; account-trust-docs 5/5; daemon vitest 230 files, 6974 passed / 20 skipped, including reloadHold.test.ts (25).\n- Windows: postflight-safe powershell (PS 5.1) NONE.\n- The legs were launched at 07:43Z by this task's previous session, which then died. This sessi"
 }
