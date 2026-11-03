@@ -159,6 +159,15 @@ export interface Epic {
   updatedAt: string;
 }
 
+/** One moe.amend_plan_step revision of a step's text (packages/moe-daemon/src/types/schema.ts StepAmendment). */
+export interface StepAmendment {
+  amendmentId: string;
+  description: string;
+  reason?: string;
+  amendedBy?: string;
+  amendedAt?: string;
+}
+
 export interface ImplementationStep {
   stepId: string;
   description: string;
@@ -168,6 +177,10 @@ export interface ImplementationStep {
   completedAt?: string;
   note?: string;
   modifiedFiles?: string[];
+  /** Append-only amendment history; `description` stays the original text. */
+  amendments?: StepAmendment[];
+  /** The amendment in force (an amendmentId above); absent when the step was never amended. */
+  activeAmendmentId?: string;
 }
 
 export interface QAIssue {

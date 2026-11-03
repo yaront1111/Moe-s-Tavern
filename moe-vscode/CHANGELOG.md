@@ -34,6 +34,7 @@ VS Code parity with JetBrains and shared client behaviour (epic-aabc654d; see `d
 - While disconnected, the **Claude accounts** view keeps the accounts from the last rotation it received: **Sign in** and **Sign out and remove** still run the accounts CLI in the "Claude accounts" terminal, and the list edits come back when the daemon reconnects. With no rotation received yet it shows "Not connected to the Moe daemon.", as JetBrains does.
 - On Windows, agent and account terminals always open in Windows PowerShell (`powershell.exe`), whatever the default terminal profile is.
 - Each **Prior hand-offs** card in task detail is titled with who released the task, when and why (`#1 released by <worker> (<time>): <reason>`), as in JetBrains. Before, the title was only `#1`, `#2` and so on.
+- Plan review and task detail show an amended plan step's current text (the active `moe.amend_plan_step` amendment), with an "Amended by <who>" line whose tooltip keeps the original, as in JetBrains. Before, they showed the original text while **Approve** approved the amended plan.
 
 ## [0.8.0] - 2026-09-07
 

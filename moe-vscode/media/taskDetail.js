@@ -328,6 +328,20 @@
     }
 
     // Render steps (for live updates)
+    // The amendment in force on a step: the entry activeAmendmentId names, never simply the
+    // latest; null for a blank, dangling or non-string id, a non-array amendments or an entry
+    // without a string description. The same rule as activeStepAmendment in
+    // src/panels/PlanReviewPanel.ts and the daemon's planAmendments.ts. Never throws.
+    function activeStepAmendment(step) {
+        var id = step ? step.activeAmendmentId : undefined;
+        if (typeof id !== 'string' || id.length === 0 || !Array.isArray(step.amendments)) { return null; }
+        for (var k = 0; k < step.amendments.length; k++) {
+            var a = step.amendments[k];
+            if (a && typeof a === 'object' && typeof a.description === 'string' && a.amendmentId === id) { return a; }
+        }
+        return null;
+    }
+
     function renderSteps(steps) {
         var container = document.getElementById('planContent');
         if (!container) { return; }
@@ -364,10 +378,19 @@
             header.appendChild(titleSpan);
             card.appendChild(header);
 
+            // Show the text the approval revision covers: the active amendment, else the original.
+            var amendment = activeStepAmendment(step);
             var desc = document.createElement('div');
             desc.className = 'step-description';
-            desc.textContent = step.description || '';
+            desc.textContent = amendment ? amendment.description : (step.description || '');
             card.appendChild(desc);
+            if (amendment) {
+                var amended = document.createElement('div');
+                amended.className = 'step-amended';
+                amended.textContent = 'Amended by ' + (typeof amendment.amendedBy === 'string' && amendment.amendedBy.trim() ? amendment.amendedBy : 'unknown');
+                amended.title = 'Original step: ' + (step.description || '');
+                card.appendChild(amended);
+            }
 
             if (step.affectedFiles && step.affectedFiles.length > 0) {
                 var filesDiv = document.createElement('div');

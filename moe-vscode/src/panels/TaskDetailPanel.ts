@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
-import { PlanReviewPanel, seedRevisionAttribute, showApprovalRefusal } from './PlanReviewPanel';
+import { PlanReviewPanel, seedRevisionAttribute, showApprovalRefusal, stepTextHtml } from './PlanReviewPanel';
 import type {
     HandoffNote,
+    ImplementationStep,
     Task,
     TaskComment,
     TaskPriority,
@@ -757,6 +758,12 @@ export class TaskDetailPanel implements vscode.Disposable {
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .step-amended {
+            margin-top: 4px;
+            font-size: 11px;
+            font-style: italic;
+            color: var(--vscode-descriptionForeground);
+        }
         .step-files {
             margin-top: 4px;
             font-size: 11px;
@@ -1122,7 +1129,7 @@ export class TaskDetailPanel implements vscode.Disposable {
         return `<div class="delivery-section" id="deliverySection"><div class="section-title">${escapeHtml(title)}</div>${body.join('')}</div>`;
     }
 
-    private renderSteps(steps: Array<{ stepId: string; description: string; status: string; affectedFiles?: string[] }>): string {
+    private renderSteps(steps: ImplementationStep[]): string {
         if (steps.length === 0) {
             return '<p class="muted-text">No implementation steps defined</p>';
         }
@@ -1143,7 +1150,7 @@ export class TaskDetailPanel implements vscode.Disposable {
 
             return `<div class="step-card ${cssClass}">
                 <div class="step-header"><span class="${iconClass}">${icon}</span><span>Step ${i + 1}: ${escapeHtml(status)}</span></div>
-                <div class="step-description">${escapeHtml(step.description)}</div>
+                ${stepTextHtml(step)}
                 ${filesHtml}
             </div>`;
         }).join('');
