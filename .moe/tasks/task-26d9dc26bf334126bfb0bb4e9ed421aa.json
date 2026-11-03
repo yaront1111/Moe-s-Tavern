@@ -12,10 +12,11 @@
     {
       "stepId": "step-1",
       "description": "Tests first (RED). Edit moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt only, with the Edit tool (JUnit 4; reuse the TemporaryFolder rule and the helpers powerShellFixture, typedScript and typedPsScript). Read mem:gotcha-protected-interpreter-windows-tests and mem:decision-protected-launch-interpreter first.\n\nLeave every existing row untouched. These rows are DoD 2's byte-identity proof for legacy Accounts lines:\n- `PowerShell accounts command quotes every word inside its encoded script`;\n- `WSL accounts command runs WSL node on mnt paths`;\n- `bash accounts command single-quotes every word`;\n- the C0/DEL and space/tilde rows;\n- AccountPresentationTest's vm-token row (that file is not edited).\n\nNew rows A1-A7 use two internal symbols that steps 2 and 3 add: `TerminalAgentLauncher.accountsCommandFor(profile, cli, registryFile, args, shell, basePath, systemRoot)` and `TerminalAgentLauncher.PROTECTED_WSL_NODE_PROGRAM`. A refusal is an IllegalArgumentException (assertThrows). Its message starts with `Protected execution profile: ` and never contains `node executable` or `agent wrapper`.\n\nA1, any host: legacy is unchanged.\n- For each AccountsShell, `accountsCommandFor(LEGACY, cli, file, args, shell, basePath)` equals `buildAccountsCommand(cli, file, args, shell)`.\n- Use basePath `D:\\projexts\\app` and a cli.node that does not exist, because legacy never validates.\n\nA2, Windows only: the native PowerShell line.\n- Guards: assumeTrue(SystemInfo.isWindows), plus P2's assume-skip on temporaryFolder.root's real path (copy it).\n- Lay out powerShellFixture(sysroot), an outside `node.exe` file and a sibling project folder. Run PROTECTED on AccountsShell.POWERSHELL with systemRoot = sysroot.path and args login, acct-1.\n- The line starts with `<fixture real path, every backslash turned into '/'> -NoProfile -ExecutionPolicy Bypass -EncodedCommand `, and does not start with `powershell`.\n- typedScript(line, <that word>) equals typedPsScript(buildAccountsCommand(AccountCli(<node real path>, script), file, args, AccountsShell.POWERSHELL)). So the decoded script is today's, with the validated node.\n\nA3, Windows only: PowerShell refusals.\n- systemRoot null, empty or blank: the message names SystemRoot.\n- A sysroot inside the project, a `sys root` folder and a missing folder: the message names that path and `the Accounts command's PowerShell`.\n- A valid sysroot with node inside the project: the message names the node path.\n\nA4, any host: node on AccountsShell.BASH.\n- An outside node file gives exactly buildAccountsCommand(AccountCli(<its real path>, script), file, args, AccountsShell.BASH).\n- A relative `bin/node` (named in the message), a bare `node`, a file inside the project, a missing path and a directory (each named) all refuse.\n\nA5, any host: the WSL line.\n- Inputs: basePath `D:\\projexts\\app`; cli `C:\\Program Files\\nodejs\\node.exe` with `C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js`; registry `C:\\Users\\Yaron\\.moe\\claude-accounts.json`; args remove, acct-2, --sign-out. Kotlin literals double each backslash.\n- The line equals `'/bin/bash' -c '` + PROTECTED_WSL_NODE_PROGRAM + `' moe-accounts '/mnt/d/projexts/app' '/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.2/plugins/moe-jetbrains/daemon/accounts/cli.js' '--accounts-file' '/mnt/c/Users/Yaron/.moe/claude-accounts.json' 'remove' 'acct-2' '--sign-out'`.\n- The program holds no single quote, backslash, `!`, C0 control or DEL, so it types unchanged inside single quotes in bash, zsh and fish. It ends with `exec node \"$@\"`.\n\nA6, any host: WSL refusals.\n- basePath `\\\\server\\share\\app`, `/home/u/app`, `D:app` (drive-relative) and empty each refuse. Each non-empty one is named.\n- A basePath holding a C0 control throws the existing `Invalid accounts command word` message. Build it at runtime, as `\"D:/p\" + 1.toChar() + \"q\"`.\n\nA7, POSIX only: the program's behaviour.\n- Guard: assumeTrue(!SystemInfo.isWindows && File(\"/bin/bash\").canExecute()).\n- Run `ProcessBuilder(\"/bin/bash\", \"-c\", PROTECTED_WSL_NODE_PROGRAM, \"moe-accounts\", <projectArg>, \"a b\", \"c\")` with directory(<cwd>) and environment()[\"PATH\"] = <path>.\n- Fake nodes: a file named `node` holding `#!/bin/sh` then `printf '%s|' <tag> \"$@\"`, setExecutable(true). Put them in project/ (tag cwd), project/bin/ (tag inside) and outside/ (tag outside). `link` is a symlink to project/bin.\n- Wait at most 10 s, and on a timeout destroyForcibly only that child.\n- (a) cwd project, PATH = `.`, an empty entry, `bin`, project/bin, link, outside, joined with ':'. Stdout is `outside|a b|c|` and exit 0.\n- (b) The same PATH without outside: exit 1, empty stdout, and stderr contains MOE_PROTECTED_INTERPRETER_NOT_FOUND.\n- (c) cwd a work folder outside the project holding rel/node (tag rel), PATH `rel`: exit 1 and empty stdout.\n- (d) A missing project folder, PATH outside: exit 1 and empty stdout.\n- In a WSL probe, the architect killed three program mutants with (a) to (c): keeping relative entries, dropping the empty-keep guard, and comparing only the entry instead of walking its ancestors.\n\nRED: take the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). From the worktree, run `W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.TerminalAgentLauncherTest\"`. It must fail at compileTestKotlin on the missing symbols. Release the lease and keep the output for the completion summary.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
-      ]
+      ],
+      "startedAt": "2026-11-03T09:27:46.205Z"
     },
     {
       "stepId": "step-2",
@@ -66,7 +67,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:40:06.793Z",
-  "updatedAt": "2026-11-03T09:25:23.464Z",
+  "updatedAt": "2026-11-03T09:27:46.205Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:57:52.111Z",
@@ -157,5 +158,13 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T09:24:48.647Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-24611a0a@2026-11-03T08:58:08Z",
+    "at": "2026-11-03T09:26:42.560Z"
+  },
+  "workStartedAt": "2026-11-03T09:27:46.205Z"
 }

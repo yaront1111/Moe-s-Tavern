@@ -52,29 +52,43 @@
     {
       "stepId": "step-3",
       "description": "Launch-level tests in scripts/tests/postflight-worktree.cjs. It holds one case list for both wrappers, run by postflight.sh with the sh engine and by postflight.ps1 with ps1. Register three new cases in the cases map.\n\nCommon fixture: repo() plus\n- `big/` holding about 30 nested directories, each with its own .gitignore;\n- `big/` and `.serena/` appended to <top>/.git/info/exclude only, which is the UnAI shape;\n- a tracked src/.gitignore holding `*.tmp`;\n- `.serena/project.yml` with project_name and `ignored_paths:` holding `- keep-me/`;\n- an existing `.serena/project.local.yml` holding a user comment and `read_only: false`;\n- knobs that pin XDG_CONFIG_HOME to a fixture dir, so no real ~/.config/git/ignore leaks in (HOME is already a fixture).\n\n1. 'serena-ignore' (shared mode, like 'shared-landed': FAKE_CLAIM_WORKSPACE:null, MOE_SERENA_PATH:process.execPath, type claude):\n   - after the launch, .serena/project.local.yml equals a LITERAL expected text: the user bytes unchanged, then the Moe block with `ignore_all_files_in_gitignore: false` and the ignored_paths \"/.git\", \"keep-me/\", the info/exclude patterns (\"big/\", \".serena/\"), the root .gitignore patterns and \"src/**/*.tmp\";\n   - the log has the [OK] MOE_SERENA_IGNORE_OVERRIDE line;\n   - a second launch leaves the file's bytes and inode unchanged and logs the up-to-date line.\n2. 'serena-ignore-off', each launch still running the CLI with today's exit code:\n   - (a) no Serena: MOE_SERENA_PATH unset and PATH filtered of every dir holding a `serena` executable. No MOE_SERENA_IGNORE line, and project.local.yml is byte-identical.\n   - (b) MOE_SERENA_IGNORE_OVERRIDE=0. File unchanged, plus the SKIPPED line.\n   - (c) .moe-agent.json serenaProject pointing at a plain dir outside any repo. Nothing is created in it.\n   - (d) serenaProject pointing at a dir whose .git file names a missing gitdir. Nothing is created in it.\n3. 'serena-ignore-wt' (a worktree-mode claude launch): W/.serena/project.local.yml holds a block computed for W, and W/.serena/project.yml still carries WT-06's `project_name: ...@<task>` rewrite.\n\nCheck every existing case still passes. Fixture repos do not ignore .serena/, so the script skips there and must not change any compared tree. postflight-safe.mjs fails on a line that starts with SKIP, and our line starts with '[info] '.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-03T09:20:28.251Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "scripts/tests/postflight-worktree.cjs: three new registered cases plus shared helpers.\n- serenaFixture: 30 big/tNN/.gitignore files; info/exclude holding only 'big/' and '.serena/'; a tracked src/.gitignore '*.tmp', committed on moe/control with main moved to it; .serena/project.yml with ignored_paths [keep-me/]; and a user project.local.yml.\n- SERENA_KNOBS pins XDG_CONFIG_HOME to the fixture and unsets GIT_CONFIG_GLOBAL.\n- serenaSaid() normalizes the MOE_SERENA_IGNORE_* log lines.\n\nThe cases:\n- 'serena-ignore' (shared mode, claude). The file must equal the LITERAL user bytes plus the block ['/.git','keep-me/','big/','.serena/','.worktrees/','.mcp.json','logs/','src/**/*.tmp']. Run 1 logs one `[OK] ... wrote <f> (8 patterns...)` line. Run 2 keeps the bytes and the bigint inode and logs `up to date (8)`.\n- 'serena-ignore-off', four runs, each with the CLI run, exit 0 and the file byte-identical:\n  - (none): MOE_SERENA_PATH unset and PATH filtered of serena{,.exe,.cmd,.bat,.ps1}. The MCP config has no serena entry and there is no line.\n  - (opt-out): the exact SKIPPED line `MOE_SERENA_IGNORE_OVERRIDE=0`.\n  - (plain) and (broken): .moe-agent.json serenaProject points at an os.tmpdir() dir holding .serena/project.yml, so the git check is reached. 'broken' adds a .git file naming a missing gitdir. The file list is unchanged, and there is one SKIPPED line 'is not a git work tree'.\n- 'serena-ignore-wt' (worktree claude). The control gets user + 9 patterns, because its extra/.gitignore is in the control only. W/.serena/project.local.yml is exactly the 8-pattern block, which proves it was computed on W. W/.serena/project.yml keeps project_name 'fixture@task-postflight'. The log has two [OK] lines, control first.\nStrengthened: the 'codes' case now also compares the MOE_SERENA_IGNORE_ family between the wrappers, which enforces the parity invariant without touching parity-check.*.\n\nResults:\n- sh: 4 ok in 17 s.\n- ps1 on PS 5.1 via node.exe: 4 ok in 38 s.\n- RED: the same cases against HEAD's wrappers fail with 3 AssertionErrors (serena-ignore: the file; off: opt-out line; wt: the control file).",
+      "startedAt": "2026-11-03T09:20:28.251Z",
+      "completedAt": "2026-11-03T09:27:00.504Z"
     },
     {
       "stepId": "step-4",
       "description": "Docs (DoD 4). Keep each to a few sentences.\n- docs/MEMORY.md: add a short 'Serena startup ignore override' subsection under the Caveats section. It covers:\n  - why it exists: Serena's startup .gitignore walk ignores .git/info/exclude and core.excludesFile and enters .git/. On UnAI, 112 info/exclude-d worktrees made every new seat's Serena time out for 15-23 min;\n  - what each launch does: it runs scripts/moe-serena-ignore.mjs on the Serena root, which writes a managed block in .serena/project.local.yml only when git ignores that file. The block turns the walk off and lists the same patterns, converted as Serena converts them;\n  - the fail-open cases;\n  - how to opt out: MOE_SERENA_IGNORE_OVERRIDE=0, or setting ignore_all_files_in_gitignore or ignored_paths yourself in project.local.yml outside the block.\n- scripts/CLAUDE.md: one sentence in the 'MCP servers for spawned agents' bullet (:43), next to the Serena resolution text, naming the script, both call sites (shared root and worktree W) and the opt-out.\n- docs/CONFIGURATION.md: one env-table row after MOE_SERENA_PROJECT (:57): `MOE_SERENA_IGNORE_OVERRIDE` | `0` turns off the launchers' Serena ignore override | on | `0`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MEMORY.md",
         "scripts/CLAUDE.md",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MEMORY.md",
+        "scripts/CLAUDE.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Docs (DoD 4):\n- docs/MEMORY.md: a new '### Serena startup ignore override' subsection under Caveats. It covers why (the startup walk ignores info/exclude and core.excludesFile and enters .git/, which cost UnAI 15-23 min), what each launch does (the shared root, and W in worktree mode; the block's contents), the write conditions and fail-open cases, and both opt-outs.\n- scripts/CLAUDE.md: the MCP-servers bullet now names serena_ignore_override / Invoke-MoeSerenaIgnoreOverride, the script, both call sites (pre-flight root, and W after the project.yml rewrite), the one-line output codes, fail-open, and the MOE_SERENA_IGNORE_OVERRIDE=0 opt-out, with a pointer to MEMORY.md.\n- docs/CONFIGURATION.md: an env row for MOE_SERENA_IGNORE_OVERRIDE after MOE_SERENA_PROJECT.\nnpm run lint passes (role docs 39/30/36 lines).",
+      "startedAt": "2026-11-03T09:27:01.241Z",
+      "completedAt": "2026-11-03T09:27:44.270Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification. This is the DoD 3 gate: both postflight harnesses, which also run postflight-worktree.cjs, plus parity, the producer's unit suite and lint. Run this once, fresh, after the last edit:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-e3e81c45.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && node --test scripts/tests/serena-ignore.test.mjs && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\" && cd \"$R\" && npm run lint\n\nHow to run it:\n- It takes about 25 min for bash plus 45 min for PS 5.1 (mem:gotcha-postflight-worktree-mutant-copy timings). Run it as ONE detached job, e.g. `setsid nohup bash -c '<command>; echo $? > <scratch>/exit' > <scratch>/out 2>&1 &`, record its PID, and poll the exit file. That command's exit code and output tail are the complete_task evidence.\n- Never kill other processes. Kill only the PID you recorded.\n- Never run npm install or npm ci in the checkout.\n- Run it from a normal WSL shell, not env -i, so Windows interop has git and powershell.exe.\n\nReport the pass and fail counts of both harnesses, and name the three new cases' ok lines for sh and for ps1.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T09:27:45.053Z"
     },
     {
       "stepId": "step-6",
@@ -108,12 +122,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:25:34.188Z",
-  "updatedAt": "2026-11-03T09:20:28.251Z",
+  "updatedAt": "2026-11-03T09:27:45.053Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:31:25.007Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -129,7 +143,9 @@
   ],
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T07:43:53.542Z",

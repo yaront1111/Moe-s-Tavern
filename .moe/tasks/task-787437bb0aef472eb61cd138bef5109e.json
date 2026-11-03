@@ -37,16 +37,21 @@
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of the one-file diff before complete_task. Fix anything you find within this file only, and record each answer in the complete_task summary.\n1. Scope: git diff --stat shows exactly moe-vscode/tests/protected-daemon-provenance.test.cjs, and git diff -- moe-vscode/src is empty. Only the scheduler expression and its comment changed: no deadline, poll interval, row or assertion.\n2. Lost events: re-read stopProtectedDaemon in moe-vscode/src/services/MoeDaemonClient.ts and confirm that spawn(), the deadline timer and both child.once listeners sit in one synchronous Promise executor, so a nextTick delivery cannot be missed. If production ever attaches listeners after an await, (7) fails loudly; it does not pass silently.\n3. Refusal paths (from step 1's MA and MB results):\n   - hang reaches the stop deadline (killed true).\n   - alive, new pid, unreadable and oversize reach the 25 ms exit deadline.\n   - nonzero and ENOENT finish false without a kill.\n4. Cancellation: in 'cancel during stop', afterStop calls disconnect() before 'exit'. connect()'s connectCancelled() fences then return before waitForReplacementExit and startProtectedDaemon: 0 sockets, 0 errors, 1 spawn.\n5. Concurrency and globals:\n   - The two concurrent connect() calls still rely on connectInProgress.\n   - process.nextTick is the test file's own global.\n   - The vm sandbox (setTimeout/clearTimeout/setInterval/clearInterval) is unchanged, and nothing else in the file uses process.nextTick.\n6. Name, don't fix: StubWebSocket 'open' on setImmediate against the 15 s handshakeTimeoutMs, shared by every connect row.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/protected-daemon-provenance.test.cjs"
       ],
-      "startedAt": "2026-11-03T09:25:06.155Z"
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+      ],
+      "note": "Adversarial review clear. 1) diff exactly +3/-1 one file, src empty; byte comparison proves only scheduler/comment changed, diff --check clean. 2) spawn/timer/both once listeners synchronous; nextTick cannot be missed; later await would fail (7). 3) MA/MB prove stop hang kill vs four exit-timeout refusal paths; nonzero/ENOENT refuse without kill. 4) afterStop disconnect before exit; connectCancelled fences prevent wait/start (0 sockets/0 errors/1 spawn). 5) connectInProgress unchanged; one test-global process.nextTick; vm timers untouched. 6) residual StubWebSocket open setImmediate vs 15s handshake timer explicitly out of scope. Inputs remain trusted fixture arguments, cleanup/error handling unchanged. Fresh full exact gate already passed in step 2; no edits since. Handoff and existing gotcha memory updated.",
+      "startedAt": "2026-11-03T09:25:06.155Z",
+      "completedAt": "2026-11-03T09:25:52.857Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -65,7 +70,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T09:01:08.650Z",
-  "updatedAt": "2026-11-03T09:25:06.155Z",
+  "updatedAt": "2026-11-03T09:27:56.270Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T09:02:44.827Z",
@@ -75,7 +80,7 @@
     "firstClaimAt": "2026-11-03T09:03:23.739Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -88,7 +93,8 @@
   "lowEffortEligible": true,
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T09:20:33.979Z",
@@ -149,11 +155,39 @@
   "planApprovedAt": "2026-11-03T09:20:34.009Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T09:03:22Z",
-    "at": "2026-11-03T09:22:20.215Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T09:20:36Z",
+    "at": "2026-11-03T09:27:56.270Z"
   },
-  "workStartedAt": "2026-11-03T09:23:05.517Z"
+  "workStartedAt": "2026-11-03T09:23:05.517Z",
+  "reviewStartedAt": "2026-11-03T09:26:07.881Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && F=moe-vscode/tests/protected-daemon-provenance.test.cjs && L=$(mktemp -d /tmp/787437bb-linux.XXXXXX) && git archive HEAD | tar -x -C \"$L\" && cp \"$F\" \"$L/$F\" && cmp \"$F\" \"$L/$F\" && echo 'globalThis.setImmediate = (fn, ...args) => setTimeout(fn, 30, ...args);' > \"$L/defer-immediate.cjs\" && echo \"LINUX_SNAPSHOT=$L\" && (cd \"$L/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && node --require ../defer-immediate.cjs tests/protected-daemon-provenance.test.cjs && npm test && npm run compile' > \"$L/verification.log\" 2>&1; rc=$?; grep -aE '^[^ ]+ (tests|pass|fail|skipped) [0-9]+' \"$L/verification.log\"; echo \"LINUX_EXIT=$rc\"; exit $rc) && cd \"$(git rev-parse --show-toplevel)\" && F=moe-vscode/tests/protected-daemon-provenance.test.cjs && mkdir -p /mnt/d/moe-scratch && W=$(mktemp -d /mnt/d/moe-scratch/787437bb-win.XXXXXX) && git archive HEAD | tar -x -C \"$W\" && cp \"$F\" \"$W/$F\" && cmp \"$F\" \"$W/$F\" && echo 'globalThis.setImmediate = (fn, ...args) => setTimeout(fn, 30, ...args);' > \"$W/defer-immediate.cjs\" && echo \"WINDOWS_SNAPSHOT=$W\" && (cmd.exe /d /c \"cd /d $(wslpath -w \"$W/moe-vscode\") && npm ci --no-audit --no-fund && node --require ../defer-immediate.cjs tests/protected-daemon-provenance.test.cjs && npm test && npm run compile\" > \"$W/verification.log\" 2>&1; rc=$?; grep -aE '^[^ ]+ (tests|pass|fail|skipped) [0-9]+' \"$W/verification.log\"; echo \"WINDOWS_EXIT=$rc\"; exit $rc) && cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "LINUX_SNAPSHOT=/tmp/787437bb-linux.kgtdl1\nℹ tests 47\nℹ pass 47\nℹ fail 0\nℹ skipped 0\nℹ tests 685\nℹ pass 676\nℹ fail 0\nℹ skipped 9\nLINUX_EXIT=0\nWINDOWS_SNAPSHOT=/mnt/d/moe-scratch/787437bb-win.vYw1Y1\nℹ tests 47\nℹ pass 45\nℹ fail 0\nℹ skipped 2\nℹ tests 681\nℹ pass 669\nℹ fail 0\nℹ skipped 12\nWINDOWS_EXIT=0\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n",
+    "reportedAt": "2026-11-03T09:26:07.881Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+  ],
+  "completionSummary": "Test-only fixture scheduling fix (+3/-1): stop outcomes use nextTick; start/open stay setImmediate. Exact checkRefs [0] && [1] && [2] exit 0. Counts tests/pass/fail/skipped: Linux deferred 47/47/0/0, full 685/676/0/9; Windows deferred 47/45/0/2, full 681/669/0/12. Both compiles pass; parity PASS; lint OK (39/30/36 lines). Snapshots/logs retained: /tmp/787437bb-linux.kgtdl1/verification.log; /mnt/d/moe-scratch/787437bb-win.vYw1Y1/verification.log. Aggregate /tmp/787437bb-verification.log; exact command /tmp/787437bb-verification-command.sh. RED /tmp/787437bb-red.or67KN/red.log: 47/38/9/0, exact expected nine failures. Base plain and GREEN plain/deferred 47/47/0/0. MA 47/46/1/0 only hang; MB 47/43/4/0 only alive,new pid,unreadable,oversize. Production restored/cmp after each mutant. Review answers: (1) exact scheduler/comment-only byte comparison, one-file diff, src empty; deadlines/poll/rows/assertions unchanged, diff --check clean. (2) spawn/timer/error+exit listeners synchronous, nextTick cannot be lost; adding await before listeners would fail (7). (3) hang tests stop deadline/kill; four MB rows test exit deadline; nonzero/ENOENT refuse without kill. (4) disconnect before exit fenced by connectCancelled before wait/start: 0 sockets,0 errors,1 spawn. (5) connectInProgress unchanged; one test-global nextTick, vm timers untouched. (6) residual StubWebSocket open setImmediate vs 15s handshake timeout named, not changed. Trusted fixture inputs and existing cleanup/error handling unchanged. Handoff and gotcha memory saved; wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "e21e80471de678aded76262bfcf9671dc47bb3ad",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T09:20:36Z",
+      "paths": [
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T09:27:56.270Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
