@@ -1,0 +1,28 @@
+{
+  "id": "task-d981e0b0b3a34edbb26dd63fa7303e2c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: complete_task, qa_approve and qa_reject record no actor on TASK_COMPLETED / QA_APPROVED / QA_REJECTED, so get_activity_log by workerId misses every completion and QA verdict and #general says \"Task moved to REVIEW/DONE by unknown\"",
+  "description": "Filed by architect-1dd28c7c from the daemon/proxy defect hunt (task-8f18d6fa).\n\nPROBLEM\nstate.updateTask(taskId, updates, event, actorWorkerId) stores actorWorkerId as the activity event's workerId and names it in the \"Task moved to <STATUS> by <actor>\" #general notice (state/taskStore.ts, about lines 643-658; 691da5cc). The code comment there says the actor \"is threaded from the tool that knows who called it. Without it every task event was written with no actor and the per-worker audit trail was empty\". start_step, complete_step, submit_plan, set_task_status, set_task_dependencies and claim_next_task pass params.workerId. The three review-loop tools do not:\n- tools/completeTask.ts ~277: state.updateTask(task.id, { status: 'REVIEW', ... }, 'TASK_COMPLETED')\n- tools/qaApprove.ts ~224: state.updateTask(params.taskId, { status: 'DONE', ... }, 'QA_APPROVED')\n- tools/qaReject.ts ~301: state.updateTask(..., 'QA_REJECTED')\nEach of those moves also unassigns the row, so the notice's assignee fallback is null too, and it prints \"by unknown\".\nEffects:\n- get_activity_log { workerId: <qa seat> } returns none of that seat's approvals or rejections.\n- get_activity_log { workerId: <worker> } returns none of that worker's completions.\n- Per-seat audits are blind to the review loop.\n- #general names no actor on any REVIEW or DONE move.\nSame gap, deliberately not in this row so it stays small: report_blocked's TASK_BLOCKED (5 of 5 actor-less today) and request_replan's TASK_REOPENED.\n\nEVIDENCE\n1. Today's log. In .moe/activity.log on 2026-11-03, all 52 QA_APPROVED, 2 QA_REJECTED and 42 TASK_COMPLETED events carry no workerId, while all 212 STEP_STARTED, 215 STEP_COMPLETED and 35 PLAN_SUBMITTED events do.\n   - Example: evt-d2c98bb31c2b4019a24518da52750fec, 2026-11-03T11:45:03.957Z, QA_APPROVED task-26d9dc26, no workerId (qa-93f9625e approved it).\n   - Matching chat line in .moe/messages/chan-b6d8273b.jsonl: msg-a6e48cabc30a49d880f49458a4b9bcf0, 2026-11-03T11:45:03.958Z, \"task-26d9dc26bf334126bfb0bb4e9ed421aa: Task moved to DONE by unknown\". Today has 52 such DONE lines and 44 \"moved to REVIEW by unknown\".\n   - Latest at filing: evt-fd1847448aef4e9b8e84c799089b02f2, 2026-11-03T13:13:39.679Z, TASK_COMPLETED task-0c78c290, no workerId.\n2. Repro on HEAD 99cae90a (a descendant of 1558f141), in a git-archive snapshot outside the shared checkout. File and output: /mnt/d/moe-scratch/hunt-8f18d6fa/zzReproActor.test.ts and /mnt/d/moe-scratch/hunt-8f18d6fa/repro-output-99cae90a.txt.\nCommand: cd <snapshot>/packages/moe-daemon && npx vitest run src/tools/zzReproActor.test.ts\nObserved:\nREPRO event QA_APPROVED     workerId = undefined\nREPRO event QA_REJECTED     workerId = undefined\nREPRO event TASK_COMPLETED  workerId = undefined\nREPRO get_activity_log {workerId: qa-b} events: [\"TASK_UPDATED\",\"TASK_UPDATED\"]\nREPRO get_activity_log {workerId: worker-a} events: []\nREPRO #general: task-1: Task moved to REVIEW by unknown\nREPRO #general: task-1: Task moved to WORKING by unknown\nREPRO #general: task-1: Task moved to DONE by unknown\nTests 1 failed (1)\n(The repro's own setup writes pass the actor; they produce the two TASK_UPDATED events and one \"REVIEW by qa-b\" line, which are omitted above.)\n\nFIX DIRECTION\nIn each of the three tools, pass params.workerId (the caller each tool already validates) as the fourth updateTask argument. There is no schema or contract change: ActivityEvent.workerId is an existing optional field, and a call without workerId behaves as today. Keep each tool's existing error handling.\nFiles: packages/moe-daemon/src/tools/completeTask.ts, qaApprove.ts and qaReject.ts, plus one new test file (e.g. packages/moe-daemon/src/tools/reviewLoopActor.test.ts).",
+  "definitionOfDone": [
+    "complete_task, qa_reject and qa_approve each pass the caller's workerId to updateTask. One vitest case drives complete_task (worker-a), qa_reject (qa-b) and qa_approve (qa-b), and asserts the TASK_COMPLETED event's workerId is worker-a and the QA_REJECTED and QA_APPROVED events' workerId is qa-b.",
+    "The same case asserts that get_activity_log { workerId: 'qa-b' } returns QA_REJECTED and QA_APPROVED, and that get_activity_log { workerId: 'worker-a' } returns TASK_COMPLETED.",
+    "The same case asserts the #general notices read 'Task moved to REVIEW by worker-a', 'Task moved to WORKING by qa-b' and 'Task moved to DONE by qa-b'. The existing completeTask, qaApprove and qaReject suites pass unchanged, run in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 360.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T13:25:49.539Z",
+  "updatedAt": "2026-11-03T13:25:49.539Z"
+}

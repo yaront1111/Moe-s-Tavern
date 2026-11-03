@@ -82,7 +82,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -114,16 +114,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T11:37:39.579Z",
-  "updatedAt": "2026-11-03T13:14:40.833Z",
+  "updatedAt": "2026-11-03T13:25:51.313Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T11:37:52.806Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T13:25:29.422Z",
+    "wallClockMs": 6456616
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-c9368191"
+    "worker-c9368191",
+    "qa-93f9625e"
   ],
   "dependsOn": [],
   "tier": "standard",
@@ -211,10 +214,11 @@
   "planApprovedAt": "2026-11-03T11:55:42.394Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T13:08:13Z",
-    "at": "2026-11-03T13:14:40.832Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T13:23:22Z",
+    "at": "2026-11-03T13:25:51.313Z"
   },
   "workStartedAt": "2026-11-03T13:09:40.216Z",
   "reviewStartedAt": "2026-11-03T13:13:39.665Z",
@@ -251,5 +255,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T13:25:29.422Z",
+  "reviewCompletedAt": "2026-11-03T13:25:29.422Z",
+  "reviewSummary": "Reviewed completion eaad2635 (on moe/work-2026-10-24, control HEAD): 4 paths, +154/-4 (~150 net, under the 400 cap): accountStore.ts settleLease (+7/-3), new accountStore.presence.test.ts (+145), docs/MCP_SERVER.md (+1 bullet), scripts/CLAUDE.md (+1/-1, line 42 only). Within approvedScope; sweeps.ts, leaseAccount.ts and timeouts untouched.\n\nRe-ran task.verification (plan's C0+C1 chain, foreground, exit 0): C0 OK (parity-check PASS, role-doc lint OK); C1 OK in a shared-clone snapshot outside the checkout, env -i nvm node 24: 233 files passed, 6997 passed | 24 skipped, tsc --noEmit clean. (Counts differ slightly from the worker's 6993/20 because HEAD now includes fb126280; no failures.)\n\nDiscrimination: in a git-archive snapshot with the parent accountStore.ts restored, the presence test gives 3 failed | 3 passed, failing exactly p1 (all-spent), p3 (rotation:false), p4 (repeat lease); p2 control, p5 unknown seat and p6 DEAD seat pass, as the contract requires.\n\nDoD: (1) every lease_account path goes through settleLease, which now always calls touchWorker and passes { accountId } only when it differs (absent = null); touchWorker's unknown and DEAD guards are unchanged (checked in workerStore.ts) and p5/p6 pin them. (2) The test uses the real runBlockedTimeoutSweep: the stale REVIEW owner who leases while all accounts are spent keeps the row; the no-lease control (p2) releases it. (3) Both docs state each lease_account call counts as presence. (4) Suite + tsc pass.\n\nAdversarial: no DEAD-resurrection race (touchWorker re-reads under the reentrant mutex); absent accountId stays absent on a null reply; load is at most one worker write per lease. The documented MOE_ACCOUNT_RETRY_SEC >= reviewStaleTimeoutMs/1000 gap and the wrapper-side re-check are out of scope. Nothing to cut. The live daemon needs the governor's restage and swap before the fix takes effect.",
+  "requiredCheckAtDone": null
 }

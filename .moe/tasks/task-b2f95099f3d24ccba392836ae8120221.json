@@ -1,0 +1,28 @@
+{
+  "id": "task-b2f95099f3d24ccba392836ae8120221",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_read with an explicit sinceId rewrites the caller's chat cursors: a channel peek rewinds the cursor (chat_wait re-delivers handled messages) and an all-channel peek jumps other channels past unread mentions",
+  "description": "Filed by architect-1dd28c7c from the daemon/proxy defect hunt (task-8f18d6fa).\n\nPROBLEM\nmoe.chat_read (packages/moe-daemon/src/tools/chatRead.ts) writes the caller's per-channel chatCursors and clears unread whenever workerId is present. That includes reads that pass an explicit sinceId. moe-proxy injects workerId into every chat_read a seat makes (injectWorkerId in packages/moe-proxy/src/utils.ts exempts only get_activity_log), so no seat can peek at older messages without moving its cursor. state/workerStore.ts updateWorkerCursors merges the new id unconditionally.\n1. Channel read with a sinceId older than the stored cursor: the cursor is set to the last message of that page, so it moves backwards. The next cursor-mode chat_read and the next chat_wait both re-deliver everything after it. Seen live on 2026-11-03: after a chat_read peek at msg-45ae900d (12:30Z), the governor's 13:10Z chat_wait re-sent about 10 messages it had already handled.\n2. All-channel read (no channel) with an explicit sinceId: the id is applied to every channel. A channel that does not hold it trips getMessages' expired-cursor fallback (state/chatStore.ts) and returns its newest window. That channel's cursor then jumps to its newest message and its unread count is cleared, so the messages between the old cursor and that window are never delivered, direct mentions included. util/chatBacklog.ts collectChatBacklog already guards this case for chat_wait (\"An explicit catch-up id belongs to ONE channel\"); chat_read does not. This is distinct from the archived task-a0973700 fix, which covers fetched-but-omitted messages in all-channel mode.\n3. An explicit sinceId ahead of the stored cursor skips the messages in between the same way.\n\nEVIDENCE: repro on HEAD 99cae90a (a descendant of 1558f141), run in a git-archive snapshot outside the shared checkout with Linux node_modules. Repro file and full output: /mnt/d/moe-scratch/hunt-8f18d6fa/zzReproCursor.test.ts and /mnt/d/moe-scratch/hunt-8f18d6fa/repro-output-99cae90a.txt. To re-run, copy the test into a snapshot's packages/moe-daemon/src/tools/.\nCommand: cd <snapshot>/packages/moe-daemon && npx vitest run src/tools/zzReproCursor.test.ts\nObserved:\nREPRO first read      : m1,m2,m3,m4,m5,m6 | stored cursor = m6\nREPRO peek sinceId=m1 : m2 | stored cursor = m2 (REWOUND from m6)\nREPRO next plain read : m3,m4,m5,m6 (already delivered by the first read)\nREPRO chat_wait after a second peek: true m3,m4,m5,m6\nREPRO2 #workers read            : w1,w2,w3,w4,w5 | cursor w5\nREPRO2 unread before            : {\"chan-51896eb3...\":1}   (w7 mentions the reader)\nREPRO2 all-channel sinceId=g1   : w11,w12,w13,w14,w15,w16,w17,w18,w19,w20\nREPRO2 #workers cursor now      : w20\nREPRO2 unread after             : {}\nREPRO2 next #workers plain read : []   (w6..w10, including the w7 mention, never delivered)\nTests 2 failed (2)\n\nFIX DIRECTION\nMake an explicit-sinceId chat_read a peek: it returns the page but writes no cursor and clears no unread count. Cursor-mode reads (workerId without sinceId, the only form both wrappers use) keep advancing exactly as today. In all-channel mode, apply the explicit id only to the channel that holds it (state.messageExistsInChannel, as collectChatBacklog does); other channels read from the caller's stored cursor. Update the tool description string in chatRead.ts to say a sinceId read does not move cursors. Keep the existing error handling for unknown channels and bad limits.\nOut of scope:\n- docs/MCP_SERVER.md: task-0c78c290 holds it at filing. Its chat_read notes can follow in a docs pass.\n- chat_wait's explicit-sinceId catch-up.\n- chatStore's 1 MB tail window.\nFiles: packages/moe-daemon/src/tools/chatRead.ts, plus one new test file (e.g. packages/moe-daemon/src/tools/chatRead.cursor.test.ts).",
+  "definitionOfDone": [
+    "A chat_read with workerId and an explicit sinceId leaves the caller's stored chatCursors and unread counts unchanged, in channel and all-channel mode. A vitest case seeds a cursor at m6, peeks with sinceId=m1 and limit 1, and asserts the stored cursor is still m6 and that the next cursor-mode chat_read returns no messages.",
+    "An all-channel chat_read with an explicit sinceId applies the id only to the channel that holds it. A vitest case puts an unread direct mention in another channel past its stored cursor, and asserts that channel's cursor and unread count are unchanged and its next cursor-mode read still returns the mention.",
+    "Cursor-mode reads (workerId, no sinceId) still advance cursors and clear unread as before: tools/chatBudgets.test.ts, chatChannelRef.test.ts, chatSystemFeed.test.ts and chatWait.test.ts pass unchanged, run in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 359.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T13:25:34.209Z",
+  "updatedAt": "2026-11-03T13:25:34.209Z"
+}
