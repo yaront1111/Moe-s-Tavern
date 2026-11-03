@@ -1935,11 +1935,13 @@ changes nothing (the task, its file and any SPEED-mode auto-approval stay);
 retry it. The board's `DELETE_TASK` and a `moe.delete_epic`
 cascade go through the same path.
 
+**Role gate:** a call that names a `workerId` must come from an architect or governor seat (`workerHasRole`: team role first, then the id prefix). Any other id, `''` and `null` included, is refused `-32003` / `NOT_ALLOWED` before the task lookup and any write, so the task, its attempts and its holder's record are unchanged. A call with no `workerId` key is the human path; the board's `DELETE_TASK` does not go through this tool.
+
 **Parameters:**
 ```typescript
 {
   taskId: string,
-  workerId?: string   // caller (auto-injected by moe-proxy); recorded as the actor of TASK_DELETED
+  workerId?: string   // caller (auto-injected by moe-proxy); recorded as the actor of TASK_DELETED; must resolve to architect or governor (see Role gate)
 }
 ```
 
@@ -1950,6 +1952,7 @@ cascade go through the same path.
 
 **Errors:**
 - `taskId is required` - if taskId parameter is missing
+- `[NOT_ALLOWED] delete_task not allowed: architect or governor role required …` - a `workerId` that resolves to neither role (checked before the lookup)
 - `Task not found: <taskId>` - if task does not exist
 
 ---
@@ -1958,12 +1961,14 @@ cascade go through the same path.
 
 Delete an epic and optionally its tasks.
 
+**Role gate:** as for `moe.delete_task`, a named `workerId` must resolve to architect or governor, or the call is refused `-32003` / `NOT_ALLOWED` before the epic lookup, the task-count check and any write, a cascade included. A call with no `workerId` key is the human path; the board's `DELETE_EPIC` does not go through this tool.
+
 **Parameters:**
 ```typescript
 {
   epicId: string,
   cascadeDelete?: boolean, // If true, delete all tasks in epic. Default: false
-  workerId?: string        // caller (auto-injected by moe-proxy); recorded as the actor of EPIC_DELETED and each cascaded TASK_DELETED
+  workerId?: string        // caller (auto-injected by moe-proxy); recorded as the actor of EPIC_DELETED and each cascaded TASK_DELETED; must resolve to architect or governor (see Role gate)
 }
 ```
 
@@ -1983,6 +1988,7 @@ Delete an epic and optionally its tasks.
 **Errors:**
 - `epicId is required` - if epicId parameter is missing
 - `Epic not found: <epicId>` - if epic does not exist
+- `[NOT_ALLOWED] delete_epic not allowed: architect or governor role required …` - a `workerId` that resolves to neither role (checked first)
 - `Epic "<epicId>" has N task(s)...` - if epic has tasks and cascadeDelete is false
 
 ---
