@@ -301,7 +301,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       const updated = await state.updateTask(
         params.taskId,
         updatePayload,
-        'QA_REJECTED'
+        'QA_REJECTED',
+        params.workerId
       );
 
       // Escalation messaging, one branch per destination.

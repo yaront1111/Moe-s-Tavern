@@ -286,7 +286,8 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           filesModified,
           ...(completionSummary ? { completionSummary } : {}),
         },
-        'TASK_COMPLETED'
+        'TASK_COMPLETED',
+        params.workerId
       );
 
       // updateTask clears assignedWorkerId on WORKING -> REVIEW handoff; touchWorker

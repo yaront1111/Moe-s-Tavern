@@ -242,7 +242,8 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
             ? { deliveryEvidence }
             : task.deliveryEvidence !== undefined ? { deliveryEvidence: undefined } : {}),
         },
-        'QA_APPROVED'
+        'QA_APPROVED',
+        params.workerId
       );
 
       // Use the captured assignee because updateTask clears assignedWorkerId on
