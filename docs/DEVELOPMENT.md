@@ -117,15 +117,17 @@ Claude Code config example:
 
 ## Run the JetBrains Plugin
 
-Open `moe-jetbrains` in IntelliJ/PyCharm and run one of:
+Build the daemon and the proxy first. The plugin build bundles both, and `requireBundledAssets()` in `moe-jetbrains/build.gradle.kts` fails it when either one's `dist/` is missing or older than its `src/`, or its `node_modules/` is missing. Then run Gradle from `moe-jetbrains/` (or open `moe-jetbrains` in IntelliJ/PyCharm and run the same tasks there):
 
 ```bash
-cd packages/moe-daemon
-npm run build
-
+cd packages/moe-daemon && npm install && npm run build
+cd ../moe-proxy && npm install && npm run build
+cd ../../moe-jetbrains
 ./gradlew runIde     # launches a sandbox IDE
 ./gradlew buildPlugin
 ```
+
+On Windows, run `.\gradlew.bat runIde` or `.\gradlew.bat buildPlugin` from `moe-jetbrains\`.
 
 The plugin:
 - Connects to `ws://127.0.0.1:<port>/ws`
@@ -135,16 +137,16 @@ The plugin:
 Notes:
 - For local development in this repo, open the repo root (the folder containing `packages/`) so the plugin can auto-start the local daemon.
 - If you install the plugin ZIP manually, extract it so the plugin folder contains `lib/` at the top level (e.g., `.../plugins/moe-jetbrains/lib`). If you end up with `.../plugins/moe-jetbrains/moe-jetbrains/lib`, PyCharm will not load the plugin.
-- Gradle wrapper maintenance: the committed wrapper targets Gradle 8.10.2. Keep `moe-jetbrains/gradlew` with LF endings and `moe-jetbrains/gradlew.bat` with CRLF endings; `.gitattributes` enforces this. If the wrapper is regenerated, use Gradle's `wrapper --gradle-version 8.10.2 --distribution-type bin` flow from a trusted Gradle install/distribution, do not hand-edit the binary jar, and validate with `.\gradlew.bat test` on Windows plus `bash -lc 'cd moe-jetbrains && ./gradlew --version'` when bash is available.
+- Gradle wrapper maintenance: the committed wrapper pins its Gradle version in `moe-jetbrains/gradle/wrapper/gradle-wrapper.properties` (`distributionUrl`). Keep `moe-jetbrains/gradlew` with LF endings and `moe-jetbrains/gradlew.bat` with CRLF endings; `.gitattributes` enforces this. If the wrapper is regenerated, use Gradle's `wrapper --gradle-version <version> --distribution-type bin` flow (the pinned version, or the one you are moving to) from a trusted Gradle install/distribution, do not hand-edit the binary jar, and validate with `.\gradlew.bat test` on Windows plus `bash -lc 'cd moe-jetbrains && ./gradlew --version'` when bash is available.
 
 ---
 
 ## Seed Data for the UI
 
-The current UI does not create epics or tasks yet. To see data in the board:
-- Create epic and task JSON files under `.moe/epics/` and `.moe/tasks/`.
-- Use the examples in `docs/SCHEMA.md` as templates.
-- The daemon file watcher will load them and broadcast to the UI.
+Create epics and tasks through the daemon. Never write `.moe/` files by hand: the daemon is the sole writer of its runtime state.
+- JetBrains: **+ Epic** in the board header, **+** in the Backlog column header, or **Tools → Moe → Create Task**.
+- VS Code: **Moe: Create Epic** and **Moe: Create Task** in the Command Palette.
+- Agents and scripts: `moe.create_epic` and `moe.create_task` (contracts in [MCP_SERVER.md](./MCP_SERVER.md)). From a terminal, with the daemon running: `scripts/moe-call.sh create_epic '{"title":"My epic"}' --project <path>`.
 
 ---
 
@@ -167,7 +169,7 @@ The agent scripts handle daemon startup, MCP config, role documentation injectio
 ```
 
 Key flags:
-- `-Role` / `--role`: `architect`, `worker`, or `qa`
+- `-Role` / `--role`: `architect`, `worker`, `qa`, or `governor`
 - `-Project` / `--project`: Path to your project
 - `-ProjectName` / `--project-name`: Look up project from `~/.moe/projects.json` registry
 - `-Command` / `--command`: Agent CLI to run (`claude`, `codex`, `gemini`, `grok`, or custom path). `grok` is xAI's Grok Build — install with `irm https://x.ai/cli/install.ps1 | iex` (or `npm install -g @xai-official/grok`) on Windows, `curl -fsSL https://x.ai/cli/install.sh | bash` on Mac/Linux/WSL; auth via `XAI_API_KEY` or `grok login`
@@ -300,14 +302,10 @@ Implemented now:
 - Board UI with 5 columns (Awaiting Approval displays in Planning)
 - Drag/drop status change
 - Task detail dialog (approve/reject/reopen)
+- Epic create, edit and delete (`CreateEpicDialog`, `EpicDetailDialog`) and task creation (`CreateTaskDialog`, also the `Moe.CreateTask` action)
+- Worker status (`WorkerPanel`), project settings (`MoeSettingsDialog`), the status bar widget (`MoeStatusBarWidget`) and IDE notifications (`MoeNotificationService`)
 - Daemon state manager + file watcher
 - MCP tools: `get_context`, `submit_plan`, `check_approval`, `start_step`, `complete_step`, `complete_task`, `report_blocked`, `propose_rail`, `list_tasks`, `get_next_task`, `claim_next_task`, `search_tasks`, `qa_approve`, `qa_reject`, `create_task`, `create_epic`, `update_epic`, `delete_task`, `delete_epic`, `get_activity_log`, `unblock_worker` (seat-only; `resolveBlocks: true` clears the block), `set_task_status`, `get_commit_scope`, `record_commit`, `declare_files`
-
-Not yet implemented (planned):
-- Epic CRUD UI
-- Task creation UI
-- Worker status UI
-- Notifications/settings/status bar
 
 See `docs/PLUGIN_SPEC.md` and `docs/UI_SPEC.md` for the roadmap.
 
@@ -326,7 +324,7 @@ See `docs/PLUGIN_SPEC.md` and `docs/UI_SPEC.md` for the roadmap.
 
 - **Permission denied on scripts**: Run `chmod +x scripts/*.sh`
 - **python3 not found**: Install via `brew install python3`
-- **Port 3141 in use**: Daemon will scan for next available port, check daemon.json for actual port
+- **Port 9876 in use**: Daemon will scan for next available port, check daemon.json for actual port
 - **Apple Silicon vs Intel**: Both work identically; verify Node.js architecture with `node -p process.arch`
 
 For detailed Mac setup and verification checklist, see [MAC_INSTALL.md](./MAC_INSTALL.md).
@@ -352,20 +350,20 @@ wslpath -u "C:\Users\yourname\projects\myproject"
 **Common WSL Issues**
 - **Path not found**: Ensure you're using `/mnt/c/...` format, not `C:\...`
 - **Permission denied**: Windows filesystem permissions may differ; try `chmod +x` on scripts
-- **Node not found**: Install Node.js in WSL separately: `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs`
+- **Node not found**: Install Node.js 24 LTS in WSL separately (the daemon needs 22.22+, 24 or 26): `curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs`
 - **python3 not found**: `sudo apt-get install python3`
 - **Daemon can't write files**: Check Windows file has write access from WSL
 
 **Networking**
 - WSL2 uses a different IP than Windows host
-- Daemon runs on `127.0.0.1` which WSL can access
+- The daemon binds `127.0.0.1` by default, and WSL in NAT mode cannot reach the Windows loopback. For WSL agents against a Windows daemon, start the daemon with `--host wsl` (or `MOE_BIND_HOST=wsl`): it then also listens on the WSL adapter, and agents reach it through the WSL gateway. In JetBrains on Windows, the **Start Agents** menu toggle **Run Agents in WSL (Linux)** restarts the daemon that way. Mirrored networking uses loopback. See [WSL agents cannot reach the Windows daemon](./TROUBLESHOOTING.md#wsl-agents-cannot-reach-the-windows-daemon).
 - If using Docker in WSL, ensure Docker Desktop WSL integration is enabled
 
 **IDE Integration**
 - When using JetBrains IDE on Windows with WSL projects:
   - Open project via `\\wsl$\Ubuntu\...` path in Windows
   - Or use Remote Development with WSL backend
-  - The plugin connects to daemon via localhost (works across WSL/Windows boundary)
+  - The plugin connects to the daemon at `ws://127.0.0.1:<port>/ws`. WSL agents that use a Windows daemon need the `--host wsl` bind described under **Networking**.
 
 ### General Troubleshooting
 
@@ -423,7 +421,7 @@ Outbound messages: `GET_STATE`, `UPDATE_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `R
 |---------|-----------|--------|
 | Condition | Project opened | `workspaceContains:.moe`, `onView:moe.board`, `onCommand:moe.connect` |
 | Auto-connect | On project open | On activation (configurable) |
-| Config location | `MoeSettings` | `vscode.workspace.getConfiguration('moe')` |
+| Config location | `MoeSettingsDialog` (writes `.moe/project.json` `settings` through `UPDATE_SETTINGS`) | `vscode.workspace.getConfiguration('moe')` |
 
 ### Code Reuse Opportunities
 
