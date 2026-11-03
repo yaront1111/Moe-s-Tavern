@@ -38,6 +38,16 @@ export function cleanupStaleResourceWaiters(state: StateManager): number {
   return cleaned;
 }
 
+/** Cancel the worker's parked waiter, if any: resolves it cancelled and drops its own registry entry. */
+function cancelResourceWaiter(workerId: string): void {
+  const existing = activeResourceWaiters.get(workerId);
+  if (!existing) return;
+  clearTimeout(existing.timer);
+  existing.unsubscribe();
+  existing.resolve({ granted: false, cancelled: true });
+  if (activeResourceWaiters.get(workerId) === existing) activeResourceWaiters.delete(workerId);
+}
+
 export function waitForResourceTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.wait_for_resource',
@@ -70,14 +80,10 @@ export function waitForResourceTool(_state: StateManager): ToolDefinition {
       await state.touchWorker(workerId);
       if (context?.shouldContinue?.() === false) return { granted: false, cancelled: true };
 
-      // Cancel any existing waiter for this worker (re-entry replaces).
-      const existing = activeResourceWaiters.get(workerId);
-      if (existing) {
-        clearTimeout(existing.timer);
-        existing.unsubscribe();
-        existing.resolve({ granted: false, cancelled: true });
-        activeResourceWaiters.delete(workerId);
-      }
+      // Cancel any existing waiter for this worker (re-entry replaces). Repeated
+      // right before the registry set below: a call that passed this check while
+      // another was awaiting the lock must not silently overwrite its waiter.
+      cancelResourceWaiter(workerId);
 
       // Blocking tools are dispatched WITHOUT the state mutex — take it for the
       // mutation (grant-or-enqueue), then subscribe lock-free for the park.
@@ -122,7 +128,8 @@ export function waitForResourceTool(_state: StateManager): ToolDefinition {
           if (unsubscribe) {
             try { unsubscribe(); } catch { /* already torn down */ }
           }
-          activeResourceWaiters.delete(workerId);
+          // Delete only our own entry: a replaced waiter must not drop the live one.
+          if (activeResourceWaiters.get(workerId)?.timer === timer) activeResourceWaiters.delete(workerId);
         };
 
         timer = setTimeout(() => {
@@ -172,6 +179,8 @@ export function waitForResourceTool(_state: StateManager): ToolDefinition {
           return;
         }
 
+        // No await between this re-check and the set (the executor is synchronous).
+        cancelResourceWaiter(workerId);
         activeResourceWaiters.set(workerId, {
           resolve,
           unsubscribe: () => cleanup(),

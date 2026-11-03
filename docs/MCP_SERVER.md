@@ -3130,7 +3130,7 @@ Block until this task's lease on a shared resource is granted (or the timeout fi
 **Notes:**
 - Marked `blocking` — like `moe.wait_for_task` / `moe.chat_wait`, the MCP dispatch layer does **not** wrap it in the global state mutex (it can park for minutes; all other tools stay serialized). It takes the mutex only for the grant-or-enqueue mutation on entry.
 - Caller must own the task (`assertWorkerOwns`).
-- Calling `wait_for_resource` again with the same `workerId` cancels the previous wait (the earlier call resolves `{ granted: false, cancelled: true }`). The same cancellation fires on MCP client disconnect and when the stale-waiter sweep finds the worker no longer tracked.
+- Calling `wait_for_resource` again with the same `workerId` cancels the previous wait (the earlier call resolves `{ granted: false, cancelled: true }`). This holds when the two calls overlap too: whichever call parks last stays registered, and the other resolves cancelled. The same cancellation fires on MCP client disconnect and when the stale-waiter sweep finds the worker no longer tracked.
 - Refreshes the worker heartbeat on entry and again on timeout, so a parked worker is not treated as idle.
 - **Prefer `moe.report_blocked` + session exit for waits expected to run hours** — the wrapper idles and the grant path auto-unblocks the task without burning an open session. This tool is for short waits inside a live session.
 
