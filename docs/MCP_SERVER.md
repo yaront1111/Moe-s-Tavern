@@ -3171,6 +3171,7 @@ Wrapper-only, so no role sees it in `tools/list`. Picks the account for the call
 **Notes:**
 - The wrapper starts claude with `CLAUDE_CONFIG_DIR=configDir`. It removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` from claude's environment, since each would outrank the folder's login.
 - `accountId: null` means wait: the held task stays held, and the wrapper tries again at `retryAt`.
+- Every call counts as presence for the calling seat, whatever it returns: it refreshes the seat's `lastActivityAt`, and writes `Worker.accountId` only when it changes. An unknown `workerId` gets no worker record, and a DEAD seat is not refreshed. So a task held through `MOE_ACCOUNT_WAIT` stays held: the wrapper leases again at most `MOE_ACCOUNT_RETRY_SEC` (default 300 s) apart, inside the default `reviewStaleTimeoutMs` (30 min), so the REVIEW self-heal does not release a waiting QA seat's row.
 - Which seat holds which account is kept in this daemon process only. After a daemon restart, a running seat is learned back from its wrapper's next usage report (see `moe.report_account_usage`). Until then, it is not told to switch.
 
 ### moe.report_account_usage

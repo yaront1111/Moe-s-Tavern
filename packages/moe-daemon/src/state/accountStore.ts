@@ -294,9 +294,13 @@ function switchReason(fleet: Fleet, file: string, registry: Registry, id: string
 async function settleLease(state: StateManager, fleet: Fleet, workerId: string, accountId: string | null, nowMs: number): Promise<void> {
   if (accountId === null) fleet.leases.delete(workerId);
   else fleet.leases.set(workerId, accountId);
-  if ((state.getWorker(workerId)?.accountId ?? null) !== accountId) {
-    await state.touchWorker(workerId, { accountId });
-  }
+  // Every lease call is the seat's presence, whatever it returns: a wrapper in
+  // MOE_ACCOUNT_WAIT runs no CLI and no heartbeat sidecar, so its lease polls are
+  // all it has. Without them the REVIEW self-heal released a waiting QA seat's row
+  // (2026-11-03). accountId is still written only when it changes; touchWorker
+  // creates no record and never refreshes a DEAD one.
+  const changed = (state.getWorker(workerId)?.accountId ?? null) !== accountId;
+  await state.touchWorker(workerId, changed ? { accountId } : {});
   refreshAccounts(state, nowMs);
 }
 
