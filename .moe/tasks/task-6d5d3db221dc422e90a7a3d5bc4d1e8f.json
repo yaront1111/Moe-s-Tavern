@@ -78,7 +78,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -91,7 +91,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:39.471Z",
-  "updatedAt": "2026-11-03T03:23:32.275Z",
+  "updatedAt": "2026-11-03T03:26:00.491Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:18.807Z",
@@ -101,11 +101,14 @@
     "firstClaimAt": "2026-11-03T02:54:20.407Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T03:25:39.348Z",
+    "wallClockMs": 1878941
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-93f9625e"
   ],
   "dependsOn": [
     "task-0b2ea5709415489ea9b6fef528bef5df"
@@ -223,9 +226,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T03:13:04Z",
-    "at": "2026-11-03T03:23:32.275Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T03:23:48Z",
+    "at": "2026-11-03T03:26:00.491Z"
+  },
+  "completedAt": "2026-11-03T03:25:39.348Z",
+  "reviewCompletedAt": "2026-11-03T03:25:39.348Z",
+  "reviewSummary": "Reviewed completion b1e68978 (kind=completion, pushed, on moe/work-2026-10-24 and HEAD of moe/control; tree clean for moe-jetbrains/docs). Diff: 4 files +84/-18 (net 66), exactly the approved scope; the test file is +51/-0, so D1-D12 and PS1-PS8 are untouched. Re-ran the exact task.verification under the jetbrains-gradle lease (released): parity PASS, lint OK, gradlew.bat test --rerun BUILD SUCCESSFUL, JUnit tests=600 skipped=0 failures=0 errors=0, exit 0. RuntimeSelectionPolicyTest 75/75, 0 skipped; D13 and D14 ran and passed. Worker's red.log shows only D13/D14 failing on the pre-fix code (75 tests, 2 failed). DoD 1: profile() reads the declaration before the pinned return; a verified-local read re-records PROTECTED under recordLock even for a pinned key, so a later weaker declaration asks again after restart (D13). Allow re-reads via stillWeaker under recordLock and writes LEGACY for base+aliases only while still weaker; unreadable or verified-local at answer time writes nothing and the first answer still consumes the AtomicBoolean (D14, incl. the Windows matched-spelling/no-base-record part). Invariants in the diff: unreadable declaration still returns PROTECTED with no pin/write; pinned path returns before any store read; recordLock is never held across confirmer.ask or the legacy storedProfile seam (D6); declaredProfile, callers, v1 record format unchanged. The worker's 4/4 mutants killed and two-thread lock probe are not re-run by me. Complexity pass: nothing to cut. Docs limited to the approved ARCHITECTURE Profile-pin sentence and one TROUBLESHOOTING sentence.",
+  "requiredCheckAtDone": null
 }
