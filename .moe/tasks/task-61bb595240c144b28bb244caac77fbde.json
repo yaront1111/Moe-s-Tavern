@@ -9,10 +9,60 @@
     "After a reload, a human message still resets the counter and un-pauses the channel. The existing mentionRouter, mentionRouterSystemHops and chatSystemFeed suites pass unchanged, run in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Create packages/moe-daemon/src/util/mentionRouter.reload.test.ts with the Write tool; a global rail forbids shell writes to tracked files.\n\nState-backed cases use ToolTestHarness from ../tools/toolTestHarness.js: h.init(); h.setupMoeFolder(); h.createWorker for worker-a and worker-b with status 'CODING'; await h.state.load(); take the #workers channel id from h.state.getChannels(). Add a helper hop(from, to) that returns (await h.state.sendMessage({ channel, sender: from, content: tag(to) + ' ping' })).routingTargets. Build the mention token at runtime as String.fromCharCode(64) + id. Never write a literal at-token in a plan or step text (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions).\n\nCases, all with exact assertions:\n(a) A paused channel stays paused across state.load(). Four alternating hops each route to the other worker, and the 5th routes []. Then await h.state.load(). expect(h.state.mentionRouter.getChannelState(ch)).toEqual({ hopCount: 5, paused: true }), and the next agent hop routes [].\n(b) Hop counts survive a reload. After 4 hops, load(), and getChannelState equals { hopCount: 4, paused: false }. The 5th hop routes [] and the channel is paused.\n(c) A lowered limit applies on reload. Read path.join(h.moePath, 'project.json'), set settings.chatMaxAgentHops = 2, write it back, and await h.state.load(). Hops 1 and 2 route to the mentioned worker. Hop 3 routes [] and getChannelState reports paused.\n(d) A human still resumes after a reload. Pause the channel with 5 hops, load(), then send as sender 'human' with no mention. getChannelState equals { hopCount: 0, paused: false }, and the next agent hop routes to the mentioned worker.\n(e) MentionRouter unit, no state, reusing the makeWorker/makeMessage fixture shape from util/mentionRouterSystemHops.test.ts. Take new MentionRouter(4), route 3 agent hops, call setMaxHops(2), and the 4th hop returns paused true with hopCount 4. For each invalid input (0, -1, 2.5, NaN, undefined), a fresh router given setMaxHops(x) routes hops 1-4 and pauses at hop 5 (the default of 4).\n\nRun the file in the step 3 snapshot. (a), (b) and (e) must fail on today's code. (c) and (d) pass today; they pin that the setting still applies and that a human still resets. Error handling: afterEach calls h.cleanup(), so the temp dir is removed even when an assertion throws.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.reload.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.reload.test.ts"
+      ],
+      "note": "Wrote cases (a)-(e); RED run happens in the snapshot at the gate step.",
+      "startedAt": "2026-11-03T13:45:24.265Z",
+      "completedAt": "2026-11-03T13:45:57.948Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Minimum fix, with the Edit tool only.\n\n1) packages/moe-daemon/src/util/mentionRouter.ts:\n- Make maxHops non-readonly.\n- Add setMaxHops(maxHops: number | undefined): void. It stores maxHops when Number.isInteger(maxHops) && maxHops >= 1, and otherwise stores the default 4, the same default the constructor uses. A missing setting, or a hand-edited invalid one, must neither disable the guard nor wedge every channel.\n- It never touches hopCounts or pausedChannels.\n- Give it a short doc comment saying why: StateManager.load() re-applies chatMaxAgentHops on every FileWatcher reload, and building a new router there cleared every pause and hop count.\n- Error handling: setMaxHops never throws.\n- Leave the constructor signature and route() unchanged.\n\n2) packages/moe-daemon/src/state/StateManager.ts, load(), about lines 1132-1133: replace the comment 'Re-initialize MentionRouter with project-configured maxHops' and the line that assigns a new MentionRouter with a one-line comment plus this.mentionRouter.setMaxHops(this.project?.settings?.chatMaxAgentHops);\n- The constructor (about line 490) keeps new MentionRouter(4), so the router exists before the first load.\n- The change is net zero lines. StateManager.ts must stay at split('\\n').length 1483, under the 1500 budget that state/stateModules.test.ts enforces (mem:gotcha-statemanager-line-budget). Check with node -e before moving on.\n- Touch nothing else in load(); its existing error handling and timeout stay as they are.\n\nOut of scope:\n- update_settings (state/profileRollout.ts updateProjectSettings) still applies a changed chatMaxAgentHops only at the next load(), exactly as today.\n- No doc change: docs/SCHEMA.md already describes the pause-until-human behaviour this restores.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-11-03T13:45:58.780Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once in a snapshot outside the shared checkout (global rail). Follow mem:gotcha-daemon-linux-snapshot-gate.\n- SNAP=$(mktemp -d /tmp/moe-61bb-gate.XXXXXX)\n- Archive the WHOLE repo at the task worktree's HEAD: git -C <worktree> archive HEAD | tar -x -C $SNAP\n- Overlay ONLY the three owned files from the worktree and cmp each one.\n- Give $SNAP/packages/moe-daemon a lock-matching Linux node_modules: cp -al an existing one, or run npm ci there under env -i with the nvm node bin on PATH (mem:gotcha-linux-vitest-reuse-native-node-modules).\n\nThen run exactly this command. Every listed test must pass, and its fresh output tail is the complete_task verification:\ncd \"$SNAP/packages/moe-daemon\" && NO_COLOR=1 npx vitest run src/util/mentionRouter.reload.test.ts src/util/mentionRouter.test.ts src/util/mentionRouterSystemHops.test.ts src/util/utilFixes.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatBudgets.test.ts src/tools/addComment.test.ts src/state/stateModules.test.ts\n\nCapture the exit code with '> log 2>&1; echo $?', not through a pipe.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.reload.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review: load the adversarial-self-review skill.\n\nMutants: run each in a copy of the step 3 snapshot with node_modules re-linked, running only src/util/mentionRouter.reload.test.ts. Count a mutant KILLED only when the Tests line shows real failures. Back up once, then restore from git show and check diff -rq is empty (mem:gotcha-daemon-linux-snapshot-gate).\n- M1: load() builds a new router again (restore the old 'this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4)' line). (a) and (b) must fail.\n- M2: the setMaxHops body is empty. (c) and (e) must fail.\n- M3: setMaxHops also clears hopCounts and pausedChannels. (a) and (b) must fail.\n- M4: setMaxHops assigns the raw value without the integer >= 1 guard. The invalid-input rows of (e) must fail.\n\nChecklist:\n- Concurrency: load() runs under the state mutex and route() is synchronous, so nothing interleaves.\n- Null project: setMaxHops(undefined) gives 4.\n- Raising the limit leaves a paused channel paused until a human message or the continue token.\n- System messages still route neutrally (mentionRouterSystemHops passes).\n- git diff --stat shows only the three owned files.\n\nPut the mutant table and the StateManager split-line count in the complete_task summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.reload.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-d6c1cb7a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +74,67 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:37:04.594Z",
-  "updatedAt": "2026-11-03T13:39:44.915Z",
+  "updatedAt": "2026-11-03T13:45:58.780Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T13:39:40.903Z"
+    "firstClaimAt": "2026-11-03T13:39:40.903Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
-  ]
+    "architect-1dd28c7c",
+    "worker-d6c1cb7a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T13:43:44.607Z",
+  "executionContract": {
+    "intendedBehavior": "The chat loop guard (per-channel hop counts and pauses in MentionRouter) survives every StateManager.load(), including FileWatcher reloads. load() only re-applies settings.chatMaxAgentHops to the existing router. A missing or invalid value (anything but an integer >= 1) means the default, 4. Only a human message or the continue token resets a channel, as docs/SCHEMA.md states.",
+    "invariants": [
+      "StateManager.ts split('\\n').length stays below 1500 (state/stateModules.test.ts); this change is net zero lines.",
+      "The MentionRouter constructor signature, route(), resetChannel() and getChannelState() keep their current behaviour; system messages stay loop-guard neutral.",
+      "No schema, .moe file or MCP tool contract changes."
+    ],
+    "sourceAssumptions": [
+      "state/StateManager.ts constructor (~490) builds new MentionRouter(4); load() (~1132-1133) rebuilds it from settings.chatMaxAgentHops.",
+      "index.ts (~848-853): the FileWatcher onChange calls healMassDeletion and then state.load().",
+      "util/mentionRouter.ts: hopCounts and pausedChannels are private maps on the instance; maxHops is readonly and set only by the constructor.",
+      "state/validators.ts bounds chatMaxAgentHops to an integer 1-20 on update_settings, but load() reads project.json unvalidated."
+    ],
+    "checkRefs": [
+      "cd \"$SNAP/packages/moe-daemon\" && NO_COLOR=1 npx vitest run src/util/mentionRouter.reload.test.ts src/util/mentionRouter.test.ts src/util/mentionRouterSystemHops.test.ts src/util/utilFixes.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatBudgets.test.ts src/tools/addComment.test.ts src/state/stateModules.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A maxHops setter on the existing router, called from load(). Chosen: the smallest change and net zero lines in the line-budgeted StateManager.ts. (2) Copying hopCounts and pausedChannels into a freshly built router. Rejected: it reaches into private state for no gain. (3) Rebuilding the router only when maxHops changes. Rejected: a changed setting would still drop every pause.",
+    "codebaseInsights": "Three facts frame the fix:\n- The router is constructed once in the StateManager constructor and again on every load(). The FileWatcher reloads on external .moe writes; state/sweeps.ts ~172-182 records that a claim reliably triggers one on the live host, which is the same reset-on-reload class the sweeps fix handled for timers.\n- System messages are deliberately loop-guard neutral (util/mentionRouterSystemHops.test.ts).\n- The repro is /mnt/d/moe-scratch/hunt-8f18d6fa/zzHuntUtil1.test.ts, including a real-FileWatcher case. Optional to reuse; its timing makes it unsuitable as a gate test.",
+    "risks": "- StateManager.ts has 16 lines of headroom under its 1500-line budget, so keep the edit net zero.\n- Never write a literal at-token in step text or a comment echoed to chat. Build it at runtime in tests.\n- A lowered limit must apply to hop counts already accumulated: the next hop past the new limit pauses.\n- Do not validate through validators.ts: another row holds that file. The integer >= 1 guard lives in setMaxHops.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/mentionRouter.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/util/mentionRouterSystemHops.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/state/stateModules.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "776074e5da48665efb45008e209952d9070908f2",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T13:43:44.633Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T13:45:24.265Z"
 }
