@@ -664,8 +664,8 @@ export class StateManager {
   // generated from the extracted functions, never hand-written.
   // ---------------------------------------------------------------------------
 
-  async createTask(input: Partial<Task>): Promise<Task> {
-    return createTask(this, input);
+  async createTask(input: Partial<Task>, actorWorkerId?: string): Promise<Task> {
+    return createTask(this, input, actorWorkerId);
   }
 
   async updateTask(taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {

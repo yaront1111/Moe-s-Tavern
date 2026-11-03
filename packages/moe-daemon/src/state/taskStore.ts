@@ -286,7 +286,7 @@ function assertProgressionReady(
   assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
 }
 
-export async function createTask(state: StateManager, input: Partial<Task>): Promise<Task> {
+export async function createTask(state: StateManager, input: Partial<Task>, actorWorkerId?: string): Promise<Task> {
   if (!state.project) {
     throw new Error('Project not loaded');
   }
@@ -358,7 +358,9 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
 
   await state.writeEntity('tasks', task.id, task);
   state.tasks.set(task.id, task);
-  state.appendActivity('TASK_CREATED', { title: task.title }, task);
+  // The actor is a parameter, never read from `input`: the board passes its raw /ws
+  // payload as `input`, and a payload must not name its own actor.
+  state.appendActivity('TASK_CREATED', { title: task.title }, task, undefined, undefined, undefined, actorWorkerId);
   state.emit({ type: 'TASK_CREATED', payload: task });
 
   if (task.status === 'PLANNING') {

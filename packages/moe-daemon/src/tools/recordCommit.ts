@@ -376,7 +376,7 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
           sessionId,
           at: now,
         };
-        updated = await state.updateTask(task.id, updates, 'TASK_COMMIT_RECORDED');
+        updated = await state.updateTask(task.id, updates, 'TASK_COMMIT_RECORDED', params.workerId);
       }
       if (params.workerId) {
         await state.touchWorker(params.workerId);

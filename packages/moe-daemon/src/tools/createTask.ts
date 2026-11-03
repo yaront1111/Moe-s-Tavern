@@ -166,7 +166,7 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
         order: params.order,
         createdBy: resolvedCreatedBy,
         ...(dependsOn ? { dependsOn } : {}),
-      });
+      }, params.workerId);
 
       // Cycle check (dependsOn ∪ blockedOnTaskIds), the same invariant
       // set_task_dependencies rejects on and report_blocked drops on. The id
