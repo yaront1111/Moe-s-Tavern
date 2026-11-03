@@ -58,8 +58,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -71,12 +71,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:19:40.914Z",
-  "updatedAt": "2026-11-03T18:36:47.334Z",
+  "updatedAt": "2026-11-03T18:38:23.029Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:21:02.727Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T18:38:23.027Z",
+    "wallClockMs": 1040300
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -202,5 +204,9 @@
     "kind": "completion",
     "sessionId": "worker-33f67e5b@2026-11-03T18:31:38Z",
     "at": "2026-11-03T18:36:13.617Z"
-  }
+  },
+  "completedAt": "2026-11-03T18:38:23.027Z",
+  "reviewCompletedAt": "2026-11-03T18:38:23.027Z",
+  "reviewSummary": "Reviewed completion 9d08bab8 (ancestor of moe/work-2026-10-24 head b9119a93). Diff: 4 files, +125/-11 (net 114), exactly the approved scope; task paths clean in the tree.\n\nRe-ran task.verification verbatim in a git-archive snapshot outside the checkout: npm ci, both tsc runs pass; vitest over createEpic*, updateEpic, StateManager, validators, getActivityLog, WebSocketServer gives 8 files / 403 tests passed, rc=0.\nMutant check: with the parent StateManager.ts swapped in, the two new files give 5 failed / 2 passed (3 orderCascade cases, 'refuses each bad value', 'keeps ARCHIVED'). The update_epic baseline and the null/omitted-defaults cases pass either way, as expected. So the tests pin the fix.\n\nDoD 1: BOGUS status and 'abc' / -5 / 2.5 orders are refused with INVALID_INPUT naming the field, via the tool and state.createEpic (the /ws path), nothing persisted (map and epics/ dir asserted unchanged). ARCHIVED is kept. Next default order is 2 in memory and on disk.\nDoD 2: omitted/null status and order give PLANNED and nextEpicOrder() (2, 3). Legacy epic files with order 'abc' or no order load byte-for-byte untouched; next default order is 5 after epic-1's 4.\nDoD 3: createEpic, updateEpic, StateManager, validators, getActivityLog, WebSocketServer suites green.\n\nCode: validateEpicUpdates is the single rule; refusal throws before writeEntity; nextEpicOrder filters non-finite orders (1 when none) and never rewrites; sanitizeEnum import dropped, no other use; createEpic.ts untouched; doc section has INVALID_INPUT, \"ARCHIVED\", integer >= 0; no forbidden patterns added.\nNotes, non-blocking: fractional/negative order to create_epic is now refused (parity with update_epic); MAX_SAFE_INTEGER accepted as in update_epic. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
