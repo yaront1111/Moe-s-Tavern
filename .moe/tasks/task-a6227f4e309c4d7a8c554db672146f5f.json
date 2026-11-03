@@ -80,8 +80,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -96,7 +96,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T09:21:06.242Z",
-  "updatedAt": "2026-11-03T11:58:33.095Z",
+  "updatedAt": "2026-11-03T12:03:48.766Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T09:22:57.794Z",
@@ -106,7 +106,9 @@
     "firstClaimAt": "2026-11-03T09:22:58.178Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T12:02:52.970Z",
+    "wallClockMs": 9594792
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -114,10 +116,11 @@
     "qa-93f9625e"
   ],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T11:45:29Z",
-    "at": "2026-11-03T11:57:42.242Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T11:57:56Z",
+    "at": "2026-11-03T12:03:48.766Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -241,5 +244,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T12:02:52.970Z",
+  "reviewCompletedAt": "2026-11-03T12:02:52.970Z",
+  "reviewSummary": "Reviewed landed completion f27a5f7d, contained in origin/moe/work-2026-10-24. Exactly the 5 approved files, +227/-22 (net 205).\n\nRe-ran task.verification verbatim at HEAD=f27a5f7d, CHECK_EXIT=0:\n- Linux (env -i, node 24.21.0): 692/682/0/10, compile OK.\n- Windows (cmd.exe): 688/675/0/13, compile OK.\n- parity and lint OK.\nW6 ran natively on Linux and W7 on Windows. W4, W5, W8-W10 and X1 pass on both legs. Legacy W1-W3, L5, Q, V, A and S are green.\n\nDoD 1:\n- protectedAccountsTerminal returns null unless the profile is protected.\n- On win32 it checks the SystemRoot powershell.exe first, then installedExecutable on the node.\n- It returns only accepted real paths. The win32 shellPath and the typed `& '<path>'` are the same path, and POSIX types the checked node.\n- A refusal throws before any line, terminal or clipboard write. Every runCli caller is inside guard, so exactly one error shows (W10).\n\nDoD 2:\n- With a null selection, cli and options are unchanged, and 4-argument accountsCommandLine is unchanged (W9, Q1, V2, W2). The default subject keeps L5's text.\n- Coverage: win32 W4, W5 and W7; POSIX W6; provider W8-W10.\n\nInvariants: the compiled provider requires only vscode and AccountPresentation. The quoting helpers are untouched. The diff has no forbidden patterns.\n\nMy mutants:\n- Killed: node checked first and subject ignored (W4/W5); profile gate dropped (W4/W5); silent refusal (W10); interpreter not passed (W8/W10).\n- Survived: POSIX `shellPath: undefined`. It is equivalent, because the provider reads shellPath only on win32 and plain() drops undefined keys before W5's hasOwn check.\n\nPonytail: nothing to cut.\n\nResiduals as planned: task-f3f364a6, task-55710898, and the unchecked cli.script.",
+  "requiredCheckAtDone": null
 }
