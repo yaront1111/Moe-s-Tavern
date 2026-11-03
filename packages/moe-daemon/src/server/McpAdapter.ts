@@ -309,9 +309,15 @@ export class McpAdapter {
           // Serialize state-mutating tools through the global state mutex so
           // concurrent MCP calls on the same entity can't lose updates (the
           // handlers do read-modify-write and were previously unprotected).
-          // Blocking tools opt out — they'd hold the lock for minutes. The
-          // mutex is reentrant, so tools that already call runExclusive
-          // internally (claim_next_task, submit_plan, …) are safe to wrap.
+          // `blocking` tools opt out and take state.runExclusive themselves
+          // around every read-modify-write: wait_for_task, chat_wait and
+          // wait_for_resource park for minutes, while claim_next_task and
+          // release_task (the handoff disk-state `git status`,
+          // util/diskState.ts), submit_plan (its cached-ref Git lookup) and
+          // get_execution_readiness (a bounded evaluation) do slow work
+          // outside their own exclusive section that a wrap here would make
+          // every other tool wait on. The mutex is reentrant, so a wrapped
+          // tool that also calls runExclusive internally does not deadlock.
           const invoke = () => tool.handler(params.arguments, this.state, {
             shouldContinue: options.shouldContinue,
             onWaiterRegistered: workerId => options.onWaiterRegistered?.(tool.name, workerId),

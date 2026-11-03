@@ -83,6 +83,13 @@ function clampOptional(value: unknown, field: string, max = MAX_HANDOFF_FIELD_LE
 export function releaseTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.release_task',
+    // Mutex opt-out (tools/index.ts ToolDefinition.blocking): a handoffNote's
+    // disk-state capture spawns `git status` (util/diskState.ts, killed at 3 s)
+    // before the handler's state.runExclusive; a dispatch-level wrap would hold
+    // the fleet-wide mutex across it. The ownership gates and every write stay
+    // inside that runExclusive; before it the handler only validates input,
+    // checks the caller's role for force and captures.
+    blocking: true,
     description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Ownership: a caller that supplies workerId may release only the row it holds (RELEASE_NOT_ASSIGNEE otherwise); only an omitted workerId (a human or the board) may release a row another worker holds, and only between steps (STEP_LEASE_HELD while a step is IN_PROGRESS) unless force; a supplied workerId that is blank or not a string is refused INVALID_INPUT. NEVER release on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. One exception to in-place routing: the 3rd release in 24h whose handoffNote.whatIsDone reports no progress ("nothing"/"none"/"n/a") parks the task to BACKLOG for human triage and returns cascadeTriggered:true (disable via settings.refusalCascadeAutoBacklog:false). To pull a task OUT of the agent pool yourself, have a human/governor use moe.set_task_status → BACKLOG.',
     inputSchema: {
       type: 'object',

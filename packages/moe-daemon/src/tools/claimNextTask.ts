@@ -383,6 +383,12 @@ function controlSeatClaim(state: StateManager, task: Task): boolean {
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.claim_next_task',
+    // Mutex opt-out (tools/index.ts ToolDefinition.blocking): once the claim's
+    // own state.runExclusive below releases, the stale-handoff recompute spawns
+    // `git status` (util/diskState.ts, killed at 3 s); a dispatch-level wrap
+    // would hold the fleet-wide mutex across it. Every read and write of the
+    // claim stays inside that runExclusive.
+    blocking: true,
     description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED (a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it). When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim.',
     inputSchema: {
       type: 'object',
