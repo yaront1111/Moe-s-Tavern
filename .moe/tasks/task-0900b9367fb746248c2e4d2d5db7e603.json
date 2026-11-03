@@ -41,31 +41,47 @@
     {
       "stepId": "step-3",
       "description": "DoD 3, docs/ARCHITECTURE.md only, with the Edit tool. Under Security Notes, **VS Code parity**, the **Profile pin** (task-98c81a27) bullet is lines 642-645 at 1558f141. It ends 'An unreadable `project.json`, or a pin VS Code would not have written, reads as protected.' After that sentence, append these continuation lines, with the bullet's 4-space indent and exactly this wrapping (each line within 120 columns):\n```\n    A later `verified-local` read in the same window session records the project protected again (task-0900b936). An\n    Allow answered while the project declares `verified-local`, or while its `project.json` is unreadable, records\n    nothing.\n```\nNothing needs removing. task-48bbd091's landed text does not name this row as an open difference: `grep -c 0900b936 docs/ARCHITECTURE.md` is 0 at 1558f141. So the description's 'replaces that' reduces to this addition, which checkRef [4] checks. Leave these unchanged (DoD 3):\n- the JetBrains Profile pin bullet;\n- TROUBLESHOOTING.md, whose 'choose Allow Downgrade, then restart VS Code' stays true;\n- CONFIGURATION.md and moe-vscode/CHANGELOG.md;\n- every other doc.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md"
       ],
-      "startedAt": "2026-11-03T11:57:37.633Z"
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Appended the three continuation lines to the VS Code Profile pin (task-98c81a27) bullet in docs/ARCHITECTURE.md with the Edit tool, +3/-0, 4-space indent. The new lines are at most 118 columns. The checkRef [4] phrase matches once, and `grep -c 0900b936 docs/ARCHITECTURE.md` is 1. No other docs file changed.",
+      "startedAt": "2026-11-03T11:57:37.633Z",
+      "completedAt": "2026-11-03T11:57:50.922Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, once, after steps 1-3 (DoD 2 and 3). From the task worktree root, run executionContract checkRefs [0]-[4] verbatim and in order. Joined with &&, they are this task's verification command. In complete_task, report their combined exit code and the summary lines each one prints.\n- [1] and [2] take about 4 minutes each. Run them with run_in_background and wait for the completion notice; do not poll.\n- [0] RED re-proof: the merge-base client must differ from W's (`! cmp -s`), and the new test file must fail exactly 3 rows against it, all P12 or P13.\n- [1] Linux snapshot outside the checkout: git archive HEAD with the two moe-vscode files overlaid and cmp-checked, then npm ci, npm test and npm run compile under env -i with nvm node v24.21.0.\n- [2] Windows snapshot under /mnt/d/moe-scratch: the same overlay, then npm ci, npm test and npm run compile through cmd.exe.\n- [3] The quality gate, run in place.\n- [4] Scope and docs: the non-board diff is exactly the three files, the pin file's diff only adds lines, and the bullet's new text is present once.\nExpected Linux full npm test: 688 tests / 679 pass / 0 fail / 9 skipped (architect probe; base 685/676/0/9). Expected Windows: about 684 / 672 / 0 / 12 (base 681/669/0/12 per task-787437bb's QA).\nQA re-runs [0] and [4] at the control checkout with MOE_LAND_TARGET=<completion>^, and [4] also with QA_TIP=<completion>.\n- If the provenance '(7) replace succeeds' or 'cancel during stop' flake appears (mem:gotcha-vscode-provenance-test-deadlines), it is not this change. Re-run that leg once, report both runs, and never edit that test.\n- Never run npm in the shared checkout or in W.\n- Kill only PIDs your own session started, by recorded PID; never pkill, killall or a name match.\n- Keep every scratch file and log outside W, because every dirty path in W lands.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran checkRefs [0]-[4] verbatim, all exit 0.\n- [0] RED: the merge-base client differs from mine, and the new test file against it gives 34 tests, 31 pass, 3 fail, exactly P12 and both P13 rows.\n- [1] Linux snapshot /tmp/0900b936-linux.2MUPZc: npm ci, npm test and npm run compile exit 0; 688 tests, 679 pass, 0 fail, 9 skipped.\n- [2] Windows snapshot /mnt/d/moe-scratch/0900b936-win.894VPE: exit 0; 684 tests, 672 pass, 0 fail, 12 skipped.\n- [3] parity-check.sh PASS; npm run lint exit 0.\n- [4] SCOPE_DOCS_OK.\nNo provenance flake appeared. Nothing under the worktree was written, and all logs are outside it.",
+      "startedAt": "2026-11-03T11:57:57.622Z",
+      "completedAt": "2026-11-03T11:59:21.037Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff, `git diff \"$(git merge-base HEAD \"$MOE_LAND_TARGET\")\"` in W. This is the final step.\n(1) Mutants. Use the step-1 scratch layout with the fixed client, and run the step-1 command once per mutant. Restore the fixed file and cmp it after each. Anchor each mutant on whole statements (mem:pattern-mutant-equivalence-and-anchor-traps). Expected kills, matching /mnt/d/moe-scratch/0900b936-arch-probe/mutants.log:\n- M1: put `if (pinnedProjects.has(key)) { return 'protected'; }` back directly after `const key = projectStateKey(basePath);`. Fails only P12.\n- M2: replace the `declaredProfile(basePath) !== 'legacy-like'` condition with false. Fails both P13 rows.\n- M3: compare `=== 'verified-local'` instead. Fails only P13 (an unreadable project.json).\n(2) Attack the diff and its error handling:\n- A pinned key with no store root: storedProfile answers 'absent' and persistProfile false, both before any hashing.\n- An untrusted record read under a verified-local declaration is rewritten protected, exactly as before for an unpinned key.\n- Pinned keys now re-read project.json (strict, at most 1 MiB) on every runtimeProfile call. The callers are connect, the daemon start, the agent launch and vm-control, and none of them loops.\n- An absent project.json at Allow time still counts as weaker and records legacy, as in JetBrains.\n- A second VS Code window shares globalStorage. The last write wins, as since task-98c81a27; this task does not widen that.\n- The new log line names no secret. declaredProfile's reason text is repository content, which runtimeProfile already logs.\n- The new rows' temp dirs are removed through the file's `made` list.\nIf the review changes any byte, re-run step 4's command and report that run.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/protected-profile-pin.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Adversarial review done, no byte changed, so step 4 was not re-run.\nMutants, run in /tmp scratch layouts with each anchor matching exactly once:\n- M1 (pin check back directly after the key): fails only P12.\n- M2 (the Allow guard replaced with false): fails both P13 rows.\n- M3 (guard compares === 'verified-local'): fails only P13 (an unreadable project.json).\nThese are the expected kills, and no mutant was equivalent.\nAttack review:\n- With no store root, a pinned key's storedProfile answers 'absent' and persistProfile returns false, both before any hashing (P9 covers it).\n- An untrusted record under a verified-local read is rewritten protected, as for an unpinned key.\n- Pinned keys now re-read project.json (strict, at most 1 MiB) per runtimeProfile call. The four callers (connect, startDaemon, AgentLauncher.launch, ManagedVmTreeProvider) call it once per action, and none loops. An unreadable declaration on a pinned key now also logs the fail-closed line, still returning protected without writing.\n- An absent project.json at Allow time reads legacy-like and records legacy, as in JetBrains.\n- A second window shares globalStorage, and the last write wins as since task-98c81a27; this task does not widen that.\n- The new log line names no secret.\n- The new rows' temp dirs go through the file's `made` list.\nEvidence logs are in /tmp/0900b936-evidence (red, linux-verification, windows-verification).",
+      "startedAt": "2026-11-03T11:59:21.974Z",
+      "completedAt": "2026-11-03T12:00:44.544Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,7 +104,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:44:20.312Z",
-  "updatedAt": "2026-11-03T11:57:37.633Z",
+  "updatedAt": "2026-11-03T12:02:36.931Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T09:26:27.208Z",
@@ -98,18 +114,17 @@
     "firstClaimAt": "2026-11-03T09:26:54.986Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
     "worker-d6c1cb7a"
   ],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T09:40:48Z",
-    "at": "2026-11-03T11:56:32.753Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T11:54:58Z",
+    "at": "2026-11-03T12:02:36.931Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -117,7 +132,10 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T11:54:55.388Z",
@@ -194,5 +212,38 @@
   },
   "planApprovedAt": "2026-11-03T11:54:55.424Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T11:56:43.380Z"
+  "workStartedAt": "2026-11-03T11:56:43.380Z",
+  "reviewStartedAt": "2026-11-03T12:01:08.593Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && R=$(mktemp -d /tmp/0900b936-red.XXXXXX) && mkdir -p \"$R/moe-vscode/src/services\" \"$R/moe-vscode/tests\" && git show \"$B:moe-vscode/src/services/MoeDaemonClient.ts\" > \"$R/moe-vscode/src/services/MoeDaemonClient.ts\" && ! cmp -s moe-vscode/src/services/MoeDaemonClient.ts \"$R/moe-vscode/src/services/MoeDaemonClient.ts\" && cp moe-vscode/tests/protected-profile-pin.test.cjs \"$R/moe-vscode/tests/\" && (cd \"$R/moe-vscode\" && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules \"$HOME/.nvm/versions/node/v24.21.0/bin/node\" --test --test-reporter=tap tests/protected-profile-pin.test.cjs > \"$R/red.log\" 2>&1; [ $? -ne 0 ]) && grep -E '^# (tests|pass|fail) ' \"$R/red.log\" && [ \"$(grep -c '^not ok ' \"$R/red.log\")\" = 3 ] && [ \"$(grep -cE '^not ok [0-9]+ - P1[23][ :]' \"$R/red.log\")\" = 3 ] && echo \"RED_OK $R/red.log\"  # then checkRefs [1] Linux snapshot, [2] Windows snapshot, [3] bash scripts/tests/parity-check.sh && npm run lint, [4] scope+docs: all five run fresh in this session after the final edit, each exit 0",
+    "exitCode": 0,
+    "outputTail": "[0] RED_OK: # tests 34 / # pass 31 / # fail 3 (P12 + both P13 only)\n[1] LINUX_EXIT=0: ℹ tests 688 / ℹ pass 679 / ℹ fail 0 / ℹ skipped 9 (npm ci + npm test + npm run compile)\n[2] WINDOWS_EXIT=0: ℹ tests 684 / ℹ pass 672 / ℹ fail 0 / ℹ skipped 12 (npm ci + npm test + npm run compile via cmd.exe)\n[3] PASS parity-check.sh; npm run lint exit 0 (architect.md 39, worker.md 30, qa.md 36 lines)\n[4] SCOPE_DOCS_OK",
+    "reportedAt": "2026-11-03T12:01:08.593Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/protected-profile-pin.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "docs/ARCHITECTURE.md"
+  ],
+  "completionSummary": "VS Code runtimeProfile now reads the .moe/project.json declaration before its session-pin shortcut, as JetBrains has since task-6d5d3db2. A verified-local read re-records the project protected even after Allow Downgrade recorded legacy earlier in the same window session, so a legacy declaration after the restart asks again. The Allow callback re-reads the declaration through declaredProfile(basePath) and records legacy only while it still reads legacy-like. An Allow answered while the project declares verified-local, or while project.json is unreadable, writes nothing (same bytes and inode) and logs 'Moe keeps the protected profile'.\n\nChanged files: MoeDaemonClient.ts (+8/-5, runtimeProfile and askDowngrade only; no import, no top-level require, no await, lock or timer); protected-profile-pin.test.cjs (+49/-0: P12 and two P13 rows between P11 and S1, pure addition); docs/ARCHITECTURE.md (+3 continuation lines on the VS Code Profile pin bullet).\n\nEvidence:\n- RED against the merge-base client: 34 tests / 31 pass / 3 fail, exactly P12 and both P13 rows.\n- Linux snapshot (npm ci, npm test, npm run compile, outside the checkout): 688 tests / 679 pass / 0 fail / 9 skipped, exit 0.\n- Windows snapshot through cmd.exe, outside the checkout: 684 / 672 / 0 / 12, exit 0.\n- parity-check.sh PASS and npm run lint exit 0.\n- Scope check SCOPE_DOCS_OK: only the three files changed, and the pin file's diff only adds lines.\n- Mutants M1 (pin check back first), M2 (Allow guard replaced with false) and M3 (guard compares === 'verified-local') each fail exactly the expected rows: P12 only, both P13, and the unreadable-project.json P13 only.\n\nLogs: /tmp/0900b936-evidence. Handoff: Serena memory task-task-0900b9367fb746248c2e4d2d5db7e603-handoff.",
+  "commits": [
+    {
+      "sha": "13683b4e76a068bd917acd271d0a1c337085b2ce",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T11:54:58Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T12:02:36.931Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
