@@ -65,18 +65,25 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (final step, adversarial-self-review skill), scoped to this diff (3 files). Check each item below.\n\n(a) There is no await between the pre-set re-check and activeResourceWaiters.set, and the executor itself has none.\n\n(b) A grant that arrives for call 1 just before call 2 registers: call 1 resolves granted, its cleanup deletes only its own entry, and call 2 parks or returns granted immediately from acquireResource. The task-keyed lease is unaffected, so no double grant.\n\n(c) cleanupStaleResourceWaiters and the WebSocketServer disconnect path still delete the entry they cancel.\n\n(d) The subscribe-failure path deletes nothing it does not own.\n\n(e) Mutant proof: the new tests are red at HEAD.\n\n(f) Error handling: the helper never throws out of the handler.\n\nIf anything changes, re-run step 4's command and submit that fresh output as the test evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/waitForResource.ts",
         "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
         "docs/MCP_SERVER.md"
       ],
-      "startedAt": "2026-11-03T23:07:09.963Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.ts",
+        "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review (a)-(f) clean, no changes after step 4's run. (a) executor sync, no await between re-check and set. (b) a grant to call 1 resolves it granted and deletes only its own entry; call 2's acquireResource is task-keyed and idempotent, so no double grant. (c) stale sweep and WS disconnect still delete the entry they cancel. (d) subscribe-failure cleanup deletes only its own entry (never registered, so nothing). (e) tests a-c red at HEAD. (f) helper has no throw path.",
+      "startedAt": "2026-11-03T23:07:09.963Z",
+      "completedAt": "2026-11-03T23:07:23.984Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-93f9625e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,12 +95,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:46:48.919Z",
-  "updatedAt": "2026-11-03T23:07:09.963Z",
+  "updatedAt": "2026-11-03T23:08:48.139Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:02:41.189Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -107,7 +114,8 @@
     "step-1",
     "step-3",
     "step-2",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T23:04:23.678Z",
@@ -171,5 +179,44 @@
   },
   "planApprovedAt": "2026-11-03T23:04:23.721Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T23:05:14.673Z"
+  "workStartedAt": "2026-11-03T23:05:14.673Z",
+  "reviewStartedAt": "2026-11-03T23:07:31.055Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'whichever call parks last' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents $P/tools/waitForResource.ts $P/tools/waitForResource.reentry.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/waitForResource.reentry.test.ts src/tools/waitForResource.test.ts src/tools/acquireResource.test.ts src/tools/releaseResource.generation.test.ts src/server/WebSocketServer.test.ts'",
+    "exitCode": 0,
+    "outputTail": "✓ src/server/WebSocketServer.test.ts (128 tests) 16348ms\n\n Test Files  5 passed (5)\n      Tests  151 passed (151)\n   Start at  01:06:50\n   Duration  17.62s (tests 82%, transform 15%, import 3%)",
+    "reportedAt": "2026-11-03T23:07:31.055Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/waitForResource.ts",
+    "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "wait_for_resource overlap fix in waitForResource.ts: new cancelResourceWaiter(workerId) helper (resolves cancelled, clears timer, unsubscribes, drops only its own entry), called at the top of the handler and again right before activeResourceWaiters.set (executor is synchronous, no await between), so the last call to park stays registered and the earlier overlapping call resolves {granted:false,cancelled:true}. cleanup() now deletes the registry entry only while its timer matches (chatWait identity guard), so a replaced waiter's timeout/grant/subscribe-failure cleanup can no longer drop the live entry that WebSocketServer disconnect cleanup and the stale sweep look up. WebSocketServer.ts untouched. New waitForResource.reentry.test.ts (4 cases, vi.waitFor polling): red at HEAD for overlap, disconnect-after-overlap and replaced-timer cases (3 fail), sequential re-entry passes both ways; all 4 green with the fix. docs/MCP_SERVER.md re-entry bullet gains the overlap sentence ('whichever call parks last').",
+  "commits": [
+    {
+      "sha": "942717bcbab72c52dc3dad8c421087915c026777",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T23:04:23Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
+        "packages/moe-daemon/src/tools/waitForResource.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T23:08:46.258Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T23:04:23Z",
+    "at": "2026-11-03T23:08:46.258Z"
+  }
 }

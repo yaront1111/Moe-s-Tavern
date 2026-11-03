@@ -13,37 +13,54 @@
     {
       "stepId": "step-1",
       "description": "DoD 1. In docs/MCP_SERVER.md `### moe.amend_plan_step` **Notes** (~:532-538), insert one bullet right after the 'Rejects the 11th amendment' bullet (~:535).\n\nFirst re-read the landed code (packages/moe-daemon/src/tools/amendPlanStep.ts ~:97-112, util/rails.ts listPlanRailViolations / planRailText / assertPlanRails). Adjust a word only if the code disagrees. Text:\n\n\"- **Rail check:** before any write, the replacement is checked with `moe.submit_plan`'s global rails: `forbiddenPatterns`, then `requiredPatterns`, by case-insensitive substring over every step's effective text plus its `affectedFiles` and `newFiles`, with the replacement in this step's place. Only a violation the amendment introduces is refused: code `-32003`, message `[CONSTRAINT_VIOLATION] Rail violation: \"<violation>\". Default action: revise the replacement text to satisfy this rail and call moe.amend_plan_step again. …`, with the same escape hatch as `moe.submit_plan`'s **Rail refusal** note. A violation the plan already had neither blocks the amendment nor is named, and an amendment may remove it.\"\n\nLink to the Rail refusal note; do not restate it. The verification greps this section for 'introduces', '[CONSTRAINT_VIOLATION] Rail violation' and 'neither blocks'. Error handling and test code are unaffected: this is a docs-only change.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-03T23:07:24.632Z",
+      "completedAt": "2026-11-03T23:07:32.865Z"
     },
     {
       "stepId": "step-2",
       "description": "DoD 2. In docs/MCP_SERVER.md `### moe.get_activity_log` **Notes** (~:3158-3165), insert one bullet right after the `maxPayloadChars` truncation bullet (~:3160).\n\nFirst re-read packages/moe-daemon/src/tools/getActivityLog.ts (~:145 and ~:162, the eventTypes schema description ~:201) and the KNOWN_EVENT_TYPES source. Text:\n\n\"- `eventTypes` values that are not activity event types (`ACTIVITY_EVENT_TYPES` in `types/schema.ts`) match nothing. They are never refused: the reply echoes their distinct values in an additive `unknownEventTypes: string[]` field, present only when non-empty.\"\n\nThe verification greps this section for 'unknownEventTypes: string[]' and 'only when non-empty'. Touch no other section. Error handling and test code are unaffected: this is a docs-only change.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-03T23:07:33.712Z",
+      "completedAt": "2026-11-03T23:07:36.015Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification (DoD 1, 2, and 3's lint): run this once, fresh, before complete_task:\n\n`cd \"$(git rev-parse --show-toplevel)\" && sec() { awk -v h=\"### moe.$1\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md; } && sec amend_plan_step | grep -q 'introduces' && sec amend_plan_step | grep -qF '[CONSTRAINT_VIOLATION] Rail violation' && sec amend_plan_step | grep -q 'neither blocks' && sec get_activity_log | grep -qF 'unknownEventTypes: string[]' && sec get_activity_log | grep -q 'only when non-empty' && npm run lint`\n\nThe role-doc linter is a bash script and needs no install. Submit the exit code and output tail as complete_task evidence; that is the test evidence for this docs-only row.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T23:07:36.924Z",
+      "completedAt": "2026-11-03T23:07:40.670Z"
     },
     {
       "stepId": "step-4",
       "description": "Self-review (final step), plus DoD 3's diff scope. Run:\n\n`B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"); git diff --name-only \"$B\" -- . ':(exclude).moe'; git diff -U0 \"$B\" -- docs/MCP_SERVER.md | sed -n 's/^@@ -[0-9,]* +\\([0-9]*\\).*/\\1/p' | while read -r s; do awk -v s=\"$s\" '/^### /{h=$0} NR==s{print h; exit}' docs/MCP_SERVER.md; done | sort -u`\n\nExpected output:\n- the first command prints only docs/MCP_SERVER.md;\n- the loop prints only `### moe.amend_plan_step` and `### moe.get_activity_log`.\n\nPaste both into the completion summary (QA checks the same with `git show --stat <sha>`).\n\nThen read both bullets against the code once more. Check each item:\n- the introduced-only rule (`already` set vs `introduced`);\n- the default-action text, verbatim from amendPlanStep.ts;\n- the distinct-values and present-only-when-non-empty behaviour (getActivityLog.ts ~:145/:162);\n- no claim that the code does not make, e.g. error.data contents.\n\nError handling: if a check fails, fix the text and re-run step 3's command as the fresh test evidence.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-03T23:07:41.557Z",
+      "completedAt": "2026-11-03T23:07:47.837Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -55,11 +72,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:48:44.894Z",
-  "updatedAt": "2026-11-03T23:06:39.692Z",
+  "updatedAt": "2026-11-03T23:07:51.119Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:04:32.009Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -70,7 +88,12 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T23:06:06.137Z",
   "executionContract": {
@@ -125,5 +148,18 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T23:06:06.164Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:07:24.632Z",
+  "reviewStartedAt": "2026-11-03T23:07:51.117Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && sec() { awk -v h=\"### moe.$1\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md; } && sec amend_plan_step | grep -q 'introduces' && sec amend_plan_step | grep -qF '[CONSTRAINT_VIOLATION] Rail violation' && sec amend_plan_step | grep -q 'neither blocks' && sec get_activity_log | grep -qF 'unknownEventTypes: string[]' && sec get_activity_log | grep -q 'only when non-empty' && npm run lint",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)",
+    "reportedAt": "2026-11-03T23:07:51.117Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "Added one Notes bullet each to docs/MCP_SERVER.md moe.amend_plan_step (rail check, introduced-only -32003 refusal, pre-existing violations neither block nor named) and moe.get_activity_log (unknownEventTypes: string[], only when non-empty). Diff scope: docs/MCP_SERVER.md only; hunks only in those two sections."
 }
