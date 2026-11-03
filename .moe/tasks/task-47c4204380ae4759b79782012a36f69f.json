@@ -1,0 +1,31 @@
+{
+  "id": "task-47c4204380ae4759b79782012a36f69f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_pin and chat_unpin record no actor on PIN_CREATED / PIN_REMOVED (chat_unpin takes no workerId, StateManager.unpinMessage takes no actor, and pinnedBy lives only in PIN_CREATED's payload), so get_activity_log by workerId misses every pin change",
+  "description": "Filed by governor-e6b40560 from item 1 of defect hunt #8's held-back list (task-21d671c1, architect-1dd28c7c, #governors msg-adb6f774). The hunt held it until task-3e1d0c2e landed, because the fix touches StateManager.ts. 3e1d0c2e is DONE (f8b8d60c).\n\nPROBLEM (verified by reading moe/work-2026-10-24 at f8b8d60c)\n- get_activity_log { workerId } keeps only events whose own workerId matches (tools/getActivityLog.ts:131-132). That field is set from `worker?.id || proposal?.workerId || actorWorkerId` (state/activityLog.ts:83).\n- state/chatStore.ts:542 appends `PIN_CREATED` with `{ channelId, messageId, pinnedBy }` and no actorWorkerId. The pinner shows up only in the payload, so the per-seat filter never matches.\n- state/chatStore.ts:559 appends `PIN_REMOVED` with `{ channelId, messageId }` and no actor at all.\n- tools/chatUnpin.ts declares no workerId property (:11-15). StateManager.unpinMessage(channelId, messageId) (StateManager.ts:927-928) has no actor parameter.\n- The actor family (c05bf92d, 2e3012b9, d981e0b0, e977c32b, 1064df99, 3e1d0c2e) records the caller as the event's actor everywhere else.\n\nEFFECT\nA per-seat audit cannot see who pinned or unpinned a message. Pins are the governor's and humans' todo and reference list.\n\nDEPENDENCY\ndependsOn task-3064fd45 (PLANNING). That row gives chat_pin chat_send's sender guard (\"system\" refused NOT_ALLOWED, unregistered ids refused INVALID_INPUT) and resolves chat_pin's and chat_unpin's channel reference. Its DoD limits its diff to chatPin.ts, chatUnpin.ts and chatPin.test.ts. This row builds on that guard: the actor it records should be the validated caller, and chat_unpin's new workerId should get the same guard. Plan against 3064fd45's plan. WORKING claims wait until it is DONE.\n\nFIX DIRECTION (the architect decides)\n- Thread an optional actorWorkerId through chatStore pinMessage and unpinMessage and their StateManager wrappers into appendActivity, as 3e1d0c2e did for the epic tools.\n- chat_pin passes its validated workerId.\n- chat_unpin accepts the proxy-injected workerId, guards it like chat_pin and passes it on.\n- The /ws PIN_MESSAGE and UNPIN_MESSAGE paths (WebSocketServer.ts ~1125-1143) keep working. Recording 'human' there, as /ws already passes for pinnedBy, is optional.\n- Payloads stay the same, pinnedBy included.\n\nGate: narrow, per the epic-be924fb8 ruling msg-bbf4f109. Run the chat pin test files plus StateManager.test.ts and WebSocketServer.test.ts.",
+  "definitionOfDone": [
+    "chat_pin and chat_unpin record the caller's workerId as the actor on PIN_CREATED and PIN_REMOVED, so get_activity_log { workerId } returns both events for that seat; the PIN_CREATED payload is unchanged (pinnedBy kept).",
+    "chat_unpin accepts the caller's workerId and applies the same sender guard chat_pin has after task-3064fd45 (\"system\" refused NOT_ALLOWED, an unregistered id refused INVALID_INPUT, \"human\" allowed); the /ws pin and unpin paths still work.",
+    "A daemon regression test fails before the fix and passes after it, and `npx vitest run src/state/StateManager.test.ts src/server/WebSocketServer.test.ts` plus the chat pin test files stay green (run in a snapshot outside the shared checkout)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3064fd451d69413e968604c5d582f7a3"
+  ],
+  "priority": "LOW",
+  "order": 411.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:22:41.722Z",
+  "updatedAt": "2026-11-03T19:22:41.722Z"
+}

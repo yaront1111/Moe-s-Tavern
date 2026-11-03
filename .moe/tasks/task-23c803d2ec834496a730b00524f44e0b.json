@@ -69,11 +69,18 @@
     {
       "stepId": "step-3",
       "description": "Seat route, part 2, in scripts/moe-agent.ps1: the job and the stop. Port m3 verbatim.\n\n**ENV SCRUB HELPER.** Every seat-* spawn (start, job, stop) runs with ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY and CODEX_API_KEY removed from $env:, each saved and restored in a finally. The in-process hot-reload supervisor keeps env across passes, so a missed restore would leak into the next pass.\n\n**JOB BRANCH.** A new first branch of the launch dispatch, before codex/gemini/grok/claude (~8362), taken on VM-route iterations. It replaces the host CLI.\n- **Credential.**\n  - claude: lease as m3 does, then `$token = Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId)`. $null on any non-zero exit means fail closed with m3's line.\n  - codex: fail closed with m3's line; CQ-M07n adds the keys.\n  - `$json = @{ name = <m3's name>; value = $token } | ConvertTo-Json -Compress`.\n  - The token lives only in these variables. It never enters an argv, an env, a file, Write-Host or a transcript line (task rail). Clear the variables right after the spawn.\n- **Spawn.** `$json | & node $seat seat-job <m3's argv, each value one element>`.\n  - --attempt `$script:MoeAttemptId`, --generation `$script:MoeAttemptGeneration`, --checkout `$script:MoeWtPath`, --task `$preflightTaskId`, --role `$Role`, --cli claude.\n  - --commit: a worker sends W's HEAD (`Invoke-MoeGit -Top $script:MoeWtPath -GitArgs @('rev-parse','HEAD')`); QA sends the task's last landed completion commit, taken from where m3 takes it.\n  - If any value is missing, fail closed with m3's code.\n- **Stdin.** PowerShell's pipe appends CRLF, and 5.1's $OutputEncoding is ASCII (fine for sk-ant-oat tokens). Read M07j's landed stdin reader. If it JSON.parses the whole buffer, trailing whitespace is accepted. If it rejects trailing bytes, write stdin through System.Diagnostics.Process with RedirectStandardInput, no newline, then close it.\n- **Relay and outcome.**\n  - Use `2>&1 | ForEach-Object { ... }` with $ErrorActionPreference 'Continue'.\n  - Write an [System.Management.Automation.ErrorRecord] to stderr as text. Never parse it as an outcome.\n  - Relay each stdout string as the sh relays it, keeping the LAST stdout line that parses as JSON with `seatJob` -eq 1 (-is [int] or [long]).\n  - ok:true sets `$script:CliExitCode` from its exitCode.\n  - A missing outcome or ok:false takes m3's happy-path handling (a non-zero CliExitCode); CQ-M07n owns the failed-job detail.\n  - Usage receipts and stream parsing behave as m3's do.\n- **Landing.** For a worker with ok:true, call `Invoke-MoeVmCandidateLanding -Commit $o.commit -BaseTree $o.baseTree -Tree $o.tree -M @{ TaskId; Title; Status; ReopenCount; CliExit; Sid = $moeSid }`, mapped as m3 maps land_vm_candidate. Then fall through to the normal post-flight. QA lands nothing of its own.\n\n**SEAT STOP.** In the outer finally (~9700), before Invoke-MoeDeregister, when the seat holds an instance:\n- `seat-stop ... --instance <it>`, best-effort and bounded as m3 bounds it (e.g. Start-Process -PassThru + WaitForExit(<m3's limit>) + taskkill of that own PID on timeout), with the scrub helper. Then clear the instance.\n- That one funnel covers normal exit, Ctrl+C, terminating errors, `exit` and the hot-reload hand-over. CQ-M07n moves the reload-branch stop ahead of its early deregister.\n\n**Error handling.** Every native call checks its exit code and parsed JSON. Failures under the VM route end in m3's codes, never a host launch; seat-stop failures only warn.\n\n**Done when** the step-1 rows pass alone on powershell.exe and pwsh.exe from WSL (mem:gotcha-pwsh7-reachable-from-wsl), and `bash scripts/tests/parity-check.sh` passes (BOM intact).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1",
+        ".serena/memories/gotcha-powershell-seat-native-boundaries.md"
+      ],
+      "note": "Wired stdin-only job, final-stdout outcome validation, admitted-tree helper and stop-before-deregister. Landed m3 source also skips host worktree tooling, ordinary/L2 checkpoints and the post-failure host signin probe: ported those guards in the same wrapper file (required to preserve no-host/tree-only behavior). DoD rows pass standalone on PS5.1 and pwsh7; /mnt/d/moe-scratch/n3-green51.log and n3-green7.log exit0, both PASS. Parser matrix rejects root arrays, boolean markers, wrong role/commit/tree and clamps invalid/missing exits. RED caught pwsh7 Int64/root-array unwrapping and .NET null leaving empty env keys; fixed using typed checks/object parsing and Remove-Item. Normal/background/error env restore, absent-key preservation, spaced runner argv and double-stop tests added. parity PASS, diff --check clean, BOM efbbbf. Final full gate follows after latest test-only diagnostic/throw fixture changes.",
       "startedAt": "2026-11-03T19:13:28.553Z",
+      "completedAt": "2026-11-03T19:23:37.149Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -88,8 +95,9 @@
     {
       "stepId": "step-4",
       "description": "Gate (DoD 6). Run it ONCE, after the last byte change. Its output is complete_task's evidence.\n\nIt takes 20-30 min: launch it in the background (Bash run_in_background) and wait for the completion notice. It runs from the repo root on D:, with the seat's MOE_*, CLAUDE* and FAKE_* variables removed and MOE_POSTFLIGHT_TIMEOUT_SEC passed through WSLENV (mem:gotcha-qa-ps1-postflight-from-wsl):\n\ncd /mnt/d/projexts/moes && L=/mnt/d/moe-scratch/n3-gate.log && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=\"D:\\projexts\\moes\\scripts\\tests\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh' > \"$L\" 2>&1; echo \"exit=$?\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c\n\nIt must print exit=0 and these counts:\n- `1 PASS parity-check.sh`;\n- `3 PASS postflight-vm-route.ps1`;\n- `1 PASS postflight.ps1`.\n\nA leg that never ran can still exit 0, so check the counts (mem:gotcha-pwsh7-reachable-from-wsl). If postflight.ps1 fails, rerun the parent revision's scripts before blaming the change.\n\nThe complete_task verification is this command, its exit code and that output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T19:23:37.185Z"
     },
     {
       "stepId": "step-5",
@@ -133,12 +141,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:34:00.801Z",
-  "updatedAt": "2026-11-03T19:13:28.553Z",
+  "updatedAt": "2026-11-03T19:23:37.185Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:55:43.120Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-12ae794e",
@@ -150,7 +158,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T19:02:54.498Z",
