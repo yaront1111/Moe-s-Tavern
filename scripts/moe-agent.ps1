@@ -3108,6 +3108,20 @@ function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
     }
 }
 
+# `git worktree list --porcelain -z` in $Top as a list of @{ Path; Ref } (Ref ''
+# for a detached HEAD), or $null when git fails. Shared by Install-MoeTaskWorktree
+# and WT-14. Twin: wt_porcelain.
+function Get-MoeWorktreeRecords([string]$Top) {
+    $list = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'list', '--porcelain', '-z')
+    if ($list.Rc -ne 0) { return $null }
+    $recs = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($field in ($list.Out -join "`n").Split([char]0)) {
+        if ($field.StartsWith('worktree ', [StringComparison]::Ordinal)) { $recs.Add(@{ Path = $field.Substring(9); Ref = '' }) }
+        elseif ($field.StartsWith('branch ', [StringComparison]::Ordinal) -and $recs.Count) { $recs[$recs.Count - 1].Ref = $field.Substring(7) }
+    }
+    return ,$recs
+}
+
 # Before W's first sparse-checkout, make sure the common config has
 # extensions.worktreeConfig=true (task-c7ca56e6). Otherwise git's sparse-checkout
 # sets it itself under the shared .git/config.lock, and of two seats provisioning at
@@ -3158,14 +3172,9 @@ function Enable-MoeWorktreeConfig([string]$Top) {
 function Install-MoeTaskWorktree([string]$Top, [string]$W, [string]$Branch, [string]$Target, [string]$TaskId) {
     $last = { param($r) "$(@($r.Out) | Select-Object -Last 1)" }
     # W's registration, matched under Get-MoeComparableProjectPath (D:/x is /mnt/d/x).
-    $list = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'list', '--porcelain', '-z')
-    if ($list.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree list failed in $Top" }
+    $recs = Get-MoeWorktreeRecords $Top
+    if ($null -eq $recs) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree list failed in $Top" }
     $want = Get-MoeComparableProjectPath $W
-    $recs = New-Object System.Collections.Generic.List[hashtable]
-    foreach ($field in ($list.Out -join "`n").Split([char]0)) {
-        if ($field.StartsWith('worktree ', [StringComparison]::Ordinal)) { $recs.Add(@{ Path = $field.Substring(9); Ref = '' }) }
-        elseif ($field.StartsWith('branch ', [StringComparison]::Ordinal) -and $recs.Count) { $recs[$recs.Count - 1].Ref = $field.Substring(7) }
-    }
     $hit = @($recs | Where-Object { [string]::Equals((Get-MoeComparableProjectPath $_.Path), $want, [StringComparison]::Ordinal) }) | Select-Object -First 1
     $added = $false; $finish = $false; $base = "refs/heads/$Target"
     if ($hit) {
@@ -6187,17 +6196,19 @@ function Test-MoeControlWorktreeMode {
     return ($h.Rc -eq 0 -and ($h.Out -join '').Trim() -ceq 'refs/heads/moe/control')
 }
 
-# A [WARN] line on every call, plus a #general alert at most once an hour per
-# code for the whole checkout (every seat of it): the stamp
-# <gitdir>/moe/control-alert-<code> holds the last alert's UTC epoch (one that is
-# unreadable or in the future counts as old), read and updated only under the
-# exclusive-create lock file control-alert.lock. A held lock is skipped, never
-# waited on; one older than 10 minutes was left by a killed seat and is removed.
-# No failure here stops a follow or a landing. Twin: control_alert.
-function Send-MoeControlAlert([string]$Code, [string]$Detail, [hashtable]$Git) {
+# A [WARN] line on every call, plus a #general alert at most once per $Window
+# seconds (default 3600) per $Key (default the code) for the whole checkout
+# (every seat of it): the stamp <gitdir>/moe/control-alert-<key> holds the last
+# alert's UTC epoch (one that is unreadable or in the future counts as old), read
+# and updated only under the exclusive-create lock file control-alert.lock. A
+# held lock is skipped, never waited on; one older than 10 minutes was left by a
+# killed seat and is removed. No failure here stops a follow or a landing.
+# Twin: control_alert.
+function Send-MoeControlAlert([string]$Code, [string]$Detail, [hashtable]$Git, [string]$Key = '', [int]$Window = 3600) {
     Write-Host "[WARN] ${Code}: $Detail" -ForegroundColor Yellow
     if (-not $generalChannelId -or -not $Git) { return }
-    $dir = Join-Path $Git.GitDir 'moe'; $lock = Join-Path $dir 'control-alert.lock'; $stamp = Join-Path $dir "control-alert-$Code"; $won = $false
+    if (-not $Key) { $Key = $Code }
+    $dir = Join-Path $Git.GitDir 'moe'; $lock = Join-Path $dir 'control-alert.lock'; $stamp = Join-Path $dir "control-alert-$Key"; $won = $false
     try {
         [void][IO.Directory]::CreateDirectory($dir)
         $held = Get-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
@@ -6206,7 +6217,7 @@ function Send-MoeControlAlert([string]$Code, [string]$Detail, [hashtable]$Git) {
         try {
             $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
             $last = if (Test-Path -LiteralPath $stamp) { ([IO.File]::ReadAllText($stamp)).Trim() } else { '' }
-            if (-not ($last -match '^[0-9]{1,12}$' -and [long]$last -le $now -and $now - [long]$last -lt 3600)) {
+            if (-not ($last -match '^[0-9]{1,12}$' -and [long]$last -le $now -and $now - [long]$last -lt $Window)) {
                 [IO.File]::WriteAllText($stamp, "$now`n"); $won = $true
             }
         } finally { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
@@ -7484,6 +7495,412 @@ function Invoke-MoeControlSeatPostflight([string]$Status, [int]$CliExit, [string
     return $res
 }
 
+# ---- worktree removal (WT-14; design §1.7, §1.9, §1.10) ----
+# W's record in Get-MoeWorktreeRecords as @{ Rc; Ref; Err }: Rc 0 when W is
+# registered on $Ref, after `git worktree repair` when git recorded it in the other
+# OS's spelling (as Install-MoeTaskWorktree does); 1 when W is not registered; 3
+# when it is on another branch (Ref); 2 when the list or the repair fails (Err).
+# Twin: wt_registration.
+function Get-MoeWorktreeRegistration([string]$Top, [string]$W, [string]$Ref) {
+    $recs = Get-MoeWorktreeRecords $Top
+    if ($null -eq $recs) { return @{ Rc = 2; Ref = ''; Err = "git worktree list failed in $Top" } }
+    $want = Get-MoeComparableProjectPath $W
+    $hit = @($recs | Where-Object { [string]::Equals((Get-MoeComparableProjectPath $_.Path), $want, [StringComparison]::Ordinal) }) | Select-Object -First 1
+    if (-not $hit) { return @{ Rc = 1; Ref = ''; Err = '' } }
+    if ($hit.Ref -cne $Ref) { return @{ Rc = 3; Ref = $hit.Ref; Err = '' } }
+    if (-not [string]::Equals($hit.Path, $W, [StringComparison]::Ordinal)) {
+        $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'repair', $W) -MergeStderr
+        if ($r.Rc -ne 0) { return @{ Rc = 2; Ref = $hit.Ref; Err = "git worktree repair failed: $(@($r.Out) | Select-Object -Last 1)" } }
+    }
+    return @{ Rc = 0; Ref = $hit.Ref; Err = '' }
+}
+
+# <common git dir>/moe/worktree: WT-06's link manifests (<taskId>.links), WT-07's
+# <taskId>.control-dirt, the sweep lock; '' when git fails. Twin: wt_admin_dir.
+function Get-MoeWorktreeAdminDir([string]$Top) {
+    $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--path-format=absolute', '--git-common-dir')
+    $common = if ($r.Rc -eq 0) { "$(@($r.Out) | Select-Object -First 1)".Trim() } else { '' }
+    if (-not $common) { return '' }
+    return "$common/moe/worktree"
+}
+
+# The object $Rev names in $Top, or '' when it does not resolve.
+function Get-MoeRevSha([string]$Top, [string]$Rev) {
+    $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '-q', '--verify', $Rev)
+    if ($r.Rc -ne 0) { return '' }
+    return "$(@($r.Out) | Select-Object -First 1)".Trim()
+}
+
+# refs/heads/moe/task/$TaskId's commit, or '' when it does not resolve.
+function Get-MoeTaskBranchTip([string]$Top, [string]$TaskId) { Get-MoeRevSha $Top "refs/heads/moe/task/$TaskId^{commit}" }
+
+# $true when $Path itself is a link, dangling or not: a symlink or a junction (a
+# reparse point). Remove-MoeGateRoot's test.
+function Test-MoeLinkItem([string]$Path) {
+    $i = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    return [bool]($i -and ($i.Attributes -band [IO.FileAttributes]::ReparsePoint))
+}
+
+# The sweep lock $Dir/sweep.lock: one directory create, never waited on, so a
+# held lock is $false. One whose mtime is over 2 h old was left by a killed seat:
+# it is removed once (never recursively) and the create retried once. Only the
+# process that took the lock drops it. Twin: worktree_lock_take / worktree_lock_drop.
+function Lock-MoeWorktreeSweep([string]$Dir) {
+    $script:MoeWtLockHeld = ''
+    $lock = "$Dir/sweep.lock"
+    try {
+        [void][IO.Directory]::CreateDirectory($Dir)
+        try { $null = New-Item -ItemType Directory -Path $lock -ErrorAction Stop }
+        catch {
+            $held = Get-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+            if (-not $held -or -not $held.PSIsContainer -or $held.LastWriteTimeUtc -gt [DateTime]::UtcNow.AddSeconds(-7200)) { return $false }
+            [IO.Directory]::Delete($lock)
+            $null = New-Item -ItemType Directory -Path $lock -ErrorAction Stop
+        }
+    } catch { return $false }
+    $script:MoeWtLockHeld = $lock
+    return $true
+}
+function Unlock-MoeWorktreeSweep {
+    if ($script:MoeWtLockHeld) { try { [IO.Directory]::Delete($script:MoeWtLockHeld) } catch {} }
+    $script:MoeWtLockHeld = ''
+}
+
+# WT-06's manifest $File (one W-relative path per line) as @{ Rels; Err }; a
+# missing $File lists nothing. Err when $File is not a readable regular file, a
+# line is not a plain relative path (absolute, a drive letter or backslash, an
+# empty, '.' or '..' segment), or a parent of an entry inside W is a link.
+# Twin: wt_manifest_read.
+function Read-MoeWorktreeManifest([string]$W, [string]$File) {
+    $res = @{ Rels = @(); Err = '' }
+    $item = Get-Item -LiteralPath $File -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return $res }
+    $text = $null
+    if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and -not $item.PSIsContainer) {
+        try { $text = [IO.File]::ReadAllText($File) } catch { $text = $null }
+    }
+    if ($null -eq $text) { $res.Err = "$File is not a readable regular file"; return $res }
+    foreach ($line in $text.Split("`n")) {
+        $rel = if ($line.EndsWith("`r")) { $line.Substring(0, $line.Length - 1) } else { $line }
+        if (-not $rel) { continue }
+        if ($rel -cnotmatch '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\z' -or "/$rel/".Contains('/./') -or "/$rel/".Contains('/../')) {
+            $res.Err = "manifest line '$rel' in $File is not a plain W-relative path"; return $res
+        }
+        $p = $W; $segs = $rel.Split('/')
+        for ($i = 0; $i -lt $segs.Count - 1; $i++) {
+            $p = "$p/$($segs[$i])"
+            if (Test-MoeLinkItem $p) { $res.Err = "$p, a parent of manifest entry $rel, is a link"; return $res }
+        }
+        $res.Rels += $rel
+    }
+    return $res
+}
+
+# WT-07's worktree attribution of W as @{ Ok; N; Attr; Git }: Attr.Candidates are
+# W's non-DENY dirty paths, the paths a checkpoint would land, N counts them, and
+# Git is W's hashtable for Invoke-MoeRescueRef. Ok is $false when git status or
+# the attribution fails, or a status entry is missing from the snapshot (a
+# control character in its path, a nested repository): bytes the snapshot cannot
+# carry never reach a rescue ref, so they keep W. Twin: worktree_dirt_scan.
+function Get-MoeWorktreeDirtScan([string]$W) {
+    $res = @{ Ok = $false; N = 0; Attr = $null; Git = $null }
+    $gd = Invoke-MoeGit -Top $W -GitArgs @('rev-parse', '--absolute-git-dir')
+    $gitDir = if ($gd.Rc -eq 0) { ($gd.Out -join '').Trim() } else { '' }
+    if (-not $gitDir) { return $res }
+    $S = Get-MoeDirtySnapshot $W
+    $st = Invoke-MoeGit -Top $W -GitArgs @('status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames')
+    if ($null -eq $S -or $st.Rc -ne 0 -or $S.Count -ne @(($st.Out -join "`n").Split([char]0) | Where-Object { $_ }).Count) { return $res }
+    $res.Attr = Get-MoeWorktreeAttribution $S '' (Read-MoeCommitSettings)
+    $res.N = @($res.Attr.Candidates).Count
+    $res.Git = @{ Top = $W; GitDir = $gitDir; Rel = '' }
+    $res.Ok = $true
+    return $res
+}
+
+# The removal engine's refusal line. Twin: wt_remove_refused.
+function Write-MoeWorktreeRemoveRefused([string]$W, [string]$Detail) {
+    Write-Host "[WARN] MOE_WORKTREE_REMOVE_REFUSED: ${W}: $Detail" -ForegroundColor Yellow
+}
+
+# The one removal engine. W is $Top/.worktrees/$TaskId: neither W nor
+# $Top/.worktrees a link, registered on refs/heads/moe/task/$TaskId
+# (Get-MoeWorktreeRegistration), no W/.moe, and every line of its manifest
+# checked first (Read-MoeWorktreeManifest). Each listed link is unlinked
+# (Remove-MoeGateRoot's call, never a recursion) and proved gone, so git's
+# recursion never reaches a link target; a missing entry is skipped and a
+# non-link is W's own. Then `worktree remove --force --force` (a locked W too:
+# with no separate unlock, a failed remove keeps the lock), exactly
+# $TaskId.links and $TaskId.control-dirt, and `branch -D` while the branch is
+# still at $Tip (default: its tip here). A failed guard, or any throw before W
+# is removed, prints MOE_WORKTREE_REMOVE_REFUSED and returns $false with W
+# registered and the branch kept. Git deregisters W even when its remove fails
+# part-way (refused here, branch kept), and Git for Windows exits 0 with W left
+# on disk when W holds a junction no manifest lists: the next sweep pass names
+# either leftover MOE_WORKTREE_UNREGISTERED. Callers hold the sweep lock and have
+# proved every byte landed or rescued. Twin: remove_task_worktree.
+function Remove-MoeTaskWorktree([string]$Top, [string]$TaskId, [string]$Tip = '') {
+    $w = "$Top/.worktrees/$TaskId"
+    try {
+        if ($TaskId -cnotmatch '^task-[A-Za-z0-9_-]{1,128}\z') { Write-MoeWorktreeRemoveRefused $w "'$TaskId' is not a task id"; return $false }
+        if ((Test-MoeLinkItem "$Top/.worktrees") -or (Test-MoeLinkItem $w)) { Write-MoeWorktreeRemoveRefused $w "W or $Top/.worktrees is a link"; return $false }
+        $reg = Get-MoeWorktreeRegistration $Top $w "refs/heads/moe/task/$TaskId"
+        if ($reg.Rc -eq 1) { Write-MoeWorktreeRemoveRefused $w 'it is not a registered worktree'; return $false }
+        if ($reg.Rc -eq 3) { Write-MoeWorktreeRemoveRefused $w "it is registered on $(if ($reg.Ref) { $reg.Ref } else { 'a detached HEAD' }), not refs/heads/moe/task/$TaskId"; return $false }
+        if ($reg.Rc -ne 0) { Write-MoeWorktreeRemoveRefused $w $reg.Err; return $false }
+        if ($null -ne (Get-Item -LiteralPath (Join-Path $w '.moe') -Force -ErrorAction SilentlyContinue)) { Write-MoeWorktreeRemoveRefused $w 'W/.moe exists (MOE_WORKTREE_MOE_PRESENT)'; return $false }
+        if (-not $Tip) { $Tip = Get-MoeTaskBranchTip $Top $TaskId }
+        if (-not $Tip) { Write-MoeWorktreeRemoveRefused $w "refs/heads/moe/task/$TaskId does not resolve"; return $false }
+        $d = Get-MoeWorktreeAdminDir $Top
+        if (-not $d) { Write-MoeWorktreeRemoveRefused $w "git rev-parse --git-common-dir failed in $Top"; return $false }
+        $man = Read-MoeWorktreeManifest $w "$d/$TaskId.links"
+        if ($man.Err) { Write-MoeWorktreeRemoveRefused $w $man.Err; return $false }
+        foreach ($rel in $man.Rels) {
+            $p = "$w/$rel"
+            $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+            if (-not $item -or -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+            try { if ($item.PSIsContainer) { [IO.Directory]::Delete($p) } else { [IO.File]::Delete($p) } } catch {}
+            if ($null -ne (Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue)) { Write-MoeWorktreeRemoveRefused $w "the link $rel could not be unlinked"; return $false }
+        }
+        $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'remove', '--force', '--force', $w) -MergeStderr
+        if ($r.Rc -ne 0) { Write-MoeWorktreeRemoveRefused $w "git worktree remove failed: $(@($r.Out) | Select-Object -First 1)"; return $false }
+    } catch {
+        Write-MoeWorktreeRemoveRefused $w "the removal failed in PowerShell: $_"; return $false
+    }
+    foreach ($p in @("$d/$TaskId.links", "$d/$TaskId.control-dirt")) {
+        try { [IO.File]::Delete($p) } catch {}
+        if ($null -ne (Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue)) { Write-Host "[WARN] could not delete $p; $w is already removed." -ForegroundColor Yellow }
+    }
+    $cur = Get-MoeTaskBranchTip $Top $TaskId
+    if ($cur -cne $Tip) {
+        Write-Host "[WARN] moe/task/$TaskId moved from $Tip to $(if ($cur) { $cur } else { 'nothing' }) while $w was removed; the branch is kept." -ForegroundColor Yellow
+    } else {
+        $b = Invoke-MoeGit -Top $Top -GitArgs @('branch', '-D', "moe/task/$TaskId") -MergeStderr
+        if ($b.Rc -ne 0) { Write-Host "[WARN] git branch -D moe/task/$TaskId failed: $(@($b.Out) | Select-Object -First 1); $w is already removed." -ForegroundColor Yellow }
+    }
+    Write-Host "[worktree] removed $w on moe/task/$TaskId"
+    return $true
+}
+
+# Design §1.7, a QA seat after qa_approve left $TaskId DONE: in a worktree-mode
+# control checkout at the repository top, a registered W of $TaskId is removed
+# (Remove-MoeTaskWorktree, under the sweep lock) when W/.moe is absent, W is on
+# moe/task/$TaskId, W holds no non-DENY dirt (Get-MoeWorktreeDirtScan) and the
+# branch is fully landed in refs/heads/<target> (Test-MoeTaskBranchLanded, WT-13's
+# target rule). Otherwise `[worktree] left W to the orphan sweep: <reason>`.
+# Silent when the checkout or W does not qualify; never a rescue or any other
+# deletion. Twin: qa_done_worktree_removal.
+function Invoke-MoeQaWorktreeRemoval([string]$TaskId) {
+    if (-not (Test-MoeControlWorktreeMode)) { return }
+    $git = Get-MoeGitTop
+    if (-not $git -or $git.Rel -or $TaskId -cnotmatch '^task-[A-Za-z0-9_-]{1,128}\z') { return }
+    $cb = [string](Read-MoeCommitSettings).consolidationBranch
+    $target = if ($cb -and $cb -notmatch '[?\[]') { $cb } else { 'main' }
+    $top = $git.Top; $w = "$top/.worktrees/$TaskId"; $tip = ''; $reason = ''
+    $reg = Get-MoeWorktreeRegistration $top $w "refs/heads/moe/task/$TaskId"
+    if ($reg.Rc -eq 1) { return }
+    if ($reg.Rc -eq 3) { $reason = "it is registered on $(if ($reg.Ref) { $reg.Ref } else { 'a detached HEAD' }), not refs/heads/moe/task/$TaskId" }
+    elseif ($reg.Rc -ne 0) {
+        if ($null -eq (Get-Item -LiteralPath $w -Force -ErrorAction SilentlyContinue)) { return }
+        $reason = $reg.Err
+    } elseif ($null -ne (Get-Item -LiteralPath (Join-Path $w '.moe') -Force -ErrorAction SilentlyContinue)) {
+        $reason = 'W/.moe exists (MOE_WORKTREE_MOE_PRESENT)'
+    } else {
+        $scan = Get-MoeWorktreeDirtScan $w
+        $tip = Get-MoeTaskBranchTip $top $TaskId
+        if (-not $scan.Ok) { $reason = 'git status or the attribution failed in W' }
+        elseif ($scan.N -gt 0) { $reason = "it holds $($scan.N) non-DENY dirty path(s)" }
+        elseif (-not $tip -or -not (Test-MoeTaskBranchLanded $top "refs/heads/$target" $TaskId)) { $reason = "moe/task/$TaskId is not fully landed in $target" }
+        else {
+            $d = Get-MoeWorktreeAdminDir $top
+            if (-not $d -or -not (Lock-MoeWorktreeSweep $d)) { $reason = 'the sweep lock is held' }
+        }
+    }
+    if ($reason) { Write-Host "[worktree] left $w to the orphan sweep: $reason"; return }
+    try { $null = Remove-MoeTaskWorktree $top $TaskId $tip } finally { Unlock-MoeWorktreeSweep }
+}
+
+# ---- the orphan sweep (WT-14; design §1.9, §1.10) ----
+# The taskId of every open attempt record (phase not closed) under the control
+# checkout's .moe/attempts, or $null when a record cannot be listed, read or
+# parsed: a pass that cannot see every attempt removes nothing. Twin: wt_open_attempts.
+function Get-MoeOpenAttemptTaskIds {
+    $root = Join-Path $projectPath '.moe/attempts'
+    $ids = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    try {
+        $ri = Get-Item -LiteralPath $root -Force -ErrorAction SilentlyContinue
+        if (-not $ri) { return ,$ids }
+        if (-not $ri.PSIsContainer) { return $null }
+        foreach ($f in @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop | Where-Object { $_.Name.EndsWith('.json', [StringComparison]::Ordinal) })) {
+            $d = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop
+            if ($d -isnot [Management.Automation.PSCustomObject]) { return $null }
+            if ([string]$d.phase -cne 'closed') { [void]$ids.Add([string]$d.taskId) }
+        }
+    } catch { return $null }
+    return ,$ids
+}
+
+# The daemon's status of $TaskId (moe.get_context view 'status', unserved, so no
+# session receipt): the status of an answer naming $TaskId, 'UNKNOWN' for the
+# daemon's TASK_NOT_FOUND refusal alone, else '' (no proxy or daemon, another
+# refusal, an answer about another task): an RPC failure never counts as
+# unknown to the daemon. Twin: wt_task_status.
+function Get-MoeWorktreeTaskStatus([string]$TaskId) {
+    $r = Invoke-MoeRpcUnserved -Tool 'get_context' -Args @{ taskId = $TaskId; view = 'status' }
+    if ($null -eq $r) { return $(if ($script:MoeRpcFailure -eq 'daemon refusal' -and $script:MoeRpcCodeName -ceq 'TASK_NOT_FOUND') { 'UNKNOWN' } else { '' }) }
+    $t = if ($r -is [Management.Automation.PSCustomObject]) { $r.task } else { $null }
+    if ($t -isnot [Management.Automation.PSCustomObject] -or [string]$t.id -cne $TaskId -or $t.status -isnot [string]) { return '' }
+    return [string]$t.status
+}
+
+# $true when a pass is due: $Interval is 0, or $Stamp (epoch seconds) is
+# unreadable, malformed, in the future, or $Interval old. Twin: wt_sweep_due.
+function Test-MoeSweepDue([string]$Stamp, [long]$Interval) {
+    if ($Interval -le 0) { return $true }
+    try { $last = [IO.File]::ReadAllText($Stamp).TrimEnd([char]10) } catch { return $true }
+    if ($last.EndsWith("`r")) { $last = $last.Substring(0, $last.Length - 1) }
+    if ($last -cnotmatch '^[0-9]{1,12}\z') { return $true }
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    return ([long]$last -gt $now -or $now - [long]$last -ge $Interval)
+}
+
+# Design §1.9 at the loop top: in a worktree-mode control checkout at the
+# repository top with a real TOP/.worktrees, one pass at most every
+# MOE_WORKTREE_SWEEP_INTERVAL_SEC (unset or blank: 3600; 0: every loop top;
+# anything else warns once and uses 3600) for the whole checkout:
+# <admin>/sweep.last holds the last pass's epoch, checked first without the
+# lock, then again under it, and written (temp + Move-Item) before the pass. A
+# held sweep lock skips the pass. Shared mode runs nothing. Twin: worktree_orphan_sweep.
+function Invoke-MoeWorktreeSweep {
+    if (-not (Test-MoeControlWorktreeMode)) { return }
+    $git = Get-MoeGitTop
+    if (-not $git -or $git.Rel) { return }
+    $top = $git.Top
+    if (-not (Test-Path -LiteralPath "$top/.worktrees" -PathType Container) -or (Test-MoeLinkItem "$top/.worktrees")) { return }
+    $iv = [string]$env:MOE_WORKTREE_SWEEP_INTERVAL_SEC; $sec = 3600
+    if ($iv -cmatch '^[0-9]{1,9}\z') { $sec = [long]$iv }
+    elseif ($iv.Trim()) {
+        if ($script:MoeWtSweepIntervalWarned -cne $iv) { Write-Host "[WARN] MOE_WORKTREE_SWEEP_INTERVAL_SEC='$iv' is not a whole number of seconds; the orphan sweep runs at most every 3600s." -ForegroundColor Yellow }
+        $script:MoeWtSweepIntervalWarned = $iv
+    }
+    $d = Get-MoeWorktreeAdminDir $top
+    if (-not $d) { return }
+    $stamp = "$d/sweep.last"
+    if (-not (Test-MoeSweepDue $stamp $sec)) { return }
+    if (-not (Lock-MoeWorktreeSweep $d)) { Write-Host '[worktree] sweep skipped: lock held'; return }
+    try {
+        if (-not (Test-MoeSweepDue $stamp $sec)) { return }
+        $tmp = "$stamp.tmp.$PID"
+        try {
+            [IO.File]::WriteAllText($tmp, "$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())`n")
+            Move-Item -LiteralPath $tmp -Destination $stamp -Force -ErrorAction Stop
+        } catch {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            Write-Host "[WARN] could not write $stamp; the orphan sweep skips this pass." -ForegroundColor Yellow
+            return
+        }
+        # Pre-flight resolves #general after the loop top: a local of this
+        # scope, which the pass's alerts and rescue rows read.
+        if (-not $generalChannelId) {
+            $ch = Invoke-MoeRpc -Tool 'chat_channels' -Args @{}
+            if ($ch -and $ch.channels) { foreach ($c in $ch.channels) { if ($c.name -eq 'general') { $generalChannelId = $c.id; break } } }
+        }
+        $null = Invoke-MoeWorktreeSweepPass $git
+    } finally { Unlock-MoeWorktreeSweep }
+}
+
+# One pass under the sweep lock. Lists TOP/.worktrees (Get-MoeWorktreeRecords
+# and the directory itself): an unregistered task-* directory is named
+# (MOE_WORKTREE_UNREGISTERED, one #general alert per path a day) and left on
+# disk. Candidates are the records at TOP/.worktrees/<id> on
+# refs/heads/moe/task/<id>; each, in task-id order, is skipped while W is
+# missing, an attempt of its task is open or the daemon says neither DONE nor
+# ARCHIVED; a link W is refused and a W/.moe is left. The rest (DONE, ARCHIVED
+# or unknown to the daemon), at most 5 a pass, go to
+# Invoke-MoeWorktreeSweepRemove. A failed list, attempt read or status read
+# stops the pass ($false). Twin: worktree_sweep_pass.
+function Invoke-MoeWorktreeSweepPass([hashtable]$Git) {
+    $top = $Git.Top; $base = "$top/.worktrees"; $names = $null
+    $recs = Get-MoeWorktreeRecords $top
+    try { if ($null -ne $recs) { $names = [string[]]@(Get-ChildItem -LiteralPath $base -Force -ErrorAction Stop | ForEach-Object { $_.Name }) } } catch { $names = $null }
+    if ($null -eq $recs -or $null -eq $names) {
+        Write-Host "[WARN] the worktree sweep stopped: git worktree list or a listing of $base failed." -ForegroundColor Yellow; return $false
+    }
+    $reg = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $cands = New-Object 'System.Collections.Generic.SortedSet[string]' ([StringComparer]::Ordinal)
+    foreach ($r in $recs) {
+        $cp = Get-MoeComparableProjectPath $r.Path
+        [void]$reg.Add($cp)
+        $nm = @($r.Path.TrimEnd([char]'\', [char]'/') -split '[\\/]')[-1]
+        if ($nm -cmatch '^task-[A-Za-z0-9_-]{1,128}\z' -and $r.Ref -ceq "refs/heads/moe/task/$nm" -and [string]::Equals($cp, (Get-MoeComparableProjectPath "$base/$nm"), [StringComparison]::Ordinal)) { [void]$cands.Add($nm) }
+    }
+    [Array]::Sort($names, [StringComparer]::Ordinal)
+    foreach ($nm in $names) {
+        $full = "$base/$nm"
+        if (-not $nm.StartsWith('task-', [StringComparison]::Ordinal) -or -not (Test-Path -LiteralPath $full -PathType Container)) { continue }
+        $cp = Get-MoeComparableProjectPath $full
+        if ($reg.Contains($cp)) { continue }
+        $sha = [Security.Cryptography.SHA1]::Create()
+        try { $key = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($cp))) -replace '-', '').Substring(0, 16).ToLowerInvariant() } finally { $sha.Dispose() }
+        Send-MoeControlAlert 'MOE_WORKTREE_UNREGISTERED' "$($full -replace '[\x00-\x1f\x7f]', '?'): not a registered worktree; left on disk" $Git "MOE_WORKTREE_UNREGISTERED-$key" 86400
+    }
+    if ($cands.Count -eq 0) { return $true }
+    $open = Get-MoeOpenAttemptTaskIds
+    if ($null -eq $open) { Write-Host "[WARN] the worktree sweep stopped: an attempt record under $projectPath/.moe/attempts cannot be read." -ForegroundColor Yellow; return $false }
+    $n = 0
+    foreach ($tid in $cands) {
+        if ($n -ge 5) { break }
+        $w = "$base/$tid"
+        if (Test-MoeLinkItem $w) { Write-MoeWorktreeRemoveRefused $w 'W is a link'; continue }
+        if (-not (Test-Path -LiteralPath $w -PathType Container)) { continue }
+        if ($null -ne (Get-Item -LiteralPath (Join-Path $w '.moe') -Force -ErrorAction SilentlyContinue)) { Write-Host "[worktree] sweep left ${w}: W/.moe exists (MOE_WORKTREE_MOE_PRESENT)"; continue }
+        if ($open.Contains($tid)) { continue }
+        $st = Get-MoeWorktreeTaskStatus $tid
+        if (-not $st) { Write-Host "[WARN] the worktree sweep stopped: moe.get_context gave no status for $tid." -ForegroundColor Yellow; return $false }
+        if ($st -cne 'DONE' -and $st -cne 'ARCHIVED' -and $st -cne 'UNKNOWN') { continue }
+        $n++
+        $null = Invoke-MoeWorktreeSweepRemove $Git $tid
+    }
+    return $true
+}
+
+# A sweep candidate whose task is DONE, ARCHIVED or unknown. W's non-DENY dirt
+# goes to a rescue ref on W's HEAD (Invoke-MoeRescueRef, reason
+# worktree-orphan), and a branch tip not fully landed in the target to a second
+# one (-Sha); each must hold every byte and resolve to the commit just written,
+# else MOE_WORKTREE_REMOVE_REFUSED with W and its branch kept. Then the attempts
+# are read again and Remove-MoeTaskWorktree runs. A completion's frozen tree
+# never stands in for W's dirt, and the rescue records no session.
+# Twin: worktree_sweep_remove.
+function Invoke-MoeWorktreeSweepRemove([hashtable]$Git, [string]$TaskId) {
+    $top = $Git.Top; $w = "$top/.worktrees/$TaskId"
+    $cb = [string](Read-MoeCommitSettings).consolidationBranch
+    $target = if ($cb -and $cb -notmatch '[?\[]') { $cb } else { 'main' }
+    $tip = Get-MoeTaskBranchTip $top $TaskId
+    $gd = Invoke-MoeGit -Top $w -GitArgs @('rev-parse', '--absolute-git-dir')
+    if (-not $tip -or $gd.Rc -ne 0 -or -not "$(@($gd.Out) | Select-Object -First 1)".Trim()) { Write-MoeWorktreeRemoveRefused $w "W's git dir or refs/heads/moe/task/$TaskId does not resolve"; return $false }
+    $scan = Get-MoeWorktreeDirtScan $w
+    if (-not $scan.Ok) { Write-MoeWorktreeRemoveRefused $w 'git status or the attribution failed in W'; return $false }
+    $sid = "$WorkerId@unknown"; $frozen = $script:MoeFrozen; $script:MoeFrozen = $null
+    try {
+        if ($scan.N -gt 0) {
+            $r = Invoke-MoeRescueRef -Git $scan.Git -TaskId $TaskId -Reason 'worktree-orphan' -Title 'worktree orphan' -Sid $sid -Attr @{ Candidates = $scan.Attr.Candidates }
+            if (-not $r -or $r.PathCount -ne $scan.N -or -not $r.Sha -or (Get-MoeRevSha $top $r.Ref) -cne $r.Sha) {
+                Write-MoeWorktreeRemoveRefused $w "rescue failed: W's $($scan.N) dirty path(s) are not all on a rescue ref"; return $false
+            }
+        }
+        if (-not (Test-MoeTaskBranchLanded $top "refs/heads/$target" $TaskId)) {
+            $r = Invoke-MoeRescueRef -Git $scan.Git -TaskId $TaskId -Reason 'worktree-orphan' -Title 'worktree orphan' -Sid $sid -Sha $tip
+            if (-not $r -or -not $r.Ref -or (Get-MoeRevSha $top "$($r.Ref)^{commit}") -cne $tip) {
+                Write-MoeWorktreeRemoveRefused $w "rescue failed: no rescue ref holds moe/task/$TaskId at $tip"; return $false
+            }
+        }
+    } finally { $script:MoeFrozen = $frozen }
+    $open = Get-MoeOpenAttemptTaskIds
+    if ($null -eq $open) { Write-MoeWorktreeRemoveRefused $w "an attempt record under $projectPath/.moe/attempts cannot be read"; return $false }
+    if ($open.Contains($TaskId)) { Write-Host "[worktree] sweep left ${w}: an attempt of $TaskId opened"; return $true }
+    return (Remove-MoeTaskWorktree $top $TaskId $tip)
+}
+
 # Section 4 steps 1-3 (shared by the pre-flight and the idle paths): scope,
 # DONE/ARCHIVED cleanup, recovery landing of a lingering baseline.
 function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]$TaskId, [string]$Status, [string]$Title, [string]$Sid) {
@@ -8629,6 +9046,11 @@ do {
     $firstRun = $false
 
     $script:CliExitCode = 0
+
+    # WT-14 (§1.9): the orphan sweep, at most once per MOE_WORKTREE_SWEEP_INTERVAL_SEC
+    # for the whole checkout. A worktree-mode control checkout only, so shared mode
+    # runs nothing new; it never stops the seat or changes this iteration.
+    try { Invoke-MoeWorktreeSweep } catch { Write-Host "[WARN] the worktree sweep failed in PowerShell: $_" -ForegroundColor Yellow }
 
     # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
     $script:MoeFrozen=$null; $script:MoeLandingResult=$null; $script:MoeFinalizeDone=$false; $script:MoeFinalizeRc=$false
@@ -10601,6 +11023,12 @@ $mentionsJson
         # deliberately KEPT for the next pre-flight to recover — which only
         # works if the marker is gone. Same as the sh twin.
         if ($moeGit) { Remove-MoeLiveMarker $moeGit.GitDir $preflightTaskId }
+        # WT-14: the approved task's worktree goes now, or waits for the orphan
+        # sweep. A control seat only, so shared mode runs nothing new; it never
+        # changes the landing outcome, the loop decision or the exit code.
+        if ($moeWtExit -eq 'control' -and $Role -eq 'qa' -and $moeWtStatus -ceq 'DONE') {
+            try { Invoke-MoeQaWorktreeRemoval $preflightTaskId } catch { Write-Host "[WARN] the worktree removal of task $preflightTaskId failed in PowerShell: $_" -ForegroundColor Yellow }
+        }
     } elseif ($AutoClaim -and -not $moeSkipLaunch) {
         # -------- Adoption boundary (the alarm, not the fix) --------
         # This session launched WITHOUT a task baseline. It may still retain

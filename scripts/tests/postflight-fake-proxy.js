@@ -390,6 +390,20 @@ if (tool === 'claim_next_task' && claimLimit > 0) {
   if (claimN > claimLimit) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
 }
 if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam','noteam-until-joined'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
+// FAKE_TASK_STATUS_MAP=taskId=STATUS,...: a get_context view 'status' read (WT-14's
+// orphan sweep; no wrapper sent one before) answers {contextScope:'status',
+// task:{id,status}}, WORKING for an unmapped id. NOT_FOUND refuses as the daemon
+// refuses an unknown taskId (data.codeName TASK_NOT_FOUND); FAIL is an error with
+// no codeName. Answered here, so the context-count block below never sees it.
+if (tool === 'get_context' && args.view === 'status') {
+  const status = Object.fromEntries(csv(process.env.FAKE_TASK_STATUS_MAP).map((kv) => kv.split('=')))[args.taskId] || 'WORKING';
+  if (status === 'NOT_FOUND' || status === 'FAIL') {
+    const error = status === 'FAIL' ? { code: -32603, message: 'fake get_context failure' }
+      : { code: -32001, message: `Task not found: ${args.taskId}`, data: { tool: 'moe.get_context', codeName: 'TASK_NOT_FOUND' } };
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id || 1, error }) + '\n');
+  } else ok({ contextScope: 'status', task: { id: args.taskId, status } });
+  process.exit(0);
+}
 if (tool === 'get_context' && args.taskId) {
   const countFile = path.join(moe,'context-count');
   const count = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile,'utf8') : 0) + 1;
