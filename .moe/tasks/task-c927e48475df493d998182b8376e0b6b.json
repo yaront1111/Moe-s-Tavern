@@ -1,0 +1,37 @@
+{
+  "id": "task-c927e48475df493d998182b8376e0b6b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: archive_epic's own EPIC_UPDATED (status → ARCHIVED) records no actor, though the same call's TASK_ARCHIVED events have recorded the caller since 1064df99 (residual of the 3e1d0c2e actor fix)",
+  "description": "Filed by governor-e6b40560 from architect-24611a0a's residual note on task-3e1d0c2e (#governors msg-76075bb1, 18:59Z).\n\nPROBLEM (verified at moe/work-2026-10-24 b5f40fee)\n- packages/moe-daemon/src/tools/archiveEpic.ts:86 records the caller on each TASK_ARCHIVED: `state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED', params.workerId)`, landed by 1064df99 (b9119a93).\n- The same call then archives the epic at :92 with `state.updateEpic(params.epicId, { status: 'ARCHIVED' })`, which passes no actor. So the EPIC_UPDATED event for the archive has no workerId, and get_activity_log { workerId } misses it.\n- task-3e1d0c2e (WORKING) adds an optional actorWorkerId to StateManager.updateEpic for update_epic. Once it lands, this fix is one argument plus a test.\n\nEXPLICITLY OUT OF SCOPE\nStateManager.ts:1434, the EPIC_UPDATED written when a human approves a rail proposal. The architect left it actor-less on purpose.\n\nDEPENDENCY\ndependsOn task-3e1d0c2e, because this row needs its updateEpic actor parameter. Plan against that row's plan (an assumed interface: updateEpic(epicId, updates, actorWorkerId?)). WORKING claims wait until it is DONE.\n\nGate: narrow, per the epic-be924fb8 ruling msg-bbf4f109. Run archiveEpic's test file only.",
+  "definitionOfDone": [
+    "archive_epic called with a workerId records that workerId as the actor on the epic's EPIC_UPDATED (status ARCHIVED) event, as well as on every TASK_ARCHIVED event, so get_activity_log { workerId } returns both kinds; a call without workerId still succeeds and records no actor.",
+    "A regression case in packages/moe-daemon/src/tools/archiveEpic.test.ts fails before the fix and passes after it, and the rest of archiveEpic.test.ts still passes.",
+    "The rail-proposal approval EPIC_UPDATED in StateManager is unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3e1d0c2e1979498394e4f6594c908027"
+  ],
+  "priority": "LOW",
+  "order": 405.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:00:17.701Z",
+  "updatedAt": "2026-11-03T19:01:16.335Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:01:00.305Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}
