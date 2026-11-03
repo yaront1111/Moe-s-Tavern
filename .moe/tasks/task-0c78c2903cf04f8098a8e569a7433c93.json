@@ -114,7 +114,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T11:37:39.579Z",
-  "updatedAt": "2026-11-03T13:13:39.667Z",
+  "updatedAt": "2026-11-03T13:14:40.833Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T11:37:52.806Z",
     "plannedStepCount": 5,
@@ -211,11 +211,10 @@
   "planApprovedAt": "2026-11-03T11:55:42.394Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-24611a0a@2026-11-03T11:37:48Z",
-    "at": "2026-11-03T11:56:52.953Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T13:08:13Z",
+    "at": "2026-11-03T13:14:40.832Z"
   },
   "workStartedAt": "2026-11-03T13:09:40.216Z",
   "reviewStartedAt": "2026-11-03T13:13:39.665Z",
@@ -232,5 +231,25 @@
     "docs/MCP_SERVER.md",
     "scripts/CLAUDE.md"
   ],
-  "completionSummary": "settleLease (packages/moe-daemon/src/state/accountStore.ts) now calls touchWorker on every moe.lease_account call, passing { accountId } only when the stored value (absent = null) differs, else {}. A QA wrapper parked in MOE_ACCOUNT_WAIT therefore keeps refreshing lastActivityAt, and the 30-min REVIEW self-heal no longer releases its row. Every leaseAccount reply path and recordAccountReport's learn-back go through settleLease, so all count as presence. touchWorker's unknown/DEAD guards are unchanged; sweeps.ts, leaseAccount.ts and every timeout are untouched; reply shapes are unchanged.\n\nTests: new state/accountStore.presence.test.ts (ToolTestHarness + the real runBlockedTimeoutSweep). RED on unfixed source (git-archive snapshot): Tests 3 failed | 3 passed, failing exactly p1 (all-spent), p3 (rotation:false), p4 (repeat lease); p2 (no-lease control: sweep releases the row), p5 (unknown workerId: no record in memory or on disk) and p6 (DEAD seat: lastActivityAt and status unchanged) pass. GREEN with the fix: presence + accountStore.test.ts + accountTools.test.ts = 3 files, 44 passed.\n\nDocs: docs/MCP_SERVER.md moe.lease_account Notes gains one bullet; scripts/CLAUDE.md account-rotation bullet (line 42 only) gains one clause.\n\nVerification: the plan's C0+C1 chain, fresh: C0 OK (only the 4 planned paths differ from the merge-base; parity-check PASS; npm run lint OK); full daemon suite in a shared-clone snapshot: 233 files passed, 6993 tests passed | 20 skipped (baseline 232 files / 6987 + this file's 6); tsc --noEmit clean; C1 OK.\n\nKnown and out of scope: MOE_ACCOUNT_RETRY_SEC at or above reviewStaleTimeoutMs/1000 can still lose the row between polls (documented). The live daemon needs the governor's restage and swap before the fix takes effect."
+  "completionSummary": "settleLease (packages/moe-daemon/src/state/accountStore.ts) now calls touchWorker on every moe.lease_account call, passing { accountId } only when the stored value (absent = null) differs, else {}. A QA wrapper parked in MOE_ACCOUNT_WAIT therefore keeps refreshing lastActivityAt, and the 30-min REVIEW self-heal no longer releases its row. Every leaseAccount reply path and recordAccountReport's learn-back go through settleLease, so all count as presence. touchWorker's unknown/DEAD guards are unchanged; sweeps.ts, leaseAccount.ts and every timeout are untouched; reply shapes are unchanged.\n\nTests: new state/accountStore.presence.test.ts (ToolTestHarness + the real runBlockedTimeoutSweep). RED on unfixed source (git-archive snapshot): Tests 3 failed | 3 passed, failing exactly p1 (all-spent), p3 (rotation:false), p4 (repeat lease); p2 (no-lease control: sweep releases the row), p5 (unknown workerId: no record in memory or on disk) and p6 (DEAD seat: lastActivityAt and status unchanged) pass. GREEN with the fix: presence + accountStore.test.ts + accountTools.test.ts = 3 files, 44 passed.\n\nDocs: docs/MCP_SERVER.md moe.lease_account Notes gains one bullet; scripts/CLAUDE.md account-rotation bullet (line 42 only) gains one clause.\n\nVerification: the plan's C0+C1 chain, fresh: C0 OK (only the 4 planned paths differ from the merge-base; parity-check PASS; npm run lint OK); full daemon suite in a shared-clone snapshot: 233 files passed, 6993 tests passed | 20 skipped (baseline 232 files / 6987 + this file's 6); tsc --noEmit clean; C1 OK.\n\nKnown and out of scope: MOE_ACCOUNT_RETRY_SEC at or above reviewStaleTimeoutMs/1000 can still lose the row between polls (documented). The live daemon needs the governor's restage and swap before the fix takes effect.",
+  "commits": [
+    {
+      "sha": "eaad2635fcf26163be34ddb763d29f977eeca187",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T13:08:13Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/accountStore.presence.test.ts",
+        "packages/moe-daemon/src/state/accountStore.ts",
+        "scripts/CLAUDE.md"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T13:14:40.832Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
