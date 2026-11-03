@@ -1084,6 +1084,30 @@ tokens, and the account's Sign-in column does not read Subscription (or, after a
 - `MOE_CLAUDE_NOT_FOUND`: that terminal cannot run claude. Install Claude Code where the agents run (inside the WSL
   distro under "Run Agents in WSL") and put it on PATH, or set `MOE_CLAUDE_BIN`. The account's state is unchanged.
 
+### Sign-in refused under the protected profile: `MOE_PROTECTED_CLAUDE_REFUSED`, `MOE_PROTECTED_CLAUDE_NOT_FOUND`
+
+**Symptom:** under the protected profile (`executionProfile` `verified-local`), in JetBrains or VS Code, the terminal
+tab that **Sign in**, **Check sign-ins** or **Sign out** (or **Sign out and remove**) opened ends with one of these lines.
+The account's state is unchanged, and nothing was written or run.
+- `MOE_PROTECTED_CLAUDE_REFUSED: <reason>; nothing was run.`
+- `MOE_PROTECTED_CLAUDE_NOT_FOUND: "<bin>" was not found on an absolute PATH entry outside the project <path>; nothing was run.`
+
+**Cause:** under that profile both IDEs start the accounts CLI with `--protected-project <project>`. That keeps a
+project copy of claude, or of the node an npm `claude.cmd` shim starts, from running during sign-in. The CLI takes
+claude only from an absolute PATH entry outside the project (on Windows, a drive-qualified one) or from a
+`MOE_CLAUDE_BIN` path outside it, and runs it with PATH = those entries and cwd = the home folder.
+- `MOE_PROTECTED_CLAUDE_NOT_FOUND`: no such entry holds claude. For example, claude is installed only inside the
+  project, or is reachable only through a `.`, relative or in-project PATH entry, or through a network share or a
+  mapped drive.
+- `MOE_PROTECTED_CLAUDE_REFUSED`: the `<reason>` is one of: the project is not a local folder; no absolute PATH entry
+  is outside the project; the home folder is not a local folder outside the project (a network-share home is
+  refused); `MOE_CLAUDE_BIN` is not an absolute file outside the project; or cmd.exe under SystemRoot is not a local
+  file outside the project (only for a `.cmd` or `.bat` claude on Windows).
+
+**Fix:** install Claude Code outside the project and put its folder on the PATH the IDE terminal gets, or set
+`MOE_CLAUDE_BIN` to its absolute path outside the project. Keep the home folder on a local drive. Then run the action
+again. The full rule is in docs/MCP_SERVER.md, **Claude Account Rotation**.
+
 ### `MOE_ACCOUNT_SIGNED_OUT account=<id> state=…`
 
 **Symptom:** a seat prints it after claude exits with an error, then relaunches at once on the next account.
