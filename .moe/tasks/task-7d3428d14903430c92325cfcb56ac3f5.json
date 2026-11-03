@@ -65,8 +65,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -85,16 +85,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:41:31.379Z",
-  "updatedAt": "2026-11-03T20:59:22.941Z",
+  "updatedAt": "2026-11-03T21:02:09.020Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:43:03.557Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T21:02:09.017Z",
+    "wallClockMs": 1145460
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-c9368191"
+    "worker-c9368191",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -214,5 +217,9 @@
     "kind": "completion",
     "sessionId": "worker-c9368191@2026-11-03T20:51:24Z",
     "at": "2026-11-03T20:59:16.341Z"
-  }
+  },
+  "completedAt": "2026-11-03T21:02:09.017Z",
+  "reviewCompletedAt": "2026-11-03T21:02:09.017Z",
+  "reviewSummary": "Approved. Reviewed completion 395172f0 (on moe/work-2026-10-24, in the control HEAD; owned files clean in tree). Own diff +74/-8, net 66 LOC, exactly the 3 planned files: getCommitScope.ts, getCommitScope.test.ts, docs/MCP_SERVER.md:719 (one line).\n\nRe-ran task.verification in a git-archive snapshot under /tmp, outside the shared checkout (removed afterwards):\n- GREEN: docs grep ok, tsc --noEmit clean, vitest getCommitScope.test.ts: Tests 70 passed (70), exit 0.\n- RED-AT-BASE (new tests over 8ca8d389's getCommitScope.ts): 3 failed | 67 passed (70); failing = (o1), (o4), (o5). Confirms DoD 1.\n- Mutant (scratch snapshot only): exempt on `!finalizing` (any finalizing attempt) fails (o2): 1 failed | 69 passed. Tests pin 'holder of THIS task's attempt'.\n\nDoD:\n1. (o1): holder gets livePeerIds [], activePeerIds [], peersActive false (full toEqual; also pins assignee null and finalizingAttempt.workerId).\n2. (o2): worker-2 (neither assignee nor holder) stays in activePeerIds ['worker-1','worker-2'], peersActive true. Existing BLOCKED-unassigned case at :310 unchanged and passing, 70/70.\n3. File passes in full; the exemption phrase is in both the tool description and the workerId inputSchema description ((o5) asserts both; also in MCP_SERVER.md).\n\nSource: orphanCaller = caller !== null && caller !== task.assignedWorkerId && finalizing?.workerId !== caller; the finalizing lookup moved above it (pure read of state.attempts, well-formed 'finalizing' records only, so a malformed or other-task attempt exempts nobody: (o3)). Null caller never orphan; livePeerIds unchanged ((o4)); reply shape unchanged. No stale old wording elsewhere (grep). No deleted or weakened tests, no scope creep. Ponytail: nothing to cut.\n\nNot covered, by plan: scripts/tests/postflight-fake-proxy.js:795 still models the old orphan rule (governor follow-up); seats freed without a finalizing attempt (submit_plan, report_blocked seat-freeing) stay orphans. Wrappers read only peersActive, so no wrapper change.",
+  "requiredCheckAtDone": null
 }
