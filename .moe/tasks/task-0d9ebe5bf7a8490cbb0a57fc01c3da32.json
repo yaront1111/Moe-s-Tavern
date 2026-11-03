@@ -1,0 +1,30 @@
+{
+  "id": "task-0d9ebe5bf7a8490cbb0a57fc01c3da32",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: protected standalone moe-call.sh direct execution runs a project bash through its env shebang before PATH scrubbing",
+  "description": "Adversarial review of task-0b2ea570: moe-call.sh still starts with #!/usr/bin/env bash. From a scratch project containing executable ./bash, direct exec with MOE_RUNTIME_PROTECTED=1 and PATH=.:/usr/bin:/bin runs that plant before the script body (exit 42, ran.log='project bash').\nReproduced on the final task worktree bytes; fixture at /mnt/d/moe-scratch/0b2ea570-work/residuals-xhs0e985. Current approved M2 rows invoke /bin/bash explicitly and cannot cover kernel/env interpreter selection.\nKeep this separate from the approved PATH-body scrub; add direct-exec coverage and define a trusted interpreter entry path without changing legacy behavior.",
+  "definitionOfDone": [
+    "Under MOE_RUNTIME_PROTECTED=1, supported direct invocation cannot select a project bash before the helper body; add a non-vacuous planted-bash regression.",
+    "Preserve supported Linux/macOS/Git Bash entry behavior and legacy compatibility; document any direct-invocation limitation."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-0b2ea5709415489ea9b6fef528bef5df"
+  ],
+  "priority": "LOW",
+  "order": 327.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T03:02:36.827Z",
+  "updatedAt": "2026-11-03T03:02:36.827Z"
+}
