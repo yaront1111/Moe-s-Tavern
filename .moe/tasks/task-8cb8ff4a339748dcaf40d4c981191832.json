@@ -8,10 +8,52 @@
     "A new vitest case covers that window (fake timers, the callback held behind the mutex while updateSettings switches to CONTROL) and the existing submit_plan SPEED, automaticApprovalRevision and approvalModeSwitch tests stay green."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1. In packages/moe-daemon/src/tools/submitPlan.ts armSpeedModeApproval, inside the `state.runExclusive` section of the timer callback, right after the status re-check `if (!currentTask || currentTask.status !== 'AWAITING_APPROVAL') return;` (~:127-128), add:\n\n```ts\nconst mode = state.project?.settings?.approvalMode;\nif (mode !== 'SPEED' && mode !== 'TURBO') return;\n```\n\nAdd a 2-3 line comment: a timer that has already fired and is queued on the mutex behind the human's switch to CONTROL cannot be cancelled by clearAllSpeedModeTimeouts (task-8cb8ff4a, residual of task-42aeed8a). TURBO approves anyway (42aeed8a's hook leaves timers running on a TURBO switch). CONTROL or an unset mode, the CONTROL default, leaves the row for a human.\n\nThe return is silent: no write, no activity, no system message. That matches what a cancelled timer leaves, and the row simply stays AWAITING_APPROVAL. Also extend the function's JSDoc sentence 're-check that the task is still AWAITING_APPROVAL' to 'and that approvalMode is still SPEED or TURBO'.\n\nError handling: the read happens under the lock, so it sees the settings write that queued ahead of it. The existing try/catch/finally (failure activity, map cleanup) is unchanged, and the return still goes through `finally`. Tests come in step 2.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "startedAt": "2026-11-03T23:04:05.055Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 1, 2. packages/moe-daemon/src/state/approvalModeSwitch.test.ts: add the queued-callback window next to the file's existing cases. They use submitUnder, switchTo, advance and approvals; DELAY_MS is 5000.\n\nAdd a local helper `fireTimerBehind(work)`, copied from tools/automaticApprovalRevision.test.ts queueTimerBehind (:145-154), because test files never import each other:\n- open a gate promise;\n- `const held = h.state.runExclusive(async () => { await gate; await work(); })`, which takes the lock synchronously;\n- `await vi.advanceTimersByTimeAsync(DELAY_MS)`, so the SPEED timer fires and its callback queues behind the held lock;\n- `open(); await held; await advance(0)`.\n\nCases:\n- (a) After `submitUnder('SPEED')`, call `fireTimerBehind(() => h.state.updateSettings({ approvalMode: 'CONTROL' }))`. Expect the row `toMatchObject({ status: 'AWAITING_APPROVAL' })`, `not.toHaveProperty('approvedPlanRevision')`, and `approvals()` toEqual([]). One further `advance(DELAY_MS * 4)` still approves nothing.\n- (b) The same with `{ approvalMode: 'TURBO' }`: WORKING, approvedPlanRevision equal to the submitted revision, and exactly one PLAN_AUTO_APPROVED. This pins that TURBO still approves.\n\nCalling updateSettings inside the held section is the board's UPDATE_SETTINGS path that switchTo uses, so 42aeed8a's hook runs and cannot cancel the already-fired timer.\n\nRed first: case (a) must fail against HEAD's submitPlan.ts (the row turns WORKING with a PLAN_AUTO_APPROVED). Record that in the completion summary. Keep every existing case unchanged. Error handling: use mutation-resistant assertions only.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/approvalModeSwitch.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs sync (ruling msg-71db57ac). In docs/MCP_SERVER.md, section `### Plan approval — expectedPlanRevision compare-and-swap`, extend the **Mode switch.** bullet (~:3399). After 'so nothing armed under SPEED is approved after the human asked for manual approval.', add:\n\n'That includes a timer that has already fired and is waiting for the state lock: under the lock it re-checks `approvalMode` and approves only under `SPEED` or `TURBO`, leaving the row `AWAITING_APPROVAL` otherwise.'\n\nChange nothing else. The verification grep reads 'already fired' from this file. docs/CONFIGURATION.md:511 stays accurate as written. Error handling and tests are unaffected by this docs-only step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification: run this once, fresh, before complete_task. It is the narrow suite the DoD names, run on a snapshot outside the repo per the live-runtime rail:\n\n`cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'already fired' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents $P/tools/submitPlan.ts $P/state/approvalModeSwitch.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/state/approvalModeSwitch.test.ts src/tools/automaticApprovalRevision.test.ts src/tools/submitPlan.test.ts src/server/planApproval.test.ts src/state/approvalRevision.acceptance.test.ts'`\n\nThis covers the DoD's 'submit_plan SPEED, automaticApprovalRevision and approvalModeSwitch tests stay green', plus the approval-route suites that arm SPEED. Submit the exit code and output tail as complete_task evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (final step, adversarial-self-review skill), scoped to this diff (3 files). Check each item below.\n\n(a) The mode is read INSIDE runExclusive, after the status check, never captured at arm time.\n\n(b) TURBO still approves and SPEED still approves: run the existing cases plus (b).\n\n(c) An unset approvalMode refuses, matching the CONTROL default and rearmSpeedModeApprovals' SPEED-only gate.\n\n(d) The early return still runs `finally`, so the map entry is dropped only when it is this timer's own.\n\n(e) A second CONTROL→SPEED switch before the lock is released: the queued callback then sees SPEED and approves. That is intended, and the human asked for SPEED again.\n\n(f) Mutant proof: case (a) is red against HEAD's submitPlan.ts.\n\n(g) Error handling: no new throw path; failures still go to recordSpeedApprovalFailure.\n\nIf anything changes, re-run step 4's command and submit that fresh output as the test evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/state/approvalModeSwitch.test.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -26,16 +68,86 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:44:42.438Z",
-  "updatedAt": "2026-11-03T23:00:57.077Z",
+  "updatedAt": "2026-11-03T23:04:05.055Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:48:23.850Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T23:00:54.756Z"
+    "firstClaimAt": "2026-11-03T23:00:54.756Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
-  ]
+    "architect-1dd28c7c",
+    "worker-26483323"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:02:32.606Z",
+  "executionContract": {
+    "intendedBehavior": "A SPEED auto-approval timer approves only if, under the state lock, the task is still AWAITING_APPROVAL and approvalMode is still SPEED or TURBO; a fired timer queued behind a switch to CONTROL leaves the row AWAITING_APPROVAL with no PLAN_AUTO_APPROVED.",
+    "acceptanceCriteria": [
+      "SPEED submit, timer fires while the mutex is held, updateSettings→CONTROL inside the held section: the row stays AWAITING_APPROVAL, has no approvedPlanRevision, and no PLAN_AUTO_APPROVED is logged.",
+      "The same window with →TURBO: approved once, bound to the submitted revision.",
+      "Existing approvalModeSwitch, automaticApprovalRevision, submitPlan, planApproval and approvalRevision acceptance tests pass unchanged."
+    ],
+    "invariants": [
+      "The mode is read under the lock.",
+      "No new write, activity or message on the withheld path.",
+      "Timer map cleanup is unchanged."
+    ],
+    "compatibility": [
+      "SPEED and TURBO approval behaviour is unchanged when no CONTROL switch intervenes.",
+      "The restart re-arm is unchanged."
+    ],
+    "approvedScope": [
+      "armSpeedModeApproval timer callback (submitPlan.ts)",
+      "approvalModeSwitch.test.ts new cases",
+      "MCP_SERVER.md Mode switch bullet"
+    ],
+    "reuse": [
+      "The existing runExclusive status re-check pattern",
+      "queueTimerBehind's held-lock technique"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/submitPlan.ts:127-128 re-checks only status inside runExclusive.",
+      "packages/moe-daemon/src/tools/submitPlan.ts:87 clearAllSpeedModeTimeouts clears only pending timers.",
+      "docs/MCP_SERVER.md:3399 Mode switch bullet promises nothing armed under SPEED is approved after a CONTROL switch."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'already fired' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents $P/tools/submitPlan.ts $P/state/approvalModeSwitch.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/state/approvalModeSwitch.test.ts src/tools/automaticApprovalRevision.test.ts src/tools/submitPlan.test.ts src/server/planApproval.test.ts src/state/approvalRevision.acceptance.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Three fixes were weighed:\n- Capture the mode at arm time and compare under the lock. This is wrong: a SPEED→TURBO switch should still approve.\n- Have updateSettings wait for or drain queued callbacks. That is complex and cannot see a fired-but-queued timer.\n- Re-read approvalMode under the lock, next to the existing status re-check. This was chosen: one line, same TOCTOU pattern.\n\nThe withheld path stays silent, as a cancelled timer is. The revision-mismatch system message exists because a human must act on a changed plan. Here the human chose CONTROL and the row is already waiting for them.",
+    "codebaseInsights": "- submitPlan.ts armSpeedModeApproval (~:113-155): detachFromMutexContext + setTimeout, then a runExclusive status re-check, then updateTask(..., 'PLAN_AUTO_APPROVED', ..., { approvedPlanRevision }).\n- clearAllSpeedModeTimeouts (:87) only clears pending timers.\n- 42aeed8a's hook in state/profileRollout.ts updateProjectSettings clears timers on →CONTROL, re-arms on →SPEED, and leaves them on →TURBO.\n- Test helpers: approvalModeSwitch.test.ts (submitUnder/switchTo/advance/approvals) and automaticApprovalRevision.test.ts queueTimerBehind (:145).",
+    "risks": "- Fake-timer ordering: the lock must be held BEFORE advancing timers so the callback queues; copy queueTimerBehind exactly.\n- DELAY_MS in approvalModeSwitch.test.ts is 5000, not 50.\n- Do not import across test files.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/state/approvalModeSwitch.test.ts",
+      "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts",
+      "packages/moe-daemon/src/state/profileRollout.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "2ee4bada2e2fff57edaa2b2e7215a1ec98fff07a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:02:32.642Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:04:05.055Z"
 }
