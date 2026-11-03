@@ -13,20 +13,26 @@
     {
       "stepId": "step-1",
       "description": "Tests first (DoD 1, 2), in scripts/tests/postflight-worktree.cjs. Read mem:gotcha-postflight-worktree-git-stub before touching the stub.\n\n(a) Add two knobs to both the sh `git` stub and `git.ps1` (stub() ~:120-175). Document them in the stub's header comment.\n- WT_GIT_PUSH_REMOTE_REJECTED=1: a `push` call whose argv holds `--porcelain` runs the REAL push with its output discarded, so origin really holds C. It then prints `To <remote>`, `!<TAB><last argv><TAB>[remote rejected] (wt stub: applied, then refused)` and `Done`, and exits 1.\n- WT_GIT_FETCH_FAIL_AFTER_PUSH=<marker file>: that push also creates the marker. While the marker exists, every `fetch` fails (exit 1), so all 3 land_fetch tries of the re-check fail. L4's fetch before the push is untouched.\n- In git.ps1, print the porcelain lines on the success stream and fail with `Write-Error` plus exit 1 (the gotcha). In the sh argv scan, use distinct flag letters.\n\n(b) Add a new case 'wt-remote-rejected' and register it in `cases`. Use a bare origin (as wtUnlanded's bare() helper does) and a REVIEW landing (landRun with REVIEW and MOE_LAND_NET_BACKOFF_SEC 0). Two arms:\n- applied, with WT_GIT_PUSH_REMOTE_REJECTED=1. Assert:\n  - origin's main is the landed C;\n  - finals(p) is [['landed', C]];\n  - the last completion row is sha C with pushed:true;\n  - there is no refs/moe/rescue/<task>/* ref, and retryOf(p) is null;\n  - journal(p) is gone after the run, as after any landed completion (match wtCompletion's assertion);\n  - the log has one MOE_PUSH_REMOTE_REJECTED_APPLIED line and no MOE_PUSH_FAILED.\n- fetch-fails, the same plus WT_GIT_FETCH_FAIL_AFTER_PUSH. Expect exactly the existing wtUnlanded 'rejected' shape, even though origin holds C, because the DoD keeps that path exactly as before:\n  - MOE_PUSH_FAILED;\n  - a completion row failed/MOE_PUSH_FAILED/pushed:false;\n  - an unlanded finalize with unlandedReason 'remote';\n  - a rescue ref at the task-branch tip;\n  - landingRetry count 1.\n\nLeave wtUnlanded's 'rejected' arm unchanged (a pre-receive hook, so origin truly refuses): it still proves the not-applied path. The held-out scripts/tests/worktree-landing.{sh,ps1} must pass unchanged; never edit them.\n\nRED at HEAD: the applied arm (MOE_PUSH_FAILED, routed unlanded). The fetch-fails arm is a guard that passes before and after the fix.\n\nError handling in the harness: give each arm its own repo, bare remote and marker, so no knob leaks into another case. Edit with your TOOL-witnessed editor.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-03T23:00:34.632Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Added stub knobs WT_GIT_PUSH_REMOTE_REJECTED (value = a push log file, so the case also proves exactly ONE push: no re-push after [remote rejected]) and WT_GIT_FETCH_FAIL_AFTER_PUSH (marker created by that push) to the sh git stub and git.ps1, plus their launch() stub-activation condition and header doc; new case wt-remote-rejected (arms applied, fetch-fails; one landRun each on its own repo/bare/marker). RED at HEAD on sh: applied arm gets MOE_PUSH_FAILED/unlanded/rescue while origin holds C (the incident). fetch-fails arm alone passes at HEAD (scratch copy run).",
+      "startedAt": "2026-11-03T23:00:34.632Z",
+      "completedAt": "2026-11-03T23:04:22.153Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix (DoD 1, 2). Edit only the push functions. The VM-route blocks belong to other open rows: CQ-M07n/n3 in ps1, task-1ccae85c/cc4213c0 in sh.\n\nscripts/moe-agent.sh\n- Add a helper above wt_push_target (~:7488): `wt_remote_holds TARGET C`.\n  - It runs land_fetch \"$1\" (3 tries, the backoff apart), then `git -C \"$MOE_TOP\" merge-base --is-ancestor \"$2\" \"refs/remotes/origin/$1^{commit}\"`.\n  - It returns 0 only on that proof; a failed fetch or any other exit is 1.\n  - It never pushes.\n- In wt_push_target, after the porcelain loop, add `if [ \"$rc\" = 2 ] && wt_remote_holds \"$1\" \"$3\"; then`. That branch prints `[WARN] MOE_PUSH_REMOTE_REJECTED_APPLIED: origin answered [remote rejected] for $3, but origin's $1 holds it; the push counts as published.` and sets rc=0. The line carries no task id, because migration landing shares this function.\n- Fix the header comments of wt_push_target and wt_publish, which call 2 just \"[remote rejected]\".\n- Leave wt_publish unchanged. rc 0 takes the normal path: journal 'pushed …', mirror, LAND_PUSHED, then the row and the landed finalize. rc 2 still removes the journal and sets MOE_PUSH_FAILED, now only after the re-check found no C or its fetch failed.\n- Migration's `2)` arm is unchanged. It inherits the re-check, so a push that was applied there ends MOE_MIGRATION_LANDED.\n\nscripts/moe-agent.ps1 (twins)\n- Add `Test-MoeRemoteHolds([string]$Top, [string]$T, [string]$C)`: Invoke-MoeLandFetch, then rev-parse and `merge-base --is-ancestor` through Invoke-MoeGit. It returns $true only on proof.\n- In Send-MoeLandPush's `![remote rejected]` branch (~:7101), keep setting $script:MoePushDetail, then `if (Test-MoeRemoteHolds $Top $T $C) { Write-Host '<the same line, byte-identical>' -ForegroundColor Yellow; return 0 }; return 2`.\n- Fix the header comments. Publish-MoeWorktreeLanding and the migration caller are unchanged.\n\nError handling: a failed or unprovable re-check keeps today's MOE_PUSH_FAILED route exactly. No re-push, no new round, no force flag.\n\nThe new MOE_PUSH_ code sits in both wrappers, so parity's family compare passes; parity-check.{sh,ps1}, held by another row, need no edit. Keep moe-agent.ps1's UTF-8 BOM.\n\nEdit your worktree copies in place with a TOOL-witnessed editor; never temp+mv. Then run `bash -n scripts/moe-agent.sh` and the ps1 ParseFile check: powershell.exe -NoProfile with Parser::ParseFile on the wslpath -w path, exit 1 on any error.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-03T23:04:22.898Z"
     },
     {
       "stepId": "step-3",
@@ -61,11 +67,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:48:03.572Z",
-  "updatedAt": "2026-11-03T23:00:34.632Z",
+  "updatedAt": "2026-11-03T23:04:22.898Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:52:29.147Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -75,7 +82,9 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:59:31.743Z",
   "executionContract": {

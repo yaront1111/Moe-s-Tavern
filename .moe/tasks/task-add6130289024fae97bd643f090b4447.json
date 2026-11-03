@@ -92,7 +92,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,7 +108,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:34:59.618Z",
-  "updatedAt": "2026-11-03T23:04:15.297Z",
+  "updatedAt": "2026-11-03T23:06:31.901Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:51:43.186Z",
@@ -118,11 +118,14 @@
     "firstClaimAt": "2026-11-03T22:57:59.122Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T23:06:03.693Z",
+    "wallClockMs": 484571
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -237,9 +240,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T23:00:47Z",
-    "at": "2026-11-03T23:04:15.297Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T23:04:35Z",
+    "at": "2026-11-03T23:06:31.901Z"
+  },
+  "completedAt": "2026-11-03T23:06:03.693Z",
+  "reviewCompletedAt": "2026-11-03T23:06:03.693Z",
+  "reviewSummary": "APPROVED. Reviewed completion 6a477152 (on moe/work-2026-10-24, in HEAD): 4 files, +151/-7 (~144 net, under the 400 cap). In scope: createTask.ts, taskStore.ts nextTaskOrder, new createTask.order.test.ts, and only the `### moe.create_task` hunks of docs/MCP_SERVER.md. No tests deleted or weakened.\n\nRe-ran task.verification in a git-archive snapshot outside the repo (live-runtime rail): doc grep for 'not a finite number' passed, tsc --noEmit clean, vitest 6 files / 342 tests all passed, exit 0. Working-tree copies of the owned sources were identical to the commit.\n\nMutant proof, run myself: with the parent commit's createTask.ts and taskStore.ts in the snapshot, createTask.order.test.ts gives 15 failed / 6 passed (r1-r4, all 9 matrix cases, 2 nextTaskOrder cases). The tests use toBe/toMatchObject and check task count, tasks/ listing and TASK_CREATED emits.\n\nDoD 1: createTask.ts refuses a present non-finite or non-number order with invalidInput('order'), INVALID_INPUT with context.field 'order', before the c90b41f1 checks and state.createTask, so nothing is written. Refused: 'abc', '1', NaN, ±Infinity, null, {}, [], true. Stored exactly in memory and on disk: 231.164, 0, -2.5. No integer rule. The docs section gains the refusal bullet ('not a finite number', null included) and an updated param comment.\n\nDoD 2: nextTaskOrder filters typeof number && Number.isFinite like nextEpicOrder and returns 1 when nothing is left. 'x' and null rows are skipped (3), an all-non-finite epic gives 1, and the newest default-order row stays epic-final (r4). All-finite epics are unchanged (existing StateManager nextTaskOrder tests pass).\n\nAdversarial: no non-test caller sends order:null (grepped scripts, daemon src, role docs). Out of scope and untouched, per the row: /ws CREATE_TASK's unchecked order and reorder/update paths (follow-up candidates). The docs collision notice concerns other rows' hunks. Complexity pass: nothing to delete.",
+  "requiredCheckAtDone": null
 }

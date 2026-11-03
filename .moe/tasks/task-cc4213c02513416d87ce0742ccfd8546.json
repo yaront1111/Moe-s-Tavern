@@ -41,17 +41,23 @@
     {
       "stepId": "step-3",
       "description": "DoD 1, 3 (test). scripts/tests/postflight-vm-route.sh: add row VR-outage in the `[seat job]` subshell, after the three VR-taskless rows and before `echo '[seat job] VR-reload…'`.\n\nSetup:\n- A fake host CLI at \"$TMP_DIR/outage-bin/outage-cli\". Its basename is not codex/gemini/grok, so CLI_TYPE stays claude (moe-agent.sh ~:631). It appends `{\"tool\":\"host-cli\",\"args\":{}}` to \"$FAKE_CALL_LOG\" (inherited through vmr_run), so the call log orders it among the RPCs, and it exits 1 at once.\n- `VMR_ARGS=(--poll-interval 0)`: single-shot without --no-loop. A launch failure relaunches after its backoff, and the first iteration that neither fails nor probes ends the run (loop end ~:12405).\n- `VMR_CMD=\"$TMP_DIR/outage-bin/outage-cli\"`.\n- `vmr_run VR-outage worker claude \"$LEGACY\" on 0 FAKE_CLAIM_MODE=idle FAKE_MENTION=1 FAKE_READINESS_AFTER=\"3:$READY\" MOE_ACCOUNT_ROTATION=off MOE_LAUNCH_BACKOFF_BASE_SEC=1 MOE_LAUNCH_BACKOFF_MAX_SEC=1`.\n\nHow the run goes:\n- Iterations 1-3 read legacy. The fake re-serves its routed mention on every chat_read, so each iteration launches the notification-only host CLI. It fails fast every time, and the third failure enters the outage with no task held.\n- Iteration 4 reads verified-local ready, starts the seat VM, and (fixed) claims marked. The idle claim then takes the vm-route taskless skip with no seat job, so it needs no VM credential.\n- MOE_ACCOUNT_ROTATION=off is REQUIRED. The block exports rotation on, and under rotation a failed claude run relaunches on the next account and zeroes the streak (the ACCOUNT_RELAUNCH branch, ~:11935), so the outage would never be entered.\n\nAssertions: a node heredoc over \"$CALLS\", \"$OUT\" (ANSI stripped), \"$PROJECT/.moe/evidence-rpcs.jsonl\" and \"$PROJECT/.moe/messages/chan-general.jsonl\"; any failure goes to vmr_fail VR-outage.\n- Exit 0.\n- 'entering launch outage mode' appears: the carried-over precondition.\n- The step-1 local line appears exactly once.\n- No 'MOE_LAUNCH_PROBE' anywhere.\n- Exactly 3 host-cli rows, all before the 4th get_execution_readiness.\n- At least one claim_next_task before the flip, each with no executionRoute key.\n- At least one claim_next_task after the flip, each with executionRoute 'vm'. This is the resumed claim.\n- The agent-seat cmds are exactly ['seat-start','seat-stop'].\n- The chat file has 'after 3 host launch failures. Launch outage over: claiming resumes.'.\n- Then `vmr_one_reason VR-outage vm-route`.\n\nAfterwards, restore `VMR_ARGS=(--no-loop --poll-interval 0)` (VMR_CMD resets itself) and add 'outage' to the block's PASS echo line. Iterate with `bash scripts/tests/postflight-vm-route.sh` alone (~1-2 min). Error handling: every assertion names what it expected, and vmr_fail dumps the wrapper output.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-03T23:00:38.838Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Row VR-outage added in the [seat job] block before VR-reload: fake host CLI outage-bin/outage-cli (logs host-cli into $CALLS, baked path; exits 1), VMR_ARGS=(--poll-interval 0), FAKE_READINESS_AFTER=3:$READY, rotation off, backoff 1/1. Node assertions: exit 0, outage entered, one outage-over line (the VM-route text), no MOE_LAUNCH_PROBE, 3 host-cli rows all before the 4th readiness read, unmarked legacy claims before / vm-marked claims after the flip, seats [seat-start, seat-stop], #general 'after 3 host launch failures. Launch outage over: claiming resumes.'; then vmr_one_reason vm-route. VMR_ARGS restored; PASS line gains 'outage'. env -i Node 24 run of postflight-vm-route.sh alone: PASS, rc=0 (3m56s).",
+      "startedAt": "2026-11-03T23:00:38.838Z",
+      "completedAt": "2026-11-03T23:06:19.238Z"
     },
     {
       "stepId": "step-4",
       "description": "DoD 2, 3. Verification: run this once, fresh, as the final gate. Work from the task worktree root: `cd \"$(git rev-parse --show-toplevel)\"`.\n\nIt takes about 30-35 min, past the Bash tool's 10-min cap, so launch it detached (setsid nohup … > log 2>&1 &), record its PID, and poll the log (mem:convention-postflight-scratch-harness):\n\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'`\n\nWhat it covers:\n- postflight.sh runs scenario AH, the launch-outage rows, unchanged (DoD 2).\n- Its last line chains postflight-vm-route.sh, which includes VR-outage and the earlier T and VR rows (DoD 3).\n\nThe launcher harnesses may run in place, as the project rail says. Never pattern-kill: stop only the PID you recorded.\n\nBefore that final run, iterate on scenario AH with a trimmed scratch harness as that memory describes. In complete_task, report the exit code and an output tail that shows the '[scenario AH]' line and '[seat job] PASS … outage'.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T23:06:20.114Z"
     },
     {
       "stepId": "step-5",
@@ -81,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:12:21.590Z",
-  "updatedAt": "2026-11-03T23:00:38.838Z",
+  "updatedAt": "2026-11-03T23:06:20.114Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:41:27.476Z",
@@ -91,7 +97,7 @@
     "firstClaimAt": "2026-11-03T22:43:02.962Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -103,7 +109,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:57:38.214Z",
