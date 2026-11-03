@@ -139,14 +139,17 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         throw missingRequired('taskId');
       }
       const force = params.force === true;
-      // force follows its documented audience (governor or human). Refused
-      // before any read or write; a workerId-less call is the /ws board or a
-      // human, and keeps it. The assignee never needs force for its own row.
-      if (force && params.workerId && !workerHasRole(state, params.workerId, 'governor')) {
-        throw notAllowed(
-          'release_task',
-          `force is the governor/human crash-recovery override (worker ${params.workerId} is not a governor)`
-        );
+      // Only an omitted workerId is the human/board path. Explicit blank or
+      // non-string values bypass proxy injection, not this role check. Refuse
+      // before task reads or writes; an assignee never needs force on its row.
+      if (force && params.workerId !== undefined) {
+        const callerId = typeof params.workerId === 'string' ? params.workerId : '';
+        if (!workerHasRole(state, callerId, 'governor')) {
+          throw notAllowed(
+            'release_task',
+            `force is the governor/human crash-recovery override (worker ${callerId || '(none)'} is not a governor)`
+          );
+        }
       }
       // Bounded before use: an ATTEMPT_SUPERSEDED refusal echoes the presented id.
       if (typeof params.attemptId === 'string' && params.attemptId.length > MAX_ATTEMPT_ID_LEN) {

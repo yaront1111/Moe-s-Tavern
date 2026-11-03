@@ -36,19 +36,20 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
       // The store forces on any truthy value (args are not schema-validated),
       // so the gate must read force the same way or `force: 1` slips past it.
       const force = Boolean(params.force);
-      if (!params.workerId && !force) throw missingRequired('workerId');
+      const workerId = typeof params.workerId === 'string' ? params.workerId : '';
+      if (!workerId.trim() && !force) throw missingRequired('workerId');
       if (!RESOURCE_ID_RE.test(params.resourceId)) {
         throw invalidInput('resourceId', 'use 1-64 chars of letters, digits, ".", "_", "-"');
       }
-      // force follows its documented audience (governor or human), refused
-      // before any read or write. A workerId-less force is the human path.
-      if (force && params.workerId && !workerHasRole(state, params.workerId, 'governor')) {
+      // Only an omitted workerId is the human path. Blank/non-string values
+      // skip proxy injection, but must be refused before any read or write.
+      if (force && params.workerId !== undefined && !workerHasRole(state, workerId, 'governor')) {
         throw notAllowed(
           'release_resource',
-          `force is the governor/human override (worker ${params.workerId} is not a governor)`
+          `force is the governor/human override (worker ${workerId || '(none)'} is not a governor)`
         );
       }
-      if (params.workerId) await state.touchWorker(params.workerId);
+      if (workerId.trim()) await state.touchWorker(workerId);
 
       // ATOMICITY. Nothing can move the lease between this check and the
       // release below, because McpAdapter dispatches every tool without
@@ -113,7 +114,7 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
       // matchesCaller matches by taskId or every holder and never reads it.
       const result = await state.releaseResource({
         resourceId: params.resourceId,
-        workerId: params.workerId ?? '',
+        workerId,
         taskId: params.taskId,
         force,
       });

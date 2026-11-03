@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { releaseTaskTool } from './releaseTask.js';
 import { releaseResourceTool } from './releaseResource.js';
@@ -14,7 +14,20 @@ import type { MoeError } from '../util/errors.js';
 describe('release_task / release_resource force is governor/human only', () => {
   const h = new ToolTestHarness();
   beforeEach(() => h.init());
-  afterEach(() => h.cleanup());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  // The proxy injects only an absent workerId key; explicit invalid values
+  // reach the handler unchanged because MCP arguments are not schema-validated.
+  const malformedCallers: { label: string; workerId: unknown }[] = [
+    { label: 'empty', workerId: '' },
+    { label: 'null', workerId: null },
+    { label: 'numeric', workerId: 123 },
+    { label: 'zero', workerId: 0 },
+    { label: 'false', workerId: false },
+    { label: 'whitespace', workerId: ' \t ' },
+    { label: 'object', workerId: {} },
+    { label: 'array', workerId: [] },
+  ];
 
   function step(stepId: string, status: StepStatus): ImplementationStep {
     return { stepId, description: stepId, status, affectedFiles: ['file.ts'] };
@@ -58,6 +71,10 @@ describe('release_task / release_resource force is governor/human only', () => {
   const snapshot = (taskId: string) => {
     const task = h.state.getTask(taskId)!;
     return [task.status, task.assignedWorkerId, task.implementationPlan[0].status];
+  };
+  const protectedState = () => {
+    const { tasks, workers, resources } = h.state.getSnapshot();
+    return structuredClone({ tasks, workers, resources });
   };
 
   it('(p1) documents release_task force as the governor/human override', () => {
@@ -107,6 +124,21 @@ describe('release_task / release_resource force is governor/human only', () => {
     }
   });
 
+  it.each(malformedCallers)('(p7) refuses force with a $label workerId before any task read', async ({ workerId }) => {
+    await acquireGate();
+    const before = protectedState();
+    const read = vi.spyOn(h.state, 'getTask');
+    const lock = vi.spyOn(h.state, 'runExclusive');
+    const touch = vi.spyOn(h.state, 'touchWorker');
+    const activity = vi.spyOn(h.state, 'appendActivity');
+    for (const taskId of ['task-peer', 'task-idle', 'task-missing']) {
+      await expect(releaseTask({ taskId, workerId, force: true }))
+        .rejects.toMatchObject({ codeName: 'NOT_ALLOWED' });
+    }
+    expect(protectedState()).toEqual(before);
+    for (const spy of [read, lock, touch, activity]) expect(spy).not.toHaveBeenCalled();
+  });
+
   it('(r1) refuses a worker or qa seat forcing release_resource and releases nothing', async () => {
     await acquireGate();
     await expect(releaseResource({ resourceId: 'gate', workerId: 'worker-1', taskId: 'task-peer', force: true }))
@@ -138,4 +170,34 @@ describe('release_task / release_resource force is governor/human only', () => {
     const own = await releaseResource({ resourceId: 'gate', workerId: 'worker-peer' }) as { released: string[] };
     expect(own.released).toEqual(['task-peer']);
   });
+
+  it.each(malformedCallers)('(r4) refuses resource force with a $label workerId without writes', async ({ workerId }) => {
+    await acquireGate();
+    await acquireResourceTool(h.state).handler(
+      { resourceId: 'gate', taskId: 'task-idle', workerId: 'worker-peer2' }, h.state
+    );
+    expect(h.state.getResource('gate')!.queue).toHaveLength(1);
+    const before = protectedState();
+    const read = vi.spyOn(h.state, 'getResource');
+    const touch = vi.spyOn(h.state, 'touchWorker');
+    const release = vi.spyOn(h.state, 'releaseResource');
+    const activity = vi.spyOn(h.state, 'appendActivity');
+    for (const force of [true, 'true', 1]) {
+      for (const scope of [{}, { taskId: 'task-peer' }]) {
+        await expect(releaseResource({ resourceId: 'gate', workerId, force, ...scope }))
+          .rejects.toMatchObject({ codeName: 'NOT_ALLOWED' });
+      }
+    }
+    expect(protectedState()).toEqual(before);
+    for (const spy of [read, touch, release, activity]) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it.each([{ label: 'omitted', workerId: undefined }, ...malformedCallers])(
+    '(r5) requires a usable workerId without force ($label)', async ({ workerId }) => {
+      const touch = vi.spyOn(h.state, 'touchWorker');
+      await expect(releaseResource({ resourceId: 'gate', workerId }))
+        .rejects.toMatchObject({ codeName: 'MISSING_REQUIRED' });
+      expect(touch).not.toHaveBeenCalled();
+    }
+  );
 });
