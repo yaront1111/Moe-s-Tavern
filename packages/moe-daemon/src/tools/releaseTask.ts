@@ -83,7 +83,7 @@ function clampOptional(value: unknown, field: string, max = MAX_HANDOFF_FIELD_LE
 export function releaseTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.release_task',
-    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — but NEVER on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. One exception to in-place routing: the 3rd release in 24h whose handoffNote.whatIsDone reports no progress ("nothing"/"none"/"n/a") parks the task to BACKLOG for human triage and returns cascadeTriggered:true (disable via settings.refusalCascadeAutoBacklog:false). To pull a task OUT of the agent pool yourself, have a human/governor use moe.set_task_status → BACKLOG.',
+    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Ownership: a caller that supplies workerId may release only the row it holds (RELEASE_NOT_ASSIGNEE otherwise); only an omitted workerId (a human or the board) may release a row another worker holds, and only between steps (STEP_LEASE_HELD while a step is IN_PROGRESS) unless force; a supplied workerId that is blank or not a string is refused INVALID_INPUT. NEVER release on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. One exception to in-place routing: the 3rd release in 24h whose handoffNote.whatIsDone reports no progress ("nothing"/"none"/"n/a") parks the task to BACKLOG for human triage and returns cascadeTriggered:true (disable via settings.refusalCascadeAutoBacklog:false). To pull a task OUT of the agent pool yourself, have a human/governor use moe.set_task_status → BACKLOG.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -150,6 +150,13 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
             `force is the governor/human crash-recovery override (worker ${callerId || '(none)'} is not a governor)`
           );
         }
+      }
+      // Without force too, only an omitted workerId is the human/board path: the
+      // proxy injects MOE_WORKER_ID into an absent key only, so a supplied blank or
+      // non-string id bypassed injection. Refuse it before any read or write
+      // rather than read it as the human (assertReleaseCaller skips a falsy caller).
+      if (params.workerId !== undefined && (typeof params.workerId !== 'string' || params.workerId.trim() === '')) {
+        throw invalidInput('workerId', 'must be a non-blank worker id when supplied; a human or the board omits it');
       }
       // Bounded before use: an ATTEMPT_SUPERSEDED refusal echoes the presented id.
       if (typeof params.attemptId === 'string' && params.attemptId.length > MAX_ATTEMPT_ID_LEN) {

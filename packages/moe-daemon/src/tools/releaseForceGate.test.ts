@@ -200,4 +200,37 @@ describe('release_task / release_resource force is governor/human only', () => {
       expect(touch).not.toHaveBeenCalled();
     }
   );
+
+  // task-c8d6dbd5: without force too, only an omitted workerId is the human/board
+  // path. A supplied '' / null / non-string id bypassed proxy injection, so it is
+  // refused before any read or write instead of being read as the human.
+  it.each(malformedCallers)('(n1) refuses a $label workerId without force before any task read', async ({ workerId }) => {
+    const before = protectedState();
+    const read = vi.spyOn(h.state, 'getTask');
+    const lock = vi.spyOn(h.state, 'runExclusive');
+    const touch = vi.spyOn(h.state, 'touchWorker');
+    const activity = vi.spyOn(h.state, 'appendActivity');
+    for (const taskId of ['task-idle', 'task-peer', 'task-missing']) {
+      await expect(releaseTask({ taskId, workerId, reason: 'not mine' }))
+        .rejects.toMatchObject({ codeName: 'INVALID_INPUT' });
+    }
+    expect(protectedState()).toEqual(before);
+    for (const spy of [read, lock, touch, activity]) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('(n2) keeps the omitted-workerId release between steps and the holder\'s own release', async () => {
+    const byHuman = await releaseTask({ taskId: 'task-idle', reason: 'board' });
+    expect(byHuman).toMatchObject({ success: true, previousWorkerId: 'worker-peer2' });
+    expect(h.state.getTask('task-idle')!.assignedWorkerId).toBeNull();
+
+    const byHolder = await releaseTask({ taskId: 'task-peer', workerId: 'worker-peer' });
+    expect(byHolder).toMatchObject({ success: true, previousWorkerId: 'worker-peer' });
+    expect(h.state.getTask('task-peer')!.assignedWorkerId).toBeNull();
+  });
+
+  it('(n3) still refuses a well-formed non-holder id between steps (RELEASE_NOT_ASSIGNEE)', async () => {
+    await expect(releaseTask({ taskId: 'task-idle', workerId: 'worker-1' }))
+      .rejects.toMatchObject({ codeName: 'RELEASE_NOT_ASSIGNEE' });
+    expect(snapshot('task-idle')).toEqual(['WORKING', 'worker-peer2', 'COMPLETED']);
+  });
 });
