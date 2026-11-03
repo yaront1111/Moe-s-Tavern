@@ -22,9 +22,12 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.time.Duration
 import java.time.Instant
@@ -155,6 +158,69 @@ class MoeDaemonSupervisorTest {
         File(moeDir, "daemon.json").writeText("{not-json")
 
         assertNull(supervisor(root).readDaemonInfo())
+    }
+
+    // F1 (task-7faede18): a daemon.json that is not a regular file reached without a link reads as absent, unopened.
+    @Test
+    fun `F1a a daemon json that is a directory reads as absent and is never deleted`() {
+        val root = initializedRoot("daemon-json-dir")
+        val dir = File(root, ".moe/daemon.json").apply { mkdirs() }
+        assertNull(supervisor(root).readDaemonInfo())
+        assertFalse(supervisor(root).deleteDaemonInfoIfUnchanged(DaemonInfo(9876, 42, "now", root.canonicalPath)))
+        assertTrue(dir.isDirectory)
+    }
+
+    @Test
+    fun `F1b a daemon json link reads as absent, even to a valid file, and is never deleted`() {
+        val root = initializedRoot("daemon-json-link")
+        val expected = DaemonInfo(9876, 42, "now", root.canonicalPath)
+        val target = File(temporaryFolder.newFolder(), "daemon.json").apply { writeText(Gson().toJson(expected)) }
+        val link = File(root, ".moe/daemon.json").toPath()
+        Assume.assumeTrue("file symlinks unavailable on this host", fileLink(link, target.toPath()))
+        assertNull(supervisor(root).readDaemonInfo())
+        assertFalse(supervisor(root).deleteDaemonInfoIfUnchanged(expected))
+        assertTrue("the link remains", Files.isSymbolicLink(link))
+        assertEquals("the target remains", Gson().toJson(expected), target.readText())
+    }
+
+    @Test
+    fun `F1c a daemon json FIFO, direct or linked, returns at once as absent`() {
+        val linked = initializedRoot("fifo-link")
+        val direct = initializedRoot("fifo-direct")
+        val pipe = temporaryFolder.root.toPath().resolve("pipe")
+        withFifos(pipe, File(direct, ".moe/daemon.json").toPath()) {
+            assertTrue(fileLink(File(linked, ".moe/daemon.json").toPath(), pipe))
+            assertNull("link to a FIFO", within5s { supervisor(linked).readDaemonInfo() })
+            assertNull("FIFO", within5s { supervisor(direct).readDaemonInfo() })
+        }
+    }
+
+    private fun <T> within5s(body: () -> T): T = CompletableFuture.supplyAsync { body() }.get(5, TimeUnit.SECONDS)
+
+    private fun fileLink(link: Path, target: Path): Boolean = try {
+        Files.createSymbolicLink(link, target)
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    /** As RuntimeSelectionPolicyTest.withFifos: POSIX only, and a reader stuck in open is released in finally. */
+    private fun withFifos(vararg paths: Path, body: () -> Unit) {
+        val made = !RuntimeSelectionPolicy.windowsHost && paths.all {
+            try {
+                ProcessBuilder("mkfifo", it.toString()).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start().waitFor() == 0
+            } catch (_: Exception) {
+                false
+            }
+        }
+        Assume.assumeTrue("POSIX FIFOs", made)
+        try {
+            body()
+        } finally {
+            paths.filter { Files.exists(it, LinkOption.NOFOLLOW_LINKS) && !Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
+                .forEach { RandomAccessFile(it.toFile(), "rw").close() }
+        }
     }
 
     @Test
@@ -1351,6 +1417,23 @@ class MoeDaemonSupervisorTest {
         }
     }
 
+    @Test
+    fun `W40 a Windows restart that begins while a daemon start is in flight refuses before any stop or signal`() = WinRestart().use { f ->
+        f.own(f.proc(S))
+        f.stop = { 0 }
+        var inner: String? = "unset"
+        f.onStart = { inner = f.restart(null) }
+        assertFalse("the fake starter refuses, but is reached", f.service.ensureDaemonRunning())
+        assertEquals(1, f.starts)
+        assertEquals(START_IN_PROGRESS, inner)
+        assertEquals("nothing stopped, read or signaled", emptyList<String>(), f.events)
+        assertTrue(f.stops.isEmpty())
+        f.onStart = {}
+        assertNull("a later restart runs normally", f.restart(null))
+        assertEquals(listOf("stop", "kill:$S"), f.signals())
+        assertEquals(1, f.stops.size)
+    }
+
     /** Local, drive-less alias: exercises selection without contacting a share or launching node. */
     private fun volumeSpelling(file: File): String {
         val real = file.toPath().toRealPath().toString()
@@ -1383,6 +1466,8 @@ class MoeDaemonSupervisorTest {
         var lookup: (Long) -> ProcessHandle? = { handles[it] }
         var stop: () -> Int? = { 1 }
         var onSleep: () -> Unit = {}
+        // Runs inside a daemon start, just before the fake starter refuses.
+        var onStart: () -> Unit = {}
         var polls = 0
         init {
             RuntimeSelectionPolicy.resetForTest()
@@ -1390,7 +1475,7 @@ class MoeDaemonSupervisorTest {
         }
         val service by lazy {
             MoeDaemonSupervisor(root.path, "Test Project", onStatus = { _, text -> statuses += text }, portProbe = { _, _ -> false },
-                processAliveProbe = { handles[it.toLong()]?.alive == true }, processStarter = { starts++; error("must not start") },
+                processAliveProbe = { handles[it.toLong()]?.alive == true }, processStarter = { starts++; onStart(); error("must not start") },
                 profile = { profile }, installedRoot = { installed }, nodeExecutable = { nodePath },
                 processLookup = { lookup(it) }, runStop = {
                     stops += it.command().toList(); stopEnvironments += it.environment().toMap(); events += "stop"; stop()
@@ -1625,5 +1710,6 @@ class MoeDaemonSupervisorTest {
         const val INCOMPLETE = "Restart Daemon did not start a new Moe daemon: it could not confirm that the old one stopped. " +
             "Use Restart Daemon again."
         const val IN_PROGRESS = "Restart Daemon is already stopping the old Moe daemon. Wait for it to finish."
+        const val START_IN_PROGRESS = "Restart Daemon did not run: Moe is starting the daemon. Wait for it to finish, then use Restart Daemon."
     }
 }

@@ -8,6 +8,7 @@ import com.moe.model.MoeState
 import com.moe.services.MoeDaemonSupervisor
 import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
+import com.moe.toolwindow.ManagedVmPanel
 import com.moe.util.RuntimeSelectionPolicy.ProcessFacts
 import com.moe.util.RuntimeSelectionPolicy.SpawnRecord
 import com.moe.util.TerminalAgentLauncher.ProtectedAgentRuntime
@@ -40,6 +41,7 @@ import java.io.IOError
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.lang.reflect.Proxy
 import java.net.InetSocketAddress
 import java.nio.file.Files
@@ -349,6 +351,108 @@ class RuntimeSelectionPolicyTest {
         asks.answers.last()(true)
         assertEquals("the matched spelling stays protected", profileJson(local, "protected"), store.read(localName))
         assertNull("no base record was written", store.read(RuntimeSelectionPolicy.profileRecordName(base.path)))
+    }
+
+    // F1 (task-7faede18): a project.json that is not a regular file reached without a link is never opened.
+    @Test
+    fun `F1a a project json that is a directory reads as untrusted without pinning or writing`() = withProfileStore { store, _, asks ->
+        val dir = moeFolder().also { projectJson(it).toFile().mkdirs() }
+        assertUntrustedUnpinned(store, dir, asks, "directory")
+    }
+
+    @Test
+    fun `F1b a project json link reads as untrusted, even to a legacy file, and so does a dangling link`() = withProfileStore { store, _, asks ->
+        val target = File(temporaryFolder.newFolder(), "legacy.json").apply { writeText("""{"settings":{"executionProfile":"legacy"}}""") }
+        val linked = moeFolder()
+        assumeTrue("file symlinks unavailable on this host", fileLink(projectJson(linked), target.toPath()))
+        assertUntrustedUnpinned(store, linked, asks, "link to a legacy file")
+        val dangling = moeFolder()
+        assertTrue(fileLink(projectJson(dangling), File(temporaryFolder.root, "missing.json").toPath()))
+        assertUntrustedUnpinned(store, dangling, asks, "dangling link")
+    }
+
+    @Test
+    fun `F1c a project json FIFO, direct or linked, returns at once as untrusted`() = withProfileStore { store, _, asks ->
+        val linked = moeFolder()
+        val direct = moeFolder()
+        val pipe = temporaryFolder.root.toPath().resolve("pipe")
+        withFifos(pipe, projectJson(direct)) {
+            assertTrue(fileLink(projectJson(linked), pipe))
+            assertUntrustedUnpinned(store, linked, asks, "link to a FIFO")
+            assertUntrustedUnpinned(store, direct, asks, "FIFO")
+        }
+    }
+
+    @Test
+    fun `F1d a project json linked to a device reads as untrusted`() = withProfileStore { store, _, asks ->
+        val dir = moeFolder()
+        assumeTrue("POSIX devices", !RuntimeSelectionPolicy.windowsHost && fileLink(projectJson(dir), Paths.get("/dev/null")))
+        assertUntrustedUnpinned(store, dir, asks, "link to /dev/null")
+    }
+
+    @Test
+    fun `M1 vm-control resolves through the installed artifact under the protected profile only`() {
+        val project = temporaryFolder.newFolder("project")
+        val vm = "scripts/local-runner/vm-control.mjs"
+        fun layout(root: File) = installedLayout(root).also { File(it, vm).apply { parentFile.mkdirs() }.writeText("installed") }
+        val root = layout(temporaryFolder.newFolder("installed"))
+        val sandbox = layout(File(project, "build/idea-sandbox/plugins/moe-jetbrains"))
+        val noBundled: () -> File? = { throw AssertionError("protected never takes the bundled path") }
+        assertEquals("(a)", realFile(File(root, vm)), ManagedVmPanel.vmControlScript(project.path, true, { root }, noBundled))
+        assertNull("(b) a root inside the project", ManagedVmPanel.vmControlScript(project.path, true, { sandbox }, noBundled))
+        val bare = installedLayout(temporaryFolder.newFolder("bare"))
+        assertNull("(c) a missing script", ManagedVmPanel.vmControlScript(project.path, true, { bare }, noBundled))
+        assertNull("(c) no installed root", ManagedVmPanel.vmControlScript(project.path, true, { null }, noBundled))
+        val noRoot: () -> File? = { throw AssertionError("legacy never reads the installed root") }
+        val bundled = File(sandbox, vm)
+        assertEquals("(d) legacy keeps the bundled file", bundled, ManagedVmPanel.vmControlScript(project.path, false, noRoot) { bundled })
+        assertNull("(d) legacy with no bundled file", ManagedVmPanel.vmControlScript(project.path, false, noRoot) { null })
+    }
+
+    /** [dir]'s project.json reads PROTECTED and UNTRUSTED within 5 s; replaced by a legacy file, it reads LEGACY: nothing pinned, written or asked. */
+    private fun assertUntrustedUnpinned(store: ProtectedStateStore, dir: File, asks: RecordingConfirmer, label: String) {
+        assertEquals(label, RuntimeProfile.PROTECTED, within5s { profileOf(dir) })
+        assertEquals(label, DeclaredProfile.UNTRUSTED, within5s { RuntimeSelectionPolicy.declaredProfile(dir.path) })
+        assertNull("$label: nothing written", store.read(RuntimeSelectionPolicy.profileRecordName(dir.path)))
+        Files.delete(projectJson(dir))
+        writeProfile(dir, "legacy")
+        assertEquals("$label: nothing pinned", RuntimeProfile.LEGACY, profileOf(dir))
+        assertTrue("$label: nothing asked", asks.paths.isEmpty())
+    }
+
+    private fun moeFolder(): File = temporaryFolder.newFolder().also { File(it, ".moe").mkdirs() }
+
+    private fun projectJson(dir: File): Path = dir.toPath().resolve(".moe").resolve("project.json")
+
+    private fun <T> within5s(body: () -> T): T = CompletableFuture.supplyAsync { body() }.get(5, TimeUnit.SECONDS)
+
+    // A true symbolic link only: unlike symlink(), never a junction, which cannot name a file.
+    private fun fileLink(link: Path, target: Path): Boolean = try {
+        Files.createSymbolicLink(link, target)
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * Runs [body] with a writer-less FIFO at each of [paths] (POSIX only, else skips). Opening a FIFO read-write never
+     * blocks on Linux or macOS, so the finally opens each one that is still a FIFO once: a reader stuck in open returns.
+     */
+    private fun withFifos(vararg paths: Path, body: () -> Unit) {
+        assumeTrue("POSIX FIFOs", !RuntimeSelectionPolicy.windowsHost && paths.all { mkfifo(it) })
+        try {
+            body()
+        } finally {
+            paths.filter { Files.exists(it, LinkOption.NOFOLLOW_LINKS) && !Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
+                .forEach { RandomAccessFile(it.toFile(), "rw").close() }
+        }
+    }
+
+    private fun mkfifo(path: Path): Boolean = try {
+        ProcessBuilder("mkfifo", path.toString()).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .start().waitFor() == 0
+    } catch (_: Exception) {
+        false
     }
 
     @Test

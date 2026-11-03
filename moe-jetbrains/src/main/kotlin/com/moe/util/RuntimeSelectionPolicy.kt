@@ -197,10 +197,15 @@ object RuntimeSelectionPolicy {
         false
     }
 
-    /** True for exactly "verified-local", false for absent/legacy/observe; throws for anything else. */
+    /**
+     * True for exactly "verified-local", false for absent/legacy/observe; throws for anything else. Only a regular file
+     * reached without a final link is opened: a link, FIFO, directory or device is untrusted unread, so a FIFO cannot
+     * block the caller. Residual: a live local process that swaps the file between the check and the open still can.
+     */
     private fun declaresVerifiedLocal(file: Path): Boolean {
         if (Files.notExists(file, LinkOption.NOFOLLOW_LINKS)) return false
-        val bytes = Files.newInputStream(file).use { it.readNBytes(MAX_PROJECT_JSON_BYTES + 1) }
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) throw UntrustedSetting("project.json is not a regular file")
+        val bytes = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS).use { it.readNBytes(MAX_PROJECT_JSON_BYTES + 1) }
         if (bytes.size > MAX_PROJECT_JSON_BYTES) throw UntrustedSetting("project.json is larger than 1 MiB")
         val root = parseStrict(String(bytes, Charsets.UTF_8))
         if (!root.isJsonObject) throw UntrustedSetting("project.json is not a JSON object")

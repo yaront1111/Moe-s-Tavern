@@ -18,9 +18,11 @@ import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Owns daemon discovery, spawn backoff, and the lifecycle of the process started by the plugin.
@@ -58,6 +60,8 @@ class MoeDaemonSupervisor(
     private val replacementInFlight = AtomicBoolean()
     // Held while a Windows restart stops the old tree: a daemon spawned meanwhile would be orphaned by the next spawn.
     private val windowsRestartInFlight = AtomicBoolean()
+    // Starts in progress. Each side sets its own atomic before reading the other's, so a start and a Windows restart never overlap.
+    private val startsInFlight = AtomicInteger()
     // A refused restart retains its captured authority until a later restart confirms the entire tree gone.
     @Volatile private var unresolvedWindowsTree: OldTree? = null
     private var pendingReplacement: ReplacementTarget? = null
@@ -66,10 +70,16 @@ class MoeDaemonSupervisor(
         fun alive(): Boolean = target.isAlive || parent?.isAlive == true
     }
 
+    // Only a regular file reached without a final link is opened: a link, FIFO, directory or device reads as absent
+    // unread, and so is never deleted. Residual: a live local process that swaps the file after the check can still block.
     private fun parseDaemonInfo(file: File): DaemonInfo? {
         return try {
-            if (!file.exists()) return null
-            val bytes = file.inputStream().use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }
+            val path = file.toPath()
+            if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) log.warn("Ignoring .moe/daemon.json: not a regular file")
+                return null
+            }
+            val bytes = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS).use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }
             if (bytes.size > MAX_DAEMON_JSON_BYTES) {
                 log.warn("Ignoring .moe/daemon.json: larger than ${MAX_DAEMON_JSON_BYTES / 1024} KiB")
                 return null
@@ -105,6 +115,15 @@ class MoeDaemonSupervisor(
     }
 
     fun ensureDaemonRunning(): Boolean {
+        startsInFlight.incrementAndGet()
+        return try {
+            ensureDaemonRunningUnlessRestarting()
+        } finally {
+            startsInFlight.decrementAndGet()
+        }
+    }
+
+    private fun ensureDaemonRunningUnlessRestarting(): Boolean {
         if (windowsRestartInFlight.get() || unresolvedWindowsTree != null) return false
         if (profile() != RuntimeProfile.PROTECTED) return ensureDaemonRunningImpl()
         // Cover the fall-through spawn too: stop may remove metadata before the old processes exit.
@@ -344,8 +363,9 @@ class MoeDaemonSupervisor(
     // Today's guards pick the daemon.json process; signals then reach only this IDE's spawn tree or a PROTECTED-verified one.
     private fun stopWindowsRestart(info: DaemonInfo?): String? {
         if (!windowsRestartInFlight.compareAndSet(false, true)) return RESTART_IN_PROGRESS
-        val isProtected = profile() == RuntimeProfile.PROTECTED
         return try {
+            if (startsInFlight.get() > 0) return START_IN_PROGRESS
+            val isProtected = profile() == RuntimeProfile.PROTECTED
             // An absent pid reads as 0; a dead pid may be reused: neither is ever signaled.
             val pid = info?.pid?.takeIf { it > 0 && isProcessAlive(it) }
             val run = try {
@@ -956,6 +976,7 @@ class MoeDaemonSupervisor(
         private const val INCOMPLETE_RESTART = "Restart Daemon did not start a new Moe daemon: it could not confirm that the old one stopped. " +
             "Use Restart Daemon again."
         private const val RESTART_IN_PROGRESS = "Restart Daemon is already stopping the old Moe daemon. Wait for it to finish."
+        private const val START_IN_PROGRESS = "Restart Daemon did not run: Moe is starting the daemon. Wait for it to finish, then use Restart Daemon."
         private const val MAX_ANCESTORS = 64
         private const val EXIT_TIMEOUT_MS = 15_000L
         private const val POLL_MS = 250L
