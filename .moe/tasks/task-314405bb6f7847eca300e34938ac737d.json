@@ -108,8 +108,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -128,12 +128,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:24:11.405Z",
-  "updatedAt": "2026-11-03T16:42:23.412Z",
+  "updatedAt": "2026-11-03T16:44:29.408Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T16:28:58.924Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T16:43:53.356Z",
+    "wallClockMs": 894432
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -258,9 +260,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T16:38:13Z",
-    "at": "2026-11-03T16:42:01.561Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:42:08Z",
+    "at": "2026-11-03T16:44:29.408Z"
+  },
+  "completedAt": "2026-11-03T16:43:53.356Z",
+  "reviewCompletedAt": "2026-11-03T16:43:53.356Z",
+  "reviewSummary": "Reviewed completion 0a6775ae (on moe/work-2026-10-24) via git show. Size +169/-10, 4 files, under the cap. Scope matches the plan. chatSend.ts and the other chat tools are untouched.\n\nRe-run in a /tmp git-archive snapshot of 0a6775ae, no overlay (env -i npm ci, node 24):\n- Doc grep for NOT_ALLOWED, INVALID_INPUT, NOT_FOUND, #general, 10KB passes. `npm run lint` passes.\n- `tsc --noEmit` and `tsc -p tt.json` are clean.\n- `vitest run src/tools/chat src/tools/registry.test.ts src/tools/joinTeam.notification.test.ts`: 8 files, 102 tests, exit 0. DoD 4's chatSend.test.ts does not exist; the architect's task comment corrects it to chatBudgets, chatChannelRef and joinTeam.notification, all of which ran.\n\nMy mutation check on the new test file: pre-fix chatDecision.ts fails 5 of 10, pre-fix chatStore.ts fails 1 of 10, restored passes 10/10.\n\nDoD:\n1. Sender rules mirror chatSend.ts:34-52: 'system' gives NOT_ALLOWED, an unregistered id gives INVALID_INPUT with the disk fallback, 'human' is accepted. Every refusal precedes createDecision. The success shape is unchanged.\n2. The channel goes through resolveChannelRef. The id, 'general' and '#general' post with messageId set. An unknown channel gives NOT_FOUND. The byte cap is checked before the write with sendMessage's exact text, so getDecisions() stays empty.\n3. Tests cover every named case, including a loop-guard pause surviving the refused call. The doc has the Errors list and the channel forms.\n\nNon-blocking: an omitted workerId with a channel still posts as 'unknown' via MentionRouter's human path. The contract keeps this and the docs state it. A governor may want a follow-up row.",
+  "requiredCheckAtDone": null
 }
