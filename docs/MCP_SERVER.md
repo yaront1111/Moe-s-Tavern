@@ -2715,14 +2715,14 @@ Remove a pinned message from a channel.
 
 ### moe.chat_decision
 
-Propose a decision for human approval. Optionally post it to a chat channel.
+Propose a decision for human approval. Optionally post it to a chat channel as `[Decision Proposed] <content>`, sent under the proposer's id.
 
 **Parameters:**
 ```typescript
 {
   content: string,      // Required: what is being proposed
-  channel?: string,     // Optional: channel ID to post the decision to
-  workerId?: string     // Optional: proposing worker
+  channel?: string,     // Optional: channel id, or name in either "general" or "#general" form
+  workerId?: string     // Optional: proposing worker, a registered worker or "human" (omitted: recorded as "unknown")
 }
 ```
 
@@ -2730,6 +2730,12 @@ Propose a decision for human approval. Optionally post it to a chat channel.
 ```typescript
 { success: true, decision }
 ```
+
+**Errors.** Every refusal writes nothing: no decision file, no chat message. JSON-RPC code, then `MoeError.codeName`:
+- `-32003 NOT_ALLOWED`: `workerId` is `"system"`, which is reserved for daemon-internal messages (the `moe.chat_send` rule)
+- `-32602 INVALID_INPUT`: `workerId` is not a registered worker or `"human"`, or `channel` is not a string
+- `-32001 NOT_FOUND`: `channel` matches no channel, or a name that more than one channel shares
+- `-32000`: the posted line would exceed the 10KB chat message limit (`Message content exceeds 10KB limit`, as `moe.chat_send` refuses it)
 
 ---
 

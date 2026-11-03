@@ -598,6 +598,13 @@ export async function createDecision(state: StateManager, opts: {
     const content = sanitizeString(opts.content, 'content', 10240);
     if (!content) throw new Error('Decision content is required');
 
+    // Checked before the write: a later sendMessage throw orphaned the decision with messageId null.
+    const postTo = opts.channel && state.channels.has(opts.channel) ? opts.channel : null;
+    const postContent = `[Decision Proposed] ${content}`;
+    if (postTo && Buffer.byteLength(postContent, 'utf-8') > MAX_CHAT_MESSAGE_BYTES) {
+      throw new Error('Message content exceeds 10KB limit');
+    }
+
     const decision: Decision = {
       id: generateId('dec'),
       proposedBy: opts.proposedBy,
@@ -617,11 +624,11 @@ export async function createDecision(state: StateManager, opts: {
     state.decisions.set(decision.id, decision);
 
     // Post a system message to the channel if provided
-    if (opts.channel && state.channels.has(opts.channel)) {
+    if (postTo) {
       const { message: msg } = await sendMessage(state, {
-        channel: opts.channel,
+        channel: postTo,
         sender: opts.proposedBy,
-        content: `[Decision Proposed] ${content}`,
+        content: postContent,
         decisionId: decision.id
       });
       decision.messageId = msg.id;
