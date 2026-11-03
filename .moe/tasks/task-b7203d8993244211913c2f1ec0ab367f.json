@@ -78,7 +78,7 @@
   ],
   "planRevision": 1,
   "status": "REVIEW",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "qa-af7be174",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -90,10 +90,23 @@
   ],
   "priority": "LOW",
   "order": 435.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-1f4ec278769846b1af087fa435198d40",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-03T22:23:07.410Z",
+      "content": "Landing unlanded (conflict) 1 time(s) in a row; attempt attempt-e3bd8ddde1f9419b8632f32c87f6ee7f (generation 2); paths: docs/MCP_SERVER.md; rescue ref: refs/moe/rescue/task-b7203d8993244211913c2f1ec0ab367f/20261103T222305Z; target tip: cbae60700324951a00c65eae299c1dbbdac114c8; task WORKING."
+    },
+    {
+      "id": "comment-38f3c955460e4b58982ffc1f55d24572",
+      "author": "governor-e6b40560",
+      "content": "Governor note for the landing-retry session (22:24Z). This landing failed MOE_COMMIT_FAILED_CONFLICT against target cbae6070, and docs/MCP_SERVER.md is the only conflicting path; waitForTask.ts and waitForTask.deleteWake.test.ts merge cleanly. I reproduced it with git merge-file on the rescue ref. There is one hunk, in `### moe.wait_for_task`, at about :1618:\n- The target side is task-a024ac57's docs commit cbae6070. It added a NEW bullet, \"- **The execution route matches `claim_next_task` too:** ...\", directly above the \"- Wake triggers while parked:\" line.\n- This row's side changed that \"Wake triggers while parked\" line to name `TASK_DELETED` (\"...producing a claimable match (a delete that frees nothing leaves the wait parked)...\").\nResolve it by keeping both, in this order: the target's execution-route bullet unchanged, then this row's TASK_DELETED version of the wake-triggers line. Remove the target's old wake-triggers line; nothing else changes. Edit the file with your session's own editor (Edit, or apply_patch on a codex exec seat), not a shell write. Then re-run the plan's verification on the merged tree and call complete_task as the LANDING-CONFLICT prompt says.",
+      "timestamp": "2026-11-03T22:23:47.913Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:23.553Z",
-  "updatedAt": "2026-11-03T22:02:15.499Z",
+  "updatedAt": "2026-11-03T22:27:39.285Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:14:24.970Z",
@@ -107,7 +120,8 @@
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "worker-2dc72348"
   ],
   "tier": "standard",
   "effort": "high",
@@ -186,12 +200,12 @@
   "planApprovedAt": "2026-11-03T21:26:40.380Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T22:00:41.476Z",
-  "reviewStartedAt": "2026-11-03T22:02:15.496Z",
+  "reviewStartedAt": "2026-11-03T22:25:41.706Z",
   "verification": {
     "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $T/waitForTask.ts $T/waitForTask.deleteWake.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run waitForTask deleteTask dependencyUnblock waiter-ownership",
     "exitCode": 0,
-    "outputTail": "Test Files  6 passed (6)\n      Tests  86 passed (86)\n(tsc --noEmit clean; RED-AT-BASE leg: Tests 2 failed | 1 passed (3), (w2) and (w3) FAIL, printed RED-AT-BASE)",
-    "reportedAt": "2026-11-03T22:02:15.496Z",
+    "outputTail": "(run on the merged worktree via git ls-files snapshot, same npm ci / tsc --noEmit / vitest commands) Test Files  6 passed (6)\n      Tests  86 passed (86)\nexit 0",
+    "reportedAt": "2026-11-03T22:25:41.706Z",
     "source": "agent-reported"
   },
   "filesModified": [
@@ -199,5 +213,44 @@
     "packages/moe-daemon/src/tools/waitForTask.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "A parked wait_for_task now re-runs its findMatchingTask match on TASK_DELETED as well as TASK_CREATED and TASK_UPDATED. Deleting a dependent's only unmet prerequisite wakes the waiter with that dependent. A delete that frees nothing leaves the wait parked. Changes: (1) waitForTask.ts: the parked listener's event filter and its comment, nothing else. (2) New waitForTask.deleteWake.test.ts with (w1) unrelated delete stays parked, (w2) wakes with task-dep and the claim hands it out, (w3) one of two prerequisites stays parked, the second wakes it. (3) docs/MCP_SERVER.md: three wait_for_task phrases name TASK_DELETED. Verification ran in git-archive snapshots outside the shared checkout. GREEN: tsc clean, 6 files, 86 tests passed. RED-AT-BASE at 54635828: 2 failed | 1 passed (3), with (w2) and (w3) failing."
+  "completionSummary": "Landing conflict resolved: docs/MCP_SERVER.md's wait_for_task section had one conflict hunk. Kept the target's new \"execution route matches claim_next_task\" bullet unchanged, followed by this task's TASK_DELETED wake-triggers line; the old wake-triggers line and all markers are removed. Code unchanged: waitForTask.ts parked listener re-matches on TASK_DELETED, plus new waitForTask.deleteWake.test.ts ((w1) unrelated delete stays parked, (w2) wakes with task-dep, (w3) two prerequisites). Re-verified on the merged tree, built from the worktree's git ls-files (not git archive HEAD) in a snapshot outside the shared checkout: tsc clean, 6 files, 86 tests passed. RED-AT-BASE (2 failed | 1 passed (3)) was recorded earlier and the test file is unchanged.",
+  "commits": [
+    {
+      "sha": "7574573fa61d06e57dd02979f57140a05b4d51fd",
+      "ref": "refs/moe/rescue/task-b7203d8993244211913c2f1ec0ab367f/20261103T222305Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T21:26:45Z",
+      "paths": [],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T22:23:05.390Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-b7203d8993244211913c2f1ec0ab367f ref=refs/moe/rescue/task-b7203d8993244211913c2f1ec0ab367f/20261103T222305Z sha=7574573fa61d06e57dd02979f57140a05b4d51fd reason=conflict"
+    },
+    {
+      "sha": "52185bb4c612299e93be14233863a8efd37bb7fc",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T22:23:39Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T22:27:36.505Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T22:23:39Z",
+    "at": "2026-11-03T22:27:36.505Z"
+  },
+  "landingRetry": null
 }
