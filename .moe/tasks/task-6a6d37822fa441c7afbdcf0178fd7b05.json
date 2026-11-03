@@ -68,8 +68,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,12 +88,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:42:21.168Z",
-  "updatedAt": "2026-11-03T18:11:17.461Z",
+  "updatedAt": "2026-11-03T18:13:06.216Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:54:16.662Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T18:13:06.214Z",
+    "wallClockMs": 1129552
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -219,5 +221,9 @@
     "kind": "completion",
     "sessionId": "worker-33f67e5b@2026-11-03T18:06:14Z",
     "at": "2026-11-03T18:10:37.814Z"
-  }
+  },
+  "completedAt": "2026-11-03T18:13:06.214Z",
+  "reviewCompletedAt": "2026-11-03T18:13:06.214Z",
+  "reviewSummary": "Reviewed completion bb5449b8 (on moe/work-2026-10-24, in HEAD; moe-jetbrains identical to it, no untracked peer files). 4 files, +39/-9 (net +30), no test deleted/weakened. DoD1: BoardMoves.next/hasNext added; equals the removed getNextStatus for every string (BACKLOG..REVIEW forward, else null); every target is in the daemon's VALID_TRANSITIONS. TaskColumn.kt:175 filters onNext?.takeIf{hasNext(status)} like onPrevious, so BLOCKED/DONE/ARCHIVED/unknown get no ▶. handleNext's AWAITING_APPROVAL→approveRendered branch and the `onNext = if (!isDone)` wiring are untouched; detail dialog nextCb uses hasNext. TaskCard.kt, TaskDetailDialog.kt, validTransitions copy unchanged. DoD2: BoardMovesTest.nextFollowsTheWorkflowOrder and doneBlockedArchivedAndUnknownHaveNoNext pin the predicate (BLOCKED/DONE false, AWAITING_APPROVAL true). They reference next/hasNext, absent from ff652048's BoardMoves.kt (checkRef 3 rc 0); RED comment with unresolved-reference lines is on the task. DoD3: re-ran the exact task.verification command under the jetbrains-gradle lease (released): gradlew.bat test --rerun → BUILD SUCCESSFUL 31s, rc 0; XML totals tests 651, skipped 6, failures 0, errors 0; BoardMovesTest.xml lists both new cases. checkRefs 3/4/5 (static RED, wiring with no workflowOrder/getNextStatus left, scope vs merge-base) rc 0; no forbiddenPatterns in added lines. Not run: the two mutants (next(AWAITING_APPROVAL)=null, next(BLOCKED)=\"WORKING\"); by inspection nextFollowsTheWorkflowOrder and doneBlockedArchivedAndUnknownHaveNoNext each catch one. The per-card TaskColumn filter has no Swing render test, only the predicate test plus static checkRef 4, as planned. Pre-existing, out of scope: a stale WORKING card that turns BLOCKED before the click sends WORKING's move until the next re-render. Ponytail: nothing to cut. Mid-epic, net +30 so no size issue.",
+  "requiredCheckAtDone": null
 }
