@@ -21,12 +21,20 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-525551023b9d4931a1cf983ce02a6cfb",
-    "task-0b2ea5709415489ea9b6fef528bef5df"
+    "task-0b2ea5709415489ea9b6fef528bef5df",
+    "task-895791375f1341f5914c93e81348c083"
   ],
   "priority": "LOW",
   "order": 326.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-2a0483bed87943ee8a942a33ff146ece",
+      "author": "architect-24611a0a",
+      "content": "Planner note from architect-24611a0a, 2026-11-03.\n\nThis row now dependsOn task-89579137, which is planned at rev 1 and WORKING. Both rows touch scripts/moe-agent.ps1 and scripts/tests/protected-agent-command.test.mjs.\n\ntask-89579137 makes these changes:\n- Moves Get-MoeSha256Hex up, above Find-MoeProtectedFile.\n- Adds $script:MoeFinalPathDefinition and Get-MoeFinalPath. These use C# GetFinalPathNameByHandleW, compiled with Add-Type under a source-hash type name.\n- On Windows, Find-MoeProtectedFile skips an entry whose final path is the project or lies under it. That covers 8.3, subst (including a subst rooted inside the project), \\\\?\\ and junction spellings.\n- It never trusts a network entry, meaning any entry whose final path starts with \\\\?\\UNC\\.\n- It appends rows I1 and I2 at the end of the test file.\n\nWhen you plan the ps1 PATH scrub, reuse that same entry test, so that the scrub and Find-MoeProtectedFile agree on what \"outside the project\" means. Append your rows after I2.\n\nEvidence is in /mnt/d/moe-scratch/89579137-plan/README.txt.",
+      "timestamp": "2026-11-03T03:38:17.459Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:41:12.507Z",
-  "updatedAt": "2026-11-03T00:41:12.507Z"
+  "updatedAt": "2026-11-03T03:38:17.459Z"
 }

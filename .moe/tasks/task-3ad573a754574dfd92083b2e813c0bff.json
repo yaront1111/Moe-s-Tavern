@@ -84,8 +84,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -116,7 +116,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-03T02:54:31.169Z",
+  "updatedAt": "2026-11-03T03:42:48.638Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
@@ -132,7 +132,9 @@
     "plannedDistinctFileCount": 4,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-03T03:42:10.974Z",
+    "wallClockMs": 299021317
   },
   "contextFetchedBy": [
     "worker-ed0f6a9e",
@@ -354,10 +356,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T01:55:25Z",
-    "at": "2026-11-03T02:54:13.918Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T02:54:29Z",
+    "at": "2026-11-03T03:42:48.637Z"
   },
   "workStartedAt": "2026-11-02T19:45:29.085Z",
   "blockedReason": null,
@@ -375,7 +378,7 @@
   },
   "completionSummary": "QA reject-1 rework, test-only. Only scripts/tests/literal-project-path.test.mjs changed: +41/-12 vs a0269bcd, 232 lines, sha 723c8cf0. Launchers, ci.yml and daemon-json-cap match a0269bcd byte for byte.\n\nQA items:\n1. codeOnly() masks a token-boundary # outside strings: (?<![^\\s;(){}|,'\"])#. L5564, L7720 and L7731 are now inspected. Reverting them flags exactly those 3; the L450 control is flagged.\n2. Samples `$n = 1 # it's a note` then `Test-Path $y`, and `Write-Host 'a # b'; Test-Path $z`: both flagged. Exact sets updated.\n3. scan() returns `uninspected`: listed cmdlet names the scanner skipped outside full-line comments, <# #> blocks and literal here-strings. The launcher tests assert []. PS 5.1 AST CommandAst set = the scanner's (206+7).\n4. Optional moe-team.ps1 hoist declined: G2 needs the escape as each Start-Process's own -WorkingDirectory value.\n\nStep-6 found 3 more fail-open holes of the same class; each is fixed and pinned:\n- The Env: exemption also matched comments and string args; it is now anchored to the operand.\n- G2 accepted Escape( anywhere in the segment; it must now be the -WorkingDirectory value.\n- The coverage view masked expandable @\" here-strings, whose $(...) is code.\n\nMutation proof:\n- Scanner mutants S1-S12 all killed.\n- The plan's 4-site launcher revert flags L435, L450, L914 and L9342.\n- On Windows, reverting only Resolve-Path fails all 4 PS 5.1 cases with 'Project path not found'.\n\nVerification, the command verbatim, 02:10:54-02:51:53Z:\n- Linux 3 pass / 5 skip.\n- parity PASS.\n- Windows node 8/8, 0 skip (PS 5.1 x claude/codex/gemini/grok, pwsh 7 claude).\n- postflight-safe PS 5.1 exit 0, NONE.\n- VERIFY_EXIT=0.\nGate (parity + lint): 0. get_commit_scope: no peer declares the test file.",
   "landingRetry": null,
-  "reviewCompletedAt": "2026-11-03T00:49:56.417Z",
+  "reviewCompletedAt": "2026-11-03T03:42:10.974Z",
   "rejectionDetails": {
     "failedDodItems": [
       "A static guard requires -LiteralPath on every listed path cmdlet in both launchers and an escaped -WorkingDirectory on every Start-Process. The scanner is pinned by an exact-flag self-test."
@@ -438,5 +441,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-03T03:42:10.974Z",
+  "reviewSummary": "QA r2 approve. Commit 384f0c55 (tree 713a6f6e = cand-2ea8847a, parent f7b077f7, on origin/moe/work-2026-10-24): test-only literal-project-path.test.mjs +41/-12; task net ~237 LOC; no launcher bytes.\nVerify (task recipe on git archive 384f0c55 scripts, blobs hash-checked, MOE_* scrubbed): Linux 3 pass/5 skip; parity PASS; Windows node 8/8, 0 skip (PS5.1 x4 CLIs + pwsh7 claude); postflight-safe PS5.1 exit 0 NONE (02:57-03:40Z). Gate parity+lint OK.\nReject-1 items: (1) token-boundary # masking: old hidden sites L5580/L8146/L8157 flagged on revert; (2) trailing `# it's` and `'a # b'; Test-Path $z` samples pinned, exact sets hand-checked; (3) uninspected oracle asserted []; (4) optional hoist declined, fine.\nIndependent PS5.1 AST oracle: 0 parse errors; CommandAst (line,cmdlet) multisets == scanner sites (224 agent / 7 team); 0 non-literal (10 Env:), every Start-Process WD escaped, 0 aliases. BOM/LF kept, team ASCII, CI step in 3-OS build-all-platforms.\nMutants: 14/14 launcher mutants flagged (phantom quotes fail closed as uninspected); scanner mutants S1-S14 killed.\nNon-blocking (Serena gotcha-regex-code-scanner-trailing-comment-quotes): the self-test does not pin 3 segment terminators. Dropping the enclosing `)`, `|` or `;` break (S16/S20/S21) stays green yet would pass `if ((Test-Path $a) -and (Test-Path -LiteralPath $b))`, `Get-Content -Path $f | Set-Content -LiteralPath $g`, `Remove-Item $f; Remove-Item -LiteralPath $g`. Shipped scanner handles all three; add those samples when segment() is next edited.\nPonytail: Lean already, net -0. Handoff memory retired to _archive after approve.",
+  "requiredCheckAtDone": null
 }
