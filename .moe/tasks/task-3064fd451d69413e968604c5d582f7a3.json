@@ -13,38 +13,61 @@
     {
       "stepId": "step-1",
       "description": "Write the failing tests first (TDD; read mem:gotcha-chat-tools-sender-channel-parity). Create packages/moe-daemon/src/tools/chatPin.test.ts with your seat's own file editor (Write on Claude, apply_patch on codex exec). Never use a shell write or `cp` from scratch: the rails' TOOL-witness rule. A dry-run prototype of the whole file is /mnt/d/moe-scratch/plan-3064fd45/chatPin.test.ts. Read it, then write the file yourself.\n\nSetup copies tools/chatDecision.test.ts:\n- one `new ToolTestHarness()`;\n- beforeEach: h.init(), h.setupMoeFolder({ schemaVersion: 6 } as never), h.createEpic(), h.createWorker({ id: 'worker-a', status: 'CODING' }), await h.state.load();\n- afterEach: await flushActivityLog(h.state), then h.cleanup().\n\nHelpers:\n- generalId(), from h.state.getChannels();\n- send / pin / unpin, which call chatSendTool / chatPinTool / chatUnpinTool(h.state).handler(args, h.state);\n- posted(content), the message id from h.state.sendMessage({ channel: generalId(), sender: 'human', content });\n- expectNoPin(), which asserts h.state.getPins(generalId()) toEqual [] AND that .moe/pins/<generalId>.json does not exist.\n\nWrite exactly seven cases. Each title starts with its prefix, because checkRef 2 greps the prefixes:\n- (p1) chat_send refuses workerId 'system' (NOT_ALLOWED). Then chat_pin as 'system' rejects toMatchObject { code: MoeErrorCode.NOT_ALLOWED (-32003), codeName: 'NOT_ALLOWED', context: { operation: 'chat_pin as \"system\"', reason: 'reserved for daemon-internal messages' } }. Then expectNoPin().\n- (p2) chat_send refuses 'worker-ghost' (INVALID_INPUT). Then chat_pin as 'worker-ghost' rejects { code: MoeErrorCode.INVALID_INPUT (-32602), codeName: 'INVALID_INPUT', message: expect.stringContaining('Unknown sender') }. Then expectNoPin().\n- (p3) A regression guard, already green at HEAD. Pin three posted messages as 'human', 'worker-a' and 'worker-late'. Call h.createWorker({ id: 'worker-late' }) AFTER load, so only the tryLoadWorkerFromDisk fallback knows that seat. Each pin.pinnedBy is the caller, and getPins(generalId()) maps to [[m1,'human'],[m2,'worker-a'],[m3,'worker-late']].\n- (p4) '#general' and (p5) 'general': one it.each over [['p4','#general'],['p5','general']], titled '(%s) ...'. chat_pin by the reference resolves toMatchObject { success: true, pin: { messageId, pinnedBy: 'worker-a' } }. getPins(generalId()) then holds exactly that messageId. chat_unpin by the same reference resolves toEqual { success: true }, and getPins(generalId()) is [].\n- (p6) chat_pin to 'chan-missing' and to '#nope' rejects { code: MoeErrorCode.NOT_FOUND (-32001), codeName: 'NOT_FOUND', context: { entity: 'Channel', id: <ref> } }. Then expectNoPin().\n- (p7) Pin by id first. chat_unpin to 'chan-missing' and to '#nope' rejects with the same NOT_FOUND shape, and the pin is still there.\n\nThen run checkRef 2 (the RED gate: b5f40fee with only the test overlaid). It must print `Tests  6 failed | 1 passed (7)` and RED-AT-BASE, because p3 is the only case green at base.\n\nError handling: if RED-AT-BASE is missing, fix the test (for example, a mistyped prefix or a case that passes at base). Never change the gate.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/chatPin.test.ts"
       ],
-      "startedAt": "2026-11-03T19:23:42.132Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatPin.test.ts"
+      ],
+      "note": "Wrote 7 cases; checkRef 2 printed 6 failed | 1 passed (7) and RED-AT-BASE.",
+      "startedAt": "2026-11-03T19:23:42.132Z",
+      "completedAt": "2026-11-03T19:24:15.693Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix both tools with your seat's editor. The reference is /mnt/d/moe-scratch/plan-3064fd45/reference-fix.diff, dry-run green.\n\nchatPin.ts:\n- Import { invalidInput, notAllowed, notFound } from '../util/errors.js'.\n- inputSchema: the channel description becomes chat_send's exact wording, 'Channel id, or name in either \"general\" or \"#general\" form'. The workerId description becomes 'Worker pinning the message (a registered worker or \"human\")'.\n- After the three existing non-empty-string checks, add chat_send's sender rule (chatSend.ts:40-53), written in chat_decision's compact form (chatDecision.ts:34-43):\n  - workerId === 'system': throw notAllowed('chat_pin as \"system\"', 'reserved for daemon-internal messages');\n  - workerId !== 'human' && !state.getWorker(id) && !state.tryLoadWorkerFromDisk(id): throw invalidInput('workerId', 'Unknown sender: workerId must be a registered worker or \"human\"').\n- Then `const channel = state.resolveChannelRef(params.channel); if (!channel) throw notFound('Channel', params.channel);` and call state.pinMessage(channel.id, params.messageId, params.workerId).\n- Add a 3-4 line comment on why: the id becomes pinnedBy in the pins file, in PINS_UPDATED and in PIN_CREATED, so every refusal precedes the write.\n\nchatUnpin.ts:\n- Also import notFound.\n- Use the same channel description.\n- Resolve the channel the same way, then call state.unpinMessage(channel.id, params.messageId).\n\nThis step owns the error handling. Every new refusal is a coded MoeError thrown before the store call. So a refused call writes no pins file, emits no PINS_UPDATED and appends no PIN_CREATED. The store's own errors (message not in channel, already pinned, pin not found) propagate unchanged.\n\nOut of scope, do not touch:\n- chatStore.ts, StateManager.ts;\n- WebSocketServer.ts: its /ws PIN_MESSAGE / UNPIN_MESSAGE path keeps recording 'human';\n- docs/MCP_SERVER.md, which other rows hold;\n- chat_unpin's schema beyond the channel description. Add no workerId property and no sender rule there. PIN_REMOVED's actor is a separate follow-up that needs StateManager.unpinMessage.\n\nNo separate test run is needed here: step 3 runs the gate once.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatPin.ts",
         "packages/moe-daemon/src/tools/chatUnpin.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatPin.ts",
+        "packages/moe-daemon/src/tools/chatUnpin.ts"
+      ],
+      "note": "Sender rule + resolveChannelRef in chat_pin; resolveChannelRef in chat_unpin; schema descriptions updated.",
+      "startedAt": "2026-11-03T19:24:16.605Z",
+      "completedAt": "2026-11-03T19:24:31.235Z"
     },
     {
       "stepId": "step-3",
       "description": "Verify once (read mem:gotcha-daemon-linux-snapshot-gate).\n\nRun checkRef 1 (the GREEN gate) exactly as written. It:\n- archives HEAD into a mktemp snapshot;\n- overlays the three owned files;\n- runs npm ci there, never in the shared checkout;\n- runs `npx tsc --noEmit`;\n- runs vitest on chatPin.test.ts, the src/tools/chat family, registry.test.ts, StateManager.test.ts and WebSocketServer.test.ts.\nThe dry run gave Test Files 10 passed (10), Tests 373 passed (373), exit 0, in about 23 s. Counts may grow when peers land chat tests. Use this exact command, its exit code and its output tail as complete_task verification.\n\nThen re-run checkRef 2: it must still print RED-AT-BASE.\n\nScope check (DoD 3): `git status --porcelain` in your worktree lists exactly packages/moe-daemon/src/tools/chatPin.ts and chatUnpin.ts (modified) and chatPin.test.ts (new).\n\nError handling for a red run:\n- A failing (pN) case: fix the source. Never weaken an assertion.\n- A tsc error: fix the types in the two sources.\n- A failure in a file this row does not own: re-run that file alone, both in the snapshot and on a plain `git archive HEAD` without the overlay. If it fails there too, it is a peer or HEAD issue. Name it in your completion summary and do not edit it.\n- A timeout in StateManager.test.ts or WebSocketServer.test.ts: check `uptime` and re-run that file alone before calling it a regression.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef 1 green: tsc clean, 10 files / 373 tests passed; git status shows exactly the 3 owned files.",
+      "startedAt": "2026-11-03T19:24:32.259Z",
+      "completedAt": "2026-11-03T19:25:07.096Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of the three-file diff (skill adversarial-self-review), before complete_task. Check that:\n- (a) every refusal precedes state.pinMessage / unpinMessage: no refused call writes a pins file, emits PINS_UPDATED or appends PIN_CREATED;\n- (b) 'system' is refused before the registry lookup (otherwise it gets INVALID_INPUT, not NOT_ALLOWED), and 'human' still skips the lookup;\n- (c) both tools hand the store channel.id, never params.channel;\n- (d) an ambiguous name (two channels share it) resolves to null and is refused NOT_FOUND, as chat_send does;\n- (e) the response shapes stay { success: true, pin } and { success: true }, and canonical ids still work (p3, p7);\n- (f) no added line contains a project.json globalRails.forbiddenPatterns string;\n- (g) the diff stays inside the three files, at about +142/-7 lines.\n\nOptional mutation spot-check, run in a snapshot only, never in the worktree: /mnt/d/moe-scratch/plan-3064fd45/README.txt lists 8 clause mutants and the test case each one must kill.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatPin.ts",
+        "packages/moe-daemon/src/tools/chatUnpin.ts",
+        "packages/moe-daemon/src/tools/chatPin.test.ts"
+      ],
+      "note": "Self-review (a)-(g) clean: refusals precede store calls, system checked before lookup, channel.id passed, shapes unchanged, no forbidden patterns, diff limited to the 3 files.",
+      "startedAt": "2026-11-03T19:25:08.308Z",
+      "completedAt": "2026-11-03T19:25:17.596Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -69,11 +92,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:10:35.780Z",
-  "updatedAt": "2026-11-03T19:23:42.132Z",
+  "updatedAt": "2026-11-03T19:25:23.756Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:10:46.661Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -83,7 +107,12 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:22:33.673Z",
   "executionContract": {
@@ -160,5 +189,19 @@
   },
   "planApprovedAt": "2026-11-03T19:22:33.711Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T19:23:42.132Z"
+  "workStartedAt": "2026-11-03T19:23:42.132Z",
+  "reviewStartedAt": "2026-11-03T19:25:23.754Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp packages/moe-daemon/src/tools/chatPin.ts packages/moe-daemon/src/tools/chatUnpin.ts packages/moe-daemon/src/tools/chatPin.test.ts \"$S/packages/moe-daemon/src/tools/\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/chatPin.test.ts src/tools/chat src/tools/registry.test.ts src/state/StateManager.test.ts src/server/WebSocketServer.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  10 passed (10)\n      Tests  373 passed (373)\n   Duration  18.37s",
+    "reportedAt": "2026-11-03T19:25:23.754Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatPin.test.ts",
+    "packages/moe-daemon/src/tools/chatPin.ts",
+    "packages/moe-daemon/src/tools/chatUnpin.ts"
+  ],
+  "completionSummary": "chat_pin now applies chat_send's sender rule before any write: 'system' is refused NOT_ALLOWED (-32003), and an id that is not 'human' and not a registered worker (memory or disk) is refused INVALID_INPUT 'Unknown sender' (-32602). chat_pin and chat_unpin resolve the channel through state.resolveChannelRef, so id, 'general' and '#general' all work and the store gets channel.id. An unknown channel is refused NOT_FOUND (-32001) instead of an uncoded Error. Both channel schema descriptions use chat_send's wording. New chatPin.test.ts has cases p1-p7. At b5f40fee with only the test overlaid it gives 6 failed | 1 passed (7) and RED-AT-BASE; with the fix, 10 files / 373 tests pass, including the chat family, registry, StateManager and WebSocketServer. tsc is clean. The diff touches only chatPin.ts, chatUnpin.ts and chatPin.test.ts. Not done: PIN_REMOVED still records no actor (needs the StateManager.unpinMessage wrapper, held by task-3e1d0c2e)."
 }

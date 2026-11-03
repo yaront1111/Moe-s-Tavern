@@ -62,8 +62,9 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's diff (adversarial-self-review skill), once, as the last step. Then call moe.complete_task with step 4's evidence and step 3's audit table in the summary.\n\n(1) Scope. `git status --short` and `git diff --numstat` against your base show exactly two files:\n- scripts/moe-agent.ps1, +10/-1 (the FIX_NEW block only);\n- scripts/tests/postflight-vm-route.ps1, +1 (the row).\nNothing else: no edit to n1's gate, no other caller, no .moe/ path, no sh file. `head -c3 scripts/moe-agent.ps1 | od -An -tx1` prints `ef bb bf`, and the added lines are ASCII (`git diff | grep -P '[^\\x00-\\x7F]'` prints nothing).\n\n(2) Mutation check, on a scratch COPY only. From your worktree run `bash /mnt/d/moe-scratch/plan-044c/mutants.sh` with run_in_background; it takes about 15 minutes. It reads your worktree, copies HEAD's scripts/, docs/roles and validators.ts plus your two changed files into /mnt/d/moe-scratch/044c-mut.*, and mutates only that copy. Each mutant must fail the copy's postflight-vm-route.ps1 at its row:\n- M1 (today's return line) on 5.1: T-malformed-array;\n- M3 (no comma) on 5.1: T-malformed-array;\n- M2 (no pwsh 7 branch) on 7: T-malformed-array;\n- M4 (every value wrapped in an array) on 5.1: C1, the first refusal row.\nExpected: four `killed` lines and `mutants exit=0`. The architect's dry run killed 4 of 4 (/mnt/d/moe-scratch/plan-044c/mutants.output.txt). A `NOT APPLIED` line means your text differs from FIX_NEW: match it. Never mutate the tracked file.\n\n(3) Edge cases, confirmed by reading, not by new code:\n- objects, scalars, null and raw text are unchanged (probe);\n- an array of 2+ items is unchanged; one-element and empty arrays now come back as arrays;\n- the pass-throughs keep the shape;\n- pwsh 6 keeps today's behaviour;\n- concurrency is unchanged: one proxy process per call, and no shared state is added.\n\n(4) If any tracked byte changed in this step, rerun step 4.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T19:25:52.300Z"
     }
   ],
   "planRevision": 1,
@@ -105,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:44.109Z",
-  "updatedAt": "2026-11-03T19:20:49.292Z",
+  "updatedAt": "2026-11-03T19:25:52.300Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T16:31:41.317Z",
@@ -199,5 +200,34 @@
   },
   "planApprovedAt": "2026-11-03T17:07:05.795Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T17:27:58.361Z"
+  "workStartedAt": "2026-11-03T17:27:58.361Z",
+  "commits": [
+    {
+      "sha": "e3b179143cae8a488018f068327da946ee512e21",
+      "ref": "refs/heads/moe/task/task-044c7410e7a24c1bbe56da35ff643232",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T17:27:03Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T19:24:08.004Z",
+      "treeId": "87f396a7ae21c866dc753757a744cd1ca93fd99b",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T17:27:03Z",
+    "at": "2026-11-03T19:24:08.004Z"
+  }
 }

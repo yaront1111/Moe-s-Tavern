@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,16 +81,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:00:17.701Z",
-  "updatedAt": "2026-11-03T19:24:05.996Z",
+  "updatedAt": "2026-11-03T19:26:19.070Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:01:00.305Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T19:25:50.169Z",
+    "wallClockMs": 1489864
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -209,9 +212,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T19:20:32Z",
-    "at": "2026-11-03T19:24:05.996Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T19:24:15Z",
+    "at": "2026-11-03T19:26:19.070Z"
+  },
+  "completedAt": "2026-11-03T19:25:50.169Z",
+  "reviewCompletedAt": "2026-11-03T19:25:50.169Z",
+  "reviewSummary": "APPROVED. Reviewed completion 32929cf2 (in moe/control HEAD and moe/work-2026-10-24): +51/-4, 3 owned files, ~47 net LOC; StateManager.ts not in diff.\n\nRe-ran task.verification in a git-archive snapshot: RAIL-CALL-UNCHANGED, tsc --noEmit + tsc -p tt.json clean, vitest 'Test Files 2 passed (2), Tests 10 passed (10)', exit 0. Re-ran checkRef red (unfixed archiveEpic.ts pinned at 99d39004): (e1) FAIL, 'Tests 1 failed | 6 passed (7)', RED-BEFORE-FIX.\n\nDoD: (1) archiveEpic.ts:93 passes the bare params.workerId as updateEpic's 3rd arg (signature at StateManager.ts:1287); epicWasArchived short-circuit kept, so an idempotent re-archive writes nothing; caller-less call records no actor. (e1) asserts per-seat get_activity_log (architect-c: EPIC_UPDATED + both TASK_ARCHIVED; worker-z/'unknown'/'agent': none), each event's actor (null when caller-less), and unchanged EPIC_UPDATED payloads. (2) (e1) fails before, passes after; existing cases and holderActor test pass. (3) rail-proposal `await this.updateEpic(epic.id, { epicRails: rails });` still at StateManager.ts:1437.\n\nMutants on a snapshot copy of fixed archiveEpic.ts, each killed by (e1) alone: `?? 'unknown'`, `|| 'agent'`, dropping the epicWasArchived short-circuit. Docs sentence, param comment and schema description match the code. No forbidden patterns. Quality gate (parity-check + role-doc lint) unaffected: no role docs or wrapper scripts changed. ponytail: nothing to cut. Not run: full daemon suite, per the row's narrow-gate ruling (epic-be924fb8 msg-bbf4f109).",
+  "requiredCheckAtDone": null
 }
