@@ -14,10 +14,11 @@
     {
       "stepId": "step-1",
       "description": "Fake daemon hold in scripts/tests/postflight-fake-proxy.js. First read task-4ddbfb31's landed deregisterWorker and claim code and mirror its response shapes (heldTaskIds, holdUntil). Where the landed code differs from this text, follow the code. Add FAKE_CLAIM_MODE=reload-hold and document it at its handler like the other modes.\n\nState: <project>/.moe/reload-hold.holder holds the holder's workerId.\n- Create the file only with flag 'wx'. That makes two seats unable to both become holder; EEXIST means another seat already is.\n- Error handling: a reader that finds the file empty, unreadable or racing never throws. It answers as a non-holder, so it fails toward 'none'. Any other fs error propagates, as the fake's other handlers do, so the arm fails loudly instead of answering half-built state.\n\nclaim_next_task:\n- No holder file: create it for the caller. Answer {...attemptFixture(), hasNext:true, task:{id:'task-postflight', title:'Postflight smoke', status:'WORKING', chatChannel:'chan-task'}}.\n- The holder: answer with the 'resume' mode's alreadyAssigned shape (with its nextAction) for task-postflight, status WORKING.\n- Anyone else: {hasNext:false}.\n- Append one row per answer to <project>/.moe/claim-answers.jsonl: {workerId, answer:'claimed'|'resumed'|'none'}.\n\nderegister_worker: keep the existing deregister.log line and race hook unchanged, then:\n- The holder with reason wrapper_restart keeps the holder file and answers {success:true, workerId, alreadyDead:false, releasedTaskIds:[], releasedCount:0, heldTaskIds:['task-postflight'], holdUntil:<now+120000 as ISO>}.\n- The holder with any other reason deletes the file (a release) and answers releasedTaskIds ['task-postflight'], heldTaskIds [].\n- A non-holder gets both lists empty.\n\nAdd 'reload-hold' to the list that skips the unconditional attemptFixture() call (~line 392), so only the holder's claim writes the attempt record, with workerId set to the holder. Every other mode's answers stay byte-identical.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "startedAt": "2026-11-03T07:22:06.785Z"
     },
     {
       "stepId": "step-2",
@@ -86,7 +87,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:08:50.369Z",
-  "updatedAt": "2026-11-03T07:19:36.651Z",
+  "updatedAt": "2026-11-03T07:22:06.785Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:59.859Z",
@@ -186,5 +187,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T06:59:12.716Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T07:22:06.785Z"
 }

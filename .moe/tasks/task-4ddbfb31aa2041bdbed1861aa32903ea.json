@@ -120,8 +120,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -133,12 +133,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T06:50:45.140Z",
-  "updatedAt": "2026-11-03T07:18:47.040Z",
+  "updatedAt": "2026-11-03T07:22:27.174Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T06:59:39.717Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-03T07:21:40.524Z",
+    "wallClockMs": 1320807
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -279,9 +281,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T07:02:26Z",
-    "at": "2026-11-03T07:17:55.715Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T07:18:24Z",
+    "at": "2026-11-03T07:22:27.174Z"
+  },
+  "completedAt": "2026-11-03T07:21:40.524Z",
+  "reviewCompletedAt": "2026-11-03T07:21:40.524Z",
+  "reviewSummary": "Reviewed landed a13eb354 (on moe/work-2026-10-24 and origin). 6 files, exactly the approved scope, +331/-10 (net 321). scripts/ and docs/ untouched. No existing test edited.\n\nGate: fresh git archive of a13eb354, clean env, Node 24. npm ci, tsc --noEmit and vitest run exit 0: 230 files, 6974 passed, 20 skipped. The named existing suites (chatSystemFeed, joinTeam.*, workerType, resourceStore.deregister, reattachAttempt) pass unchanged. New test type-checks (scratch tsconfig). parity-check and lint pass.\n\nMutants killed: hold disabled 11/25 fail; endReloadHold skipped 3/25; watcher wiring removed 1/25. Restored, 25/25 green.\n\nDoD:\n1. Exact response (heldTaskIds [T], releasedTaskIds [], holdUntil). Task and attempts deep-equal, attempt running, worker not DEAD, resource unchanged. No chat-leave. One banner each to workers and governors. One WORKER_DISCONNECTED row.\n2. Peer: ranked claim answers hasNext:false, explicit claim refused /already assigned/. Seat's claim answers alreadyAssigned T and clears reloadHoldUntil to null.\n3. Sweep at deadline-1: no-op. At the deadline it equals the terminal_closed control [WORKING, null, closed, DEAD]. A peer then claims T.\n4. Resolver table correct. 0 releases at once. terminal_closed during a hold releases. A repeat makes no write, banner or activity. An idle seat goes DEAD at once.\n5. Full suite green.\n\nAdversarial:\n- Hold write, clear and expiry run under the mutex (serialization test).\n- A failed hold write falls back to release; a failed clear fails the claim.\n- A malformed deadline expires. A failed DEAD write retries. A failed record lets the pass continue.\n- The restart purge spares a held seat.\n- The DEAD write adds the key only when it was set.\n- No forbidden patterns.\n\nPonytail pass: lean, nothing to cut.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
