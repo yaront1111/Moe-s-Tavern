@@ -9,10 +9,58 @@
     "docs/MCP_SERVER.md's `### moe.set_task_status` Attempts sentence states the alive-and-pointing rule, and no other section changes. In a snapshot, `cd packages/moe-daemon && npx vitest run src/tools/setTaskStatus src/state/dependencyUnblock.test.ts` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "One shared owner predicate, called from both restores.\n(a) packages/moe-daemon/src/state/dependencyUnblock.ts: add, next to repairParkedSeat (before runDependencyUnblock), exactly:\n`export function parkedHoldOwner(state: StateManager, task: Pick<Task, 'id' | 'assignedWorkerId'>): string | null {`\n`  const owner = task.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null;`\n`  return owner && owner.status !== 'DEAD' && owner.currentTaskId === task.id ? owner.id : null;`\n`}`\nMove the long rationale comment from runDependencyUnblock (:255-265: the genuine two-pointer hold; an IDLE corpse is neither missing nor DEAD, so isTaskClaimable stays false while the Layer-3 prune keeps a worker that owns active work) onto this helper's doc comment, and name both callers. In runDependencyUnblock, replace the two-line inline owner/restoreTo computation (:266-267) with `const restoreTo = parkedHoldOwner(state, task);`, keeping a one-line pointer comment. Behaviour there is unchanged. The StateManager import stays type-only, so there is no import cycle.\n(b) packages/moe-daemon/src/tools/setTaskStatus.ts: change the import on line 1 to `import { carriedBlockQuestion, parkedHoldOwner } from '../state/dependencyUnblock.js';`. In the leave-BLOCKED arm (:213-215), replace `updates.assignedWorkerId = task.assignedWorkerId;` with `updates.assignedWorkerId = parkedHoldOwner(state, task);`. The explicit null when the seat is not kept is deliberate: updateTask's hand-back then closes the task's running/reconciling attempt (MCP_SERVER.md, Close on hand-back). Update both comments that promise the seat back unconditionally: the 'Block bookkeeping' block (:185-191, 'a parked worker keeps its task through block-and-unblock') and the one above the arm (:208-212). They should say the return edge keeps the seat only for the genuine hold, as both auto-unblocks do.\nDo NOT touch the BLOCKED-entry arm (:192-196), the BACKLOG park, cross-status exits, resourceStore.ts (its resumeResourceHolder copy may stay; optional adoption is skipped to keep the diff small), sweeps.ts, or the /ws handler (out of scope; a follow-up row is filed). The gate's structural check requires the literal `parkedHoldOwner(state, task)` in setTaskStatus.ts, no `currentTaskId ===` there, and exactly one `currentTaskId === task.id` in dependencyUnblock.ts.\nError handling: parkedHoldOwner is pure (no IO). The write path is unchanged: an updateTask failure still propagates, and a failed hand-back close is logged and never fails the tool. Edit with the seat's own editor (Serena symbol tools or Edit on Claude, apply_patch on codex exec), never a shell write.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ],
+      "startedAt": "2026-11-03T23:49:42.916Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Tests: the new packages/moe-daemon/src/tools/setTaskStatus.unblockOwner.test.ts, plus one row of setTaskStatus.test.ts.\nNew file harness: ToolTestHarness with `h.setupMoeFolder({ schemaVersion: 6 })` (attempts need it; mirror src/state/attemptHandback.test.ts), then h.createEpic(). Mock state.postToRoleChannel and postToGeneral with vi.spyOn(...).mockResolvedValue(undefined). afterEach runs clearEmitter, vi.restoreAllMocks and cleanup. Read attempt phases with `listAttempts(h.state, taskId).map(a => [a.generation, a.phase])` from '../state/attemptStore.js'. Template: /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_manualUnblockCorpse.test.ts (its import paths become './toolTestHarness.js' and './setTaskStatus.js').\n(1) The corpse (DoD 1), through the real flow.\n- Create task-W and task-holder (both WORKING), then h.state.load().\n- claimNextTaskTool claims task-W for 'worker-parked' (generation 1).\n- acquireResourceTool gives 'bench-box' to task-holder / 'worker-holder'.\n- reportBlockedTool on task-W from worker-parked with resourceId 'bench-box' answers granted:false: the row is BLOCKED and assigned, the seat BLOCKED, phases [[1,'running']].\n- Age the seat: `await h.state.updateWorker('worker-parked', { lastActivityAt: <2 h ago ISO> })` (an explicit lastActivityAt is honoured; blockedTimeoutMs defaults to 1 h).\n- Run the real `await h.state.checkBlockedTimeouts()`. Assert the precondition: the row is still BLOCKED and assigned to worker-parked, the seat is IDLE with currentTaskId null, and the attempt is still [[1,'running']].\n- Call `setTaskStatusTool(h.state).handler({ taskId: 'task-W', status: 'WORKING' }, h.state)` with NO workerId key (the human path).\n- Assert: status 'WORKING', assignedWorkerId null, h.state.isTaskClaimable(task) true, phases exactly [[1,'closed']], h.state.hasActiveTaskAssignment('worker-parked') false.\n(2) The genuine hold (DoD 2): the same flow without aging and without the sweep. The return to WORKING keeps assignedWorkerId 'worker-parked', and phases stay [[1,'running']].\n(3) The owner table (DoD 2). Each case is seeded directly (createTask/createWorker, then load): a BLOCKED row with blockedFromStatus 'WORKING', assigned to:\n- 'ghost', with no worker record;\n- a DEAD record whose currentTaskId names the row;\n- a CODING record whose currentTaskId is 'task-other';\n- an IDLE record with currentTaskId null;\n- a BLOCKED record whose currentTaskId names the row.\nFor each, assert `parkedHoldOwner(h.state, task)` (imported from '../state/dependencyUnblock.js') and then the set_task_status return: null and null for the first four, the worker id for the last. Add one blockedFromStatus 'REVIEW' row with a missing owner: it returns to REVIEW unassigned. Use exact toBe/toEqual values, never truthiness.\n(4) packages/moe-daemon/src/tools/setTaskStatus.test.ts: the row 'BLOCKED → blockedFromStatus restores the parked worker and clears bookkeeping' (:159-169) restores onto a worker-1 that has no record, so it fails under the fix. It was the only failure in the architect's full-suite prototype run: 1 of 7428 tests. Right after its first updateTask, add `h.createWorker({ id: 'worker-1', status: 'CODING', currentTaskId: 'task-1' }); await h.state.load();` so it pins the genuine two-pointer hold. Keep its title and assertions unchanged. Change no other row.\nEdit with the seat's own editor, never a shell write.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.unblockOwner.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs sync, this row's own section only (ruling msg-71db57ac): docs/MCP_SERVER.md `### moe.set_task_status` (:1632-1689).\n(a) In the **Attempts:** paragraph (:1672), replace the sentence 'Entering `BLOCKED`, and returning from `BLOCKED` to `blockedFromStatus`, keep the seat and so keep its attempt.' with: entering `BLOCKED` keeps the seat and so its attempt. Returning to `blockedFromStatus` keeps the seat, and its attempt, only while that worker exists, is not `DEAD` and its `currentTaskId` still names the task (the rule the dependency and resource auto-unblocks apply). Otherwise the row returns unassigned and claimable, and that write closes the seat's `running`/`reconciling` attempt.\n(b) In the **Assignment:** sentence (:1682-1686), say the same in short: entering `BLOCKED` preserves `assignedWorkerId`; the return to `blockedFromStatus` preserves it only for that alive, pointing worker. Replace 'The plugin `/ws` board-move handler enforces the same rules.' with a true statement: it enforces the same transition rules, but its return to `blockedFromStatus` still restores the recorded assignee without that owner check. That clause goes away with the /ws follow-up row.\nDo not edit any other section, including the **Close on hand-back** paragraph (:124). Its first list already covers a set_task_status that clears the seat. Edit with the seat's own editor (Edit on Claude, apply_patch on codex exec), never Serena (it ignores docs/) or a shell write.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written (text also at /mnt/d/moe-scratch/plan-a133bd6a/checkref-gate.txt, 994 chars).\n- What it does: it overlays the four code/test files onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive). It checks the one-shared-predicate structure, and prints 'no shared predicate (<dir>)' on failure. Then, under env -i with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci && npx vitest run src/tools/setTaskStatus src/state/{dependencyUnblock,attemptHandback}.test.ts`. That is a superset of the DoD command: attemptHandback pins the kept-seat attempt on both BLOCKED edges. Last, it checks that the new file passed.\n- Expected: exit 0; 'Test Files 5 passed'; the last line is 'unblockOwner ok (/tmp/ma133.XXXX)'.\n- Architect dry run with a prototype of this plan: exit 0, 5 files and 131 tests in about 7 s. Base setTaskStatus.ts, an inline copy, and a missing test file each exit 1.\n- Then `rm -rf` the printed literal /tmp/ma133.XXXX path.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit it prints the snapshot path and the last 40 log lines; read them before changing anything, and fix the owning step's file.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- Concurrency: set_task_status runs under the global state mutex (McpAdapter). The predicate reads the worker map in the same critical section as the write. There is no await between the read and the updateTask.\n- Odd input: an assignee id with no record, a DEAD record, a repointed or IDLE record, assignedWorkerId null, and blockedFromStatus PLANNING/REVIEW/missing (the effectiveFrom fallback is 'WORKING').\n- Safety: a live, pointing seat NEVER loses its row on the return edge (case 2 and attemptHandback's both-edges row). No idle-time rule is introduced: isTaskClaimable still keys strictly on a missing or DEAD owner.\n- The hand-back closes only running/reconciling attempts and never a finalizing one (Close on hand-back).\n- runDependencyUnblock behaves exactly as before: dependencyUnblock.test.ts passes unchanged.\n- RED re-proof: in a scratch copy outside the repo, restore `git show $(git merge-base HEAD moe/work-2026-10-24):packages/moe-daemon/src/tools/setTaskStatus.ts` over your file, keep the new test, and run `npx vitest run src/tools/setTaskStatus.unblockOwner.test.ts` in that snapshot. The corpse case and the ghost/DEAD/repointed/IDLE/REVIEW table cases must fail; the genuine-hold cases pass. Paste the failing test names into the completion summary, then rm -rf the literal scratch path.\n- Scope: the diff against the merge-base, plus uncommitted changes, lists exactly the five planned files: no resourceStore.ts, sweeps.ts, WebSocketServer.ts or packages/moe-daemon/CLAUDE.md, and only the set_task_status section of docs/MCP_SERVER.md.\nIf this review changes any file, re-run step 4's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in the owning step's file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.unblockOwner.test.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.test.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-fdb2af60",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +72,93 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:29:53.656Z",
-  "updatedAt": "2026-11-03T23:37:57.977Z",
+  "updatedAt": "2026-11-03T23:49:42.916Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T23:37:53.856Z"
+    "firstClaimAt": "2026-11-03T23:37:53.856Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
-  ]
+    "architect-74d9e1c7",
+    "worker-fdb2af60"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:48:16.709Z",
+  "executionContract": {
+    "intendedBehavior": "set_task_status's BLOCKED -> blockedFromStatus exit keeps the recorded assignee only while that worker exists, is not DEAD and its currentTaskId still names the task. That is the rule runDependencyUnblock and resumeResourceHolder already apply, now in one exported helper, parkedHoldOwner (state/dependencyUnblock.ts), which runDependencyUnblock and setTaskStatus both call. Otherwise the row returns unassigned and claimable, and updateTask's hand-back closes its running/reconciling attempt. A genuine hold (a live seat pointing at the row) is still restored with its attempt running. Every other set_task_status arm is unchanged. docs/MCP_SERVER.md's ### moe.set_task_status states the rule, and its /ws sentence stays true.",
+    "acceptanceCriteria": [
+      "After the real checkBlockedTimeouts idles a resource-parked seat, set_task_status (no workerId) back to blockedFromStatus leaves assignedWorkerId null, isTaskClaimable true, the attempt [[1,'closed']] and hasActiveTaskAssignment(corpse) false.",
+      "A non-DEAD assignee whose currentTaskId names the row keeps the assignment, and its attempt stays running. A missing, DEAD, repointed or IDLE-unpointed assignee yields null, both from parkedHoldOwner and from the set_task_status return.",
+      "setTaskStatus.ts calls parkedHoldOwner(state, task) and holds no inline owner check; dependencyUnblock.ts holds the single predicate and runDependencyUnblock calls it.",
+      "Only the ### moe.set_task_status section of docs/MCP_SERVER.md changes, and it states the alive-and-pointing rule.",
+      "The checkRef exits 0, ending with 'unblockOwner ok'."
+    ],
+    "invariants": [
+      "isTaskClaimable still keys strictly on a missing or DEAD owner. No idle-time rule is introduced.",
+      "A live seat whose currentTaskId names the row never loses it on the return edge.",
+      "The hand-back never closes a finalizing attempt."
+    ],
+    "compatibility": [
+      "No MCP contract shape change: set_task_status keeps the same params and reply.",
+      "Existing .moe/ state stays valid, with no new fields.",
+      "The BLOCKED-entry arm, the BLOCKED -> BACKLOG park and cross-status exits are unchanged.",
+      "runDependencyUnblock's behaviour is identical; dependencyUnblock.test.ts passes unchanged.",
+      "resourceStore.resumeResourceHolder keeps its inline copy.",
+      "The /ws UPDATE_TASK twin (WebSocketServer.ts:545) is unchanged in this row."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/state/dependencyUnblock.ts: new export parkedHoldOwner, and its use in runDependencyUnblock (comment moved to the helper)",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts: the import line, the newStatus === effectiveFrom assignment, and its two comments",
+      "packages/moe-daemon/src/tools/setTaskStatus.unblockOwner.test.ts (new): the corpse flow, the genuine hold and the owner table",
+      "packages/moe-daemon/src/tools/setTaskStatus.test.ts: only the 'BLOCKED → blockedFromStatus restores the parked worker' row seeds a pointing worker-1",
+      "docs/MCP_SERVER.md: ### moe.set_task_status, the Attempts and Assignment sentences only"
+    ],
+    "reuse": [
+      "runDependencyUnblock's inline predicate (dependencyUnblock.ts:266-267) becomes parkedHoldOwner, with its comment.",
+      "The hunt repro /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_manualUnblockCorpse.test.ts, and attemptHandback.test.ts's claim/listAttempts pattern."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/setTaskStatus.ts: line 1 imports carriedBlockQuestion from '../state/dependencyUnblock.js'; :213-215 is `if (newStatus === effectiveFrom) { updates.assignedWorkerId = task.assignedWorkerId; }`; the handler's state param is in scope.",
+      "packages/moe-daemon/src/state/dependencyUnblock.ts:266-267 holds the owner predicate, the only `currentTaskId === task.id` in the file. StateManager is imported type-only.",
+      "packages/moe-daemon/src/state/sweeps.ts:456-489: the blocked-timeout sweep keeps a resource-waiting BLOCKED row assigned, then sets the seat IDLE with currentTaskId null. It keys on worker.status BLOCKED and lastActivityAt older than blockedTimeoutMs.",
+      "packages/moe-daemon/src/state/workerStore.ts:185-187: updateWorker honours an explicit lastActivityAt.",
+      "Architect prototype on d5431577 (inline fix): the full daemon suite gave 1 failure out of 7428 tests, setTaskStatus.test.ts:159, which restores onto a worker that has no record."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/ma133.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in tools/setTaskStatus{,.unblockOwner.test,.test}.ts state/dependencyUnblock.ts; do cp \"$R/$f\" $f || exit 1; done && { grep -q 'parkedHoldOwner(state, task)' tools/setTaskStatus.ts && ! grep -q 'currentTaskId ===' tools/setTaskStatus.ts && [ $(grep -c 'currentTaskId === task.id' state/dependencyUnblock.ts) = 1 ] || { echo \"no shared predicate ($L)\"; exit 1; }; } && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx vitest run src/tools/setTaskStatus src/state/{dependencyUnblock,attemptHandback}.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -E '^ +(Test Files|Tests) ' ../v.log; grep -q '✓ src/tools/setTaskStatus.unblockOwner.test.ts' ../v.log && echo \"unblockOwner ok ($L)\" )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) An inline predicate copy in setTaskStatus.ts: rejected, because the DoD asks for one shared predicate and the gate checks the structure. 2) Also adopting the helper in resourceStore.resumeResourceHolder: skipped. The description makes it optional, and it would be a 6th file, which floors the plan to heavy. 3) Fixing the /ws twin here: the row puts /ws out of scope. Instead, the set_task_status section's '/ws enforces the same rules' sentence is made true, and the architect files a follow-up row for WebSocketServer.ts:545, which depends on this one for parkedHoldOwner. 4) Asserting 'one predicate' by spying on the ESM export is not workable (internal calls bypass the namespace), so the gate greps fixed literals, which three negative controls validated.",
+    "codebaseInsights": "- updateTask clears the assignment on any status change when it is omitted, and an explicit null hands back too. Either way the running/reconciling attempt closes (Close on hand-back).\n- The blocked-timeout sweep deliberately keeps resource-waiting BLOCKED rows assigned, which is how the corpse arises.\n- unblock_worker cannot reach that row, because it requires worker.status BLOCKED.\n- The full daemon suite on the prototype: 274 files, 7428 tests, a single failure (setTaskStatus.test.ts:159, which restores onto a record-less worker-1); fixed in step 2.\n- With NO_COLOR=1 the vitest summary and the ✓ file lines are plain text.",
+    "risks": "- Attempts exist only with setupMoeFolder({ schemaVersion: 6 }), so a default harness lists no attempts and the closed-phase assertion would be vacuous. Assert [[1,'running']] BEFORE the unblock.\n- report_blocked stamps a fresh lastActivityAt, so age the seat AFTER it.\n- The gate's structural greps are literal: keep `parkedHoldOwner(state, task)` exactly, and add no other `currentTaskId === task.id` to dependencyUnblock.ts.\n- The checkRef is 994 chars against a 1000 cap: do not edit it.\n- Rails: no npm in the shared checkout, no pattern kills, and tracked files written only with the seat's own editor.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/sweeps.ts",
+      "packages/moe-daemon/src/state/attemptHandback.test.ts",
+      "packages/moe-daemon/src/tools/setTaskStatus.test.ts",
+      "docs/MCP_SERVER.md",
+      "/mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_manualUnblockCorpse.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "563b95a72ab652164d72991b39bbbf92cbc9a070",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:48:16.743Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:49:42.916Z"
 }

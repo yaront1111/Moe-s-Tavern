@@ -97,7 +97,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,16 +110,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:24:00.875Z",
-  "updatedAt": "2026-11-03T23:47:31.524Z",
+  "updatedAt": "2026-11-03T23:49:44.250Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:24:41.204Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T23:49:17.141Z",
+    "wallClockMs": 1475937
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -247,9 +250,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T23:37:34Z",
-    "at": "2026-11-03T23:47:31.524Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:47:53Z",
+    "at": "2026-11-03T23:49:44.250Z"
+  },
+  "completedAt": "2026-11-03T23:49:17.141Z",
+  "reviewCompletedAt": "2026-11-03T23:49:17.141Z",
+  "reviewSummary": "Reviewed completion 563b95a7 (on moe/work-2026-10-24, recorded, pushed). Diff = the 5 planned moe-vscode paths only, +275/-13 (net 262, under 400 cap). releaseTask gains force emitted only for === true, after reason (plain frame byte-identical). TaskDetailPanel ports BoardRelease: first-IN_PROGRESS stepLease and title captured before awaits, second modal with JetBrains force text, fail-closed cached holder+stepId recheck, stale warning, plain path still two-arg releaseTask; RELEASE_TASK refusals shown only when context.taskId matches the panel; no new import; BoardViewProvider handles only APPROVE_TASK so no double toast. Texts byte-match MoeBundle.properties:104-106. Re-ran task.verification verbatim in a fresh git-archive snapshot (env -i, Node 24.21.0): npm ci && npm test && npm run compile exit 0, 763 tests / 753 pass / 0 fail / 10 skipped, compile clean, 'RF rows passed: 7'. My own mutation (stale recheck replaced by if(false)) makes RF5 fail, so the guard is pinned. DoD: (1) RF2/RF3/RF4 real panel+real client with raw-frame asserts: one force:true frame after both modals, either dismissal sends nothing, plain/empty/malformed plans send the plain frame; (2) RF5 covers changed holder/step, vanished, unassigned, deleted during either modal and an equal-lease newer copy still forcing; RF6 correlated refusal shown once, other task/op/contextless shows nothing; (3) RF1 pins the three bundle texts at runtime, RF7 pins wire, MANUAL_TESTS.md steps 6-7 added. No existing test removed or weakened. Not executed: real-IDE manual checks (documented only). Residual, disclosed: daemon race after the local recheck is a protocol limit (no expected-holder field). Snapshot removed. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
