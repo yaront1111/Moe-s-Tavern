@@ -9173,7 +9173,8 @@ for name in ("PREFLIGHT_GENERAL_UNREAD", "PREFLIGHT_ROUTED_UNREAD"):
 targets = {worker_id, "all"}
 if role_group:
     targets.add(role_group)
-hit = any(targets & set(m.get("mentions") or []) for m in msgs if isinstance(m, dict))
+# A seat's own message is never its mention (task-ecf78687; twin in moe-agent.ps1).
+hit = any(targets & set(m.get("mentions") or []) for m in msgs if isinstance(m, dict) and m.get("sender") != worker_id)
 sys.exit(0 if hit else 1)
 PYEOF
             MENTION_PROBE_CODE=$?
@@ -9680,6 +9681,7 @@ seen = set()
 for env_name in ("PREFLIGHT_GENERAL_UNREAD", "PREFLIGHT_ROUTED_UNREAD", "PREFLIGHT_TASK_UNREAD"):
     for msg in extract_msgs(os.environ.get(env_name, "")):
         if not isinstance(msg, dict): continue
+        if msg.get("sender") == worker_id: continue  # own message (task-ecf78687; same in moe-agent.ps1)
         mid = msg.get("id")
         if mid in seen: continue
         mentions = msg.get("mentions") or []

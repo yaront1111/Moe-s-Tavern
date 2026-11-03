@@ -4829,6 +4829,44 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AB2] ok"
 
+  # Scenario AB3 (task-ecf78687) -- a seat's OWN message is never its mention.
+  # (a) The only unread message is one this seat sent, tagging itself, @all and
+  # its role group: the pre-wait probe must not count it (the wrapper-side wait
+  # runs) and the routed build must not list it (no notification-only session).
+  # (b) Contrast: another sender's @all + role-group tag still launches one.
+  echo "[scenario AB3] a seat's own role-group/@all message never wakes it"
+  SCOPE_AB3_DIR="$TMP_DIR/scope-ab3"
+  make_scope_project "$SCOPE_AB3_DIR" '[]'
+  set +e
+  FAKE_CLAIM_MODE=idle FAKE_MENTION=self MOE_TASKLESS_WAIT_SEC=5 \
+    run_scope_wrapper "$SCOPE_AB3_DIR" "$TMP_DIR/scope-ab3.out" "$FILE_CLI" worker worker-scope-ab3
+  scope_ab3_code=$?
+  set -e
+  FAKE_CLAIM_MODE=""; FAKE_MENTION=""
+  [ "$scope_ab3_code" -eq 0 ] || scope_fail AB3 "wrapper exited with $scope_ab3_code" "$TMP_DIR/scope-ab3.out"
+  grep -Fq 'msg-fake-self' "$SCOPE_AB3_DIR/.moe/messages/chan-general.jsonl" 2>/dev/null \
+    || scope_fail AB3 "fixture: the seat's own message was never served" "$TMP_DIR/scope-ab3.out"
+  if [ -f "$SCOPE_AB3_DIR/session-new.txt" ]; then
+    scope_fail AB3 "the seat's own message launched a notification-only session to answer itself" "$TMP_DIR/scope-ab3.out"
+  fi
+  grep -Fq '[no-task] No claimable task for role worker; waiting up to 5s in the wrapper' "$TMP_DIR/scope-ab3.out" \
+    || scope_fail AB3 "the pre-wait probe counted the seat's own message, so the wrapper-side wait was skipped" "$TMP_DIR/scope-ab3.out"
+  grep -Fq 'MOE_TASKLESS_NO_LAUNCH reason=idle role=worker worker=worker-scope-ab3' "$TMP_DIR/scope-ab3.out" \
+    || scope_fail AB3 "the suppressed launch must be named, not silent" "$TMP_DIR/scope-ab3.out"
+  SCOPE_AB3B_DIR="$TMP_DIR/scope-ab3b"
+  make_scope_project "$SCOPE_AB3B_DIR" '[]'
+  set +e
+  FAKE_CLAIM_MODE=idle FAKE_MENTION=group MOE_TASKLESS_WAIT_SEC=5 \
+    run_scope_wrapper "$SCOPE_AB3B_DIR" "$TMP_DIR/scope-ab3b.out" "$FILE_CLI" worker worker-scope-ab3b
+  scope_ab3b_code=$?
+  set -e
+  FAKE_CLAIM_MODE=""; FAKE_MENTION=""
+  [ "$scope_ab3b_code" -eq 0 ] || scope_fail AB3 "(b) wrapper exited with $scope_ab3b_code" "$TMP_DIR/scope-ab3b.out"
+  [ -f "$SCOPE_AB3B_DIR/session-new.txt" ] \
+    || scope_fail AB3 "(b) another sender's @all/role-group tag must still launch a notification-only session" "$TMP_DIR/scope-ab3b.out"
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AB3] ok"
+
   # Scenarios AC/AD -- a file whose HEAD blob holds CRLF, under line-ending
   # conversion. The snapshot hashes the worktree with `hash-object`, which loads
   # no index and so normalizes CRLF to LF; `git add` into the temp index (seeded
@@ -5728,10 +5766,10 @@ try {
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=45
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=44
+  scope_expected_runs=46
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=45
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AB3, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else
