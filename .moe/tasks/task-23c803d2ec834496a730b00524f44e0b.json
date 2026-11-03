@@ -95,15 +95,24 @@
     {
       "stepId": "step-4",
       "description": "Gate (DoD 6). Run it ONCE, after the last byte change. Its output is complete_task's evidence.\n\nIt takes 20-30 min: launch it in the background (Bash run_in_background) and wait for the completion notice. It runs from the repo root on D:, with the seat's MOE_*, CLAUDE* and FAKE_* variables removed and MOE_POSTFLIGHT_TIMEOUT_SEC passed through WSLENV (mem:gotcha-qa-ps1-postflight-from-wsl):\n\ncd /mnt/d/projexts/moes && L=/mnt/d/moe-scratch/n3-gate.log && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=\"D:\\projexts\\moes\\scripts\\tests\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh' > \"$L\" 2>&1; echo \"exit=$?\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c\n\nIt must print exit=0 and these counts:\n- `1 PASS parity-check.sh`;\n- `3 PASS postflight-vm-route.ps1`;\n- `1 PASS postflight.ps1`.\n\nA leg that never ran can still exit 0, so check the counts (mem:gotcha-pwsh7-reachable-from-wsl). If postflight.ps1 fails, rerun the parent revision's scripts before blaming the change.\n\nThe complete_task verification is this command, its exit code and that output.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T19:23:37.185Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1",
+        ".serena/memories/gotcha-powershell-seat-native-boundaries.md",
+        ".serena/memories/task-task-23c803d2ec834496a730b00524f44e0b-handoff.md"
+      ],
+      "note": "Fresh final four-leg gate PASS, exit 0: 3 PASS postflight-vm-route.ps1, 1 PASS postflight.ps1, 1 PASS parity-check.sh; /mnt/d/moe-scratch/n3-verified-gate.log. Executed the plan's legs from the assigned task worktree (WSL path derived from PWD), not the live control checkout, to test these bytes. Independent qualityGate parity + npm run lint exit 0. Resume verification exposed native stdin BOMs: parent full harness PASS, scratch diagnostics isolated console input encoding plus caller-local OutputEncoding shadowing. Added ASCII/BOM/Unicode restoration regression and a byte-probe RED/GREEN; helper now pins local/global pipe plus console encodings and restores settings. These gate-driven fixes stay within the plan's two files. First global-only attempt did not fix full nested harness; final complete rerun above does. BOM intact, diff --check clean; scope +383/-13=396 changed, net 370.",
+      "startedAt": "2026-11-03T19:23:37.185Z",
+      "completedAt": "2026-11-03T23:10:34.350Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's diff. Load adversarial-self-review.\n\n**Checklist.**\n- Can the host CLI run on ANY VM-route path? Check: a seat-start failure, a missing token, codex, a missing attempt id, a shared claim, a resume of a held task, the launch-outage probe, -AutoClaim:$false, and -Loop on a second iteration.\n- Can the token reach an argv, env, file, log, transcript or exception message, on either engine? Check error paths: ConvertTo-Json errors, and a native call that throws mid-pipe.\n- Is the env restored after every seat-* spawn, on every path?\n- Can a legacy iteration ever carry executionRoute, or run seat-start?\n- Does seat-stop run exactly once per held instance, and never with a stale one after a reload?\n- Does 5.1 parse an ErrorRecord as the outcome?\n- Is the runner token with spaces passed as one argument?\n\n**Three mutants**, on a scratch copy only, never the tracked file.\n- Setup: `mkdir -p /mnt/d/moe-scratch/n3-mut/docs && cp -r scripts /mnt/d/moe-scratch/n3-mut/ && cp -r docs/roles /mnt/d/moe-scratch/n3-mut/docs/`. Mutate byte-safely, keeping the BOM. Run the copy's postflight-vm-route.ps1 by its D:\\ path on 5.1. Delete the copy afterwards.\n- (1) Pass the token as an argv value: V3 must fail.\n- (2) Mutate $claimRpcArgs in place instead of a copy: n1's legacy T row or V1 must fail.\n- (3) Drop the seat-stop call from the finally: V1 or V4 must fail.\n\n**Size.** Measure `git diff --numstat -- scripts/moe-agent.ps1 scripts/tests/postflight-vm-route.ps1`. Expect about 150 wrapper lines and about 300 test lines. Over 400 changed lines, file the EPIC ADD_RAIL size waiver before complete_task, with moe.propose_rail and the CQ-M07k rail template with per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Never trim rows to fit.\n\n**Fresh evidence.** If any tracked byte changed in this step, rerun step 4.\n\n**Handoff.** Write the Serena note task-task-23c803d2ec834496a730b00524f44e0b-handoff for CQ-M07n: the function names, the instance variable, the scrub helper, the stub seam, and the reload-branch ordering it must fix.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
+      "startedAt": "2026-11-03T23:10:50.994Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -141,12 +150,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:34:00.801Z",
-  "updatedAt": "2026-11-03T19:29:54.741Z",
+  "updatedAt": "2026-11-03T23:10:50.995Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:55:43.120Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-12ae794e",
@@ -159,7 +168,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T19:02:54.498Z",

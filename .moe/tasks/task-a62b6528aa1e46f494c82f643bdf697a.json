@@ -82,8 +82,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -95,12 +95,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:46:48.919Z",
-  "updatedAt": "2026-11-03T23:09:09.369Z",
+  "updatedAt": "2026-11-03T23:11:10.984Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:02:41.189Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T23:10:50.009Z",
+    "wallClockMs": 488820
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -215,9 +217,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T23:04:23Z",
-    "at": "2026-11-03T23:08:46.258Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:08:46Z",
+    "at": "2026-11-03T23:11:10.984Z"
+  },
+  "completedAt": "2026-11-03T23:10:50.009Z",
+  "reviewCompletedAt": "2026-11-03T23:10:50.009Z",
+  "reviewSummary": "Reviewed completion 942717bc (on moe/work-2026-10-24; own diff +134/-10, net 124, 3 files — under the 400 cap). Re-ran task.verification in a fresh git-archive snapshot outside the shared checkout (npm ci, tsc --noEmit, vitest on waitForResource.reentry + waitForResource + acquireResource + releaseResource.generation + WebSocketServer tests): exit 0, tsc clean, 5 files / 151 tests passed. Mutant proof: swapped the parent's (942717bc^) waitForResource.ts into the snapshot and re-ran the reentry file — 3 of 4 fail (overlap, disconnect-after-overlap, replaced-timer), sequential re-entry passes both ways; so the tests are red without the fix. DoD 1: cancelResourceWaiter(workerId) is called at the handler top and again immediately before activeResourceWaiters.set inside the synchronous Promise executor (no await between), so the earlier overlapping call resolves {granted:false,cancelled:true} and the registry keeps the later one; test (a) asserts exact shape + registry size 1. DoD 2: cleanup() deletes the entry only when get(workerId)?.timer === timer (chatWait identity guard); tests (b)/(c) mirror the WebSocketServer disconnect sequence and show it finds/cancels the live waiter, and that a replaced waiter's own 1s timeout leaves the live entry. Subscribe-failure path (cleanup before registration) deletes nothing it does not own. DoD 3: command ran green in a snapshot. Invariants held: WebSocketServer.ts unchanged by the commit, leases/queues task-keyed and untouched, response shapes unchanged. Docs: MCP_SERVER.md re-entry bullet gains the 'whichever call parks last' sentence (verification grep passes). Assertions are exact toEqual/toBe, vi.waitFor polling (load-tolerant). No weakened tests. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
