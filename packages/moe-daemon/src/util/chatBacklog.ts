@@ -18,14 +18,65 @@ import {
 export const PER_CHANNEL_SCAN_LIMIT = 50;
 /** Messages returned in one burst response; the rest stay unread for the next call. */
 export const MAX_BURST_MESSAGES = 100;
+/**
+ * Full pages of skipped lines one drain reads past in a filtered channel to
+ * reach a routed line. Each page re-reads up to 1 MB of the channel's tail.
+ */
+export const MAX_SKIP_PAGES = 10;
 
 const TRUNCATION_HINT =
   'Long chat messages are truncated by default. Use moe.chat_read with maxContentChars: 0 for full content.';
 
+/**
+ * moe.chat_wait's one relevance rule, shared by the live wake and the drains.
+ * With a channel filter: a watched channel's line, or one routed to the caller.
+ * With none: a routed line, or any human line.
+ */
+export function chatWaitAdmits(channelSet: Set<string> | null, message: ChatMessage, routedToCaller: boolean): boolean {
+  if (channelSet) return channelSet.has(message.channel) || routedToCaller;
+  return routedToCaller || message.sender === 'human';
+}
+
+/**
+ * Whether a STORED line was routed to the caller. A stored line keeps raw
+ * mentions, never routingTargets, so this rebuilds the router's decision with
+ * its own parser (code spans stripped, group tokens only in the addressing
+ * prefix, groups resolved by team role), never the raw tokens, and never
+ * route(), which moves hop counts and pauses. A line naming seats is routed
+ * when it names the caller; one naming none when 'system' or 'human' sent it,
+ * as the router broadcasts those to busy seats. An agent line naming nobody
+ * routes nowhere, and an unknown (departed) sender does not pass as human.
+ *
+ * It errs only toward delivering. These count as routed although the live
+ * wake may not have been: a line in a loop-guarded (paused) channel, a line
+ * sent while the caller was idle, and a parseMentions:false daemon echo
+ * (releaseTask's #workers copy), which is stored as a mention-less system line.
+ */
+function routedToCaller(state: StateManager, workerId: string): (message: ChatMessage) => boolean {
+  const workers = Array.from(state.workers.values());
+  const teams = Array.from(state.teams.values());
+  const ids = workers.map((worker) => worker.id);
+  return (message) => {
+    if ((message.mentions ?? []).length > 0) {
+      const named = state.mentionRouter.parseMentions(message.content, ids, workers, teams);
+      if (named.length > 0) return named.includes(workerId);
+    }
+    return message.sender === 'system' || message.sender === 'human';
+  };
+}
+
+/** Where a drain's skipped lines let a cursor move. */
+export interface SkipCursors {
+  /** Deliverable id -> the last skipped id after it, before its channel's next deliverable line. */
+  skipAfter?: Map<string, string>;
+  /** channelId -> the last skipped id before its first deliverable line (or its last one when none is). */
+  skipLead?: Map<string, string>;
+}
+
 /** A drained burst plus the delivery bookkeeping it justifies. */
-export interface ChatBurst {
+export interface ChatBurst extends SkipCursors {
   messages: ChatMessage[];
-  /** channelId -> id of the LAST message actually being delivered for it. */
+  /** channelId -> id of the last line delivered for it, or of a skipped line read after it. */
   cursorUpdates: Record<string, string>;
   /** Channels with nothing left behind — safe to clear unread for. */
   fullyDrained: string[];
@@ -38,7 +89,7 @@ export interface ChatBurst {
 }
 
 /** What a drain read, for deciding which cursors may move. */
-export interface BurstScope {
+export interface BurstScope extends SkipCursors {
   /** Scanned channels that may still hold messages this drain did not reach. */
   partialChannels: Set<string>;
   /** Channels the drain actually read. */
@@ -60,7 +111,9 @@ export interface BurstScope {
  *
  * Cursors are also computed from the DELIVERED slice only, so the burst cap can
  * never advance past a message the caller never saw, and never for a channel
- * outside `scannedChannels`.
+ * outside `scannedChannels`. Skipped lines the scan read move a cursor too
+ * (`scope.skipAfter`/`skipLead`), never past a deliverable line: a channel's
+ * delivered scanned lines are always a prefix of its deliverable ones.
  */
 export function summarizeChatBurst(
   scanned: ChatMessage[],
@@ -68,7 +121,7 @@ export function summarizeChatBurst(
   scope: BurstScope,
   maxContentChars: number = DEFAULT_CHAT_CONTENT_CHARS
 ): ChatBurst {
-  const { partialChannels, scannedChannels } = scope;
+  const { partialChannels, scannedChannels, skipAfter, skipLead } = scope;
   const scannedIds = new Set(scanned.map((message) => message.id));
   const seen = new Set<string>();
   const deduped: ChatMessage[] = [];
@@ -103,11 +156,20 @@ export function summarizeChatBurst(
   const incomplete = new Set(partialChannels);
   for (const message of dropped) incomplete.add(message.channel);
 
+  // A dropped off-bus line may be one the scan skipped (the live wake judged it
+  // from routingTargets), so its channel's cursor must not ride a skip run.
+  const noSkip = new Set(dropped.filter((message) => !scannedIds.has(message.id)).map((message) => message.channel));
   const cursorUpdates: Record<string, string> = {};
   for (const message of messages) {
     if (!scannedChannels.has(message.channel)) continue;
     if (!scannedIds.has(message.id)) continue;
-    cursorUpdates[message.channel] = message.id;
+    const skip = noSkip.has(message.channel) ? undefined : skipAfter?.get(message.id);
+    cursorUpdates[message.channel] = skip ?? message.id;
+  }
+  for (const [channelId, skipId] of skipLead ?? []) {
+    if (scannedChannels.has(channelId) && !noSkip.has(channelId) && !(channelId in cursorUpdates)) {
+      cursorUpdates[channelId] = skipId;
+    }
   }
   const fullyDrained = Object.keys(cursorUpdates).filter((channelId) => !incomplete.has(channelId));
 
@@ -117,7 +179,9 @@ export function summarizeChatBurst(
     fullyDrained,
     hasMore: dropped.length > 0 || partialChannels.size > 0,
     partialChannels: incomplete,
-    scannedChannels
+    scannedChannels,
+    skipAfter,
+    skipLead
   };
 }
 
@@ -130,7 +194,8 @@ function backlogChannelIds(
 ): string[] {
   if (channelSet) {
     // A channel filter selects ambient traffic, not where someone may address
-    // the worker. Unread channels are already mention-routed (including groups).
+    // the worker: an unread channel holds a line routed to it. Outside the
+    // filter the drain delivers only routed lines (chatWaitAdmits).
     const unread = state.getUnreadSummary(workerId);
     return [...new Set([...channelSet, ...Object.keys(unread?.channels ?? {})])];
   }
@@ -141,14 +206,83 @@ function backlogChannelIds(
   return unread ? Object.keys(unread.channels) : [];
 }
 
+interface DrainContext {
+  state: StateManager;
+  workerId: string;
+  /** The caller's registration time: the floor of a channel it has no position in. */
+  startedAt?: string;
+  channelSet: Set<string> | null;
+  /** chatWaitAdmits over the stored-line routing rule. */
+  admits: (message: ChatMessage) => boolean;
+}
+
+interface ChannelScan {
+  deliver: ChatMessage[];
+  /** Same shape as SkipCursors.skipAfter, for this channel only. */
+  skipAfter: Map<string, string>;
+  skipLeadId?: string;
+  /** The last page read was full, so the channel may hold more. */
+  partial: boolean;
+}
+
 /**
- * Scan every watched channel from the caller's cursor forward.
+ * Read one channel forward from `sinceId`. A filtered channel (outside the
+ * caller's filter, or any channel with none) whose full page held nothing
+ * deliverable reads on, up to MAX_SKIP_PAGES, so a routed line behind a long
+ * run of other seats' chatter still arrives in this call. Throws on a failed
+ * read; the caller then records nothing for the channel.
+ */
+async function scanChannel(ctx: DrainContext, channelId: string, sinceId: string | undefined): Promise<ChannelScan> {
+  const scan: ChannelScan = { deliver: [], skipAfter: new Map(), partial: false };
+  const filtered = !ctx.channelSet?.has(channelId);
+  let pendingSkip: string | undefined;
+  let from = sinceId;
+  for (let pages = 1; ; pages++) {
+    const page = await ctx.state.getMessages(channelId, { sinceId: from, limit: PER_CHANNEL_SCAN_LIMIT, hideSystemFeed: true });
+    // With no position in a channel, getMessages falls back to its newest
+    // window, which reaches back before this worker existed. Those messages
+    // were routed to the workers registered when they were sent, but their
+    // raw group tokens (@all, @workers) still match this worker's role, so a
+    // freshly registered worker got paged to answer history. Its backlog
+    // starts at registration, except for messages that name it directly (a
+    // reused worker id) or whose timestamp does not parse.
+    const floor = from ? Number.NaN : Date.parse(ctx.startedAt ?? '');
+    const messages = Number.isNaN(floor)
+      ? page
+      : page.filter((message) =>
+        !(Date.parse(message.timestamp) < floor) || (message.mentions ?? []).includes(ctx.workerId));
+    scan.partial = messages.length >= PER_CHANNEL_SCAN_LIMIT;
+    for (const message of messages) {
+      // Own posts (like history under the floor) neither deliver nor move a cursor.
+      if (message.sender === ctx.workerId) continue;
+      if (!ctx.admits(message)) { pendingSkip = message.id; continue; }
+      recordSkip(scan, pendingSkip);
+      pendingSkip = undefined;
+      scan.deliver.push(message);
+    }
+    if (!filtered || scan.deliver.length > 0 || page.length < PER_CHANNEL_SCAN_LIMIT || pages >= MAX_SKIP_PAGES) break;
+    from = page[page.length - 1].id;
+  }
+  recordSkip(scan, pendingSkip);
+  return scan;
+}
+
+/** File a run of skipped lines after the last deliverable line, or as the channel's lead. */
+function recordSkip(scan: ChannelScan, skipId: string | undefined): void {
+  if (skipId === undefined) return;
+  const last = scan.deliver[scan.deliver.length - 1];
+  if (last) scan.skipAfter.set(last.id, skipId);
+  else scan.skipLeadId = skipId;
+}
+
+/**
+ * Scan every channel the caller may have backlog in, from its cursor forward.
  *
- * No mention/human relevance filter is applied: the unread-summary path is
- * already routed, the channelSet path includes watched traffic plus routed
- * unread channels, and an explicit sinceId means "give me everything since X"
- * (stored messages carry RAW mention tokens, so filtering here would drop the
- * group pings a governor is catching up on).
+ * The drain applies the live wake's relevance (chatWaitAdmits): a watched
+ * channel delivers every line, and a channel outside the filter (or any channel
+ * with no filter) delivers only lines routed to the caller, plus human lines
+ * when there is no filter. Lines it reads and skips still move that channel's
+ * cursor (skipAfter / skipLead), so no later call delivers them.
  */
 export async function collectChatBacklog(
   state: StateManager,
@@ -157,15 +291,22 @@ export async function collectChatBacklog(
   explicitSinceId?: string,
   maxContentChars: number = DEFAULT_CHAT_CONTENT_CHARS
 ): Promise<ChatBurst> {
+  const scope = {
+    partialChannels: new Set<string>(),
+    scannedChannels: new Set<string>(),
+    skipAfter: new Map<string, string>(),
+    skipLead: new Map<string, string>(),
+  };
   const channelIds = backlogChannelIds(state, workerId, channelSet, explicitSinceId);
-  if (channelIds.length === 0) {
-      return summarizeChatBurst([], [], { partialChannels: new Set(), scannedChannels: new Set() }, maxContentChars);
-  }
+  if (channelIds.length === 0) return summarizeChatBurst([], [], scope, maxContentChars);
 
   const worker = state.getWorker(workerId);
+  const isRouted = routedToCaller(state, workerId);
+  const ctx: DrainContext = {
+    state, workerId, startedAt: worker?.startedAt, channelSet,
+    admits: (message) => chatWaitAdmits(channelSet, message, isRouted(message)),
+  };
   const raw: ChatMessage[] = [];
-  const partialChannels = new Set<string>();
-  const scannedChannels = new Set<string>();
 
   for (const channelId of channelIds) {
     // An explicit catch-up id belongs to ONE channel. Applying it to a channel
@@ -176,32 +317,19 @@ export async function collectChatBacklog(
       ? explicitSinceId
       : worker?.chatCursors?.[channelId];
     try {
-      const page = await state.getMessages(channelId, { sinceId, limit: PER_CHANNEL_SCAN_LIMIT, hideSystemFeed: true });
-      // With no position in a channel, getMessages falls back to its newest
-      // window, which reaches back before this worker existed. Those messages
-      // were routed to the workers registered when they were sent, but their
-      // raw group tokens (@all, @workers) still match this worker's role, so a
-      // freshly registered worker got paged to answer history. Its backlog
-      // starts at registration, except for messages that name it directly (a
-      // reused worker id) or whose timestamp does not parse.
-      const floor = sinceId ? Number.NaN : Date.parse(worker?.startedAt ?? '');
-      const messages = Number.isNaN(floor)
-        ? page
-        : page.filter((message) =>
-          !(Date.parse(message.timestamp) < floor) || (message.mentions ?? []).includes(workerId));
-      scannedChannels.add(channelId);
-      // A full page means the channel may hold more than this scan returned.
-      if (messages.length >= PER_CHANNEL_SCAN_LIMIT) partialChannels.add(channelId);
-      for (const message of messages) {
-        if (message.sender !== workerId) raw.push(message);
-      }
+      const scan = await scanChannel(ctx, channelId, sinceId);
+      scope.scannedChannels.add(channelId);
+      if (scan.partial) scope.partialChannels.add(channelId);
+      raw.push(...scan.deliver);
+      for (const [id, skipId] of scan.skipAfter) scope.skipAfter.set(id, skipId);
+      if (scan.skipLeadId !== undefined) scope.skipLead.set(channelId, scan.skipLeadId);
     } catch (error) {
-      // One unreadable channel must not fail the whole tool.
+      // One unreadable channel must not fail the whole tool; its cursor stays put.
       logger.warn({ workerId, channelId, error }, 'chat_wait skipped an unreadable channel while draining');
     }
   }
 
-  return summarizeChatBurst(raw, [], { partialChannels, scannedChannels }, maxContentChars);
+  return summarizeChatBurst(raw, [], scope, maxContentChars);
 }
 
 /** Advance cursors / clear unread for messages actually being delivered. */

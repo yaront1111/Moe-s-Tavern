@@ -8,6 +8,7 @@ import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchReply, idleSwitchFor, type Account
 import {
   applyChatDelivery,
   chatBurstResponse,
+  chatWaitAdmits,
   collectChatBacklog,
   summarizeChatBurst,
   type ChatBurst,
@@ -170,17 +171,14 @@ class ChatWaitSession {
     const message = event.payload as ChatMessage;
     // The #general feed never wakes a waiter; the drain skips it too.
     if (isSystemFeedMessage(this.ctx.state.getChannel(message.channel), message)) return false;
+    // Use routingTargets so group expansion and loop-guard suppression remain
+    // authoritative; the drains rebuild the same decision from stored lines.
     const targets = event.routingTargets ?? message.mentions ?? [];
-    if (this.ctx.channelSet) {
-      // Watch ambient channel traffic AND mentions routed to this worker
-      // anywhere (including task channels). Use routingTargets so group
-      // expansion and loop-guard suppression remain authoritative.
-      return message.sender !== this.ctx.workerId &&
-        (this.ctx.channelSet.has(message.channel) || targets.includes(this.ctx.workerId));
-    }
-    // No explicit channel filter — fall back to the conservative mention/human
-    // filter so workers in broad-scope chat_wait aren't woken on every chatter.
-    return targets.includes(this.ctx.workerId) || message.sender === 'human';
+    if (this.ctx.channelSet && message.sender === this.ctx.workerId) return false;
+    // With a filter: watched ambient traffic AND lines routed to this worker
+    // anywhere. With none: the conservative routed/human rule, so a
+    // broad-scope waiter is not woken on every chatter.
+    return chatWaitAdmits(this.ctx.channelSet, message, targets.includes(this.ctx.workerId));
   }
 
   private onEvent(event: { type: string; payload?: unknown; routingTargets?: string[] }): void {
@@ -255,12 +253,8 @@ class ChatWaitSession {
       const drained = await collectChatBacklog(
         this.ctx.state, this.ctx.workerId, this.ctx.channelSet, this.ctx.sinceId, this.ctx.maxContentChars
       );
-      const burst = summarizeChatBurst(
-        drained.messages,
-        [...this.buffered, trigger],
-        { partialChannels: drained.partialChannels, scannedChannels: drained.scannedChannels },
-        this.ctx.maxContentChars
-      );
+      // The drained burst is the merge scope, so its skip cursors carry over.
+      const burst = summarizeChatBurst(drained.messages, [...this.buffered, trigger], drained, this.ctx.maxContentChars);
       await this.settle(burst);
     } catch (error) {
       logger.warn({ workerId: this.ctx.workerId, error }, 'chat_wait burst drain failed; returning trigger message only');
@@ -285,19 +279,29 @@ class ChatWaitSession {
       logger.warn({ workerId: this.ctx.workerId, error }, 'chat_wait entry drain failed; blocking for new messages');
     }
     if (this.finished) return;
+    const scanned = drained?.messages ?? [];
+    if (drained && scanned.length === 0 && this.buffered.length === 0 && Object.keys(drained.cursorUpdates).length > 0) {
+      // Skip-only drain: move the cursors past the lines it read and skipped
+      // before blocking. Still BEFORE entryDrainDone, so events arriving now are
+      // only buffered and no wake can write a cursor at the same time; a
+      // buffered one ships below with these same cursors. Never throws.
+      await applyChatDelivery(this.ctx.state, this.ctx.workerId, drained);
+      if (this.finished) return;
+    }
     this.entryDrainDone = true;
 
-    const scanned = drained?.messages ?? [];
     if (scanned.length === 0 && this.buffered.length === 0) return; // nothing waiting — block as before
 
     this.claimed = true;
     // Recompute from the FINAL delivered list so cursors reflect the merge —
     // and keep the buffered messages tagged as off-bus so they cannot advance a
     // cursor past the part of their channel the scan never reached.
-    const burst = summarizeChatBurst(scanned, this.buffered, {
-      partialChannels: drained?.partialChannels ?? new Set(),
-      scannedChannels: drained?.scannedChannels ?? new Set(),
-    }, this.ctx.maxContentChars);
+    const burst = summarizeChatBurst(
+      scanned,
+      this.buffered,
+      drained ?? { partialChannels: new Set(), scannedChannels: new Set() },
+      this.ctx.maxContentChars
+    );
     logger.info(
       { workerId: this.ctx.workerId, count: burst.messages.length, hasMore: burst.hasMore },
       'chat_wait returning backlog (messages arrived before wait — avoided lost wakeup)'
