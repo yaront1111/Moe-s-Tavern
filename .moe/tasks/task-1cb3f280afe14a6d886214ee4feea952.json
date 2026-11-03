@@ -64,8 +64,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -77,7 +77,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:13:04.415Z",
-  "updatedAt": "2026-11-03T02:36:04.768Z",
+  "updatedAt": "2026-11-03T02:37:32.868Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:26.126Z",
@@ -87,7 +87,9 @@
     "firstClaimAt": "2026-11-03T02:24:28.823Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T02:37:07.401Z",
+    "wallClockMs": 758578
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -200,9 +202,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T02:26:40Z",
-    "at": "2026-11-03T02:29:51.859Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T02:35:53Z",
+    "at": "2026-11-03T02:37:32.868Z"
+  },
+  "completedAt": "2026-11-03T02:37:07.401Z",
+  "reviewCompletedAt": "2026-11-03T02:37:07.401Z",
+  "reviewSummary": "Reviewed completion 89400467 (on moe/work-2026-10-24, contained in control HEAD; working-tree files identical to HEAD for both paths). Diff +105/-1 across exactly 2 files (dependencyUnblock.ts +25, dependencyUnblock.test.ts +81/-1); resourceStore.ts untouched; well under the 400 LOC cap. DoD 1: new repairParkedSeat() runs after unblocked.push only when restoreTo is non-null; if seat is BLOCKED and currentTaskId===taskId it calls updateWorker(id,{status:'READING_CONTEXT',lastError:null,lastActivityAt:seat.lastActivityAt},'WORKER_UNBLOCKED') — identical rule/fields to grantNextLeases (resourceStore.ts:552-566, 07af3ca5). DoD 2: non-BLOCKED, other-pointer and DEAD seats return early (DEAD also never reaches restoreTo); worker write is in its own try/catch with logger.warn, after the task restore, so a failed write cannot undo it or stop the scan. DoD 3: parity test extended (status/lastError/lastActivityAt/currentTaskId + updateWorker called with exact args and WORKER_UNBLOCKED); new tests for blocked-timeout sweep, untouched seats (structuredClone toEqual), failed write isolated. I reproduced RED myself in a git-archive snapshot of 89400467 with only dependencyUnblock.ts reverted to its parent: 3 failed|56 passed — parity (expected worker match READING_CONTEXT), sweep ('BACKLOG' vs 'WORKING'), failed-write ('BLOCKED' vs 'READING_CONTEXT'); untouched-seats test passes as designed. DoD 4: re-ran task.verification (checkRefs[0]) verbatim in a git-archive snapshot outside the repo: tsc --noEmit clean, vitest dependencyUnblock + resourceStore.lifecycle + reportBlocked = 3 files passed, 150/150 tests, exit 0. DoD 5 satisfied (only the 2 files). Complexity pass (non-blocking): helper-vs-inline is fine; test (d) relies on the scan visiting task-f1rst1 before task-s3cnd1 (Map load order) — ids chosen to pin that, noted in worker handoff; no reject. No weakened/deleted tests.",
+  "requiredCheckAtDone": null
 }
