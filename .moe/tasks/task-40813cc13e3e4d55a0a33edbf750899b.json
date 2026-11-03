@@ -13,22 +13,31 @@
     {
       "stepId": "step-1",
       "description": "Tests first (DoD 2). Both edits are made red-first.\n\n(a) Corpus: moe-jetbrains/src/test/resources/client-settings-policy.json.\nUnder the WT-19 default rule, P04's settings (a qualityGate, no worktreeMode) now resolve to worktree mode on. To keep P04 a shared-mode test, add `\"worktreeMode\":\"off\"` to P04's settings and append to its note: \"; worktreeMode 'off' keeps the shared-mode rows\". Its expect array stays byte-identical. Every other existing row (P01-P10) has no non-blank string gate, so their inputs and expectations stay untouched. P09's numeric qualityGate counts as unset, so P09 stays off.\n\nAppend rows P11-P15. Each carries a note citing validators.ts resolveWorktreeMode/resolveWorktreeTarget and the full ten-plus-one expect list:\n- P11: explicit 'on', with consolidationBranch \"  release/train  \" and qualityGate \"npm test\". Landing branch is release/train.\n- P12: worktreeMode unset, qualityGate \"npm test\", no consolidationBranch. The mode is on by default, and Landing branch is main.\n- P13: explicit 'off' with qualityGate \"npm test\" and qualityGateScope everyTask. These are exactly today's shared-mode rows, with NO mode row.\n- P14: 'on' with the glob consolidationBranch \"moe/work-*\" and commitBoardState false. Landing branch is main, and Commit board state shows the off/worktree detail.\n- P15: a malformed worktreeMode (42) with qualityGate \"npm test\". The client reads a malformed mode as unset, by the same rule P07-P10 apply to other wire types, so it resolves on by the default rule. In the note, record that the daemon refuses such a stored value (INVALID_INPUT) and the dialog degrades.\n\nUse exactly these strings. Both clients render them, and the corpus has no client-specific expectations.\n- Mode row. Present ONLY when the mode resolves on, inserted directly BEFORE \"Landing branch\":\n  - label \"Worktree mode\"\n  - value \"On\" when explicit, or \"On (unset; a qualityGate is set)\" from the default\n  - detail \"Each WORKING claim works in .worktrees/<taskId> on moe/task/<taskId>.\"\n- Landing branch, mode on:\n  - value: the target, i.e. the trimmed consolidationBranch when it is non-empty and contains none of * ? [, else \"main\"\n  - detail (literal): \"Each completion lands as one merge-tree squash commit on this branch.\"\n  - detail (unset): \"No consolidationBranch set; each completion lands as one squash commit on main.\"\n  - detail (glob): \"A glob consolidationBranch is not a landing target; each completion lands on main.\"\n- Commit board state, mode on. The value stays On/Off.\n  - detail (on): \"Landings carry no .moe/ path; board history is snapshotted to refs/moe/board.\"\n  - detail (off): \"Landings carry no .moe/ path; no refs/moe/board snapshot is written.\"\n- Quality gate scope, mode on:\n  - value \"Every completion (worktree mode)\"\n  - detail \"Every worktree landing runs the gate, whatever qualityGateScope says.\"\n- With the mode off, every row is unchanged.\n\n(b) MoeJsonTest: moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt.\nAdd ONE test method immediately after `an inverted task sizing band lifts max to warn` (about :287-307), before `parseState preserves task runtime fields and step metadata`. Do not add it at the end of the file: task-37e03b91 adds its method after the step-metadata test.\n\nThrough parseState, assert exact values for worktreeModeOn, worktreeModeFromDefault and worktreeTarget in these cases:\n- 'on' gives on, explicit.\n- 'off' plus a gate gives off.\n- Unset plus \"npm test\" gives on, from the default.\n- Unset plus \"   \" gives off.\n- {} gives off.\n- Unset plus a numeric gate 42 gives off.\n- A malformed mode (42, \"maybe\" or null) plus a gate gives on from the default. The same malformed mode without a gate gives off.\n- Target:\n  - \"  release/train  \" gives release/train;\n  - \"\" gives main;\n  - \"moe/work-*\", \"a?b\" and \"a[b\" each give main.\n\nRun RED under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease):\n`gradlew.bat -p moe-jetbrains test --tests com.moe.util.MoeJsonTest --tests com.moe.toolwindow.SettingsPolicyCorpusTest --rerun`\nThe MoeJsonTest compile fails on the missing properties. Keep that tail as the fails-before evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/resources/client-settings-policy.json",
         "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
       ],
-      "startedAt": "2026-11-03T16:02:08.419Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-settings-policy.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt"
+      ],
+      "note": "Corpus: P04 gains worktreeMode \"off\" + note clause (expect unchanged); P11-P15 appended with the plan's exact strings (P14 = explicit 'on' with no gate + glob + commitBoardState false). MoeJsonTest: one method after the inverted-sizing test covering every resolve branch (on/off/unset+gate/blank/{}/numeric gate/malformed 42,\"maybe\",null,\"ON\" with and without gate) and every target branch. SCOPE GROWTH (2 one-line test edits, forced by the design): SettingsPolicyCorpusTest.POLICY_SHAPE gains \"worktreeMode\" (else the well-formed check rejects the new settings key), and MoeSettingsDialogTest's populated fixture gains worktreeMode=\"off\" (it sets a gate with no mode, which now resolves on). RED: `gradlew.bat test --tests com.moe.util.MoeJsonTest --tests com.moe.toolwindow.SettingsPolicyCorpusTest --rerun` exit 1, compileTestKotlin FAILED: \"Unresolved reference 'worktreeMode'/'worktreeModeOn'/'worktreeModeFromDefault'/'worktreeTarget' on receiver of type 'ProjectSettings'\", \"No parameter with name 'worktreeMode' found\".",
+      "startedAt": "2026-11-03T16:02:08.419Z",
+      "completedAt": "2026-11-03T16:05:29.734Z"
     },
     {
       "stepId": "step-2",
       "description": "JetBrains implementation (DoD 1). Keep edits inside the areas named here. Placement note: task-37e03b91 and task-ac587df5 edit other parts of these files.\n\n(a) model/Models.kt: edit ProjectSettings ONLY (:43-63).\n- Add a defaulted `val worktreeMode: String? = null`. It holds the raw stored value when it is exactly \"on\" or \"off\", else null.\n- Add a class body with computed properties that mirror packages/moe-daemon/src/state/validators.ts:301-311:\n  - `val worktreeModeFromDefault: Boolean get() = worktreeMode == null && qualityGate.isNotBlank()`. qualityGate is already strictly parsed and trimmed, so a non-string gate is \"\".\n  - `val worktreeModeOn: Boolean get() = worktreeMode == \"on\" || worktreeModeFromDefault`.\n  - `val worktreeTarget: String get() = consolidationBranch.takeIf { it.isNotEmpty() && it.none { c -> c == '*' || c == '?' || c == '[' } } ?: \"main\"`.\n- Add a KDoc line. Explain that a malformed stored mode reads as unset here, while the daemon refuses it, and that this display copy degrades instead of throwing.\n- UPDATE_SETTINGS (MoeCommandSender.kt:81-92) sends only four allowlisted keys, so this display-only field never reaches project.json. Do not add it there.\n\n(b) util/MoeJson.kt: edit parseProjectSettings ONLY (:278-308).\n- Set `worktreeMode = settings.getStrictStringOrNull(\"worktreeMode\")?.takeIf { it == \"on\" || it == \"off\" }`.\n- Error handling: no read may throw. A JSON null, number, object or unknown string all yield null, which means the gate rule. That is the KDoc rule at :271-276.\n\n(c) toolwindow/MoeSettingsDialog.kt, effectivePolicyRows (:177-232).\n- Compute `val wt = s.worktreeModeOn` once.\n- When wt is true:\n  - insert the mode row directly before the Landing branch row;\n  - swap in the worktree variants of Landing branch (a new private worktreeLandingRow(s) beside landingBranchRow), Commit board state and Quality gate scope.\n- Use the exact strings from step 1. When wt is false, build the list exactly as today.\n- landingBranchRow keeps its shared-mode `contains(\"*\")` test unchanged. Only worktreeTarget uses the daemon's `*?[` set.\n\nThen re-run the step 1 command until it is green.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt"
-      ]
+      ],
+      "startedAt": "2026-11-03T16:05:33.502Z"
     },
     {
       "stepId": "step-3",
@@ -78,11 +87,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:46:49.581Z",
-  "updatedAt": "2026-11-03T16:02:08.419Z",
+  "updatedAt": "2026-11-03T16:05:33.502Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:55:39.579Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 7
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -95,7 +105,9 @@
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T15:59:57.397Z",
   "planningNotes": {

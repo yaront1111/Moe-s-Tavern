@@ -72,8 +72,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -85,16 +85,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:42:23.585Z",
-  "updatedAt": "2026-11-03T16:04:18.765Z",
+  "updatedAt": "2026-11-03T16:06:18.968Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:42:33.338Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:05:56.201Z",
+    "wallClockMs": 1402863
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-c9368191"
+    "worker-c9368191",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -217,9 +220,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T15:57:27Z",
-    "at": "2026-11-03T16:02:03.600Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:04:17Z",
+    "at": "2026-11-03T16:06:18.968Z"
+  },
+  "completedAt": "2026-11-03T16:05:56.201Z",
+  "reviewCompletedAt": "2026-11-03T16:05:56.201Z",
+  "reviewSummary": "Reviewed completion 3467e494 (on moe/work-2026-10-24, contained in control HEAD; own bytes +159/-6, net 153, 5 files, size cap not hit). Diff = exactly the plan: params.workerId added as updateTask's actor arg at all six sites (reportBlocked.ts :144 grant correction and :359 correction pass `undefined` event so they stay TASK_UPDATED, :342 flip 'TASK_BLOCKED'; requestReplan 'TASK_REOPENED'; archiveTask 'TASK_ARCHIVED'; submitPlanCritique 'TASK_UPDATED'), passed bare (no assignee/'unknown' fallback), no new try/catch, no docs/taskStore change; grep confirms no other updateTask call left in those 4 files. Re-ran task.verification verbatim in a git-archive snapshot outside the repo (working-tree owned paths identical to the commit): tsc --noEmit + tsc on the test clean, vitest 7 files / 112 tests passed, exit 0. RED proof: overlaid only the new test on base 3467e494^ -> fails (actor map all null, every get_activity_log {workerId} seat query empty, #general lines wrong). Mutation check of my own with the plan's patch.cjs: dropping the correction, replan, archive or critique site each fails that site's own actor-map key + seat query (replan/archive/critique also the #general list); worker's flip/grant mutants recorded in the handoff. Test pins the null no-guess rule (task-fix TASK_BLOCKED, task-anon TASK_ARCHIVED) and the assignee/'unknown' #general fallbacks with exact strings, and hard-asserts each handler arm (seatFreed/alreadyBlocked/granted/flipped). DoD 1-3 met. No contract/schema change. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
