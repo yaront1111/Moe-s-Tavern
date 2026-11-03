@@ -39,25 +39,31 @@
     {
       "stepId": "step-3",
       "description": "FIX scripts/moe-agent.ps1. Keep the UTF-8 BOM and LF endings; the file must parse cleanly on PS 5.1 and 7.\n\n(a) Project discovery becomes `$projectPath = Resolve-Path -LiteralPath $Project -ErrorAction SilentlyContinue`. Add a one-line comment: a project dir may contain [ ], which -Path reads as a wildcard.\n\n(b) Convert every remaining G1 site to -LiteralPath and keep every other parameter. The sites below are as of 2026-10-30. Line numbers WILL have moved: 26 upstream ps1-lane tasks land first. So apply the rule to whatever the step-1 guard lists, including their new code.\n- Load-Registry and Get-MoeInstallPath: Test-Path and Get-Content.\n- Get-CodexMoeServerOverride: Test-Path $ConfigPath. Resolve-CommandParts: Test-Path $Cmd. Also Test-Path $moeDir.\n- The three `Resolve-Path (Join-Path $PSScriptRoot \"..\")` calls; Test-Path $proxyScript x2; Test-Path $daemonScript x2.\n- Serena: Test-Path $serenaCandidate; .moe-agent.json Test-Path and Get-Content; Resolve-Path -Path $serenaProjectCandidate; Test-Path $serenaPath x4.\n- Set-Content -Path $mcpConfigFile; Test-Path $daemonInfoPath x2.\n- Get-RoleDoc: Test-Path x2 and Get-Content. project.json and KNOWN_ISSUES.md: Test-Path and Get-Content.\n- Agents mirror: Test-Path x3, Get-ChildItem, Copy-Item.\n- Codex config: Test-Path on the dir and the file, Get-Content, Set-Content x4, Test-Path $codexDir.\n- Gemini: Test-Path on the dir and the file, Get-Content, Test-Path $geminiInstructionsDir, Set-Content GEMINI.md.\n- Grok: Test-Path on the dir and the file, Get-Content, Test-Path $grokAuthFile.\n- Memories: Test-Path and Get-ChildItem.\n- Push-Location $projectPath x4 (gemini and grok launches) and the test seam Push-Location $Git.Top.\n- Teardown: Test-Path and Remove-Item -Path on $mcpConfigFile, $systemPromptFile and $script:GrokPromptFile.\n\nForms:\n- `Get-Content -Raw -Path $x` -> `Get-Content -LiteralPath $x -Raw`.\n- `Set-Content -Path $f -Encoding UTF8 [-NoNewline]` -> `Set-Content -LiteralPath $f -Encoding UTF8 [-NoNewline]`. On both engines, -Path with -Encoding fails for a new bracketed file with \"A parameter cannot be found that matches parameter name 'Encoding'\" (probed).\n- `Get-ChildItem -LiteralPath $d -File -Filter '*.md'`.\n- `Copy-Item -LiteralPath $src -Destination $dest -Force`. A bracketed -Destination works (probed).\n\n(c) The daemon-start Start-Process gains `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`. It is the same directory as before, only escaped. Add a one-line comment: PS 5.1 resolves the inherited current location as a wildcard. Probed facts:\n- From a [x] cwd, 5.1 fails with \"Cannot perform operation because the wildcard path ... did not resolve to a file\"; 7.6 is fine.\n- A raw bracketed -WorkingDirectory fails on both engines; an escaped one works on both.\n\nError handling: keep every existing -ErrorAction (SilentlyContinue / Stop), try/catch and fallback exactly as it is. A genuinely missing path must still take the same branch as today: 'Project path not found', 'not initialized for Moe', the plugin docs/roles fallback, the Serena 'override not found' warning, the dotted codex fallback, and 'Daemon failed to start'. -LiteralPath changes only how the path string is interpreted, never what happens when it is absent.\n\nLeave alone: Env: drive operations, New-Item -Path, Join-Path/Split-Path (string ops), [IO.File] calls, native git -C/argv, and moe-agent.sh. Make no other behavior change. Done when the step-1 guard reports no moe-agent.ps1 violations.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-03T01:07:16.928Z"
+      "note": "No change this session. QA verified the scripts/moe-agent.ps1 fix landed in a0269bcd: flag multiset unchanged, BOM and LF kept, no remaining non-literal path cmdlet. QA asked for those launcher bytes to be left alone, and they are: `git diff --quiet HEAD -- scripts/moe-agent.ps1` passes, the file starts with ef bb bf, and it has 0 CR.\n\nDone condition rechecked with the reworked (stricter) step-1 guard: moe-agent.ps1 has 0 violations and 0 uninspected cmdlet sites. The PS 5.1 ParseFile CommandAst set equals the scanner's 206 sites, so the guard now really inspects every invocation, including QA's L5564, L7720 and L7731 (all -LiteralPath).\n\nPeers befdddf7 and ecf78687 are live on this file. It is clean here, so this session lands nothing for it.",
+      "startedAt": "2026-11-03T01:07:16.928Z",
+      "completedAt": "2026-11-03T01:08:09.964Z"
     },
     {
       "stepId": "step-4",
       "description": "FIX scripts/moe-team.ps1. It stays ASCII with no BOM.\n- `Test-Path -LiteralPath $agentScript`.\n- Load-Registry: `Test-Path -LiteralPath $path` and `Get-Content -LiteralPath $path -Raw`.\n- `$teamPath = Resolve-Path -LiteralPath $Project -ErrorAction SilentlyContinue`. Without it, a [x] project silently falls back to the team name \"Moe Team\" instead of its leaf.\n- Each of the three `Start-Process powershell ...` calls gains the same `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`. Otherwise PS 5.1 refuses to open a window from a [x] current directory.\n\nError handling is unchanged: the missing-agent-script exit, the registry try/catch returning @(), and the \"Moe Team\" fallback for an unresolvable project keep their current behavior.\n\nLeave the child `cd \"$scriptDir\"` command strings and Quote-ForCommand unchanged. Done when the step-1 guard reports no violations in either file.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-team.ps1"
-      ]
+      ],
+      "note": "No change this session. The scripts/moe-team.ps1 fix landed in a0269bcd and is unchanged vs HEAD: ASCII, 0 non-ASCII bytes, 0 CR. With the reworked step-1 guard it has 0 violations and 0 uninspected sites, and the PS 5.1 AST cross-check found 7 of 7 sites.\n\nQA's optional ponytail note asked to hoist the three escaped -WorkingDirectory expressions (L100/L113/L126) into one variable. I declined. G2 pins `WildcardPattern]::Escape(` inside each Start-Process segment, so a shared variable would need dataflow in the scanner or a weaker G2. QA also asked to leave the verified launcher bytes alone.",
+      "startedAt": "2026-11-03T01:08:10.941Z",
+      "completedAt": "2026-11-03T01:08:16.955Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY. Run this ONE command once, from the repo root, IN THE BACKGROUND: it takes about 15 min and the Bash tool's foreground cap is 10 min.\n\nR=$(pwd) && mkdir -p /mnt/d/moe-scratch && W=$(mktemp -d /mnt/d/moe-scratch/literal-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && cp scripts/moe-agent.ps1 scripts/moe-team.ps1 \"$W/scripts/\" && cp scripts/tests/literal-project-path.test.mjs \"$W/scripts/tests/\" && cd \"$W\" && node --test scripts/tests/literal-project-path.test.mjs && bash scripts/tests/parity-check.sh && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$W/scripts/tests/literal-project-path.test.mjs\")\" && WSLENV=\"$WSLENV:MOE_POSTFLIGHT_TIMEOUT_SEC\" MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$W/scripts/tests/postflight-safe.mjs\")\" powershell; rc=$?; cd \"$R\"; rm -rf \"$W\"; echo \"VERIFY_EXIT=$rc\"; [ \"$rc\" -eq 0 ]\n\nExpect:\n- Linux: the static tests pass and the Windows cases are skipped.\n- parity-check passes, which also checks the BOM.\n- Windows-native: every case passes, NONE skipped. pwsh is on PATH on this box, so a skipped pwsh case is not evidence.\n- postflight-safe prints {\"exit\":0,...,\"failureClass\":\"NONE\"}. That is the PS 5.1 regression harness over the whole edited wrapper.\n\nWhy this shape: the snapshot is HEAD's scripts plus your three files, so peers' dirty bytes stay out. The drive-letter cwd matters: from a /tmp (UNC) cwd, unrelated postflight scenarios fail.\n\nIf postflight-safe fails, rerun only its part on a pristine `git archive HEAD scripts` snapshot to classify the failure as pre-existing before touching code, and report both results. Submit this command, its exit code and its output tail as the complete_task verification.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T01:08:49.554Z"
     },
     {
       "stepId": "step-6",
@@ -99,7 +105,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-03T01:07:16.928Z",
+  "updatedAt": "2026-11-03T01:08:49.555Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
@@ -113,7 +119,7 @@
     "firstClaimAt": "2026-10-30T16:38:29.657Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 8,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -127,7 +133,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [
     {
