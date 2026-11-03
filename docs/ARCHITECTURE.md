@@ -480,6 +480,10 @@ and `verified-local` stays refused until certification and the client gates pass
   `moe-agent.sh` and `moe-call.sh` rewrite PATH, before their first bare-name command, to absolute entries outside the
   project. A rewrite that keeps no entry refuses, because an empty PATH makes bash search the current directory.
   So neither they nor the agent CLI they start finds a tool through a `.`, relative or in-project entry.
+  Run by path, `moe-call.sh` starts under `/bin/sh` and hands itself to bash using builtins only: under the marker
+  exactly `/bin/bash` (a host without it refuses with `MOE_PROTECTED_INTERPRETER_NOT_FOUND`), otherwise `bash` by PATH
+  lookup, as the old `#!/usr/bin/env bash` did. A caller that names the interpreter (`bash moe-call.sh`) chooses it, so
+  under the marker it must name an absolute bash, or run with the rewritten PATH as the wrappers do.
   `moe-agent.ps1` rewrites PATH the same way before its first bare-name command, keeping only the entries
   `Find-MoeProtectedFile` trusts, so an 8.3, subst, junction or network spelling of the project goes too, and runs
   its WT-13 git check only after that. Both wrappers also export `MOE_PROTECTED_GIT`, the only git their

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # moe-call.sh - CLI helper for calling Moe daemon tools via the proxy
 # Usage: moe-call.sh <tool_name> [json_arguments] [--project <path>]
 #
@@ -9,6 +9,24 @@
 #   moe-call.sh submit_plan '{"taskId":"task-xxx","plan":[...]}'
 #   moe-call.sh wait_for_task '{"statuses":["PLANNING"],"workerId":"architect-abc","timeoutMs":300000}'
 #   moe-call.sh add_comment '{"taskId":"task-xxx","content":"my question","workerId":"architect-abc"}'
+
+# task-0d9ebe5b: run by path, a fixed /bin/sh starts and hands over to bash once, using
+# builtins only (under sh any other word is a PATH lookup a project file could answer).
+# MOE_RUNTIME_PROTECTED=1 takes exactly /bin/bash; otherwise `bash` is found by PATH, as
+# the old `#!/usr/bin/env bash` did. A bash not in POSIX mode (`bash moe-call.sh`) skips
+# it. MOE_CALL_BASH_ENTRY allows one hand-over, so POSIXLY_CORRECT cannot loop.
+if [ -z "${MOE_CALL_BASH_ENTRY:-}" ]; then
+    if [ -z "${BASH_VERSION:-}" ] || case ":${SHELLOPTS:-}:" in *:posix:*) true ;; *) false ;; esac; then
+        MOE_CALL_BASH_ENTRY=1; export MOE_CALL_BASH_ENTRY
+        if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then
+            [ -x /bin/bash ] || { echo "Error: MOE_PROTECTED_INTERPRETER_NOT_FOUND: /bin/bash is not executable; under MOE_RUNTIME_PROTECTED=1 run moe-call.sh as '<absolute path to bash> moe-call.sh'. Refusing to start." >&2; exit 1; }
+            exec /bin/bash "$0" "$@"
+        fi
+        exec bash "$0" "$@"
+    fi
+fi
+unset MOE_CALL_BASH_ENTRY
+[ -n "${BASH_VERSION:-}" ] || { echo "Error: moe-call.sh must run under bash; refusing to start." >&2; exit 1; }
 
 set -euo pipefail
 

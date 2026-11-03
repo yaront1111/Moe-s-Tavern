@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync,
+  writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -180,7 +181,7 @@ function runtimeLayout(t) {
   };
   put('home/.moe/config.json', JSON.stringify({ installPath: nativePath(path.join(dir, 'global')) }));
   put('scratch project/.moe/daemon.json', '{}\n');
-  return { dir, proxies, helper: put('install/scripts/moe-call.sh', readFileSync(helper)) };
+  return { dir, proxies, put, helper: put('install/scripts/moe-call.sh', readFileSync(helper)) };
 }
 
 function callHelper(layout, { marker, proxyPath, cwd, tool = 'get_context', args = '{}' } = {}) {
@@ -268,3 +269,92 @@ for (const marker of ['', '0', '01', 'true', ' 1', '1 ']) {
     assert.deepEqual(result.ran, ['repo']);
   });
 }
+
+// task-0d9ebe5b: run by path, the kernel (MSYS on Windows) picks the interpreter
+// from the shebang before any helper line runs. The project holds bash and sh plants.
+const dash = ['/bin/dash', '/usr/bin/dash'].find(file => existsSync(file));
+const plant = name => `#!/bin/sh\necho 'project ${name}' >> "$MOE_CALL_RAN_LOG"\nexit 42\n`;
+
+function directCall(layout, { marker, dot = true, via, extra = {}, helper: file = layout.helper } = {}) {
+  const project = path.join(layout.dir, 'scratch project');
+  const log = path.join(layout.dir, 'ran.log');
+  rmSync(log, { force: true });
+  chmodSync(file, 0o755);
+  for (const name of ['bash', 'sh']) writeFileSync(path.join(project, name), plant(name), { mode: 0o755 });
+  const env = { ...process.env, HOME: nativePath(path.join(layout.dir, 'home')), MOE_CALL_RAN_LOG: nativePath(log),
+    PROXY_PATH: nativePath(layout.proxies.inherited), MOE_PROXY_PATH: nativePath(layout.proxies.named) };
+  for (const name of ['MOE_RUNTIME_PROTECTED', 'MOE_CALL_BASH_ENTRY', 'POSIXLY_CORRECT', 'SHELLOPTS']) delete env[name];
+  if (marker !== undefined) env.MOE_RUNTIME_PROTECTED = marker;
+  Object.assign(env, extra);
+  // Windows keeps the inherited PATH, which Git Bash converts.
+  if (!windows) env.PATH = [path.dirname(process.execPath), '/usr/bin', '/bin'].join(':');
+  const options = { cwd: project, env, timeout: 20_000 };
+  // The shim only sets PATH and execs the file by path: real direct execution.
+  const result = via
+    ? spawnSync(via, [file, 'get_context', '{}', '--project', project],
+      { ...options, env: { ...env, PATH: `.:${env.PATH}` } })
+    : spawnSync(bash, ['-c', `${dot ? 'PATH=".:$PATH"; export PATH; ' : ''}exec "$0" "$@"`, shellPath(file),
+      'get_context', '{}', '--project', shellPath(project)], options);
+  assert.ifError(result.error); // a hand-over loop fails here as a timeout
+  return { status: result.status, stdout: result.stdout.toString('utf8'), stderr: result.stderr.toString('utf8'),
+    ran: existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [] };
+}
+
+function expectNamed(result) {
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.ran, ['named']);
+  assert.deepEqual(JSON.parse(result.stdout), { ran: 'named', tool: 'moe.get_context' });
+}
+
+function expectPlant(result) {
+  assert.equal(result.status, 42, result.stderr);
+  assert.deepEqual(result.ran, ['project bash']);
+  assert.equal(result.stdout, '');
+}
+
+test('direct exec D1: the marker never runs a project bash; legacy still finds bash by PATH', t => {
+  const layout = runtimeLayout(t);
+  expectNamed(directCall(layout, { marker: '1' }));
+  expectPlant(directCall(layout, {}));
+});
+
+test('direct exec D2: a bash running as sh hands over',
+  { skip: windows && 'Git Bash /bin/sh is bash in POSIX mode: D1 covers it' }, t => {
+  const layout = runtimeLayout(t);
+  const sh = path.join(layout.dir, 'shbin', 'sh');
+  mkdirSync(path.dirname(sh));
+  symlinkSync('/bin/bash', sh);
+  expectNamed(directCall(layout, { marker: '1', via: sh }));
+  // Running the body in place would reach 'named'; the hand-over reaches the PATH bash.
+  expectPlant(directCall(layout, { via: sh }));
+});
+
+test('direct exec D3: POSIXLY_CORRECT hands over at most once', t => {
+  const layout = runtimeLayout(t);
+  const extra = { POSIXLY_CORRECT: '1' };
+  expectNamed(directCall(layout, { marker: '1', extra }));
+  expectNamed(directCall(layout, { dot: false, extra }));
+});
+
+test('direct exec D4: dash hands over, and a preset sentinel refuses',
+  { skip: windows ? 'POSIX only' : !dash && 'no dash on this host' }, t => {
+  const layout = runtimeLayout(t);
+  expectNamed(directCall(layout, { marker: '1', via: dash }));
+  const forged = directCall(layout, { marker: '1', via: dash, extra: { MOE_CALL_BASH_ENTRY: '1' } });
+  assert.equal(forged.status, 1, forged.stderr);
+  assert.equal(forged.stdout, '');
+  assert.deepEqual(forged.ran, []);
+  assert.equal(forged.stderr, 'Error: moe-call.sh must run under bash; refusing to start.\n');
+});
+
+test('direct exec D5: without /bin/bash the marker refuses and never falls back to the PATH bash', t => {
+  const layout = runtimeLayout(t);
+  const text = readFileSync(layout.helper, 'utf8');
+  assert.ok(text.split('/bin/bash').length - 1 >= 2, 'the helper must name /bin/bash for this row to mean anything');
+  const file = layout.put('nobash/scripts/moe-call.sh', text.replaceAll('/bin/bash', '/nonexistent/moe-bash'));
+  const result = directCall(layout, { marker: '1', helper: file });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.deepEqual(result.ran, []);
+  assert.match(result.stderr, /^Error: MOE_PROTECTED_INTERPRETER_NOT_FOUND: \/nonexistent\/moe-bash is not executable/m);
+});
