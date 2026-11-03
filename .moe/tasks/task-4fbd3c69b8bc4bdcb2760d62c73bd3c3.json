@@ -82,7 +82,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:43:54.639Z",
-  "updatedAt": "2026-11-03T21:08:41.386Z",
+  "updatedAt": "2026-11-03T21:11:14.656Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:54:28.772Z",
     "plannedStepCount": 4,
@@ -179,5 +179,31 @@
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "packages/moe-daemon/src/tools/waitForTask.ts"
   ],
-  "completionSummary": "wait_for_task now returns no match, and parks, while the caller's own attempt is finalizing. That is the hold claim_next_task enforces with ATTEMPT_FINALIZING, so a waiter is no longer woken into a claim that refuses it. finalize_attempt's existing announceAttemptClosed TASK_UPDATED wakes the parked waiter, and its claim then succeeds.\n\nChanges (four files):\n- util/claimEligibility.ts: new ownFinalizingAttempt(state, workerId). One pass over state.attempts.values(), keeping the lowest generation (earliest stored on a tie), which is what listAttempts().find returned. No copy, sort or clone.\n- tools/claimNextTask.ts: the inline lookup is replaced by the helper. The ATTEMPT_FINALIZING refusal, its position and its context are unchanged.\n- tools/waitForTask.ts: findMatchingTask returns NO_MATCH right after the blockingHold check.\n- new tools/waitForTask.ownFinalizing.test.ts: (c1) claim refuses with ATTEMPT_FINALIZING; (c2) worker-2's wait is still woken; (f1) DoD 1, worker-1's wait answers hasNext:false with no task; (f2) DoD 2, the parked waiter wakes on finalize_attempt and the claim assigns task-next to worker-1.\n\nVerification, one command, run in snapshots outside the shared checkout, exit 0:\n- Gate leg: tsc --noEmit and the typecheck of the new test passed. Test Files 11 passed (11), Tests 356 passed (356). The suites were waitForTask*, claimNextTask* (including 'refuses a coding claim while that worker has an attempt finalizing'), finalizeAttempt, executionProfileAdmission, executionRoute and attemptHandback.\n- Red-at-base leg (DoD 1 and 2 fail at base): the new file against waitForTask.ts pinned at 9834628e printed Tests 2 failed | 2 passed (4), with (f1) and (f2) red and (c1) and (c2) green, then RED-AT-BASE. The same 2 failed | 2 passed (4) came from my step-1 run before the fix.\n\nSelf-review, no fixes needed:\n- Order parity: the own-task match and blockingHold still come before the new line.\n- No lost wake: lines 315-413 of waitForTask.ts contain no await, so"
+  "completionSummary": "wait_for_task now returns no match, and parks, while the caller's own attempt is finalizing. That is the hold claim_next_task enforces with ATTEMPT_FINALIZING, so a waiter is no longer woken into a claim that refuses it. finalize_attempt's existing announceAttemptClosed TASK_UPDATED wakes the parked waiter, and its claim then succeeds.\n\nChanges (four files):\n- util/claimEligibility.ts: new ownFinalizingAttempt(state, workerId). One pass over state.attempts.values(), keeping the lowest generation (earliest stored on a tie), which is what listAttempts().find returned. No copy, sort or clone.\n- tools/claimNextTask.ts: the inline lookup is replaced by the helper. The ATTEMPT_FINALIZING refusal, its position and its context are unchanged.\n- tools/waitForTask.ts: findMatchingTask returns NO_MATCH right after the blockingHold check.\n- new tools/waitForTask.ownFinalizing.test.ts: (c1) claim refuses with ATTEMPT_FINALIZING; (c2) worker-2's wait is still woken; (f1) DoD 1, worker-1's wait answers hasNext:false with no task; (f2) DoD 2, the parked waiter wakes on finalize_attempt and the claim assigns task-next to worker-1.\n\nVerification, one command, run in snapshots outside the shared checkout, exit 0:\n- Gate leg: tsc --noEmit and the typecheck of the new test passed. Test Files 11 passed (11), Tests 356 passed (356). The suites were waitForTask*, claimNextTask* (including 'refuses a coding claim while that worker has an attempt finalizing'), finalizeAttempt, executionProfileAdmission, executionRoute and attemptHandback.\n- Red-at-base leg (DoD 1 and 2 fail at base): the new file against waitForTask.ts pinned at 9834628e printed Tests 2 failed | 2 passed (4), with (f1) and (f2) red and (c1) and (c2) green, then RED-AT-BASE. The same 2 failed | 2 passed (4) came from my step-1 run before the fix.\n\nSelf-review, no fixes needed:\n- Order parity: the own-task match and blockingHold still come before the new line.\n- No lost wake: lines 315-413 of waitForTask.ts contain no await, so",
+  "commits": [
+    {
+      "sha": "67d7a0c09bc0b96b983e214a334c5373806761c3",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T21:03:03Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ownFinalizing.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/util/claimEligibility.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T21:11:14.656Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T21:03:03Z",
+    "at": "2026-11-03T21:11:14.656Z"
+  }
 }

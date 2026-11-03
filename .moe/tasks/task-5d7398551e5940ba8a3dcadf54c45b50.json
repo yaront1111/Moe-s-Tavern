@@ -9,10 +9,42 @@
     "`cd packages/moe-daemon && npx vitest run src/util/metrics.test.ts` passes in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, RED before step 2 (test-driven-development). Step 4's negative control proves the RED.\n\nIn your task worktree, edit packages/moe-daemon/src/util/metrics.test.ts with the Edit tool only (it is a tracked file: no cp, no heredoc).\n\nThe architect dry-ran the full result at tip ac3ea38f: /mnt/d/moe-scratch/plan-5d739855/metrics.test.ts. The diff is metrics.test.diff in the same folder. Read it and reproduce it.\n\n(a) Line 2's import becomes `import { computeMetricsAggregate, computeDashboardAggregate, filterTasksForMetrics } from './metrics.js';`.\n\n(b) After the file's last `});`, append a 3-line comment and `describe('filterTasksForMetrics sinceIso window', ...)`. The comment says sinceIso keeps \"tasks last touched at/after this time\": a finished row keys on doneAt, every other row on updatedAt, and the stamps are fixed because filterTasksForMetrics never reads the clock.\n\nFixture:\n- NOW_MS = Date.parse('2026-11-03T20:00:00.000Z'), hoursAgo(h) = ISO of NOW_MS - h*3_600_000, SINCE = hoursAgo(24).\n- row(id, status, { createdAt, updatedAt?, firstClaimAt?, doneAt? }) builds `{ id, epicId: 'epic-metrics-fixture', title, status, createdAt, updatedAt, metrics } as unknown as Task`. metrics carries only the stamps given.\n- kept(...tasks) = filterTasksForMetrics(tasks, { sinceIso: SINCE }).map((t) => t.id).\n\nCases. Keep these exact title prefixes; step 4 greps them.\n- (w1) WORKING, REVIEW and BLOCKED rows, each { createdAt 72 h, firstClaimAt 48 h, updatedAt 1 h }: kept(...) toEqual all three ids in input order. This is DoD 1, the hunt repro.\n- (w2) DONE { createdAt 72 h, firstClaimAt 60 h, doneAt 48 h, updatedAt 1 h }: toEqual([]). This is DoD 2: doneAt still wins over a later touch.\n- (w3) WORKING with every stamp at 48 h: toEqual([]). This is DoD 2.\n- (w4) Three rows: DONE { doneAt 1 h, updatedAt 1 h, firstClaimAt 60 h, createdAt 72 h }; a legacy WORKING row with no updatedAt { firstClaimAt 1 h, createdAt 72 h }; a legacy BACKLOG row with only { createdAt 48 h }. Expected: ['task-done-new', 'task-legacy-claimed']. This pins the fallback order for state files without updatedAt.\n\nAt base the file prints 'Tests  1 failed | 10 passed (11)'. Only (w1) fails. Do not run vitest in the shared checkout (global rail).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/metrics.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN: in packages/moe-daemon/src/util/metrics.ts, filterTasksForMetrics (:110-131), reorder the sinceIso key. Edit with the Edit tool only. The architect's dry-run diff (+6/-3) is /mnt/d/moe-scratch/plan-5d739855/metrics.diff.\n\n(a) The key at :122-125 becomes `const ts = t.metrics?.doneAt ?? t.updatedAt ?? t.metrics?.firstClaimAt ?? t.createdAt;`. Keep the existing 4-line layout with one `??` term per line.\n\n(b) Replace the stale 2-line comment at :120-121 (\"Use the most recent lifecycle timestamp...\") with a 5-line one:\n- \"last touched\" is list_metrics' sinceIso contract;\n- a finished row keys on doneAt, so a later comment, board edit or archive never pulls it back into the window;\n- every other row keys on updatedAt, its most recent touch, which is never older than firstClaimAt;\n- firstClaimAt, then createdAt, only stand in for a legacy row with no updatedAt.\n\nWhy doneAt can stay first: only finished rows carry it. qa_approve sets it (qaApprove.ts:194). Every reopen path strips it through buildReopenClearingUpdates (util/reopen.ts:61-63), whose callers are setTaskStatus, taskStore, StateManager and WebSocketServer.\n\nError handling: no new failure path, and no throw or catch is added.\n- A missing or unparseable key still excludes the row exactly as today (`!Number.isFinite(tsMs)` → continue).\n- An unparseable sinceIso is still refused at the edges, unchanged: listMetrics.ts:29-34 (invalidInput) and WebSocketServer.ts:988-991 (ERROR frame).\n\nScope:\n- Do NOT touch listMetrics.ts's newest-first sort (:44-48). docs/MCP_SERVER.md documents doneAt → firstClaimAt → updatedAt → createdAt as the sort order.\n- Do NOT edit docs/MCP_SERVER.md: its sinceIso note (:2863) becomes true with this fix.\n- Both IDE metrics ranges (JetBrains MetricsPanel.kt:191-197, VS Code MetricsViewProvider.ts:109-113) reach this same function through /ws GET_METRICS (WebSocketServer.ts:993), so they need no change.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/metrics.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification (DoD 3). Run this ONCE from the task worktree root after steps 1-2, exactly:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/metrics.ts packages/moe-daemon/src/util/metrics.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/util/metrics.test.ts src/tools/governanceFeatures.test.ts\n\nWhat it does:\n- Snapshots HEAD's packages/moe-daemon outside the shared checkout and overlays the two edited files. They are uncommitted in the worktree; for QA after landing they equal HEAD.\n- Type-checks the sources.\n- Runs metrics.test.ts (DoD 3's file) and governanceFeatures.test.ts, which drives the list_metrics tool end to end.\n\nThe architect dry-ran it at ac3ea38f with the prototype: tsc exit 0, 2 files, 39 tests, all passing.\n\nIts fresh output is complete_task's verification { command, exitCode: 0, outputTail }.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff. This is the final step: load the adversarial-self-review skill.\n\n(1) Negative control (DoD 1: (w1) fails on the old key). Run from the worktree root:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\")\" packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/metrics.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/util/metrics.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests \" \"$S/l\"; grep -aqE \"^ +Tests +1 failed \\| 10 passed \\(11\\)\" \"$S/l\" && grep -aqF \"> (w1) \" \"$S/l\" && ! grep -aqF \"> (w2) \" \"$S/l\" && ! grep -aqF \"> (w3) \" \"$S/l\" && ! grep -aqF \"> (w4) \" \"$S/l\" && echo RED-AT-BASE; }\n\n- Expect 'Tests  1 failed | 10 passed (11)' and RED-AT-BASE. The architect's dry run printed exactly that.\n- util/metrics.ts is byte-identical between 31492ac5, the hunt's HEAD, and ac3ea38f, so this is DoD 1's \"fails against HEAD 31492ac5\".\n- Quote both lines in the completion summary, and mutate nothing in the worktree (mem:convention-daemon-vitest-mutant-checkref).\n- QA variant after landing: replace the merge-base with <completion sha>^.\n\n(2) Mutants the cases kill:\n- updatedAt first, or a max over all stamps: (w2) fails.\n- firstClaimAt kept before updatedAt: (w1) fails.\n- firstClaimAt dropped from the fallback: (w4) fails.\n\n(3) Error handling and inputs: a missing or unparseable key still excludes the row, with no new throw. An invalid sinceIso is still refused at listMetrics.ts and WebSocketServer.ts.\n\n(4) No other consumer changes:\n- listMetrics.ts's sort and output are untouched;\n- GET_METRICS uses the same function;\n- no state file changes shape, so legacy rows are covered by (w4).\n\n(5) The diff touches exactly metrics.ts and metrics.test.ts. docs/MCP_SERVER.md is untouched; its :2863 note becomes true.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/metrics.ts",
+        "packages/moe-daemon/src/util/metrics.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-2dc72348",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +56,77 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:44:05.533Z",
-  "updatedAt": "2026-11-03T21:05:37.337Z",
+  "updatedAt": "2026-11-03T21:11:19.274Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T21:05:34.534Z"
+    "firstClaimAt": "2026-11-03T21:05:34.534Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
-  ]
+    "architect-74d9e1c7",
+    "worker-2dc72348"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T21:10:03.782Z",
+  "executionContract": {
+    "intendedBehavior": "list_metrics and /ws GET_METRICS keep, for a sinceIso cutoff, the tasks last touched at or after it. A finished row (metrics.doneAt set) is keyed on doneAt, so a later comment, board edit or archive never pulls it back into the window. Every other row is keyed on updatedAt, its most recent touch. firstClaimAt, then createdAt, stand in only for a legacy row with no updatedAt. A WORKING, REVIEW or BLOCKED row first claimed before the cutoff but touched after it is therefore included.",
+    "acceptanceCriteria": [
+      "filterTasksForMetrics with a 24 h sinceIso keeps WORKING, REVIEW and BLOCKED rows whose firstClaimAt is 48 h old and updatedAt 1 h old, and this case fails at the merge-base.",
+      "A DONE row with doneAt 48 h old and updatedAt 1 h old stays out, and a row whose every stamp is 48 h old stays out.",
+      "A DONE row done 1 h ago is kept, and a legacy row without updatedAt is keyed on firstClaimAt, then createdAt.",
+      "metrics.test.ts and governanceFeatures.test.ts pass, and tsc is clean, in a snapshot outside the shared checkout."
+    ],
+    "invariants": [
+      "listMetrics.ts's newest-first sort (doneAt → firstClaimAt → updatedAt → createdAt) is unchanged.",
+      "A missing or unparseable key still excludes the row, and an invalid sinceIso is still refused at the tool and /ws edges.",
+      "No .moe/ state shape changes."
+    ],
+    "compatibility": [
+      "The list_metrics MCP contract is unchanged; its schema and docs/MCP_SERVER.md already promise this 'last touched' behaviour.",
+      "The IDE metrics ranges (JetBrains MetricsPanel, VS Code MetricsViewProvider) need no change."
+    ],
+    "reuse": [
+      "This is a one-expression reorder in the existing helper; both entry points share it."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/metrics.ts:110-131 filterTasksForMetrics keys on doneAt ?? firstClaimAt ?? updatedAt ?? createdAt at :122-125.",
+      "metrics.doneAt is set by qaApprove.ts:194 and stripped on every reopen through util/reopen.ts buildReopenClearingUpdates (:61-63).",
+      "listMetrics.ts:39 and WebSocketServer.ts:993 are the only callers of filterTasksForMetrics."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/metrics.ts packages/moe-daemon/src/util/metrics.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/util/metrics.test.ts src/tools/governanceFeatures.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Key on the maximum of all stamps. Rejected: DoD 2 requires a DONE row done 48 h ago but touched 1 h ago to stay out. (b) updatedAt first. Rejected for the same reason. (c) Chosen, the row's fix direction: doneAt ?? updatedAt ?? firstClaimAt ?? createdAt. (d) Fall through an unparseable stamp to the next valid one. Rejected as scope creep: the daemon writes updatedAt itself, and today's exclusion of an unparseable key is kept.",
+    "codebaseInsights": "doneAt marks only finished rows, because buildReopenClearingUpdates strips it on every reopen path. metrics.ts, metrics.test.ts and listMetrics.ts are byte-identical between the hunt's HEAD 31492ac5 and ac3ea38f. No open row declares util/metrics.ts or metrics.test.ts; the architect scanned .moe/tasks at 21:07Z. The prototype passed tsc and 2 files / 39 tests, and the base gave 'Tests  1 failed | 10 passed (11)' with only (w1) failing.",
+    "risks": [
+      "Changing listMetrics.ts's sort as well would break MCP_SERVER.md's documented order. Leave it alone.",
+      "The negative control expects exactly 11 tests in metrics.test.ts. Adding or removing cases changes the grep counts."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/src/util/metrics.ts",
+      "packages/moe-daemon/src/util/metrics.test.ts",
+      "packages/moe-daemon/src/tools/listMetrics.ts",
+      "packages/moe-daemon/src/util/reopen.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6ded0c935e82f850493411b41e1b61e6bfc9ca1a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T21:10:03.811Z",
+  "approvedPlanRevision": 1
 }
