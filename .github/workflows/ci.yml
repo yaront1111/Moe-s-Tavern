@@ -276,6 +276,11 @@ jobs:
         if: runner.os != 'macOS'
         run: node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/subagent-mirror.test.mjs
 
+      - name: Test PowerShell .moe-agent.json read
+        # PowerShell 5.1 reads a BOM-less file as ANSI unless told UTF-8; Linux runs pwsh 7.
+        if: runner.os != 'macOS'
+        run: node --test scripts/tests/serena-project-config.test.mjs
+
       - name: Test PowerShell daemon autostart arguments
         # Start-Process builds a native Windows command line (PowerShell 5.1 and 7).
         if: runner.os == 'Windows'

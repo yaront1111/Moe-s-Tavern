@@ -682,7 +682,7 @@ $serenaProjectCandidate = $null
 $moeAgentConfig = Join-Path $projectPath ".moe-agent.json"
 if (Test-Path -LiteralPath $moeAgentConfig) {
     try {
-        $cfg = Get-Content -Raw -LiteralPath $moeAgentConfig | ConvertFrom-Json
+        $cfg = Get-Content -Raw -LiteralPath $moeAgentConfig -Encoding UTF8 | ConvertFrom-Json
         if ($cfg.serenaProject) {
             $serenaProjectCandidate = $cfg.serenaProject
             $serenaProjectSource = ".moe-agent.json"
