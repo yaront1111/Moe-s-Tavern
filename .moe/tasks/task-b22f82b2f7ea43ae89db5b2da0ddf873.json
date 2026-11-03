@@ -13,28 +13,40 @@
     {
       "stepId": "step-1",
       "description": "Edit docs/DEVELOPMENT.md with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat (both TOOL-witnessed, moe-agent.sh:5237), never Serena or a shell write. This is the governor's wording (comment-ee19c031 on this row, ruling comment-e4b42690 on task-57fe7ad1): this checkout's local .serena/project.yml ignores docs/**, so every Serena editor refuses the file. Docs-only row: no code and no new test file.\n\nThe architect's dry-run result is /mnt/d/moe-scratch/plan-b22f/DEVELOPMENT.proposed.md (Windows: D:\\moe-scratch\\plan-b22f\\). DEVELOPMENT.base.md there is the c99801aa doc, so `diff` the two to see every hunk. Read them, but apply the edits with your editing tool; never cp the proposed file into the tree. Line numbers are at c99801aa (the doc is unchanged at cc84c88a); if the file moved, apply by section. Make exactly these edits and nothing else:\n\n1. :355, WSL \"Node not found\": `setup_20.x` becomes `setup_24.x`, and the lead-in becomes `Install Node.js 24 LTS in WSL separately (the daemon needs 22.22+, 24 or 26):` (engines >=22.22.0).\n\n2a. :144-147, the body of \"## Seed Data for the UI\" (keep the heading), becomes:\nCreate epics and tasks through the daemon. Never write `.moe/` files by hand: the daemon is the sole writer of its runtime state.\n- JetBrains: **+ Epic** in the board header, **+** in the Backlog column header, or **Tools → Moe → Create Task**.\n- VS Code: **Moe: Create Epic** and **Moe: Create Task** in the Command Palette.\n- Agents and scripts: `moe.create_epic` and `moe.create_task` (contracts in [MCP_SERVER.md](./MCP_SERVER.md)). From a terminal, with the daemon running: `scripts/moe-call.sh create_epic '{\"title\":\"My epic\"}' --project <path>`.\n\n2b. \"## Current Feature Coverage\": after `- Task detail dialog (approve/reject/reopen)` add\n- Epic create, edit and delete (`CreateEpicDialog`, `EpicDetailDialog`) and task creation (`CreateTaskDialog`, also the `Moe.CreateTask` action)\n- Worker status (`WorkerPanel`), project settings (`MoeSettingsDialog`), the status bar widget (`MoeStatusBarWidget`) and IDE notifications (`MoeNotificationService`)\nThen delete `Not yet implemented (planned):`, its four bullets and the blank line after them. Keep the `See docs/PLUGIN_SPEC.md ...` line.\n\n3. :120-128, \"## Run the JetBrains Plugin\": replace the `Open moe-jetbrains ... run one of:` line and its code block with:\nBuild the daemon and the proxy first. The plugin build bundles both, and `requireBundledAssets()` in `moe-jetbrains/build.gradle.kts` fails it when either one's `dist/` is missing or older than its `src/`, or its `node_modules/` is missing. Then run Gradle from `moe-jetbrains/` (or open `moe-jetbrains` in IntelliJ/PyCharm and run the same tasks there):\n```bash\ncd packages/moe-daemon && npm install && npm run build\ncd ../moe-proxy && npm install && npm run build\ncd ../../moe-jetbrains\n./gradlew runIde     # launches a sandbox IDE\n./gradlew buildPlugin\n```\nOn Windows, run `.\\gradlew.bat runIde` or `.\\gradlew.bat buildPlugin` from `moe-jetbrains\\`.\n(Keep the one-line `cd … && npm install && npm run build` forms: step 2's check keys on them.)\n\n4a. :361 becomes:\n- The daemon binds `127.0.0.1` by default, and WSL in NAT mode cannot reach the Windows loopback. For WSL agents against a Windows daemon, start the daemon with `--host wsl` (or `MOE_BIND_HOST=wsl`): it then also listens on the WSL adapter, and agents reach it through the WSL gateway. In JetBrains on Windows, the **Start Agents** menu toggle **Run Agents in WSL (Linux)** restarts the daemon that way. Mirrored networking uses loopback. See [WSL agents cannot reach the Windows daemon](./TROUBLESHOOTING.md#wsl-agents-cannot-reach-the-windows-daemon).\n\n4b. :368 becomes:\n  - The plugin connects to the daemon at `ws://127.0.0.1:<port>/ws`. WSL agents that use a Windows daemon need the `--host wsl` bind described under **Networking**.\n\n5. :138, Gradle note: replace `the committed wrapper targets Gradle 8.10.2.` with `the committed wrapper pins its Gradle version in \\`moe-jetbrains/gradle/wrapper/gradle-wrapper.properties\\` (\\`distributionUrl\\`).`. Replace `` `wrapper --gradle-version 8.10.2 --distribution-type bin` flow from `` with `` `wrapper --gradle-version <version> --distribution-type bin` flow (the pinned version, or the one you are moving to) from ``. Name no literal version: one would drift again (the properties file pins 9.8.2 today).\n\n6. :329: `Port 3141 in use` becomes `Port 9876 in use`. The rest of the line is unchanged.\n\n7. :170 becomes `` - `-Role` / `--role`: `architect`, `worker`, `qa`, or `governor` ``.\n\n8. :426, the JetBrains cell `` `MoeSettings` `` becomes `` `MoeSettingsDialog` (writes `.moe/project.json` `settings` through `UPDATE_SETTINGS`) ``. The VS Code cell is unchanged.\n\nOut of scope, leave as is: the partial MCP tool list (:304), the daemon.json field list (:92) and the message-type lists (:408-409).\n\nError handling: if an old string no longer matches because the file changed after c99801aa, re-read that section and apply the same intent. If a cited UI label or class no longer exists, say so in a task comment and keep the doc to what the code has. Never paper over a mismatch by inventing a name.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/DEVELOPMENT.md"
       ],
-      "startedAt": "2026-11-03T18:45:22.874Z"
+      "modifiedFiles": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "startedAt": "2026-11-03T18:45:22.874Z",
+      "completedAt": "2026-11-03T18:45:53.453Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification: run it once, fresh, from the task worktree root (.worktrees/<taskId>). This docs-only row has no test suite. The mechanical grep gate below is its regression test, and it is how the row meets the epic rail's test requirement.\n\nRun executionContract.checkRefs [0], then [1], joined with ' && '. Submit that exact text, its exit code and the output tail as complete_task's verification.\n\nDo not run the doc's npm or gradlew commands to try them. The shared-checkout rail forbids npm builds, and this gate is the evidence.\n\n[0] covers DoD 1 to 3. It prints `counts: 0 0 0` and then DOC_OK only when all of these hold:\n- none of the three DoD grep patterns matches (each `grep -c` is 0);\n- the `` - `-Role` / `--role`: `` line names governor;\n- inside \"## Run the JetBrains Plugin\", these lines come in order: a `cd …moe-daemon … npm run build` line, a `cd …moe-proxy … npm run build` line, `cd …moe-jetbrains`, then the first `gradlew runIde|buildPlugin` line.\n\n[1] is DoD 3's scope check against `git merge-base HEAD ${MOE_LAND_TARGET:-moe/work-2026-10-24}`. It prints SCOPE_OK only when no tracked change and no untracked file exists outside docs/DEVELOPMENT.md, and docs/DEVELOPMENT.md itself differs. `.moe/` is excluded because the daemon's board writes land in the control checkout, never in the task worktree.\n\nError handling for a red check:\n- [0] prints the offending line(s), or exits 1 at the role or block check. Fix the doc text, never the check.\n- [1] prints `out of scope: <paths>`. Revert those paths, or delete the stray untracked file.\n- Re-run both until green.\n\nThe architect dry-ran both checks (/mnt/d/moe-scratch/plan-b22f/gate0.txt and gate1.txt):\n- [0] failed on the c99801aa doc and passed on the proposed copy.\n- Five mutants failed [0]: the role line without governor, no proxy build line, `cd moe-jetbrains` after gradlew, port 3141 restored, and no daemon build line.\n- [1] passed with only the doc changed, both uncommitted and committed with MOE_LAND_TARGET set.\n- [1] failed on a stray README.md edit, on a stray untracked file and on an unchanged doc.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T18:45:54.333Z",
+      "completedAt": "2026-11-03T18:46:07.227Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of the doc diff (`git diff $(git merge-base HEAD ${MOE_LAND_TARGET:-moe/work-2026-10-24}) -- docs/DEVELOPMENT.md`). Load the adversarial-self-review skill first.\n\nChecklist:\n- Does every changed sentence match the source it rests on (executionContract.sourceAssumptions)? That means: engines >=22.22.0; the JetBrains classes, Moe.CreateTask, the `+ Epic` and `+` labels and the VS Code command titles; requireBundledAssets; DEFAULT_BIND_HOST and DEFAULT_PORT; `--host wsl` and the Run Agents in WSL (Linux) toggle; gradle-wrapper.properties; governor in both launchers; MoeSettingsDialog to UPDATE_SETTINGS.\n- Does the text agree with docs/TROUBLESHOOTING.md (\"Wrong Node.js version\" and \"WSL agents cannot reach the Windows daemon\") and with docs/CONFIGURATION.md (MOE_BIND_HOST and `--host wsl`)? Does the TROUBLESHOOTING anchor resolve to the heading at :181?\n- Cross-platform: does the plugin block name the Windows gradlew.bat form, and does the WSL Node line install a 22.22+ line?\n- Markdown: are code fences balanced, list items intact, and is the Config location row still 3 cells?\n- Was no claim added beyond the 8 items, and no line outside them changed?\n\nIf you find something, fix it with step 1's editing tool and re-run step 2's command before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "note": "Self-review: edits follow the plan text; anchor resolves (TROUBLESHOOTING:182), fences balanced, config row 3 cells, gate green.",
+      "startedAt": "2026-11-03T18:46:07.631Z",
+      "completedAt": "2026-11-03T18:46:09.909Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -59,11 +71,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:20:05.391Z",
-  "updatedAt": "2026-11-03T18:45:22.874Z",
+  "updatedAt": "2026-11-03T18:47:22.336Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:33:10.060Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -74,7 +87,11 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T18:43:59.226Z",
   "executionContract": {
@@ -137,11 +154,39 @@
   "planApprovedAt": "2026-11-03T18:43:59.259Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-1dd28c7c@2026-11-03T18:33:08Z",
-    "at": "2026-11-03T18:44:49.643Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T18:44:11Z",
+    "at": "2026-11-03T18:47:22.335Z"
   },
-  "workStartedAt": "2026-11-03T18:45:22.874Z"
+  "workStartedAt": "2026-11-03T18:45:22.874Z",
+  "reviewStartedAt": "2026-11-03T18:46:12.224Z",
+  "verification": {
+    "command": "checkRefs[0] && checkRefs[1] (DEVELOPMENT.md content grep + awk order check; merge-base scope check)",
+    "exitCode": 0,
+    "outputTail": "counts: 0 0 0\nDOC_OK\nSCOPE_OK",
+    "reportedAt": "2026-11-03T18:46:12.224Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/DEVELOPMENT.md"
+  ],
+  "completionSummary": "docs/DEVELOPMENT.md: fixed the 8 named contradictions (Node 24 for WSL, UI-based seeding, feature coverage, plugin build order with proxy and gradlew from moe-jetbrains, WSL --host wsl networking, Gradle version deferred to wrapper properties, port 9876, governor role, MoeSettingsDialog).",
+  "commits": [
+    {
+      "sha": "b5f40feec10434f67489bab37d2e2d627a820099",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T18:44:11Z",
+      "paths": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "recordedBy": "qa-93f9625e",
+      "recordedAt": "2026-11-03T18:47:21.959Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
