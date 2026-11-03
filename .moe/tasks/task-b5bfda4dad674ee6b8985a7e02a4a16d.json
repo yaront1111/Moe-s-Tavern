@@ -41,7 +41,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -61,16 +61,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:02:49.230Z",
-  "updatedAt": "2026-11-03T17:13:42.018Z",
+  "updatedAt": "2026-11-03T17:15:55.602Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:05:48.104Z",
     "plannedStepCount": 2,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 2
+    "executedStepCount": 2,
+    "doneAt": "2026-11-03T17:15:25.178Z",
+    "wallClockMs": 577074
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-93f9625e"
   ],
   "tier": "light",
   "effort": "medium",
@@ -168,9 +171,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T17:11:26Z",
-    "at": "2026-11-03T17:13:42.018Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T17:14:10Z",
+    "at": "2026-11-03T17:15:55.602Z"
+  },
+  "completedAt": "2026-11-03T17:15:25.178Z",
+  "reviewCompletedAt": "2026-11-03T17:15:25.178Z",
+  "reviewSummary": "Reviewed completion 19d5e67a (on moe/control HEAD and moe/work-2026-10-24; recorded completion, pushed). Diff: docs/SCHEMA.md only, +32/-14, 4 hunks all inside \"## ID Generation\" (heading and closing '---' untouched).\n\nRe-ran checkRef pieces on the commit's blob (shared tree is dirty with .moe files, so scope check = git diff --name-only 19d5e67a^ 19d5e67a):\n- DoD1: 0 matches for split('-')[0] / \"First 8 chars\".\n- DoD2: prefix loop prints nothing; the 17 non-test generateId prefixes each have a table row.\n- DoD3: section has <32 lowercase hex>, 0aab4d36, step-<n>, MOE_WORKER_ID.\n- DoD4: only docs/SCHEMA.md changed; 2 fence lines; one '---' (the terminator).\n- Cited facts verified: ids.ts:8, submitPlan.ts:509 step-${idx+1}, reportBlocked.ts:32 {6,}, moe-agent.sh:917-921 / .ps1:460-465 <role>-<8 hex>, -WorkerId param, proxy injectWorkerId, 0aab4d36 (2026-06-30). Entity names match SCHEMA.md interfaces.\n- Gate: parity-check.sh PASS, npm run lint exit 0.\n\nNon-blocking: attemptStore.ts:278 also accepts a caller-supplied attempt id, so the \"also accept a caller-supplied id\" sentence (Candidate/Review/CheckRun/CheckDispatch, per their interfaces) is not exhaustive; no DoD covers it, so not rejected. Docs-only; no code or tests touched.",
+  "requiredCheckAtDone": null
 }
