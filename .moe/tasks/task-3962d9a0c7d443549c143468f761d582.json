@@ -96,7 +96,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -109,16 +109,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:59:04.924Z",
-  "updatedAt": "2026-11-03T20:29:35.284Z",
+  "updatedAt": "2026-11-03T20:34:30.732Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:14:54.413Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T20:33:47.541Z",
+    "wallClockMs": 1133128
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-c9368191"
+    "worker-c9368191",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -204,10 +207,11 @@
   "planApprovedAt": "2026-11-03T20:24:03.857Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T20:24:11Z",
-    "at": "2026-11-03T20:29:35.284Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T20:30:57Z",
+    "at": "2026-11-03T20:34:30.732Z"
   },
   "workStartedAt": "2026-11-03T20:25:23.382Z",
   "reviewStartedAt": "2026-11-03T20:27:02.791Z",
@@ -244,5 +248,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T20:33:47.541Z",
+  "reviewCompletedAt": "2026-11-03T20:33:47.541Z",
+  "reviewSummary": "Approved. Reviewed completion ef354ee9 (recorded as completion, pushed; contained in moe/work-2026-10-24 and control HEAD). Diff +72/-8 across 4 files, under the 400 LOC cap.\n\nRE-RAN in a git-archive snapshot of ef354ee9 outside the shared checkout:\n- npm ci + npx tsc --noEmit: rc 0.\n- vitest run joinTeam.deadMembers, joinTeam.notification, teamMembershipHeal, workerType: 4 files, 86 tests passed (matches the worker).\n- Negative control (ef354ee9^ sources + only the new test file): 2 failed | 7 passed (9). The refused-join and TEAM_FULL cases fail; the member re-join case passes both ways, as designed.\n- qualityGate: parity-check.sh PASS, npm run lint OK.\n\nDoD:\n1. Met. The refused-join case asserts getWorker('w-n3') is null, workers/w-n3.json is absent and a state.subscribe capture is [] (no WORKER_CREATED). assertTeamHasSeat runs before createWorker.\n2. Met. Asserts MoeError, codeName TEAM_FULL, code INVALID_STATE (-32002), message contains 'is full (max 3 members)'. addTeamMember also rejects with TEAM_FULL (the /ws path).\n3. Met. The vitest command passes in a snapshot.\n\nSource checks: assertTeamHasSeat runs before evictDeadMembers and clearMembershipTombstone and is equivalent to the old inline block. A recordless member is not DEAD, and a refused join writes nothing. The message text after the '[TEAM_FULL] ' prefix is unchanged, so all existing substring assertions pass. teamMembershipHeal catches everything. The WS ERROR frame stays additive and McpAdapter logs at warn. The wrappers only print error.message, so no scripts/ change. The docs hunk is confined to the join_team section; the routed collision with task-0adea941 is moot since both have landed.\n\nNon-blocking: addTeamMember recomputes the DEAD id list (one line). Not run: the full daemon suite and JetBrains tests (daemon-only change, not epic-final).",
+  "requiredCheckAtDone": null
 }
