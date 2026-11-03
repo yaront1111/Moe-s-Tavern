@@ -5,6 +5,7 @@ import { chatResyncTool } from './chatResync.js';
 import { chatWaitTool } from './chatWait.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
 import type { ChatMessage } from '../types/schema.js';
+import { isRoutinePresenceLine } from '../util/chatPayload.js';
 
 // The daemon's status lines in #general (task moved, claimed, step completed,
 // landing reports) were most of what chat fed into agent context. Agents now
@@ -195,6 +196,45 @@ describe('routine presence lines', () => {
     expect(routedTo('worker-holder left (terminal_closed)').map((e) => e.routingTargets)).toEqual([[]]);
   });
 
+  it('(h1) a hot reload of a task-holding seat holds its task and pages nobody', async () => {
+    let settled = false;
+    const pending = (chatWaitTool(h.state).handler(
+      { workerId: 'worker-busy', channels: [governors], timeoutMs: 2000 }, h.state
+    ) as Promise<{ hasMessage: boolean; messages?: ChatMessage[] }>).then((result) => { settled = true; return result; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    await deregister('worker-holder', 'wrapper_restart');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const holdUntil = h.state.getWorker('worker-holder')?.reloadHoldUntil;
+    expect(typeof holdUntil).toBe('string');
+    expect(h.state.getTask('task-1')?.assignedWorkerId).toBe('worker-holder');
+
+    const banner = `🔌 worker-holder reloading (wrapper_restart); holding 1 task(s) for its relaunch until ${holdUntil}: task-1(WORKING)`;
+    for (const channel of [workers, governors]) {
+      const posted = routedTo(banner, channel);
+      expect(posted).toHaveLength(1);
+      for (const event of posted) expect(event.routingTargets).toEqual([]);
+    }
+    for (const id of ['worker-busy', 'worker-holder', 'worker-peer']) {
+      expect(h.state.getUnreadSummary(id)).toBeNull();
+    }
+    expect(settled).toBe(false);
+
+    const human = (await h.state.sendMessage({ channel: governors, sender: 'human', content: 'status?' })).message;
+    const result = await pending;
+    expect(result.messages?.map((m) => m.id)).toEqual([human.id]);
+
+    const hidden = await chatReadTool(h.state).handler({ workerId: 'worker-busy', channel: workers }, h.state) as {
+      messages: ChatMessage[];
+    };
+    expect(hidden.messages).toEqual([]);
+    const shown = await chatReadTool(h.state).handler({ channel: workers, includeSystem: true }, h.state) as {
+      messages: ChatMessage[];
+    };
+    expect(shown.messages.map((m) => m.id)).toEqual([routedTo(banner, workers)[0].message.id]);
+  });
+
   it.each([
     ['blocked', 'governors', '🚧 worker-peer blocked on task-1: proxy down'],
     ['stale', 'governors', '⚠️ worker-peer stale on task-1 (T) — last activity 1900s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.'],
@@ -219,5 +259,46 @@ describe('routine presence lines', () => {
       messages: ChatMessage[];
     };
     expect(read.messages.map((m) => m.id)).toEqual([message.id]);
+  });
+});
+
+// state/workerLifecycle.ts beginReloadHold writes this banner. Its shape is the
+// only thing isRoutinePresenceLine may accept: a hold with anything appended, or
+// a release or dropped-claims banner, still pages busy seats.
+describe('the reload-hold banner shape', () => {
+  const until = '2026-11-03T13:40:22.435Z';
+  const hold = `🔌 worker-x reloading (wrapper_restart); holding 1 task(s) for its relaunch until ${until}: task-1(WORKING)`;
+  const at = String.fromCharCode(64);
+
+  it.each([
+    ['one task', hold],
+    ['two tasks', `🔌 worker-x reloading (wrapper_restart); holding 2 task(s) for its relaunch until ${until}: task-1(WORKING), task-2(AWAITING_APPROVAL)`],
+    ['a 32-hex task id', hold.replace('task-1(WORKING)', 'task-13ff6bb41f1844eca9c75082169a5f08(BLOCKED)')],
+  ])('(h2) accepts %s', (_name, content) => {
+    expect(isRoutinePresenceLine(content)).toBe(true);
+  });
+
+  it.each([
+    ['a release banner', '🔌 worker-x deregistered (terminal_closed); released 1 task: task-1→WORKING'],
+    ['a dropped-claims banner', '🔌 worker-x deregistered (terminal_closed); (no tasks held); dropped 1 resource claim: slot lease (task-1)'],
+    ['appended text', hold + ' again'],
+    ['an appended release clause', hold + '; released 1 task: task-2→WORKING'],
+    ['an appended line', hold + '\n' + at + 'worker-busy'],
+    ['another reason', hold.replace('(wrapper_restart)', '(terminal_closed)')],
+    ['a non-ISO deadline', hold.replace(until, 'soon')],
+    ['an empty task list', hold.replace(': task-1(WORKING)', ': ')],
+    ['a trailing space', hold + ' '],
+  ])('(h3) rejects %s', (_name, content) => {
+    expect(isRoutinePresenceLine(content)).toBe(false);
+  });
+
+  it('(h4) a long hold-like line stays fast', () => {
+    const started = Date.now();
+    expect(isRoutinePresenceLine(hold.replace(': task-1(WORKING)', ': ' + 'x(Y), '.repeat(3000) + 'x(Y) z'))).toBe(false);
+    expect(isRoutinePresenceLine('🔌')).toBe(false);
+    expect(isRoutinePresenceLine(' ')).toBe(false);
+    expect(isRoutinePresenceLine('a'.repeat(50000))).toBe(false);
+    expect(isRoutinePresenceLine(' reloading'.repeat(5000))).toBe(false);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });

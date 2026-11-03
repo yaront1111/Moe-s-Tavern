@@ -31,14 +31,24 @@ const PRESENCE_LEFT_LINE = /^\S+ left \([^\n]*\)$/;
 // never ends in "(no tasks held)" and keeps routing.
 const QUIET_DEREGISTER_BANNER = /^\u{1F50C} \S+ deregistered \([^\n]*\); \(no tasks held\)$/u;
 
+// The reload-hold banner (state/workerLifecycle.ts beginReloadHold). A hot reload
+// keeps the seat's tasks assigned for its relaunch, so it frees nothing either.
+// The reason is always RELOAD_HOLD_REASON (beginReloadHold refuses any other), the
+// deadline is toISOString(), and the <taskId>(<STATUS>) list ends the line, so
+// appended text keeps routing. A hold that runs out is a full reload_hold_expired
+// deregister, whose "released N task" banner still routes.
+const RELOAD_HOLD_BANNER = /^\u{1F50C} \S+ reloading \(wrapper_restart\); holding \d+ task\(s\) for its relaunch until \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z: [^\s(),]+\([A-Z_]+\)(?:, [^\s(),]+\([A-Z_]+\))*$/u;
+
 /**
- * A routine presence line: a seat leaving, or a deregistration that freed
- * nothing. Wrapper restarts produce them after almost every CLI session, and
+ * A routine presence line: a seat leaving, a deregistration that freed
+ * nothing, or a hot reload that holds its tasks for the relaunch. Wrapper
+ * restarts produce them after almost every CLI session, and
  * they carry no decision for anyone. Total: any other input is simply false.
  */
 export function isRoutinePresenceLine(content: string): boolean {
   return typeof content === 'string'
-    && (PRESENCE_LEFT_LINE.test(content) || QUIET_DEREGISTER_BANNER.test(content));
+    && (PRESENCE_LEFT_LINE.test(content) || QUIET_DEREGISTER_BANNER.test(content)
+      || RELOAD_HOLD_BANNER.test(content));
 }
 
 /**
