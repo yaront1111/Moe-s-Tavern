@@ -28,18 +28,26 @@
     {
       "stepId": "step-2",
       "description": "The fix. Use your Edit tool.\n\n(a) packages/moe-daemon/src/tools/updateEpic.ts\n- Change the type import to `import type { Epic, EpicStatus } from '../types/schema.js';`.\n- Add `import { validateEpicUpdates } from '../state/validators.js';` and `import { archiveEpicTool } from './archiveEpic.js';`.\n- Directly above `export function updateEpicTool`, add:\n```ts\n/**\n * The one epic-update path of moe.update_epic and the board's /ws UPDATE_EPIC.\n * Moving an epic that is not ARCHIVED yet to ARCHIVED runs moe.archive_epic\n * instead of a bare status write: its in-flight refusal, its holder rule for a\n * caller with a workerId, its finalizing hold, and every task archived with a\n * TASK_ARCHIVED event. The call's other fields are validated before any write\n * and applied after the archive. Every other update, an already-ARCHIVED epic\n * included, stays a plain state.updateEpic.\n */\nexport async function applyEpicUpdate(\n  state: StateManager,\n  epicId: string,\n  updates: Record<string, unknown>,\n  workerId?: string\n): Promise<Epic> {\n  const epic = state.getEpic(epicId);\n  if (!epic || updates?.status !== 'ARCHIVED' || epic.status === 'ARCHIVED') {\n    return state.updateEpic(epicId, updates as Partial<Epic>, workerId);\n  }\n  const { status: _archived, ...rest } = updates;\n  const hasRest = Object.keys(rest).length > 0;\n  if (hasRest) validateEpicUpdates(rest as Partial<Epic>); // a bad companion field is refused before any write\n  await archiveEpicTool(state).handler(workerId === undefined ? { epicId } : { epicId, workerId }, state);\n  return hasRest ? state.updateEpic(epicId, rest as Partial<Epic>, workerId) : state.getEpic(epicId)!;\n}\n```\n- In updateEpicTool:\n  - The handler's write becomes `const epic = await applyEpicUpdate(state, params.epicId, updates, workerId as string | undefined);`. The allowed-field check and assertDesignatable still run first, unchanged.\n  - The description becomes `'Update an existing epic. status ARCHIVED on an epic that is not archived yet runs moe.archive_epic first (refused while any task is PLANNING, AWAITING_APPROVAL or WORKING, or, for a caller with a workerId, while another worker holds a BLOCKED task; otherwise every task is archived), then applies the other fields.'`.\n  - The status schema becomes `{ type: 'string', enum: ['PLANNED', 'ACTIVE', 'COMPLETED', 'ARCHIVED'], description: 'Epic status. ARCHIVED follows moe.archive_epic (see the tool description).' }`. This is additive: validateEpicUpdates already accepted ARCHIVED, and the reply shape `{ success, epic }` is unchanged.\n\n(b) packages/moe-daemon/src/server/WebSocketServer.ts. Touch only two places: the import list and the `case 'UPDATE_EPIC'` body.\n- Add `import { applyEpicUpdate } from '../tools/updateEpic.js';` right after `import { releaseTaskTool } from '../tools/releaseTask.js';`.\n- In UPDATE_EPIC, replace `const epic = await this.withMutex(() => this.state.updateEpic(epicId, updates as Record<string, unknown>));` with these two comment lines and the new call:\n  `// moe.update_epic's path: a move to ARCHIVED follows moe.archive_epic`\n  `// (in-flight refusal, every task archived); a refusal is the ERROR frame.`\n  `const epic = await this.withMutex(() => applyEpicUpdate(this.state, epicId, updates as Record<string, unknown>));`\n- Leave the EPIC_UPDATED reply, the Origin check, UPDATE_SETTINGS and every other case alone. Other lanes edit them, and merge-tree lands distinct hunks.\n- The board call carries no workerId, so it is a human for the holder rule, exactly as archive_epic treats a caller-less call.\n\nError handling:\n- Every refusal is thrown before the first write: an invalid companion field from validateEpicUpdates, then archive_epic's NOT_ALLOWED in-flight and holder gates, then its finalizing-hold refusal.\n- The MCP path returns the coded error. /ws turns it into the existing catch-all ERROR frame `{ type: 'ERROR', message, operation: 'UPDATE_EPIC', code, codeName, context }`, so no new error path is added.\n- A missing epic or a non-object `updates` keeps today's plain-path errors (`Epic not found`, `updates must be an object`).\n- A write failure partway through archiving behaves as archive_epic does today.\n\nCheck: in the architect's dry run of this exact code, tsc gave rc 0. The new file plus updateEpic, archiveEpic(.holderActor), createEpic.validation, epicDeleteActor and all five WebSocketServer*.test.ts gave 11 files and 191 tests passed. The full daemon suite from a whole-tree snapshot gave 266 files, 7309 passed and 24 skipped in 46 s.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/updateEpic.ts",
         "packages/moe-daemon/src/server/WebSocketServer.ts"
       ],
-      "startedAt": "2026-11-03T22:46:55.073Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/updateEpic.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Implemented approved applyEpicUpdate helper, archiveEpicTool delegation, pre-write companion validation, additive ARCHIVED enum, and only the WS import/UPDATE_EPIC call. Scope grew solely to docs/MCP_SERVER.md's ### moe.update_epic section because governor comment-d480311d and architect correction comment-60494020 explicitly require that sync and reject the plan's file-wide-held deferral. Corrected status list and documented archive/refusal semantics; no other section changed. git diff --check passed. Planned GREEN/full suite runs once in step 3; RED already established in step 1.",
+      "startedAt": "2026-11-03T22:46:55.073Z",
+      "completedAt": "2026-11-03T22:47:45.233Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification, run once.\n\nRun the GREEN gate (first checkRef) verbatim; it is complete_task's verification. This is the FULL daemon suite, because update_epic's published inputSchema changed (MCP wire surface). It runs from a whole-tree `git archive HEAD` snapshot in /tmp, because many daemon suites read scripts/, docs/ and certify fixtures outside the package; a package-only archive fails them spuriously. Never run npm or vitest in the checkout (rail). It takes about 2-3 min: npm ci, then tsc, then about 46 s of vitest. Expect tsc clean and `Test Files  266 passed`, plus the counts of any files peers have added since.\n\nThe output is large, so read only the `Test Files`, `Tests` and `FAIL` lines.\n\nThen run the RED gate (second checkRef) once more. It must still print RED-AT-BASE, because it pins f8b8d60c's two source files. Quote its output in your completion summary.\n\nError handling for a red run:\n- For any failure outside the four touched areas (updateEpic, archiveEpic, WebSocketServer, the new file), re-run that file in a second whole-tree snapshot of plain HEAD.\n- If it fails there too, it is pre-existing. Report it in #general and call moe.report_blocked with both outputs; do not touch that file.\n- If it fails only with your change, fix your code, never the test.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T22:48:04.679Z"
     },
     {
       "stepId": "step-4",
@@ -75,12 +83,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:22.068Z",
-  "updatedAt": "2026-11-03T22:46:55.073Z",
+  "updatedAt": "2026-11-03T22:48:04.679Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:34:31.384Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -91,7 +99,8 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:43:24.967Z",

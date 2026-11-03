@@ -66,8 +66,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -79,12 +79,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:36.150Z",
-  "updatedAt": "2026-11-03T22:46:21.030Z",
+  "updatedAt": "2026-11-03T22:48:27.559Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:37:25.685Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:48:01.486Z",
+    "wallClockMs": 635801
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -204,9 +206,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T22:40:23Z",
-    "at": "2026-11-03T22:45:54.126Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:45:59Z",
+    "at": "2026-11-03T22:48:27.559Z"
+  },
+  "completedAt": "2026-11-03T22:48:01.486Z",
+  "reviewCompletedAt": "2026-11-03T22:48:01.486Z",
+  "reviewSummary": "Reviewed completion 2293e2c5 (on moe/work-2026-10-24; git show, 4 files, +158/-0, under the 400 LOC cap; matches approvedScope: profileRollout.ts hook, new approvalModeSwitch.test.ts, one MCP_SERVER.md bullet, one CONFIGURATION.md bullet; submitPlan.ts untouched). Re-ran task.verification verbatim in a git-archive snapshot outside the repo (Node 24.21.0): doc greps pass, tsc --noEmit clean, 7 files / 490 tests passed, EXIT=0. Mutant check: with profileRollout.ts reverted to 2293e2c5^ in the snapshot, approvalModeSwitch.test.ts fails exactly 2 of 7 (SPEED->CONTROL, CONTROL->SPEED); the 5 guard cases pass, so the tests are not vacuous. DoD: (1) SPEED->CONTROL before the timer fires leaves the row AWAITING_APPROVAL, no PLAN_AUTO_APPROVED, no approvedPlanRevision. (2) CONTROL->SPEED approves after speedModeDelayMs with no restart, exactly one PLAN_AUTO_APPROVED bound to the submitted revision; an armed row is not armed twice (timer-count delta across SPEED->TURBO->SPEED). (3) New vitest file covers both directions plus TURBO-keeps-timer, same-mode/unrelated write, and refused writes in both directions; existing submitPlan/automaticApprovalRevision/profileRollout/StateManager/planApproval/WebSocketServer suites stay green. Code audit: hook runs after validateSettingsUpdate + atomic write + state.project assignment, before the SETTINGS_UPDATED emit; undefined mode counts as CONTROL (matches setTaskStatus.ts:156); updateSettings has one production caller (WebSocketServer UPDATE_SETTINGS under withMutex); wire shape, validation, emit and restart re-arm unchanged. Residual, disclosed by the worker and not a defect of this slice: a timer already fired and queued on the mutex behind the settings write re-checks only status, so a CONTROL switch in that window can still approve one row; fix needs a mode re-check in submitPlan.ts's timer callback, filed as task-8cb8ff4a (dependsOn dd1e00f8). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

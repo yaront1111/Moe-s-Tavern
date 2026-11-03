@@ -1,0 +1,28 @@
+{
+  "id": "task-bc6ba91b03b4435781ade6d4159e5ed7",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a worktree completion whose push origin applied but answered [remote rejected] is routed unlanded and its receipt journal deleted, so the retry finds nothing to commit, no completion row is ever recorded, and QA's landed gate parks the row BLOCKED (both launchers)",
+  "description": "Filed by the governor at 22:50Z on 2026-11-03 after a live incident on task-7cef0861.\n\nINCIDENT (all times Z, 2026-11-03):\n- 22:41:06: worker-c9368191 takes the git-land lease for 7cef0861's completion.\n- 22:41:38: the completion C = 890b1831 is created, and its push reaches origin. origin/moe/work-2026-10-24 holds 890b1831 to this hour. Its tree equals attempt-de9d1520's candidate tree bcc76403, its parent is the candidate base 3441d183, and its trailers are Moe-Task task-7cef0861 / Moe-Kind completion.\n- 22:41:46-49: the wrapper still reads a `![remote rejected]` porcelain line. It records MOE_PUSH_FAILED and the rescue ref refs/moe/rescue/task-7cef0861.../20261103T224148Z (reason=remote), then finalizes the attempt unlanded. The row goes REVIEW -> WORKING with landingRetry remote.\n- 22:43:55: the retry session (worker-33f67e5b) finds the merged tree equal to the target's: MOE_COMMIT_NOTHING_TO_COMMIT, with no completion row.\n- 22:44:34: QA's landed gate (qa_landed_gate) stops: \"no recorded completion commit (get_context task.landing.lastCompletion.sha is missing ...)\". The row is BLOCKED.\n- 22:46:42: the governor repairs it by hand with record_commit (890b1831, verified against the candidate).\nWithout that manual repair the row cannot leave the loop: every new landing finds nothing to commit, and QA blocks again.\n\nCAUSE (at tip 15728974):\n- scripts/moe-agent.sh wt_push_target (:7488-7498) maps a `![remote rejected]` line straight to rc 2. wt_publish (:7504-7520) then runs `rm -f` on the receipt journal and sets MOE_PUSH_FAILED. Neither ever fetches to check whether origin took C, which reconcile_push (:7418) does for every unknown answer.\n- The retry's L5 branch (:7581-7584) already recovers a journaled C when the merged tree equals the target's ($jc gives LAND_WT_RECOVERED and records the owed completion row). The journal is gone by then, so it records a plain \"nothing\".\n- The ps1 twins behave the same: Send-MoeLandPush (:7094-7105), Publish-MoeWorktreeLanding (:7112 on), and the L5 branch (:7220-7223).\nGitHub can answer a push with remote rejected (an internal error or a ref-lock timeout on its side) after applying the update. So a single remote-rejected line is not proof that C is absent.\n\nFIX DIRECTION (the planner decides):\n1. On `![remote rejected]`, fetch origin's target once, the same way reconcile_push does. If C is an ancestor of origin's tip, treat the push as published (rc 0: journal 'pushed', mirror, record and finalize landed). Otherwise MOE_PUSH_FAILED as today. A failed fetch stays MOE_PUSH_FAILED.\n2. Optionally, as defense in depth, keep the receipt journal until that check proves C absent, so a pre-flight replay or the retry's L5 recovery can still owe the row.\nBoth launchers, in string parity. Sync the worktree landing text in scripts/CLAUDE.md (it says \"`[remote rejected]` is `MOE_PUSH_FAILED`\") and the design doc's L9 line if it says the same.\n\nPLACEMENT: edit only the push/publish functions named above. The CQ-M07n rows (23c803d2 WORKING, 62ec51f1 gated) and cc4213c0 edit the VM-route blocks of the same files, and merge-tree lands separate hunks cleanly. In the task worktree, edit moe-agent.{sh,ps1} in place with a TOOL-witnessed editor, then bash -n and the ps1 ParseFile check, never temp+mv. Test with a git stub or fake remote in the worktree landing harness (scripts/tests/postflight-worktree.cjs): the push updates the bare remote, then prints a `![remote rejected]` porcelain line.",
+  "definitionOfDone": [
+    "In both launchers, a worktree completion whose push answers `![remote rejected]` while origin's target already contains C is treated as published: the attempt is finalized landed with landedRevision C, a completion row with pushed:true is recorded, no rescue ref or landingRetry is created, and the receipt journal is settled rather than deleted unread.",
+    "A `![remote rejected]` answer where origin's target does NOT contain C after the re-check (and a failed re-check fetch) still ends MOE_PUSH_FAILED with the rescue ref and the unlanded remote route exactly as before; parity-check passes and the landing harness covers both cases on the sh and ps1 wrappers.",
+    "scripts/CLAUDE.md's worktree landing text (and the design doc's L9 line, if it states the old rule) describes the re-check."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 452.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:48:03.572Z",
+  "updatedAt": "2026-11-03T22:48:03.572Z"
+}
