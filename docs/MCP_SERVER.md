@@ -1854,10 +1854,12 @@ Create a new epic.
   description?: string,
   architectureNotes?: string,
   epicRails?: string[],
-  status?: string,
-  order?: number
+  status?: "PLANNED" | "ACTIVE" | "COMPLETED" | "ARCHIVED",  // default "PLANNED"
+  order?: number   // an integer >= 0; default: the highest finite epic order + 1
 }
 ```
+
+A bad `status` or `order` is refused with `INVALID_INPUT`, the same rule `moe.update_epic` applies, and no epic is written. An omitted or `null` value takes the default.
 
 **Returns:**
 ```typescript

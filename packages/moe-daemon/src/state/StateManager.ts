@@ -79,7 +79,6 @@ import {
   sanitizeNumber,
   sanitizePatternPreservingPlaceholders,
   sanitizeBoolean,
-  sanitizeEnum,
   sanitizeUrl,
   validateEntityId
 } from '../util/sanitize.js';
@@ -1251,10 +1250,15 @@ export class StateManager {
     const title = sanitizeString(input.title, 'epicTitle', 500, 'Untitled epic');
     const description = sanitizeString(input.description, 'epicDescription', 10000, '');
     const architectureNotes = sanitizeString(input.architectureNotes, 'architectureNotes', 50000, '');
-    // Same rule as updateEpic: refuse (INVALID_INPUT), never truncate or drop.
-    const epicRails = validateEpicUpdates({ epicRails: input.epicRails }).epicRails ?? [];
-    const validStatuses = ['PLANNED', 'ACTIVE', 'COMPLETED'] as const;
-    const status = sanitizeEnum(input.status, validStatuses, 'PLANNED');
+    // Same rule as updateEpic: refuse (INVALID_INPUT), never truncate, drop or coerce.
+    // null counts as omitted, as it did before status and order were validated here.
+    const validated = validateEpicUpdates({
+      epicRails: input.epicRails,
+      status: input.status ?? undefined,
+      order: input.order ?? undefined,
+    });
+    const epicRails = validated.epicRails ?? [];
+    const status = validated.status ?? 'PLANNED';
 
     const now = new Date().toISOString();
     const epic: Epic = {
@@ -1265,7 +1269,7 @@ export class StateManager {
       architectureNotes,
       epicRails,
       status,
-      order: input.order ?? this.nextEpicOrder(),
+      order: validated.order ?? this.nextEpicOrder(),
       createdAt: now,
       updatedAt: now
     };
@@ -1475,8 +1479,12 @@ export class StateManager {
   }
 
   nextEpicOrder(): number {
-    const epics = Array.from(this.epics.values());
-    if (epics.length === 0) return 1;
-    return Math.max(...epics.map((e) => e.order)) + 1;
+    // Skip non-finite orders: a legacy or hand-edited non-numeric order made every
+    // later default NaN, which JSON writes as null.
+    const orders = Array.from(this.epics.values())
+      .map((e) => e.order)
+      .filter((o) => typeof o === 'number' && Number.isFinite(o));
+    if (orders.length === 0) return 1;
+    return Math.max(...orders) + 1;
   }
 }
