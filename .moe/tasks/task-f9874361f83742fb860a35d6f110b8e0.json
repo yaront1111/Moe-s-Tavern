@@ -81,17 +81,20 @@
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW (adversarial-self-review skill), then complete_task.\n\nMutants. Put each in its own `cp -r` copy of this worktree's scripts/ outside the repo (ps1 copies keep the BOM; mem:gotcha-postflight-worktree-mutant-copy). Run them with MOE_WORKTREE_ONLY=wt-settings, after an unmutated control copy passes. Each must FAIL with an AssertionError.\n- sh M1: drop the refusal branch.\n- sh M2: drop the post-flight read_commit_settings line (the mid-session cases then land gated on main).\n- sh M3: target back to CS_CONSOLIDATION_BRANCH:-main ('pinned' lands on main).\n- sh M4: drop MOE_LAND_SETTINGS_UNREADABLE from unlanded_reason (no unlanded finalize).\n- sh M5: readable = d is a dict only ('settings-string' lands).\n- sh M6: print the mismatch line unconditionally ('agree' fails).\n- ps1 P1: drop the refusal branch.\n- ps1 P2: $target = $st.\n- ps1 P3: settingsReadable = $true whenever ConvertFrom-Json did not throw ('array' lands).\n- ps1 P4: drop the map entry.\nExpected survivor: -cne to -ne (no case-only branch pair). Record every result in the completion summary.\n\nChecklist:\n- Two seats landing at once: the lease id follows the pinned target, and the refusal takes no lease.\n- Every input class: missing, empty, truncated, array, scalar settings, absent settings, a mid-session change.\n- MOE_WT_TARGET and $script:MoeWtTarget are always set on a worktree completion.\n- The owner guard still runs first.\n- Shared-mode landing and every existing settings value are unchanged.\n- No new MOE_* name appears in one twin only.\n- The diff is at or under about 250 net LOC, tests included.\n- No added line contains a project.json globalRails.forbiddenPatterns string.\n\nName the out-of-scope residuals from planningNotes.risks in the completion summary.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "note": "Adversarial self-review. No code change. The bytes are checkpoint 5ae55687; working-tree and HEAD sha256 equal the hashes the step-5 gate ran on.\n\nMUTANTS: each ran in its own cp -r copy of scripts/ with MOE_WORKTREE_ONLY=wt-settings (driver D:\\moe-scratch\\f987-tools\\{apply.py,mut.sh}, results\\*.result). The unmutated controls ctl-sh and ctl-ps both pass.\nKilled with an AssertionError (case that killed it):\n- M1, drop the sh refusal: missing.\n- M2, drop the post-flight read_commit_settings: empty.\n- M3, target back to CS_CONSOLIDATION_BRANCH:-main: pinned.\n- M4, drop the sh unlanded_reason entry: missing.\n- M5, readable = dict only: settings-string.\n- M6, print the mismatch unconditionally: absent.\n- P1, drop the ps1 refusal: missing.\n- P2, $target = $st: pinned.\n- P3, settingsReadable always $true: empty.\n- P4, drop the map entry: missing.\nP5 (-cne to -ne) survives, as expected: no case covers a branch pair that differs only by case.\n\nCHECKLIST\n- Lease id: acquire_land_lease and Acquire-MoeLandLease take the pinned target. The pinned case asserts every lease resourceId is git-land-moe-work-x.\n- No lease on refusal: the refusal branch comes before acquire, and leases(p)=[] is asserted.\n- Input classes covered: missing, empty, truncated (remote), array, settings-string, absent, plus a mid-session corruption through an absolute WT_CLI_WRITE.\n- MOE_WT_TARGET ($script:MoeWtTarget) is set only by provisioning, after its local-branch check, and reset every iteration. If it is empty the target falls back to the settings rule, today's behavior.\n- The owner guard runs first: the refusal comes after the L2 'refused' return.\n- CS_* are assigned only inside read_commit_settings, so the post-flight re-read changes no other state. The function ends with return 0, so it is set -e safe. Python is a hard startup requirement.\n- ps1 lands with its fresh post-flight read ($moeSettings at ~11085).\n- Both codes appear in both twins; the codes case passes on both engines.\n- No forbidden pattern in any added line.\n- Size: +107/-23 (84 net).\n\nMERGED TREE: the target is now 2b934dce, including d2d6ac4b. git merge-tree onto it is clean (tree 256f3f11). A git-archive of that tree passes:\n- L6: parity-check.sh PASS, npm run lint OK.\n- wt-settings and codes: ok on sh and on PS 5.1.\n\nTHEORETICAL, not fixed:\n- pwsh 7's ConvertFrom-Json enumerates a top-level one-element array into its object, so pwsh reads [{\"settings\":{...}}] as readable where python says not. Even then the gate comes from that object.\n- echo -e interprets backslash escapes in a consolidationBranch inside the warning line. The effect is cosmetic, and the existing lines already do the same.",
+      "startedAt": "2026-11-03T15:23:35.706Z",
+      "completedAt": "2026-11-03T15:28:24.379Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -110,7 +113,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:30:24.086Z",
-  "updatedAt": "2026-11-03T15:19:04.220Z",
+  "updatedAt": "2026-11-03T15:29:48.208Z",
   "contextFetchedBy": [
     "governor-e6b40560",
     "architect-24611a0a",
@@ -125,7 +128,7 @@
     "firstClaimAt": "2026-11-03T13:08:25.095Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -136,7 +139,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:35:29.182Z",
@@ -214,10 +218,65 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T13:36:42.176Z",
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-24611a0a@2026-11-03T13:08:24Z",
-    "at": "2026-11-03T13:52:48.331Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T15:21:44Z",
+    "at": "2026-11-03T15:29:48.208Z"
+  },
+  "commits": [
+    {
+      "sha": "5ae5568738ccce2c083b5664bee1eb4ec6b53fe3",
+      "ref": "refs/heads/moe/task/task-f9874361f83742fb860a35d6f110b8e0",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T13:35:31Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T15:21:05.651Z",
+      "treeId": "9b733530940bca93d2430b1671fb6e6de3ab7410",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "6cca2104b00faca1405dff2dce4645e327235fb3",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T15:21:44Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T15:29:48.208Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "docs/CONFIGURATION.md",
+    "scripts/CLAUDE.md"
+  ],
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-11-03T15:29:01.162Z",
+  "verification": {
+    "command": "N=\"/mnt/c/Program Files/nodejs/node.exe\" && P=\"/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && bash scripts/tests/parity-check.sh && $P \"$(wslpath -w scripts/tests/parity-check.ps1)\" && S=$(mktemp -d /mnt/d/moe-scratch/f987-XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fp.js\" && MOE_WORKTREE_ONLY=wt-settings,codes node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fp.js\" \"$S\" \"$BASH\" && MOE_WORKTREE_ONLY=wt-settings,codes WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fp.js\")\" \"$(wslpath -w \"$S\")\" powershell && env $(compgen -e | grep -E '^(MOE_|CLAUDE)' | sed 's/^/-u /') bash -c 'node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh' && \"$N\" scripts/tests/postflight-safe.mjs powershell && $P \"$(wslpath -w scripts/tests/worktree-landing.ps1)\"",
+    "exitCode": 0,
+    "outputTail": "START 2026-11-03T13:52:11Z HEAD=eaad2635 (worktree dirty: the 5 task files; sha256 sh 2fb68947.. ps1 1356a2c5.. cjs 464a8ba8.. CONFIGURATION a672e6b5.. CLAUDE 928e0ac3.., identical at END and in checkpoint 5ae55687)\nPASS parity-check.sh\nPASS parity-check.ps1\n[worktree] codes ok\n[worktree] wt-settings ok\n[worktree] 2 ok, 0 failed\n[worktree] codes ok\n[worktree] wt-settings ok\n[worktree] 2 ok, 0 failed\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge ... PASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge ... PASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nEND 2026-11-03T15:18:11Z\nEXIT=0\n--- merged-tree recheck this session (target 2b934dce incl. task-d2d6ac4b; merge-tree clean, tree 256f3f11, git-archive snapshot): PASS parity-check.sh; npm run lint OK; sh: [worktree] codes ok, wt-settings ok, 2 ok 0 failed; PS 5.1: [worktree] codes ok, wt-settings ok, 2 ok 0 failed",
+    "reportedAt": "2026-11-03T15:29:01.162Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Worktree completions now fail closed when post-flight cannot read .moe/project.json, and they land on the attempt's pinned workspace.target. Both twins changed; 84 net LOC across 5 files.\n\n- sh: read_commit_settings emits an 11th field, CS_SETTINGS_READABLE. It defaults to false, so a failed python run also refuses.\n- ps1: Read-MoeCommitSettings gets the matching settingsReadable flag. It uses PSObject.Properties and the full PSCustomObject type name.\n- Readable means a JSON object whose settings is absent, null or an object. Shared-mode CS_* and other keys are unchanged for every input (checked on 20+ inputs per engine).\n- land_worktree_completion re-reads the settings. Its target is MOE_WT_TARGET / $script:MoeWtTarget, else the old settings rule. A differing settings target prints MOE_LAND_TARGET_MISMATCH, and the landing still goes to the pinned target.\n- MOE_LAND_SETTINGS_UNREADABLE refuses right after the L2-failed branch: no lease, merge-tree, gate, journal or push. unlanded_reason maps it to gate, so the task branch tip is parked on a rescue ref, a failed row is recorded with pushed false, and the attempt is finalized unlanded with reason gate.\n- Tests: wt-settings in postflight-worktree.cjs covers missing, empty, truncated (remote), array, settings-string, absent, pinned and agree. RED on the unmodified wrappers on both engines.\n- Docs: two rows in CONFIGURATION.md and the unlanded-route line in scripts/CLAUDE.md.\n\nMutants (wt-settings): M1-M6 and P1-P4 are all killed with an AssertionError. P5 (-cne to -ne) survives as expected, since no case covers a branch pair that differs only by case.\n\nVerification:\n- The plan's command ran in full 13:52-15:18Z, EXIT=0, on bytes sha256-identical to checkpoint 5ae55687. This session did not re-run the 86-min command.\n- Rechecked this session on the merged tree (target 2b934dce, which includes d2d6ac4b; merge-tree clean): parity-check.sh, lint, and wt-settings plus codes pass on sh and on PS 5.1.\n\nResiduals, out of scope"
 }
