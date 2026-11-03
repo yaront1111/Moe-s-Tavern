@@ -108,8 +108,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -189,7 +189,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-03T00:18:36.427Z",
+  "updatedAt": "2026-11-03T00:20:21.935Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
@@ -199,7 +199,9 @@
     "firstClaimAt": "2026-10-30T13:39:36.046Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-03T00:18:48.423Z",
+    "wallClockMs": 297552377
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -345,10 +347,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-02T22:18:36Z",
-    "at": "2026-11-02T22:35:01.596Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T23:30:21Z",
+    "at": "2026-11-03T00:20:21.935Z"
   },
   "reviewStartedAt": "2026-11-02T22:33:19.847Z",
   "verification": {
@@ -358,5 +361,9 @@
     "reportedAt": "2026-11-02T22:33:19.847Z",
     "source": "agent-reported"
   },
-  "completionSummary": "A hot reload now loads only committed bytes. After the ls-files/diff gate, the wrapper copies itself into a private moe-wrapper-pin.* folder and checks the copy's hash-object against HEAD:./<leaf>. Only then does it parse and run the copy (sh: exec \"$BASH\" <pin>; ps1: & $global:MoeWrapperReloadPin). The copy deletes itself after the launch hash. A copy without the hand-over marker reloads from the checkout, as before.\n\nLines changed:\n- moe-agent.sh: +74/-15\n- moe-agent.ps1: +99/-27\n- postflight.sh: +65\n- postflight.ps1: +84\n- postflight-fake-proxy.js: +8\n- scripts/CLAUDE.md: +1/-1\nNet +288.\n\nRED before any wrapper edit: /mnt/d/moe-scratch/red-69c02444.HXkfgr.{sh,ps1}.log. Both exited 1 with 'HOT RELOAD (RACE) FAILED: the restart loaded bytes written after the committed check'.\n\nGREEN: gate-69c02444.205923 ran 11-02 20:59-22:13Z, exit 0. parity-check, postflight.sh and postflight.ps1 all pass, and [hot reload race] is ok on both (sequence crcccrcccrccc). It was not rerun because the 6 files are cmp-identical to its snapshot v-69c02444.x2uOsC. This session I reran bash -n and parity-check: green. The gate runs from the task worktree because in worktree mode the task bytes exist only on the task branch.\n\nDeviations from the plan:\n- The sh self-delete runs when BASH_SOURCE != MOE_WRAPPER_FILE.\n- Added a wrapper_pin_stage helper.\n- The refusal-path substitution is quoted (bash 5.2 patsub &).\n- The ps1 pin is global-only.\n- Deletes are non-recursive.\n- The ps1 copy deletes itself after the launch hash.\n- Phase B asserts the self-delete.\n- Docs say six [hot reload*] arms.\n\nStep-7 review: checklist a-g clean, no code change. PS 5.1 and pwsh 7 probes with TEMP set to 't ëmp' and 'tmp [x]' pass, and WriteAllBytes adds no Zone.Identifier. The theoretical risks are in the step-7 note. The target is now 863629c8, and merge-tree onto it is clean (tree 4cff99f5)."
+  "completionSummary": "A hot reload now loads only committed bytes. After the ls-files/diff gate, the wrapper copies itself into a private moe-wrapper-pin.* folder and checks the copy's hash-object against HEAD:./<leaf>. Only then does it parse and run the copy (sh: exec \"$BASH\" <pin>; ps1: & $global:MoeWrapperReloadPin). The copy deletes itself after the launch hash. A copy without the hand-over marker reloads from the checkout, as before.\n\nLines changed:\n- moe-agent.sh: +74/-15\n- moe-agent.ps1: +99/-27\n- postflight.sh: +65\n- postflight.ps1: +84\n- postflight-fake-proxy.js: +8\n- scripts/CLAUDE.md: +1/-1\nNet +288.\n\nRED before any wrapper edit: /mnt/d/moe-scratch/red-69c02444.HXkfgr.{sh,ps1}.log. Both exited 1 with 'HOT RELOAD (RACE) FAILED: the restart loaded bytes written after the committed check'.\n\nGREEN: gate-69c02444.205923 ran 11-02 20:59-22:13Z, exit 0. parity-check, postflight.sh and postflight.ps1 all pass, and [hot reload race] is ok on both (sequence crcccrcccrccc). It was not rerun because the 6 files are cmp-identical to its snapshot v-69c02444.x2uOsC. This session I reran bash -n and parity-check: green. The gate runs from the task worktree because in worktree mode the task bytes exist only on the task branch.\n\nDeviations from the plan:\n- The sh self-delete runs when BASH_SOURCE != MOE_WRAPPER_FILE.\n- Added a wrapper_pin_stage helper.\n- The refusal-path substitution is quoted (bash 5.2 patsub &).\n- The ps1 pin is global-only.\n- Deletes are non-recursive.\n- The ps1 copy deletes itself after the launch hash.\n- Phase B asserts the self-delete.\n- Docs say six [hot reload*] arms.\n\nStep-7 review: checklist a-g clean, no code change. PS 5.1 and pwsh 7 probes with TEMP set to 't ëmp' and 'tmp [x]' pass, and WriteAllBytes adds no Zone.Identifier. The theoretical risks are in the step-7 note. The target is now 863629c8, and merge-tree onto it is clean (tree 4cff99f5).",
+  "completedAt": "2026-11-03T00:18:48.423Z",
+  "reviewCompletedAt": "2026-11-03T00:18:48.423Z",
+  "reviewSummary": "Verified completion 373dc3d4 (on moe/work-2026-10-24 and origin; tree e47c2b68 = cand-827a45af). Net 288 non-board LOC (+331/-43), 6 files, all in approvedScope.\nGate: checkRef chain on git archive 373dc3d4 (blobs hash-checked, MOE_/CLAUDE env unset, timeout 180): bash -n, parity-check PASS, postflight.sh PASS EXIT=0 (29 min), postflight.ps1 on PS 5.1 PASS EXIT=0 (43 min). Six [hot reload*] arms ok in both twins, race sequence crcccrcccrccc; [stale offset] ok.\nAC1: both RED logs confirmed. AC2-4: arms present and green. AC5: no deletions in harnesses; parity lists untouched. AC6: $PSScriptRoot only in the ps1:120 fallback (also at tip 1b754809); BASH_SOURCE only at sh:20 and 8846-8852; MOE_WRAPPER_SOURCE unset at top. AC7: green, 288 <= 300.\nRead the diff: the pin is copied and blob-checked before parse, sidecar stop and deregister; deletes are non-recursive and only moe-wrapper-pin.*; every new failure defers.\nExtra: pwsh 7.6.9 reload-only scratch: six arms ok. sh mutants: parent wrapper, no marker check and launch hash from checkout are each killed by the race arm. Removing the blob compare survives it; my git-shim probe (write between diff and copy) kills it, and the shipped code passes. Coverage gap, not a DoD item; noted on the row.\nWindows node.exe, 24 ps1-reading suites, commit vs parent: the only regression is 22 prompt-cache-launcher compact-window rows, fixed by e54bab27 (tip 1b754809, 33/33). heartbeatStop at tip 0c44ccf0: Linux 6 pass/3 skip, Windows 3 pass/6 skip (f6d9c532). daemon-autostart-argv PS7 EPERM in rmSync cleanup: flake, executed code identical, 14 reruns pass. Per governor comment-003cf215, not rejected for the two fixture gaps.",
+  "requiredCheckAtDone": null
 }
