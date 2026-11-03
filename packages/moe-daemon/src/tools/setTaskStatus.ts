@@ -5,6 +5,7 @@ import type { ActivityEventType, TaskStatus } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, notAllowed } from '../util/errors.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { workerHasRole } from '../util/workerRole.js';
 
 /**
  * Valid task statuses for validation.
@@ -67,7 +68,7 @@ function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
 export function setTaskStatusTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.set_task_status',
-    description: 'Set task status (optionally with a reopen reason)',
+    description: 'Architect/governor/human: set task status (optionally with a reopen reason). A caller whose workerId resolves to neither role (a worker or QA seat) is refused with NOT_ALLOWED and should ask a governor in #governors to move the row.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -94,6 +95,21 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       // Validate status is a known value
       if (!VALID_STATUSES.includes(params.status as TaskStatus)) {
         throw invalidInput('status', `${params.status} is not valid. Valid statuses are: ${VALID_STATUSES.join(', ')}`);
+      }
+
+      // TOOL_AUDIENCE only filters tools/list, so gate here like the sibling
+      // set_task_priority / set_task_dependencies. An absent workerId key is the
+      // human path (a seat's proxy injects MOE_WORKER_ID whenever the key is
+      // missing); a key set to '' or null skips that injection, so it is judged
+      // like any id and refused. Runs before the task lookup and any write.
+      if (params.workerId !== undefined) {
+        const callerId = typeof params.workerId === 'string' ? params.workerId : '';
+        if (!workerHasRole(state, callerId, 'architect', 'governor')) {
+          throw notAllowed(
+            'set_task_status',
+            `architect or governor role required (worker ${callerId || '(none)'} is not on an architect or governor team and its id declares neither role); ask a governor in #governors to move the row`
+          );
+        }
       }
 
       const task = state.getTask(params.taskId);
