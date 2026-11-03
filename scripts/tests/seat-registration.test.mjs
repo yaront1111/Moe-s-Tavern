@@ -53,7 +53,7 @@ process.stdin.on('end', () => {
     save();
     if (outcome === 'silent') return;
     if (outcome === 'error') return refuse('Team Workers is full (max 1 members)');
-    if (outcome === 'gone') return refuse('Team not found: ' + args.teamId);
+    if (outcome === 'gone') return reply({ error: { code: -32001, message: '[NOT_FOUND] Team not found: ' + args.teamId, data: { tool: 'moe.join_team', codeName: 'NOT_FOUND' } } });
     if (outcome === 'isError') return reply({ result: { isError: true, content: [{ type: 'text', text: 'refused' }] } });
     if (outcome === 'malformed') return ok({ success: true });
     if (outcome === 'foreign') return ok({ team: { id: args.teamId, memberIds: ['worker-other'] } });
@@ -88,7 +88,7 @@ const SEGMENTS = {
     tail: between(sh.slice(sh.lastIndexOf('\ndone\n') + 6), '\n# A one-shot run that ends teamless', '\n}\n'),
   },
   ps1: {
-    funcs: between(ps, 'function Invoke-MoeRpcRaw {', '\nif ($Team) {')
+    funcs: between(ps, 'function Invoke-MoeRpcRaw {', '\nif ($Team -and -not $moeMigration) {')
       + between(ps, '# Invoke-MoeRpc TOOL ARGS_HASHTABLE_OR_JSON', '# Immutable claim tokens belong to the runner')
       + between(ps, "$script:MoeMentionFailedMarker = 'MOE_MENTION_DELIVERY_FAILED'", 'function ConvertTo-MoeFencedJson'),
     chat: between(ps, 'Write-Host "Pre-flight: joining chat, claiming task, loading context..." -ForegroundColor Cyan\n', '        $preflightPending = Invoke-MoeRpc'),
@@ -256,6 +256,7 @@ for (const engine of ENGINES) {
         { registered: 'true', joined: 'true', mentions: 1, skip: 'false' },
       ]);
       assert.deepEqual(tools(run, 1), ['join_team'], 'one join per pre-flight, then no chat call at all');
+      assert.ok(!tools(run).includes('create_team'), 'only a deleted team drops its id');
       assert.equal(run.fake.cursor, 'msg-1', 'the mention is read only once the seat is registered');
     });
   }
@@ -271,7 +272,9 @@ for (const engine of ENGINES) {
   t('a seat whose team was deleted re-creates it by name on the next pre-flight', () => {
     const run = runSeat(engine, { joins: ['gone', 'ok'] });
     assert.deepEqual(tools(run, 1), ['join_team']);
+    assert.match(run.out, /MOE_SEAT_UNREGISTERED worker=worker-fixture team=Workers - moe\.join_team: \[NOT_FOUND\] Team not found: team-fixture;/);
     assert.deepEqual(tools(run, 2).slice(0, 3), ['create_team', 'join_team', 'chat_channels']);
+    assert.deepEqual(run.rpcs.find((r) => r.iter === 2 && r.tool === 'create_team').args, { name: 'Workers' });
     assert.deepEqual(run.states.map((s) => s.registered), ['false', 'true']);
   });
   for (const outcome of ['noid', 'silent']) {

@@ -2003,7 +2003,8 @@ function Invoke-MoeTeamJoinRetry {
     }
     $script:teamJoinLastError = $failure
     # A team deleted under the seat: drop its id so the next retry re-creates it by name.
-    if ($failure.StartsWith('Team not found: ')) { $script:teamId = '' }
+    # The daemon's refusal reads "[NOT_FOUND] Team not found: <id>", so match inside it, not at its start.
+    if ($failure.Contains('Team not found: ')) { $script:teamId = '' }
     # Warn when the refusal changes, not on every poll: the per-poll banners
     # already name a teamless seat.
     if ($failure -ne $previousError) {

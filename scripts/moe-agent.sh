@@ -2568,7 +2568,8 @@ print(msg or raw[:200] or 'no answer')
     fi
     TEAM_JOIN_LAST_ERROR="$failure"
     # A team deleted under the seat: drop its id so the next retry re-creates it by name.
-    case "$failure" in "Team not found: "*) TEAM_ID="" ;; esac
+    # The daemon's refusal reads "[NOT_FOUND] Team not found: <id>", so match inside it, not at its start.
+    case "$failure" in *"Team not found: "*) TEAM_ID="" ;; esac
     # Warn when the refusal changes, not on every poll: the per-poll banners
     # already name a teamless seat.
     if [ "$failure" != "$previous_error" ]; then
