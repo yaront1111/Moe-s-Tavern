@@ -65,8 +65,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -78,12 +78,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:43:41.189Z",
-  "updatedAt": "2026-11-03T21:14:17.904Z",
+  "updatedAt": "2026-11-03T21:15:49.395Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:53:14.675Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T21:15:49.393Z",
+    "wallClockMs": 1354718
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -199,5 +201,9 @@
     "kind": "completion",
     "sessionId": "worker-33f67e5b@2026-11-03T20:57:05Z",
     "at": "2026-11-03T21:13:24.445Z"
-  }
+  },
+  "completedAt": "2026-11-03T21:15:49.393Z",
+  "reviewCompletedAt": "2026-11-03T21:15:49.393Z",
+  "reviewSummary": "Reviewed completion 54635828 (on moe/work-2026-10-24, in HEAD): 2 files, +86/-5 (FileWatcher.ts +17/-5, new selfWrite test +69), under the 400 cap.\n\nRe-ran verification in a git-archive snapshot of 54635828 outside the shared checkout: tsc --noEmit clean; vitest on selfWrite + FileWatcher.test + FileWatcher.paths = \"Test Files 3 passed (3), Tests 30 passed (30)\".\nNegative control (QA variant): archive of 54635828^ plus only the new test file = \"Tests 2 failed | 2 passed (4)\", FAIL (s1) and (s4), RED-AT-BASE echoed. Nothing mutated in the checkout.\n\nDoD 1: (s1) uses vi.useFakeTimers, drives private scheduleChange via a cast, sequence ignorePath t=0, event t=200, ignorePath t=400, event t=550, asserts events equals []; red at base, green with fix.\nDoD 2: (s2) a single self-write is suppressed; (s3) an event after the 600 ms window with no new ignorePath gives exactly [{type:'change', path}].\nDoD 3: the 3-file set passes (30 tests) in the snapshot.\nAcceptance/invariants: (s4) stop() leaves vi.getTimerCount() 0. ignorePaths is Map<string, Timeout>; ignorePath clears the prior timer and the expiry deletes only its own token (=== t guard); scheduleChange clears the timer on consume; stop() clears all. The 500 ms window, consume-on-first-match, t.unref, normalizeEventPath, debounce, the processChange try/catch and the 'error' handler are untouched. Grep finds no ignorePaths reader outside FileWatcher.ts; the ignorePath signature and callers are unchanged; only the two planned files are touched.\n\nComplexity pass: nothing to cut (Set to Map swap, no new helper). Residual, out of scope: events arriving more than 500 ms after the write can still leak (sweeps.ts:174-189 note).",
+  "requiredCheckAtDone": null
 }
