@@ -179,11 +179,17 @@
       "author": "architect-24611a0a",
       "content": "Planner note for this row's QA: a second 373dc3d4 regression.\n\nscripts/tests/prompt-cache-launcher.test.mjs fails 22 of 99 rows through Windows node.exe on a pure archive of 717c4019, and it is still red at a0269bcd. Every failing row is a PowerShell \"compact window\" row, and each fails with \"Join-Path : Cannot bind argument to parameter 'Path' because it is null\" at `Join-Path $script:MoeScriptRoot 'mods\\moe-compaction-keeper'`.\n\nThe cause: 373dc3d4 moved those keeper and account-switch lines from $PSScriptRoot to $script:MoeScriptRoot, and the fixture's extracted script never sets it. The suite runs in CI's build-all-platforms matrix.\n\nIt is filed as task-e54bab27 (PLANNING, HIGH), a one-line fixture prelude, the same pattern as f6d9c532. A simulated fix passes 99 of 99. Like f6d9c532, the fix stays in that row, not here.",
       "timestamp": "2026-11-02T23:40:07.495Z"
+    },
+    {
+      "id": "comment-9d1fdb4cf49c4458837f91f044251c57",
+      "author": "qa-93f9625e",
+      "content": "QA (qa-93f9625e), re comment-003cf215: checked both fixture gaps on the current target and followed your recommendation.\n- heartbeatStop.test.ts at tip 0c44ccf0: Linux env -i 6 passed / 3 skipped; Windows-native vitest 3 passed / 6 skipped (all three PowerShell cases green). Together all 9 cases pass.\n- prompt-cache-launcher.test.mjs compact-window rows, Windows node.exe: 373dc3d4 22 of 33 fail (Join-Path null at $script:MoeScriptRoot), parent 7fe2b575 33/33, tip 1b754809 (e54bab27) 33/33.\n- A sweep of 24 ps1-reading node suites through Windows node.exe, commit vs parent, found no other regression. One daemon-autostart-argv PS7 EPERM in rmSync cleanup is a flake: the executed code is identical, and 14 reruns passed.\nVerdict: approving. Two follow-up notes for you to route:\n1) Coverage gap: removing the blob comparison (`[ \"$want\" = \"$got\" ] || return 1`) survives the committed [hot reload race] arm, whose write lands in deregister, after the copy. A git-shim probe that writes between `git diff --quiet HEAD` and the copy kills that mutant, and the shipped code passes it (scratch /tmp/qa69-mut.HEr8a2/probe-arm.sh). A LOW row could add it to both twins.\n2) 8 stale moe-wrapper-pin.* folders in C:\\Users\\Yaron\\AppData\\Local\\Temp, from 19:58-20:12Z, so from the worker's step-2 scratch and mutant runs, not from this gate. The ps1 arms other than race set TEMP but not TMP, so a pin goes to the real %TEMP%. They are harmless and safe to delete.",
+      "timestamp": "2026-11-03T00:18:36.427Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T23:40:07.495Z",
+  "updatedAt": "2026-11-03T00:18:36.427Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",

@@ -94,7 +94,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -126,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:23.628Z",
-  "updatedAt": "2026-11-03T00:02:15.749Z",
+  "updatedAt": "2026-11-03T00:18:38.151Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:12.756Z",
@@ -136,11 +136,14 @@
     "firstClaimAt": "2026-11-02T23:13:45.650Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T00:18:10.000Z",
+    "wallClockMs": 3864350
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-ed0f6a9e"
+    "worker-ed0f6a9e",
+    "qa-7328a40d"
   ],
   "dependsOn": [],
   "tier": "standard",
@@ -246,9 +249,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-02T23:50:26Z",
-    "at": "2026-11-03T00:02:15.749Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T00:12:09Z",
+    "at": "2026-11-03T00:18:38.151Z"
+  },
+  "completedAt": "2026-11-03T00:18:10.000Z",
+  "reviewCompletedAt": "2026-11-03T00:18:10.000Z",
+  "reviewSummary": "Reviewed completion 5c5b3706 (tree 2b3ebaef = candidate cand-323ec1b2), which is on moe/work-2026-10-24 and origin. Diff: 4 files, +55/-3 (net 52), within the plan's approvedScope. BOM ef bb bf kept, 0 CR bytes in all 4 files, and --stat equals --ignore-cr-at-eol --stat.\n\nRe-ran task.verification verbatim from the control checkout, whose HEAD is 5c5b3706 and whose scripts/, docs/ and package.json are clean. GATE_EXIT=0:\n- Linux env -i leg: 157 tests, 130 pass, 0 fail, 27 skip.\n- Windows node.exe leg: 217 tests, 177 pass, 0 fail, 40 skip.\n- parity-check PASS; lint OK.\nLog: /mnt/d/moe-scratch/2f22237b-qa/verify.log.\n\nThe new rows really run:\n- C1 passes on Linux.\n- C2 passes on PS 5.1 (5.3 s) and PS 7 (5.1 s) through Windows node.exe.\n\nIndependent mutants, in a git-archive scratch copy under Windows Temp, removed afterwards:\n- ps1 line dropped: C2 fails 0/2 and runs the project node.exe and 'project moehelper'.\n- sh line replaced with ':': C1 fails, getting 'env [unset]' where 'env [1]' was expected.\n\nDoD:\n1. Planted <project>\\node.exe and moehelper.cmd never run under the marker. The PATH node and the trusted helper run instead, and the legacy half proves the fixture is not vacuous.\n2. Legacy is unchanged: the variable is set only under the strict marker check, never cleared, and C1 pins marker unset and '01'. Parity passes.\n3. Both suites exit 0 on Linux and on Windows.\n\nAudit:\n- Nothing before the marker line spawns cmd.exe. The pre-marker calls are PowerShell/bash bare-git calls, which resolve on PATH only.\n- The codex ProcessStartInfo path inherits the process env, and there is no env -i in sh.\n- The docs claim only cmd.exe and name the libuv residual (task-52555102).\n- Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
