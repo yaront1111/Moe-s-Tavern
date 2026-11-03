@@ -10,10 +10,49 @@
     "The plan's daemon test command (cd packages/moe-daemon && npm test, or a narrowed suite plus npm run build that the plan justifies) exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (DoD 1, 2; skill test-driven-development). Create packages/moe-daemon/src/state/accountStore.presence.test.ts with the Write tool, never a shell write into the tree (global rail).\n\nFixture: one ToolTestHarness (src/tools/toolTestHarness.ts) for the file, as in src/state/teamStore.presence.test.ts.\n- beforeEach:\n  - h.init(). Save the vitest MOE_ACCOUNTS_FILE value, then set process.env.MOE_ACCOUNTS_FILE = path.join(h.testDir, 'machine', 'claude-accounts.json'), as src/tools/accountTools.test.ts does. registryFilePath() reads the env on every call.\n  - STALE = new Date(Date.now() - 2 h).toISOString().\n  - h.setupMoeFolder(); h.createEpic(); h.createTask({ id: 'task-review', status: 'REVIEW', assignedWorkerId: 'qa-wait' }); h.createWorker({ id: 'qa-wait', currentTaskId: 'task-review', status: 'READING_CONTEXT', lastActivityAt: STALE }).\n  - await h.state.load(); vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(), which absorbs the all-spent #governors alert.\n- afterEach: vi.restoreAllMocks(), restore the env value, h.cleanup().\n- Helpers:\n  - lease(id = 'qa-wait') = leaseAccountTool(h.state).handler({ workerId: id }, h.state).\n  - sweep() = h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state)). This is the real REVIEW self-heal (state/sweeps.ts:493). Never edit sweeps.ts.\n  - signIn() = addAccount(file, 'One'), addAccount(file, 'Two'), then recordSignIn(file, 'acct-1' and 'acct-2', 'subscription'), from src/accounts/registry.ts.\n  - spendAll() = signIn(), then reportAccountUsageTool(h.state).handler({ accountId, windows: { five_hour: { utilization: 0.95, resetsAt: Math.floor(Date.now() / 1000) + 7200, status: 'allowed' } } }, h.state) for both accounts, with NO workerId. A report that names qa-wait learns its account back through settleLease and touches the seat, which would mask the control case.\n\nCases. Keep these title prefixes, so a FAIL line names its case:\n- (p1) all-spent reply:\n  - spendAll(); before = Date.now(); reply = await lease().\n  - The reply matches { rotation: true, accountId: null, switchAtPercent: 90 }, with a string retryAt and retryInSec > 0.\n  - Date.parse(seat.lastActivityAt) >= before.\n  - The record has no own accountId key (Object.prototype.hasOwnProperty.call). An absent accountId counts as null, so it is not written.\n  - After sweep(), the task matches { status: 'REVIEW', assignedWorkerId: 'qa-wait' } and seat.currentTaskId is 'task-review'.\n- (p2) control:\n  - spendAll().\n  - Guard: Date.now() - Date.parse(seat.lastActivityAt) > h.state.reviewStaleTimeoutMs, and the row is held.\n  - sweep() with no lease. The task matches { status: 'REVIEW', assignedWorkerId: null }. This proves the test discriminates.\n  - Do not read the seat after this sweep: the Layer-3 prune deletes it.\n- (p3) rotation:false reply, with no account list at all:\n  - lease() equals { rotation: false, reason: null }.\n  - lastActivityAt >= before, and the record has no own accountId key.\n  - After sweep(), the row is held.\n- (p4) repeat lease of the same account:\n  - signIn(). The first lease() returns accountId 'acct-1', and seat.accountId is 'acct-1'.\n  - await h.state.updateWorker('qa-wait', { lastActivityAt: STALE }). updateWorker keeps an explicit lastActivityAt.\n  - before = Date.now(). The second lease() returns 'acct-1' again; seat.accountId is still 'acct-1' and lastActivityAt >= before.\n  - After sweep(), the row is held.\n- (p5) unknown seat:\n  - spendAll(). lease('qa-ghost') returns accountId null.\n  - h.state.getWorker('qa-ghost') is null, and .moe/workers/qa-ghost.json does not exist.\n- (p6) DEAD seat:\n  - await h.state.createWorker({ id: 'qa-dead', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1', currentTaskId: null, status: 'IDLE' }).\n  - updateWorker its lastActivityAt to STALE, THEN its status to 'DEAD'. In that order the DEAD flip keeps the stored time.\n  - spendAll(); lease('qa-dead'). The record still matches { status: 'DEAD', lastActivityAt: STALE }.\n\nRed run before step 2. It runs in a snapshot outside the checkout, because the rail allows no npm commands in the shared checkout:\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp packages/moe-daemon/src/state/accountStore.presence.test.ts \"$S/packages/moe-daemon/src/state/\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && NO_COLOR=1 npx vitest run src/state/accountStore.presence.test.ts\nIt must print Tests 3 failed | 3 passed, failing exactly (p1), (p3) and (p4). The architect's prototype printed exactly that on target 1558f141. Quote those lines in the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/accountStore.presence.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix (DoD 1). It goes in settleLease (packages/moe-daemon/src/state/accountStore.ts:294), edited with the Edit tool. Today it calls touchWorker only when accountId changes; while every account is spent each reply carries accountId null, so the waiting wrapper's polls never refresh the seat.\n\nCall state.touchWorker on EVERY call. Pass { accountId } only when the stored value (absent counts as null) differs, else {}:\nconst changed = (state.getWorker(workerId)?.accountId ?? null) !== accountId;\nawait state.touchWorker(workerId, changed ? { accountId } : {});\n- Keep the fleet.leases update and the refreshAccounts call as they are.\n- Add a short comment saying why: a wrapper in MOE_ACCOUNT_WAIT runs no CLI and no heartbeat sidecar, so its lease polls are its only presence. Without them the REVIEW self-heal released a waiting QA seat's row (2026-11-03). touchWorker creates no record and never refreshes a DEAD one.\n- Every leaseAccount return path already goes through settleLease: an invalid list, no accounts, none signed in, all spent, an account chosen. So every reply counts.\n- recordAccountReport's learn-back call also goes through settleLease: a report naming a seat whose lease this daemon process forgot. That seat is now refreshed too. That is intended, because only the seat's own wrapper sends such a report.\n- Do not edit tools/leaseAccount.ts, state/sweeps.ts or any timeout (governor note; the task's Out of scope).\n\nError handling: this adds no IO and no failure path. touchWorker already serializes on the reentrant state mutex, returns null for an unknown or DEAD worker, and catches and logs a failed write. So a lease reply never fails because of presence.\n\nGreen re-run, in a snapshot:\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp packages/moe-daemon/src/state/accountStore.presence.test.ts packages/moe-daemon/src/state/accountStore.ts \"$S/packages/moe-daemon/src/state/\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && NO_COLOR=1 npx vitest run src/state/accountStore.presence.test.ts src/state/accountStore.test.ts src/tools/accountTools.test.ts\nIt must pass all 3 files. The prototype printed 44 passed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/accountStore.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs (DoD 3), edited with the Edit tool only.\n(a) docs/MCP_SERVER.md, the '### moe.lease_account' Notes. After the bullet that starts '`accountId: null` means wait' (:3173), add one bullet. It says:\n- every call counts as presence for the calling seat, whatever it returns;\n- it refreshes the seat's `lastActivityAt` and writes `Worker.accountId` only when it changes;\n- an unknown `workerId` gets no worker record, and a DEAD seat is not refreshed;\n- so a task held through `MOE_ACCOUNT_WAIT` stays held. The wrapper leases again at most `MOE_ACCOUNT_RETRY_SEC` (default 300 s) apart, inside the default `reviewStaleTimeoutMs` (30 min), so the REVIEW self-heal does not release a waiting QA seat's row.\n(b) scripts/CLAUDE.md, the 'Claude account rotation' bullet (:42, one physical line). Right after '(default 300), the task held', insert: ': each `moe.lease_account` call counts as the seat's presence (it refreshes `lastActivityAt`), so the REVIEW self-heal leaves a waiting QA seat's row held'.\n- Change nothing else on that line or any other.\n- task-e3e81c45 edits the adjacent line 43. This row dependsOn it, so this worktree's base already holds that edit and the landing merge stays clean (planningNotes).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "scripts/CLAUDE.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification (DoD 4). Run it once, fresh, from the worktree root after every edit is final. It is executionContract.checkRefs C0 then C1, chained in one shell:\ncd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && D='packages docs scripts moe-jetbrains moe-vscode' && X=$( { git diff --name-only \"$B\" -- $D; git ls-files --others --exclude-standard -- $D; } | grep -vxF -e packages/moe-daemon/src/state/accountStore.ts -e packages/moe-daemon/src/state/accountStore.presence.test.ts -e docs/MCP_SERVER.md -e scripts/CLAUDE.md || true) && { [ -z \"$X\" ] || { echo \"FAIL: out of scope vs $B: $X\"; exit 1; }; } && bash scripts/tests/parity-check.sh && npm run lint && echo 'C0 OK' && cd \"$(git rev-parse --show-toplevel)\" && H=$(git rev-parse HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && for f in packages/moe-daemon/src/state/accountStore.ts packages/moe-daemon/src/state/accountStore.presence.test.ts docs/MCP_SERVER.md scripts/CLAUDE.md; do cp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npm test && npx tsc --noEmit' && echo 'C1 OK'\n- C0: only the 4 planned paths differ from the merge-base with the land target, and the project qualityGate (parity-check, lint) passes.\n- C1: the FULL daemon suite (npm test, which is vitest run) plus tsc --noEmit, in a shared clone of HEAD outside the checkout with the 4 files copied in.\n- Why the full suite: this row is the epic's final task, and the daemon's doc-consistency tests read docs/MCP_SERVER.md.\n- Baseline on target 1558f141: 232 files, 6987 passed, 20 skipped, about 55 s. The architect's dry run of this exact command with a prototype printed C0 OK, 233 files, 6993 passed, then C1 OK.\n- Its output tail is the complete_task verification.\n- A failing test you did not cause: report it by name. Never skip or weaken a test.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this diff only (skill adversarial-self-review):\n(1) Concurrency: a deregister racing a lease must not resurrect a DEAD seat. touchWorker re-reads the record under the mutex, and p6 pins it.\n(2) Null or absent: an absent accountId must stay absent on a null reply (p1, p3). A changed account must still be written (p4's first lease).\n(3) The learn-back side effect: grep the tests that call recordAccountReport or report_account_usage for any assertion that a report leaves lastActivityAt alone.\n(4) Load: each lease is one worker-file write and one WORKER_UPDATED. That is at most one per launch, plus one per 300 s while a seat waits.\n(5) A MOE_ACCOUNT_RETRY_SEC at or above reviewStaleTimeoutMs/1000 can still lose the row between polls. That stays documented and out of scope.\n(6) Nothing in sweeps.ts, leaseAccount.ts or any timeout changed.\nIf the review changes any file, re-run the step-4 command and submit only that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -28,15 +67,111 @@
       "author": "governor-e6b40560",
       "content": "Governor placement note for the planner. Files I expect the fix to touch: packages/moe-daemon/src/state/accountStore.ts (settleLease), maybe tools/leaseAccount.ts, a test in state/accountStore.test.ts or tools/accountTools.test.ts, and the docs in docs/MCP_SERVER.md and scripts/CLAUDE.md.\n- The only open row touching any of them is e3e81c45 (WORKING, worker-33f67e5b, at its verify/adversarial steps). It edits scripts/CLAUDE.md. Worktree mode lands both rows, so I added no edge. Keep the scripts/CLAUDE.md change to the one account-rotation bullet so the merge stays clean.\n- The REVIEW self-heal under test is in state/sweeps.ts (runBlockedTimeoutSweep, the \"REVIEW self-heal\" loop). Don't edit it; the row only changes what counts as presence.\n- After it lands, the live daemon needs a restage and swap before the fix takes effect. I'll handle that.",
       "timestamp": "2026-11-03T11:38:15.230Z"
+    },
+    {
+      "id": "comment-0994c9aecd124e46955aaac2b9d962d1",
+      "author": "architect-24611a0a",
+      "content": "Architect placement note for @governor-e6b40560. I added dependsOn task-e3e81c45 to this row. It is a merge-ordering edge only, with no logical dependency.\n- Why: DoD 3 must edit the account-rotation bullet in scripts/CLAUDE.md, which is line 42, one physical line. e3e81c45's task branch changes line 43 (the 'MCP servers for spawned agents' bullet, hunk @@ -40,4 +40,4 @@). git merge-tree treats edits on adjacent lines as a conflict. I simulated the landing in a scratch clone: target 1558f141 + e3e81c45's scripts/CLAUDE.md hunk, merged with a line-42 edit, gives CONFLICT (content) in scripts/CLAUDE.md. Five workers are idle, so under TURBO this row would be claimed (and its worktree cut from the target) within seconds, before e3e81c45 lands. The landing would then take the unlanded conflict route.\n- What clears the risk is a worktree base that already holds e3e81c45's completion, not e3e81c45 reaching DONE. Once e3e81c45's completion is on moe/work-2026-10-24, you can drop the edge early: set_task_dependencies removeDependsOn [task-e3e81c457c0e405a909cde910a2a8330]. Otherwise it clears itself when e3e81c45 is DONE.\n- Gate baseline: the full daemon suite on target 1558f141 in a snapshot is 232 files, 6987 passed, 20 skipped (~55 s), and tsc --noEmit is clean. The plan's gate with a prototype of the fix and test is 233 files, 6993 passed.",
+      "timestamp": "2026-11-03T11:53:38.361Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T11:37:39.579Z",
-  "updatedAt": "2026-11-03T11:38:26.230Z",
+  "updatedAt": "2026-11-03T11:56:52.954Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T11:37:52.806Z"
+    "firstClaimAt": "2026-11-03T11:37:52.806Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "dependsOn": [
+    "task-e3e81c457c0e405a909cde910a2a8330"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T11:55:42.366Z",
+  "executionContract": {
+    "intendedBehavior": "Every moe.lease_account call from a registered, non-DEAD seat refreshes that seat's lastActivityAt, whatever the reply: leased, all-spent (accountId null), rotation:false, or a repeat of the same account. Worker.accountId is written only when it changes. An unknown workerId creates no record, and a DEAD seat is not refreshed. A QA seat waiting in MOE_ACCOUNT_WAIT therefore keeps its REVIEW row through the REVIEW self-heal.",
+    "acceptanceCriteria": [
+      "(p1) After an all-spent lease, a QA seat that was stale past reviewStaleTimeoutMs has a fresh lastActivityAt and no own accountId key. The REVIEW self-heal sweep leaves its row assigned.",
+      "(p2) The same fixture without the lease: the sweep releases the row (status REVIEW, assignedWorkerId null).",
+      "(p3) A rotation:false lease refreshes lastActivityAt and the row stays held.",
+      "(p4) A repeat lease of the same account refreshes lastActivityAt and keeps accountId 'acct-1'.",
+      "(p5) A lease for an unknown workerId creates no worker record in memory or on disk.",
+      "(p6) A lease for a DEAD seat leaves its stored lastActivityAt and DEAD status unchanged.",
+      "On the unfixed source exactly p1, p3 and p4 fail. With the fix the full daemon suite and tsc --noEmit pass."
+    ],
+    "invariants": [
+      "The REVIEW self-heal in state/sweeps.ts, reviewStaleTimeoutMs and staleWorkerTimeoutMs are unchanged",
+      "touchWorker never creates a worker record and never refreshes a DEAD one",
+      "accountId is written only when it changes; an absent accountId stays absent on a null reply",
+      "The lease_account reply shapes are unchanged"
+    ],
+    "compatibility": [
+      "The moe.lease_account input and reply shapes are unchanged: no MCP contract change",
+      "No new worker field: existing .moe/workers records load unchanged"
+    ],
+    "approvedScope": [
+      "state/accountStore.ts settleLease: the touchWorker call only",
+      "new state/accountStore.presence.test.ts",
+      "docs/MCP_SERVER.md moe.lease_account Notes: one bullet",
+      "scripts/CLAUDE.md account-rotation bullet: one inserted clause"
+    ],
+    "reuse": [
+      "touchWorker's existing unknown and DEAD guards and its mutex",
+      "the ToolTestHarness fixture",
+      "runBlockedTimeoutSweep as the real self-heal, not a re-implementation"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/accountStore.ts:294 settleLease calls touchWorker only when accountId changes; this is the bug",
+      "packages/moe-daemon/src/state/workerStore.ts:91 touchWorker returns null for an unknown or DEAD record; updateWorker stamps lastActivityAt unless the update passes one",
+      "packages/moe-daemon/src/state/sweeps.ts:493-527 REVIEW self-heal releases a REVIEW row whose present, non-DEAD owner is silent past reviewStaleTimeoutMs; the Layer-3 prune at :567 then deletes a stale worker that owns nothing",
+      "scripts/moe-agent.sh get_account_lease: the wait loop leases again every min(retryInSec, MOE_ACCOUNT_RETRY_SEC, default 300) seconds"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && D='packages docs scripts moe-jetbrains moe-vscode' && X=$( { git diff --name-only \"$B\" -- $D; git ls-files --others --exclude-standard -- $D; } | grep -vxF -e packages/moe-daemon/src/state/accountStore.ts -e packages/moe-daemon/src/state/accountStore.presence.test.ts -e docs/MCP_SERVER.md -e scripts/CLAUDE.md || true) && { [ -z \"$X\" ] || { echo \"FAIL: out of scope vs $B: $X\"; exit 1; }; } && bash scripts/tests/parity-check.sh && npm run lint && echo 'C0 OK'",
+      "cd \"$(git rev-parse --show-toplevel)\" && H=$(git rev-parse HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && for f in packages/moe-daemon/src/state/accountStore.ts packages/moe-daemon/src/state/accountStore.presence.test.ts docs/MCP_SERVER.md scripts/CLAUDE.md; do cp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npm test && npx tsc --noEmit' && echo 'C1 OK'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: settleLease always calls touchWorker and passes { accountId } only when it changed. It is a one-line change, and settleLease is the single funnel for all five leaseAccount return paths, so every reply counts as presence.\nRejected:\n- Touching in tools/leaseAccount.ts. It adds a file, and it writes twice when the account changes (handler plus settleLease).\n- A wrapper-side moe.heartbeat during MOE_ACCOUNT_WAIT. The task says daemon only; it needs sh and ps1 parity edits; and the lease poll is already a call from the live wrapper.\n- Exempting waiting seats inside the REVIEW self-heal. The governor said not to edit sweeps.ts, and it needs new state.\nSide effect, accepted: recordAccountReport's learn-back path (a report naming a seat whose lease this daemon process forgot) also refreshes that seat now. Only that seat's wrapper sends it, so it is real presence.\nDependency edge: I added dependsOn task-e3e81c45 as a merge-ordering edge only. DoD 3 must edit scripts/CLAUDE.md line 42, a single physical line, and e3e81c45 edits line 43. A scratch-clone simulation of the landing (target 1558f141 + e3e81c45's hunk, merged with a line-42 edit) gave CONFLICT (content) in scripts/CLAUDE.md. Five workers are idle, so under TURBO this row would otherwise be claimed, and its worktree cut, before e3e81c45 lands. The governor may drop the edge as soon as e3e81c45's completion is on moe/work-2026-10-24 (comment-0994c9ae).\nRouting: standard tier, 5 steps and 4 files. Sonnet 5.5 or gpt-6.1-sol at xhigh fits: a one-line fix with a prototyped test.\nEpic-final scope: this epic is a rolling bug bucket whose siblings were each QA'd. This row's gate is the full daemon suite plus the quality gate; the review covers this diff.",
+    "codebaseInsights": "- touchWorker (state/workerStore.ts:91) runs on the reentrant state mutex, returns null for a missing or DEAD record, and logs and swallows a failed write.\n- updateWorker stamps lastActivityAt = now unless the update passes one explicitly. The REVIEW self-heal uses that to keep a crashed QA's time, and test p4 uses it to make a seat stale again.\n- REVIEW self-heal: sweeps.ts:493-527. It acts only on a present, non-DEAD owner silent past reviewStaleTimeoutMs; the default equals staleWorkerTimeoutMs, 30 min. The Layer-3 prune at :567 then deletes a stale worker that owns no active task.\n- A report_account_usage call that names a workerId learns the lease back through settleLease. Fixtures must therefore seed spent usage with reports that name no seat.\n- ToolTestHarness builds its StateManager with the default timeouts. registryFilePath() reads MOE_ACCOUNTS_FILE on every call.\n- The wrapper wait loop is scripts/moe-agent.sh get_account_lease (about :9041-9095), with a ps1 twin. It sleeps min(retryInSec, MOE_ACCOUNT_RETRY_SEC), an integer of at least 1, default 300, and leases again. The MOE_ACCOUNT_UNTRUSTED path also leases again after its sleep.\n- Daemon doc tests (util/*Docs.test.ts, getCommitScope.test.ts) read docs/MCP_SERVER.md. That is why C1 copies the docs into the snapshot.",
+    "risks": "- Merge conflict with e3e81c45 on scripts/CLAUDE.md lines 42 and 43. The dependsOn edge mitigates it; keep the line-42 edit to one inserted clause.\n- Presence cost: one worker-file write and one WORKER_UPDATED broadcast per lease. That is at most one per launch, plus one per 300 s per waiting seat.\n- An operator MOE_ACCOUNT_RETRY_SEC at or above 1800 still lets the row go between polls. It is documented, not fixed; changing reviewStaleTimeoutMs is out of scope.\n- A seat whose record was already pruned stays unregistered: a lease never creates a record, by design.\n- The live daemon needs the governor's restage and swap after landing.\n- Timing in the tests: a 2 h-old STALE against a 30-min timeout, and lastActivityAt >= before, uses real clocks only. No fake timers are needed, and there is no flake window.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/accountStore.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/state/sweeps.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/tools/accountTools.test.ts",
+      "packages/moe-daemon/src/state/teamStore.presence.test.ts",
+      "docs/MCP_SERVER.md",
+      "scripts/CLAUDE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "1558f141fa4dbe05860f655b0f5d6c1e58a4a107",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T11:55:42.394Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-24611a0a@2026-11-03T11:37:48Z",
+    "at": "2026-11-03T11:56:52.953Z"
+  }
 }

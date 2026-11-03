@@ -12,50 +12,76 @@
     {
       "stepId": "step-1",
       "description": "Tests first, RED (task-a6227f4e). Read `mem:decision-protected-launch-interpreter` and the VS Code parity section of `mem:gotcha-protected-interpreter-windows-tests`. Edit tracked files only with the Edit/Write tools (or a Serena editor); shell writes go only to scratch copies outside the checkout. Tests share no helper module, so extend this file's own harness in moe-vscode/tests/windows-terminal-shell.test.cjs:\n(a) loadLauncher(platform, { refuse, client = {} }) spreads `client` over loadClient() in its '../services/MoeDaemonClient' require entry, the clientOverrides pattern of protected-runtime.test.cjs. Add a helper that writes .moe/project.json = {\"settings\":{\"executionProfile\":\"verified-local\"}} into that launcher's workspace. Use a fresh launcher per row, so no session pin leaks.\n(b) loadProvider(platform, rotation, { connected, refuse, select }) records showErrorMessage into rec.errors and passes `select` as the third constructor argument only when given.\nBuild every expected line literally with the test's own quoting, never through mod.accountsCommandLine, so a mutant there cannot hide.\nW4 (any host, real client):\n- A legacy workspace answers null for windows true and false, even for the bare node 'node'.\n- A protected workspace refuses ('node', false, {}) with 'Accounts node executable is not an absolute path'.\n- It refuses ('node', true, {}) with 'Accounts terminal interpreter %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe not found': the interpreter is checked first.\nW5 (any host, installedExecutable stubbed as a recorder of (path, basePath, label)). The stub accepts with a value different from its input, such as the input plus '.real':\n- Legacy makes no call.\n- Protected win32 calls (path.win32.join('C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'), the workspace, the Accounts terminal interpreter label above without its suffix), then (the node, the workspace, 'Accounts node executable'). It returns {node, shellPath} from the ACCEPTED values.\n- POSIX makes only the node call and returns {node} with no shellPath key.\n- A rejected interpreter returns {refused: its reason} and never checks the node. A rejected node returns {refused: its reason}.\nW6 (native POSIX only, skip on win32; protected):\n- The real path of process.execPath, and a symlink outside the project to it, both give {node: that real path}.\n- A regular file in the project, and an outside symlink to it, refuse with 'Accounts node executable resolves inside the project'.\n- '/nonexistent/node' refuses with 'Accounts node executable not found'.\n- An outside directory refuses with 'Accounts node executable is not a regular file'.\nW7 (native Windows only, skip elsewhere; protected):\n- {SystemRoot: process.env.SystemRoot} plus process.execPath gives {node: realpath(execPath), shellPath: realpath of System32\\WindowsPowerShell\\v1.0\\powershell.exe}.\n- {} refuses '... not found'.\n- SystemRoot = the project, with System32\\WindowsPowerShell\\v1.0\\powershell.exe written in it, refuses '... resolves inside the project'.\n- <project>\\node.exe refuses with 'Accounts node executable resolves inside the project'.\n- 'node' refuses with 'Accounts node executable is not an absolute path'.\nW8 (provider, C05 sign-in, recording select): select is called once with (rotation.cli.node, windows).\n- win32: select returns {node:'C:\\Program Files\\nodejs\\node.exe', shellPath:'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'}. The options are exactly {name: the tab text, shellPath: that path}. The sent line is exactly \"& 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' -NoProfile -ExecutionPolicy Bypass -EncodedCommand <b64>\". The b64 decodes (utf16le) to exactly \"& 'C:\\Program Files\\nodejs\\node.exe' '/opt/moe/daemon/dist/accounts/cli.js' '--accounts-file' '/home/dev/.moe/claude-accounts.json' 'login' 'acct-2'\".\n- linux and darwin: select returns {node:'/opt/node/bin/node'}. The options are exactly {name}, with no shellPath key. The line is exactly \"'/opt/node/bin/node' '/opt/moe/daemon/dist/accounts/cli.js' '--accounts-file' '/home/dev/.moe/claude-accounts.json' 'login' 'acct-2'\".\n- With refuse:true, the clipboard gets that same protected line.\nW9: on win32 and linux, a select that returns null gives options and a sent line identical to a provider built with no select (byte-identical legacy).\nW10 (win32 and linux, with and without a terminal API): select returns {refused:'Accounts node executable resolves inside the project'}.\n- No terminal, no clipboard write and no warning.\n- Exactly one error: 'Account action failed: Protected execution profile: Accounts node executable resolves inside the project. Moe runs account commands only with an interpreter outside the project, so nothing was started.'\n- A win32 shellPath containing a newline gives exactly 'Account action failed: Invalid interpreter: contains control characters', and no terminal.\nIn moe-vscode/tests/accounts-view.test.cjs X1, replace the constructor regex with one for `new AccountsTreeProvider(daemonClient, undefined, protectedAccountsTerminal);`. Add a regex that the './util/AgentLauncher' import names protectedAccountsTerminal. Every other existing row stays byte-identical: W1-W3, Q1, V2 and the X/A/S rows are the legacy proof.\nRED: in a Linux snapshot outside the checkout (git archive HEAD, then copy only these two test files), run `npm ci --no-audit --no-fund && node --test tests/windows-terminal-shell.test.cjs tests/accounts-view.test.cjs` in moe-vscode. Record which rows fail: W4, W5, W6, W8, W10 and X1 are expected to fail, W7 skips on Linux, and W1-W3 and W9 pass.\nError handling: every fixture gets its own temp dir under the file's existing `after` cleanup. Symlink rows are POSIX-only.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/windows-terminal-shell.test.cjs",
         "moe-vscode/tests/accounts-view.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/windows-terminal-shell.test.cjs",
+        "moe-vscode/tests/accounts-view.test.cjs"
+      ],
+      "note": "RED recorded in Linux snapshot /tmp/a6227f4e-red.ZMij (git archive HEAD plus the 2 test files; npm ci; node --test windows-terminal-shell + accounts-view): 19 tests, 11 pass, 7 fail, 1 skipped. Failing: X1 (regex), W4/W5/W6 (protectedAccountsTerminal is not a function), W8 (selector never called), W10 (terminal opened, no error), W9. W7 skips (Windows host only). W1-W3 and every other accounts-view row pass. Deviation: W9 also fails on RED, but only at its non-vacuity guard 'win32: the selector ran'. I added that guard on purpose, so the null-selector row cannot pass when the selector is never consulted. Its byte-identity checks are unchanged.",
+      "startedAt": "2026-11-03T11:49:10.029Z",
+      "completedAt": "2026-11-03T11:52:00.628Z"
     },
     {
       "stepId": "step-2",
       "description": "Selection in moe-vscode/src/util/AgentLauncher.ts. Reuse the existing helpers; add no new module.\n(1) protectedInterpreter gains a fifth parameter `subject = 'wrapper interpreter'`. Its label becomes `${subject} %SystemRoot%\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe` on win32 and `${subject} ${posixBash}` elsewhere. The default text stays byte-identical, so protected-runtime L5 is unchanged. The JetBrains twin task-26d9dc26 added the same subject.\n(2) Export `type AccountsTerminal = { node: string; shellPath?: string } | { refused: string }` and `protectedAccountsTerminal(node: string, windows: boolean, env: NodeJS.ProcessEnv = process.env): AccountsTerminal | null`:\n- basePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '', the same project path launchRole and MoeDaemonClient use.\n- If runtimeProfile(basePath) !== 'protected', return null before any check. That is the legacy route. It runs on every Accounts action, like launchRole, so its session pin and downgrade prompt behave the same.\n- On win32 only, call protectedInterpreter(basePath, true, env, undefined, 'Accounts terminal interpreter') first. A rejection returns {refused: reason} without checking the node.\n- Then call installedExecutable(node, basePath, defaultFoldCase, 'Accounts node executable'). A rejection returns {refused: reason}.\n- Otherwise return {node: accepted real path}, plus shellPath set to the accepted PowerShell on win32 only. That one path is both the terminal's shellPath and the typed word, so nothing is looked up through the workspace cwd or PATH.\nError handling: no selection outcome throws, because runtimeProfile and installedExecutable already fail closed with reasons. The UI reason never shows the absolute path, per the existing installedExecutable convention.\nAdd a short doc comment naming task-a6227f4e and JetBrains TerminalAgentLauncher.accountsCommandFor. W4-W7 turn green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/util/AgentLauncher.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts"
+      ],
+      "note": "protectedInterpreter gained a fifth parameter, subject = 'wrapper interpreter'. The default label text is unchanged: the L5 rows in protected-runtime pass on Linux, and the win32 L5 rows skip on this host. Added the exported type AccountsTerminal and protectedAccountsTerminal(node, windows, env = process.env). It returns null unless runtimeProfile(first workspace folder) is protected. On win32 it calls protectedInterpreter(basePath, true, env, undefined, 'Accounts terminal interpreter') first. Then it calls installedExecutable(node, basePath, defaultFoldCase, 'Accounts node executable'). It returns only accepted real paths, with shellPath on win32 only. Linux snapshot node --test of windows-terminal-shell plus protected-runtime: 52 tests, 43 pass, 6 skipped. W4, W5 and W6 pass and W7 skips (Windows host only). The 3 failing rows, W8, W9 and W10, are the provider rows step 3 turns green.",
+      "startedAt": "2026-11-03T11:52:03.043Z",
+      "completedAt": "2026-11-03T11:52:35.202Z"
     },
     {
       "stepId": "step-3",
       "description": "Provider and wiring.\nIn moe-vscode/src/providers/AccountsTreeProvider.ts:\n(1) Add `import type { AccountsTerminal } from '../util/AgentLauncher';`. It must be type-only, with no runtime import. The provider must keep loading under the closed require maps (vscode and AccountPresentation only) in accounts-actions, accounts-view, powershell-quoting and windows-terminal-shell.\n(2) The constructor gains a third parameter `private readonly protectedTerminal: (node: string, windows: boolean) => AccountsTerminal | null = () => null`. Document it as AgentLauncher.protectedAccountsTerminal, supplied by extension.ts. Null keeps the legacy line and terminal.\n(3) accountsCommandLine gains an optional fifth parameter `interpreter?: string`. When given, check it with assertSafeArg('interpreter', interpreter) after the words. The win32 line then starts with `& ${psQuote(interpreter)}` instead of the bare `powershell`, the form of AgentLauncher.buildPowerShellCommand. POSIX ignores the parameter. Without it the output is byte-identical (Q1, V2, W2).\n(4) runCli: after the CLI check, call `const pinned = this.protectedTerminal(rotation.cli.node, windows)`.\n- A {refused} result throws new Error(`Protected execution profile: ${pinned.refused}. Moe runs account commands only with an interpreter outside the project, so nothing was started.`). It throws before any line or terminal is built, so guard shows exactly one error and nothing reaches the clipboard. Error handling stays guard's.\n- Otherwise build the line from {...rotation.cli, node: pinned.node} with pinned.shellPath as the interpreter. createTerminal's win32 shellPath is `pinned?.shellPath ?? 'powershell.exe'`. The legacy options object keeps its keys and their order.\n- Update the line-284 comment: the protected terminal starts the validated PowerShell.\n- Leave psQuote, shQuote and assertSafeArg untouched (Q2 text identity).\nIn moe-vscode/src/extension.ts: add protectedAccountsTerminal to the existing './util/AgentLauncher' import, and construct `new AccountsTreeProvider(daemonClient, undefined, protectedAccountsTerminal)`. Nothing else there changes. W8, W10 and X1 turn green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/providers/AccountsTreeProvider.ts",
         "moe-vscode/src/extension.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "AccountsTreeProvider changes:\n- A type-only import of AccountsTerminal; no new runtime require, and the closed require maps still load the file.\n- A readonly third constructor parameter, protectedTerminal, defaulting to () => null.\n- accountsCommandLine takes an optional fifth parameter, interpreter. assertSafeArg('interpreter') checks it after the words. On win32 the line then starts `& psQuote(interpreter)`. With 4 arguments the output is byte-identical.\n- runCli calls the selector after the CLI check. A refusal throws 'Protected execution profile: <reason>. Moe runs account commands only with an interpreter outside the project, so nothing was started.' before any line, terminal or clipboard write. Otherwise the line uses the pinned node and the interpreter, and the win32 shellPath is pinned?.shellPath ?? 'powershell.exe'.\n- psQuote, shQuote and assertSafeArg are untouched.\n\nextension.ts imports protectedAccountsTerminal and constructs the provider with (daemonClient, undefined, protectedAccountsTerminal).\n\nLinux snapshot run of windows-terminal-shell, accounts-view, accounts-actions, powershell-quoting and protected-runtime: 79 tests, 73 pass, 0 fail, 6 skipped. `npm run compile` exits 0.",
+      "startedAt": "2026-11-03T11:52:36.033Z",
+      "completedAt": "2026-11-03T11:53:20.589Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run it once, fresh, after the last edit; its output is the complete_task evidence. From the task worktree, run the checkRef exactly as given in the executionContract:\n- a Linux snapshot under env -i with node v24.21.0;\n- then a Windows snapshot through cmd.exe;\n- each leg runs npm ci, npm test and npm run compile in moe-vscode;\n- then parity-check and lint in the worktree.\nBoth legs must be green. W6 runs only on Linux and W7 only on Windows, so one leg is not enough. Report the test counts of both legs. Never run npm ci or npm test inside the checkout (global rail).\nError handling: if a row unrelated to this diff flakes, rerun the whole command fresh and report both outputs. Do not widen this task to edit unrelated tests (`mem:gotcha-vscode-provenance-test-deadlines`).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/windows-terminal-shell.test.cjs"
-      ]
+      ],
+      "note": "Ran the executionContract checkRef verbatim from the task worktree, fresh after the last edit. CHECK_EXIT=0.\n- Linux leg (/tmp/a6227f4e-l.P5qB, env -i, node v24.21.0): npm ci, npm test and compile pass. 692 tests, 682 pass, 0 fail, 10 skipped. The base was 685/676/0/9. W4, W5, W6 and W8-W10 plus X1 pass; W7 skips.\n- Windows leg (/mnt/d/moe-scratch/a6227f4e-w.MsRQ, cmd.exe): npm ci, npm test and compile pass. 688 tests, 675 pass, 0 fail, 13 skipped. The base was 681/669/0/12. W7 ran natively and passed; W6 skips.\n- PASS parity-check.sh; npm run lint OK.\n- No flakes.\n- No files modified in this step.",
+      "startedAt": "2026-11-03T11:53:21.424Z",
+      "completedAt": "2026-11-03T11:54:45.772Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of the five-file diff. Load the adversarial-self-review skill and read `mem:pattern-mutant-equivalence-and-anchor-traps`.\nMutants run only in scratch copies under /mnt/d/moe-scratch or /tmp, never on the worktree bytes. Run each on the leg where its killer row runs, and restore each one. Expected kills:\n- MA: runCli types rotation.cli.node instead of pinned.node. Killed by W8.\n- MB: createTerminal keeps 'powershell.exe' under the protected profile. Killed by W8 on win32.\n- MC: accountsCommandLine ignores interpreter. Killed by W8.\n- MD: a refusal falls through to the legacy line. Killed by W10.\n- ME: protectedAccountsTerminal returns null when protected. Killed by W4-W7.\n- MF: it skips the node check on win32. Killed by W5.\n- MG: the interpreter's assertSafeArg is dropped. Killed by W10.\nChecklist:\n- The legacy branches are byte-identical: W1-W3, Q1, V2 and L5 are untouched and green.\n- The provider has no runtime import beyond vscode and AccountPresentation.\n- The refusal happens before createTerminal and before the clipboard.\n- On every protected route, the typed first word and the shellPath are absolute, validated real paths.\n- Two concurrent actions each re-read the profile, and nothing is cached.\n- Step text and test source hold no bare at-token.\nName these residuals in the completion summary, without fixing them here:\n- the POSIX default-profile terminal shell (epic-final task-f3f364a6);\n- the accounts CLI's own claude lookup (task-55710898);\n- cli.script is not checked. It is an argument that the provenance-checked daemon names, and the JetBrains twin does not check it either.\nError handling: if the review changes any byte, rerun step 4's command fresh and report that output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/providers/AccountsTreeProvider.ts",
         "moe-vscode/src/util/AgentLauncher.ts"
-      ]
+      ],
+      "note": "Adversarial self-review done; no bytes changed, so the step 4 gate output stands.\n\nMutants ran in scratch snapshot /tmp/a6227f4e-l.P5qB with whole-statement anchors, each checked unique and restored, and cmp-verified against the worktree afterwards. Each run loaded all 19 tests. Kills: MA, MB and MC by W8; MD by W10; ME by W4, W5 and W6; MF by W5; MG by W10.\n\nChecklist:\n- Legacy rows W1-W3, Q1, V2 and L5 are green on both legs.\n- The provider imports only vscode and AccountPresentation at runtime; AccountsTerminal is an `import type`.\n- The refusal throws before line, terminal or clipboard (W10).\n- Every protected typed word and shellPath is an installedExecutable-accepted real path.\n- The selector runs on every action, with no cache.\n- No at-tokens or non-ASCII in the diff. The diff is +227/-22.\n\nTheoretical only:\n- An empty workspace (basePath '') reads legacy, as in MoeDaemonClient.\n- Swapping a validated real path after the check needs write access outside the project.\n\nResiduals, not fixed here:\n- the POSIX default-profile terminal shell (task-f3f364a6);\n- the accounts CLI's own claude lookup (task-55710898);\n- cli.script is unchecked, as in the JetBrains twin.",
+      "startedAt": "2026-11-03T11:54:46.673Z",
+      "completedAt": "2026-11-03T11:55:30.929Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -70,7 +96,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T09:21:06.242Z",
-  "updatedAt": "2026-11-03T11:45:56.411Z",
+  "updatedAt": "2026-11-03T11:57:42.243Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T09:22:57.794Z",
@@ -79,24 +105,30 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T09:22:58.178Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
     "worker-2dc72348"
   ],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-1dd28c7c@2026-11-03T09:22:55Z",
-    "at": "2026-11-03T09:40:50.561Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T11:45:29Z",
+    "at": "2026-11-03T11:57:42.242Z"
   },
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T11:45:26.992Z",
   "executionContract": {
@@ -170,5 +202,43 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T11:45:27.033Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T11:49:10.029Z",
+  "reviewStartedAt": "2026-11-03T11:56:07.864Z",
+  "verification": {
+    "command": "set -euo pipefail\nR=$(git rev-parse --show-toplevel); L=$(mktemp -d /tmp/a6227f4e-l.XXXX); W=$(mktemp -d /mnt/d/moe-scratch/a6227f4e-w.XXXX)\nfor S in \"$L\" \"$W\"; do git -C \"$R\" archive HEAD | tar -x -C \"$S\"\n for f in src/util/AgentLauncher.ts src/providers/AccountsTreeProvider.ts src/extension.ts tests/windows-terminal-shell.test.cjs tests/accounts-view.test.cjs; do cp \"$R/moe-vscode/$f\" \"$S/moe-vscode/$f\"; done; done\n(cd \"$L/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile') >\"$L/v.log\" 2>&1 || { tail -60 \"$L/v.log\"; exit 1; }\ntail -16 \"$L/v.log\"\ncmd.exe /d /c \"cd /d $(wslpath -w \"$W\")\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\" >\"$W/v.log\" 2>&1 || { tail -60 \"$W/v.log\"; exit 1; }\ntail -16 \"$W/v.log\"\ncd \"$R\" && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "[Linux leg /tmp/a6227f4e-l.P5qB, env -i node v24.21.0: npm ci && npm test && npm run compile]\nℹ tests 692\nℹ suites 0\nℹ pass 682\nℹ fail 0\nℹ cancelled 0\nℹ skipped 10\nℹ todo 0\nℹ duration_ms 3884.73957\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\n[Windows leg /mnt/d/moe-scratch/a6227f4e-w.MsRQ via cmd.exe]\nℹ tests 688\nℹ suites 0\nℹ pass 675\nℹ fail 0\nℹ cancelled 0\nℹ skipped 13\nℹ todo 0\nℹ duration_ms 3146.0847\n\n> moe-vscode@0.8.0 compile\n> tsc -p ./\n\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nCHECK_EXIT=0",
+    "reportedAt": "2026-11-03T11:56:07.864Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/windows-terminal-shell.test.cjs",
+    "moe-vscode/tests/accounts-view.test.cjs",
+    "moe-vscode/src/util/AgentLauncher.ts",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts",
+    "moe-vscode/src/extension.ts"
+  ],
+  "completionSummary": "The VS Code Accounts terminal now pins its interpreters under the protected profile. Exactly 5 files, +227/-22 (production +49/-12).\n\n- AgentLauncher: protectedInterpreter gains `subject` (the default text is unchanged, so L5 passes). New AccountsTerminal and protectedAccountsTerminal(node, windows, env). It answers null unless runtimeProfile is protected. On win32 it checks the SystemRoot powershell.exe ('Accounts terminal interpreter') first, then installedExecutable on the daemon's node ('Accounts node executable'). It returns only accepted real paths, with shellPath on win32 only.\n- AccountsTreeProvider: a type-only import and an injected third constructor parameter (default () => null is legacy). accountsCommandLine gains `interpreter?`, assertSafeArg-checked; on win32 it types `& '<path>'`.\n- runCli throws 'Protected execution profile: ...' before any line, terminal or clipboard write. It types the pinned node, and the pinned PowerShell is the win32 shellPath.\n- extension.ts injects protectedAccountsTerminal.\n- Legacy lines and options are byte-identical (W1-W3, Q1, V2 and W9 green).\n\nTesting:\n- RED: X1 and W4-W10 failed (W7 skipped). W9 failed only at its non-vacuity guard.\n- Final gate, run fresh: Linux 692/682/0/10 with W6 native; Windows 688/675/0/13 with W7 native; both compile; parity and lint pass.\n- Mutants MA-MG were all killed (W8: MA, MB, MC; W10: MD, MG; W4-W6: ME; W5: MF).\n\nResiduals, not fixed here:\n- the POSIX default-profile terminal shell (task-f3f364a6);\n- the accounts CLI's own claude lookup (task-55710898);\n- cli.script is unchecked, as in the JetBrains twin.\n\nSerena handoff updated; the wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "f27a5f7d8364ee8560b9abe6213377e72e956575",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T11:45:29Z",
+      "paths": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/accounts-view.test.cjs",
+        "moe-vscode/tests/windows-terminal-shell.test.cjs"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T11:57:42.242Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

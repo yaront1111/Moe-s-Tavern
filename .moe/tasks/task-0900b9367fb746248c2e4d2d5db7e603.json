@@ -9,10 +9,63 @@
     "docs/ARCHITECTURE.md Security Notes, VS Code parity, no longer lists this row as an open difference and states the landed behaviour. No other docs file changes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1 and 2, tests first (RED). In moe-vscode/tests/protected-profile-pin.test.cjs, insert the block below with the Edit tool, after the P11 test (its closing `});`, line 321 at 1558f141) and before the `test('S1: ...` line. It is a pure addition: no existing row, helper or constant changes. It reuses the file's helpers. session(root, choice) calls a function choice for each prompt, so a deferred promise lets P13 answer Allow after the project re-declares. P12 mirrors JetBrains D13 and P13 mirrors D14 (moe-jetbrains RuntimeSelectionPolicyTest, task-6d5d3db2).\n\n```js\n// task-0900b936, the parity of JetBrains D13/D14 (task-6d5d3db2): the declaration is read before the session pin, and an Allow re-reads it.\ntest('P12: a verified-local read after an allowed downgrade records protected again, so a legacy declaration after the restart asks again', async () => {\n    const [root, dir] = [storeRoot(), project(VERIFIED)];\n    const file = confirmProtected(root, dir);\n    declare(dir, LEGACY);\n    const s2 = session(root, ALLOW);\n    assert.equal(s2.api.runtimeProfile(dir), 'protected');\n    await settle();\n    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'legacy'), 'the allowed downgrade is recorded');\n    declare(dir, '{');\n    assert.equal(s2.api.runtimeProfile(dir), 'protected');\n    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'legacy'), 'an unreadable declaration writes nothing');\n    declare(dir, VERIFIED);\n    assert.equal(s2.api.runtimeProfile(dir), 'protected');\n    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'protected'), 'a verified-local read withdraws the allowed downgrade');\n    declare(dir, LEGACY);\n    assert.equal(s2.api.runtimeProfile(dir), 'protected');\n    await settle();\n    assert.equal(s2.asks.length, 1, 'no second question this session');\n    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'protected'));\n    const s3 = session(root, KEEP);\n    assert.equal(s3.api.runtimeProfile(dir), 'protected', 'after the restart the legacy declaration asks again');\n    assert.equal(s3.asks.length, 1);\n});\n\nfor (const [label, later] of [['verified-local', VERIFIED], ['an unreadable project.json', '{']]) {\n    test(`P13 (${label}): an Allow answered after the project re-declares records nothing, and the next session asks again`, async () => {\n        const [root, dir] = [storeRoot(), project(VERIFIED)];\n        const file = confirmProtected(root, dir);\n        declare(dir, LEGACY);\n        let answer;\n        const s2 = session(root, () => new Promise(resolve => { answer = resolve; }));\n        assert.equal(s2.api.runtimeProfile(dir), 'protected');\n        assert.equal(s2.asks.length, 1);\n        const before = fs.statSync(file).ino;\n        declare(dir, later);\n        answer(ALLOW);\n        await settle();\n        assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'protected'));\n        assert.equal(fs.statSync(file).ino, before, 'no write at all');\n        assert.ok(s2.logs.some(line => line.includes('Moe keeps the protected profile')), s2.logs.join('\\n'));\n        assert.ok(!s2.logs.some(line => line.includes('recorded the allowed downgrade')), s2.logs.join('\\n'));\n        declare(dir, LEGACY);\n        const s3 = session(root, KEEP);\n        assert.equal(s3.api.runtimeProfile(dir), 'protected');\n        assert.equal(s3.asks.length, 1);\n    });\n}\n```\n\nRED proof, before step 2: run executionContract checkRef [0] from the worktree root, without its `! cmp -s ... &&` clause (W's client is still the base at this point, which is the point). [0] copies the merge-base client and this test file into a /tmp scratch dir and runs the file there, reading the shared moe-vscode/node_modules through NODE_PATH, read-only. Never run npm in the shared checkout or in W. Expected, as in the architect probe: `# tests 34`, `# pass 31`, `# fail 3`. The only `not ok` rows are P12, at 'a verified-local read withdraws the allowed downgrade', and both P13 rows, at their first record assertion (actual profile legacy). Windows node.exe registers 30 rows, because four P6 rows are POSIX-only, and fails the same three. Keep the log outside W. Architect probe: /mnt/d/moe-scratch/0900b936-arch-probe (README.txt; reference-tests.diff is this block, for reference only).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "note": "Inserted P12 and the two P13 rows between P11 and S1 as a pure addition, using the Edit tool. RED against the merge-base client (1558f141) in /tmp/0900b936-red.R1WDCk, which is outside the worktree: 34 tests, 31 pass, 3 fail. The failing rows are exactly P12 and both P13 rows, each at its first record assertion (expected protected, actual legacy). The pre-existing rows all pass.",
+      "startedAt": "2026-11-03T11:56:43.380Z",
+      "completedAt": "2026-11-03T11:57:16.669Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 1, implementation. In moe-vscode/src/services/MoeDaemonClient.ts, with the Edit tool, change only runtimeProfile() and askDowngrade(). Per the governor's placement note, do not move or reflow the provenance code around them. Reference: /mnt/d/moe-scratch/0900b936-arch-probe/reference-fix.diff (+8/-5, validated by the architect). It is reference only: never cp, patch or git apply it.\n\n(a) runtimeProfile: read the declaration BEFORE the session-pin check, as JetBrains RuntimeSelectionPolicy.profile does since b1e68978. The body after `const key = projectStateKey(basePath);` becomes:\n```ts\n        // Read before the session pin: a verified-local read withdraws a downgrade allowed earlier this session (task-0900b936).\n        if (declaresVerifiedLocal(path.join(basePath, '.moe', 'project.json'))) {\n            pinnedProjects.add(key);\n            if (storedProfile(key) !== 'protected') { persistProfile(basePath, key, 'protected'); }\n            return 'protected';\n        }\n        if (pinnedProjects.has(key)) { return 'protected'; }\n        const stored = storedProfile(key);\n        if (stored === 'absent' || stored === 'legacy') { return 'legacy'; }\n        pinnedProjects.add(key);\n        askDowngrade(basePath, key);\n        return 'protected';\n```\n(b) askDowngrade: guard the Allow branch with the existing declaredProfile(basePath). It is already the strict re-read, it never throws and never pins, and it logs an untrusted read itself; its 'legacy-like' answer is exactly JetBrains' stillWeaker. The `.then` callback body becomes:\n```ts\n            if (choice !== 'Allow Downgrade') {\n                keep(choice === undefined ? 'the downgrade prompt was dismissed' : 'the downgrade was declined');\n            } else if (declaredProfile(basePath) !== 'legacy-like') {\n                // An Allow applies only while the declaration still reads weaker; an untrusted read is logged by declaredProfile (task-0900b936).\n                keep('the project no longer declares a weaker profile');\n            } else if (persistProfile(basePath, key, 'legacy')) {\n                log('Moe recorded the allowed downgrade; it takes effect after VS Code restarts');\n            }\n```\nError handling:\n- A throwing declaration read in runtimeProfile, now also for a pinned key, still goes to the existing catch. It logs 'Moe runtime selection fails closed to the protected profile: <reason>' and returns 'protected', without pinning or writing.\n- declaredProfile catches every strict-read failure: an lstat or stat error, not a regular file, over 1 MiB, a byte order mark, invalid JSON, an unknown executionProfile. It logs 'Moe reads the declared execution profile as untrusted: <reason>' and answers 'untrusted', so the Allow records nothing.\n- writeProtectedState still logs a failed write, and the callback's existing .catch still covers a rejected or throwing prompt.\nInvariants:\n- Add no import and no top-level require (the closed-require-map vm suites).\n- storedProfile and persistProfile stay unchanged, and both still return before hashing when no store root is set.\n- These stay byte-unchanged: declaresVerifiedLocal, declaredProfile, readProtectedState and writeProtectedState; the modal message and its button order; every spawn-record and provenance function.\n- runtimeProfile never throws and returns the same profile as before for every sequence. Only the record writes change.\n- Add no lock, await or timer. The extension host is single-threaded, and runtimeProfile and the Allow callback each run synchronously to completion, so JetBrains' recordLock has no counterpart here.\nGREEN: the step-1 command with this client exits 0, 34/34 on Linux.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Edited runtimeProfile and askDowngrade only, with the Edit tool: +8/-5, no import, no top-level require, no await, lock or timer. runtimeProfile reads declaresVerifiedLocal before the session-pin check, and storedProfile now runs only inside the verified-local branch and after the pin check. The Allow callback gains one else-if on declaredProfile(basePath) !== 'legacy-like' that logs keep('the project no longer declares a weaker profile'). GREEN in the /tmp scratch layout (/tmp/0900b936-green.Kr7oQx): 34 tests, 34 pass, 0 fail.",
+      "startedAt": "2026-11-03T11:57:18.652Z",
+      "completedAt": "2026-11-03T11:57:35.524Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 3, docs/ARCHITECTURE.md only, with the Edit tool. Under Security Notes, **VS Code parity**, the **Profile pin** (task-98c81a27) bullet is lines 642-645 at 1558f141. It ends 'An unreadable `project.json`, or a pin VS Code would not have written, reads as protected.' After that sentence, append these continuation lines, with the bullet's 4-space indent and exactly this wrapping (each line within 120 columns):\n```\n    A later `verified-local` read in the same window session records the project protected again (task-0900b936). An\n    Allow answered while the project declares `verified-local`, or while its `project.json` is unreadable, records\n    nothing.\n```\nNothing needs removing. task-48bbd091's landed text does not name this row as an open difference: `grep -c 0900b936 docs/ARCHITECTURE.md` is 0 at 1558f141. So the description's 'replaces that' reduces to this addition, which checkRef [4] checks. Leave these unchanged (DoD 3):\n- the JetBrains Profile pin bullet;\n- TROUBLESHOOTING.md, whose 'choose Allow Downgrade, then restart VS Code' stays true;\n- CONFIGURATION.md and moe-vscode/CHANGELOG.md;\n- every other doc.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "startedAt": "2026-11-03T11:57:37.633Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once, after steps 1-3 (DoD 2 and 3). From the task worktree root, run executionContract checkRefs [0]-[4] verbatim and in order. Joined with &&, they are this task's verification command. In complete_task, report their combined exit code and the summary lines each one prints.\n- [1] and [2] take about 4 minutes each. Run them with run_in_background and wait for the completion notice; do not poll.\n- [0] RED re-proof: the merge-base client must differ from W's (`! cmp -s`), and the new test file must fail exactly 3 rows against it, all P12 or P13.\n- [1] Linux snapshot outside the checkout: git archive HEAD with the two moe-vscode files overlaid and cmp-checked, then npm ci, npm test and npm run compile under env -i with nvm node v24.21.0.\n- [2] Windows snapshot under /mnt/d/moe-scratch: the same overlay, then npm ci, npm test and npm run compile through cmd.exe.\n- [3] The quality gate, run in place.\n- [4] Scope and docs: the non-board diff is exactly the three files, the pin file's diff only adds lines, and the bullet's new text is present once.\nExpected Linux full npm test: 688 tests / 679 pass / 0 fail / 9 skipped (architect probe; base 685/676/0/9). Expected Windows: about 684 / 672 / 0 / 12 (base 681/669/0/12 per task-787437bb's QA).\nQA re-runs [0] and [4] at the control checkout with MOE_LAND_TARGET=<completion>^, and [4] also with QA_TIP=<completion>.\n- If the provenance '(7) replace succeeds' or 'cancel during stop' flake appears (mem:gotcha-vscode-provenance-test-deadlines), it is not this change. Re-run that leg once, report both runs, and never edit that test.\n- Never run npm in the shared checkout or in W.\n- Kill only PIDs your own session started, by recorded PID; never pkill, killall or a name match.\n- Keep every scratch file and log outside W, because every dirty path in W lands.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff, `git diff \"$(git merge-base HEAD \"$MOE_LAND_TARGET\")\"` in W. This is the final step.\n(1) Mutants. Use the step-1 scratch layout with the fixed client, and run the step-1 command once per mutant. Restore the fixed file and cmp it after each. Anchor each mutant on whole statements (mem:pattern-mutant-equivalence-and-anchor-traps). Expected kills, matching /mnt/d/moe-scratch/0900b936-arch-probe/mutants.log:\n- M1: put `if (pinnedProjects.has(key)) { return 'protected'; }` back directly after `const key = projectStateKey(basePath);`. Fails only P12.\n- M2: replace the `declaredProfile(basePath) !== 'legacy-like'` condition with false. Fails both P13 rows.\n- M3: compare `=== 'verified-local'` instead. Fails only P13 (an unreadable project.json).\n(2) Attack the diff and its error handling:\n- A pinned key with no store root: storedProfile answers 'absent' and persistProfile false, both before any hashing.\n- An untrusted record read under a verified-local declaration is rewritten protected, exactly as before for an unpinned key.\n- Pinned keys now re-read project.json (strict, at most 1 MiB) on every runtimeProfile call. The callers are connect, the daemon start, the agent launch and vm-control, and none of them loops.\n- An absent project.json at Allow time still counts as weaker and records legacy, as in JetBrains.\n- A second VS Code window shares globalStorage. The last write wins, as since task-98c81a27; this task does not widen that.\n- The new log line names no secret. declaredProfile's reason text is repository content, which runtimeProfile already logs.\n- The new rows' temp dirs are removed through the file's `made` list.\nIf the review changes any byte, re-run step 4's command and report that run.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-d6c1cb7a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -35,23 +88,111 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:44:20.312Z",
-  "updatedAt": "2026-11-03T09:40:15.615Z",
+  "updatedAt": "2026-11-03T11:57:37.633Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T09:26:27.208Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T09:26:54.986Z"
+    "firstClaimAt": "2026-11-03T09:26:54.986Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
+    "architect-74d9e1c7",
+    "worker-d6c1cb7a"
   ],
   "lastCommitOutcome": {
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T09:26:51Z",
-    "at": "2026-11-03T09:40:15.615Z"
-  }
+    "sessionId": "architect-74d9e1c7@2026-11-03T09:40:48Z",
+    "at": "2026-11-03T11:56:32.753Z"
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T11:54:55.388Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code's runtimeProfile reads .moe/project.json before its session-pin shortcut, as JetBrains has since task-6d5d3db2. So a verified-local read records the project protected even after Allow Downgrade recorded legacy earlier in the same window session, and a legacy declaration after the restart asks again. Allow re-reads the declaration and records legacy only while it still reads weaker (absent, legacy, observe or no executionProfile). An Allow answered while the project declares verified-local, or while project.json cannot be read strictly, records nothing and logs why. Unchanged: every profile runtimeProfile returns, the prompt, the store and the daemon provenance. docs/ARCHITECTURE.md's VS Code Profile pin bullet states this behaviour.",
+    "acceptanceCriteria": [
+      "P12, in one session. After Allow Downgrade records legacy: an unreadable declaration writes nothing; a verified-local read rewrites the record to protected; a following legacy declaration asks no second question in that session. A fresh session (a restart) with the legacy declaration answers protected and asks once.",
+      "P13 (verified-local) and P13 (an unreadable project.json): an Allow answered after the project re-declares leaves the protected record's bytes and inode unchanged. It logs 'Moe keeps the protected profile' and never 'recorded the allowed downgrade', and the next session asks again.",
+      "RED: with the merge-base MoeDaemonClient.ts, the pin file fails exactly these three rows (Linux: 34 tests, 31 pass, 3 fail), and every pre-existing row passes.",
+      "moe-vscode npm test and npm run compile exit 0 in a Linux snapshot and in a Windows snapshot, both outside the shared checkout. The pin file's diff only adds lines.",
+      "docs/ARCHITECTURE.md is the only docs file changed, and its VS Code Profile pin bullet states the landed behaviour."
+    ],
+    "invariants": [
+      "runtimeProfile never throws and returns the same profile as before for every sequence of declarations: a pinned key answers protected, a blank basePath answers legacy, and an unreadable declaration answers protected without pinning or writing.",
+      "MoeDaemonClient.ts gains no import and no top-level require (the closed-require-map vm suites). storedProfile and persistProfile stay unchanged and still return before hashing when no store root is set.",
+      "Only Allow Downgrade records legacy, and only while the declaration still reads weaker. Every other answer records nothing: a dismissal, a rejected or throwing prompt, a verified-local re-read or any read failure.",
+      "These stay byte-unchanged: the downgrade modal (message, modal flag, Keep Protected / Allow Downgrade order), ask-once-per-session, the store rules, and the spawn-provenance code.",
+      "No lock, await or timer is added: runtimeProfile and the Allow callback stay synchronous.",
+      "Pre-existing test rows, helpers and constants stay byte-unchanged."
+    ],
+    "compatibility": [
+      "Profile records keep the strict {version:1, project, profile} shape, so a record written before this change reads the same.",
+      "The callers (connect, startDaemon, AgentLauncher.launch, ManagedVmTreeProvider) and their answers are unchanged. Pinned projects now re-read project.json on each call, as in JetBrains.",
+      "TROUBLESHOOTING.md and CONFIGURATION.md stay as task-48bbd091 landed them (DoD 3)."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/services/MoeDaemonClient.ts runtimeProfile: the declaration read moves before the pinnedProjects check, and the storedProfile read moves inside the verified-local branch and after the pin check.",
+      "moe-vscode/src/services/MoeDaemonClient.ts askDowngrade: one new else-if branch on declaredProfile(basePath) !== 'legacy-like' that keeps protected. Nothing else in the file changes.",
+      "moe-vscode/tests/protected-profile-pin.test.cjs: the P12 row and the two P13 rows, inserted between P11 and S1.",
+      "docs/ARCHITECTURE.md: three continuation lines at the end of the VS Code Profile pin (task-98c81a27) bullet."
+    ],
+    "reuse": [
+      "declaredProfile(basePath) (CQ-M07p) is the Allow re-read: it is strict, never throws, never pins and logs an untrusted read. No new helper is written.",
+      "declaresVerifiedLocal, storedProfile, persistProfile and keep() are reused unchanged.",
+      "The reference is JetBrains RuntimeSelectionPolicy.profile / askDowngrade / stillWeaker after task-6d5d3db2 (b1e68978), with RuntimeSelectionPolicyTest D13 and D14 as the test models.",
+      "The pin file's session, storeRoot, project, declare, confirmProtected, record, keyOf and settle helpers are reused. A function choice gives the deferred answer."
+    ],
+    "sourceAssumptions": [
+      "MoeDaemonClient.ts runtimeProfile (line 429 at 1558f141) returns on pinnedProjects.has(key) before declaresVerifiedLocal. askDowngrade (line 481) persists legacy on 'Allow Downgrade' without re-reading.",
+      "declaresVerifiedLocal(file) (line 499) returns false for an absent file or a legacy, observe or missing executionProfile, true for verified-local, and throws otherwise. declaredProfile(basePath) (line 524) maps those answers to 'legacy-like', 'verified-local' or 'untrusted' and never throws.",
+      "In protected-profile-pin.test.cjs, session(root, choice) calls choice() for a function choice (line 30). confirmProtected returns the record file. P11 ends at line 321 and S1 starts at line 323.",
+      "task-48bbd091's landed ARCHITECTURE.md text does not name task-0900b936 (grep count 0 at 1558f141). The VS Code Profile pin bullet is lines 642-645."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && R=$(mktemp -d /tmp/0900b936-red.XXXXXX) && mkdir -p \"$R/moe-vscode/src/services\" \"$R/moe-vscode/tests\" && git show \"$B:moe-vscode/src/services/MoeDaemonClient.ts\" > \"$R/moe-vscode/src/services/MoeDaemonClient.ts\" && ! cmp -s moe-vscode/src/services/MoeDaemonClient.ts \"$R/moe-vscode/src/services/MoeDaemonClient.ts\" && cp moe-vscode/tests/protected-profile-pin.test.cjs \"$R/moe-vscode/tests/\" && (cd \"$R/moe-vscode\" && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules \"$HOME/.nvm/versions/node/v24.21.0/bin/node\" --test --test-reporter=tap tests/protected-profile-pin.test.cjs > \"$R/red.log\" 2>&1; [ $? -ne 0 ]) && grep -E '^# (tests|pass|fail) ' \"$R/red.log\" && [ \"$(grep -c '^not ok ' \"$R/red.log\")\" = 3 ] && [ \"$(grep -cE '^not ok [0-9]+ - P1[23][ :]' \"$R/red.log\")\" = 3 ] && echo \"RED_OK $R/red.log\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp -d /tmp/0900b936-linux.XXXXXX) && git archive HEAD | tar -x -C \"$L\" && for f in moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/tests/protected-profile-pin.test.cjs; do cp \"$f\" \"$L/$f\" && cmp \"$f\" \"$L/$f\" || { L=; break; }; done && [ -n \"$L\" ] && echo \"LINUX_SNAPSHOT=$L\" && (cd \"$L/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile' > \"$L/verification.log\" 2>&1; rc=$?; grep -aE '^[^ ]+ (tests|pass|fail|skipped) [0-9]+' \"$L/verification.log\"; echo \"LINUX_EXIT=$rc\"; exit $rc)",
+      "cd \"$(git rev-parse --show-toplevel)\" && mkdir -p /mnt/d/moe-scratch && WS=$(mktemp -d /mnt/d/moe-scratch/0900b936-win.XXXXXX) && git archive HEAD | tar -x -C \"$WS\" && for f in moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/tests/protected-profile-pin.test.cjs; do cp \"$f\" \"$WS/$f\" && cmp \"$f\" \"$WS/$f\" || { WS=; break; }; done && [ -n \"$WS\" ] && echo \"WINDOWS_SNAPSHOT=$WS\" && (cmd.exe /d /c \"cd /d $(wslpath -w \"$WS/moe-vscode\") && npm ci --no-audit --no-fund && npm test && npm run compile\" > \"$WS/verification.log\" 2>&1; rc=$?; tr -d '\\r' < \"$WS/verification.log\" | grep -aE '^[^ ]+ (tests|pass|fail|skipped) [0-9]+'; echo \"WINDOWS_EXIT=$rc\"; exit $rc)",
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && [ \"$(git diff --name-only \"$B\" ${QA_TIP:-} -- . ':(exclude).moe' | sort | tr '\\n' ' ')\" = \"docs/ARCHITECTURE.md moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/tests/protected-profile-pin.test.cjs \" ] && git diff --numstat \"$B\" ${QA_TIP:-} -- moe-vscode/tests/protected-profile-pin.test.cjs | awk '{ exit !($1 > 0 && $2 == 0) }' && [ \"$(grep -c 0900b936 docs/ARCHITECTURE.md)\" = 1 ] && awk '/\\*\\*VS Code parity\\*\\*/,/\\*\\*Accepted Windows costs\\*\\*/' docs/ARCHITECTURE.md | tr '\\n' ' ' | tr -s ' ' | grep -qF 'A later `verified-local` read in the same window session records the project protected again (task-0900b936). An Allow answered while the project declares `verified-local`, or while its `project.json` is unreadable, records nothing.' && echo SCOPE_DOCS_OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A verbatim JetBrains port with recordLock: rejected. The extension host is single-threaded, and runtimeProfile and the Allow callback both run synchronously to completion, so nothing can interleave. (2) A new stillWeaker helper or closure: the architect's first two probes, both green. Replaced by the existing declaredProfile(basePath), which is the same strict read, never throws and already logs an untrusted read. That is +2 lines instead of about +10, and it keeps the edit inside askDowngrade, as the governor's placement note asks. (3) Re-reading inside the callback without a guard, so the existing .catch logs a read failure: rejected, because that line says 'the downgrade prompt failed'. (4) Clearing the session pin on a verified-local read: rejected, because the pin must hold for the whole session. (5) Mirroring JetBrains' TROUBLESHOOTING.md sentence: rejected by DoD 3 ('No other docs file changes').",
+    "codebaseInsights": "- The pin logic is in moe-vscode/src/services/MoeDaemonClient.ts, lines 429-532 at 1558f141: runtimeProfile, storedProfile, persistProfile, askDowngrade, declaresVerifiedLocal and declaredProfile. All of it is synchronous fs, and none of it throws to callers.\n- The vm test suites transpile MoeDaemonClient.ts into a closed vm context, and some do not pass Buffer. That is why storedProfile and persistProfile return before hashing when no root is set (mem:decision-protected-state-store). A new import or top-level require breaks those suites.\n- declaredProfile's 'legacy-like' answer equals JetBrains' stillWeaker == true. 'untrusted' is any strict-read failure, already logged.\n- In protected-profile-pin.test.cjs, a RESTART is a fresh vm load (session()) against the same store root. A function choice gives a deferred modal answer. P3/P4's inode check is the 'no write at all' idiom, and it holds on NTFS too.\n- A task worktree has no moe-vscode/node_modules, so tests run in snapshots (mem:gotcha-vscode-tests-need-full-repo-snapshot, mem:gotcha-vscode-gate-from-wsl). checkRef [0] reads the shared checkout's node_modules through NODE_PATH, read-only.\n- node --test with --test-reporter=tap prints top-level rows as 'not ok N - <name>' and a '# fail N' summary.\n- Architect probe at 1558f141, in /mnt/d/moe-scratch/0900b936-arch-probe:\n  - Linux pin file: base 34 tests / 31 pass / 3 fail; fixed 34/34.\n  - Windows pin file: base 30 / 27 / 3; fixed 30/30.\n  - Full Linux suite with the fix: 688 / 679 / 0 / 9.\n  - The six protected suites: 185 / 176 / 0 / 9.\n  - tsc6 --noEmit: exit 0.\n  - Mutants M1-M3: each fails exactly its expected rows.",
+    "risks": "- Edit all three tracked files with the Edit tool (global rail). No sed -i, heredoc, cp or patch into W. Keep scratch files and logs outside W, because every dirty path in W lands.\n- checkRef [0]'s RED base is the merge-base client. QA re-runs [0] and [4] at the control checkout with MOE_LAND_TARGET=<completion>^, and [4] also with QA_TIP=<completion>. Without those overrides, [0] fails at '! cmp -s' and [4] at the scope compare; both are expected.\n- Never run npm in the shared checkout or in W: [1] and [2] are the snapshots. Never pattern-kill; kill only PIDs you started.\n- task-787437bb fixed the provenance replacement flake (mem:gotcha-vscode-provenance-test-deadlines). If a provenance row fails under load, re-run the leg once and report both runs; never edit that file.\n- Do not reword the modal text or the existing log lines: P2 and P3 pin the message and the button order.\n- An absent project.json at Allow time reads legacy-like and records legacy (JetBrains parity). Do not harden it into a refusal.\n- Put no at-tokens in step notes or code comments (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions).",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/protected-profile-pin.test.cjs",
+      "docs/ARCHITECTURE.md",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "1558f141fa4dbe05860f655b0f5d6c1e58a4a107",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T11:54:55.424Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T11:56:43.380Z"
 }
