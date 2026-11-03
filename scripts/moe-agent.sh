@@ -7724,9 +7724,10 @@ worktree_control_dirt() {
 # MERGE_HEAD already there is reused. The prompt then starts LANDING-CONFLICT:
 # <unmerged paths> or LANDING-RETRY: <reason>. Any other git failure stops the
 # seat (MOE_WORKTREE_RESUME_FAILED); never a reset, clean or abort, so W keeps
-# its bytes. Twin: Invoke-MoeWorktreeResume.
+# its bytes. Both lines end with the resume rule (verify the merged working
+# tree, not HEAD; git stays read-only). Twin: Invoke-MoeWorktreeResume.
 worktree_resume() {
-    local base mh rc=0 hooks err line
+    local base mh rc=0 hooks err line resume_rule
     MOE_WT_RETRY_PATHS="$(create_secure_temp)/wt-retry-$$.z"
     MOE_WT_RETRY=$(printf '%s' "${PREFLIGHT_CONTEXT:-}" | $PYTHON_CMD -c 'import json,sys
 try: r=json.load(sys.stdin)["task"]["landingRetry"]
@@ -7752,12 +7753,13 @@ print(r["reason"] if ok else "")' "$MOE_WT_RETRY_PATHS" 2>/dev/null) || MOE_WT_R
 p=list(dict.fromkeys(x.decode("utf-8","replace") for x in sys.stdin.buffer.read().split(b"\0") if x))
 s=", ".join("".join(c if c.isprintable() else "?" for c in x[:200]) for x in p[:20])
 print(s+(" +%d more"%(len(p)-20) if len(p)>20 else ""))' 2>/dev/null) || line=""
+    resume_rule="The wrapper commits this merge only when it lands, so HEAD can lack the merged target: where the verification builds a snapshot from HEAD (git archive HEAD, or a clone checked out at HEAD), build it from the tracked files of this worktree instead (the paths git ls-files lists), keep every other command unchanged, and say so in the evidence. Git stays read-only here: run only git status, git diff, git log, git show, git ls-files and git rev-parse, never a git write (commit, merge, reset, checkout, switch, restore, stash, add, rm, mv, rebase, cherry-pick, revert, apply, clean, or any other command that changes the index, HEAD, a ref or MERGE_HEAD)."
     if [ -n "$line" ]; then
         line="LANDING-CONFLICT: $line
-Your last completion did not land: $MOE_WT_TARGET is merged into this worktree and these paths conflict. Edit files only (no git commands, no new plan): remove every conflict marker (<<<<<<<, =======, >>>>>>>), re-run the plan's verification, then call moe.complete_task."
+Your last completion did not land: $MOE_WT_TARGET is merged into this worktree and these paths conflict. Edit files only (no new plan): remove every conflict marker (<<<<<<<, =======, >>>>>>>), re-run the plan's verification, then call moe.complete_task. $resume_rule"
     else
         line="LANDING-RETRY: $MOE_WT_RETRY
-Your last completion did not land ($MOE_WT_RETRY); $MOE_WT_TARGET is merged into this worktree. Edit files only (no git commands, no new plan), re-run the plan's verification, then call moe.complete_task."
+Your last completion did not land ($MOE_WT_RETRY); $MOE_WT_TARGET is merged into this worktree. Edit files only (no new plan), re-run the plan's verification, then call moe.complete_task. $resume_rule"
     fi
     echo -e "${YELLOW}[WARN]${NC} ${line%%$'\n'*}"
     DYNAMIC_CONTEXT="$line
