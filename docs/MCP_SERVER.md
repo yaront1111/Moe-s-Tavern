@@ -1843,6 +1843,15 @@ Create a new task in an epic. **Guardrails are ALL ADVISORY — creation never h
 }
 ```
 
+**Input refusals.** Malformed input is refused before any write, so nothing is created and a retry cannot duplicate a row. Refused inputs:
+- a missing `epicId` or `title` (`MISSING_REQUIRED`);
+- an unknown `status` or `priority`;
+- a `dependsOn` that is not an array of strings;
+- a `definitionOfDone` that is present (not `null`) but not an array of strings;
+- a `taskRails` that is present (not `null`) but not an array of at most 100 non-empty strings of at most 10000 characters each. These are the bounds `moe.create_epic` applies to `epicRails`.
+
+Each is `INVALID_INPUT` naming the field, e.g. `taskRails[2]`. These are caller errors, not guardrails; the guardrails below stay advisory. Empty or blank DoD entries are still dropped, and an empty list still gets the placeholder and its warning.
+
 **Returns:**
 ```typescript
 { success: true, task, warnings?: string[] }
