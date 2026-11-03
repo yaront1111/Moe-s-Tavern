@@ -74,9 +74,15 @@
     {
       "stepId": "step-5",
       "description": "Verify once, then do one adversarial self-review. The gate is narrow, per the epic-be924fb8 ruling msg-bbf4f109 that this row's description cites.\n\nRun this exact command from the task worktree. It also works verbatim in the control checkout after landing.\n\ncd \"$(git rev-parse --show-toplevel)\" && d=packages/moe-daemon/src && ! grep -q \"pass force:true\" $d/util/claimGuards.ts && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $d/tools/{releaseTask,releaseResource}.ts $d/util/claimGuards.ts $d/tools/{releaseResource.generation,releaseForceGate}.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/release*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/release src/tools/claimNextTask.race src/state/resourceStore > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'\n\nExpect exit 0 and no FAIL line. The architect's dry-run of this exact command on a scratch tree holding the draft fix printed 'Test Files 10 passed (10)' and 'Tests 156 passed (156)'. On the unfixed checkout it exits 1. The architect also ran src/server/WebSocketServer*, reportBlocked.test.ts and deregisterWorker* green on the draft fix (213 tests). Never run npm in the shared checkout, and never pass TMPDIR inside the env -i (`mem:convention-daemon-full-suite-gate-checkref`).\n\nError handling for a red run: fix only the owned files and re-run the same command.\n\nSelf-review:\n- Can any non-governor seat still reach force? The proxy injects MOE_WORKER_ID, so a seat cannot go workerId-less by accident.\n- Does a refusal write anything? (p2)-(p4) and (r1) pin that it does not.\n- Does /ws RELEASE_TASK still force? It sends no workerId; releaseTask.test.ts arm 4 pins it.\n- Is any message still telling the caller to pass force? The grep in the gate checks.\n- Does the store ever read the '' caller under force?\n- The diff is the 6 planned files.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T20:18:25.204Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseResource.ts",
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts"
+      ],
+      "note": "Gate (the plan's exact command) exited 0: Test Files 10 passed (10), Tests 157 passed (157). The wider set of 23 files (claimNextTask*, WebSocketServer*, reportBlocked, deregisterWorker*, taskEventActor, acquire/waitForResource) gave 531 passed.\n\nThe self-review found one real hole and fixed it. McpAdapter does not schema-validate args, and the store's matchesCaller forces on any truthy `force`, so the step-3 gate (`=== true`) let a worker's `force: 'true'` or `force: 1` skip the gate and still force. release_resource now reads `const force = Boolean(params.force)` once, the same truthiness the store uses, for the missingRequired check, the gate, the precondition targeting and the store call. r1 gains a `force: 'true'` assertion, proven red against the earlier gate. release_task was already safe: it computes `force = params.force === true` and passes that boolean to the guards.\n\nTheoretical, not fixed: a seat that explicitly sends `workerId: \"\"` is treated as workerId-less, i.e. as the human path. The proxy injects only when the key is absent. Before this change, assertReleaseCaller already treated \"\" as no caller, and per workerRole.ts the role gate is a workflow guard, not a security boundary.\n\nThe store never reads the '' caller under force: matchesCaller returns on params.force before callerOwns.",
+      "startedAt": "2026-11-03T20:18:25.204Z",
+      "completedAt": "2026-11-03T20:20:36.878Z"
     }
   ],
   "planRevision": 1,
@@ -93,12 +99,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:01:05.255Z",
-  "updatedAt": "2026-11-03T20:18:25.204Z",
+  "updatedAt": "2026-11-03T20:20:36.879Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:03:54.143Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -115,7 +121,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T20:13:17.111Z",

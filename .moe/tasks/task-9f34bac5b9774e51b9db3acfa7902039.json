@@ -75,8 +75,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,12 +88,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:58:30.918Z",
-  "updatedAt": "2026-11-03T20:18:32.603Z",
+  "updatedAt": "2026-11-03T20:20:43.203Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:58:34.751Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T20:20:12.179Z",
+    "wallClockMs": 1297428
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -185,10 +187,11 @@
   "planApprovedAt": "2026-11-03T20:13:14.393Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T20:13:15Z",
-    "at": "2026-11-03T20:17:45.053Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T20:18:10Z",
+    "at": "2026-11-03T20:20:43.203Z"
   },
   "workStartedAt": "2026-11-03T20:14:37.160Z",
   "declaredFiles": [
@@ -231,5 +234,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T20:20:12.179Z",
+  "reviewCompletedAt": "2026-11-03T20:20:12.179Z",
+  "reviewSummary": "Reviewed completion cf7ccda6 (on moe/control + moe/work-2026-10-24; 4 paths, +152/-4, ~148 net LOC; no docs edit, TOOL_AUDIENCE untouched). Diff: resourceStore.ts only exports RESOURCE_ELIGIBLE_STATUSES (ReadonlySet; store logic unchanged, so reaper DONE/ARCHIVED seeds still work); acquireResource.ts adds assertResourceTaskEligible (INVALID_STATE) after notFound, before assertWorkerOwns/touchWorker; waitForResource.ts does the same pre-check plus an in-lock re-read + notFound + assert inside state.runExclusive (blocking:true runs outside the mutex). Re-ran task.verification verbatim in a git-archive snapshot outside the shared checkout: tsc clean (src + test), ineligible file 11/11, neighbour run 15 files / 246 tests, EXIT=0. Every other test driving these tools (acquireResource, waitForResource, reportBlocked, resourceStore*, attemptHandback, reloadHold, releaseResource*, McpAdapter.cancellation, WebSocketServer.lifecycle/waiter-ownership) is in that run, green unchanged. daemonGitDocs 4/4; no forbidden patterns in added lines. Mutants (scratch snapshot only): drop wait pre-check fails only (w1); drop in-lock recheck fails only (w2); drop REVIEW from set fails (e1) task-review and the refusal tests. DoD 1 (i1 x4 statuses, i2 no queue entry), DoD 2 (w1 + WORKING acquire granted after) and DoD 3 all evidenced; e1 keeps PLANNING/WORKING/REVIEW/BLOCKED granted. Wrapper: acquire_land_lease runs on a REVIEW row (eligible); a refusal fails closed as MOE_COMMIT_FAILED_LAND_LEASE (the accepted edge the worker named). Non-blocking: an in-lock refusal comes after the seat's own earlier waiter was cancel-and-replaced (pre-existing order; reaper cleans any leftover queue entry).",
+  "requiredCheckAtDone": null
 }
