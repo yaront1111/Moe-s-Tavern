@@ -99,8 +99,8 @@
     }
   ],
   "planRevision": 4,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -138,12 +138,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:16.023Z",
-  "updatedAt": "2026-11-03T17:26:31.659Z",
+  "updatedAt": "2026-11-03T18:23:40.908Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:23.394Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T18:23:00.542Z",
+    "wallClockMs": 172597148
   },
   "contextFetchedBy": [
     "architect-12ae794e",
@@ -267,9 +269,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T16:19:03Z",
-    "at": "2026-11-03T17:26:05.326Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T17:26:15Z",
+    "at": "2026-11-03T18:23:40.908Z"
+  },
+  "completedAt": "2026-11-03T18:23:00.542Z",
+  "reviewCompletedAt": "2026-11-03T18:23:00.542Z",
+  "reviewSummary": "Reviewed completion 6d6bdc51: tree c3dd87dd matches the candidate, and the commit is on origin/moe/work-2026-10-24. Diff +307/-0 across the 3 declared paths (agent +88, new harness +217, parent hook +2), under the 400 cap; diff --check clean.\n\nRe-ran task.verification on a git-archive snapshot of 6d6bdc51 with MOE_/CLAUDE/FAKE_ scrubbed and timeout 180: exit=0. PASS counts: 3 postflight-vm-route.ps1 (5.1, pwsh7, nested), 1 postflight.ps1 (5.1), 1 parity-check.sh. 0 SKIP, lint OK, BOM kept.\n\nPort source: m1 is DONE, reopen 0; the grep still returns 9578c609. Diffed the gate against m1's sh functions:\n- the 5 details are byte-identical;\n- the order is CLI, shared, not-ready, placeholder (WSL dropped per the rail);\n- the predicate matches: object, -ceq enum, [bool], RAW [array] of [string];\n- the WT-19 unset default and the JS-trim set match;\n- output is stderr then exit 1; finally deregisters, and the supervisor propagates N.\nThe call site precedes every RPC of the iteration.\n\nDoD coverage:\n- DoD1: 13 T rows compare normalized argv/cwd/env to legacy, which ran twice to prove the mask (session/uuid/tmp only).\n- DoD2/3: C1-2, S1-6, N1-4 (N3 is the single-id trap) and R1-2 check exit 1, one exact line, no chat/claim, only deregister after, no CLI.\n- DoD4: A1/G1.\n- DoD5: the run above.\n\nMy mutant, dropping 6>$null, was killed by T-refuse. The worker's 3 mutants are logged.\n\nNon-blocking:\n(a) the singleton-array unroll is refusal-only and governor-deferred to 044c7410;\n(b) pwsh7 would turn an ISO-date-shaped capability id into [datetime], which is unreachable because READINESS_IDS is a closed kebab-case set; add a row in 044c7410;\n(c) case-insensitive property reads and 5.1's ANSI Get-Content of project.json (same as line 1113) can change only which refusal code prints, never a host launch.\n\nPonytail: the json.dumps mirror is justified by the byte-exact rendering requirement.",
+  "requiredCheckAtDone": null
 }
