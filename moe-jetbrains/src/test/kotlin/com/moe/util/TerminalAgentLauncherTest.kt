@@ -633,7 +633,8 @@ class TerminalAgentLauncherTest {
         assertTrue(line, line.startsWith("$word -NoProfile -ExecutionPolicy Bypass -EncodedCommand "))
         assertFalse(line, line.startsWith("powershell"))
         val legacy = TerminalAgentLauncher.buildAccountsCommand(
-            AccountCli(node.toPath().toRealPath().toString(), ACCOUNTS_SCRIPT), ACCOUNTS_FILE, args, AccountsShell.POWERSHELL
+            AccountCli(node.toPath().toRealPath().toString(), ACCOUNTS_SCRIPT), ACCOUNTS_FILE, listOf("--protected-project", project.path) + args,
+            AccountsShell.POWERSHELL
         )
         assertEquals(typedPsScript(legacy), typedScript(line, word))
     }
@@ -686,7 +687,8 @@ class TerminalAgentLauncherTest {
         val args = listOf("check")
         assertEquals(
             TerminalAgentLauncher.buildAccountsCommand(
-                AccountCli(node.toPath().toRealPath().toString(), ACCOUNTS_SCRIPT), ACCOUNTS_FILE, args, AccountsShell.BASH
+                AccountCli(node.toPath().toRealPath().toString(), ACCOUNTS_SCRIPT), ACCOUNTS_FILE, listOf("--protected-project", project.path) + args,
+                AccountsShell.BASH
             ),
             TerminalAgentLauncher.accountsCommandFor(PROTECTED, AccountCli(node.path, ACCOUNTS_SCRIPT), ACCOUNTS_FILE, args, AccountsShell.BASH, project.path)
         )
@@ -709,7 +711,8 @@ class TerminalAgentLauncherTest {
         assertEquals(
             "'/bin/bash' -c '" + TerminalAgentLauncher.PROTECTED_WSL_NODE_PROGRAM + "' moe-accounts '/mnt/d/projexts/app' " +
                 "'/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.2/plugins/moe-jetbrains/daemon/accounts/cli.js' " +
-                "'--accounts-file' '/mnt/c/Users/Yaron/.moe/claude-accounts.json' 'remove' 'acct-2' '--sign-out'",
+                "'--accounts-file' '/mnt/c/Users/Yaron/.moe/claude-accounts.json' '--protected-project' '/mnt/d/projexts/app' " +
+                "'remove' 'acct-2' '--sign-out'",
             line
         )
         // Typed unchanged inside single quotes by bash, zsh and fish.
