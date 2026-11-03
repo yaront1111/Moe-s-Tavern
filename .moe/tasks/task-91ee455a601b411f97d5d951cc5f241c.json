@@ -56,24 +56,37 @@
     {
       "stepId": "step-3",
       "description": "3. One verification gate, at the end, run once. Run it from the repo root, in place: launcher harnesses run in place per the global rail. Launch it with job control and a scrubbed MOE_*/CLAUDE* env (mem:gotcha-qa-session-env-and-signals-leak-into-harness): `( set -m; nohup bash -c '<command> > log 2>&1; echo EXIT=$? >> log' >/dev/null 2>&1 & )`, then poll the log with a foreground timeout.\nThe exact command:\n`bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/worktree-landing.sh && bash scripts/tests/postflight-vm-route.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`\nRequired:\n- exit 0;\n- parity PASS: MOE_VM_ is not a compared family until CQ-M07n, and no MOE_COMMIT_/MOE_ATTR_/MOE_CHECKPOINT_/MOE_ATTRIBUTION_/MOE_ACCOUNT_ code was added;\n- worktree-landing.sh green and unedited, proving legacy worktree completions are unchanged by step 2;\n- every [vm candidate] and [strong intent] row passing;\n- postflight.sh green, which also re-runs postflight-vm-route.sh through CQ-M07m1's line.\nThe fresh command, exitCode and outputTail are the complete_task evidence. Load regression-check and verification-before-completion. If a dependency's bytes are missing or a harness cannot run, report that; never claim green.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-03T17:22:11.825Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Gate run once, in place from the task worktree root, detached with job control and a scrubbed env (env -i HOME + nvm Node 24 PATH), 17:22Z-18:00Z. Exact command: bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/worktree-landing.sh && bash scripts/tests/postflight-vm-route.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh. Result EXIT=0. The log has PASS parity-check.sh; worktree-landing 18 passed, 0 failed, 0 errors (file unedited vs 430e4620); [vm candidate] ok R1, R1u, R2a-R5b, R6-R9; [strong intent] ok G1-G7 and G8; PASS postflight-vm-route.sh (alone, then again via postflight.sh); frozen candidate 106, owner guard 16, migration 12; PASS postflight.sh. No SKIP lines. Log: /mnt/d/moe-scratch/gate-91ee455a.log. I also ran the project qualityGate (parity-check && npm run lint): EXIT=0.",
+      "startedAt": "2026-11-03T17:22:11.825Z",
+      "completedAt": "2026-11-03T18:00:57.397Z"
     },
     {
       "stepId": "step-4",
       "description": "4. Adversarial self-review, once, scoped to this diff. Load adversarial-self-review. Check each of these:\n- a refusal leaves every ref, W's index file and the control checkout byte-identical;\n- a set -e trip inside the helper, for example a failed `$(...)` assignment or a missing `contested` file;\n- the order is read-tree, then seam, then CAS, then rollback, so an INT/TERM or crash between any two leaves W recoverable by the next pre-flight, never a revert;\n- a lost CAS restores W, and a failed rollback still parks NEW;\n- no git command writes through the control checkout except rescue_ref_from_commit's refs/moe/rescue ref, and none touches refs/heads/<target>;\n- paths with spaces, Unicode or newlines in the staged file;\n- the protected seam skip;\n- wt_strong_intent cannot pass on stale FROZEN_* from an earlier round or landing (it compares M and B), and it is a no-op for legacy, observe and an empty LAND_TASK_ID;\n- no MOE_COMMIT_* code added, so parity holds;\n- no shared-mode or legacy worktree behaviour changed.\nSize: measure `git diff --numstat -- scripts/`. If it is over 400 net changed lines, file the epic size waiver with moe.propose_rail before complete_task, using the CQ-M05 rail template with the exact per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Re-run step 3's exact command after any fix. Report every created or modified path in complete_step.modifiedFiles. Wrappers own the Git writes: never commit by hand.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "I reviewed the diff against 430e4620 adversarially before the gate run, so no fix forced a rerun; nothing needed fixing.\n\nEach checklist item:\n- Refusals use only rev-parse, symbolic-ref, cat-file and --no-optional-locks status. Rows R2-R5 assert that refs, W's index sha256 and the control checkout are unchanged.\n- Every $(...) assignment is guarded (|| var=\"\" or inside an if/&& list), and $work/contested is created empty before write_commit_message.\n- The order is commit-tree, read-tree COMMIT NEW, seam, then the CAS, so an interrupt before the CAS leaves W's dirt over COMMIT for the recovery checkpoint.\n- A lost CAS rolls W back and parks NEW. A failed rollback warns and still parks NEW.\n- Git writes go only through W, plus rescue_ref_from_commit's refs/moe/rescue ref; refs/heads/<target> is never touched. Every vm-candidate row checks the control checkout's HEAD, index and status and refs/heads/main.\n- Paths are NUL-delimited end to end; R1u covers a space and Unicode.\n- The seam is skipped when RUNTIME_PROTECTED=1 (R9).\n- wt_strong_intent compares FROZEN_TREE=M and FROZEN_BASE=B (both non-empty), and land_worktree_checkpoint resets FROZEN_TREE/BASE at L2. So a stale candidate from an earlier round or landing cannot pass, and an ungated strong round always refuses. It is a no-op for legacy and observe (G1) and for an empty LAND_TASK_ID (G1b).\n- No new MOE_COMMIT_* code: only the existing INTENT_INCOMPLETE, present in both twins, so parity passes.\n- Shared mode is untouched: wt_land_rounds is worktree-only, and land_vm_candidate has no caller. worktree-landing.sh passes 18/18 unedited.\n- Retry is idempotent: a re-call after success or contention refuses as HEAD_MOVED.\n\nTheoretical, for CQ-M07m3: after REF_CONTENTION, W's files and index are back at COMMIT, while HEAD follows the branch to whatever moved it. That mismatch comes from the external mover (R6 pins the restore), and m3 must hold the task on rc 2.\n\nSize: git diff --numstat 430e4620 -- scripts/ gives moe-agent.sh +100/-1 and postflight-vm-route.sh +192/-0. Net 291 is under 400, so no waiver is needed.",
+      "startedAt": "2026-11-03T18:01:03.893Z",
+      "completedAt": "2026-11-03T18:01:23.093Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -95,12 +108,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:12.430Z",
-  "updatedAt": "2026-11-03T17:22:11.825Z",
+  "updatedAt": "2026-11-03T18:01:48.600Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T14:50:10.406Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-30d804be",
@@ -113,7 +126,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:50:37.463Z",
@@ -235,14 +250,6 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
-    ".moe/tasks/task-435e8989c4d0425aa6eecf523353e5bc.json",
-    ".moe/tasks/task-5464e7259cfd479793d93f9651fb3eba.json",
-    ".moe/tasks/task-65b3e023923e4ab6b71cb94e7bea2f9b.json",
-    ".moe/tasks/task-91ee455a601b411f97d5d951cc5f241c.json",
-    ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json",
-    ".moe/tasks/task-cd2977e10648489fa3d63b0a376ca6fa.json",
-    ".moe/tasks/task-d861f3de0d62437a964a83011e8c7def.json",
     "scripts/moe-agent.sh",
     "scripts/tests/postflight-vm-route.sh"
   ],
@@ -253,5 +260,14 @@
     "sessionId": "worker-2dc72348@2026-11-03T16:54:05Z",
     "at": "2026-11-03T17:11:58.129Z"
   },
-  "workStartedAt": "2026-11-03T16:55:27.290Z"
+  "workStartedAt": "2026-11-03T16:55:27.290Z",
+  "reviewStartedAt": "2026-11-03T18:01:48.598Z",
+  "verification": {
+    "command": "bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/worktree-landing.sh && bash scripts/tests/postflight-vm-route.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\n... PASS local/remote x18\nworktree-landing: 18 passed, 0 failed, 0 errors\n[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] ok G1-G7 and G8\nPASS postflight-vm-route.sh\nPASS frozen candidate scenarios: 106\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 12\n...\n[WT-14] ok: 11 scenarios\n[protected runtime] ok\n[prompt overflow] ok\n[vm route] ok today's path (legacy x2, observe, unreadable, refuse, unknown, fail, 2 malformed)\n[vm route] ok refusals (W1, C1, C2, S1-S4, N1, N2, R1, R2)\n[vm route] ok architect and governor\n[vm route] ok protected seam (P1 seam=0) and static seam scope\n[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] ok G1-G7 and G8\nPASS postflight-vm-route.sh\nPASS postflight.sh\nEXIT=0",
+    "reportedAt": "2026-11-03T18:01:48.598Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-M07m2: commit a VM job's admitted tree onto the task branch, plus CQ-V07's intent rule for worktree completions (scripts/moe-agent.sh, +100/-1).\n\n1. land_vm_candidate COMMIT BASE_TREE TREE (nothing calls it yet; CQ-M07m3 will; twin CQ-M07n2).\n- Refusals are read-only and give rc 1: MOE_VM_CANDIDATE_NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY (tracked, untracked or a pending merge) and TREE_INVALID.\n- TREE == BASE_TREE gives MOE_VM_CANDIDATE_EMPTY, rc 0, and writes nothing.\n- Otherwise: one checkpoint commit-tree TREE -p COMMIT with WT-07's message and trailers and no hooks; read-tree -m -u COMMIT NEW in W; the protected-skipped test seam; then a CAS update-ref from COMMIT. One committed checkpoint ledger row and an [OK] MOE_VM_CANDIDATE_COMMITTED line follow.\n- A failed W update (SYNC_FAILED) or a lost CAS (REF_CONTENTION, W rolled back) parks NEW on refs/moe/rescue/<id>/<ts> with rc 2.\n- It never writes the control checkout, its index or the target.\n\n2. wt_strong_intent M B, called once per wt_land_rounds round after the L6 gate and before L7.\n- It is a no-op for legacy, observe and a task-less landing.\n- Under verified-local it refuses with the existing MOE_COMMIT_REFUSED_INTENT_INCOMPLETE unless the frozen candidate is exactly M on B and the attempt and plan revision are pinned. land_worktree_completion's existing refused path handles it: no ref, no rescue ref.\n- Consequence for the M07 final: a verified-local worktree completion now needs settings.qualityGate.\n\nTests: scripts/tests/postflight-vm-route.sh +192, with [vm candidate] R1, R1u, R2a-R5b, R6-R9 and [strong intent] G1, G1b, G2-G5, G6a-c, G7, G8. Every vm-candidate row asserts that the control HEAD, index and status and refs/heads/main are unchanged. RED before the code, GREEN after. 10 mutants were killed across both steps.\n\nGate: the exact command above, run in place with env -i, EXIT=0 (about 38 min, no SKIP). worktree-landing.sh passed 18/18 and is unedited. The qualityGate (parity-check && npm "
 }

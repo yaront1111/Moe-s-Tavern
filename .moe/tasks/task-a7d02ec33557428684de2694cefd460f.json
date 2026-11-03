@@ -84,14 +84,16 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this task's diff (load adversarial-self-review). Mutants run in a copy OUTSIDE the worktree: a crash mid-mutant must never leave one in W, where your landing would commit it. Set it up with `git archive HEAD scripts .github/workflows/ci.yml | tar -x -C /mnt/d/moe-scratch/mut-a7d0/<m>`, then `cp --parents` your 6 changed files into it, apply ONE exact-count string edit per mutant, and run that copy's account-wait-attempt.test.mjs. Every mutant must fail at least one row; the dry run confirmed all of these (dryrun.txt):\n- M1: drop sh `ACCOUNT_RELAUNCH=true`. Row 1 fails with `PREFLIGHT 2 relaunch=false`.\n- M6: drop sh's `[ \"${ACCOUNT_LEASE_WAITED:-false}\" = true ] || return 0` line. Row 4 fails.\n- M7: drop ps1 `$script:AccountRelaunch = $true`. Rows 1 and 2 fail on powershell.exe and pwsh.exe, because the -NoLoop do/while ends without a launch.\nThen read the diff for:\n- two seats on one task: the re-check only reads .moe/attempts and removes only this session's own marker;\n- --no-loop vs -NoLoop: a single extra pass;\n- a hot reload (sh exec keeps env, but the pre-flight top re-blanks the pair);\n- a daemon restart during the wait: a `reconciling` attempt reads as not current, and the re-run pre-flight's reattach_own_attempts handles it;\n- no bash-4-only syntax in the new sh lines (macOS bash 3.2);\n- the stale line identical in both twins;\n- no new MOE_ACCOUNT_* variable names;\n- the wait-message wording untouched.\nThe diff stays about +279/-2 (net 277), under the 400 review cap. If this review changes any byte, re-run step 5's command and submit that fresh output.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T17:58:00.027Z"
+      "note": "Adversarial self-review. No byte changed, so the step-5 run stands.\n\nMutants: M1-M8 each ran in /mnt/d/moe-scratch/mut-a7d0/<m>, outside W, and each one fails rows.\n- M1, M4: row 1 fails; M1 prints PREFLIGHT 2 relaunch=false.\n- M2: row 2 fails.\n- M3, M6: row 4 fails.\n- M5: rows 1 and 2 fail.\n- M7: rows 1 and 2 fail on powershell.exe and pwsh.exe.\n- M8: row 1 fails on powershell.exe and pwsh.exe.\n\nVerified by reading:\n- Loop targeting. In sh, `continue` targets the main `while` at 9507: the only nested loop (9854-9881) closes before the call site, and FIRST_RUN=false (9595) runs before it. In ps1, `continue` targets the main `do{}while` at 9210/11355, with no enclosing foreach, switch or try/finally. The worktree Push-Location is popped at the iteration top (9321).\n- clear_account_lease sends no RPC, and live_marker_remove removes only this session's own marker.\n- The new sh lines use bash-3.2 syntax only. MOE_ACCOUNT_WAIT_STALE_ATTEMPT is the only new MOE_ACCOUNT_ token, and it is in both twins. The wait wording is untouched.\n- Size: +279/-2. parity-check passes and npm run lint exits 0.\n\nTheoretical only, noted for QA:\n(a) For reasons other than `identity`, the reason text in parentheses comes from each twin's existing reader. sh says 'phase' / 'id' where ps1 says 'phase or id', and a JSON error reads as Python text in one and PowerShell text in the other. The code and the rest of the line are identical.\n(b) If the previous iteration set a launch-failure backoff, the loop top sleeps it before the re-run pre-flight, because the stale path does not reset the streak (no CLI ran). That is bounded, and the seat still re-claims.\n(c) A torn or unreadable attempt file reads as stale and costs one extra pre-flight. That is fail-closed, and a new restart needs a new wait first, so it cannot busy-loop.",
+      "startedAt": "2026-11-03T17:58:00.027Z",
+      "completedAt": "2026-11-03T18:01:07.275Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -110,12 +112,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:18:14.949Z",
-  "updatedAt": "2026-11-03T17:58:00.027Z",
+  "updatedAt": "2026-11-03T18:01:30.310Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:27:41.811Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -133,7 +135,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:50:54.390Z",
@@ -206,5 +209,22 @@
   },
   "planApprovedAt": "2026-11-03T17:50:54.418Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T17:53:16.419Z"
+  "workStartedAt": "2026-11-03T17:53:16.419Z",
+  "reviewStartedAt": "2026-11-03T18:01:30.308Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && export PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:$PATH\" && S=$(compgen -e | grep '^MOE_' | sed 's/^/-u /') && bash -n scripts/moe-agent.sh && powershell.exe -NoProfile -Command '$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/moe-agent.ps1).Path,[ref]$null,[ref]$e); if ($e.Count) { $e | % Message; exit 1 }; \"ParseFile OK\"' && env $S bash scripts/tests/parity-check.sh && env $S node --test scripts/tests/account-wait-attempt.test.mjs scripts/tests/moe-account-lease.test.mjs && env $S \"/mnt/c/Program Files/nodejs/node.exe\" --test 'scripts\\tests\\account-wait-attempt.test.mjs' 'scripts\\tests\\moe-account-lease.test.mjs'",
+    "exitCode": 0,
+    "outputTail": "ParseFile OK\nPASS parity-check.sh\n[WSL node 24]\nℹ tests 45\nℹ suites 0\nℹ pass 44\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 4261.899563\n[Windows node.exe]\n✔ C:/Program Files/Git/bin/bash.exe: a headless seat never opens the account's config (217.7095ms)\n✔ C:/Program Files/Git/bin/bash.exe: a trust helper that fails launches unrotated (306.6497ms)\n✔ vm-credential: exactly the stored token on stdout, else nothing and exit 3 (342.0228ms)\nℹ tests 67\nℹ suites 0\nℹ pass 65\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 16031.6425",
+    "reportedAt": "2026-11-03T18:01:30.308Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/account-wait-attempt.test.mjs",
+    "scripts/tests/moe-account-lease.test.mjs",
+    ".github/workflows/ci.yml",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md"
+  ],
+  "completionSummary": "Both launchers now re-verify the attempt pinned at pre-flight after an account lease that WAITED: the MOE_ACCOUNT_WAIT branch, and the MOE_ACCOUNT_UNTRUSTED branch. If the pin is closed, superseded, missing, or not running/finalizing, the launcher prints `[account] MOE_ACCOUNT_WAIT_STALE_ATTEMPT task=.. attempt=.. generation=.. (<reason>) - ...`, which is identical in both twins. It launches nothing and drops only its own live-session marker. It also clears the local lease, gives one resume attempt back, sets the account-relaunch flag, and re-runs pre-flight at once, which also keeps a --no-loop / -NoLoop run going. A lease that did not wait, or a seat with no pin, launches exactly as before.\n\nChanges (+279/-2, inserts only):\n- scripts/moe-agent.sh: get_account_lease gets an ACCOUNT_LEASE_WAITED reset and two sets; new account_wait_recheck; `account_wait_recheck || continue`.\n- scripts/moe-agent.ps1: the $script:AccountLeaseWaited equivalent; new Test-MoeAccountWaitAttempt; `if (-not (Test-MoeAccountWaitAttempt)) { continue }`.\n- New scripts/tests/account-wait-attempt.test.mjs: 4 rows per engine.\n- The +2 idle_wait cut in moe-account-lease.test.mjs fixes its bash rows 3 and 4, which fail at HEAD (since d94c095f).\n- One CI line, and one scripts/CLAUDE.md sentence plus a test-list entry.\n\nRED (comment-f5a1969d): run against the 19d5e67a and 195b656a wrappers, WSL fails 2/4 and Windows 6/12. The stale rows print `LAUNCH task=task-wait attempt=attempt-a`.\n\nGREEN: the checkRef exits 0. ParseFile OK; parity-check PASS; WSL tests 45 (pass 44, skip 1); Windows tests 67 (pass 65, skip 2). npm run lint exits 0.\n\nMutants M1-M8, run outside W, each fail rows.\n\nTheoretical notes for QA:\n(a) For failures other than `identity`, the reason text comes from each twin's existing reader, so the wording differs: sh 'phase' vs ps1 'phase or id'.\n(b) A launch-failure backoff left from the previous iteration is still slept once before the re-run pre-flight, because the stale path does not "
 }

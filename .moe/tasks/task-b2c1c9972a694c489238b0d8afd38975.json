@@ -63,7 +63,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -76,16 +76,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:31:44.716Z",
-  "updatedAt": "2026-11-03T17:56:22.602Z",
+  "updatedAt": "2026-11-03T18:01:51.993Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:49:07.939Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T18:01:26.010Z",
+    "wallClockMs": 738071
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -187,9 +190,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T17:52:09Z",
-    "at": "2026-11-03T17:56:22.601Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T18:00:07Z",
+    "at": "2026-11-03T18:01:51.993Z"
+  },
+  "completedAt": "2026-11-03T18:01:26.010Z",
+  "reviewCompletedAt": "2026-11-03T18:01:26.010Z",
+  "reviewSummary": "Reviewed completion e0bd054a (on moe/control, moe/work-2026-10-24; +72/-2, 2 files, net ~70 LOC) via `git show` and a `git archive` snapshot at /mnt/d/moe-scratch (removed afterwards), not the dirty tree. Diff: doctor.ps1 renames Run-Native's `[string[]]$Args` to `$Arguments`, changes the splat to `@Arguments`, and adds one comment line. The new test is scripts/tests/doctor-ps1.test.mjs, rows DP1-DP3. Callers at :46/:52/:69 still pass arrays; the throw text and the finally block are unchanged.\n\nRe-ran on the snapshot with Windows node v24.16.0 / PS 5.1:\n- DoD1: `grep -niE '\\$args\\b' scripts/doctor.ps1` prints nothing.\n- DoD2: `node.exe --test --test-reporter=tap scripts/tests/doctor-ps1.test.mjs` gives tests 3, pass 3, fail 0, skipped 0. DP1 sees argv=[buildPlugin], DP2 sees argv=[--version], and DP3 (recorder exits 3) throws \"exited with code 3\".\n- DoD3: ParseFile on doctor.ps1 prints PARSE_OK (0 errors). `git diff --name-only e0bd054a^ e0bd054a` lists only scripts/doctor.ps1 and scripts/tests/doctor-ps1.test.mjs.\n- Red control: base doctor.ps1 (e0bd054a^) with the new test fails exactly DP1 and DP2, and DP3 passes. So the test catches the bug, and DP3 pins the throw.\n- Invariants: doctor.ps1 has 0 CR, no BOM and no non-ASCII. The test never runs real java or Gradle, removes its temp dir in `finally`, and hard-codes no drive letters. It skips under non-Windows node via the repo's `windowsOnly` convention.\n\nNot run: scripts/tests/parity-check.sh and npm run lint (the landing qualityGate). The diff touches neither role docs nor the moe-agent wrappers. Complexity pass: nothing to cut; the diff is minimal.",
+  "requiredCheckAtDone": null
 }
