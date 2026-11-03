@@ -248,6 +248,7 @@ vmj_fixture() {
   VMJ_BASE=$(git -C "$PROJECT" rev-parse HEAD)
   printf %s "$VMJ_BASE" > "$TMP_DIR/vmj-base"
   export FAKE_CLAIM_WORKSPACE="{\"mode\":\"$VMJ_WORKSPACE\",\"target\":\"main\"}"
+  export FAKE_CTX_WORKSPACE="$FAKE_CLAIM_WORKSPACE" # alreadyAssigned resumes recover this from get_context.
   export FAKE_CTX_LANDING="{\"lastCompletion\":{\"sha\":\"$VMJ_BASE\"}}"
   if [ "$VMJ_QA" = true ]; then export FAKE_TASK_STATUS=REVIEW; else unset FAKE_TASK_STATUS; fi
 }
@@ -297,6 +298,140 @@ vmj_background() {
 }
 vmj_wrapper_pid() { "$NODE" -e 'const r=require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse).find(r=>r.tool==="agent-seat"); const a=r.args.argv; console.log(a[a.indexOf("--runner")+1].split("@")[0])' "$PROJECT/.moe/evidence-rpcs.jsonl"; }
 
+echo '[seat errors] capacity FULL/LOCK_BUSY retries before any claim; other failures stop'
+VMR_ARGS=(--no-loop --poll-interval 1)
+for start_case in capacity failure usage unreadable; do
+  case "$start_case" in
+    capacity) starts='[{"exit":75,"code":"SEAT_CAPACITY_FULL"},{"exit":75,"code":"SEAT_CAPACITY_LOCK_BUSY"}]' ;;
+    failure) starts='[{"exit":1,"code":"SEAT_PROVISION_FAILED"}]' ;;
+    usage) starts='[{"exit":2,"code":"SEAT_USAGE"}]' ;;
+    unreadable) starts='[{"exit":1,"code":"never echo arbitrary text"}]' ;;
+  esac
+  vmr_run "VE-$start_case" worker claude "$READY" on 0 FAKE_SEAT_STARTS="$starts"
+  "$NODE" - "$PROJECT/.moe/evidence-rpcs.jsonl" "$OUT" "$REC" "$start_case" "$VMR_CODE" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),[file,out,rec,mode,rc]=process.argv.slice(2);
+const rows=fs.readFileSync(file,'utf8').trim().split('\n').map(JSON.parse),s=rows.filter(r=>r.tool==='agent-seat'),text=fs.readFileSync(out,'utf8');
+a.equal(fs.existsSync(rec),false);
+if(mode==='capacity') {
+  a.equal(rc,'0'); a.deepEqual(s.map(r=>r.args.cmd),['seat-start','seat-start','seat-start','seat-job','seat-stop']);
+  a.ok(rows.findIndex(r=>r.tool==='claim_next_task')>rows.indexOf(s[2]));
+  for(const code of ['FULL','LOCK_BUSY']) a.ok(text.includes('MOE_SEAT_CAPACITY_WAIT: SEAT_CAPACITY_'+code));
+} else {
+  a.equal(rc,'1'); a.deepEqual(s.map(r=>r.args.cmd),['seat-start']); a.ok(!rows.some(r=>r.tool==='claim_next_task'));
+  a.ok(text.includes('MOE_SEAT_START_FAILED: '+({failure:'SEAT_PROVISION_FAILED',usage:'SEAT_USAGE',unreadable:'exit 1'}[mode])));
+}
+JS
+done
+VMR_ARGS=(--no-loop --poll-interval 0)
+
+echo '[seat credentials] codex pipe canary, fallback and missing key'
+for key in OPENAI_API_KEY CODEX_API_KEY; do
+  vmr_run "VE-$key" worker codex "$READY" on 0 OPENAI_API_KEY= CODEX_API_KEY= "$key=$TOKEN"
+  [ "$VMR_CODE" = 0 ] || vmr_fail "$key" "exit $VMR_CODE"
+  "$NODE" - "$PROJECT/.moe/evidence-rpcs.jsonl" "$OUT" "$REC" "$TOKEN" "$key" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),crypto=require('crypto'),[f,o,r,t,k]=process.argv.slice(2);
+const raw=fs.readFileSync(f,'utf8'),rows=raw.trim().split('\n').map(JSON.parse),s=rows.filter(x=>x.tool==='agent-seat');
+a.equal(fs.existsSync(r),false); a.ok(!raw.includes(t)&&!fs.readFileSync(o,'utf8').includes(t));
+a.deepEqual(s.map(x=>x.args.cmd),['seat-start','seat-job','seat-stop']);
+for(const x of s) for(const key of ['OPENAI_API_KEY','CODEX_API_KEY','CLAUDE_CODE_OAUTH_TOKEN','ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN']) a.ok(!(key in x.args.env));
+a.equal(s[1].args.stdinName,k); a.equal(s[1].args.stdinSha256,crypto.createHash('sha256').update(t).digest('hex'));
+a.equal(s[1].args.argv.at(-1),'codex');
+JS
+done
+vmr_run VE-no-key worker codex "$READY" on 0 OPENAI_API_KEY= CODEX_API_KEY=
+[ "$VMR_CODE" = 1 ] && grep -q MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" || vmr_fail VE-no-key 'not refused'
+vmj_rows none
+[ "$(vmr_calls | grep -cx chat_send)" = 1 ] || vmr_fail VE-no-key 'not one escalation'
+echo '[seat credentials] claude waits holding the task; one escalation across repeated missing tokens'
+vmj_missing_fixture() { vmj_fixture; rm -f "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"; }
+VMR_SETUP=vmj_missing_fixture
+vmj_background VE-missing worker claude "$READY" on 0 MOE_ACCOUNT_RETRY_SEC=1
+for n in $(seq 1 "$POSTFLIGHT_TIMEOUT_SEC"); do
+  [ "$(grep -c MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" 2>/dev/null || true)" -ge 2 ] 2>/dev/null && break
+  sleep 1
+done
+[ "$(grep -c MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" || true)" -ge 2 ] || vmr_fail VE-missing 'did not retry'
+printf %s "$TOKEN" > "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"
+wait "$VMJ_PID"
+[ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail VE-missing 'retry failed'; vmj_rows happy
+"$NODE" - "$CALLS" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),r=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(JSON.parse);
+a.equal(r.filter(x=>x.tool==='chat_send'&&x.args.content.includes('MOE_VM_CREDENTIAL_UNAVAILABLE')).length,1);
+a.equal(r.filter(x=>x.tool==='claim_next_task').length,1); a.ok(r.filter(x=>x.tool==='lease_account').length>=3);
+JS
+VMR_SETUP=vmj_fixture
+
+echo '[seat failures] failed or missing outcome stops VM, then resumes with a fresh instance'
+VMR_ARGS=(--loop --poll-interval 1)
+for job_case in failed missing false stop-failed streak; do
+  jobs='[{"exit":1,"outcome":{"seatJob":1,"ok":false,"code":"SEAT_JOB_SESSION_FAILED","vm":"kept"}}]'
+  case "$job_case" in
+    missing) jobs='[{"exit":0}]' ;;
+    false) jobs='[{"exit":0,"outcome":{"seatJob":1,"ok":false,"code":"SEAT_JOB_SESSION_FAILED","vm":"kept"}}]' ;;
+    streak) jobs='[{"exit":1},{"exit":1},{"exit":1}]' ;;
+  esac
+  extra=(); [ "$job_case" != stop-failed ] || extra=(FAKE_SEAT_STOP_FAIL=1)
+  limit=2; [ "$job_case" != streak ] || limit=4
+  vmj_background "VE-$job_case" worker claude "$READY" on 0 FAKE_SEAT_JOBS="$jobs" FAKE_CLAIM_LIMIT="$limit" \
+    MOE_LAUNCH_BACKOFF_BASE_SEC=1 MOE_LAUNCH_BACKOFF_MAX_SEC=1 "${extra[@]}"
+  vmj_wait seat-job "$limit"; pid=$(vmj_wrapper_pid)
+  vmj_wait seat-stop "$((limit-1))"
+  # The last job is successful. Stop only after its checkpoint is durable.
+  for n in $(seq 1 "$POSTFLIGHT_TIMEOUT_SEC"); do grep -q MOE_VM_CANDIDATE_COMMITTED "$OUT" && break; sleep 1; done
+  kill -TERM "$pid"; wait "$VMJ_PID"
+  "$NODE" - "$PROJECT" "$OUT" "$REC" "$limit" "$job_case" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),cp=require('child_process'),[p,out,rec,n,mode]=process.argv.slice(2);
+const r=fs.readFileSync(p+'/.moe/evidence-rpcs.jsonl','utf8').trim().split('\n').map(JSON.parse),s=r.filter(x=>x.tool==='agent-seat'),text=fs.readFileSync(out,'utf8');
+const calls=fs.readFileSync(p+'/../calls.jsonl','utf8').trim().split('\n').map(JSON.parse);
+a.equal(fs.existsSync(rec),false); a.deepEqual(s.map(x=>x.args.cmd),Array(Number(n)).fill(['seat-start','seat-job','seat-stop']).flat());
+a.equal(new Set(s.filter(x=>x.args.cmd==='seat-start').map(x=>x.args.instance)).size,Number(n));
+const claims=r.filter(x=>x.tool==='claim_next_task'); for(let i=0;i<Number(n);i++) a.ok(r.indexOf(claims[i])>r.indexOf(s[3*i]));
+a.equal((text.match(/MOE_SEAT_JOB_FAILED:/g)||[]).length,Number(n)-1); a.ok(text.includes('[resume]'));
+a.equal(r.filter(x=>x.tool==='record_commit'&&x.args.outcome==='committed').length,1); a.ok(!calls.some(x=>x.tool==='release_task'));
+if(mode==='streak') a.equal(calls.filter(x=>x.tool==='chat_send'&&x.args.content.includes('CLI exits within')).length,1);
+if(mode==='stop-failed') a.ok(text.includes('MOE_SEAT_STOP_FAILED: SEAT_DELETE_FAILED'));
+const git=(...args)=>cp.execFileSync('git',['-C',p,...args],{encoding:'utf8'}).trim(); a.equal(git('rev-parse','moe/task/task-postflight^'),fs.readFileSync(p+'/../vmj-base','utf8'));
+JS
+done
+VMR_ARGS=(--no-loop --poll-interval 0)
+echo '[seat failures] successful job with DIRTY helper refusal retains admitted tree on rescue ref'
+vmr_run VE-rescue worker claude "$READY" on 0 FAKE_SEAT_DIRTY=1
+[ "$VMR_CODE" = 1 ] || vmr_fail VE-rescue 'must hold on helper refusal'
+"$NODE" - "$PROJECT" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),cp=require('child_process'),p=process.argv[2],git=(...args)=>cp.execFileSync('git',['-C',p,...args],{encoding:'utf8'}).trim();
+const rows=fs.readFileSync(p+'/.moe/evidence-rpcs.jsonl','utf8').trim().split('\n').map(JSON.parse),job=rows.find(x=>x.tool==='agent-seat'&&x.args.cmd==='seat-job');
+const ref=git('for-each-ref','--format=%(refname)','refs/moe/rescue/task-postflight/'); a.equal(ref.split('\n').length,1); a.ok(ref);
+const base=fs.readFileSync(p+'/../vmj-base','utf8'); a.equal(git('rev-parse',ref+'^'),base); a.equal(git('rev-parse',ref+'^{tree}'),job.args.tree);
+a.equal(git('rev-parse','moe/task/task-postflight'),base); a.equal(fs.readFileSync(p+'/.worktrees/task-postflight/untracked.txt','utf8'),'preserve me\n');
+a.equal(rows.filter(x=>x.tool==='record_commit'&&x.args.kind==='rescue').length,1);
+JS
+
+echo '[seat waits] Ctrl+C during capacity and missing credentials; resume cap stays bounded'
+for wait_case in capacity credential cap; do
+  VMR_SETUP=vmj_fixture; VMR_ARGS=(--loop --poll-interval 1); extra=(); pattern=MOE_SEAT_CAPACITY_WAIT
+  case "$wait_case" in
+    capacity) extra=('FAKE_SEAT_STARTS=[{"exit":75,"code":"SEAT_CAPACITY_LOCK_BUSY"}]'); VMR_ARGS=(--loop --poll-interval 20) ;;
+    credential) VMR_SETUP=vmj_missing_fixture; extra=(MOE_ACCOUNT_RETRY_SEC=20); pattern=MOE_VM_CREDENTIAL_UNAVAILABLE ;;
+    cap) extra=('FAKE_SEAT_JOBS=[{"exit":1},{"exit":1},{"exit":1}]' MOE_LAUNCH_FAIL_SEC=0 MOE_RESUME_MAX_ATTEMPTS=1); pattern='Auto-resume cap reached' ;;
+  esac
+  vmj_background "VE-wait-$wait_case" worker claude "$READY" on 0 "${extra[@]}"
+  vmj_wait seat-start; pid=$(vmj_wrapper_pid)
+  for n in $(seq 1 "$POSTFLIGHT_TIMEOUT_SEC"); do grep -q "$pattern" "$OUT" && break; sleep 1; done
+  grep -q "$pattern" "$OUT" || vmr_fail "$wait_case" 'wait was not reached'
+  kill -INT "$pid"; wait "$VMJ_PID"
+  [ "$(cat "$TMP_DIR/bg.code")" = 0 ] && [ ! -e "$REC" ] || vmr_fail "$wait_case" 'interrupted wait launched or failed'
+  "$NODE" - "$PROJECT/.moe/evidence-rpcs.jsonl" "$CALLS" "$wait_case" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),[f,c,mode]=process.argv.slice(2),read=p=>fs.readFileSync(p,'utf8').trim().split('\n').map(JSON.parse);
+const rows=read(f),calls=read(c),seats=rows.filter(r=>r.tool==='agent-seat');
+a.equal(seats.filter(r=>r.args.cmd==='seat-job').length,mode==='cap'?2:0);
+a.equal(seats.filter(r=>r.args.cmd==='seat-stop').length,mode==='cap'?3:mode==='credential'?1:0);
+if(mode==='capacity') a.ok(!calls.some(r=>r.tool==='claim_next_task'));
+if(mode==='cap') a.equal(calls.filter(r=>r.tool==='chat_send'&&r.args.content.includes('pausing auto-resume')).length,1);
+a.ok(!calls.some(r=>r.tool==='release_task'));
+JS
+done
+VMR_SETUP=vmj_fixture; VMR_ARGS=(--no-loop --poll-interval 0)
+
 echo '[seat job] VR-happy (replaces R1), credential confinement and candidate landing'
 { echo 'PYTHON_CMD=python3 ROLE=worker'; sed -n '/^seat_job_outcome() {$/,/^}$/p' "$WRAPPER"; echo 'seat_job_outcome "$1"'; } > "$TMP_DIR/outcome.sh"
 "$NODE" - "$TMP_DIR/outcome.sh" <<'JS'
@@ -314,7 +449,7 @@ echo '[seat job] nonzero guest exit still never invokes a host signin-state prob
 vmr_run VR-nonzero worker claude "$READY" on 0 FAKE_SEAT_EXIT_CODE=17
 vmj_rows nonzero
 echo '[seat job] R2 codex, no-auto-claim, QA settings guard, protected override'
-vmr_run R2 qa codex "$READY" on 0
+vmr_run R2 qa codex "$READY" on 0 OPENAI_API_KEY= CODEX_API_KEY=
 [ "$VMR_CODE" = 1 ] && grep -q MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" || vmr_fail R2 'not refused'; vmj_rows none
 VMR_ARGS+=(--no-auto-claim)
 vmr_run VR-noclaim worker claude "$READY" on 0

@@ -32,16 +32,25 @@ async function main() {
     const n = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) + 1 : 1;
     fs.writeFileSync(counter, String(n));
     const instance = `moe-vm-${n.toString(16).padStart(20, '0')}`;
+    const failure = JSON.parse(process.env.FAKE_SEAT_STARTS || '[]')[n - 1];
+    if (failure) { record({ instance: null }); answer({ ok: false, code: failure.code }); process.exitCode = failure.exit; return; }
     record({ instance }); answer({ ok: true, instance, executionReady: false });
   } else if (cmd === 'seat-stop') {
+    if (process.env.FAKE_SEAT_STOP_FAIL) { record({}); answer({ ok: false, code: 'SEAT_DELETE_FAILED' }); process.exitCode = 1; return; }
     record({}); answer({ ok: true, instance: flag('instance'), vm: 'deleted' });
   } else if (cmd === 'seat-job') {
     const chunks = [];
     for await (const chunk of process.stdin) chunks.push(chunk);
     const credential = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    require('node:assert/strict').deepEqual(Object.keys(credential).sort(), ['name', 'value']);
     const role = flag('role'), commit = flag('commit');
     const result = candidate(flag('checkout'), commit, role === 'worker');
     record({ ...result, stdinName: credential.name, stdinSha256: hash(credential.value) });
+    const jobs = fs.readFileSync(path.join(moe, 'evidence-rpcs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+      .filter(r => r.tool === 'agent-seat' && r.args.cmd === 'seat-job').length;
+    const failure = JSON.parse(process.env.FAKE_SEAT_JOBS || '[]')[jobs - 1];
+    if (failure) { if (failure.outcome) answer(failure.outcome); else console.log('no outcome'); process.exitCode = failure.exit; return; }
+    if (process.env.FAKE_SEAT_DIRTY) fs.writeFileSync(path.join(flag('checkout'), 'untracked.txt'), 'preserve me\n');
     await new Promise(resolve => setTimeout(resolve, Number(process.env.FAKE_SEAT_JOB_SLEEP || 0) * 1000));
     console.log('guest stdout'); console.error('guest stderr');
     // A guest can forge earlier marked lines. Only the final host line counts.

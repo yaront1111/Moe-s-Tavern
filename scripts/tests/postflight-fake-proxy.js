@@ -514,6 +514,9 @@ switch (tool) {
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
   case 'claim_next_task': {
     if (claimOnceIdle) { ok({ hasNext: false }); break; }
+    if (process.env.FAKE_SEAT_JOBS && readRows(rpcLog).filter(r => r.tool === 'claim_next_task').length > 1) {
+      ok({ hasNext: false, alreadyAssigned: { taskId: 'task-postflight', title: 'VM retry', status: 'WORKING' } }); break;
+    }
     if (process.env.FAKE_CLAIM_MODE === 'resume') {
       // One-task-per-worker guard shape (util/claimEligibility.ts
       // heldTaskRefusal): the worker already holds an active task from a CLI

@@ -70,6 +70,13 @@ test('importing the helper runs no command', () => {
   assert.equal(process.exitCode, undefined);
 });
 
+test('retry-sec: shared account wait policy without credentials or side effects', () => {
+  for (const [value, expected] of [['', '300'], ['1', '1'], ['17', '17'], ['0', '300'], ['bad', '300']]) {
+    const out = helper(['retry-sec'], { env: cleanEnv({ MOE_ACCOUNT_RETRY_SEC: value }) });
+    assert.deepEqual([out.status, out.stdout, out.stderr], [0, expected + '\n', '']);
+  }
+});
+
 test('gate: on by default, off on request, skipped under a cloud provider', () => {
   assert.equal(gateLine({}), 'go');
   for (const value of ['0', 'false', 'OFF', 'no', ' off ']) assert.equal(gateLine({ MOE_ACCOUNT_ROTATION: value }), 'off', value);

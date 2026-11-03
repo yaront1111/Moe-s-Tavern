@@ -17,6 +17,7 @@
 // outside every Claude config folder, and prints it only to stdout.
 //
 //   gate                                         go | off | skip<TAB><note>
+//   retry-sec                                    configured account wait seconds (default 300)
 //   pick              (stdin: the lease reply)   leased<TAB><id><TAB><peak|?><TAB><configDir>
 //                                                | wait<TAB><sec><TAB><retryAt> | off<TAB><note> | unavailable<TAB><why>
 //   signin-state <configDir> <claude command...> subscription | signed_out | other | unknown
@@ -48,7 +49,7 @@ const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 const OFF_RE = /^(0|false|off|no)$/i;
 const UNREADABLE = 'unavailable\tunreadable reply from the daemon';
 const USAGE = 'usage: node moe-account-lease.mjs gate | pick | signin-state <configDir> <claude command...> '
-  + '| trust <configDir> <projectDir> [<launchDir>] | statusline | statusline-settings <file> | vm-credential <id>';
+  + '| trust <configDir> <projectDir> [<launchDir>] | statusline | statusline-settings <file> | vm-credential <id> | retry-sec';
 const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 const TRUST_LOCK_WAIT_MS = 2000;
 const TRUST_POLL_MS = 50;
@@ -557,6 +558,9 @@ export function main(argv, env = process.env) {
       fs.writeFileSync(args[0], json, { mode: 0o600 });
       return 0;
     }
+    case 'retry-sec':
+      console.log(retryCapSec(env));
+      return 0;
     case 'vm-credential': {
       if (!args[0]) {
         console.error(USAGE);

@@ -9494,6 +9494,41 @@ seat_vm_stop() {
 seat_credential_json() {
     $PYTHON_CMD -c 'import json,sys; v=sys.stdin.read(); sys.exit(3) if not v else print(json.dumps({"name":sys.argv[1],"value":v}))' "$1"
 }
+seat_credential_stream() {
+    if [ "$CLI_TYPE" = codex ]; then
+        if [ -n "${OPENAI_API_KEY:-}" ]; then
+            builtin printf %s "$OPENAI_API_KEY" | seat_credential_json OPENAI_API_KEY
+        else builtin printf %s "${CODEX_API_KEY:-}" | seat_credential_json CODEX_API_KEY; fi
+    else
+        (set -o pipefail; "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" 2>/dev/null | seat_credential_json CLAUDE_CODE_OAUTH_TOKEN)
+    fi
+}
+seat_credential_announce() {
+    local args
+    args=$($PYTHON_CMD -c 'import json,sys; print(json.dumps(dict(channel=sys.argv[1],workerId=sys.argv[2],content=sys.argv[3])))' \
+        "${GENERAL_CHANNEL_ID:-general}" "$WORKER_ID" "@governors $WORKER_ID: MOE_VM_CREDENTIAL_UNAVAILABLE - $1" 2>/dev/null) || return 0
+    moe_rpc chat_send "$args" >/dev/null 2>&1 || true
+}
+# Wait outside launch timing. Re-lease and recheck the pinned attempt after each
+# wait, just like the account loop: a released task must never launch stale.
+seat_wait_credential() {
+    local escalated=' ' account sec
+    sec=$("$NODE_CMD" "$ACCOUNT_HELPER" retry-sec 2>/dev/null) || sec=300
+    case "$sec" in ''|*[!0-9]*) sec=300 ;; esac
+    [ "$sec" -ge 1 ] || sec=300
+    while ! { [ -n "$ACCOUNT_LEASED_ID" ] && "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" >/dev/null 2>&1; }; do
+        account="${ACCOUNT_LEASED_ID:-none}"
+        echo "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account; retrying in ${sec}s (Ctrl+C to stop)"
+        case "$escalated" in *" $account "*) ;; *)
+            escalated="$escalated$account "
+            seat_credential_announce "account=$account; mint a token with 'accounts vm-token <id>' and enable account rotation. The task stays held." ;;
+        esac
+        idle_wait "$sec"
+        ACCOUNT_LEASE_WAITED=true; account_wait_recheck || return 1
+        clear_account_lease; get_account_lease
+        account_wait_recheck || return 1
+    done
+}
 seat_job_outcome() {
     $PYTHON_CMD -c 'import json,re,sys
 d=json.load(sys.stdin)
@@ -9502,11 +9537,27 @@ bt,t=d.get("baseTree"),d.get("tree")
 if not all(isinstance(v,str) and re.fullmatch("[0-9a-f]{40}([0-9a-f]{24})?",v) for v in (bt,t)): sys.exit(1)
 c=d.get("exitCode"); print(c if type(c) is int and 0<=c<=255 else 1,bt,t)' "$ROLE" "$1" 2>/dev/null
 }
+# The helper's rc=1 refusals are read-only. Retain an admitted tree before
+# holding on a moved base or dirty W; never overwrite those unrelated bytes.
+seat_rescue_candidate() {
+    case "$LAND_CODE" in MOE_VM_CANDIDATE_HEAD_MOVED|MOE_VM_CANDIDATE_BASE_MISMATCH|MOE_VM_CANDIDATE_DIRTY) ;; *) return 0 ;; esac
+    local c="$1" t="$2" new p n=0 work="$SECURE_TEMP_DIR/vm-rescue" MOE_TOP="$MOE_WT_PATH"
+    local ATTR_DIR="$work" RESCUE_STAGED_FILE="$work/staged.z"
+    if [ "$(git -C "$MOE_TOP" cat-file -t "$c" 2>/dev/null)" = commit ] \
+        && [ "$(git -C "$MOE_TOP" cat-file -t "$t" 2>/dev/null)" = tree ] \
+        && mkdir -p "$work" && : > "$work/contested" \
+        && git -C "$MOE_TOP" diff-tree -r -z --name-only --no-renames "$c" "$t" > "$work/diff.z"; then
+        while IFS= read -r -d '' p; do printf 'WORKTREE\t-\t%s\0' "$p"; n=$((n + 1)); done < "$work/diff.z" > "$work/staged.z"
+        if write_commit_message rescue "$work/msg" "$n" 0 \
+            && new=$(git -C "$MOE_TOP" commit-tree "$t" -p "$c" -F "$work/msg" 2>/dev/null) \
+            && rescue_ref_from_commit "$new" vm-helper-refused; then return 0; fi
+    fi
+    echo "[WARN] MOE_VM_CANDIDATE_RESCUE_FAILED: task=$LAND_TASK_ID commit=$c tree=$t; manual recovery required." >&2
+    return 1
+}
 run_vm_job() {
     local checkout commit out="$SECURE_TEMP_DIR/seat-job.out" reply parsed code bt tree vm_rc=0
     local pipe_rc=()
-    [ -n "$ACCOUNT_LEASED_ID" ] && "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" >/dev/null 2>&1 \
-        || verified_local_refuse MOE_VM_CREDENTIAL_UNAVAILABLE "account ${ACCOUNT_LEASED_ID:-none} has no VM token; mint one with 'accounts vm-token <id>' (Accounts tab)."
     [ -n "$MOE_ATTEMPT_ID" ] && [ -n "$MOE_ATTEMPT_GENERATION" ] \
         || verified_local_refuse MOE_SEAT_JOB_INPUT_MISSING 'attempt identity'
     if [ "$ROLE" = worker ]; then
@@ -9520,24 +9571,29 @@ run_vm_job() {
     [[ $commit =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || verified_local_refuse MOE_SEAT_JOB_INPUT_MISSING "$code"
     echo "[seat] job role=$ROLE task=$PREFLIGHT_TASK_ID instance=$SEAT_VM_INSTANCE commit=$commit"
     set +e
-    "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" 2>/dev/null | seat_credential_json CLAUDE_CODE_OAUTH_TOKEN \
+    seat_credential_stream \
         | seat_cli seat-job --project "$PROJECT" --worker "$WORKER_ID" --runner "$MOE_PROCESS_STARTED_AT" --host "$MOE_HOST" \
             --instance "$SEAT_VM_INSTANCE" --role "$ROLE" --task "$PREFLIGHT_TASK_ID" --attempt "$MOE_ATTEMPT_ID" --generation "$MOE_ATTEMPT_GENERATION" \
-            --checkout "$checkout" --commit "$commit" --cli claude | tee "$out"
+            --checkout "$checkout" --commit "$commit" --cli "$CLI_TYPE" | tee "$out"
     pipe_rc=("${PIPESTATUS[@]}")
     set -e
     reply=$(tail -n 1 "$out" 2>/dev/null) || reply=""; rm -f "$out"
-    [ "${pipe_rc[0]}" = 0 ] && [ "${pipe_rc[1]}" = 0 ] || verified_local_refuse MOE_VM_CREDENTIAL_UNAVAILABLE 'VM token pipe failed.'
     parsed=$(seat_job_outcome "$commit" <<< "$reply") || parsed=""
-    if [ "${pipe_rc[2]}" != 0 ] || [ "${pipe_rc[3]}" != 0 ] || [ -z "$parsed" ]; then
-        code=$(seat_result_code "${pipe_rc[2]}" <<< "$reply") || code="exit ${pipe_rc[2]}"
-        verified_local_refuse MOE_SEAT_JOB_FAILED "$code"
+    if [ "${pipe_rc[0]}" != 0 ] || [ "${pipe_rc[1]}" != 0 ] || [ "${pipe_rc[2]}" != 0 ] || [ -z "$parsed" ]; then
+        CLI_EXIT_CODE="${pipe_rc[1]}"; [ "$CLI_EXIT_CODE" != 0 ] || CLI_EXIT_CODE=1
+        code=$(seat_result_code "$CLI_EXIT_CODE" <<< "$reply") || code="exit $CLI_EXIT_CODE"
+        echo "[WARN] MOE_SEAT_JOB_FAILED: $code" >&2
+        seat_vm_stop
+        return 0 # Existing launch-failure/backoff and resume budgets own retries.
     fi
     read -r CLI_EXIT_CODE bt tree <<< "$parsed"
     if [ "$ROLE" = worker ]; then
         LAND_TASK_ID="$PREFLIGHT_TASK_ID"; LAND_TITLE="$PREFLIGHT_TASK_TITLE"; LAND_STATUS=WORKING; LAND_CLI_EXIT="$CLI_EXIT_CODE"
         land_vm_candidate "$commit" "$bt" "$tree" || vm_rc=$?
-        [ "$vm_rc" = 0 ] || exit 1
+        if [ "$vm_rc" != 0 ]; then
+            [ "$vm_rc" != 1 ] || seat_rescue_candidate "$commit" "$tree" || true
+            exit 1
+        fi
     fi
     return 0
 }
@@ -9676,7 +9732,7 @@ verified_local_refuse() {
     exit 1
 }
 verified_local_gate() {
-    local reply parsed profile rest ready missing mode us=$'\x1f'
+    local reply parsed profile rest ready missing mode rc us=$'\x1f'
     reply=$(moe_rpc get_execution_readiness '{}' 2>/dev/null) || return 0
     parsed=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c '
 import json, sys
@@ -9707,13 +9763,22 @@ sys.stdout.write("\x1f".join([p, "true" if r else "false", ", ".join(clean(x) fo
         verified_local_refuse MOE_VERIFIED_LOCAL_NOT_READY "this project runs verified-local, which is not ready; missing: ${missing:-(none named)}; refusing to start this seat."
     fi
     [ "$AUTO_CLAIM" = true ] || verified_local_refuse MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM "a --no-auto-claim seat cannot run under verified-local; the VM route needs the wrapper's marked claim."
-    [ "$CLI_TYPE" != codex ] || verified_local_refuse MOE_VM_CREDENTIAL_UNAVAILABLE 'codex VM credentials are not wired yet; refusing to run codex on the host.'
+    if [ "$CLI_TYPE" = codex ] && [ -z "${OPENAI_API_KEY:-}${CODEX_API_KEY:-}" ]; then
+        seat_credential_announce "codex needs OPENAI_API_KEY or CODEX_API_KEY in the wrapper's environment. Nothing was claimed or provisioned."
+        verified_local_refuse MOE_VM_CREDENTIAL_UNAVAILABLE "codex needs OPENAI_API_KEY or CODEX_API_KEY in the wrapper's environment"
+    fi
     CLAIM_ITER_JSON=$($PYTHON_CMD -c 'import json,sys; d=json.load(sys.stdin); d["executionRoute"]="vm"; print(json.dumps(d))' 2>/dev/null <<< "$CLAIM_RPC_JSON") \
         || verified_local_refuse MOE_VERIFIED_LOCAL_CLAIM_UNBUILDABLE 'cannot build a marked VM claim.'
     VM_ROUTE=true
-    if [ -z "$SEAT_VM_INSTANCE" ]; then
-        seat_vm_start || { echo "[ERROR] MOE_SEAT_START_FAILED: $SEAT_START_CODE" >&2; exit 1; }
-    fi
+    while [ -z "$SEAT_VM_INSTANCE" ]; do
+        rc=0; seat_vm_start || rc=$?
+        [ "$rc" != 0 ] || break
+        [ "$rc" = 75 ] || { echo "[ERROR] MOE_SEAT_START_FAILED: $SEAT_START_CODE" >&2; exit 1; }
+        # Initial capacity waits hold nothing; re-provisioning after a failed job
+        # retains the existing task. A governor can release that held task.
+        echo "[seat] MOE_SEAT_CAPACITY_WAIT: $SEAT_START_CODE; no task is claimed; retrying in ${POLL_INTERVAL}s (Ctrl+C to stop)"
+        idle_wait "$POLL_INTERVAL"
+    done
 }
 
 # Bash reads scripts incrementally from a saved file offset. An in-place save
@@ -10993,6 +11058,7 @@ $PROMPT_BODY"
     if [ "$MOE_SKIP_LAUNCH" != true ] && [ "$CLI_TYPE" = claude ]; then
         get_account_lease
         account_wait_recheck || continue
+        if [ "$VM_ROUTE" = true ]; then seat_wait_credential || continue; fi
     fi
     if [ "$MOE_SKIP_LAUNCH" != true ]; then
         prepare_agent_git_guard || { echo 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' >&2; exit 1; }
@@ -11881,7 +11947,9 @@ PYEOF
         echo -e "${YELLOW}[launch-failure]${NC} CLI exited $CLI_EXIT_FOR_LAUNCH after ${CLI_ELAPSED_SEC}s, before doing any work (streak $LAUNCH_FAIL_STREAK): provider usage limit, credential, a crash at launch, or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand). Not counted against the resume budget; next relaunch in ${LAUNCH_FAIL_BACKOFF_SEC}s."
         if [ "$LAUNCH_FAIL_STREAK" -eq 3 ]; then
             LAUNCH_FAIL_HEAD="@governors $WORKER_ID: CLI exits within ${LAUNCH_FAIL_SEC}s of launch (exit $CLI_EXIT_FOR_LAUNCH, $LAUNCH_FAIL_STREAK in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem."
-            if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ]; then
+            # VM seats cannot run a taskless recovery probe. Keep their task
+            # and use the same bounded backoff plus one escalation below.
+            if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ] && [ "$VM_ROUTE" != true ]; then
                 # Launch outage mode (declared above the loop). The release and
                 # its @governors line wait for this iteration's post-flight
                 # (launch_outage_postflight), so the landing and finalize see the
