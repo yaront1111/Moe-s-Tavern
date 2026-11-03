@@ -74,8 +74,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -94,12 +94,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:31:10.080Z",
-  "updatedAt": "2026-11-03T02:42:57.364Z",
+  "updatedAt": "2026-11-03T03:29:20.512Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T00:44:10.024Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T03:28:49.520Z",
+    "wallClockMs": 9879496
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -232,10 +234,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T01:22:03Z",
-    "at": "2026-11-03T02:42:39.235Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T02:42:46Z",
+    "at": "2026-11-03T03:29:20.511Z"
   },
   "reviewStartedAt": "2026-11-03T02:41:57.914Z",
   "verification": {
@@ -245,5 +248,9 @@
     "reportedAt": "2026-11-03T02:41:57.914Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Fixed the worktree LANDING-CONFLICT/LANDING-RETRY resume prompt. Both lines now drop 'no git commands' and end with one 654-char rule, byte-identical in scripts/moe-agent.sh (worktree_resume) and scripts/moe-agent.ps1 (Invoke-MoeWorktreeResume): the wrapper commits the merge only on landing, so HEAD can lack the merged target; build any HEAD-based snapshot (git archive HEAD, a clone at HEAD) from the worktree's tracked files (the paths git ls-files lists), keep other commands unchanged and say so in the evidence; git stays read-only (only status, diff, log, show, ls-files, rev-parse; every write named and forbidden). Line 1 of each prompt, the merge/fetch/stop flow and every MOE_ code are unchanged. New [landing resume] blocks in scripts/tests/postflight.sh and postflight.ps1 (inserted before [worktree reuse]) run 3 seat runs: plain (no rule, no LANDING- line), retry ('LANDING-RETRY: gate', rule, no 'no git commands', MERGE_HEAD set), conflict ('LANDING-CONFLICT: src/a.txt', rule, MERGE_HEAD set, src/a.txt unmerged). RED/GREEN: 12d7bb62's wrappers fail at (retry) on both engines; the fixed wrappers pass. Fresh run of the plan's joined verification (01:26:14Z-02:37:35Z, EXIT=0): ParseFile ok + rule 654 chars in 4 files; PASS parity-check.sh; postflight.sh exit=0 ok-lines=75 SKIP-lines=0; postflight.ps1 (PS 5.1) exit=0 ok-lines=69 SKIP-lines=0; both [landing resume] ok and both PASS lines. sha256 of the four files identical before, after and at completion. Diff +163/-7 in exactly four files; docs untouched (worker.reference.md / initFiles.ts alignment is task-ee85bfb1a3e3418b8555ec97ae1afd88)."
+  "completionSummary": "Fixed the worktree LANDING-CONFLICT/LANDING-RETRY resume prompt. Both lines now drop 'no git commands' and end with one 654-char rule, byte-identical in scripts/moe-agent.sh (worktree_resume) and scripts/moe-agent.ps1 (Invoke-MoeWorktreeResume): the wrapper commits the merge only on landing, so HEAD can lack the merged target; build any HEAD-based snapshot (git archive HEAD, a clone at HEAD) from the worktree's tracked files (the paths git ls-files lists), keep other commands unchanged and say so in the evidence; git stays read-only (only status, diff, log, show, ls-files, rev-parse; every write named and forbidden). Line 1 of each prompt, the merge/fetch/stop flow and every MOE_ code are unchanged. New [landing resume] blocks in scripts/tests/postflight.sh and postflight.ps1 (inserted before [worktree reuse]) run 3 seat runs: plain (no rule, no LANDING- line), retry ('LANDING-RETRY: gate', rule, no 'no git commands', MERGE_HEAD set), conflict ('LANDING-CONFLICT: src/a.txt', rule, MERGE_HEAD set, src/a.txt unmerged). RED/GREEN: 12d7bb62's wrappers fail at (retry) on both engines; the fixed wrappers pass. Fresh run of the plan's joined verification (01:26:14Z-02:37:35Z, EXIT=0): ParseFile ok + rule 654 chars in 4 files; PASS parity-check.sh; postflight.sh exit=0 ok-lines=75 SKIP-lines=0; postflight.ps1 (PS 5.1) exit=0 ok-lines=69 SKIP-lines=0; both [landing resume] ok and both PASS lines. sha256 of the four files identical before, after and at completion. Diff +163/-7 in exactly four files; docs untouched (worker.reference.md / initFiles.ts alignment is task-ee85bfb1a3e3418b8555ec97ae1afd88).",
+  "completedAt": "2026-11-03T03:28:49.520Z",
+  "reviewCompletedAt": "2026-11-03T03:28:49.520Z",
+  "reviewSummary": "Reviewed completion f7b077f7 (on moe/work-2026-10-24 = control HEAD). 4 files, +163/-7 (156 net, under cap), in approvedScope; docs untouched (task-ee85bfb1 owns them). diff --check clean, LF, both .ps1 keep BOM.\nDoD1: both twins' LANDING-CONFLICT/LANDING-RETRY line 2 drop 'no git commands' and end with one 654-char rule, byte-identical in 4 files: build any HEAD-based snapshot from the worktree's tracked files (git ls-files), disclose it; git read-only with exact allowlist (status, diff, log, show, ls-files, rev-parse), every write named and forbidden. Line 1, merge/fetch flow and MOE_ codes unchanged.\nDoD2: [landing resume] blocks in postflight.sh/.ps1 (plain / retry / conflict; rule, no 'no git commands', MERGE_HEAD, unmerged src/a.txt); fixtures fail loudly, no assertion loosened.\nDoD3, re-run by me on the landed commit (its bytes differ from the worker's tested ones): piece 1 in place: \"ParseFile ok; resume rule 654 chars in 4 files\", \"PASS parity-check.sh\". sh leg (env-scrubbed, pinned git archive f7b077f7 snapshot, 02:44-03:13Z): \"postflight.sh exit=0 ok-lines=88 SKIP-lines=0\", \"[landing resume] ok\", \"PASS postflight.sh\". ps1 leg (PS 5.1, second snapshot, 02:44-03:28Z): \"postflight.ps1 exit=0 ok-lines=82 SKIP-lines=0\", \"[landing resume] ok\", \"PASS postflight.ps1\". No SKIP lines. Substitution: snapshots via git archive f7b077f7 instead of git ls-files|tar (same bytes, scripts clean) and a qa-b5c8 mktemp prefix.\nMutants, trimmed block, both engines: landed GREEN; HEAD^ wrappers fail at retry; rule dropped from RETRY only fails at retry; from CONFLICT only fails at conflict; 'no git commands' restored fails at conflict. 5/5 as expected.\nAdversarial: no-move retry merges nothing, advice still right; git status only refreshes stat cache; rule is a constant, nothing to race. Non-blocking: 'paths git ls-files lists' could make naive tar error on a delete/modify-conflict path; worker must disclose.",
+  "requiredCheckAtDone": null
 }

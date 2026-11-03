@@ -16,11 +16,12 @@
     {
       "stepId": "step-1",
       "description": "Tests first.\n\nSome cases cannot run on this Windows gate host. Symlinks are refused there (mklink: 'You do not have sufficient privilege', probed 2026-11-03) and FIFOs do not exist. So the link and FIFO cases assume-skip here, and they run in CI's ubuntu `./gradlew test` (ci.yml:141-185). Make those cases self-guarding, so a regression fails instead of hanging CI:\n- Assume that symlink() works, and that mkfifo works (ProcessBuilder(\"mkfifo\", path).start().waitFor() == 0).\n- Run each FIFO read inside CompletableFuture.supplyAsync and get it with a 5 s timeout.\n- In finally, unblock a stuck reader with RandomAccessFile(fifo, \"rw\").close(). Opening a FIFO O_RDWR never blocks on Linux or macOS.\n\nRuntimeSelectionPolicyTest.kt (the F and M prefixes are unused there):\n\nF1 `F1 a project json that is not a regular file reads as untrusted without being read`:\n- (a) Every OS: .moe/project.json is a directory. profile is PROTECTED and declaredProfile is UNTRUSTED. Nothing is pinned (rewriting it as legacy then reads LEGACY), and nothing is written to the store.\n- (b) Where symlink() works: a link to a regular file that declares legacy gives PROTECTED and UNTRUSTED. Today the read follows the link and gets LEGACY. A dangling link gives PROTECTED.\n- (c) POSIX: a link to a FIFO with no writer. profile and declaredProfile return within 5 s, as PROTECTED and UNTRUSTED. Today they block in open.\n- (d) POSIX: a link to /dev/null gives UNTRUSTED.\n\nM1 `M1 vm-control resolves through the installed artifact under the protected profile only`. It calls ManagedVmPanel.vmControlScript, which step 3 adds:\n- (a) Protected, installed root outside the project and holding scripts/local-runner/vm-control.mjs: the result is that file's real path.\n- (b) Protected, installed root inside the project (<project>/build/idea-sandbox/plugins/moe-jetbrains, the shape of runIde on this repo): null.\n- (c) Protected, script missing: null.\n- (d) Legacy: exactly the bundled lambda's file. The root lambda is never called; make it throw AssertionError.\n\nMoeDaemonSupervisorTest.kt:\n\nF1 `F1 a daemon json that is not a regular file reads as absent without being read`:\n- (a) Every OS: .moe/daemon.json is a directory. readDaemonInfo() is null.\n- (b) Where symlinks work: a link to a valid daemon.json gives null; today it returns the info. deleteDaemonInfoIfUnchanged(that info) is false, and both the link and its target remain.\n- (c) POSIX: a link to a FIFO. readDaemonInfo() returns null within 5 s.\n\nW40 `W40 a Windows restart that begins while a daemon start is in flight refuses before any stop or signal`:\n- Add a fixture hook `var onStart: () -> Unit = {}`. WinRestart's processStarter calls it before its error. The default is a no-op, so no other row changes.\n- With own(proc(S)) and stop = { 0 }, set onStart to record f.restart(null).\n- f.service.ensureDaemonRunning() is false. The recorded refusal is step 3's new start-in-progress message. f.stops is empty, and there is no kill: event.\n- Afterwards, f.restart(null) runs normally, with one stop.\n- Today the inner restart runs its stop and kills S.\n\nRED run, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). If the lease is busy, call moe.report_blocked with that resourceId, and release it on every path. From the worktree root:\nW=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --tests com.moe.services.MoeDaemonSupervisorTest --rerun\"\nLeave the --tests values unquoted (mem:gotcha-jetbrains-gradle-from-wsl). Expect a compile failure, because vmControlScript and the new message do not exist yet. Record it, and record which F cases ran and which assume-skipped.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
-      ]
+      ],
+      "startedAt": "2026-11-03T03:26:33.008Z"
     },
     {
       "stepId": "step-2",
@@ -67,7 +68,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:06:02.725Z",
-  "updatedAt": "2026-11-03T03:25:51.303Z",
+  "updatedAt": "2026-11-03T03:26:33.008Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:16.532Z",
@@ -158,5 +159,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T03:10:49.152Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T03:26:33.008Z"
 }
