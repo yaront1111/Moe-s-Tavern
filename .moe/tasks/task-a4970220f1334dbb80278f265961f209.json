@@ -26,20 +26,28 @@
     {
       "stepId": "step-2",
       "description": "Verify once (mem:gotcha-daemon-linux-snapshot-gate).\n\nRun checkRef 1 (the GREEN gate) exactly as written. In a mktemp snapshot of HEAD, with only workerType.test.ts overlaid, it:\n- runs npm ci there, never in the shared checkout;\n- runs a tsc -p tt.json typecheck whose include is that file (extends ./tsconfig.json, types:[node]), satisfying DoD 3;\n- runs workerType.test.ts (DoD 1);\n- applies a scratch-only patch to the snapshot's chatWho.ts (resolve params.channel via state.resolveChannelRef, throw notFound on null, key both passes on the canonical id), mirroring task-4877ef36 step 1;\n- runs the file again (DoD 2) and prints PATCHED-GREEN.\nDry run: Tests 57 passed (57) twice, exit 0, about 14 s. Use this exact command, its exit code and its output tail as complete_task verification.\n\nThen run checkRef 2 (the RED gate). At b5f40fee with the same scratch patch and the ORIGINAL fixture, 'chat_who carries the type…' must fail with 'Channel not found: chan-x' (Tests 1 failed | 56 passed (57)), and it prints RED-AT-BASE. This proves the patch is not a no-op.\n\nScope check (DoD 3): `git status --porcelain` in your worktree lists only packages/moe-daemon/src/tools/workerType.test.ts.\n\nError handling for a red run:\n- A TS error: fix the fixture typing (the ChatChannel fields are id, name, type, linkedEntityId, createdAt).\n- A patched-run NOT_FOUND: the channel file is not loading (wrong dir, written after load, or a wrong id). Fix the fixture, never the gate.\n- node exit 9 means the patch anchor drifted in chatWho.ts: report it, do not edit chatWho.ts.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T19:29:30.583Z"
+      "note": "PATCHED-GREEN (57/57 twice, tsc ok) and RED-AT-BASE both printed; git status lists only workerType.test.ts",
+      "startedAt": "2026-11-03T19:29:30.583Z",
+      "completedAt": "2026-11-03T19:30:15.354Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of the one-file diff (skill adversarial-self-review), before complete_task. Check that:\n- (a) every expect() line and entry shape in workerType.test.ts is byte-identical (`git diff` shows only the import line and the added setup lines);\n- (b) the channel file is written before h.state.load(), under h.moePath (the temp project), never the repo's .moe/;\n- (c) the channel type is 'custom': migrateToV6FileSystem deletes only 'task'/'epic' channels on load, and ensureChatInfrastructure still self-heals #general;\n- (d) CHAN is unchanged, so the cursor and waiter keys still match;\n- (e) no added line contains a project.json globalRails.forbiddenPatterns string;\n- (f) the cleanup is unchanged: h.cleanup() removes the temp dir, channel file included.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/workerType.test.ts"
+      ],
+      "note": "Self-review a-f checked against git diff: import + 6 setup lines only.",
+      "startedAt": "2026-11-03T19:30:15.923Z",
+      "completedAt": "2026-11-03T19:30:21.729Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -51,12 +59,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:16:50.040Z",
-  "updatedAt": "2026-11-03T19:29:30.583Z",
+  "updatedAt": "2026-11-03T19:31:29.723Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:23:13.515Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -68,7 +76,9 @@
   "codexModel": "gpt-6-luna",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:27:52.698Z",
@@ -131,5 +141,40 @@
   },
   "planApprovedAt": "2026-11-03T19:27:52.737Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T19:29:22.476Z"
+  "workStartedAt": "2026-11-03T19:29:22.476Z",
+  "reviewStartedAt": "2026-11-03T19:30:23.987Z",
+  "verification": {
+    "command": "checkRef 1 (snapshot of HEAD + overlay: tsc -p tt.json && vitest run workerType.test.ts && scratch chatWho patch && vitest run again) ; checkRef 2 at b5f40fee",
+    "exitCode": 0,
+    "outputTail": "Test Files 1 passed (1) Tests 57 passed (57) x2 (unpatched and patched) PATCHED-GREEN; RED-AT-BASE: Tests 1 failed | 56 passed (57), Channel not found: chan-x",
+    "reportedAt": "2026-11-03T19:30:23.987Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/workerType.test.ts"
+  ],
+  "completionSummary": "workerType.test.ts chat_who fixture now writes .moe/channels/chan-x.json (custom channel) before state.load, so it survives chat_who refusing unknown channels. Import gains ChatChannel; no assertions changed.",
+  "commits": [
+    {
+      "sha": "5eac839f787862e54d8550fbc9c6680067dc3a89",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T19:28:11Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/workerType.test.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T19:31:29.723Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T19:28:11Z",
+    "at": "2026-11-03T19:31:29.723Z"
+  }
 }

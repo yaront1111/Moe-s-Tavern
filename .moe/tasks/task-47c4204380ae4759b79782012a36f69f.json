@@ -13,28 +13,42 @@
     {
       "stepId": "step-1",
       "description": "Thread the actor through the pin store and its wrapper (chatStore.ts, StateManager.ts). This follows the f8b8d60c pattern: a trailing optional `actorWorkerId?: string` that ends up as appendActivity's 7th argument. That argument is the event's workerId (activityLog.ts:83), the field the get_activity_log filter reads (getActivityLog.ts:131-132).\n\n(a) chatStore.ts pinMessage (:517-545). Make the PIN_CREATED append (:542) `state.appendActivity('PIN_CREATED', { channelId, messageId, pinnedBy }, undefined, undefined, undefined, undefined, pinnedBy)`.\n- pinnedBy already IS the validated caller on both paths: chat_pin's guarded workerId (after task-3064fd45) and /ws PIN_MESSAGE's 'human' (WebSocketServer.ts:1127).\n- So pinMessage's signature, chatPin.ts and WebSocketServer.ts all stay unchanged.\n\n(b) chatStore.ts unpinMessage (:547-561).\n- Add a trailing `actorWorkerId?: string` and pass it as the 7th argument of the PIN_REMOVED append (:559).\n- Keep the payload exactly `{ channelId, messageId }`. The description says payloads stay as they are.\n\n(c) StateManager.ts wrapper (:927-929): `async unpinMessage(channelId: string, messageId: string, actorWorkerId?: string): Promise<void> { return unpinMessage(this, channelId, messageId, actorWorkerId); }`. Touch no other method: task-3e1d0c2e's epic and task methods are DONE and are not yours.\n\nOut of scope:\n- The /ws UNPIN_MESSAGE call (WebSocketServer.ts:1141) passes no actor, so a board unpin keeps recording none, as today. The description calls 'human' there optional, and leaving it keeps the diff to 5 files.\n- PIN_TOGGLED (togglePinDone, /ws only).\n\nError handling: the 'Channel not found', 'Message not found in channel', 'Message already pinned' and 'Pin not found' throws all stay before the append, unchanged. An omitted actor records exactly what HEAD records.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/chatStore.ts",
         "packages/moe-daemon/src/state/StateManager.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "pinMessage passes pinnedBy as appendActivity's 7th arg (actor); unpinMessage + StateManager.unpinMessage gain trailing optional actorWorkerId forwarded to PIN_REMOVED. Payloads unchanged.",
+      "startedAt": "2026-11-03T19:30:21.834Z",
+      "completedAt": "2026-11-03T19:30:46.067Z"
     },
     {
       "stepId": "step-2",
       "description": "chat_unpin accepts the caller's workerId, guards it and passes it on (chatUnpin.ts).\n\nThis row depends on task-3064fd45, so the file you start from already resolves the channel (resolveChannelRef, then notFound) and calls `state.unpinMessage(channel.id, params.messageId)`. Read that landed version first.\n\n(a) Schema.\n- Add `workerId: { type: 'string', description: 'Worker removing the pin (a registered worker or \"human\"; omitted means \"human\")' }` to inputSchema.properties.\n- Do NOT add it to `required`. That keeps the change additive: \"No breaking changes to MCP tool API contracts\". The proxy stamps a workerId on every agent call anyway.\n\n(b) Guard. Apply chat_send's sender rule (chatSend.ts:40-53), in the compact form task-3064fd45 gave chatPin.ts.\n- `if (params.workerId !== undefined && typeof params.workerId !== 'string') throw invalidInput('workerId', 'must be a string')`\n- `const actor = params.workerId || 'human'`\n- `if (actor === 'system') throw notAllowed('chat_unpin as \"system\"', 'reserved for daemon-internal messages')`\n- `if (actor !== 'human' && !state.getWorker(actor) && !state.tryLoadWorkerFromDisk(actor)) throw invalidInput('workerId', 'Unknown sender: workerId must be a registered worker or \"human\"')`\n- Put the guard after the existing channel and messageId string checks and BEFORE the channel resolution and the store call. Refuse 'system' before the registry lookup, so it gets NOT_ALLOWED and not INVALID_INPUT.\n- Import notAllowed.\n\n(c) Call `state.unpinMessage(channel.id, params.messageId, actor)`.\n\nError handling: every refusal comes before the store call, so a refused unpin writes no pins file, emits no PINS_UPDATED and appends no PIN_REMOVED. The response shape stays `{ success: true }`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatUnpin.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatUnpin.ts"
+      ],
+      "note": "chat_unpin: optional workerId (not required), actor = workerId||'human', 'system' -> NOT_ALLOWED before registry lookup, unregistered -> INVALID_INPUT, all before channel resolution and store call; actor passed to state.unpinMessage.",
+      "startedAt": "2026-11-03T19:30:46.920Z",
+      "completedAt": "2026-11-03T19:30:57.672Z"
     },
     {
       "stepId": "step-3",
       "description": "Tests in chatPin.test.ts. task-3064fd45 created this file; it lands before this row (dependsOn), so extend it. It is listed as newFiles only because HEAD at planning time (f8b8d60c) does not have it yet.\n\nReuse its fixture and helpers: h, generalId(), send, pin, unpin, posted(), expectNoPin(). Import getActivityLogTool from './getActivityLog.js'. Before reading events, call `await flushActivityLog(h.state)`.\n\nAdd one describe block:\n(a1) chat_pin as 'worker-a' records PIN_CREATED with event.workerId 'worker-a'. Its payload deep-equals `{ channelId: generalId(), messageId, pinnedBy: 'worker-a' }` (unchanged).\n(a2) A pin as 'human', then an unpin as 'worker-a', records PIN_REMOVED with event.workerId 'worker-a'. Its payload deep-equals `{ channelId, messageId }`.\n(a3) `getActivityLogTool(h.state).handler({ workerId: 'worker-a', eventTypes: ['PIN_CREATED', 'PIN_REMOVED'] }, h.state)` returns exactly those two events for the seat. Assert the event names and ids, not only a count.\n(a4) chat_unpin with workerId 'system' rejects { code: MoeErrorCode.NOT_ALLOWED }; with 'worker-ghost' it rejects { code: MoeErrorCode.INVALID_INPUT }. Each time the pin is still listed in h.state.getPins(generalId()), and no PIN_REMOVED was appended.\n(a5) chat_unpin as 'human', and chat_unpin with workerId omitted, each succeed and record PIN_REMOVED with workerId 'human'.\n(a6) The board path: `await h.state.unpinMessage(generalId(), messageId)` with no actor still removes the pin, and its PIN_REMOVED has no workerId (unchanged).\n\n(a1)-(a5) fail on HEAD plus task-3064fd45: no actor is recorded, and chat_unpin has no guard.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/chatPin.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T19:30:58.661Z"
     },
     {
       "stepId": "step-4",
@@ -74,11 +88,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:22:41.722Z",
-  "updatedAt": "2026-11-03T19:29:24.545Z",
+  "updatedAt": "2026-11-03T19:30:58.661Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:24:33.842Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -88,7 +103,10 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:28:15.039Z",
   "executionContract": {
@@ -148,5 +166,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T19:28:15.076Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T19:30:21.834Z"
 }
