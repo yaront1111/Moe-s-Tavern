@@ -1,0 +1,32 @@
+{
+  "id": "task-3a98393fcdf74e2fb69e60542ae51ec1",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: VS Code protected Accounts lines do not pass --protected-project, so the accounts CLI started there still looks claude and node up through the workspace (VS Code twin of task-55710898)",
+  "description": "Filed by architect-1dd28c7c on 2026-11-03 while planning task-55710898, which was split on the package seam to stay under QA's 400-net-LOC rule: that row changes the daemon's accounts CLI and the JetBrains Accounts lines; this row is the VS Code half plus the docs for the whole contract.\n\nObjective\n- task-55710898 gives the daemon's `accounts` CLI (packages/moe-daemon/src/accounts/cli.ts, claudeAuth.ts) a `--protected-project <path>` option. With it, every command that runs claude resolves claude only in absolute PATH entries whose real path is outside that project (MOE_CLAUDE_BIN, when set, must be an absolute file outside it). The claude child then runs with PATH rewritten to those entries, cwd = the home folder, and on Windows NoDefaultCurrentDirectoryInExePath=1 and an absolute %SystemRoot%\\System32\\cmd.exe for a .cmd shim. Otherwise it refuses with MOE_PROTECTED_CLAUDE_NOT_FOUND or MOE_PROTECTED_CLAUDE_REFUSED and runs nothing.\n- JetBrains (TerminalAgentLauncher.accountsCommandFor) passes the option on every protected route in task-55710898.\n- VS Code does not pass it yet. AccountsTreeProvider.runCli (task-a6227f4e, landed f27a5f7d) pins the PowerShell and the node, but the CLI it starts still finds claude through the terminal's PATH and the workspace cwd, and on Windows a claude.cmd shim finds `node` in the workspace first.\n\nDeliverable\n- Under the protected profile (protectedAccountsTerminal returns a non-refused selection), runCli's words carry `--protected-project <workspace folder>` right after `--accounts-file <registry>`, on win32 and POSIX, in the typed line and the clipboard line alike. The folder must be the one protectedAccountsTerminal validated against. Prefer adding it to the AccountsTerminal selection (a `project` field set by protectedAccountsTerminal) over re-reading vscode.workspace.workspaceFolders in the provider, so the two cannot drift.\n- A null selection (legacy) keeps lines and terminal options byte-identical.\n- Docs for task-55710898's contract, written once both IDEs pass the option:\n  - docs/MCP_SERVER.md, the accounts CLI bullet: the option, the lookup rule and both tokens;\n  - docs/TROUBLESHOOTING.md: a cause-and-fix entry for both tokens;\n  - docs/CONFIGURATION.md, the MOE_CLAUDE_BIN row: under the protected profile it must be an absolute file outside the project.\n\nNot in scope\n- The CLI itself and JetBrains (task-55710898).\n- The POSIX default-profile terminal shell.\n- Validating cli.script.\n- .moe edits.\n\nVerification (the planner adjusts the cp list to the plan's files): the two-leg snapshot gate of task-a6227f4e (Linux env -i node v24.21.0, then Windows cmd.exe; each runs npm ci, npm test and npm run compile in moe-vscode over a git archive of HEAD with the changed moe-vscode files copied in), then `bash scripts/tests/parity-check.sh && npm run lint`.",
+  "definitionOfDone": [
+    "Under the protected profile every VS Code Accounts line (win32 and POSIX, terminal and clipboard) passes --protected-project followed by the workspace folder protectedAccountsTerminal validated, right after --accounts-file <registry>, proven by literal-line rows in moe-vscode/tests/windows-terminal-shell.test.cjs that fail when the option or its value is dropped.",
+    "A null (legacy) selection keeps Accounts lines and terminal options byte-identical: the existing W1-W3, W9, Q1, V2 and accounts-view rows pass unchanged.",
+    "docs/MCP_SERVER.md, docs/TROUBLESHOOTING.md and docs/CONFIGURATION.md describe --protected-project, MOE_PROTECTED_CLAUDE_NOT_FOUND and MOE_PROTECTED_CLAUDE_REFUSED as task-55710898 landed them, and say both IDEs pass the option under the protected profile.",
+    "The two-leg VS Code snapshot gate (Linux env -i node v24.21.0 and Windows cmd.exe: npm ci, npm test, npm run compile in moe-vscode) and bash scripts/tests/parity-check.sh && npm run lint exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-55710898dca44f67b4687130b34cd801"
+  ],
+  "priority": "MEDIUM",
+  "order": 337.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T12:06:45.880Z",
+  "updatedAt": "2026-11-03T12:06:45.880Z"
+}

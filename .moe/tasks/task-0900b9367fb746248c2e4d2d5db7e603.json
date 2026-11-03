@@ -80,8 +80,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -104,7 +104,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:44:20.312Z",
-  "updatedAt": "2026-11-03T12:03:25.001Z",
+  "updatedAt": "2026-11-03T12:06:45.672Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T09:26:27.208Z",
@@ -114,7 +114,9 @@
     "firstClaimAt": "2026-11-03T09:26:54.986Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T12:05:56.591Z",
+    "wallClockMs": 9541605
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -122,10 +124,11 @@
     "qa-af7be174"
   ],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T11:54:58Z",
-    "at": "2026-11-03T12:02:36.931Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T12:02:58Z",
+    "at": "2026-11-03T12:06:45.672Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -246,5 +249,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T12:05:56.591Z",
+  "reviewCompletedAt": "2026-11-03T12:05:56.591Z",
+  "reviewSummary": "Approved. Reviewed completion 13683b4e (on moe/control and moe/work-2026-10-24) via git show: 3 non-board files, +60/-5 (client +8/-5, pin test +49/-0, docs +3), under 400 LOC.\n\nCode: runtimeProfile reads declaresVerifiedLocal before the pin check, so a verified-local read re-records protected after an earlier Allow in the same session. askDowngrade adds one `declaredProfile(basePath) !== 'legacy-like'` branch that keeps protected, so an Allow records legacy only while the declaration still reads weaker; an unreadable project.json records nothing. No new import or require, no await, lock or timer; modal text, storedProfile, persistProfile and provenance code are unchanged.\n\nRe-run by me, all exit 0 (MOE_LAND_TARGET=13683b4e^, QA_TIP=13683b4e for [0] and [4]):\n- [0] RED vs merge-base client: 34 tests / 31 pass / 3 fail, exactly P12 and both P13 rows.\n- [1] Linux snapshot (npm ci, test, compile): 695 / 685 / 0 fail / 10 skipped.\n- [2] Windows snapshot via cmd.exe: 691 / 678 / 0 / 13.\n- [3] parity-check.sh PASS; npm run lint OK.\n- [4] SCOPE_DOCS_OK: exactly the three files, pin file diff add-only, docs phrase present once.\nMy totals are 7 per OS above the worker's (688/684) because my snapshot base f27a5f7d has more tests. No provenance flake.\n\nIndependent mutants (scratch layout, each restored and cmp-checked): M1 (pin check first) fails only P12; M2 (Allow guard false) fails both P13; M3 (=== 'verified-local') fails only P13 unreadable. The fixed client passes 34/34.\n\nNotes, not blocking: an absent project.json at Allow time still records legacy, and pinned keys re-read project.json on each call, both as in JetBrains. Complexity pass: nothing to delete.",
+  "requiredCheckAtDone": null
 }
