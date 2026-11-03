@@ -59,19 +59,26 @@
     {
       "stepId": "step-4",
       "description": "RF03 parity: replace an unverified daemon (DoD 2). This mirrors JetBrains MoeDaemonSupervisor.replacedUnverified, waitForReplacementExit and replacementMetadataCleared, with STOP_TIMEOUT_MS 20000, EXIT_TIMEOUT_MS 15000 and POLL_MS 250 as instance fields replaceStopTimeoutMs, replaceExitTimeoutMs and replacePollMs.\n\n- Offer replacement only when all of these hold: the refused endpoint came from daemon.json (not fromConfig); it has a positive integer pid, captured now; and protectedDaemonCommand selects the installed runtime. Otherwise show only the refusal.\n- Ask with `vscode.window.showWarningMessage(refusal, { modal: true, detail: <one sentence: Stop and Replace stops that daemon with the installed Moe CLI and starts the installed runtime> }, 'Stop and Replace')`. Anything but exactly 'Stop and Replace' keeps the refusal and stops nothing. Dismiss and Escape return undefined, and the modal's built-in Cancel is the safe default.\n- Stop through the installed CLI only: spawn(selection node, [installed daemon, 'stop', '--project', project], { cwd, env: protectedDaemonEnvironment(...) with SPAWN_PROOF_ENV deleted, stdio: 'ignore', windowsHide: true }). Await 'exit' within replaceStopTimeoutMs. On timeout, call kill() on that child handle only and fail. An 'error' or a non-zero code also fails.\n- Wait, polling every replacePollMs within one replaceExitTimeoutMs budget, until both hold:\n  - !this.isPidAlive(captured pid);\n  - daemon.json is absent, or names a pid that is not alive; unreadable or oversize counts as NOT cleared.\n  isPidAlive(pid) is process.kill(pid, 0); only ESRCH means dead, and EPERM means alive.\n- On success, call startProtectedDaemon(project), which mints a fresh key and replaces the store record. Then read getDaemonInfo(false) and run the gate again on the new endpoint. Admitted: return it so connect dials it. Otherwise refuse.\n- Every failure, decline or exception keeps the refusal: showErrorMessage, return undefined, no WebSocket.\n- Re-check connectCancelled() after each await. Runs only inside connect() (connectInProgress), and startInProgress prevents a double spawn.\n\nError handling: a stop that cannot run (ENOENT), a stop timeout and an unreadable daemon.json all refuse. Nothing is pattern-killed or signalled by pid; the installed CLI's stop is the only stopper.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
       ],
-      "startedAt": "2026-11-03T06:38:20.645Z"
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+      ],
+      "note": "Implemented safe-default modal replacement, installed CLI stop with a 20s bound and only its child handle killed on timeout, 15s/250ms bounded pid+metadata clearance, fresh protected spawn and HMAC re-admission. Preserves refusal after decline/error/nonzero/hang/live pid/live metadata/cancellation. Added 9 focused edge cases: metadata kinds, real ESRCH/EPERM behavior, workspace removal and failed re-admission. RED exposed dangling-symlink ENOENT incorrectly counted as absence and missing-workspace gate bypass; fixed using existing lstatOrAbsent and workspace refusal. GREEN /tmp/moe-648a-red.0NbquU: node --test tests/protected-daemon-provenance.test.cjs 44/44 pass; npm run compile exit 0. Full two-platform verification is step 5; old D1 assertion conflict still pending scope authorization.",
+      "startedAt": "2026-11-03T06:38:20.645Z",
+      "completedAt": "2026-11-03T06:41:58.607Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification, run once (DoD 3). This row is gated by dependsOn on task-137bab15 (the daemon answers the challenge) and task-98c81a27 (the store), and tests the client against a stubbed proof. Run ONE command fresh from the task worktree. It runs both legs and its output tail is the complete_task evidence:\n\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly moe-vscode/src/services/MoeDaemonClient.ts and moe-vscode/tests/protected-daemon-provenance.test.cjs, each `cp` then `cmp`. Then `cd \"$S/moe-vscode\" || exit 1` and run `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'`.\n- Windows leg: the same archive plus overlay into a fresh dir under /mnt/d/moe-scratch/ (Windows-native node_modules, never shared). Then `cmd.exe /d /c \"cd /d D:\\\\moe-scratch\\\\<dir>\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\"`. POSIX-mode cases skip on Windows.\n\nBoth legs must exit 0. Report each leg's tests / pass / fail / skipped: the base at your HEAD (including task-98c81a27's tests) plus the new cases. Never run npm in the shared control checkout.\n\nAlso run `npm run lint` in the Linux snapshot. The diff must touch only those two files. Declare them as modifiedFiles. Size: within prop-bd7d6ccfae674e019941ac59491ce1b7 (at most 520 net).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T06:41:58.636Z"
     },
     {
       "stepId": "step-6",
@@ -84,8 +91,8 @@
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -124,11 +131,23 @@
       "author": "governor-e6b40560",
       "content": "Governor early start, 06:35Z: I dropped dependsOn task-98c81a27. Its completion 9eca3971 (the owner-only store and the RF02 pin your rev 2 builds on) is on moe/work-2026-10-24 (local and origin). That row was held only for its size waiver prop-b13568c2. I have just sent it back to REVIEW for a substance review, with the verdict withheld while the waiver is pending. task-137bab15 is DONE. Your worktree is cut from the target, so it already holds both; confirm with `git merge-base --is-ancestor 9eca3971 HEAD`. Both rows edit MoeDaemonClient.ts. If 98c81a27's QA asks for changes to the store or pin API before you land, re-sync against them; a landing conflict comes back as a LANDING-CONFLICT resume. Your own size exception prop-bd7d6ccf (cap 520) is pending too, so stay within it.",
       "timestamp": "2026-11-03T06:32:36.242Z"
+    },
+    {
+      "id": "comment-fe7d4ea9a7ec4b17865311231992db9d",
+      "author": "worker-26483323",
+      "content": "Implementation progress: steps 1–3 done, step 4 focused GREEN in isolated snapshot: 44/44 provenance tests and npm run compile pass. Full-suite blocker remains the unchanged protected-daemon-spawn.test.cjs D1 exact env assertion (new key required by this row). @architect-24611a0a @governor-e6b40560 please approve the minimal third-file D1 assertion adaptation and corresponding plan/waiver scope; original msg-05e892d2 has details. I will not weaken that assertion or edit outside the two-file plan without authorization. QA's store API review passed without API changes (comment-c01fee7f).",
+      "timestamp": "2026-11-03T06:41:58.593Z"
+    },
+    {
+      "id": "comment-28b1180c31b7431bb6c1e5c661b07971",
+      "author": "worker-26483323",
+      "content": "Fresh full verification `bash /mnt/d/moe-scratch/648a-verify.sh` exited 1 on both platforms (Linux snapshot /tmp/moe-648a-linux.URl3Bh; Windows D:\\moe-scratch\\648a-win.mV5o7K). Linux 666 tests: 659 pass, 3 fail, 4 skipped. Windows 662: 652 pass, 3 fail, 7 skipped. All 44 new cases pass on Linux (42 pass/2 POSIX skips on Windows). Quality gate parity-check + lint exits 0. Three failures all in the prohibited third file protected-daemon-spawn.test.cjs: D1 exact env lacks the required key; two async ENOENT cancellation tests cancel synchronously before the new required crypto await finishes, so the new cancellation fence correctly prevents spawning (0 instead of their expected 1). Need authorization to update D1 and arrange those tests to cancel after the stubbed spawn begins, preserving their original late-error assertions. Compile passed in the focused Linux run; neither full-suite chain reached compile after npm test failed.\nAlso independently reproduced QA's out-of-scope POSIX containment bug and filed task-20a647976d404a009ea4cca6a458c580. With malformed project.json and an absent store root under a symlink into the project, the store API writes the newly minted spawn key inside the repo. This violates the task rail; no inline helper fix attempted. Awaiting that prerequisite plus test-scope correction. Steps 5/6 are not complete.",
+      "timestamp": "2026-11-03T06:44:53.183Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T06:38:20.645Z",
+  "updatedAt": "2026-11-03T06:47:16.409Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -138,7 +157,7 @@
     "firstClaimAt": "2026-11-02T22:37:43.536Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -154,7 +173,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:58:16.854Z",
@@ -270,5 +290,41 @@
     ],
     "stepsCompleted": []
   },
-  "workStartedAt": "2026-11-03T06:34:35.219Z"
+  "workStartedAt": "2026-11-03T06:34:35.219Z",
+  "blockedReason": "Implementation steps 1–4 are complete, with 44/44 focused Linux tests and compile passing, but safe completion is blocked. Fresh full Linux/Windows snapshots each fail 3 existing protected-daemon-spawn.test.cjs assertions: exact env excludes the required proof key; two cancellation tests assume synchronous spawning before the required lazy crypto await. The approved plan restricts the diff to two other files, so the old test needs explicit scope/waiver authorization (comments fe7d4ea9, 28b1180c). Full results: Linux 666/659 pass/3 fail/4 skip; Windows 662/652 pass/3 fail/7 skip; quality gate exit 0. Additionally, filed and independently reproduced task-20a647976d404a009ea4cca6a458c580: an absent POSIX store root beneath a symlink into the project passes the existing store containment helper and persists the new spawn key inside the project when project.json is malformed. This violates the task rail; shared helper fixes are outside this row's scope and were not patched inline. Preserve/checkpoint the two declared paths. Step 5 is uncompleted, step 6 mutations unrun, and no complete_task success is claimed. Full handoff and scratch paths are in Serena task-task-648a591623e1405ba788f44b5fe6690d-handoff.",
+  "blockedOnTaskIds": [
+    "task-20a647976d404a009ea4cca6a458c580"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-11-03T06:46:41.437Z",
+  "commits": [
+    {
+      "sha": "c7bc13a3d2c733b03e49a99ee8861b4be4772d51",
+      "ref": "refs/heads/moe/task/task-648a591623e1405ba788f44b5fe6690d",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T06:32:38Z",
+      "paths": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T06:47:16.409Z",
+      "treeId": "a957cad8ac8ceb62216f2e93b02ba4fc2edd09e3",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-26483323@2026-11-03T06:32:38Z",
+    "at": "2026-11-03T06:47:16.409Z"
+  }
 }

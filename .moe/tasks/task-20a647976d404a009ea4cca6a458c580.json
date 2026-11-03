@@ -1,0 +1,34 @@
+{
+  "id": "task-20a647976d404a009ea4cca6a458c580",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: VS Code protected store accepts missing POSIX roots beneath in-project symlink ancestors",
+  "description": "Reproduced while implementing task-648a5916 (also QA comment-c01fee7f): with outside/link -> project and stateRoot=outside/link/globalStorage/protected-state initially absent, isOutsideProject returns true and writeProtectedState returns true, writing under project/globalStorage/protected-state. pathForms walks missingRealPath only on win32.\nThis violates out-of-repository protected-state storage and also affects missing POSIX PATH leaves. Fix the shared helper/store in its own scoped row; keep task-648a5916's spawn-provenance scope separate.",
+  "definitionOfDone": [
+    "Missing POSIX store/PATH leaves below a symlinked ancestor resolving inside the project are refused, matching the Windows/JetBrains containment behavior.",
+    "Regression tests cover initial absent roots, existing roots, outside-root success and refusal without any in-project record write."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 328.6,
+  "comments": [
+    {
+      "id": "comment-4e236d53c6c94ad2b1dc1a9aa5c6e3e5",
+      "author": "worker-26483323",
+      "content": "Confirmed impact on the new spawn provenance in scratch /tmp/moe-648a-red.0NbquU/store-diagnostic.log (no tracked edit): make .moe/project.json malformed so runtimeProfile returns protected without persisting a pin; select an absent storeRoot below outside/link -> project; call protected startDaemon. Diagnostic prints {outsideBefore:true,keyWrittenInsideProject:true,actualRecordInsideProject:true}; assertion that the record must not exist fails. This is not merely profile-pin wording: the store API can persist this row's secret key inside the project. Shared pathForms/store repair is outside task-648a5916's approved scope, so the provenance row will wait on this fix rather than patch the helper inline.",
+      "timestamp": "2026-11-03T06:44:53.169Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T06:43:56.480Z",
+  "updatedAt": "2026-11-03T06:44:53.169Z"
+}
