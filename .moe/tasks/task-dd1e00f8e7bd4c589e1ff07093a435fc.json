@@ -1,0 +1,31 @@
+{
+  "id": "task-dd1e00f8e7bd4c589e1ff07093a435fc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: submit_plan's rail refusal tells the planner to call propose_rail with targetScope \"GLOBAL\" | \"EPIC\" | \"TASK\", but checkPlanRails enforces only the global forbidden/required patterns, so an EPIC or TASK proposal can never lift a rail refusal (MCP_SERVER.md's Rail refusal note repeats the hint)",
+  "description": "Reported by architect-24611a0a from planning task-34e42a0a (msg-c788a9d9, 21:02Z on 2026-11-03). The governor re-checked it at tip ac3ea38f. The trap is live: that architect's own first submit_plan for 34e42a0a was refused because its test fixture quoted one of this board's forbiddenPatterns.\n\nPROBLEM. A rail refusal's escape hatch offers all three scopes. EPIC and TASK proposals edit epicRails and taskRails, which the plan check never enforces. A planner who follows the hint with EPIC or TASK gets an approved proposal that changes nothing, and the plan stays refused.\n\nEVIDENCE (at ac3ea38f):\n- packages/moe-daemon/src/tools/submitPlan.ts:194-206 (assertPlanRails): `moe.propose_rail { proposalType: \"ADD_RAIL\" | \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\" | \"EPIC\" | \"TASK\", … }`.\n- packages/moe-daemon/src/util/rails.ts:16-34 checks only `projectRails.forbiddenPatterns` and `projectRails.requiredPatterns`. The comment at :34 reads \"Only forbiddenPatterns and global requiredPatterns are strictly enforced.\"\n- docs/MCP_SERVER.md's submit_plan notes (about :378-380) say epicRails and taskRails are \"NOT enforced in plan text\". The Rail refusal bullet then says the message \"goes on to name the moe.propose_rail escape hatch\" without saying that only GLOBAL can lift it.\n\nWHY BACKLOG, AFTER TWO ROWS.\n- task-34e42a0a makes propose_rail able to reach the GLOBAL forbiddenPatterns and requiredPatterns at all. The new text must describe that landed path.\n- task-2cc41d1a (amend_plan_step rails) may move assertPlanRails, and this refusal text with it, into util/rails.ts.\n- The governor promotes this row when both are DONE.\n\nFIX DIRECTION. The refusal names only targetScope \"GLOBAL\", with MODIFY_RAIL or REMOVE_RAIL of the exact forbiddenPatterns or requiredPatterns entry, in whatever shape 34e42a0a lands. The MCP_SERVER.md Rail refusal bullet says the same. Keep the refusal code and prefix (`-32003`, `Rail violation:`) unchanged.",
+  "definitionOfDone": [
+    "The submit_plan rail refusal's escape-hatch text names only targetScope GLOBAL, together with the forbiddenPatterns or requiredPatterns entry shape that task-34e42a0a made reachable. A test pins that EPIC and TASK are not offered, and that the code -32003 and the 'Rail violation:' prefix are unchanged.",
+    "docs/MCP_SERVER.md's submit_plan Rail refusal note states that only a GLOBAL proposal can lift a rail refusal. The vitest run of the submit_plan and rails tests passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-34e42a0a4f5f4fd0a93cc030772e8acb",
+    "task-2cc41d1a434a4e42ae2d34101cf2ad22"
+  ],
+  "priority": "LOW",
+  "order": 438.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T21:02:46.344Z",
+  "updatedAt": "2026-11-03T21:02:46.344Z"
+}

@@ -9,10 +9,42 @@
     "`cd packages/moe-daemon && npx vitest run src/tools/waitForTask.ownFinalizing.test.ts src/tools/waitForTask.test.ts src/tools/claimNextTask.test.ts` passes in a snapshot outside the shared checkout, including claimNextTask.test.ts's 'refuses a coding claim while that worker has an attempt finalizing'."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the tests first (load test-driven-development). Create packages/moe-daemon/src/tools/waitForTask.ownFinalizing.test.ts with the Write tool. Never cp the scratch draft into the tree: a shell write leaves no TOOL witness. Read-only reference: /mnt/d/moe-scratch/plan-4fbd3c69/waitForTask.ownFinalizing.test.ts. The architect dry-ran it red at base and green with the fix.\n\nFixture:\n- ToolTestHarness: h.setupMoeFolder({ schemaVersion: 6 }), h.createEpic(), then createTask task-W (WORKING, one COMPLETED step on file.ts, order 1) and task-next (WORKING, order 2), then await h.state.load().\n- afterEach unsubscribes and clears every entry in activeWaiters (exported from ./waitForTask.js), then calls h.state.clearEmitter() and h.cleanup().\n- Helper completeLeavingFinalizing():\n  1. claim_next_task {statuses:['WORKING'], taskId:'task-W', workerId:'worker-1'};\n  2. complete_task {taskId:'task-W', workerId:'worker-1', verification:{command:'npm test', exitCode:0}};\n  3. assert that listAttempts(h.state,'task-W') is [['worker-1','finalizing']];\n  4. return the claim's attemptId and generation.\n\nUse exactly these case-title prefixes, because the red checkRef greps them:\n- (c1) control: claim_next_task {statuses:['WORKING'], workerId:'worker-1'} is refused with a MoeError whose codeName is ATTEMPT_FINALIZING.\n- (c2) control: the hold is worker-scoped. wait_for_task for worker-2 (timeoutMs 1000) answers hasNext:true with task-next.\n- (f1) DoD 1: wait_for_task {statuses:['WORKING'], workerId:'worker-1', timeoutMs:1000} answers hasNext:false, with no task and no claim_next_task nextAction.\n- (f2) DoD 2:\n  1. Start the same wait with timeoutMs 5000 and do not await it.\n  2. After a 50 ms tick, assert that activeWaiters.has('worker-1').\n  3. Call finalize_attempt {taskId:'task-W', workerId:'worker-1', attemptId, generation, outcome:'nothing-to-commit'}.\n  4. The parked promise resolves hasNext:true with task-next and a claim_next_task nextAction.\n  5. The claim run with those args returns task-next, and getTask('task-next').assignedWorkerId is 'worker-1'.\n\nRun the file once against the unfixed code. Expected: Tests 2 failed | 2 passed (4), with (f1) and (f2) red.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ownFinalizing.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Share one worker-scoped predicate between the two tools. Do not edit util/claimGuards.ts or tools/finalizeAttempt.ts; finalize_attempt already wakes waiters through announceAttemptClosed (state/attemptStore.ts:755-758).\n\n(a) packages/moe-daemon/src/util/claimEligibility.ts: right after blockingHold, add `export function ownFinalizingAttempt(state: StateManager, workerId: string): ExecutionAttempt | null`.\n- It makes ONE pass over state.attempts.values() and keeps the attempt with `attempt.workerId === workerId && attempt.phase === 'finalizing'` and the lowest generation, the earliest stored on a tie. That is exactly what claim_next_task's `listAttempts(state).find(...)` returned.\n- It does not copy, sort or structuredClone the store. This board holds 2,237 attempt records, and wait_for_task runs this for every waiter on every task event.\n- Its doc comment says it returns the stored record read-only, and that both tools MUST read it, because a disagreement is the wake→claim→refuse spin.\n\n(b) packages/moe-daemon/src/tools/claimNextTask.ts:\n- Replace the inline lookup at :534-536 with `const finalizing = ownFinalizingAttempt(state, params.workerId);`.\n- The attemptFinalizingRefusal throw that follows is unchanged.\n- Add ownFinalizingAttempt to the claimEligibility import. Keep the listAttempts import, which :233 still uses.\n\n(c) packages/moe-daemon/src/tools/waitForTask.ts:\n- Import ownFinalizingAttempt.\n- In findMatchingTask, directly after `if (workerId && blockingHold(state, workerId)) return NO_MATCH;`, add `if (workerId && ownFinalizingAttempt(state, workerId)) return NO_MATCH;`, with a two-line comment: claim_next_task refuses this seat ATTEMPT_FINALIZING, and the close announces itself with a TASK_UPDATED that re-runs the matcher.\n- This mirrors claim's order: the held-task answer first, then the finalizing refusal.\n\nError handling: the helper is a pure read and never throws, and the matcher stays non-throwing. Claim's refusal keeps its code (-32002), codeName, context and message. Malformed records match on the same two fields as before, so neither tool changes its answer for them.\n\nReference diff (read-only): /mnt/d/moe-scratch/plan-4fbd3c69/fix.diff. With it the new file passes 4/4. The architect's mutants were each killed:\n- dropping the wait line kills (f1) and (f2);\n- a wrong phase in the helper kills claimNextTask.test.ts's 'refuses a coding claim while that worker has an attempt finalizing' and two of its siblings, plus (c1), (f1) and (f2).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claimEligibility.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run ONCE (DoD 1-3). From your task worktree, run both checkRefs as ONE command, each in its own subshell: `( <checkRefs[0]> ) && ( <checkRefs[1]> )`. Each leg cds into its own mktemp snapshot, so a bare && would break the second leg. That command and its output tail are the complete_task verification evidence.\n\n- [0] is the gate. It archives HEAD's packages/moe-daemon, overlays your four files, runs npm ci with nvm's Linux node 24 under env -i, then tsc --noEmit plus a tt.json typecheck of the new test. It runs vitest over the waitForTask*, claimNextTask* (five files), finalizeAttempt, executionProfileAdmission, executionRoute and attemptHandback tests. The architect's dry-run printed `Test Files 11 passed (11)` and `Tests 356 passed (356)`, and the gate exited 1 when waitForTask.ts was unfixed.\n- [1] is the red-at-base leg. It runs the new file against waitForTask.ts pinned at 9834628e, which is byte-identical to the 31492ac5 bytes DoD 1 names, with your claimEligibility.ts and claimNextTask.ts in place. It requires exit 1, (c1) and (c2) green, and (f1) and (f2) red, then prints RED-AT-BASE. It was dry-run both uncommitted and after a simulated landing commit.\n\nA daemon-only snapshot fails src/delivery/acceptance.test.ts, getContext.test.ts's role-doc case and daemonGitDocs.test.ts the same way at base, because they need the repo-root scripts/ and docs/. That is why the gate names its files instead of globbing.\n\nError handling for a red run: fix the code, never the (fN) assertions. If a listed suite other than the new file fails, compare it with a run on the unedited sources first.\n\nNever run npm in the shared checkout.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the new test.\n\nChecklist:\n(a) Order parity: wait's own-task match and the blockingHold check still come before the new line, as claim's alreadyAssigned answer comes before its finalizing refusal. A worker that holds an assigned row is still told about that row.\n(b) There is no lost wake. The handler awaits nothing between the immediate findMatchingTask and state.subscribe, so a finalize cannot slip between them. Read waitForTask.ts:310-408 to confirm it.\n(c) Another worker's waiter, and the task-scoped foreignFinalizingAttempt filter, behave as before, as (c2) pins.\n(d) Cost: the helper allocates nothing per call, and listAttempts is not called on the matcher path.\n(e) The timeout answer for this seat is the plain 're-enter wait' hint, because no blockingHold applies. Ending the session instead is out of scope: note it in the summary as a possible follow-up, and do not build it.\n(f) `git diff --name-only` lists only the four planned files. claimGuards.ts, finalizeAttempt.ts and docs/MCP_SERVER.md are untouched.\n(g) No added line contains a project.json globalRails.forbiddenPatterns string.\n\nRecord the findings, with both legs' printed Tests lines, in the complete_task summary.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +56,79 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:43:54.639Z",
-  "updatedAt": "2026-11-03T20:54:31.126Z",
+  "updatedAt": "2026-11-03T21:02:56.184Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T20:54:28.772Z"
+    "firstClaimAt": "2026-11-03T20:54:28.772Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T21:02:56.157Z",
+  "executionContract": {
+    "intendedBehavior": "moe.wait_for_task returns no match, and parks, while the caller's own attempt is finalizing. That is the same worker-scoped hold claim_next_task enforces with ATTEMPT_FINALIZING, so a waiter is never woken into a claim that refuses it. The parked waiter wakes when moe.finalize_attempt closes the attempt (announceAttemptClosed's TASK_UPDATED), and its claim then succeeds.",
+    "invariants": [
+      "claim_next_task's own-finalizing refusal keeps its code, codeName ATTEMPT_FINALIZING, context, message and position (after the held-task check, before any ranking or write).",
+      "Both tools read one predicate, util/claimEligibility.ownFinalizingAttempt. It never throws, never writes, and never copies or sorts the attempt store.",
+      "Another worker's waiter, the task-scoped foreignFinalizingAttempt filter and the own-task resume match are unchanged."
+    ],
+    "compatibility": [
+      "claimNextTask.test.ts, including 'refuses a coding claim while that worker has an attempt finalizing', waitForTask.test.ts, finalizeAttempt.test.ts, executionProfileAdmission, executionRoute and attemptHandback all pass unchanged.",
+      "The wait_for_task and claim_next_task response shapes are unchanged. util/claimGuards.ts, tools/finalizeAttempt.ts and docs/MCP_SERVER.md are not edited."
+    ],
+    "reuse": [
+      "The claimEligibility module and its 'both tools read one predicate' pattern (blockingHold, finalizingAttemptsByTask).",
+      "attemptFinalizingRefusal stays the claim refusal. finalize_attempt's announceAttemptClosed is the wake, so no new event is needed."
+    ],
+    "sourceAssumptions": [
+      "tools/claimNextTask.ts:534-544: the worker-scoped refusal uses `listAttempts(state).find(a => a.workerId === params.workerId && a.phase === 'finalizing')` inside `if (params.workerId)`, after blockingHold (:511).",
+      "tools/waitForTask.ts:169: findMatchingTask returns NO_MATCH on blockingHold, and its candidate filters only skip OTHER workers' finalizing rows (foreignFinalizingAttempt, :193-196).",
+      "state/attemptStore.ts:755-758 announceAttemptClosed emits TASK_UPDATED after a close, and finalizeAttempt.ts:291 calls it. waitForTask.ts:435-437 re-runs the matcher on TASK_UPDATED.",
+      "state/StateManager.ts:391: `attempts = new Map<string, ExecutionAttempt>()` is the store that listAttempts reads.",
+      "waitForTask.ts, claimEligibility.ts and claimNextTask.ts are byte-identical at 31492ac5 and 9834628e."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/{util/claimEligibility,tools/waitForTask,tools/claimNextTask,tools/waitForTask.ownFinalizing.test}.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/waitForTask.ownFinalizing.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{waitForTask,claimNextTask,finalizeAttempt,executionProfileAdmission,executionRoute} src/state/attemptHandback > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/{util/claimEligibility,tools/claimNextTask,tools/waitForTask.ownFinalizing.test}.ts \"$S\" && git show 9834628e1656689aea635f266a421e9ca65ee2af:$P/waitForTask.ts > \"$S/$P/waitForTask.ts\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1; npx vitest run src/tools/waitForTask.ownFinalizing.test.ts > ../l 2>&1; r=$?; grep -aE \"^ +Tests |^ FAIL \" ../l; [ $r = 1 ] || exit 1; for k in c1 c2; do ! grep -aqF \"> ($k) \" ../l || exit 1; done; for k in f1 f2; do grep -aqF \"> ($k) \" ../l || exit 1; done; echo RED-AT-BASE'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": [
+      "Reusing finalizingAttemptsByTask for the worker check was rejected. Its isHoldingFinalizingAttempt validity filter skips malformed records that claim's plain predicate counts, so wait would match where claim refuses, which is the spin again.",
+      "Waking the waiter with an END_SESSION handoff instead of parking it was left out: the DoD pins parking and the wake on finalize, so the self-review notes it as a possible follow-up.",
+      "Keeping listAttempts in the helper was rejected. It copies, sorts and structuredClones 2,237 records per call on the matcher's hot path."
+    ],
+    "codebaseInsights": "util/claimEligibility.ts exists to give claim_next_task and wait_for_task one definition of 'encumbered'. Each past drift (BLOCKED hold, dependsOn, foreign finalizing) caused a measured wake→claim→refuse spin. The worker-scoped finalizing hold was the one predicate still inlined in claimNextTask.ts.",
+    "risks": [
+      "A seat that waits right after complete_task now parks until finalize instead of spinning. Its wrapper finalizes only after the CLI exits, so an interactive seat that keeps waiting just times out and re-waits. That is better than a hot spin, but the session-ending guidance is a follow-up.",
+      "Parallel tests share the module-level activeWaiters map, so the new file must clear it in afterEach."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/tools/finalizeAttempt.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ac3ea38fe92a7df25ced9df044dfa591322a7864",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T21:02:56.184Z",
+  "approvedPlanRevision": 1
 }

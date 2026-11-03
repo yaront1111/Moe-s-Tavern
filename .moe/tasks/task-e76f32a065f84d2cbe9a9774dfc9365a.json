@@ -1,0 +1,30 @@
+{
+  "id": "task-e76f32a065f84d2cbe9a9774dfc9365a",
+  "epicId": "epic-be924fb8",
+  "title": "test: postflight-fake-proxy.js's get_commit_scope still models the old orphan rule (any caller that is not the assignee counts as an active peer), with no finalizing-holder exemption, so a completion scenario with no assignee would get peersActive true where the daemon now says false",
+  "description": "Reported by architect-24611a0a from planning task-7d3428d1 (msg-c788a9d9, 21:02Z on 2026-11-03). The governor re-checked it at tip ac3ea38f. It is fake-vs-daemon drift: no current postflight scenario is affected, because the fake's default assignee is the caller. But a drifted fake is how seat-registration's 'gone' case passed falsely, see task-6b8fb0ee.\n\nPROBLEM. task-7d3428d1 changes the daemon's get_commit_scope: the completing seat holding the finalizing attempt is no longer counted as an orphan peer of its own completion landing, since complete_task has already cleared the assignee. The postflight fake proxy still applies the old rule, so a future scenario that completes with no assignee (e.g. FAKE_SCOPE_ASSIGNEE=none) would get peersActive true from the fake where the real daemon answers false.\n\nEVIDENCE: scripts/tests/postflight-fake-proxy.js:795 (at ac3ea38f), `const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId;`, feeding activePeerIds at :796.\n\nWHY BACKLOG. The fake must copy the rule 7d3428d1 actually lands, which is in REVIEW now. The governor promotes this row when 7d3428d1 is DONE. The CQ-M07 lane's open rows (n3, n) don't list this file today. Check lanes.js before planning.\n\nFIX DIRECTION. Mirror the landed exemption in the fake's get_commit_scope, then add one postflight scenario, or a direct fake-proxy unit check, where a completion with no assignee and a finalizing caller yields peersActive false.",
+  "definitionOfDone": [
+    "postflight-fake-proxy.js's get_commit_scope applies the same finalizing-holder exemption task-7d3428d1 landed in the daemon. A completion call whose caller holds the finalizing attempt, with no assignee, reports peersActive false.",
+    "A scenario or unit check pins that case, and the postflight harness rows that use the fake still pass on the platforms the plan names (bash postflight.sh, plus the .ps1 sibling if the ps1 path uses get_commit_scope)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7d3428d14903430c92325cfcb56ac3f5"
+  ],
+  "priority": "LOW",
+  "order": 439.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T21:02:55.403Z",
+  "updatedAt": "2026-11-03T21:02:55.403Z"
+}
