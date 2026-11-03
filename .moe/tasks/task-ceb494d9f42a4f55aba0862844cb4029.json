@@ -1,0 +1,34 @@
+{
+  "id": "task-ceb494d9f42a4f55aba0862844cb4029",
+  "epicId": "epic-be924fb8",
+  "title": "bug: grantNextLeases passes over a worktree completion's queued git-land lease, because complete_task already cleared the task's assignee",
+  "description": "Filed by the governor on 2026-11-03 from a live stall of WT-19 (task-b1ca54f2), the worktree epic's final task.\n\nPROBLEM. A worktree completion takes the git-land-<target> lease at L3, after moe.complete_task has moved the row to REVIEW and cleared assignedWorkerId. If another landing holds the lease, the wrapper queues (acquire_resource, then wait_for_resource). On release, grantNextLeases (packages/moe-daemon/src/state/resourceStore.ts, the pass-over at ~line 449) skips every entry whose task fails heldByLiveSeat (~line 83). heldByLiveSeat returns false for any unassigned task. So the queued completion is never granted:\n- it waits out its own wait_for_resource (up to 10 min per wait);\n- later landings acquire directly past it;\n- under steady traffic it can exhaust MOE_LAND_LEASE_WAIT_SEC (default 1800) and fail as MOE_COMMIT_FAILED_LAND_LEASE, the unlanded route back to a worker.\n\nEVIDENCE. From .moe/activity.log, 2026-11-03, git-land-moe-work-2026-10-24:\n- 13:54:56Z RESOURCE_ACQUIRED task-1765335a (worker-ed0f6a9e).\n- 13:55:17Z RESOURCE_QUEUED task-b1ca54f2 (worker-8cf0816c). WT-19 is REVIEW with no assignee: complete_task ran at 13:54:54Z.\n- 13:55:24Z RESOURCE_RELEASED task-1765335a. No grant follows.\n- 13:57:37Z RESOURCE_ACQUIRED task-13ff6bb4 (direct, past the queued WT-19).\n- 13:58:01Z RESOURCE_RELEASED task-13ff6bb4. Still no grant.\n- At 14:04Z, list_resources showed holders [] and queue [task-b1ca54f2, position 1]. The wrapper was still parked in wait_for_resource.\n\nFIX DIRECTION (verify against the code first).\n- A queue entry is held for grant purposes when either:\n  - the task's assignee is a live seat bound to it (as today); or\n  - the entry's own workerId is a registered, non-DEAD seat that owns the task's open execution attempt in `finalizing`. That is the post-complete_task landing window, the one moe.finalize_attempt closes.\n- Keep the pass-over for rows nobody can use, so resourceStore.unheld.test.ts stays meaningful.\n- Assumption to check: which attempt-store accessor exposes an attempt's status and its owning worker.\n\nFiles expected: packages/moe-daemon/src/state/resourceStore.ts plus a test (a resourceStore*.test.ts file or a new one). Not held by any open row at filing time.",
+  "definitionOfDone": [
+    "When a task in REVIEW has an open finalizing attempt owned by a live seat, and that seat's git-land queue entry comes up, grantNextLeases grants it as capacity frees and logs RESOURCE_GRANTED. A regression test replays the 13:55Z sequence: A holds the lease; B completes, so it is unassigned with a finalizing attempt, and queues; A releases; B is granted.",
+    "Rows no live seat can use are still passed over: unassigned with no finalizing attempt, a DEAD or deregistered requester, or an attempt owned by another seat. The existing resourceStore tests (unheld, lifecycle, deregister, durability) stay green.",
+    "The daemon's resourceStore test files and its full npm test pass in a git archive or clone snapshot outside the shared checkout (global rail), with error handling for a missing or unreadable attempt record that falls back to today's pass-over."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 363.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T14:04:49.282Z",
+  "updatedAt": "2026-11-03T14:05:11.209Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T14:04:59.017Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}
