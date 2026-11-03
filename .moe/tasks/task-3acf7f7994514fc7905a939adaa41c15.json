@@ -96,12 +96,15 @@
     {
       "stepId": "step-7",
       "description": "Adversarial self-review of this diff only (load the adversarial-self-review skill). Then run mutants in scratch copies, never in the checkout.\n\nSetup:\n- Copy the worktree's scripts/ to /mnt/d/moe-scratch/3acf7f79-work/<mutant>/scripts. A shell copy OUT of the tree is fine.\n- Apply exactly one edit per copy. Keep the BOM in ps1 copies.\n- Run an unmutated control copy first.\n- Run the Windows rows through Windows node.exe from a normal WSL shell.\n\nEach mutant must be KILLED by an AssertionError on the named row:\n- M1: the ps1 scrub removed. Killed by W3 (every form) and W4.\n- M2: WT-13 also called at its old spot under the marker. Killed by W3 '.' and W4.\n- M3: list mode keeps in-project entries. Killed by W3 relative and absolute.\n- M4: the tooling program spawns 'git'. Killed by X1 (c).\n- M5: the board program spawns 'git', in both copies. Killed by X1 (c).\n- M6: the strict isAbsolute check removed from either helper. Killed by X1 (b).\n- M7: the ps1 export removed. Killed by X2 ps1.\n- M8: the sh export removed. Killed by X2 bash.\n- M9: strict ignores the marker's exact '1'. Killed by X1 (d).\n\nChecklist:\n- The hot-reload pass is idempotent.\n- Root entries (C:\\ and /) are kept untrimmed.\n- PS 5.1 and PS 7 differ: 5.1 has no $IsWindows.\n- BOM and LF endings are kept.\n- Both program pairs are identical and ASCII.\n- No new MOE_ code.\n- Legacy never touches PATH or MOE_PROTECTED_GIT.\n- The refusal precedence under the marker is now: command refusal, then WT-13. This is accepted.\n\nRecord the evidence under /mnt/d/moe-scratch/3acf7f79-work, then write the Serena handoff memory task-task-3acf7f7994514fc7905a939adaa41c15-handoff.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/moe-agent.sh",
         "scripts/tests/protected-agent-command.test.mjs"
-      ]
+      ],
+      "note": "Adversarial self-review of this diff (re-done in the resumed session) found nothing to fix:\n- Marker parity: ps1 legacy gate `-cne '1'` is the exact complement of $script:MoeRuntimeProtected (`-ceq '1'`, :474). sh `= 1` matches the programs' `=== '1'`.\n- Lines 1-632 hold only one native command, WT-13's three `& git` calls, which run after the scrub under the marker. The supervisor `&` calls are scriptblocks.\n- List mode emits the untrimmed $realFull, so a root stays rooted. An unresolvable project WARNs, returns nothing, and the launch refuses with the existing node line. PATH is never set to ''. The rerun is idempotent: real paths of real paths.\n- Each program has exactly one child-process call (its git helper). A missing or nonexistent absolute git fails through the existing paths. Both pairs are identical and ASCII.\n- MOE_PROTECTED_GIT is overwritten under the marker (an inherited value never survives), never set in legacy, and ignored by legacy programs.\nMutants (scratch /mnt/d/moe-scratch/3acf7f79-work/mut, mk.sh + apply.py; TAP per mutant). Controls: linux 3/3 ok, win 7/7 ok. All KILLED by AssertionError:\n- M1 and M2: W3 + W4 on PS 5.1 and PS 7.\n- M3: W3 on both engines.\n- M4, M5, M6, M6b, M9: X1.\n- M7: X2 on PS 5.1 and PS 7.\n- M8: X2 bash.\nAccepted residuals:\n- POSIX pwsh re-prepends the node dir on each reload pass (pre-existing).\n- X2's Windows expectation assumes no git.exe in TAIL.\n- Git Bash relies on MSYS env conversion and fails closed if the path is unconverted.\nNo tracked edits in this step.",
+      "startedAt": "2026-11-03T07:52:21.692Z",
+      "completedAt": "2026-11-03T07:54:07.954Z"
     }
   ],
   "planRevision": 1,
@@ -130,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:41:12.507Z",
-  "updatedAt": "2026-11-03T07:45:26.785Z",
+  "updatedAt": "2026-11-03T07:54:07.954Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:57.870Z",
@@ -140,7 +143,7 @@
     "firstClaimAt": "2026-11-03T07:02:42.264Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -156,7 +159,8 @@
     "step-3",
     "step-4",
     "step-5",
-    "step-6"
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T07:25:19.447Z",
@@ -233,5 +237,38 @@
   },
   "planApprovedAt": "2026-11-03T07:25:19.485Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T07:27:52.360Z"
+  "workStartedAt": "2026-11-03T07:27:52.360Z",
+  "commits": [
+    {
+      "sha": "40487c4d6c9456061a0d121b8d91a20c30786159",
+      "ref": "refs/heads/moe/task/task-3acf7f7994514fc7905a939adaa41c15",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T07:25:21Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T07:49:57.447Z",
+      "treeId": "d5e8f0c3faea2d2fa787820819a82553571dfdc1",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/ARCHITECTURE.md",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/protected-agent-command.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-33f67e5b@2026-11-03T07:25:21Z",
+    "at": "2026-11-03T07:49:57.447Z"
+  }
 }

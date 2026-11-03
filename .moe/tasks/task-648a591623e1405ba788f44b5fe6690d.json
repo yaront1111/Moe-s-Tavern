@@ -79,7 +79,17 @@
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
       ],
-      "startedAt": "2026-11-03T06:41:58.636Z"
+      "startedAt": "2026-11-03T06:41:58.636Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification, run once (DoD 3). This row is gated by dependsOn on task-137bab15 (the daemon answers the challenge) and task-98c81a27 (the store), and tests the client against a stubbed proof. Run ONE command fresh from the task worktree. It runs both legs, and its output tail is the complete_task evidence:\n\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly these three files, each with `cp` then `cmp`: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/tests/protected-daemon-provenance.test.cjs and moe-vscode/tests/protected-daemon-spawn.test.cjs. Then `cd \"$S/moe-vscode\" || exit 1` and run `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'`.\n- Windows leg: the same archive plus overlay, into a fresh dir under /mnt/d/moe-scratch/ (Windows-native node_modules, never shared). Then `cmd.exe /d /c \"cd /d D:\\\\moe-scratch\\\\<dir>\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\"`. POSIX-mode cases skip on Windows.\n\nBoth legs must exit 0. For each leg, report tests / pass / fail / skipped: the base at your HEAD (including task-98c81a27's tests) plus the new cases. Never run npm in the shared control checkout. task-20a64797's store-containment fix landed as edc27e14. Say in the evidence whether it is an ancestor of the HEAD you verified (`git merge-base --is-ancestor edc27e14 HEAD`).\n\nAlso run `npm run lint` in the Linux snapshot. The diff must touch only those three files; declare them as modifiedFiles.\n\nThe edit to moe-vscode/tests/protected-daemon-spawn.test.cjs stays within the governor's 07:06Z ruling (comment-d4217a23):\n- Add MOE_SPAWN_PROOF_KEY to D1's exact expected env. The assertion stays exact.\n- Make the two ENOENT cancellation tests wait for the async key step, so they still expect one spawn attempt.\n- Do not lower a count, skip or delete a test, or make any other edit to that file. Give its diff and line count in the complete_task evidence.\n\nSize: at most 520 net across the three files, under prop-35eadcbd63d94a13ab7647c77ea5f3d4. It supersedes prop-bd7d6ccf and adds that third file.",
+          "reason": "At 07:06Z the governor authorized a minimal edit to moe-vscode/tests/protected-daemon-spawn.test.cjs (comment-d4217a23). This amendment adds that file to the step's overlay, its diff scope and its size line, and points the size line at prop-35eadcbd, which supersedes prop-bd7d6ccf. The commands are unchanged.",
+          "amendedBy": "architect-24611a0a",
+          "amendedAt": "2026-11-03T07:49:45.287Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-6",
@@ -91,7 +101,7 @@
       ]
     }
   ],
-  "planRevision": 3,
+  "planRevision": 4,
   "status": "WORKING",
   "assignedWorkerId": "worker-ed0f6a9e",
   "branch": null,
@@ -150,11 +160,17 @@
       "author": "governor-e6b40560",
       "content": "@worker-26483323 @architect-24611a0a Governor ruling on comment-fe7d4ea9 and comment-28b1180c (07:08Z): AUTHORIZED. A minimal adaptation of moe-vscode/tests/protected-daemon-spawn.test.cjs is in scope. All three failures follow directly from DoD 1: the daemon must receive the spawn-proof key, and admission awaits the lazy crypto.\n\nLimits:\n- D1: add MOE_SPAWN_PROOF_KEY to the exact expected env and change nothing else. The assertion stays exact.\n- The two ENOENT cancellation tests: wait for the spawn path's async key step, so they still expect one spawn attempt. Do not lower the expected count, and do not delete or skip a test.\n- Add no other edit to that file. Disclose its diff and line count in the complete_task evidence.\n\n@architect-24611a0a, two follow-ups are yours as planner:\n1. prop-bd7d6ccf names exactly three files. Re-file it with this fourth file and a cap that still covers the total, then add a row comment naming the superseded proposal, so the human clicks only the new one.\n2. Amend the plan's file scope if you want it formal.\n\nThe row stays BLOCKED on task-20a64797, a HIGH store-containment bug. I am promoting that row to PLANNING now, so it gets planned first.",
       "timestamp": "2026-11-03T07:06:10.864Z"
+    },
+    {
+      "id": "comment-4f0ac9341d34485080aa1ebafaed77a3",
+      "author": "architect-24611a0a",
+      "content": "Planner follow-ups on governor comment-d4217a23, done 07:50Z:\n1. Size waiver: prop-35eadcbd63d94a13ab7647c77ea5f3d4 (MODIFY_RAIL, PENDING) supersedes prop-bd7d6ccfae674e019941ac59491ce1b7, which was approved at 07:05Z and names three files. The new rail names the same files plus moe-vscode/tests/protected-daemon-spawn.test.cjs, limited to the governor's D1/ENOENT adaptation, under the same 520 net cap. Human: approve prop-35eadcbd only. It replaces the existing size rail in place, so the row keeps one size rail.\n2. Plan scope: step-5 amended (amend-1). The overlay, the diff scope and modifiedFiles now name that third file, the size line points at prop-35eadcbd, and the evidence must say whether edc27e14 (task-20a64797's containment fix) is an ancestor of the verified HEAD. The commands are unchanged.",
+      "timestamp": "2026-11-03T07:49:50.022Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T07:46:55.039Z",
+  "updatedAt": "2026-11-03T07:49:50.022Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
