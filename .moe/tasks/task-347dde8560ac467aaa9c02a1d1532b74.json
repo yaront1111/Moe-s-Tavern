@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,7 +102,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:05:45.996Z",
-  "updatedAt": "2026-11-03T15:45:09.135Z",
+  "updatedAt": "2026-11-03T15:49:33.776Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T15:10:18.243Z",
@@ -112,11 +112,14 @@
     "firstClaimAt": "2026-11-03T15:10:43.493Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T15:49:05.315Z",
+    "wallClockMs": 2301822
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-7328a40d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -208,10 +211,11 @@
   "planApprovedAt": "2026-11-03T15:37:38.768Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T15:37:46Z",
-    "at": "2026-11-03T15:45:09.135Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T15:45:32Z",
+    "at": "2026-11-03T15:49:33.776Z"
   },
   "workStartedAt": "2026-11-03T15:38:51.193Z",
   "reviewStartedAt": "2026-11-03T15:44:14.727Z",
@@ -252,5 +256,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T15:49:05.315Z",
+  "reviewCompletedAt": "2026-11-03T15:49:05.315Z",
+  "reviewSummary": "Reviewed completion dc37ea2b (on moe/work-2026-10-24 and origin, = control HEAD), git diff dc37ea2b^ dc37ea2b: exactly the 6 declared files, +20/-15 (docs +17/-12), no .moe path, docs-only plus the vendored copy. Size is well under the cap.\nRe-ran task.verification (byte-equal to executionContract.checkRefs.join(' && '), 4474 chars, extracted from the task record) fresh from the control checkout at HEAD=dc37ea2b, with docs/packages clean in git status: EXIT 0. C0-C2 OK; C3 parity-check PASS, lint OK, account-trust-docs pass 5; C4 OK but vacuous at HEAD (B=HEAD), so I checked scope by hand against 6cca2104 (6 files, numstat above); C5: the generator at dc37ea2b reproduces the landed initFiles.ts (base fresh, cmp identical); vitest 7 files / 78 tests passed.\nRED: checkRefs[0-2] each exit 1 with the expected FAIL lines on the parent 6cca2104 (shared clone), so the checks bite.\nDoD 1: ARCHITECTURE, SCHEMA, MCP_SERVER 1468 and 1525, and worker.reference:78 state the gate-aware rule or \"resolves to 'on'\". I compared each against validators.ts resolveWorktreeMode (an explicit value is honored, unset is 'on' iff the gate is non-blank after trim, else 'off') and claimNextTask.ts:158/375; the DoD grep finds nothing outside docs/plans. DoD 2: TROUBLESHOOTING step 3 is one line carrying the drained-until-step-6 warning and the \"set 'off' first\" option, and the intro carries CONFIGURATION:230's parenthetical. That is consistent with step 6's explicit 'on' and Roll back's explicit 'off'. DoD 3: initFiles.ts has 3 hunks, all in the worker.reference.md entry (marker sha a2e203c12ef7, body, sorted SHIPPED list), reproduced by the generator; lint passes.\nCONFIGURATION.md and docs/plans are unchanged. Side check: the TROUBLESHOOTING:1240 doctor row (\"worktreeMode is 'off' or 'on'\") stays accurate, because doctorWorktree also goes through resolveWorktreeMode. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

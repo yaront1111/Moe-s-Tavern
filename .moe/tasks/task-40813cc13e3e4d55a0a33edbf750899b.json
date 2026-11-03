@@ -1,0 +1,28 @@
+{
+  "id": "task-40813cc13e3e4d55a0a33edbf750899b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains Settings dialog ignores worktreeMode, so a worktree-mode project's Landing & Gate Policy shows shared-mode landing (moe/work-<date> peel, .moe/tasks staged, gate on the epic-final task only)",
+  "description": "Found by hunt task-2597ac6f (architect-1dd28c7c, finding F3). It was held back only because it shares JetBrains files with task-37e03b91. The governor filed it at 15:47Z on 2026-11-03 and accepts the overlap (worktree mode, merge-tree squash). The citations were re-checked at 946358a8.\n\nPROBLEM. The JetBrains settings dialog's read-only \"Landing & Gate Policy\" never reads settings.worktreeMode, so a worktree-mode project sees the shared-mode policy:\n- **Landing branch** says the wrappers peel onto moe/work-<YYYY-MM-DD>. In worktree mode they land one merge-tree squash on the target: the literal consolidationBranch, else main, and a glob also means main.\n- **Commit board state** says landing stages .moe/tasks/<id>.json. In worktree mode a landing carries no .moe/ path, and the board goes to refs/moe/board.\n- **Quality gate scope** says the gate runs only on the epic-final task. In worktree mode every completion landing runs the gate, whatever qualityGateScope says.\nThis repo runs worktree mode, so its own dialog is wrong today.\n\nEVIDENCE (HEAD 946358a8).\n- **Daemon and wrapper:**\n  - packages/moe-daemon/src/state/validators.ts:301-311: resolveWorktreeMode (unset is 'on' iff qualityGate is a string that is non-blank after trim) and resolveWorktreeTarget;\n  - scripts/moe-agent.sh:7747-7757: land_worktree_completion gates \"whatever qualityGateScope says\";\n  - docs/CONFIGURATION.md:194, 200 and 206: board snapshot, \"Ignored in worktree mode\", the worktreeMode row.\n- **JetBrains:**\n  - model/Models.kt:47-63: ProjectSettings has no worktreeMode;\n  - util/MoeJson.kt:278-308: parseProjectSettings never reads it;\n  - toolwindow/MoeSettingsDialog.kt:177-253: effectivePolicyRows and landingBranchRow are shared-mode only.\n- **Repro:** /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.wire.test.ts F2 prints `mode(qualityGate only) = on`, `target(empty) = main` and `target(glob) = main` (notes.md in the same folder).\n\nFIX DIRECTION.\n- Parse worktreeMode into ProjectSettings and resolve the effective mode exactly as resolveWorktreeMode does. A malformed value degrades without crashing the state parse, per MoeJson's existing rule.\n- Add a mode row. When the mode resolves to 'on', make the Landing branch, Commit board state and Quality gate scope rows describe worktree landing. When it resolves to 'off', keep every row byte-identical to today.\n- **Shared corpus.** The rows are pinned by moe-jetbrains/src/test/resources/client-settings-policy.json, which moe-vscode/tests/settings-policy-corpus.test.cjs replays through moe-vscode/src/panels/SettingsPanel.ts. Under that corpus's rule, a row the clients disagree on is never given a client-specific expectation. So add worktree-mode corpus rows and update the VS Code SettingsPanel twin in this same row, or the VS Code corpus test goes red. JetBrains comes first; VS Code just mirrors it.\n- Add worktreeMode to the dialog list in docs/CONFIGURATION.md's Settings Reference intro (lines 176-180), and give its row a \"Dialog:\" label.\n\nPLACEMENT (no dependsOn edge). task-37e03b91 (HIGH) edits Models.kt (PlanStep amendments), MoeJson.kt (step parse around 594-605), PlanReviewDialog.kt, TaskDetailDialog.kt and MoeJsonTest.kt.\n- Keep this row's Models.kt edit inside ProjectSettings and its MoeJson.kt edit inside parseProjectSettings.\n- Put new MoeJsonTest cases next to the existing settings-parse tests (around lines 152-300), not at the end of the file.\n- Rebase on the target tip before landing if 37e03b91 has landed.\n- Gradle runs only through cmd.exe gradlew.bat under the jetbrains-gradle lease. Hold the lease only around each run.",
+  "definitionOfDone": [
+    "With worktreeMode 'on', or unset with a non-blank qualityGate, the JetBrains dialog shows the mode as on, and its Landing branch, Commit board state and Quality gate scope rows describe worktree landing: the literal consolidationBranch, else main (a glob reads main); refs/moe/board; every completion landing gated. With the mode off (explicit 'off', or unset with no gate), every policy row is byte-identical to 946358a8.",
+    "client-settings-policy.json gains worktree-mode rows (on via explicit 'on', on via an unset mode plus a gate, explicit 'off' with a gate, and a glob consolidationBranch), with no client-specific expectation. MoeJsonTest covers each resolve branch. `gradlew.bat test` (under the jetbrains-gradle lease) and moe-vscode `npm test` both pass, with the VS Code SettingsPanel twin replaying the same corpus.",
+    "docs/CONFIGURATION.md's Settings Reference intro lists worktreeMode among the dialog's read-only effective values, and the worktreeMode row carries a \"Dialog:\" label."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 369.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:46:49.581Z",
+  "updatedAt": "2026-11-03T15:46:49.581Z"
+}

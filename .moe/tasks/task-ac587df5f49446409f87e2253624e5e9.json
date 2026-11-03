@@ -1,0 +1,27 @@
+{
+  "id": "task-ac587df5f49446409f87e2253624e5e9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains prior-handoff header reads from/to/createdAt, but the daemon writes releasedBy/releasedAt/reason, so every handoff box in Task Detail shows only \"#N\"",
+  "description": "Found by hunt task-2597ac6f (architect-1dd28c7c, finding F4). It was held back only because it shares MoeJson.kt, Models.kt and MoeJsonTest.kt with task-37e03b91. The governor filed it at 15:47Z on 2026-11-03 and accepts the overlap (worktree mode, merge-tree squash). The citations were re-checked at 946358a8.\n\nPROBLEM. Task Detail's \"prior handoffs\" header never shows who released the task, when, or why. Every box reads just \"#1\", \"#2\" and so on. The JetBrains model expects keys the daemon never writes. The unit-test fixture encodes the wrong shape, so the suite stays green against a payload no daemon sends.\n\nEVIDENCE (HEAD 946358a8).\n- **Daemon:**\n  - packages/moe-daemon/src/types/schema.ts:553-571: HandoffNote is {whatIsDone, whatRemains, pitfalls?, openQuestions?, releasedBy?, releasedAt, reason?, diskState?};\n  - tools/releaseTask.ts:150-156, 240-241 and 293-294 write it.\n- **JetBrains:**\n  - model/Models.kt:124-132: HandoffNote(from, to, createdAt, ...);\n  - util/MoeJson.kt:512-528: parseHandoffs reads \"from\", \"to\" and \"createdAt\";\n  - toolwindow/TaskDetailDialog.kt:910-918: handoffBlocks builds the header from those three fields;\n  - src/test/kotlin/com/moe/util/MoeJsonTest.kt:419-427: the priorHandoffs fixture uses from/to/createdAt.\n- **Repro:** /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.wire.test.ts F3. A real release_task writes the handoff keys `reason, releasedAt, releasedBy, whatIsDone, whatRemains`, never from/to/createdAt (notes.md in the same folder).\n\nFIX DIRECTION.\n- Model and parse releasedBy, releasedAt and reason per schema.ts. Render the header as \"#N released by <releasedBy> (<releasedAt>)\", with the reason when one is present. A note missing them still renders \"#N\" without error.\n- Fix the fixture to the daemon's shape, and add a case that fails if the parser reads from/to/createdAt again.\n- **Out of scope:** the VS Code twin has the same shape bug (moe-vscode/src/types/moe.ts:202-210 HandoffNote, and TaskDetailPanel.ts around 1225). JetBrains goes first; do not edit VS Code in this row.\n\nPLACEMENT (no dependsOn edge).\n- task-37e03b91 (HIGH) edits Models.kt (PlanStep amendments), MoeJson.kt (step parse around 594-605), TaskDetailDialog.kt (step rendering) and MoeJsonTest.kt. task-40813cc1 edits ProjectSettings and parseProjectSettings.\n- Keep this row's edits inside HandoffNote, parseHandoffs and handoffBlocks, and in the existing priorHandoffs fixture and its test method.\n- Rebase on the target tip before landing if either peer has landed.\n- Gradle runs only through cmd.exe gradlew.bat under the jetbrains-gradle lease. Hold the lease only around each run.",
+  "definitionOfDone": [
+    "The JetBrains parser reads releasedBy, releasedAt and reason (schema.ts HandoffNote). Task Detail's handoff header shows the releaser and the release time, plus the reason when present. A note without them still renders \"#N\" without error.",
+    "MoeJsonTest's priorHandoffs fixture uses the daemon's shape (releasedBy/releasedAt/reason), and a test fails if the parser reads from/to/createdAt again. `gradlew.bat test` passes under the jetbrains-gradle lease. moe-vscode is untouched."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 370.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:47:05.199Z",
+  "updatedAt": "2026-11-03T15:47:05.199Z"
+}
