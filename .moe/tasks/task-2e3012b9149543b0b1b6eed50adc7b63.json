@@ -48,20 +48,32 @@
     {
       "stepId": "step-3",
       "description": "Verification gate, run ONCE. Its fresh output is moe.complete_task's verification evidence. Run the executionContract checkRef exactly, from anywhere inside your worktree. It does the following:\n- archives the worktree HEAD into a mktemp snapshot outside the repo;\n- overlays your 5 owned paths (uncommitted edits included);\n- runs `npm ci` under `env -i` with Linux node v24;\n- type-checks the package (tsc --noEmit) and the new test file (tt.json, because the package tsconfig excludes tests);\n- runs the task's 7 vitest files.\n\nPer the global rail, never run vitest, npm ci or npm test in the shared checkout or in your worktree. A `TMPDIR=<your scratch dir>` prefix on the OUTER command is fine. Never pass TMPDIR into the env -i (mem:convention-daemon-full-suite-gate-checkref: a long temp root breaks tsx IPC pipes).\n\nExpected tail: 'Test Files  7 passed (7)' and 'Tests  112 passed (112)', exit 0. That was dry-run at both 6cca2104 and dc37ea2b in about 10 s with a warm npm cache.\n\nPlanning also ran the full daemon suite on the fixed snapshot (238 files, 7061 passed, 24 skipped). The other callers of these tools were green too: attemptHandback, dependencyUnblock, dependencyReadiness.strict, claimNextTask, activityActor, StateManager and chatSystemFeed, 411 passed. No other test asserts 'by unknown' or an absent actor for these four tools, so the narrow gate is the right size for this mid-epic row.\n\nIf a file other than taskMoveActor fails, read it before touching anything: the fix only adds an actor.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T15:59:35.640Z"
+      "note": "Gate: Test Files 7 passed (7), Tests 112 passed (112), exit 0 (tsc clean).",
+      "startedAt": "2026-11-03T15:59:35.640Z",
+      "completedAt": "2026-11-03T16:00:33.990Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of your own diff (the one review step), then complete_task with step 3's evidence.\n(1) Scope: `git status --short` and `git diff --stat` against your worktree base show exactly the 4 tool files (+7/-6) plus the new test, and nothing else. No docs, no taskStore, no shell-written tracked file.\n(2) Each of the six calls passes params.workerId bare: no assignee fallback, no `?? 'unknown'`. The event argument is unchanged: TASK_BLOCKED, TASK_REOPENED, TASK_ARCHIVED and TASK_UPDATED as before, with `undefined` for the two report_blocked corrections. Error handling is unchanged: no new try/catch, and updateTask failures still fail the tool.\n(3) A workerId-less call (human, plugin or IDE) still writes no actor, and its notice still falls back to the assignee or 'unknown'. The test's task-fix and task-anon rows pin this.\n(4) Concurrency and repeats: an identical report_blocked repeat writes nothing (unchanged arm), so it cannot double-attribute. A third-party caller on an assigned row is still refused by assertWorkerOwns before any write, so it can never be recorded as the actor of someone else's row.\n(5) Mutation spot-check, at least the flip and grant sites (both land on worker-e's row):\n   - Make a scratch snapshot of the BASE with only the new test overlaid.\n   - Run `node /mnt/d/moe-scratch/2e3012b9-plan/patch.cjs <snapshot>/packages/moe-daemon <site>`. It applies every fix except <site>; sites are grant, flip, correction, replan, archive and critique.\n   - Run the new test in that snapshot. It must fail on <site>'s own actor-map key.\n   Never mutate the worktree itself.\n(6) Response shapes are unchanged, so there is no MCP contract change and no docs/MCP_SERVER.md edit.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/submitPlanCritique.ts",
+        "packages/moe-daemon/src/tools/taskMoveActor.test.ts"
+      ],
+      "note": "Self-review: git diff --stat = 4 files +7/-6 plus new test; params.workerId passed bare, events unchanged (undefined for 2 corrections), no new try/catch. Mutation spot-check: flip mutant fails on task-blk/task-grant TASK_BLOCKED keys + worker-a query; grant mutant fails on task-grant TASK_UPDATED + worker-e query.",
+      "startedAt": "2026-11-03T16:00:34.835Z",
+      "completedAt": "2026-11-03T16:00:38.906Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -73,12 +85,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:42:23.585Z",
-  "updatedAt": "2026-11-03T15:59:35.640Z",
+  "updatedAt": "2026-11-03T16:02:03.600Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:42:33.338Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -90,7 +102,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T15:57:22.004Z",
@@ -164,5 +178,48 @@
   },
   "planApprovedAt": "2026-11-03T15:57:22.046Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T15:58:34.461Z"
+  "workStartedAt": "2026-11-03T15:58:34.461Z",
+  "reviewStartedAt": "2026-11-03T16:00:43.912Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && P=packages/moe-daemon/src/tools && cp --parents $P/reportBlocked.ts $P/requestReplan.ts $P/archiveTask.ts $P/submitPlanCritique.ts $P/taskMoveActor.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/taskMoveActor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/taskMoveActor.test.ts src/tools/reviewLoopActor.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/lifecycleFixes.test.ts src/tools/governanceFeatures.test.ts src/tools/echoedReasonNotices.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": " Test Files  7 passed (7)\n      Tests  112 passed (112)\nexit=0",
+    "reportedAt": "2026-11-03T16:00:43.912Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/taskMoveActor.test.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.ts",
+    "packages/moe-daemon/src/tools/requestReplan.ts",
+    "packages/moe-daemon/src/tools/archiveTask.ts",
+    "packages/moe-daemon/src/tools/submitPlanCritique.ts"
+  ],
+  "completionSummary": "report_blocked (flip, already-BLOCKED correction, grant correction), request_replan, archive_task and submit_plan_critique now pass params.workerId as updateTask's actor argument, so TASK_BLOCKED/TASK_REOPENED/TASK_ARCHIVED/critique TASK_UPDATED carry the calling seat, get_activity_log {workerId} returns them, and #general reads 'by <caller>'. workerId-less calls unchanged (no actor, assignee/'unknown' fallback). New taskMoveActor.test.ts: RED at base (1 failed|111 passed), GREEN after (7 files, 112 tests); flip and grant mutants fail on their own keys.",
+  "commits": [
+    {
+      "sha": "3467e494e23185a7a8e75bbdcec9ddab69205663",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T15:57:27Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/submitPlanCritique.ts",
+        "packages/moe-daemon/src/tools/taskMoveActor.test.ts"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T16:02:03.600Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T15:57:27Z",
+    "at": "2026-11-03T16:02:03.600Z"
+  }
 }

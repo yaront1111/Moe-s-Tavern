@@ -13,27 +13,42 @@
     {
       "stepId": "step-1",
       "description": "Test first (RED). Create packages/moe-daemon/src/tools/taskEventActor.test.ts with the Write tool. It is a tracked file, so never cp or heredoc it into the tree (global rail 3: a shell write leaves no TOOL witness and the path is HELD at landing).\n\nThe architect already validated this test against HEAD and against the fix. Read /mnt/d/moe-scratch/plan-e977/taskEventActor.test.ts.prototype and Write it as the new file. Add a short header comment that names task-e977c32b and its model, tools/reviewLoopActor.test.ts (mem:gotcha-review-loop-actor-regression). Keep its shape:\n- Fixture, as in reviewLoopActor.test.ts: a temp .moe/ with epics, tasks, workers, proposals, teams, channels and messages; a TURBO project.json; epic-1. Five WORKING tasks, titled by their id:\n  - task-c: worker-a, step-1 PENDING (add_comment and amend_plan_step);\n  - task-rel: worker-r, step-1 COMPLETED (holder release, routes to REVIEW);\n  - task-fix: unassigned, COMPLETED (the already-unassigned repair path, routes to REVIEW);\n  - task-anon: worker-s, COMPLETED (caller-less release);\n  - task-anon-fix: unassigned, COMPLETED (caller-less repair).\n  Each assignee gets a CODING worker record. architect-z and governor-g need none: amend_plan_step's role gate falls back to the id prefix (util/workerRole.ts), and the repair path checks nothing about its caller. No release passes a handoffNote, so computeDiskStateSignature never shells out to git.\n- Case 1, caller ids. Calls: add_comment {task-c, worker-a}; amend_plan_step {task-c, step-1, architect-z}; release_task {task-rel, worker-r}, which resolves with status REVIEW and releasedBy worker-r; release_task {task-fix, governor-g}, status REVIEW. Then flushActivityLog and these expect.soft checks, exact values:\n  - the workerId of TASK_COMMENT_ADDED on task-c is ['worker-a']; of TASK_UPDATED on task-c, ['architect-z']; of WORKER_RELEASED on task-rel, ['worker-r']; on task-fix, ['governor-g'];\n  - get_activity_log {workerId, limit: 100} for each seat, filtered to those three event types, is exactly ['TASK_COMMENT_ADDED task-c'], ['TASK_UPDATED task-c'], ['WORKER_RELEASED task-rel'] and ['WORKER_RELEASED task-fix'];\n  - the #general 'Task moved to' lines are exactly ['task-rel: Task moved to REVIEW by worker-r', 'task-fix: Task moved to REVIEW by governor-g'].\n- Case 2, no caller id. Calls: add_comment {task-c} with no workerId; release_task {task-anon}, whose RESULT keeps releasedBy 'unknown'; release_task {task-anon-fix}. Checks: each event's actor is [null] (map `e.workerId ?? null`); get_activity_log for 'unknown' and for 'agent' returns []; the notices are exactly ['task-anon: Task moved to REVIEW by unknown', 'task-anon-fix: Task moved to REVIEW by unknown'], today's fallback (DoD 2).\n- The assertions are soft on purpose: each isolated mutant in step 4 must fail its own named check, not only the first.\n- Reading #general right after the handler resolves is deterministic. sendMessage appends under a per-channel FIFO mutex (state/chatStore.ts), and release_task awaits its own banner post after updateTask has queued the notice.\n\nProve RED on HEAD 946358a8 (DoD 3) from the task worktree. The three tool files are byte-identical from 946358a8 to 6cca2104. Run exactly:\n( set -o pipefail && R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/e977-red.XXXX) && git -C \"$R\" archive 946358a8 packages/moe-daemon scripts/moe-account-lease.mjs | tar -x -C \"$S\" && cp \"$R/packages/moe-daemon/src/tools/taskEventActor.test.ts\" \"$S/packages/moe-daemon/src/tools/\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && NO_COLOR=1 npx vitest run src/tools/taskEventActor.test.ts 2>&1 | grep -aE \"AssertionError|Tests \" )\nExpect exit 1 and `Tests 1 failed | 1 passed (2)`. Case 1 fails on 9 soft checks: 4 actors, 4 seat queries and the notice list. Case 2 passes on HEAD, because it guards against an 'unknown' or 'agent' actor. The architect's own run is /mnt/d/moe-scratch/plan-e977/red-946358a8.txt. Paste the AssertionError lines into the step note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/taskEventActor.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/taskEventActor.test.ts"
+      ],
+      "note": "Added architect-validated prototype with task/model header through main-session native apply_patch editor (not shell writes), in the wrapper-provisioned task worktree. No comments or routed mentions were present. RED: exact approved 946358a8 snapshot command exited 1; Tests 1 failed | 1 passed (2).\nAssertionError: TASK_COMMENT_ADDED actor: expected [ null ] to deeply equal [ 'worker-a' ]\nAssertionError: amend TASK_UPDATED actor: expected [ null ] to deeply equal [ 'architect-z' ]\nAssertionError: holder release actor: expected [ null ] to deeply equal [ 'worker-r' ]\nAssertionError: repair release actor: expected [ null ] to deeply equal [ 'governor-g' ]\nAssertionError: get_activity_log { workerId: worker-a }: expected [] to deeply equal [ 'TASK_COMMENT_ADDED task-c' ]\nAssertionError: get_activity_log { workerId: architect-z }: expected [] to deeply equal [ 'TASK_UPDATED task-c' ]\nAssertionError: get_activity_log { workerId: worker-r }: expected [] to deeply equal [ 'WORKER_RELEASED task-rel' ]\nAssertionError: get_activity_log { workerId: governor-g }: expected [] to deeply equal [ 'WORKER_RELEASED task-fix' ]\nAssertionError: #general move notices: expected [ …(2) ] to deeply equal [ …(2) ]",
+      "startedAt": "2026-11-03T16:00:47.483Z",
+      "completedAt": "2026-11-03T16:01:41.595Z"
     },
     {
       "stepId": "step-2",
       "description": "The fix. Pass the caller's id as updateTask's fourth (actor) argument at four call sites, using the Edit tool. Nothing else in these files changes. The architect's validated diff is /mnt/d/moe-scratch/plan-e977/fix.diff (9 changed lines); match its formatting so step 4's mutant driver applies cleanly.\n- tools/addComment.ts, the updateTask call at :121-125: `'TASK_COMMENT_ADDED',` then `params.workerId` on its own line. Do not pass comment.author: it is 'agent' when no id was sent, and an audit actor is never guessed (state/activityLog.ts:30 appendActivity).\n- tools/amendPlanStep.ts :115: `state.updateTask(task.id, { implementationPlan: nextSteps }, 'TASK_UPDATED', params.workerId)`. Do not pass amendment.amendedBy, which falls back to 'unknown'.\n- tools/releaseTask.ts :332, the assigned path: `state.updateTask(task.id, updates, 'WORKER_RELEASED', params.workerId)`. Do NOT pass actors.actor. For a release with no caller id, releaseActors (util/claimGuards.ts:329-343) returns UNIDENTIFIED_RELEASER = 'unknown' (:246), and that string must not land in an event's workerId (DoD 1). A governor's forced strip records the governor; the stripped holder appears only in the result's strippedFrom and in the banner.\n- tools/releaseTask.ts :249, the already-unassigned repair path: `state.updateTask(task.id, repairUpdates, 'WORKER_RELEASED', params.workerId)`. The description cites only :332, but DoD 1 covers every WORKER_RELEASED that release_task writes, and this path also auto-routes WORKING to REVIEW with a 'by unknown' notice. Do not use `params.workerId || UNIDENTIFIED_RELEASER`; that expression belongs to the handoff's releasedBy, a different field.\n\nError handling: the extra argument adds no new IO and no new throw path, so the existing error handling stays exactly as it is and needs no new code. updateTask still throws before any write on a missing task. appendActivity is best-effort and never throws into its caller (a failed audit write is logged, not raised). The 'Task moved to' notice is already posted fire-and-forget with `.catch(() => {})`. release_task's post-write attempt close and chat posts stay best-effort try/catch, so a failure there still never fails a durable release.\n\nUnchanged by design: the tool results (releasedBy, strippedFrom, previousWorkerId), every banner, the comment author, amendedBy, the handoff's releasedBy, updateTask and appendActivity, and docs/MCP_SERVER.md. That doc is held by task-347dde85, and no contract changes.\n\nOut of scope, do not touch:\n- the status-move tools (task-2e3012b9);\n- the board's comment path (server/WebSocketServer.ts:975), which carries no seat id;\n- the daemon-owned writes at delivery/repairActivation.ts:76, state/workerStore.ts:275 and state/workerLifecycle.ts:158;\n- unblock_worker (tools/unblockWorker.ts:111). Its workerId names the TARGET seat, so passing it as the actor would be a false attribution.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/addComment.ts",
         "packages/moe-daemon/src/tools/amendPlanStep.ts",
         "packages/moe-daemon/src/tools/releaseTask.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/addComment.ts",
+        "packages/moe-daemon/src/tools/amendPlanStep.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "note": "Used one-shot Serena editor for all four actor argument additions, matching fix.diff formatting. Reused updateTask's existing actor channel; no abstraction, dependency, IO or throw path added. Confirmed params.workerId stays distinct from comment.author and releaseActors' 'unknown' placeholder. All other tool result/banner/handoff fields and existing best-effort error handling unchanged. GREEN and TypeScript checks are batched in approved step 3.",
+      "startedAt": "2026-11-03T16:01:41.620Z",
+      "completedAt": "2026-11-03T16:02:01.853Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification gate (DoD 3). Run it once, fresh, from the task worktree after the last tracked edit. Its output is the complete_task evidence: command, exitCode 0, and an outputTail holding the snapshot= line and the Test Files/Tests lines. Never run it in the shared checkout (global rail 1). Run exactly:\n\n( set -o pipefail && R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/e977-v.XXXX) && echo \"snapshot=$S\" && git -C \"$R\" archive HEAD packages/moe-daemon scripts/moe-account-lease.mjs | tar -x -C \"$S\" && for f in tools/addComment.ts tools/amendPlanStep.ts tools/releaseTask.ts tools/taskEventActor.test.ts; do cp \"$R/packages/moe-daemon/src/$f\" \"$S/packages/moe-daemon/src/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/taskEventActor.test.ts\"],\"exclude\":[]}' > tt.json && npx tsc -p tt.json && NO_COLOR=1 npx vitest run src/tools/taskEventActor.test.ts src/tools/addComment.test.ts src/tools/amendPlanStep.test.ts src/tools/releaseTask.test.ts src/tools/echoedReasonNotices.test.ts src/tools/getActivityLog.test.ts 2>&1 | tail -15 )\n\nWhat it does: archives HEAD's packages/moe-daemon plus scripts/moe-account-lease.mjs (needed by the package-wide tsc) into /tmp, overlays this row's four files, runs npm ci, then `tsc --noEmit` for the sources and tt.json for the new test (the package tsconfig excludes tests and vitest does not typecheck; mem:convention-daemon-full-suite-gate-checkref). Then it runs the description's four files, plus echoedReasonNotices.test.ts (the release chat lines) and getActivityLog.test.ts (the workerId query).\n\nThe architect dry-ran this exact command from a throwaway repo that held the fix and the prototype test: exit 0, Test Files 6 passed (6), Tests 109 passed (109), which is 107 existing plus 2 new. Counts may grow if a peer lands tests in these files; exit 0 is the requirement.\n\nError handling in the gate: every stage is chained with && inside a pipefail subshell, so a failing archive, cp, npm ci or tsc ends the run with that stage's non-zero code, and vitest's own exit code survives the tail. npm ci prints nothing on failure, because its output goes to /dev/null. If the gate fails silently, rerun npm ci in that snapshot without the redirect to see why. Keep the printed snapshot= path for step 4.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T16:02:01.883Z"
     },
     {
       "stepId": "step-4",
@@ -63,11 +78,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:42:40.727Z",
-  "updatedAt": "2026-11-03T15:59:26.719Z",
+  "updatedAt": "2026-11-03T16:02:08.582Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:43:19.555Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -77,7 +93,10 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T15:59:06.676Z",
   "executionContract": {
@@ -149,5 +168,13 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T15:59:06.722Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T16:00:47.483Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-74d9e1c7@2026-11-03T15:43:18Z",
+    "at": "2026-11-03T16:02:08.582Z"
+  }
 }

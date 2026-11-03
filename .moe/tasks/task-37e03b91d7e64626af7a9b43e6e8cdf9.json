@@ -60,19 +60,21 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review, once. Load the adversarial-self-review skill, then read this task's diff as an attacker.\n\n(1) `grep -n 'step.description' moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt`. The only remaining hits must be the stepAmendedOriginal tooltip arguments. Every rendered step text goes through effectiveDescription.\n(2) The rule matches util/planAmendments.ts:\n- it picks the ACTIVE amendment, not the latest;\n- a dangling or blank id gives the original text;\n- a non-string description or id is skipped;\n- a non-array amendments gives an empty list;\n- nothing throws, and no task is dropped.\n(3) No Swing label or tooltip string starts with agent-written text (the <html> rendering risk).\n(4) Both parse paths are exercised by the new test.\n(5) The defaults keep every existing ImplementationStep(...) call compiling. No existing MoeJsonTest assertion changed.\n(6) The approval capture is untouched. snapshotOf and onRendered still run after the steps render, and no new approval path exists.\n(7) The hunks stay inside the areas the governor's placement note names, so task-40813cc1 and task-ac587df5 squash cleanly:\n- Models.kt: StepAmendment and ImplementationStep;\n- MoeJson.kt: parseImplementationStep and parseStepAmendments;\n- the two step renderers;\n- the two bundle keys next to stepStatus;\n- one MoeJsonTest method beside the step-metadata test.\nNo reformatting or reordering of neighbouring code.\n(8) The diff touches only this plan's 6 files.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
       ],
-      "startedAt": "2026-11-03T15:59:25.790Z"
+      "note": "Adversarial self-review is done; nothing needed fixing, and no files changed.\n(1) `step.description` now appears in the two dialogs only as the stepAmendedOriginal tooltip argument. Both renderers use effectiveDescription.\n(2) The rule matches planAmendments.ts.\n- The id is matched with firstOrNull. An entry with a non-string description is skipped first, which is equivalent to the daemon's find predicate.\n- A blank or dangling id gives the original text. An empty-string amendment description stays \"\", as in the daemon.\n- A non-array holder gives []. Nothing throws.\n(3) Every label and tooltip starts with \"N. \", \"Amended by \" or \"Original step: \". JTextArea is plain text.\n(4) The test covers both parseTask and parseState.\n(5) The new ImplementationStep params are defaulted, so BoardApprovalTest:190 compiles. The MoeJsonTest diff is +53/-0.\n(6) PlanReviewDialog:79 onRendered and the fail-closed catch are untouched.\n(7) Hunks are local to my areas. The Models.kt hunk starts after TaskComment; ProjectSettings ends at ~:83 and HandoffNote is at :153. The MoeJson.kt hunks are a single import plus :595-628; parseProjectSettings is at :279 and parseHandoffs at :513. The bundle keys follow stepStatus.\n(8) The diff touches exactly the 6 planned files.\nTheoretical, not fixed:\n(a) An ImplementationStep built by Gson's Unsafe allocator from JSON with no `amendments` key would hold a null list. Main code never Gson-deserializes a Task; only the test round-trip does, and it carries [].\n(b) A plain Swing tooltip renders a long or multi-line original text on one line. This is cosmetic. Wrapping it in <html> was avoided on purpose.",
+      "startedAt": "2026-11-03T15:59:25.790Z",
+      "completedAt": "2026-11-03T16:00:06.424Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,12 +93,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:43:02.522Z",
-  "updatedAt": "2026-11-03T15:59:25.790Z",
+  "updatedAt": "2026-11-03T16:00:52.873Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:44:38.033Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -112,7 +114,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T15:51:32.167Z",
@@ -156,5 +159,22 @@
   },
   "planApprovedAt": "2026-11-03T15:51:32.211Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T15:52:54.344Z"
+  "workStartedAt": "2026-11-03T15:52:54.344Z",
+  "reviewStartedAt": "2026-11-03T16:00:52.870Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\.worktrees\\task-37e03b91d7e64626af7a9b43e6e8cdf9\\moe-jetbrains && gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 32s\n11 actionable tasks: 7 executed, 4 up-to-date\n--- build/test-results/test/*.xml totals: classes=39 tests=626 skipped=6 failures=0 errors=0 (timestamps 2026-11-03T15:58:41Z..15:59:08Z, all from this run); TEST-com.moe.util.MoeJsonTest.xml tests=34 failures=0 includes testcase \"an amended step reads as its active amendment through both parse paths\". RED on base: compileTestKotlin FAILED - Unresolved reference 'effectiveDescription' on receiver of type 'ImplementationStep'.",
+    "reportedAt": "2026-11-03T16:00:52.870Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "completionSummary": "JetBrains Plan Review and Task Detail now show each step's effective text: the active amendment's text, else the original. An \"Amended by X\" marker carries the original text in its tooltip. Plan Review's Approve therefore binds to the revision of the text the human read. The daemon is unchanged.\n- Models.kt: new StepAmendment, plus ImplementationStep's defaulted `amendments` and `activeAmendmentId`. The single rule lives in two body properties:\n  - `activeAmendment`: the entry the non-empty id names, never simply the latest; else null;\n  - `effectiveDescription`.\n  Both mirror daemon util/planAmendments.ts.\n- MoeJson.kt: parseImplementationStep plus a new parseStepAmendments. They use strict string readers and never throw: malformed shapes degrade to the original text, and the task is kept.\n- PlanReviewDialog and TaskDetailDialog render effectiveDescription and the marker, with two MoeBundle keys next to stepStatus. approval.onRendered is untouched.\n- Test: one new MoeJsonTest method, through both parseTask and parseState. It covers:\n  - the F1 wire step (\"AMENDED: delete src/a.ts\", original kept, amendedBy architect-1);\n  - the active amendment, not the latest;\n  - junk entries skipped;\n  - dangling, blank, numeric-id, object-holder, non-string and legacy shapes.\n- RED on the base: compileTestKotlin fails with \"Unresolved reference 'effectiveDescription'\".\n- GREEN, run under the jetbrains-gradle lease: 39 classes, 626 tests, 0 failures, 0 errors, 6 pre-existing skips.\n- qualityGate (parity-check + lint): exit 0.\n- gradlew.bat lives in moe-jetbrains/, so the gate runs from there; the plan's root-level form cannot find it."
 }
