@@ -13,16 +13,22 @@
     {
       "stepId": "step-1",
       "description": "Edit packages/moe-daemon/README.md with the Edit tool only. This is a docs-only row: no code, no new test file, and no test suite to run. The architect's dry-run copy of the result is /mnt/d/moe-scratch/plan-52d7/README.proposed.md.\n\nIn \"### Start Daemon\" Options (:35-37):\n- replace `- \\`--project, -p\\` - Project path (required)` with `- \\`--project\\` - Project path. Defaults to \\`MOE_PROJECT_PATH\\`, then the current directory.` (parseArgs, index.ts:62 and :67: --project, else MOE_PROJECT_PATH, else process.cwd());\n- keep the `--port` line;\n- add `- \\`--host\\` - Bind address. Defaults to \\`MOE_BIND_HOST\\`, then \\`127.0.0.1\\`; \\`--host\\` wins over \\`MOE_BIND_HOST\\`. \\`wsl\\` binds loopback plus the WSL adapters. A value other than \\`127.0.0.1\\` is recorded as \\`bindHost\\` in \\`.moe/daemon.json\\` (see \\`docs/CONFIGURATION.md\\`).` (index.ts:65 and :70; the daemon.json write at :876; CONFIGURATION.md:16 and :30);\n- after the list, add a blank line and `\\`init\\` takes the same options.` parseArgs is shared, and init passes port and host to superviseDaemon.\n\nIn \"### Logging\" (:80), replace the `MOE_LOG_LEVEL` line with `- \\`LOG_LEVEL\\` - Log level (\\`debug\\`, \\`info\\`, \\`warn\\`, \\`error\\`). Default: \\`info\\`` (util/logger.ts:7 reads `process.env.LOG_LEVEL || 'info'`).\n\nChange nothing else. Do not add a `-p` alias, and do not rename the env var in code: task-88673297 holds index.ts, and a rename would break LOG_LEVEL users. Line 71's daemon.json comment is stale too (`{ port, pid, startedAt }`), but it is out of this row's scope; leave it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/README.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/README.md"
+      ],
+      "startedAt": "2026-11-03T17:55:57.272Z",
+      "completedAt": "2026-11-03T17:56:10.274Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification (once, fresh, from the task worktree root). Run executionContract.checkRefs [0] and then [1], joined with ' && '. Submit that exact text, its exit code and the output tail as complete_task's verification.\n\n[0] is DoD 1 to DoD 3's mechanical check. It prints DOC_OK only when all of these hold:\n- `grep -nE -- '(^|[^-])-p\\b|MOE_LOG_LEVEL|\\(required\\)'` finds nothing in the README;\n- the LOG_LEVEL line carries `Default: \\`info\\``;\n- the --project line names MOE_PROJECT_PATH and the current directory;\n- every `--flag` in the README is an `indexOf('--flag')` in packages/moe-daemon/src/index.ts;\n- every flag index.ts parses appears in the README.\n\n[1] is the scope check: only packages/moe-daemon/README.md may differ, plus .moe/.\n\nError handling for a red check:\n- [0] prints the offending README line, or the flag that is unparsed or missing. Fix the README text, never the check.\n- [1] names the stray path. Revert it.\n\nThe architect's dry run printed DOC_OK on the proposed text. The base README failed [0], and two mutants failed it too: an unparsed `--frobnicate` and a missing `--host`.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T17:56:11.082Z"
     },
     {
       "stepId": "step-3",
@@ -45,11 +51,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:33:52.760Z",
-  "updatedAt": "2026-11-03T17:54:58.232Z",
+  "updatedAt": "2026-11-03T17:56:11.082Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:52:15.117Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -60,7 +67,9 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:54:04.779Z",
   "executionContract": {
@@ -109,5 +118,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T17:54:04.806Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:55:57.272Z"
 }

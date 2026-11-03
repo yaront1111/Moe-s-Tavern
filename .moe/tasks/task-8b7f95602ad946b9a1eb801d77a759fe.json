@@ -67,14 +67,16 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff: load the adversarial-self-review skill.\n\nFrom the worktree root, run checkRef 3 (/mnt/d/moe-scratch/plan-8b7f9560/checkref-scope.txt, sha256 b1ce889e40b887aa4e08880c076fbc3213f22e9330040618d982211278b9d40e). It must exit 0. It checks that:\n- exactly the 4 planned moe-vscode paths changed: CHANGELOG.md, media/board.js, src/providers/BoardViewProvider.ts and tests/board-confirmations.test.cjs;\n- `grep -n 'confirm(' moe-vscode/media/board.js` prints nothing;\n- no added line contains a forbiddenPatterns string.\nDry run: 3 tracked files at +66/-28, plus the new test.\nQA re-runs it at the control checkout with MOE_LAND_TARGET=<completion>^ QA_TIP=<completion>, and runs checkRefs 1-2 with MOE_LAND_TARGET=<completion>^.\n\nChecklist:\n- archiveDoneCount is exactly the daemon's ARCHIVE_DONE_TASKS filter (WebSocketServer.ts:908-912). Nothing in the count reads the board search.\n- No DELETE_TASK or ARCHIVE_DONE_TASKS can leave without the confirming button, and no modal opens for 0 tasks in scope.\n- The modal strings match JetBrains MoeBundle moe.message.deleteTask and moe.message.archiveDone word for word.\n- `git diff` shows no hunk in navTask, the 'reopenTask' case, drag and drop or the approval paths.\n- The CHANGELOG bullet sits at the top of ### Fixed.\n- The non-ASCII counts from step 3 still hold.\n\nThe planner ran these mutants against the step 1 test, and each was killed (/mnt/d/moe-scratch/plan-8b7f9560/mutate.py):\n- count ignores the epic: H4 and H6 fail;\n- Delete sent whatever the answer: H2;\n- archive modal without modal:true: H3;\n- every task counted, not just DONE ones: H3, H4 and E1;\n- zero-in-scope guard dropped: H6;\n- the page still calls confirm before posting: W1.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T17:55:03.924Z"
+      "note": "Loaded adversarial-self-review and reviewed own scoped diff plus entire new test against concurrency/input/dependency/exit-path checklist. No scope drift: daemon filter and JetBrains words match; send requires affirmative button and non-disposed host; no count/search coupling, navTask/reopen/approval/drag changes, or added non-ASCII. Count is intentionally click-time state, wire uses current daemon scope as approved (no task-list protocol change). checkRef 3 and git diff --check exit 0. Quality gate bash scripts/tests/parity-check.sh && npm run lint exit 0. Fresh full snapshot gate: 746 tests/736 pass/0 fail/10 skipped, 10 board rows pass; merge-base RED all 10 fail. Deleted owned snapshot dirs. Serena handoff recorded. This review step modified no project files.",
+      "startedAt": "2026-11-03T17:55:03.924Z",
+      "completedAt": "2026-11-03T17:55:52.955Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,12 +88,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:27:25.325Z",
-  "updatedAt": "2026-11-03T17:55:03.924Z",
+  "updatedAt": "2026-11-03T17:56:00.019Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:42:52.615Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -105,7 +107,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:51:06.894Z",
@@ -178,5 +181,20 @@
   },
   "planApprovedAt": "2026-11-03T17:51:06.922Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T17:53:20.630Z"
+  "workStartedAt": "2026-11-03T17:53:20.630Z",
+  "reviewStartedAt": "2026-11-03T17:56:00.016Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/plan-8b7f9560/checkref-gate.txt && bash /mnt/d/moe-scratch/plan-8b7f9560/checkref-red.txt",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 746\nℹ pass 736\nℹ fail 0\nℹ skipped 10\nboard-confirm rows passed: 10 (/tmp/m8b7.w7IK)\nRED: 10 failing, 0 ok (/tmp/m8b7r.doHA)",
+    "reportedAt": "2026-11-03T17:56:00.016Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/board-confirmations.test.cjs",
+    "moe-vscode/media/board.js",
+    "moe-vscode/src/providers/BoardViewProvider.ts",
+    "moe-vscode/CHANGELOG.md"
+  ],
+  "completionSummary": "Moved board Delete and Done clear confirmation into VS Code host modals using JetBrains wording. Archive count now matches daemon DONE/epic scope regardless of search; dismissal/zero-scope/disposal prevent sending. Preserved all unrelated board gestures, wire frames and clear visibility. Added exact 10-row regression file and top-of-Fixed changelog bullet. RED/GREEN observed (0/10 then 3/10 then 10/10), full snapshot suite 736 pass/0 fail/10 skip (746 total), compile clean, merge-base RED 10/10 fail. Scope/forbidden-pattern/non-ASCII checks and parity/lint gate pass. All five steps complete; Serena handoff saved; owned snapshots removed."
 }
