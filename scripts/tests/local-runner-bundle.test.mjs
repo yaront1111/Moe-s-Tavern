@@ -45,6 +45,13 @@ function fixture(t) {
     put(`scripts/${name}`, readFileSync(path.join(root, 'scripts', name)));
   }
   put(manifestFile, readFileSync(path.join(root, manifestFile)));
+  // Both bundlers read each package's production set from its lockfile (task-864103f3, task-c76a8bf8) and refuse a
+  // missing lockfile or a listed package with no installed package.json.
+  for (const name of ['moe-daemon', 'moe-proxy']) {
+    put(`packages/${name}/package-lock.json`, JSON.stringify({ name, lockfileVersion: 3, requires: true,
+      packages: { '': { name }, 'node_modules/dependency': { version: '0.0.0-fixture' } } }));
+    put(`packages/${name}/node_modules/dependency/package.json`, '{"name":"dependency","version":"0.0.0-fixture"}');
+  }
   put('scripts/mods/example/runtime.mjs');
   put('scripts/mods/example/runtime.test.ts');
   for (const name of ['plugin.json', 'types/index.d.ts', 'hook.test.ts']) put(`scripts/mods/example/.claude-plugin/${name}`);
@@ -279,10 +286,15 @@ test('bundled onboarding refuses any test artifact outside node_modules', t => {
 
 test('Gradle drops compiled tests from the daemon and proxy dist copies', () => {
   const source = readFileSync(path.join(root, 'moe-jetbrains/build.gradle.kts'), 'utf8');
+  // The dist copies and the import scan share one list (task-864103f3): check its patterns, then that each copy applies it.
+  const list = source.match(/^val distTestExcludes = listOf\(([^)]*)\)$/m)?.[1];
+  assert.ok(list, 'Missing Gradle distTestExcludes list');
+  const patterns = [...list.matchAll(/"([^"]*)"/g)].map(match => match[1]);
+  for (const pattern of ['**/*.test.*', '**/*.spec.*']) assert.ok(patterns.includes(pattern), `distTestExcludes must list ${pattern}`);
   for (const dir of ['bundledDaemonDir', 'bundledProxyDir']) {
     const block = source.match(new RegExp(`from\\(${dir}\\) \\{([\\s\\S]*?)\\n\\s*\\}`))?.[1];
     assert.ok(block, `Missing Gradle from(${dir}) block`);
-    assert.ok(block.includes('exclude("**/*.test.*", "**/*.spec.*")'), `${dir} copy must exclude compiled tests and specs`);
+    assert.ok(block.includes('exclude(distTestExcludes)'), `${dir} copy must exclude compiled tests and specs`);
   }
 });
 
