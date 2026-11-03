@@ -91,8 +91,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -104,12 +104,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:11:21.835Z",
-  "updatedAt": "2026-11-03T19:46:07.502Z",
+  "updatedAt": "2026-11-03T19:48:45.697Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:15:40.612Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T19:48:18.434Z",
+    "wallClockMs": 1957822
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -243,9 +245,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T19:37:16Z",
-    "at": "2026-11-03T19:44:59.642Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T19:45:45Z",
+    "at": "2026-11-03T19:48:45.697Z"
+  },
+  "completedAt": "2026-11-03T19:48:18.434Z",
+  "reviewCompletedAt": "2026-11-03T19:48:18.434Z",
+  "reviewSummary": "Reviewed completion 291a34e3 (on moe/work-2026-10-24; tree 4254f1ea = candidate cand-f0a81979). Diff = the 5 owned paths only, +76/-20 (net 56) non-board LOC, under the cap; no daemon source/tests/MCP_SERVER.md. Working-tree copies of those files are identical to the commit.\n\nRe-ran every checkRef myself, foreground, one at a time:\n- green (task.verification: real image built from git-archive snapshot, step asserted PR-only): 'healthy: /tmp/tmp.jmlKSa6Uhc', 'image HEALTHCHECK passed', exit 0.\n- static: DoD grep prints nothing; ENV MOE_BIND_HOST=0.0.0.0 (grep -x); count of '\"--project\", \"/project\"' = 0; HEALTHCHECK spiders 127.0.0.1:9876; every docker run in DEVELOPMENT.md and CONFIGURATION.md has -p 127.0.0.1:9876:9876, -v \"$PWD\":\"$PWD\", MOE_PROJECT_PATH=\"$PWD\"; both docs carry '/mcp has no authentication' and 'refuse a daemon that reports another project'; compose config (PWD=/srv/p) gives host_ip 127.0.0.1, user 1001:1001, source/target /srv/p; STATIC-OK.\n- red (Dockerfile pinned at af8ca2bb): 'Expected a healthy daemon serving ... on 127.0.0.1, got: no answer', RED-ON-HEAD-IMAGE.\n- repro (hunt script, MOE_BIND_HOST=0.0.0.0, tsc-built snapshot): 'LISTEN 0 511 0.0.0.0:19876', loopback and eth0 /health both healthy, DOD1-BIND-OK.\nAfterwards 0 moe-daemon-health containers, port 19876 free; no npm run in the shared checkout.\n\nDoD1-3 all evidenced. Invariants hold: HEALTHCHECK timings, ENTRYPOINT/EXPOSE/USER/mkdir unchanged; /project default kept; only 127.0.0.1 publishes; step still PR-only; no forbiddenPatterns strings.\n\nAdversarial read: the worker's one deviation (JSON.parse(...) ?? {}) is right: a 'null' body would otherwise TypeError instead of the Expected line. Trap cleanup keeps rc and prints logs on failure; $$ and ${port##*:} survived; \"$PWD\" quoted. Non-blocking: docs keep fixed 9876:9876 by design (clients read the port from daemon.json); an image with no mounted project still ENOENTs as before (pre-existing). No ponytail findings.",
+  "requiredCheckAtDone": null
 }
