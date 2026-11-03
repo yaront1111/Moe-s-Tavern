@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -108,12 +108,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:12.430Z",
-  "updatedAt": "2026-11-03T18:15:08.052Z",
+  "updatedAt": "2026-11-03T18:56:37.251Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T14:50:10.406Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T18:54:55.832Z",
+    "wallClockMs": 187485426
   },
   "contextFetchedBy": [
     "architect-30d804be",
@@ -271,10 +273,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T17:12:34Z",
-    "at": "2026-11-03T18:13:04.364Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T18:14:45Z",
+    "at": "2026-11-03T18:56:37.251Z"
   },
   "workStartedAt": "2026-11-03T16:55:27.290Z",
   "reviewStartedAt": "2026-11-03T18:01:48.598Z",
@@ -285,5 +288,9 @@
     "reportedAt": "2026-11-03T18:01:48.598Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M07m2: commit a VM job's admitted tree onto the task branch, plus CQ-V07's intent rule for worktree completions (scripts/moe-agent.sh, +100/-1).\n\n1. land_vm_candidate COMMIT BASE_TREE TREE (nothing calls it yet; CQ-M07m3 will; twin CQ-M07n2).\n- Refusals are read-only and give rc 1: MOE_VM_CANDIDATE_NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY (tracked, untracked or a pending merge) and TREE_INVALID.\n- TREE == BASE_TREE gives MOE_VM_CANDIDATE_EMPTY, rc 0, and writes nothing.\n- Otherwise: one checkpoint commit-tree TREE -p COMMIT with WT-07's message and trailers and no hooks; read-tree -m -u COMMIT NEW in W; the protected-skipped test seam; then a CAS update-ref from COMMIT. One committed checkpoint ledger row and an [OK] MOE_VM_CANDIDATE_COMMITTED line follow.\n- A failed W update (SYNC_FAILED) or a lost CAS (REF_CONTENTION, W rolled back) parks NEW on refs/moe/rescue/<id>/<ts> with rc 2.\n- It never writes the control checkout, its index or the target.\n\n2. wt_strong_intent M B, called once per wt_land_rounds round after the L6 gate and before L7.\n- It is a no-op for legacy, observe and a task-less landing.\n- Under verified-local it refuses with the existing MOE_COMMIT_REFUSED_INTENT_INCOMPLETE unless the frozen candidate is exactly M on B and the attempt and plan revision are pinned. land_worktree_completion's existing refused path handles it: no ref, no rescue ref.\n- Consequence for the M07 final: a verified-local worktree completion now needs settings.qualityGate.\n\nTests: scripts/tests/postflight-vm-route.sh +192, with [vm candidate] R1, R1u, R2a-R5b, R6-R9 and [strong intent] G1, G1b, G2-G5, G6a-c, G7, G8. Every vm-candidate row asserts that the control HEAD, index and status and refs/heads/main are unchanged. RED before the code, GREEN after. 10 mutants were killed across both steps.\n\nGate: the exact command above, run in place with env -i, EXIT=0 (about 38 min, no SKIP). worktree-landing.sh passed 18/18 and is unedited. The qualityGate (parity-check && npm "
+  "completionSummary": "CQ-M07m2: commit a VM job's admitted tree onto the task branch, plus CQ-V07's intent rule for worktree completions (scripts/moe-agent.sh, +100/-1).\n\n1. land_vm_candidate COMMIT BASE_TREE TREE (nothing calls it yet; CQ-M07m3 will; twin CQ-M07n2).\n- Refusals are read-only and give rc 1: MOE_VM_CANDIDATE_NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY (tracked, untracked or a pending merge) and TREE_INVALID.\n- TREE == BASE_TREE gives MOE_VM_CANDIDATE_EMPTY, rc 0, and writes nothing.\n- Otherwise: one checkpoint commit-tree TREE -p COMMIT with WT-07's message and trailers and no hooks; read-tree -m -u COMMIT NEW in W; the protected-skipped test seam; then a CAS update-ref from COMMIT. One committed checkpoint ledger row and an [OK] MOE_VM_CANDIDATE_COMMITTED line follow.\n- A failed W update (SYNC_FAILED) or a lost CAS (REF_CONTENTION, W rolled back) parks NEW on refs/moe/rescue/<id>/<ts> with rc 2.\n- It never writes the control checkout, its index or the target.\n\n2. wt_strong_intent M B, called once per wt_land_rounds round after the L6 gate and before L7.\n- It is a no-op for legacy, observe and a task-less landing.\n- Under verified-local it refuses with the existing MOE_COMMIT_REFUSED_INTENT_INCOMPLETE unless the frozen candidate is exactly M on B and the attempt and plan revision are pinned. land_worktree_completion's existing refused path handles it: no ref, no rescue ref.\n- Consequence for the M07 final: a verified-local worktree completion now needs settings.qualityGate.\n\nTests: scripts/tests/postflight-vm-route.sh +192, with [vm candidate] R1, R1u, R2a-R5b, R6-R9 and [strong intent] G1, G1b, G2-G5, G6a-c, G7, G8. Every vm-candidate row asserts that the control HEAD, index and status and refs/heads/main are unchanged. RED before the code, GREEN after. 10 mutants were killed across both steps.\n\nGate: the exact command above, run in place with env -i, EXIT=0 (about 38 min, no SKIP). worktree-landing.sh passed 18/18 and is unedited. The qualityGate (parity-check && npm ",
+  "completedAt": "2026-11-03T18:54:55.832Z",
+  "reviewCompletedAt": "2026-11-03T18:54:55.832Z",
+  "reviewSummary": "APPROVED c89e4c59 (on moe/work-2026-10-24 + origin; tree 9aee1124 and parent e9f6e21f match cand-73ab6dc4). Diff: moe-agent.sh +100/-1, postflight-vm-route.sh +192, net 291 (<400). worktree-landing.sh unedited.\nGATE (QA re-run): the exact task.verification command, run on a git-archive snapshot of c89e4c59 under env -i (Node 24), set -m (SigIgn 0x5). EXIT=0, ~38 min, no SKIP or FAIL. parity PASS; worktree-landing 18/0/0; [vm candidate] R1, R1u, R2a-R5b, R6-R9 ok; [strong intent] G1-G8 ok; frozen 106, owner 16, migration 12; postflight.sh PASS. Log: /mnt/d/moe-scratch/qa91ee-gate.log.\nQA MUTANTS, all killed: untracked-files=no (R4b), linked-gitdir check dropped (R2b), FROZEN_CANDIDATE_ID check dropped (G6c), SYNC_FAILED not parking (R7), EMPTY branch removed (R8).\nDoD: 1 R1 (one commit, sole parent COMMIT, tree TREE, W clean, no .moe, WT-07 message, one checkpoint row, hooks never run). 2 R2-R5: rc 1 + one code, refs/W/index sha/files unchanged, no rpc. 3 R6: rescue ref holds NEW, W restored, no other ref moves. 4 R8: EMPTY, nothing written. 5 vmc_run checks control HEAD/main/index/status in every row. 6 gate green.\nCode: read-only refusals; write order read-tree, seam, CAS + rollback; seam skipped when protected (R9); no hooks (as land_plumbing checkpoints). wt_strong_intent mirrors land_plumbing's CQ-V07 rule (+ FROZEN_BASE=B), placed after L6 and before L7; refusal = no rescue, lease released. No caller, no launch path.\nNotes for m3/n2: the MERGE_HEAD arm of DIRTY is untested; no owner guard in the helper (the caller must hold the claim); read-tree overwrites an ignored file at an admitted path; call it with `|| rc=$?` under set -e.",
+  "requiredCheckAtDone": null
 }

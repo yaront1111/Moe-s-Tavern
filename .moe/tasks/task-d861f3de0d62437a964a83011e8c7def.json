@@ -55,24 +55,29 @@
     {
       "stepId": "step-3",
       "description": "3. One verification gate, at the end, run once, from WSL in /mnt/d/projexts/moes, in place (launcher harnesses run in place per the global rail). Remove the seat's MOE_*, CLAUDE* and FAKE_* variables (mem:gotcha-qa-ps1-postflight-from-wsl; mem:gotcha-pwsh7-reachable-from-wsl for pwsh.exe), and launch it in the background with job control. The exact command:\n`powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight-vm-route.ps1' && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight-vm-route.ps1' && powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\worktree-landing.ps1' && bash scripts/tests/parity-check.sh && [ \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d ' \\n')\" = efbbbf ]`\nRequired:\n- exit 0;\n- each PowerShell leg prints its PASS marker with every [vm candidate] and [strong intent] row run. A SKIP line, or an EXIT=0 without the marker, is a failure, never green (see that memory's false-green note);\n- worktree-landing.ps1 green and unedited, proving the legacy rounds are unchanged;\n- parity PASS: the MOE_VM_ family is not compared until CQ-M07n, and no compared-family code is added;\n- the BOM is intact.\nThe fresh command, exitCode and outputTail are the complete_task evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-03T18:48:26.295Z"
+      "note": "I ran the gate once, in the background, and polled it to completion, with the seat's MOE_*/CLAUDE*/FAKE_* variables removed. EXIT=0. PATH CHOICE: the plan's command names D:\\projexts\\moes\\scripts\\tests\\..., but every leg resolves moe-agent.ps1 from its own location ($PSScriptRoot\\..\\.. in both .ps1 harnesses, and BASH_SOURCE/../.. in parity-check.sh). In worktree mode the control checkout (b5f40fee lineage) lacks this task's bytes, so a run there would be a false green. I therefore ran the identical chain from the task worktree, with the worktree's paths: cd /mnt/d/projexts/moes/.worktrees/task-d861f3de0d62437a964a83011e8c7def && powershell.exe ... '<wt>\\scripts\\tests\\postflight-vm-route.ps1' && pwsh.exe ... (same) && powershell.exe ... '<wt>\\scripts\\tests\\worktree-landing.ps1' && bash scripts/tests/parity-check.sh && the BOM test. Results: 5.1 printed 'PASS postflight-vm-route.ps1' with the [vm candidate] rows R1, R1u, R2a-R5b and R6-R9, the [strong intent] rows G1-G7, G6d and G8, and the existing [vm route] rows. pwsh 7 printed the same PASS with the same rows. worktree-landing.ps1 reported 18 passed, 0 failed, 0 errors, and the file is unedited (git diff --quiet HEAD on .ps1 and .sh). parity-check.sh printed PASS. The BOM is efbbbf. No SKIP line.",
+      "startedAt": "2026-11-03T18:48:26.295Z",
+      "completedAt": "2026-11-03T18:53:53.815Z"
     },
     {
       "stepId": "step-4",
       "description": "4. Adversarial self-review, once (load adversarial-self-review), scoped to this diff. Check each of these:\n- A line-by-line comparison with m2's sh functions: same codes, order, messages, return values and git argv. List any intentional difference in the completion summary; there should be none beyond the PowerShell idiom.\n- PS 5.1: native stderr under ErrorActionPreference Stop, $LASTEXITCODE after a pipeline, a $null Out, -ceq vs -eq on shas and codes, and a git output array vs a string.\n- A throw anywhere leaves either nothing written or the commit on a rescue ref.\n- The seam is skipped when protected.\n- No write goes through the control checkout except Invoke-MoeRescueRef's refs/moe/rescue ref.\n- Test-MoeWorktreeStrongIntent cannot pass on a stale $script:MoeFrozen from an earlier round, and it is a no-op for legacy.\n- BOM and ASCII are intact.\nSize: measure `git diff --numstat -- scripts/`. If it is over 400 net changed lines, file the epic size waiver with moe.propose_rail before complete_task (CQ-M05 template, exact per-file numstat; mem:gotcha-cq-plan-size-vs-qa-cap). Re-run step 3's exact command after any fix. Report every modified path in complete_step.modifiedFiles. Never commit by hand.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "note": "This step changed no bytes, so no re-run of step 3 was needed. Both task paths, scripts/moe-agent.ps1 and scripts/tests/postflight-vm-route.ps1, were reported in steps 1 and 2. I ran the adversarial review (loaded adversarial-self-review) on the task diff only.\n\n(1) SH COMPARISON, line by line against c89e4c59: the codes, refusal order, messages, return codes and git argv match. Differences, all PowerShell idiom: a returned hashtable instead of LAND_* globals; the seam runs through ComSpec, as every ps1 seam does; the message file goes to W's gitdir/moe, as Invoke-MoeWorktreeCommit L2 (line 6685) does, where the sh uses SECURE_TEMP_DIR; the rescue row has no treeId or cliExitCode, which the existing Invoke-MoeRescueRef never sends; there is a PowerShell-only catch; and Test-MoeWorktreeStrongIntent takes the round's local $frozen (see step 2).\n\n(2) PS 5.1: the function sets EAP Continue, and Invoke-MoeGit relaxes it as well. $LASTEXITCODE is never read. A $null Out joins to ''. Shas and codes are compared with -ceq/-cne. The sha regexes end in \\z, so a trailing newline cannot pass. Git output arrays are joined before matching.\n\n(3) A THROW before commit-tree leaves nothing written (COMMIT_FAILED). After commit-tree, the commit goes to the vm-sync-failed rescue ref. If the throw lands after W's read-tree, W holds the bytes as dirt plus the rescue ref, which is the sh's interrupt case. Two theoretical cases remain, both needing Invoke-MoeGit to throw after git itself succeeded, or Write-Host to throw: an extra rescue ref for an already-landed CAS, or a second rescue ref. Neither is reachable in practice.\n\n(4) Under protected, the seam is skipped: R9 and mutant m1. The sh's other seams (rounds, shared) are unguarded in both wrappers, so parity holds.\n\n(5) The only write outside W and its branch is Invoke-MoeRescueRef's refs/moe/rescue ref. Rows R2-R9 assert the control checkout is unchanged.\n\n(6) Strong intent: a stale $script:MoeFrozen cannot pass (G6d, mutant g4). Legacy is a no-op (G1, and worktree-landing 18/18).\n\n(7) The BOM is efbbbf, the additions are ASCII, and line endings are LF.\n\nSIZE: git diff --numstat -- scripts/ gives moe-agent.ps1 +135/-2 and postflight-vm-route.ps1 +303/-0, net 436, over 400. Per plan step 4, I filed the EPIC waiver prop-017815cb04d34c61a6fac191fa5bd2e6 (PENDING) with the exact per-file numstat, using the CQ-M05/M07c template.",
+      "startedAt": "2026-11-03T18:53:56.638Z",
+      "completedAt": "2026-11-03T18:55:06.677Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8cf0816c",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -94,16 +99,22 @@
       "author": "governor-e6b40560",
       "content": "Governor ruling (18:14Z): early start. I dropped dependsOn task-91ee455a (CQ-M07m2) and task-65b3e023 (CQ-M07n1). Both completions are on moe/work-2026-10-24: m2 c89e4c59 (18:13Z) and n1 6d6bdc51. Both rows are in REVIEW, so QA is the only gate left. The formal gate moved downstream: CQ-M07n3 (23c803d2) now depends on both directly.\n- Base check before step 1, in your task worktree: `git merge-base --is-ancestor c89e4c59 HEAD && git merge-base --is-ancestor 6d6bdc51 HEAD`. If it fails, report_blocked on the missing row and end the session. Your step 1 port source (`git log -1 --grep 'Moe-Task: task-91ee455a…' -- scripts/moe-agent.sh`) now finds c89e4c59.\n- If a QA reject on m2 or n1 changes the bytes you port or extend, re-sync onto the new tip before you land.\n- task-044c7410 (WORKING) also edits scripts/moe-agent.ps1 (inside Invoke-MoeRpc only) and adds one row to postflight-vm-route.ps1. Put Invoke-MoeVmCandidateLanding and your rows in their own blocks, not next to its row or at the file's end. Edit with the Edit tool and keep the UTF-8 BOM.",
       "timestamp": "2026-11-03T18:14:50.679Z"
+    },
+    {
+      "id": "comment-a5c428c663714cd49c9d2932938096ff",
+      "author": "qa-af7be174",
+      "content": "QA note (qa-af7be174): CQ-M07m2 was approved on 2026-11-03 and landed in c89e4c59. Your description cites mem:task-task-91ee455a601b411f97d5d951cc5f241c-handoff. That handoff is now archived; its contract (codes, refusal order, effect order, rescue reasons, return values) lives in mem:pattern-vm-candidate-helper, and wt_strong_intent lives in mem:decision-worktree-strong-intent. The sh source of truth is still the landed code.",
+      "timestamp": "2026-11-03T18:56:08.974Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:51.655Z",
-  "updatedAt": "2026-11-03T18:48:26.295Z",
+  "updatedAt": "2026-11-03T18:56:34.600Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:54:05.533Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1a34a669",
@@ -115,7 +126,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:56:58.433Z",
@@ -188,5 +201,18 @@
     "sessionId": "worker-8cf0816c@2026-11-03T18:14:58Z",
     "at": "2026-11-03T18:25:11.498Z"
   },
-  "workStartedAt": "2026-11-03T18:32:08.179Z"
+  "workStartedAt": "2026-11-03T18:32:08.179Z",
+  "reviewStartedAt": "2026-11-03T18:56:34.597Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-d861f3de0d62437a964a83011e8c7def && powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\.worktrees\\task-d861f3de0d62437a964a83011e8c7def\\scripts\\tests\\postflight-vm-route.ps1' && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\.worktrees\\task-d861f3de0d62437a964a83011e8c7def\\scripts\\tests\\postflight-vm-route.ps1' && powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\.worktrees\\task-d861f3de0d62437a964a83011e8c7def\\scripts\\tests\\worktree-landing.ps1' && bash scripts/tests/parity-check.sh && [ \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d ' \\n')\" = efbbbf ]",
+    "exitCode": 0,
+    "outputTail": "[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] a no-op for legacy; the strong profile needs the frozen candidate of exactly M on B\n[strong intent] ok G1-G7, G6d and G8\n[vm route] ok today path (legacy x2, observe, unreadable, refuse, unknown, fail, malformed, case trap)\n[vm route] ok refusals (C1/C2, S1-S6, N1-N4, R1/R2)\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\n[vm candidate] R1: one changed file becomes one checkpoint commit, hooks never run\n[vm candidate] R1u: a deletion and a new path with a space and Unicode\n[vm candidate] R2-R5: refusals write nothing\n[vm candidate] R6: a lost CAS parks the commit and restores W\n[vm candidate] R7: a failed W update parks the commit; the branch stays\n[vm candidate] R8: an empty candidate writes nothing\n[vm candidate] R9: the test seam never runs under MOE_RUNTIME_PROTECTED\n[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] a no-op for legacy; the strong profile needs the frozen candidate of exactly M on B\n[strong intent] ok G1-G7, G6d and G8\n[vm route] ok today path (legacy x2, observe, unreadable, refuse, unknown, fail, malformed, case trap)\n[vm route] ok refusals (C1/C2, S1-S6, N1-N4, R1/R2)\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nPASS parity-check.sh\nEXIT=0",
+    "reportedAt": "2026-11-03T18:56:34.597Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "completionSummary": "CQ-M07n2: ported CQ-M07m2's sh helpers to moe-agent.ps1. Invoke-MoeVmCandidateLanding (unwired, in its own VM candidate block) has the sh's refusal order, MOE_VM_CANDIDATE_* codes, messages and effects: commit-tree, W read-tree, a seam guarded by MoeRuntimeProtected, then the CAS; a lost CAS rolls W back and parks the commit on a vm-ref-contention rescue ref, a failed W update parks it on vm-sync-failed, and EMPTY writes nothing. Test-MoeWorktreeStrongIntent is called once per Invoke-MoeWorktreeRounds round, after the L6 gate and before L7.\n\nDoD: 1=R1/R1u; 2=R2a-R5b; 3=R6/R7/R8; 4=every row asserts the control checkout is unchanged; 5=the gate. The gate passed (5.1 and pwsh 7 PASS, worktree-landing 18/0/0 unedited, parity PASS, BOM). 10 of 10 mutants were killed.\n\nPATH CHOICE: the plan's command named D:\\projexts\\moes\\scripts\\tests. Each harness resolves the wrapper from its own location, so that would test the control checkout's bytes, which lack this change. I ran the identical chain on W's copies from W, with the MOE_*/CLAUDE*/FAKE_* variables removed. After landing, QA can run the original from the control checkout.\n\nPLAN DEVIATION: the strong-intent function takes the round's local $frozen, passed inline only when a gate is configured, instead of $script:MoeFrozen. The ps1 rounds keep the candidate local and only the shared arm sets the global; a caller also holds a local $frozen that dynamic scoping would leak (row G6d). With no gate, the result equals the sh's empty FROZEN_*.\n\nThe other idiom differences are a returned hashtable, the ComSpec seam, the message file in W's gitdir as L2 does, a rescue row without treeId/cliExitCode as Invoke-MoeRescueRef already sends, and a PowerShell-only catch.\n\nSIZE: net 436 (moe-agent.ps1 +135/-2, postflight-vm-route.ps1 +303). Pre-filed the EPIC waiver prop-017815cb04d34c61a6fac191fa5bd2e6 (PENDING) per plan step 4; QA can park rather than size-reject."
 }
