@@ -43,23 +43,33 @@
     {
       "stepId": "step-3",
       "description": "VERIFICATION. Run it once, fresh, from this task worktree's root after the last tracked edit; its output is the complete_task evidence. Never run npm in the shared checkout or in the worktree (rail). The command archives HEAD into mktemp, overlays exactly the three owned files, and runs the following under env -i with nvm node v24.21.0 (mem:gotcha-daemon-linux-snapshot-gate): npm ci, tsc --noEmit, a scratch-tsconfig typecheck of the test file (tsc skips tests otherwise), and the FULL daemon vitest suite. Run exactly:\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/chatPayload.ts packages/moe-daemon/src/tools/chatSystemFeed.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatSystemFeed.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'\nExpect exit 0, a 'Test Files N passed' line and no FAIL line. The architect dry-ran this exact command at target tip 40c82161 with the files unchanged: 236 files passed, 7014 tests passed, 24 skipped, exit 0. Your counts should be that plus your new cases, which is +13 tests if you wrote exactly the rows above. DoD 3: the chatSystemFeed (existing cases), reloadHold, mentionRouter and mentionRouter.reload suites are all inside this full run.\nIf a FAIL is in a file this task does not touch, rerun that file alone in the same snapshot before calling it a regression. Known load flakes are index.version, bindHosts D-fail and baselineRun E2 (mem:gotcha-daemon-linux-snapshot-gate). Report both runs, and never edit outside the three owned files.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T13:55:44.668Z"
+      "note": "Full run exit 0: Test Files 236 passed; Tests 7028 passed | 24 skipped (7014 baseline + 14 new).",
+      "startedAt": "2026-11-03T13:55:44.668Z",
+      "completedAt": "2026-11-03T13:56:45.922Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW (adversarial-self-review skill) of your own diff, then complete_task with step 3's output.\nMutants. In a snapshot built as in step 3, back up util/chatPayload.ts ONCE. Apply each mutant alone as an exact-once replacement and run `NO_COLOR=1 npx vitest run src/tools/chatSystemFeed.test.ts` under the same env -i. Restore from the backup and cmp after each (mem:convention-daemon-vitest-mutant-checkref; see mem:gotcha-daemon-linux-snapshot-gate on false kills). A mutant counts as killed only when the Tests line shows real failures and the named case is among the FAIL lines:\n M1: `|| RELOAD_HOLD_BANNER.test(content)` becomes `|| false`. (h1) and every (h2) row fail.\n M2: drop the final `$` of RELOAD_HOLD_BANNER. The (h3) rows 'appended text', 'an appended release clause', 'an appended line' and 'a trailing space' fail.\n M3: `reloading \\(wrapper_restart\\)` becomes `reloading \\([^\\n]*\\)`. (h3) 'another reason' fails.\n M4: `: [^\\s(),]+\\([A-Z_]+\\)(?:, [^\\s(),]+\\([A-Z_]+\\))*$` becomes `: [^\\n]*$`. Among others, (h3) 'appended text' and 'an empty task list' fail.\nPut the four Tests lines in the complete_task summary, plus one line for each checklist answer:\n - concurrency: a pure function with no shared state;\n - hostile input: non-strings give false, and 50000-char lines stay linear, per (h4);\n - an at-mention inside a hold banner: never feed, because isSystemFeedMessage requires no mentions (unchanged);\n - the expiry path: the reload_hold_expired banner says 'released N task' and still routes; read workerLifecycle.ts, which needs no change;\n - the agent-visible effect: chat_read, chat_resync and the chat_wait drain hide the banner unless includeSystem: true; the IDE reads unfiltered.\nDo not re-run step 3 unless you changed a byte after it. If you did, rerun step 3 and cite that output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/chatPayload.ts",
         "packages/moe-daemon/src/tools/chatSystemFeed.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.ts",
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "All four mutants killed (M1 4 fail, M2 5, M3 1, M4 5); backup restored+cmp'd each time.",
+      "startedAt": "2026-11-03T13:56:46.607Z",
+      "completedAt": "2026-11-03T13:57:01.985Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -71,12 +81,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:38:33.967Z",
-  "updatedAt": "2026-11-03T13:55:44.668Z",
+  "updatedAt": "2026-11-03T13:58:00.512Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T13:40:22.435Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -88,7 +98,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:53:48.421Z",
@@ -141,5 +153,44 @@
   },
   "planApprovedAt": "2026-11-03T13:53:48.446Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T13:54:45.793Z"
+  "workStartedAt": "2026-11-03T13:54:45.793Z",
+  "reviewStartedAt": "2026-11-03T13:57:08.542Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/chatPayload.ts packages/moe-daemon/src/tools/chatSystemFeed.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatSystemFeed.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": " Test Files  236 passed (236)\n      Tests  7028 passed | 24 skipped (7052)\nEXIT=0",
+    "reportedAt": "2026-11-03T13:57:08.542Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+    "packages/moe-daemon/src/util/chatPayload.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "The reload-hold banner is now a routine presence line (anchored RELOAD_HOLD_BANNER regex in util/chatPayload.ts isRoutinePresenceLine), so a wrapper_restart hold of a task-holding seat routes to [], adds no unread (holder included) and wakes no chat_wait; agent reads hide it unless includeSystem. Release/dropped-claim banners and hold banners with appended text/other reason/non-ISO deadline/empty list still route. Docs line in MCP_SERVER.md chat_read notes updated. Tests: (h1) end-to-end via deregister_worker, (h2) x3, (h3) x9, (h4) perf. Full suite in fresh snapshot: 236 files passed, 7028 passed | 24 skipped (7014 baseline + 14). Mutants M1 `|| false`: 4 fail (h1,h2x3); M2 drop `$`: 5 fail (appended text, appended release clause, appended line, trailing space, h4); M3 any reason: 1 fail (another reason); M4 `[^\\n]*$`: 5 fail (appended text, release clause, empty task list, trailing space, h4). Checklist: concurrency - pure function, no shared state; hostile input - non-strings false, 50000-char lines linear per (h4); at-mention in a hold banner - never feed, isSystemFeedMessage requires no mentions (unchanged); expiry path - reload_hold_expired banner says 'released N task' and still routes, workerLifecycle.ts unchanged; agent-visible effect - chat_read/chat_resync/chat_wait drain hide it unless includeSystem:true, IDE reads unfiltered.",
+  "commits": [
+    {
+      "sha": "d5f52d0e907aafc967368abeaf8631b5acb176f9",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T13:53:47Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+        "packages/moe-daemon/src/util/chatPayload.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T13:58:00.512Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T13:53:47Z",
+    "at": "2026-11-03T13:58:00.512Z"
+  }
 }
