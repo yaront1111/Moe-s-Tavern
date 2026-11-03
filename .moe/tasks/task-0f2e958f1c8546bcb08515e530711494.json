@@ -87,8 +87,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -100,12 +100,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:04:41.013Z",
-  "updatedAt": "2026-11-03T17:37:55.061Z",
+  "updatedAt": "2026-11-03T17:41:11.535Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:09:02.638Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T17:40:39.006Z",
+    "wallClockMs": 1896368
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -252,9 +254,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T17:27:23Z",
-    "at": "2026-11-03T17:37:12.909Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T17:37:35Z",
+    "at": "2026-11-03T17:41:11.535Z"
+  },
+  "completedAt": "2026-11-03T17:40:39.006Z",
+  "reviewCompletedAt": "2026-11-03T17:40:39.006Z",
+  "reviewSummary": "Reviewed completion 1cf76839: its tree is d1d392bb, the candidate's treeSha, and it is on origin/moe/work-2026-10-24 after a fresh fetch.\n- Diff: the 8 declared files, +368/-20 (net 348). No daemon, vscode or docs change.\n\nGate: re-ran the checkRef verbatim in the control checkout. HEAD was 1cf76839 and moe-jetbrains was clean. It ran under the jetbrains-gradle lease, 17:38-17:39Z, and exited 0:\n- BUILD SUCCESSFUL; xml tests=649, skipped=6, failures=0, errors=0.\n- MoeCommandSenderReleaseTest ran 4 tests and BoardReleaseTest 10, each with 0 failures and 0 errors.\n- The compile and test tasks executed, and the XML is fresh (17:39:30Z).\n\nDoD:\n1. The raw-frame test shows the default call and force=false are byte-identical with no force key. force=true appends \"force\":true. A blank or missing reason is omitted with and without force.\n2. stepLease matches claimGuards assertNoLiveLease and inProgressStep (both read): a non-empty assignee plus the first IN_PROGRESS step. Its null cases are tested.\n3. The card menu (handleReleaseAgent, name kept) and the Task Detail action both call BoardRelease.releaseRendered. A grep and the source guard confirm service.releaseTask( appears only in BoardRelease.kt. The flow test drives a real sender:\n   - force is sent only after the second confirmation, which names the holder and the step;\n   - declining either confirmation sends nothing;\n   - a lease that changed gives STALE with no frame.\n4. The gate is green.\n\nAdversarial read:\n- The cache re-check fails closed and never chooses what is sent.\n- The bundle keys are ASCII with no apostrophe.\n- check() keeps the call on the EDT.\n- The worker's mutants M1-M4 were killed.\n- The complexity pass found nothing to cut.\n\nFollow-up: the VS Code twin (VSC-6) is not filed.",
+  "requiredCheckAtDone": null
 }
