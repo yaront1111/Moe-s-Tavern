@@ -479,8 +479,13 @@ and `verified-local` stays refused until certification and the client gates pass
   inherit the variable, but Moe controls neither the CLI's PATH walk nor a CLI runtime that ignores it. Under the marker,
   `moe-agent.sh` and `moe-call.sh` rewrite PATH, before their first bare-name command, to absolute entries outside the
   project. A rewrite that keeps no entry refuses, because an empty PATH makes bash search the current directory.
-  So neither they nor the agent CLI they start finds a tool through a `.`, relative or in-project entry. The ps1
-  launcher's own lookups stay open (task-3acf7f79); on POSIX it puts the pinned node's directory first on PATH.
+  So neither they nor the agent CLI they start finds a tool through a `.`, relative or in-project entry.
+  `moe-agent.ps1` rewrites PATH the same way before its first bare-name command, keeping only the entries
+  `Find-MoeProtectedFile` trusts, so an 8.3, subst, junction or network spelling of the project goes too, and runs
+  its WT-13 git check only after that. Both wrappers also export `MOE_PROTECTED_GIT`, the only git their
+  worktree-launch and board-snapshot Node programs spawn; without an absolute one those programs fail closed
+  (`MOE_WORKTREE_CREATE_FAILED`, `MOE_BOARD_SNAPSHOT_SKIPPED`). On POSIX, ps1 still puts the pinned node's directory
+  first on PATH.
   VS Code (`services/MoeDaemonClient.ts`, `util/AgentLauncher.ts`) selects the same way from
   `<extensionPath>/bundled`. Candidate source becomes Git objects only
   (`admission.mjs`); branch writes stay in the wrappers' landing. A guest gets no daemon address: the host session

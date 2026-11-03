@@ -142,33 +142,38 @@ if ($moeMigration) {
 # git answers with physical paths (a link alias is caught); a failed git call, as
 # for a non-Git bundled copy, launches as before. Local 'Continue': PS 5.1 turns a
 # native stderr line into a terminating error under 'Stop'.
-$moeInWorktree = & {
-    $ErrorActionPreference = 'Continue'
-    if (-not $script:MoeWrapperPath) { return $false }
-    try {
-        $dir = Split-Path -Parent $script:MoeWrapperPath
-        $top = [string](@(& git -C $dir rev-parse --show-toplevel 2>$null) | Select-Object -First 1)
-        if ($LASTEXITCODE -ne 0 -or -not $top) { return $false }
-        $pre = [string](@(& git -C $dir rev-parse --show-prefix 2>$null) | Select-Object -First 1)
-        if ($LASTEXITCODE -ne 0) { return $false }
-        $first = [string](@(& git -C $dir worktree list --porcelain 2>$null) | Select-Object -First 1)
-        $main = if ($first.StartsWith('worktree ', [StringComparison]::Ordinal)) { $first.Substring(9) } else { '' }
-        $cmp = if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-        if ($pre.StartsWith('.worktrees/task-', $cmp)) { return $true }
-        $prefix = "$main/.worktrees/"
-        if (-not $main -or -not $top.StartsWith($prefix, $cmp)) { return $false }
-        $rest = $top.Substring($prefix.Length)
-        return ($rest.StartsWith('task-', $cmp) -and $rest.IndexOf('/') -lt 0)
-    } catch { return $false }
+function Assert-MoeWrapperNotInWorktree {
+    $moeInWorktree = & {
+        $ErrorActionPreference = 'Continue'
+        if (-not $script:MoeWrapperPath) { return $false }
+        try {
+            $dir = Split-Path -Parent $script:MoeWrapperPath
+            $top = [string](@(& git -C $dir rev-parse --show-toplevel 2>$null) | Select-Object -First 1)
+            if ($LASTEXITCODE -ne 0 -or -not $top) { return $false }
+            $pre = [string](@(& git -C $dir rev-parse --show-prefix 2>$null) | Select-Object -First 1)
+            if ($LASTEXITCODE -ne 0) { return $false }
+            $first = [string](@(& git -C $dir worktree list --porcelain 2>$null) | Select-Object -First 1)
+            $main = if ($first.StartsWith('worktree ', [StringComparison]::Ordinal)) { $first.Substring(9) } else { '' }
+            $cmp = if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+            if ($pre.StartsWith('.worktrees/task-', $cmp)) { return $true }
+            $prefix = "$main/.worktrees/"
+            if (-not $main -or -not $top.StartsWith($prefix, $cmp)) { return $false }
+            $rest = $top.Substring($prefix.Length)
+            return ($rest.StartsWith('task-', $cmp) -and $rest.IndexOf('/') -lt 0)
+        } catch { return $false }
+    }
+    # Test seam only (task-3c4be125), twin of moe-agent.sh: the launcher harnesses (postflight.{sh,ps1},
+    # postflight-worktree.cjs, worktree-landing.{sh,ps1}) set it so a worktree-mode worker can run them
+    # from its own task worktree. Exactly '1' (-cne: case-sensitive) skips this one refusal and nothing
+    # else reads it; no launch path (IDE plugins, moe-team, operators, runbooks) sets it.
+    if ($moeInWorktree -and $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -cne '1') {
+        [Console]::Error.WriteLine("[ERROR] MOE_WRAPPER_IN_WORKTREE: $($script:MoeWrapperPath) is inside a task worktree; launch the control checkout's scripts/moe-agent.ps1")
+        exit 1
+    }
 }
-# Test seam only (task-3c4be125), twin of moe-agent.sh: the launcher harnesses (postflight.{sh,ps1},
-# postflight-worktree.cjs, worktree-landing.{sh,ps1}) set it so a worktree-mode worker can run them
-# from its own task worktree. Exactly '1' (-cne: case-sensitive) skips this one refusal and nothing
-# else reads it; no launch path (IDE plugins, moe-team, operators, runbooks) sets it.
-if ($moeInWorktree -and $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -cne '1') {
-    [Console]::Error.WriteLine("[ERROR] MOE_WRAPPER_IN_WORKTREE: $($script:MoeWrapperPath) is inside a task worktree; launch the control checkout's scripts/moe-agent.ps1")
-    exit 1
-}
+# Under MOE_RUNTIME_PROTECTED=1 its git runs only after the protected PATH scrub
+# below (task-3acf7f79): no bare-name command may run before that scrub.
+if ($env:MOE_RUNTIME_PROTECTED -cne '1') { Assert-MoeWrapperNotInWorktree }
 
 # Architect and governor default to interactive TUI: planning is a conversation,
 # and governance is an interactive oversight task where the operator wants to
@@ -566,7 +571,8 @@ function Get-MoeFinalPath([string]$Path) {
 # the project's, so an 8.3, subst, \\?\ or junction spelling of the project is
 # in-project, and a network entry never counts as outside: a share can be rooted
 # inside the project (task-89579137). ponytail: a file-level link inside a
-# trusted dir is not followed; resolve it if needed.
+# trusted dir is not followed; resolve it if needed. An empty -Name lists every
+# trusted entry's real path in PATH order instead (the PATH scrub below).
 function Find-MoeProtectedFile([string]$Name, [string[]]$Extensions) {
     $onWindows = $PSVersionTable.PSEdition -ne 'Core' -or $IsWindows
     $cmp = if ($onWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
@@ -594,6 +600,7 @@ function Find-MoeProtectedFile([string]$Name, [string[]]$Extensions) {
                 $f = Get-MoeFinalPath $realFull
                 if (-not $f -or $f.StartsWith('\\?\UNC\', $cmp) -or "$($f.TrimEnd('\'))\".StartsWith($projectKey, $cmp)) { continue }
             }
+            if (-not $Name) { $realFull; continue }
             foreach ($ext in $Extensions) {
                 # The untrimmed path: a root entry trimmed to 'C:' or '' would join drive- or cwd-relative.
                 $file = [IO.Path]::Combine($realFull, "$Name$ext")
@@ -612,12 +619,26 @@ function Resolve-MoeProtectedCli([string]$Name) {
     Write-Host "[INFO] MOE_PROTECTED_AGENT_CLI: $Name -> $file"
     return $file
 }
+# task-3acf7f79, twin of sh protected_scrub_path: PowerShell's own `& git` and every
+# Node spawn walk '.', relative and in-project PATH entries, so under the marker,
+# before the first bare-name command, PATH keeps only the entries
+# Find-MoeProtectedFile trusts, as real paths in order (idempotent on a reload pass).
+# Never set it to '': that deletes the variable.
+if ($script:MoeRuntimeProtected) {
+    $moeTrusted = @(Find-MoeProtectedFile '' @() | Where-Object { $_ })
+    if ($moeTrusted.Count -eq 0) { Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start." }
+    $env:PATH = $moeTrusted -join [IO.Path]::PathSeparator
+    Assert-MoeWrapperNotInWorktree
+}
 $script:MoeNode = $null
 if ($script:MoeRuntimeProtected) {
     $nodeExtensions = if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) { @('.exe') } else { @('') }
     $script:MoeNode = Find-MoeProtectedFile 'node' $nodeExtensions
     if (-not $script:MoeNode) { Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start." }
     Set-Alias -Name node -Value $script:MoeNode -Scope Script
+    # The only git the wrapper's Node programs may spawn (task-3acf7f79); none found
+    # assigns $null, which deletes the variable, so they fail closed.
+    $env:MOE_PROTECTED_GIT = Find-MoeProtectedFile 'git' $nodeExtensions
     # On POSIX, a CLI's /usr/bin/env node shebang and its children use PATH, not the alias.
     # Like sh's use_node, put the successfully pinned node directory first for them.
     if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) { $env:PATH = [IO.Path]::GetDirectoryName($script:MoeNode) + [IO.Path]::PathSeparator + $env:PATH }
@@ -3324,7 +3345,9 @@ const [ctl, w, sp, tid] = process.argv.slice(-4), win = process.platform === 'wi
 const key = p => { try { p = fs.realpathSync.native(p); } catch { p = path.resolve(p); } return win ? p.toLowerCase() : p; };
 const within = (p, top) => { const r = path.relative(key(top), key(p)); return r !== '' && r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
 const lstat = f => { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
-const git = (...a) => { const r = cp.spawnSync('git', a, { encoding: 'utf8' }); if (r.status !== 0) throw Error('git ' + a[2] + ' failed: ' + String(r.stderr || r.error).trim()); return r.stdout; };
+// task-3acf7f79: under MOE_RUNTIME_PROTECTED=1 only an absolute git runs; Node looks a bare name up in the cwd (Node < 22) and in '.', relative and in-project PATH entries.
+const strict = process.env.MOE_RUNTIME_PROTECTED === '1', GIT = strict ? process.env.MOE_PROTECTED_GIT || '' : 'git';
+const git = (...a) => { if (strict && !path.isAbsolute(GIT)) throw Error('MOE_PROTECTED_GIT must be an absolute path to git when MOE_RUNTIME_PROTECTED=1'); const r = cp.spawnSync(GIT, a, { encoding: 'utf8' }); if (r.status !== 0) throw Error('git ' + a[2] + ' failed: ' + String(r.stderr || r.error).trim()); return r.stdout; };
 const local = d => { if (!lstat(d)) fs.mkdirSync(d); if (!within(d, w)) throw Error(d + ' resolves outside ' + w); };
 try {
     const mode = key(sp) === key(ctl) ? 'W' : 'KEEP', failed = [];
@@ -7404,8 +7427,11 @@ Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' });
 // Printable ASCII only: Windows PowerShell 5.1 reads this output in the OEM code page.
 const ascii = s => String(s).replace(/[^\x20-\x7e]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
 const esc = s => ascii(JSON.stringify(s)), first = (t, re) => { const ls = String(t).trim().split(/\r?\n/); return (ls.find(l => re.test(l)) || ls[0]).trim(); };
+// task-3acf7f79: under MOE_RUNTIME_PROTECTED=1 only an absolute git runs; Node looks a bare name up in the cwd (Node < 22) and in '.', relative and in-project PATH entries.
+const strict = process.env.MOE_RUNTIME_PROTECTED === '1', GIT = strict ? process.env.MOE_PROTECTED_GIT || '' : 'git';
 const git = (args, o = {}) => {
-    const r = cp.spawnSync('git', ['-C', proj, ...args], { encoding: 'utf8', input: o.input, env: o.env || env, timeout: o.ms || 60000, maxBuffer: 1 << 28, windowsHide: true });
+    if (strict && !path.isAbsolute(GIT)) throw Error('MOE_PROTECTED_GIT must be an absolute path to git when MOE_RUNTIME_PROTECTED=1');
+    const r = cp.spawnSync(GIT, ['-C', proj, ...args], { encoding: 'utf8', input: o.input, env: o.env || env, timeout: o.ms || 60000, maxBuffer: 1 << 28, windowsHide: true });
     if (r.status !== 0 && !o.soft) throw Error('git ' + args[0] + ' failed: ' + first(r.stderr || r.error || 'exit ' + r.status, /fatal|error/));
     return r;
 };

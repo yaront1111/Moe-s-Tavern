@@ -612,6 +612,9 @@ protected_pin_interpreters() {
     fi
     use_node
     PYTHON_CMD=$(protected_path_lookup python3 "$project") || refuse_protected_agent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: python3 was not found on an absolute PATH entry outside the project; refusing to start."
+    # The only git the wrapper's Node programs may spawn (task-3acf7f79); none found leaves it empty, so they fail closed.
+    MOE_PROTECTED_GIT=$(protected_path_lookup git "$project" .exe) || MOE_PROTECTED_GIT=""
+    export MOE_PROTECTED_GIT
     PROTECTED_INTERPRETERS_PINNED=1
 }
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
@@ -3458,7 +3461,9 @@ const [ctl, w, sp, tid] = process.argv.slice(-4), win = process.platform === 'wi
 const key = p => { try { p = fs.realpathSync.native(p); } catch { p = path.resolve(p); } return win ? p.toLowerCase() : p; };
 const within = (p, top) => { const r = path.relative(key(top), key(p)); return r !== '' && r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
 const lstat = f => { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
-const git = (...a) => { const r = cp.spawnSync('git', a, { encoding: 'utf8' }); if (r.status !== 0) throw Error('git ' + a[2] + ' failed: ' + String(r.stderr || r.error).trim()); return r.stdout; };
+// task-3acf7f79: under MOE_RUNTIME_PROTECTED=1 only an absolute git runs; Node looks a bare name up in the cwd (Node < 22) and in '.', relative and in-project PATH entries.
+const strict = process.env.MOE_RUNTIME_PROTECTED === '1', GIT = strict ? process.env.MOE_PROTECTED_GIT || '' : 'git';
+const git = (...a) => { if (strict && !path.isAbsolute(GIT)) throw Error('MOE_PROTECTED_GIT must be an absolute path to git when MOE_RUNTIME_PROTECTED=1'); const r = cp.spawnSync(GIT, a, { encoding: 'utf8' }); if (r.status !== 0) throw Error('git ' + a[2] + ' failed: ' + String(r.stderr || r.error).trim()); return r.stdout; };
 const local = d => { if (!lstat(d)) fs.mkdirSync(d); if (!within(d, w)) throw Error(d + ' resolves outside ' + w); };
 try {
     const mode = key(sp) === key(ctl) ? 'W' : 'KEEP', failed = [];
@@ -7924,8 +7929,11 @@ Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' });
 // Printable ASCII only: Windows PowerShell 5.1 reads this output in the OEM code page.
 const ascii = s => String(s).replace(/[^\x20-\x7e]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
 const esc = s => ascii(JSON.stringify(s)), first = (t, re) => { const ls = String(t).trim().split(/\r?\n/); return (ls.find(l => re.test(l)) || ls[0]).trim(); };
+// task-3acf7f79: under MOE_RUNTIME_PROTECTED=1 only an absolute git runs; Node looks a bare name up in the cwd (Node < 22) and in '.', relative and in-project PATH entries.
+const strict = process.env.MOE_RUNTIME_PROTECTED === '1', GIT = strict ? process.env.MOE_PROTECTED_GIT || '' : 'git';
 const git = (args, o = {}) => {
-    const r = cp.spawnSync('git', ['-C', proj, ...args], { encoding: 'utf8', input: o.input, env: o.env || env, timeout: o.ms || 60000, maxBuffer: 1 << 28, windowsHide: true });
+    if (strict && !path.isAbsolute(GIT)) throw Error('MOE_PROTECTED_GIT must be an absolute path to git when MOE_RUNTIME_PROTECTED=1');
+    const r = cp.spawnSync(GIT, ['-C', proj, ...args], { encoding: 'utf8', input: o.input, env: o.env || env, timeout: o.ms || 60000, maxBuffer: 1 << 28, windowsHide: true });
     if (r.status !== 0 && !o.soft) throw Error('git ' + args[0] + ' failed: ' + first(r.stderr || r.error || 'exit ' + r.status, /fatal|error/));
     return r;
 };
