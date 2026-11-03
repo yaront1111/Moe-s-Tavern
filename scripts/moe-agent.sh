@@ -3085,9 +3085,15 @@ $out_tail"
 MOE_TAB=$'\t'
 MOE_ZERO_OID="0000000000000000000000000000000000000000"
 
-# read_commit_settings -- one project.json read per iteration. Explicit-false
-# semantics as today for autoCommit (opt-out); commitHooks is opt-in.
+# read_commit_settings -- one project.json read per iteration, plus the worktree
+# completion's fresh post-flight read. Explicit-false semantics as today for
+# autoCommit (opt-out); commitHooks is opt-in. A key left out takes its default.
+# CS_SETTINGS_READABLE is true only when the file parsed as a JSON object whose
+# settings value is absent, null or an object; a file that is missing,
+# unreadable, not JSON or not a JSON object, or whose settings value is present
+# and not an object, is unreadable (the worktree completion refuses to land).
 read_commit_settings() {
+    CS_SETTINGS_READABLE="false"
     CS_AUTO_COMMIT="true"
     CS_CHECKPOINT_COMMITS="true"
     CS_CHECKPOINT_PUSH="true"
@@ -3106,10 +3112,11 @@ def clean(s):
     return str(s).replace('\r', ' ').replace('\n', ' ').replace('\x1f', ' ').replace('\x1e', ' ')
 try:
     d = json.load(open(p, encoding='utf-8'))
-    s = d.get('settings') or {}
-    if not isinstance(s, dict):
-        s = {}
 except Exception:
+    d = None
+s = d.get('settings') if isinstance(d, dict) else None
+readable = isinstance(d, dict) and (s is None or isinstance(s, dict))
+if not isinstance(s, dict):
     s = {}
 attr = s.get('attribution') if isinstance(s.get('attribution'), dict) else {}
 def flag(key, default):
@@ -3130,7 +3137,8 @@ cb = cb.strip() if isinstance(cb, str) and cb.strip() and '*' not in cb else ''
 qg = s.get('qualityGate')
 qg = qg.strip() if isinstance(qg, str) else ''
 fields = [flag('autoCommit', 'true'), flag('checkpointCommits', 'true'), flag('checkpointPush', 'true'),
-          flag('commitBoardState', 'true'), flag('commitHooks', 'false'), und, con, '\x1e'.join(exc), clean(cb), clean(qg)]
+          flag('commitBoardState', 'true'), flag('commitHooks', 'false'), und, con, '\x1e'.join(exc), clean(cb), clean(qg),
+          'true' if readable else 'false']
 sys.stdout.write('\x1f'.join(fields) + '\x1f')
 " "$MOE_DIR" 2>/dev/null) || parsed=""
     if [ -n "$parsed" ]; then
@@ -3144,8 +3152,11 @@ sys.stdout.write('\x1f'.join(fields) + '\x1f')
           IFS= read -r -d $'\x1f' CS_ATTR_EXCLUDE
           IFS= read -r -d $'\x1f' CS_CONSOLIDATION_BRANCH
           IFS= read -r -d $'\x1f' CS_QUALITY_GATE
+          IFS= read -r -d $'\x1f' CS_SETTINGS_READABLE
         } <<< "$parsed" 2>/dev/null || true
     fi
+    # Fail closed: a failed or empty python run reads as unreadable.
+    CS_SETTINGS_READABLE="${CS_SETTINGS_READABLE:-false}"
     # CS_QUALITY_GATE stays the configured gate whatever MOE_DISABLE_QUALITY_GATE says:
     # a worktree landing gates on it or refuses (WT-10); the shared gate keeps its own
     # opt-out (twin: Read-MoeCommitSettings' configuredGate).
@@ -7698,7 +7709,7 @@ unlanded_reason() {
     case "$1" in
         MOE_COMMIT_FAILED_CONFLICT|MOE_WORKTREE_UNRESOLVED_CONFLICT) echo conflict ;;
         MOE_COMMIT_FAILED_REF_CONTENTION|MOE_COMMIT_FAILED_LAND_LEASE) echo contention ;;
-        MOE_COMMIT_FAILED_GATE) echo gate ;;
+        MOE_COMMIT_FAILED_GATE|MOE_LAND_SETTINGS_UNREADABLE) echo gate ;;
         MOE_LAND_TARGET_DIVERGED) echo diverged ;;
         MOE_LAND_FETCH_FAILED|MOE_PUSH_FAILED) echo remote ;;
         *) return 1 ;;
@@ -7746,15 +7757,20 @@ replay_unlanded() {
 
 # land_worktree_completion W BRANCH -- a worktree completion exit (design §2.2):
 # L0-L2 commit W's dirt to BRANCH (owner guard, no ledger row of its own), then
-# the net change lands on the target (literal consolidationBranch, else main) as
-# ONE squash commit: a local CAS without a remote, else (any remote, or a failed
-# probe) the non-forced push of WT-09. With a qualityGate set (whatever
-# qualityGateScope says), the landing holds the git-land-<target> lease (L3, L14)
-# and gates each merged tree (L6); MOE_DISABLE_QUALITY_GATE=1 refuses it instead.
+# the net change lands on the target (the attempt's pinned workspace.target,
+# MOE_WT_TARGET, which W was cut from) as ONE squash commit: a local CAS without
+# a remote, else (any remote, or a failed probe) the non-forced push of WT-09.
+# project.json is read afresh here: unreadable refuses the landing before L3
+# (MOE_LAND_SETTINGS_UNREADABLE, routed unlanded), and a consolidationBranch that
+# names another target is only warned (MOE_LAND_TARGET_MISMATCH). With a
+# qualityGate set (whatever qualityGateScope says), the landing holds the
+# git-land-<target> lease (L3, L14) and gates each merged tree (L6);
+# MOE_DISABLE_QUALITY_GATE=1 refuses it instead.
 # Never peel_target_branch, ensure_safe_branch or the shared push.
 # Twin: Invoke-MoeWorktreeCompletion.
 land_worktree_completion() {
-    local w="$1" branch="$2" work journal target="${CS_CONSOLIDATION_BRANCH:-main}" l2 l2msg rc=0 rescue=false why=""
+    read_commit_settings
+    local w="$1" branch="$2" work journal st="${CS_CONSOLIDATION_BRANCH:-main}" target="${MOE_WT_TARGET:-}" l2 l2msg rc=0 rescue=false why=""
     local LAND_WT_PUB=remote QUALITY_GATE="${CS_QUALITY_GATE:-}"
     MOE_UNLANDED_PATHS="$(create_secure_temp)/wt-unlanded-$$.z"; LAND_B=""
     : > "$MOE_UNLANDED_PATHS"
@@ -7762,7 +7778,11 @@ land_worktree_completion() {
     LAND_WT_INTERNAL=true; land_worktree_checkpoint "$w" "$branch" || true; LAND_WT_INTERNAL=""
     [ "$LAND_OUTCOME" != refused ] || return 0
     l2="$LAND_OUTCOME"; l2msg="${LAND_MESSAGE:-}"
-    case "$target" in *'?'*|*'['*) target=main ;; esac
+    case "$st" in *'?'*|*'['*) st=main ;; esac
+    [ -n "$target" ] || target="$st"
+    if [ "$CS_SETTINGS_READABLE" = true ] && [ "$st" != "$target" ]; then
+        echo -e "${YELLOW}[WARN]${NC} MOE_LAND_TARGET_MISMATCH: task $LAND_TASK_ID -- .moe/project.json names $st, but this attempt was cut from $target; it lands on $target."
+    fi
     work="$(create_secure_temp)/wt-complete-$$"
     rm -rf "$work" 2>/dev/null || true
     [ "$l2" = failed ] || LAND_CODE=MOE_COMMIT_FAILED
@@ -7772,6 +7792,8 @@ land_worktree_completion() {
     journal=$(receipt_journal_path "$LAND_TASK_ID")
     if [ "$l2" = failed ]; then
         LAND_CODE="${LAND_CODE:-MOE_COMMIT_FAILED}"; LAND_MESSAGE="${l2msg:-the task-branch commit failed}"
+    elif [ "$CS_SETTINGS_READABLE" != true ]; then
+        LAND_CODE=MOE_LAND_SETTINGS_UNREADABLE; LAND_MESSAGE=".moe/project.json is missing or malformed, so this landing cannot read its qualityGate"
     elif [ -z "$journal" ] || ! mkdir -p "$work" || ! LAND_WT_T=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/$branch^{commit}" 2>/dev/null); then
         LAND_MESSAGE="refs/heads/$branch does not resolve"
     elif ! git check-ref-format "refs/heads/$target" \

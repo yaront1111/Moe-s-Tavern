@@ -261,6 +261,8 @@ Codes a worktree-mode wrapper prints (`[ERROR]` codes also park the task through
 | `MOE_LAND_TARGET_CHECKED_OUT` | `refs/heads/<target>` is checked out in a worktree, or that could not be told, so it cannot be advanced by ref update. |
 | `MOE_LAND_MIRROR_SKIPPED` | The local target did not fast-forward to the pushed commit. A warning only; the push stands. |
 | `MOE_LAND_LEASE_RELEASE_FAILED` | `release_resource` for `git-land-<target>` failed; it is retried once, and the lease's expiry is the backstop. |
+| `MOE_LAND_SETTINGS_UNREADABLE` | At a worktree completion's post-flight, `.moe/project.json` is missing, not JSON, not a JSON object, or its `settings` is not an object, so the `qualityGate` cannot be read. Nothing lands and no lease is taken, the bytes stay on `moe/task/<taskId>`, and the task returns unlanded (`gate`) for the next session to retry. A key that is only absent keeps its default. |
+| `MOE_LAND_TARGET_MISMATCH` | A warning. `project.json` names a different target from the claim's `workspace.target` that this attempt was cut from; the completion still lands on the attempt's target. |
 | `MOE_PUSH_FAILED` | origin rejected the landing push (`[remote rejected]`), or moved past the base without the journaled landing; reported `unlanded` `remote`. See also `MOE_PUSH_REBASE` in **Agent Scripts**. |
 | `MOE_PUSH_OUTCOME_UNKNOWN` | The push result could not be settled. No ref moves and the attempt stays finalizing until a pre-flight replay settles it. |
 | `MOE_CONTROL_NOT_FOLLOWING` | The control checkout is on neither `moe/control` nor the target's commit, so nothing was followed (a worker seat stops). |
