@@ -2717,9 +2717,9 @@ Pin a chat message to a channel. Pinned messages serve as todos or important ref
 **Parameters:**
 ```typescript
 {
-  channel: string,      // Required: channel ID
+  channel: string,      // Required: channel id, or name in either "general" or "#general" form
   messageId: string,    // Required: message ID to pin
-  workerId: string      // Required: worker pinning the message
+  workerId: string      // Required: a registered worker or "human"; "system" is refused NOT_ALLOWED and an unregistered id INVALID_INPUT
 }
 ```
 
@@ -2727,6 +2727,8 @@ Pin a chat message to a channel. Pinned messages serve as todos or important ref
 ```typescript
 { success: true, pin }
 ```
+
+PIN_CREATED records the caller as the activity event's `workerId`, so `moe.get_activity_log { workerId }` finds it. The payload is unchanged (`pinnedBy` is kept).
 
 ---
 
@@ -2737,8 +2739,9 @@ Remove a pinned message from a channel.
 **Parameters:**
 ```typescript
 {
-  channel: string,      // Required: channel ID
-  messageId: string     // Required: message ID to unpin
+  channel: string,      // Required: channel id, or name in either "general" or "#general" form
+  messageId: string,    // Required: message ID to unpin
+  workerId?: string     // Optional: worker removing the pin, a registered worker or "human" (omitted: "human"); same refusals as chat_pin
 }
 ```
 
@@ -2746,6 +2749,8 @@ Remove a pinned message from a channel.
 ```typescript
 { success: true }
 ```
+
+PIN_REMOVED records the caller as the activity event's `workerId`, so `moe.get_activity_log { workerId }` finds it. The payload is unchanged (`{ channelId, messageId }`). A refused call writes no pins file, emits no `PINS_UPDATED` and appends no PIN_REMOVED.
 
 ---
 

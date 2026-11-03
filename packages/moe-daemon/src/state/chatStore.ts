@@ -539,12 +539,14 @@ export async function pinMessage(state: StateManager, channelId: string, message
     pins.push(pin);
     writePins(state, channelId, pins);
     state.emit({ type: 'PINS_UPDATED', payload: { channel: channelId, pins } });
-    state.appendActivity('PIN_CREATED', { channelId, messageId, pinnedBy });
+    // pinnedBy is the validated caller on every path (chat_pin's guarded workerId, /ws 'human'),
+    // so it is also the event's actor: get_activity_log { workerId } filters on that field only.
+    state.appendActivity('PIN_CREATED', { channelId, messageId, pinnedBy }, undefined, undefined, undefined, undefined, pinnedBy);
     return pin;
   });
 }
 
-export async function unpinMessage(state: StateManager, channelId: string, messageId: string): Promise<void> {
+export async function unpinMessage(state: StateManager, channelId: string, messageId: string, actorWorkerId?: string): Promise<void> {
   await state.mutex.runExclusive(async () => {
     const channel = state.channels.get(channelId);
     if (!channel) throw new Error(`Channel not found: ${channelId}`);
@@ -556,7 +558,7 @@ export async function unpinMessage(state: StateManager, channelId: string, messa
     pins.splice(idx, 1);
     writePins(state, channelId, pins);
     state.emit({ type: 'PINS_UPDATED', payload: { channel: channelId, pins } });
-    state.appendActivity('PIN_REMOVED', { channelId, messageId });
+    state.appendActivity('PIN_REMOVED', { channelId, messageId }, undefined, undefined, undefined, undefined, actorWorkerId);
   });
 }
 

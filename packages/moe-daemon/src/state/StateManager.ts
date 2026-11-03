@@ -924,8 +924,8 @@ export class StateManager {
     return pinMessage(this, channelId, messageId, pinnedBy);
   }
 
-  async unpinMessage(channelId: string, messageId: string): Promise<void> {
-    return unpinMessage(this, channelId, messageId);
+  async unpinMessage(channelId: string, messageId: string, actorWorkerId?: string): Promise<void> {
+    return unpinMessage(this, channelId, messageId, actorWorkerId);
   }
 
   async togglePinDone(channelId: string, messageId: string): Promise<PinEntry> {
