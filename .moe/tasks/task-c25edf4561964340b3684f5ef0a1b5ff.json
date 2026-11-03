@@ -7,10 +7,45 @@
     "A scenario-prefixed SKIP line yields a nonzero result with failureClass SKIP_DETECTED; existing raw SKIP and clean PASS behavior remains covered."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Broaden the skip rule in scripts/tests/postflight-safe.mjs and pin it in scripts/tests/postflight-safe.test.mjs (the DoD item).\n\nThe tested bytes are in /mnt/d/moe-scratch/c25edf45-plan/scripts/tests/: postflight-safe.mjs (sha256 946389d1...) and postflight-safe.test.mjs (sha256 40f8ae81...). The diffs against 12d7bb62 are safe.proto.diff and safe-test.proto.diff in the same folder. Apply them with the Edit tool (global rail 3).\n\npostflight-safe.mjs:\n1. Right after `const failures = new Set([...]);`, add one module constant with this comment:\n   // A skip is the word SKIP at the start of a line, or right after one leading [tag] such as\n   // \"[scenario WT14D]\" and an optional \"(sub-case)\" tag: \"[scenario WT14D] SKIP (root ignores mode bits)\".\n   // SKIPPED, a later \"skips\", and lowercase \"skipped:\" host-capability notes are not skips.\n   const SKIP_LINE = /^(?:\\[[^\\]\\r\\n]*\\][ \\t]+(?:\\([^)\\r\\n]*\\)[ \\t]+)?)?SKIP(?:\\s|:|$)/i;\n2. In summarizePostflight, replace `lines.some(line => /^SKIP(?:\\s|:|$)/i.test(line))` with `lines.some(line => SKIP_LINE.test(line))`.\n\nNothing else changes:\n- the failureClass precedence: invalid engine, then spawn/timeout/limit, then nonzero exit, then SKIP, then the PASS marker;\n- the closed five-key summary, so no line text is ever emitted;\n- VT stripping before the line split;\n- SKIP_DETECTED still maps to exit 1.\n\nWhy this shape:\n- The one-tag prefix catches WT-14's `[scenario WT14D] SKIP (...)`. Those lines are on task-befdddf7's branch at postflight.sh :6069/:6071 and print as root or under msys. It also catches any `[block] SKIP` that a harness block prints.\n- The optional `(sub-case)` tag covers the M2-style `(d)` prefix.\n- The exact word SKIP keeps today's informational host notes green. Widening the rule to them would turn hosts red:\n  - `[scenario M2] (d) SKIPPED: ... by design` (postflight.sh :3428, platforms with no process start token);\n  - `[scenario AD] link variant skipped` and `[scenario AE] skipped: this host cannot create symlinks` (sh :4914/:5003, ps1 :4142/:4226): any Windows host without symlink rights;\n  - `[frozen candidate] <mode> skipped: ...` (sh :379, ps1 :358).\n  They are out of scope. If you think they should count, say so in the summary, but do not change them here.\n- The regex is linear (no nested or overlapping quantifiers), so a 16 MiB output stays cheap.\n\npostflight-safe.test.mjs: append the prototype's two tests. Leave every existing test unchanged: they already cover raw SKIP, ANSI-wrapped SKIP and a clean PASS, which is the DoD's \"remains covered\".\n\nTest 1, 'a SKIP after one leading [tag] fails even with an exact PASS marker and exit zero'. For each engine (bash, powershell, pwsh), with that engine's exact PASS line and CRLF endings, each line below must give failureClass SKIP_DETECTED, a nonzero exit, and a JSON summary that does not contain 'mode bits':\n- `[scenario WT14D] SKIP (root ignores mode bits)` (the repro)\n- `[scenario WT14D] SKIP (msys: mode bits do not deny an unlink; the ps1 twin denies it with icacls)`\n- `\\u001b[33m[scenario Q] SKIP: unavailable\\u001b[0m`\n- `[scenario M2] (d) SKIP: no process start token`\n- `[worktree reuse] SKIP`\n- `[scenario AB2]\\tskip optional variant`\n\nTest 2, 'SKIPPED, a later skip word and lowercase skipped notes leave a clean run green'. Each line below, followed by 'PASS postflight.sh', must give failureClass NONE and exit 0:\n- the WT14F description line containing 'a held lock skips the pass'\n- `[scenario M2] (d) SKIPPED: this platform exposes no process start token, so the probe is identity-only by design`\n- `[scenario AE] skipped: this host cannot create symlinks`\n- `[scenario AD] link variant skipped: this host cannot create symlinks`\n- `[frozen candidate] sha256-repo skipped: this git cannot create a sha256 repository`\n- `[skip] owned.txt (MOE_ATTR_PREEXISTING)`\n- `MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=task-resume`\n- `MOE_DISABLE_QUALITY_GATE=1 should skip the gate and allow the commit`\n\nMeasured on the prototype:\n- HEAD's module fails test 1, giving 13/14; the new module passes 14/14.\n- Six regex mutants each fail one test: no sub-case group, SKIP without its word boundary, [scenario] tags only, case-sensitive, unanchored, and the old rule.\n- Before completing, apply at least the unanchored and the no-boundary mutants yourself and see them fail.\n\nError handling: the summarizer must never throw on untrusted output. The regex is a constant applied per line with RegExp.test, and no capture is ever emitted. An empty output still classifies as PASS_MARKER_MISSING, and an oversized one as OUTPUT_LIMIT, as before.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-safe.mjs",
+        "scripts/tests/postflight-safe.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-safe.mjs",
+        "scripts/tests/postflight-safe.test.mjs"
+      ],
+      "note": "Applied approved prototype exactly: anchored single-tag/optional sub-case SKIP rule; two appended tests; existing 12 unchanged. RED: 13/14, WT14D reproduced NONE instead of SKIP_DETECTED. GREEN: 14/14. Scratch unanchored and no-boundary mutants each exit 1 (13 pass/1 fail), killed by negative cases. No raw output added; precedence and five-key shape unchanged.",
+      "startedAt": "2026-11-03T01:26:01.278Z",
+      "completedAt": "2026-11-03T01:26:24.606Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once, fresh, after step 1. From this task's worktree, run exactly:\ncd \"$(git rev-parse --show-toplevel)\" && node --test scripts/tests/postflight-safe.test.mjs && bash scripts/tests/parity-check.sh\n\nExpect 14 tests, 14 pass, 0 fail, then `PASS parity-check.sh`. parity-check.sh is the epic rail. CI runs this test file on every OS (ci.yml :290), so any node 20+ works. The outputTail must carry the `tests 14` / `pass 14` / `fail 0` lines and the PASS line.\n\nIf a test fails, fix it in step 1's two files and never loosen an assertion. If any byte changes after the run, run it again and submit the last output.\n\nDo not run the full postflight harnesses for this row. The architect replays the new rule over complete green logs from both engines and posts the result as a task comment.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran exact approved command fresh in task worktree: node --test scripts/tests/postflight-safe.test.mjs + parity-check.sh. Exit 0; tests 14/pass 14/fail 0/skipped 0; PASS parity-check.sh. No full postflight harness executed, per plan.",
+      "startedAt": "2026-11-03T01:26:24.640Z",
+      "completedAt": "2026-11-03T01:26:34.730Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review, once, as the final step. Load the adversarial-self-review skill.\n\nRead the diff: `git diff \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\" -- scripts/tests/postflight-safe.mjs scripts/tests/postflight-safe.test.mjs`. Expect about +4/-1 and +40 lines, in these two files only.\n\nCheck:\n- Every SKIP still yields exit 1 and never leaks text: the summary stays the five fixed keys.\n- No new false positive on a real harness line. Grep `echo \"[`, `Write-Host '[` and `console.log('[` in postflight.sh, postflight.ps1 and the cjs suites for a tag followed directly by SKIP; only intended skips may match.\n- A line that is only `SKIP` and a CRLF-ended line still classify as they do today.\n- An empty `[]` tag or a stray `]` cannot make the regex backtrack badly; the character classes exclude `]` and `)`.\n\nAfter WT-14 lands, `postflight-safe.mjs bash` reports SKIP_DETECTED under Git Bash (msys) or as root, because WT14D skips there. That is the intended outcome of this row, not a regression: the gate needs a Linux non-root shell or the ps1 twin. Say this in your summary.\n\nError handling and tests: confirm that the summarizer still never throws and that no assertion was loosened.\n\nRecord the findings in the complete_step notes. If you change any byte, re-run step 2's command and submit that output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review complete: read scoped +41/-1 diff (only two approved paths); original 12 tests unchanged. Predicate is stateless/non-global, anchored, disjoint negated delimiter classes; no new IO, concurrency, cleanup or injection surface. Existing type contract/VT handling/precedence/five-key projection unchanged. Harness SKIP/skipped emitters audited: M2/AD/AE/frozen host notes remain non-skips; no unexpected tagged exact SKIP at this HEAD. Additional bare SKIP, CRLF, [] tag, stray ], 1M-character malformed tag/sub-case and metadata probes passed. Reconfirmed mutants each 13 pass/1 fail. Exact step-2 gate exit 0, 14/14 and parity PASS; no bytes changed afterwards. WT14D will intentionally fail root/MSYS bash gates once WT-14 lands; use non-root Linux or ps1. No fixes needed.",
+      "startedAt": "2026-11-03T01:26:34.760Z",
+      "completedAt": "2026-11-03T01:26:54.784Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -19,19 +54,137 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 46,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-1cbc220b7cf249ba9e3d30d05f60e3cb",
+      "author": "architect-24611a0a",
+      "content": "Architect note (architect-24611a0a). This seat is switching Claude accounts, so the replay of the new SKIP rule over complete green harness logs (step 2 mentions it) may never be posted. It is not part of this row's verification.\n\nAt 12d7bb62, source greps of postflight.sh, postflight.ps1, postflight-worktree.cjs and postflight-migration.cjs found no printed '[tag] SKIP' line. After it lands, only WT-14's '[scenario WT14D] SKIP (...)' will match, and only when run as root or under msys.\n\nIf the full logs exist (/mnt/d/moe-scratch/v-b5c8fd34.*/postflight-{sh,ps1}.log, from task-b5c8fd34's dry run), QA can replay them through the new summarizePostflight. A clean run should still classify NONE. Prototype and diffs: /mnt/d/moe-scratch/c25edf45-plan.",
+      "timestamp": "2026-11-03T01:25:22.410Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:24:59.530Z",
-  "updatedAt": "2026-11-03T01:19:26.720Z",
+  "updatedAt": "2026-11-03T01:27:59.631Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T00:49:21.224Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T01:19:22.058Z"
+    "firstClaimAt": "2026-11-03T01:19:22.058Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-fdb2af60"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T01:24:43.601Z",
+  "executionContract": {
+    "intendedBehavior": "postflight-safe's summarizePostflight treats a line as a skip in two cases. Either SKIP is its first word, or SKIP comes right after one leading [tag] (such as '[scenario WT14D]') and an optional '(sub-case)' tag. SKIP must be followed by whitespace, a colon or the end of the line, and case is ignored. Such a line yields failureClass SKIP_DETECTED with exit 1 even when the harness exits 0 and prints its exact PASS line. A later 'skips', 'SKIPPED' and lowercase 'skipped:' host notes stay non-skips. The summary keeps its closed five-key shape and never emits output text.",
+    "acceptanceCriteria": [
+      "summarizePostflight(engine, 0, '[scenario WT14D] SKIP (root ignores mode bits)\\r\\n<exact PASS line>') returns failureClass SKIP_DETECTED and a nonzero exit for bash, powershell and pwsh.",
+      "ANSI-wrapped, colon-ended, end-of-line, sub-case '(d) SKIP:', non-scenario '[block] SKIP' and lowercase 'skip' forms are detected too.",
+      "The WT14F description ('a held lock skips the pass'), '(d) SKIPPED: ... by design', '[scenario AE] skipped:', '[scenario AD] link variant skipped', '[frozen candidate] ... skipped:', '[skip] <path>', MOE_*_SKIPPED codes and a mid-line 'skip' stay NONE with exit 0.",
+      "All 12 pre-existing tests in postflight-safe.test.mjs pass unchanged; the file passes 14/14."
+    ],
+    "invariants": [
+      "The summary keys stay exactly engine, exit, lastScenario, failureClass and failureLine; no output text is ever emitted.",
+      "The failureClass precedence is unchanged: INVALID_ENGINE, then spawn/timeout/limit, then HARNESS_FAILURE, then SKIP_DETECTED, then PASS_MARKER_MISSING, then NONE.",
+      "A raw 'SKIP ...' line, an ANSI-wrapped SKIP and a clean exact PASS classify as before."
+    ],
+    "compatibility": [
+      "CI runs this test file on every OS and postflight-safe.mjs bash on Linux and powershell/pwsh on Windows (ci.yml :290, :314-329). At HEAD no harness line on those hosts prints a [tag] SKIP.",
+      "After WT-14 (task-befdddf7) lands, a Git Bash (msys) or root run of postflight.sh prints '[scenario WT14D] SKIP', which now fails the gate. This is the intended behaviour."
+    ],
+    "approvedScope": [
+      "scripts/tests/postflight-safe.mjs: the SKIP_LINE module constant with its comment, and its use in summarizePostflight.",
+      "scripts/tests/postflight-safe.test.mjs: two appended tests."
+    ],
+    "reuse": [
+      "It reuses the existing SKIP_DETECTED class, exit mapping and VT stripping. Only the line predicate changes.",
+      "Tested bytes: /mnt/d/moe-scratch/c25edf45-plan (safe.proto.diff, safe-test.proto.diff)."
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/postflight-safe.mjs summarizePostflight (:11-33) sets failureClass SKIP_DETECTED from `lines.some(line => /^SKIP(?:\\s|:|$)/i.test(line))` after stripVTControlCharacters and a /\\r?\\n/ split.",
+      "Harness skip forms at HEAD: 'SKIP <what>: <why>' (postflight.sh :30/:55/:72/:2577/:5738, ps1 :22/:5193); '[scenario M2] (d) SKIPPED:' (sh :3428); '[scenario AD|AE] ... skipped:' (sh :4914/:5003, ps1 :4142/:4226); '[frozen candidate] <mode> skipped:' (sh :379, ps1 :358). WT-14's branch adds '[scenario WT14D] SKIP (...)' (sh :6069/:6071)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && node --test scripts/tests/postflight-safe.test.mjs && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Match only '[scenario <id>] SKIP': that is the literal DoD, but it misses '[block] SKIP' and '(d) SKIP'. (b) Match SKIP anywhere on the line: that false-positives on prose such as 'a held lock skips the pass' and 'should skip the gate'. (c) Also count 'SKIPPED' and lowercase 'skipped:' notes: that would turn Windows hosts without symlink rights (AD/AE) and platforms with no start token (M2 d) red, and it changes host-note semantics that this row does not own. Chosen: one leading [tag], an optional (sub-case), then the exact word SKIP. It is the existing raw rule generalized by its prefix, so the word-boundary semantics stay identical.",
+    "codebaseInsights": "summarizePostflight is pure; the test file imports it directly, and one test spawns the CLI entry. The lastScenario regex only takes single-letter ids. It is unrelated to this change and stays as it is. The prompt-overflow block in postflight.sh deliberately avoids printing a line that starts with SKIP, so the 'any SKIP fails' policy is intended.",
+    "risks": "Once WT-14 lands, Git Bash and root postflight-safe bash runs go red on the WT14D skip, as intended. Mention it in the summary. Host-note lines (AD/AE/M2 d/frozen sha256) still pass silently on hosts that skip them; that is a separate policy question for the governor, not this row.",
+    "keyFiles": [
+      "scripts/tests/postflight-safe.mjs",
+      "scripts/tests/postflight-safe.test.mjs",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "082554241e309875097ae066b545d61d91393c21",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T01:24:43.633Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T01:26:01.278Z",
+  "reviewStartedAt": "2026-11-03T01:27:08.263Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && node --test scripts/tests/postflight-safe.test.mjs && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 14\nℹ suites 0\nℹ pass 14\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 310.90772\nPASS parity-check.sh",
+    "reportedAt": "2026-11-03T01:27:08.263Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-safe.mjs",
+    "scripts/tests/postflight-safe.test.mjs"
+  ],
+  "completionSummary": "Fixed false-green scenario-prefixed SKIP classification with the approved anchored single-tag/optional sub-case predicate; closed safe summary and failure precedence unchanged. Two appended tests, existing 12 unchanged. RED reproduced; GREEN 14/14; unanchored/no-boundary mutants killed (13/14 each). Additional malformed/large-line probes and adversarial review passed. Fresh exact gate: 14 tests passed, 0 failed; parity PASS. No full harness run per plan. After WT-14 lands, root/MSYS WT14D skips intentionally fail bash safe gates; use non-root Linux or ps1. Handoff stored in Serena.",
+  "commits": [
+    {
+      "sha": "7379c2bc573674b2488c0667ee3c60cf00a3bdcf",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T01:24:48Z",
+      "paths": [
+        "scripts/tests/postflight-safe.mjs",
+        "scripts/tests/postflight-safe.test.mjs"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T01:27:59.631Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-03T01:24:48Z",
+    "at": "2026-11-03T01:27:59.631Z"
+  }
 }
