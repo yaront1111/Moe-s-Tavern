@@ -73,8 +73,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,7 +86,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:48:03.572Z",
-  "updatedAt": "2026-11-03T23:38:11.080Z",
+  "updatedAt": "2026-11-03T23:57:27.419Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:52:29.147Z",
     "plannedStepCount": 5,
@@ -200,11 +200,11 @@
     }
   ],
   "filesModified": [
-    "docs/plans/2026-10-30-per-task-worktrees.md",
-    "scripts/CLAUDE.md",
-    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-worktree.cjs",
     "scripts/moe-agent.sh",
-    "scripts/tests/postflight-worktree.cjs"
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/plans/2026-10-30-per-task-worktrees.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -212,5 +212,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-2dc72348@2026-11-03T22:59:36Z",
     "at": "2026-11-03T23:32:58.377Z"
-  }
+  },
+  "reviewStartedAt": "2026-11-03T23:57:27.417Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && T=scripts/tests A=scripts/moe-agent N=\"/mnt/c/Program Files/nodejs/node.exe\" P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && export MOE_WORKTREE_ONLY=wt-remote-rejected,wt-unlanded,wt-push,wt-completion,wt-replay-remote,codes WSLENV=MOE_WORKTREE_ONLY && S=$(mktemp -d /mnt/d/moe-scratch/bc6b-v.XXXXXX) && cp $T/postflight-fake-proxy.js $S/fp.js && w(){ wslpath -w \"$1\"; } && x(){ env $E node $T/$1 sh \"$PWD/$A.sh\" $S/fp.js $S \"$BASH\" && env $E \"$N\" \"$(w $T/$1)\" ps1 \"$(w $A.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell; } && bash -n $A.sh && bash $T/parity-check.sh && $P \"$(w $T/parity-check.ps1)\" && x postflight-worktree.cjs && x postflight-migration.cjs && env $E bash $T/worktree-landing.sh && $P \"$(w $T/worktree-landing.ps1)\"",
+    "exitCode": 0,
+    "outputTail": "Fresh run in this session (23:37-23:57Z, detached with set -m, SigIgn 0x5; log /mnt/d/moe-scratch/bc6b-gate2/gate.log, GATE_EXIT=0), on checkpoint 3147c313 with a clean tree:\nPASS parity-check.sh\nPASS parity-check.ps1\n[worktree] wt-push ok / wt-completion ok / wt-replay-remote ok / wt-unlanded ok / wt-remote-rejected ok / codes ok\n[worktree] 6 ok, 0 failed   (sh)\n[worktree] 6 ok, 0 failed   (ps1)\n[migration] ... remote-rejected ok, unknown ok\nPASS migration landing scenarios: 12   (sh)\nPASS migration landing scenarios: 11   (ps1; signal n/a)\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors   (sh)\nworktree-landing: 18 passed, 0 failed, 0 errors   (ps1)\nGATE_EXIT=0\nAlso: npm run lint exits 0 (qualityGate's second half).",
+    "reportedAt": "2026-11-03T23:57:27.417Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "On a [remote rejected] answer, a worktree landing push now runs ONE re-check before it gives up: a land_fetch of origin's target, then merge-base --is-ancestor C. The sh helper is wt_remote_holds, called from wt_push_target. The ps1 helper is Test-MoeRemoteHolds, called from Send-MoeLandPush. When origin's target holds C, the push counts as published (rc 0). The wrapper prints MOE_PUSH_REMOTE_REJECTED_APPLIED, and the normal path follows: the journal is marked 'pushed', the mirror runs, a pushed:true completion row is recorded, and the attempt is finalized landed. No rescue ref and no landingRetry are created. When C is absent, the fetch fails or the ref is unresolvable, the result stays MOE_PUSH_FAILED with the unlanded remote route, exactly as before. The re-check never re-pushes or forces. The [rejected], unknown and reconcile paths are unchanged. Migration landing inherits the re-check through the shared push function. Harness: new git-stub knobs WT_GIT_PUSH_REMOTE_REJECTED (a real push, then a [remote rejected] porcelain line, with the push logged so the case asserts exactly ONE push) and WT_GIT_FETCH_FAIL_AFTER_PUSH. A new case, wt-remote-rejected, has an applied arm (RED at the parent on sh and ps1) and a fetch-fails arm (a guard). Docs updated: the scripts/CLAUDE.md L9-L10 bullet, and the design doc's L9 row, 2.5 list and L9 summary. Residual, kept by this DoD: a re-check fetch that fails while origin holds C still deletes the journal. Filed as LOW task-561d347c."
 }
