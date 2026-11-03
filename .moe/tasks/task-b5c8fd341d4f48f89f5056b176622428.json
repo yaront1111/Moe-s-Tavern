@@ -1,0 +1,28 @@
+{
+  "id": "task-b5c8fd341d4f48f89f5056b176622428",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: the worktree LANDING-CONFLICT/LANDING-RETRY resume prompt forbids git commands and says \"re-run the plan's verification\", but plans snapshot with `git archive HEAD`, which mid-merge archives the pre-merge task tip",
+  "description": "Observed 2026-11-03 00:29Z on WT-14 (task-befdddf7). Its completion hit MOE_COMMIT_FAILED_CONFLICT, and the resume went to worker-26483323. The worker stopped and asked the governor (msg-c9029b23): the approved step-5 gate builds its snapshot with `git archive HEAD scripts`, but the resume prompt says \"no git commands\", and HEAD is pre-merge.\n\nCode:\n- scripts/moe-agent.sh worktree_resume (about :7720-7766);\n- its twin Invoke-MoeWorktreeResume in scripts/moe-agent.ps1 (about :7203-7240).\nBoth merge the target into W with `git merge --no-commit --no-ff`. That leaves HEAD at the task's pre-merge tip, with MERGE_HEAD set. The prompt line then says: \"Edit files only (no git commands, no new plan): remove every conflict marker (...), re-run the plan's verification, then call moe.complete_task.\" LANDING-RETRY says the same without the marker part.\n\nWhy it matters:\n- About 280 task records name `git archive HEAD` in their plan. It is the standard way to build a snapshot outside the shared checkout. Mid-merge, it archives the pre-merge tree and leaves out every target commit just merged in; for WT-14 that was 23 wrapper commits.\n- A worker who follows the plan literally therefore produces green evidence for bytes that will not land.\n- A worker who follows \"no git commands\" cannot run the plan at all, so it stalls on a governor ruling. The governor's interim ruling: copy the merged working tree's scripts/ into a mktemp snapshot outside the checkout, keep every other command byte-identical, and disclose the substitution in the evidence.\n\nThe planner decides the fix. One shape: the resume line tells the worker to build any HEAD-based snapshot from the merged working tree instead, and names the read-only git commands it may use (for example `git ls-files -z` to list tracked paths). It must still forbid every git write (commit, merge, reset, checkout, stash, add) so the wrapper keeps owning the merge commit.\n\nIf WT-19 (task-b1ca54f2) is still open when this lands, its parity sweep covers the new text.",
+  "definitionOfDone": [
+    "Both twins' LANDING-CONFLICT and LANDING-RETRY prompt lines tell the worker how to run the plan's verification against the merged working tree when the plan builds its snapshot from HEAD (e.g. `git archive HEAD`), and state exactly which read-only git commands are allowed while every git write stays forbidden; the sh and ps1 wording is identical.",
+    "New postflight cases in scripts/tests/postflight.sh and scripts/tests/postflight.ps1 assert the new instruction appears in both the LANDING-CONFLICT and the LANDING-RETRY prompt.",
+    "bash -n scripts/moe-agent.sh, the PowerShell ParseFile check on scripts/moe-agent.ps1, bash scripts/tests/parity-check.sh and both postflight engines pass, with the exact commands and counts in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 47,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T00:31:10.080Z",
+  "updatedAt": "2026-11-03T00:31:10.080Z"
+}

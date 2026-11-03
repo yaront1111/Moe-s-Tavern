@@ -1,0 +1,28 @@
+{
+  "id": "task-b1d7d1041c0c4104b9b52fc5de44553d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains connect() re-syncs its bundled role docs and skills over newer ones the running daemon wrote, so an older plugin downgrades every seat's instructions on each reconnect",
+  "description": "Observed 2026-11-03 00:40Z (governor). The fleet's .moe/roles/worker.md matches docs/roles/worker.md at 03355c25, the 10-31 plugin build: a diff of 2 lines, the marker header. Against the live daemon's build 7262e53f, or the target tip, the diff is 8 lines. Its mtime is 2026-11-02 19:13Z, the daemon restart at the worktree switch. .moe/skills/moe-qa-loop/SKILL.md dates from 10-31 19:33Z, the plugin install. Seats in worktree mode therefore read pre-worktree docs, for example:\n- worker.md still says \"work in the project root by default (never a .worktrees/ checkout)\";\n- worker.reference.md lacks the \"LANDING rule (worktree mode)\" and Worktree mode sections that 03355c25..tip added.\n\nCause: both writers use the same rule, \"overwrite when the on-disk marker sha differs\":\n- the daemon's writeInitFiles/writeSkillFiles, on every start (packages/moe-daemon/src/index.ts ~:694-700);\n- the plugin's MoeProjectInitializer.syncRoleDocs/syncSkills (writeGeneratedDoc + shouldUpgradeGeneratedDoc, ~:163-196).\nThe plugin runs its sync on every connect(), in MoeProjectService.kt ~:150 via MoeDaemonSupervisor.ensureMoeInitialized ~:628, and in ensureDaemonRunningImpl ~:127. A sha difference is not an order, so the last writer wins. The plugin is rebuilt far less often than the daemon is swapped, so its bundled copy is usually the older one, and each reconnect downgrades the docs the newer daemon just wrote.\n\nThe planner decides the fix. Possible shapes:\n- the plugin skips the doc sync when it attaches to a daemon it did not spawn, or whose /health version differs from its bundled one;\n- the marker carries an orderable version, so neither writer ever downgrades.\nWorkaround until then: rebuild and reinstall the plugin from the current tip. It needs a PyCharm restart, which is the human's call. VS Code has no such sync; grep finds none in moe-vscode/src.",
+  "definitionOfDone": [
+    "Connecting the JetBrains plugin to a running daemon never replaces a .moe/roles or .moe/skills file whose content came from a newer source than the plugin's bundled copy; a fresh project (no .moe/) and an unmarked user-customized file behave exactly as today.",
+    "JUnit tests in moe-jetbrains cover: plugin bundled copy older than on-disk daemon-written copy (kept), plugin copy newer (upgraded per the chosen rule), missing file (created), unmarked file (kept).",
+    "cd moe-jetbrains && ./gradlew test passes (run under the gradle lease per the rails), with the exact command and counts in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 348.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T00:34:03.097Z",
+  "updatedAt": "2026-11-03T00:34:03.097Z"
+}

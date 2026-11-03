@@ -68,14 +68,20 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (load the adversarial-self-review skill). Review `git diff \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\"` plus the working tree of the 4 files. Check:\n- Every DoD item maps to a passing test row.\n- A non-string, empty or huge bindHost still yields false or 'health check failed', never a throw.\n- The name is resolved once per validation, and the dialed literal equals the judged one (B2's lookup count and its dialed list).\n- A failed interface read refuses every non-loopback bindHost (B3, B4).\n- On a refusal, stop writes no sentinel, deletes nothing and keeps exit 1.\n- status and the start gate behave as the docs say.\n- No test can SIGTERM the vitest worker.\n- Repository strings reach only pino fields, never the message text.\nMutants: copy /mnt/d/moe-scratch/d6ebe4ab-plan/mut.py into your scratch dir. It drives 8 single-string mutants: probe gate, native gate, stop refusal, loopback /8 to /32, foreign gate, interface loop, catch rethrow, and ::1. Point it at your snapshot's index.ts and at src/index.test.ts, with the search strings updated to your final code. Back up once, and count a kill only when the Tests line shows real failures. Restore, then cmp against your worktree before you cite the results.\nSize: net non-board LOC must stay under 400 (expect about +190). Record the mutant table and any residual in the completion summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T00:28:50.933Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Adversarial self-review of the 4 files. FINDING (fixed): the step's \"non-string bindHost never throws\" check failed for a one-element array. net.isIP coerces, so `bindHost: [\"192.0.2.10\"]` passed as a literal and then threw a TypeError: at HEAD from http.request (pre-existing), and with the fix from BlockList.check. Probe script (tsx, fix vs HEAD) over [array, array, 5, {}, '', 100k string, null, true]: only the arrays threw. Fix: a one-line `typeof target !== 'string'` -> null guard at the top of healthProbeAddress, whose only callers are the three probe sites this task changes (small scope growth past approvedScope, same file, root-cause spot). Added test row B6 (it.each [OFF], ['127.0.0.1'], 5 -> 'health check failed', probe false, dialed []); it was RED for the arrays (TypeError) before the guard. Mutants: copied the planner's mut.py to /tmp/moe-d6ebe4ab-mut.QxUtR1, pointed it at src/index.test.ts, added M9 (second lookup: drop the literal arg) and M10 (type guard off). All 10 KILLED with real failures: M1 probe gate 2, M2 native gate 3, M3 stop refusal 2, M4 /8->/32 1, M5 foreign gate 1, M6 no interfaces 3, M7 catch rethrow 8, M8 no ::1 1, M9 second lookup 1, M10 type guard 2. Restored, then cmp equal to the worktree. Other checks OK: one lookup per validation (B2 count + dialed [OFF,OFF]); unreadable interfaces leave loopback only (B3/B4); refusal = no sentinel, no delete, exit 1 (B1); status 'stopped' and the start gate as the docs say; every stopDaemon call has killSpyWithoutSignals installed first (B4/B5/B6 never call stop); repository strings only in pino fields. Residual (theoretical): an interface address BlockList rejects aborts the loop and leaves fewer local addresses, which fails closed. Size: +205/-13, net 192. Fresh step-4 command on final bytes: exit 0, 229 files, 6937 passed, 20 skipped; account-trust-docs 5/5; scratch tsc on index.test.ts exit 0.",
+      "startedAt": "2026-11-03T00:28:50.933Z",
+      "completedAt": "2026-11-03T00:33:17.735Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,7 +93,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:05:43.620Z",
-  "updatedAt": "2026-11-03T00:28:50.933Z",
+  "updatedAt": "2026-11-03T00:34:42.505Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:14.940Z",
@@ -97,7 +103,7 @@
     "firstClaimAt": "2026-11-02T23:51:39.790Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -111,7 +117,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T00:18:52.984Z",
@@ -187,5 +194,46 @@
   },
   "planApprovedAt": "2026-11-03T00:18:53.010Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T00:20:38.054Z"
+  "workStartedAt": "2026-11-03T00:20:38.054Z",
+  "reviewStartedAt": "2026-11-03T00:33:47.534Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=\"$(mktemp -d /tmp/moe-d6ebe4ab.XXXXXX)\" && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$(git rev-parse HEAD)\" && for f in packages/moe-daemon/src/index.ts packages/moe-daemon/src/index.test.ts docs/ARCHITECTURE.md docs/TROUBLESHOOTING.md; do cp \"$f\" \"$S/repo/$f\" && cmp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run'",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ skipped 0\n...\n Test Files  229 passed (229)\n      Tests  6937 passed | 20 skipped (6957)\n   Duration  44.26s (tests 92%, transform 4%, import 4%)\n(snapshot /tmp/moe-d6ebe4ab.N6LzXN, WSL node v24.21.0, 2026-11-03 02:33Z)",
+    "reportedAt": "2026-11-03T00:33:47.534Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    "docs/ARCHITECTURE.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completionSummary": "The daemon CLI now dials a .moe/daemon.json bindHost only when the literal it resolves to is loopback (127.0.0.0/8, ::1 or an IPv4-mapped form) or an address one of this machine's network interfaces holds. The name is resolved once, and that literal is the one dialed. An unreadable interface list leaves loopback only.\n- Native daemon.json with a live pid and an off-host bindHost: validate returns 'bindHost not local'. stop logs an error with only {pid, bindHost} as fields, sends no signal, writes no sentinel, removes nothing and exits 1. status reports 'stopped' with that reason.\n- Foreign daemon.json: an off-host bindHost is skipped; the WSL gateway is still probed.\n- Loopback, 0.0.0.0, ::, wsl and local-interface stops are unchanged.\n- probeDaemonHealth keeps its signature and refuses a non-local literal unless the caller passes a host.\nSelf-review finding, fixed: net.isIP coerces, so `bindHost: [\"192.0.2.10\"]` passed as a literal and threw a TypeError (pre-existing at HEAD via http.request). healthProbeAddress now returns null for a non-string target. That is a 1-line growth past approvedScope, in the same file.\nTests: index.test.ts rows B1-B6 (16 cases). Before the fix, B1 x2, B4 and B5 failed, and later B6 for the arrays. 10 mutants were all killed: the planner's 8, plus M9 (a second lookup) and M10 (the type guard removed).\nDocs: an ARCHITECTURE.md Security Notes bullet, and in TROUBLESHOOTING.md a new Daemon Issues entry plus pointers in the Stop and Replace and Restart Daemon entries. All anchors resolve.\nSize: +205/-13, net 192.\nVerification is the plan's command on the final bytes: exit 0, daemon 229 files, 6937 passed, 20 skipped, and account-trust-docs 5/5.",
+  "commits": [
+    {
+      "sha": "12d7bb6249d85360ba54cb10a4d733214e2d0adb",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T00:19:03Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T00:34:42.505Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T00:19:03Z",
+    "at": "2026-11-03T00:34:42.505Z"
+  }
 }

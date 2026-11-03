@@ -168,11 +168,23 @@
       "author": "governor-e6b40560",
       "content": "Governor diagnosis of the 00:27Z landing conflict. This is a read-only `git merge-tree --write-tree 5c5b3706 refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z`; nothing was landed or edited.\n\nThe postflight test files and fake-proxy auto-merge cleanly. Each wrapper has exactly ONE conflict hunk, and both are the same shape: two new functions added at the same spot.\n- scripts/moe-agent.sh: the target (da5823b5, task-c7ca56e6) added `enable_worktree_config()` where WT-14 added `wt_porcelain()`. Both sit right before the `# provision_worktree --` comment block.\n- scripts/moe-agent.ps1: the target added `function Enable-MoeWorktreeConfig` where WT-14 added `function Get-MoeWorktreeRecords`.\n\nResolution: keep BOTH functions in full, with their header comments, the target's first. Add the closing `}` between them, because the merge shares one trailing brace, so a resolution that just drops the markers leaves the first function unclosed. Change no line inside either function.\n\nThen check:\n- `bash -n scripts/moe-agent.sh`;\n- the ps1 ParseFile check;\n- `bash scripts/tests/parity-check.sh`;\n- that `grep -c '^function Enable-MoeWorktreeConfig\\|^function Get-MoeWorktreeRecords'` finds 2 and the sh twins find 2.\n\n23 wrapper commits have landed since your base 0d8422ce. Re-run your step-5 gate on the merged tree before complete_task. The size waiver prop-6812056d is still PENDING.",
       "timestamp": "2026-11-03T00:28:36.282Z"
+    },
+    {
+      "id": "comment-a872d2bc2b5a434294b560ae35369fb7",
+      "author": "governor-e6b40560",
+      "content": "@worker-26483323 Governor ruling on your 00:29Z question (msg-c9029b23): YES, replace only the snapshot preparation. During a LANDING-CONFLICT resume, HEAD is the pre-merge task tip, so `git archive HEAD scripts` would test the tree without the 23 target commits. Do this instead:\n1. After resolving, confirm no conflict-marker lines are left in either wrapper.\n2. Copy the worktree's merged scripts/ into a fresh mktemp dir outside the checkout and enter it with `cd \"$S\" || exit 1`.\n3. Keep every other step-5 command byte-identical. Where an output differs only because the target commits are merged in (for example a token diff measured from your base), disclose it rather than editing the command.\n4. State the substitution and this reason in one line of the complete_task evidence. No plan or assertion changes.",
+      "timestamp": "2026-11-03T00:30:28.473Z"
+    },
+    {
+      "id": "comment-ca6b61a29fef4c91b2088446f34c5c30",
+      "author": "worker-26483323",
+      "content": "LANDING-CONFLICT recovery: resolved the two wrapper add/add hunks by retaining both WT-14's worktree-record parser and task-c7ca56e6's worktree-config retry helper, adding the parser's closing brace. No function body or test assertion changed; only scripts/moe-agent.{sh,ps1} edited (apply_patch), and no direct Git commands run. All marker lines gone; Bash and native Windows PS5.1 parsers pass; qualityGate parity && npm run lint passes. Reviewed the two resolution diffs and both provisioning call sites; no duplicate/missing function or new state/error-path change.\nFresh full verification is running at /mnt/d/moe-scratch/v-befdddf7.W9bE58 (log /mnt/d/moe-scratch/verify-befdddf7-26483323.log). Sanctioned setup-only substitution per governor msg-dc348df240cf450996e75cb1912df655: `cp -a scripts \"$S/scripts\"` replaces `git archive HEAD scripts | tar -x -C \"$S\"`, because HEAD is pre-merge during recovery and the merged scripts are what will land. Every remaining step-5 command is byte-identical, including both full harness engines. All prior steps remain completed; size-waiver REVIEW hold is unchanged.",
+      "timestamp": "2026-11-03T00:31:22.762Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-03T00:28:36.282Z",
+  "updatedAt": "2026-11-03T00:31:22.762Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",
@@ -331,5 +343,9 @@
     ],
     "count": 1,
     "at": "2026-11-03T00:27:01.582Z"
-  }
+  },
+  "declaredFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ]
 }
