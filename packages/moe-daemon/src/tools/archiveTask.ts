@@ -15,7 +15,7 @@ import { missingRequired, notFound, notAllowed } from '../util/errors.js';
  * enough).
  */
 export const ARCHIVABLE_FROM: TaskStatus[] = ['BACKLOG', 'REVIEW', 'DONE', 'PLANNING', 'BLOCKED'];
-const HOLDER_ONLY_FROM: TaskStatus[] = ['PLANNING', 'BLOCKED'];
+export const HOLDER_ONLY_FROM: TaskStatus[] = ['PLANNING', 'BLOCKED'];
 
 export function archiveUpdates(task: Pick<Task, 'status' | 'blockedReason'>): Partial<Task> {
   const updates: Partial<Task> = { status: 'ARCHIVED' };

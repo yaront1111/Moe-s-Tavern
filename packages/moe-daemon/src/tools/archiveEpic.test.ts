@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 import { ToolTestHarness } from './toolTestHarness.js';
+import { flushActivityLog } from '../state/activityLog.js';
 import { archiveEpicTool } from './archiveEpic.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
+import type { ActivityEvent } from '../types/schema.js';
 
 describe('moe.archive_epic', () => {
   const h = new ToolTestHarness();
@@ -51,6 +55,52 @@ describe('moe.archive_epic', () => {
     expect(done.priorBlockedReason ?? null).toBeNull();
     await setTaskStatusTool(h.state).handler({ taskId: 'task-bk', status: 'WORKING' }, h.state);
     expect(h.state.getTask('task-bk')).toMatchObject({ status: 'WORKING', blockedOnTaskIds: null, blockedFromStatus: null });
+  });
+
+  it('still archives a held BLOCKED row for a caller-less call, its holder, or any caller when the row is unassigned', async () => {
+    const blocked = { status: 'BLOCKED', blockedReason: 'waiting on bench-box', blockedFromStatus: 'WORKING' } as const;
+    h.createEpic({ id: 'epic-hu', order: 2 });
+    h.createEpic({ id: 'epic-ho', order: 3 });
+    h.createEpic({ id: 'epic-un', order: 4 });
+    h.createTask({ id: 'task-hu', epicId: 'epic-hu', assignedWorkerId: 'worker-x', blockedResourceId: 'bench-box', ...blocked });
+    h.createWorker({ id: 'worker-x', epicId: 'epic-hu', currentTaskId: 'task-hu', status: 'BLOCKED' });
+    h.createTask({ id: 'task-ho', epicId: 'epic-ho', assignedWorkerId: 'worker-y', ...blocked });
+    h.createWorker({ id: 'worker-y', epicId: 'epic-ho', currentTaskId: 'task-ho', status: 'BLOCKED' });
+    h.createTask({ id: 'task-un', epicId: 'epic-un', assignedWorkerId: null, ...blocked });
+    await h.state.load();
+
+    const tool = archiveEpicTool(h.state);
+    const results = [
+      await tool.handler({ epicId: 'epic-hu' }, h.state), // a human: no workerId
+      await tool.handler({ epicId: 'epic-ho', workerId: 'worker-y' }, h.state), // the holder itself
+      await tool.handler({ epicId: 'epic-un', workerId: 'architect-c' }, h.state), // nobody holds the row
+    ];
+    expect(results).toEqual(['epic-hu', 'epic-ho', 'epic-un'].map((epicId) => ({
+      success: true, epicId, epicStatus: 'ARCHIVED', archivedTaskCount: 1, totalTasks: 1,
+    })));
+    for (const id of ['task-hu', 'task-ho', 'task-un']) expect(h.state.getTask(id)?.status).toBe('ARCHIVED');
+
+    // The actor is the bare caller; a caller-less call records none (never a placeholder).
+    await flushActivityLog(h.state);
+    const ids = ['task-hu', 'task-ho', 'task-un'];
+    const actors = Object.fromEntries(h.state.getActivityLog(200)
+      .filter((e: ActivityEvent) => e.event === 'TASK_ARCHIVED' && ids.includes(e.taskId ?? ''))
+      .map((e: ActivityEvent) => [e.taskId, e.workerId ?? null]));
+    expect(actors).toEqual({ 'task-hu': null, 'task-ho': 'worker-y', 'task-un': 'architect-c' });
+
+    // updateTask clears the assignee in the same write, so the caller-less row reads "by unknown".
+    const general = h.state.getChannels().find((c) => c.name === 'general');
+    const file = general ? path.join(h.moePath, 'messages', `${general.id}.jsonl`) : '';
+    const lines = file && fs.existsSync(file)
+      ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean)
+        .map((l) => (JSON.parse(l) as { content: string }).content)
+        .filter((c) => c.includes('Task moved to') && ids.some((id) => c.startsWith(`${id}:`)))
+      : [];
+    expect([...lines].sort()).toEqual([
+      'task-ho: Task moved to ARCHIVED by worker-y',
+      'task-hu: Task moved to ARCHIVED by unknown',
+      'task-un: Task moved to ARCHIVED by architect-c',
+    ]);
   });
 
   it('refuses when the epic has an in-flight ticket', async () => {
