@@ -13,42 +13,68 @@
     {
       "stepId": "step-1",
       "description": "Tests first. Create packages/moe-daemon/src/tools/proposeRail.globalPatterns.test.ts with the Write tool, with EXACTLY these 8 cases: the RED gate pins `7 failed | 1 passed (8)`. The architect dry-ran this exact file at 8ca8d389.\nThe fixture's forbidden pattern is deliberately 'console.log'. Never use one of this board's own globalRails.forbiddenPatterns strings in the fixture, or this plan's text trips them.\n```ts\n// GLOBAL MODIFY_RAIL / REMOVE_RAIL reach the two lists submit_plan enforces\n// (forbiddenPatterns, requiredPatterns) as well as customRules (task-34e42a0a).\nimport fs from 'fs';\nimport path from 'path';\nimport { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';\nimport { ToolTestHarness } from './toolTestHarness.js';\nimport { proposeRailTool } from './proposeRail.js';\nimport { submitPlanTool } from './submitPlan.js';\nimport { MoeError } from '../util/errors.js';\n\nconst RAILS = {\n  techStack: [], formatting: '', testing: '',\n  forbiddenPatterns: ['rm -rf', 'console.log'],\n  requiredPatterns: ['error handling', 'test'],\n  customRules: ['Keep it simple'],\n};\n\ndescribe('moe.propose_rail GLOBAL rail lists (task-34e42a0a)', () => {\n  const h = new ToolTestHarness();\n  beforeEach(async () => {\n    h.init();\n    h.setupMoeFolder({ globalRails: structuredClone(RAILS) });\n    h.createEpic();\n    h.createTask({ status: 'PLANNING', assignedWorkerId: 'architect-1' });\n    await h.state.load();\n  });\n  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });\n\n  const plan = (description: string) => ({ taskId: 'task-1', workerId: 'architect-1', steps: [{ description, affectedFiles: ['file.ts'] }] });\n  const FORBIDDEN_PLAN = plan('Replace the console.log call with the logger, with error handling and a test');\n  const REQUIRED_PLAN = plan('Rename a constant and add a test');\n  const submit = (p: object) => submitPlanTool(h.state).handler(p, h.state);\n  const propose = (args: Record<string, unknown>) => proposeRailTool(h.state).handler({\n    taskId: 'task-1', targetScope: 'GLOBAL', proposedValue: '', reason: 'the rail is wrong for this task', workerId: 'architect-1', ...args,\n  }, h.state) as Promise<{ proposalId: string; status: string }>;\n  const diskRails = () => (JSON.parse(fs.readFileSync(path.join(h.moePath, 'project.json'), 'utf-8')) as { globalRails: typeof RAILS }).globalRails;\n  const proposalFiles = () => fs.readdirSync(path.join(h.moePath, 'proposals'));\n\n  it.each([\n    ['(g1) REMOVE a forbiddenPatterns entry', 'REMOVE_RAIL', 'console.log', '', FORBIDDEN_PLAN, 'Forbidden pattern: console.log', { forbiddenPatterns: ['rm -rf'] }],\n    ['(g2) MODIFY a forbiddenPatterns entry', 'MODIFY_RAIL', 'console.log', 'console.debug', FORBIDDEN_PLAN, 'Forbidden pattern: console.log', { forbiddenPatterns: ['rm -rf', 'console.debug'] }],\n    ['(g3) REMOVE a requiredPatterns entry', 'REMOVE_RAIL', 'error handling', '', REQUIRED_PLAN, 'Required pattern missing: error handling', { requiredPatterns: ['test'] }],\n    ['(g4) MODIFY a requiredPatterns entry', 'MODIFY_RAIL', 'error handling', 'constant', REQUIRED_PLAN, 'Required pattern missing: error handling', { requiredPatterns: ['constant', 'test'] }],\n  ] as const)('%s: PENDING, approval edits exactly that entry on disk, and the refused plan is accepted', async (_title, proposalType, currentValue, proposedValue, refusedPlan, violation, changed) => {\n    const { proposalId, status } = await propose({ proposalType, currentValue, proposedValue });\n    expect(status).toBe('PENDING');\n    await expect(submit(refusedPlan)).rejects.toThrow(violation);\n\n    await h.state.approveProposal(proposalId);\n    await h.state.load();\n    const expected = { ...RAILS, ...changed };\n    expect(h.state.project!.globalRails).toEqual(expected);\n    expect(diskRails()).toEqual(expected);\n    expect(h.state.proposals.get(proposalId)!.status).toBe('APPROVED');\n\n    await submit(refusedPlan);\n    expect(h.state.getTask('task-1')!.status).toBe('AWAITING_APPROVAL');\n  });\n\n  it('(g5) a GLOBAL value in no rail list is a coded NOT_FOUND refusal that writes nothing', async () => {\n    const err = await propose({ proposalType: 'REMOVE_RAIL', currentValue: 'no such rail' }).catch((e: unknown) => e);\n    expect(err).toBeInstanceOf(MoeError);\n    expect(err).toMatchObject({ codeName: 'NOT_FOUND' });\n    expect((err as Error).message).toContain('Rail not found');\n    expect(h.state.proposals.size).toBe(0);\n    expect(proposalFiles()).toEqual([]);\n  });\n\n  it('(g6) a GLOBAL value in two rail lists is a coded INVALID_INPUT refusal that writes nothing', async () => {\n    h.state.project!.globalRails.customRules = ['console.log'];\n    const err = await propose({ proposalType: 'MODIFY_RAIL', currentValue: 'console.log', proposedValue: 'x' }).catch((e: unknown) => e);\n    expect(err).toBeInstanceOf(MoeError);\n    expect(err).toMatchObject({ codeName: 'INVALID_INPUT' });\n    expect((err as Error).message).toContain('Ambiguous rail match');\n    expect(h.state.proposals.size).toBe(0);\n    expect(proposalFiles()).toEqual([]);\n  });\n\n  it('(g7) approval re-resolves: a value gone since the proposal is a coded refusal that changes nothing', async () => {\n    const { proposalId } = await propose({ proposalType: 'REMOVE_RAIL', currentValue: 'console.log' });\n    h.state.project!.globalRails.forbiddenPatterns = ['rm -rf'];\n    const before = fs.readFileSync(path.join(h.moePath, 'project.json'), 'utf-8');\n    await expect(h.state.approveProposal(proposalId)).rejects.toMatchObject({ codeName: 'NOT_FOUND' });\n    expect(fs.readFileSync(path.join(h.moePath, 'project.json'), 'utf-8')).toBe(before);\n    expect(h.state.proposals.get(proposalId)!.status).toBe('PENDING');\n  });\n\n  it('(g8) GLOBAL ADD_RAIL still appends to customRules only', async () => {\n    const { proposalId } = await propose({ proposalType: 'ADD_RAIL', proposedValue: 'console.log' });\n    await h.state.approveProposal(proposalId);\n    await h.state.load();\n    expect(h.state.project!.globalRails).toEqual({ ...RAILS, customRules: ['Keep it simple', 'console.log'] });\n  });\n});\n```\nDoD map: (g1) to (g4) are DoD 1, each with a reload from disk and the refused plan accepted afterwards. (g5) and (g6) are DoD 2. (g7) proves that approval re-resolves the value. (g8) is the ADD_RAIL regression.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/proposeRail.globalPatterns.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/proposeRail.globalPatterns.test.ts"
+      ],
+      "note": "Wrote the 8-case test file exactly as planned. The RED-at-base check runs in step 5 once the docs and code are in place.",
+      "startedAt": "2026-11-03T21:04:43.020Z",
+      "completedAt": "2026-11-03T21:05:00.025Z"
     },
     {
       "stepId": "step-2",
       "description": "Rewrite packages/moe-daemon/src/state/railChange.ts with your Write tool, as below (dry-run tsc clean).\n- findRailIndex keeps its signature and exact-then-trimEnd matching. Its two throws become coded, and the text stays 'Rail not found for proposal <id>' / 'Ambiguous rail match for proposal <id>'. StateManager.test.ts:936 and proposeRail.test.ts:127 match those substrings.\n```ts\nimport type { GlobalRails, RailProposal } from '../types/schema.js';\nimport { MoeError, MoeErrorCode } from '../util/errors.js';\n\n/** The GLOBAL lists a MODIFY_RAIL or REMOVE_RAIL can reach. ADD_RAIL only appends to customRules. */\nexport const GLOBAL_RAIL_LISTS = ['customRules', 'forbiddenPatterns', 'requiredPatterns'] as const;\nexport type GlobalRailList = typeof GLOBAL_RAIL_LISTS[number];\n\n/** The exact entry if one exists, else every entry equal once trailing whitespace is trimmed. */\nfunction railMatches(rails: readonly string[], value: string): number[] {\n  const exact = rails.indexOf(value);\n  if (exact !== -1) return [exact];\n  return rails.flatMap((rail, index) => rail.trimEnd() === value.trimEnd() ? [index] : []);\n}\n\nconst railNotFound = (proposalId: string) =>\n  new MoeError(MoeErrorCode.NOT_FOUND, `Rail not found for proposal ${proposalId}`, { proposalId });\nconst ambiguousRail = (proposalId: string, lists: readonly string[] = []) =>\n  new MoeError(MoeErrorCode.INVALID_INPUT,\n    `Ambiguous rail match for proposal ${proposalId}${lists.length ? ` (${lists.join(', ')})` : ''}`, { proposalId, lists });\n\n/** Resolve an approved rail's original text without losing insignificant trailing whitespace. */\nexport function findRailIndex(rails: string[], value: string, proposalId: string): number {\n  const matches = railMatches(rails, value);\n  if (matches.length === 0) throw railNotFound(proposalId);\n  if (matches.length > 1) throw ambiguousRail(proposalId);\n  return matches[0];\n}\n\n/** The one GLOBAL list holding a MODIFY/REMOVE value. None, or several, is a coded refusal. */\nexport function resolveGlobalRail(\n  rails: GlobalRails | undefined, value: string, proposalId: string\n): { list: GlobalRailList; index: number } {\n  const hits = GLOBAL_RAIL_LISTS.flatMap((list) => {\n    const matches = railMatches(rails?.[list] ?? [], value);\n    if (matches.length > 1) throw ambiguousRail(proposalId, [list]);\n    return matches.length === 1 ? [{ list, index: matches[0] }] : [];\n  });\n  if (hits.length === 0) throw railNotFound(proposalId);\n  if (hits.length > 1) throw ambiguousRail(proposalId, hits.map((hit) => hit.list));\n  return hits[0];\n}\n\n/** The globalRails an approved GLOBAL proposal produces. Pure: the caller persists it. */\nexport function applyGlobalRailChange(rails: GlobalRails, proposal: RailProposal): GlobalRails {\n  const next: GlobalRails = { ...rails };\n  if (proposal.proposalType === 'ADD_RAIL') {\n    next.customRules = [...(rails.customRules ?? []), proposal.proposedValue];\n    return next;\n  }\n  const { list, index } = resolveGlobalRail(rails, proposal.currentValue ?? '', proposal.id);\n  const edited = [...rails[list]];\n  if (proposal.proposalType === 'MODIFY_RAIL') edited[index] = proposal.proposedValue;\n  else edited.splice(index, 1);\n  next[list] = edited;\n  return next;\n}\n```\nError handling: every refusal is a coded MoeError thrown before any write. railNotFound is NOT_FOUND. ambiguousRail is INVALID_INPUT and covers both two matches inside one list and hits in two lists. GlobalRails' three lists are required string[] in types/schema.ts, so `rails[list]` needs no fallback after resolution.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/railChange.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/railChange.ts"
+      ],
+      "note": "Rewrote railChange.ts as planned. findRailIndex now throws coded MoeErrors with the same text. Added GLOBAL_RAIL_LISTS, resolveGlobalRail and applyGlobalRailChange.",
+      "startedAt": "2026-11-03T21:05:02.228Z",
+      "completedAt": "2026-11-03T21:05:12.010Z"
     },
     {
       "stepId": "step-3",
       "description": "Wire both callers with your Edit tool.\n(a) packages/moe-daemon/src/tools/proposeRail.ts\n- Import `{ findRailIndex, resolveGlobalRail }`.\n- Replace the `const rails = params.targetScope === 'GLOBAL' ? ... customRules ...` block and its `findRailIndex(rails, ...)` call with:\n  - `if (params.targetScope === 'GLOBAL') resolveGlobalRail(state.project?.globalRails, params.currentValue, proposalId);`\n  - `else findRailIndex(params.targetScope === 'EPIC' ? state.getEpic(task.epicId)?.epicRails || [] : task.taskRails || [], params.currentValue, proposalId);`\n  - above them, a 2-line comment: a GLOBAL value may sit in customRules, forbiddenPatterns or requiredPatterns (the two lists submit_plan enforces), and exactly one list must hold it.\n- Append to the currentValue inputSchema description: `. For GLOBAL it may be a customRules, forbiddenPatterns or requiredPatterns entry; exactly one of those lists must hold it`.\n- Leave the record shape and every other check alone. ADD_RAIL GLOBAL still appends to customRules.\n(b) packages/moe-daemon/src/state/StateManager.ts\n- Change only the import (`import { applyGlobalRailChange, findRailIndex } from './railChange.js';`) and applyRailChange's GLOBAL branch (about :1396-1418). After the existing `if (!this.project) throw new Error('Project not loaded');` it becomes:\n  - `const project = { ...this.project, globalRails: applyGlobalRailChange(this.project.globalRails, proposal), updatedAt: new Date().toISOString() };`\n  - `await atomicWriteJsonAsync(path.join(this.moePath, 'project.json'), project);`\n  - `this.project = project;`\n  - with one comment line: \"Written before it is adopted: a failed write leaves memory and the proposal unchanged.\"\n- The order changes on purpose: today it assigns before writing, so a failed write left memory ahead of disk.\n- EPIC/TASK branches and the top-of-function guard are untouched.\n- StateManager.ts went from 1493 to 1476 lines in the dry run, under stateModules.test.ts's 1500 budget. Do not grow it elsewhere.\nError handling:\n- propose_rail resolves before createProposal, so a refusal writes nothing to .moe/proposals/.\n- Approval re-resolves inside applyGlobalRailChange before the write. A refusal propagates through approveProposal, which leaves the proposal PENDING, and the WS APPROVE_PROPOSAL handler forwards the message as before, now prefixed `[NOT_FOUND] ` or `[INVALID_INPUT] `.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/proposeRail.ts",
         "packages/moe-daemon/src/state/StateManager.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/proposeRail.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "proposeRail.ts now resolves a GLOBAL value with resolveGlobalRail, and the currentValue description is extended. StateManager's GLOBAL branch now calls applyGlobalRailChange, writes project.json, then adopts it. StateManager.ts went from 1493 to 1480 lines. The plan estimated 1476; that is still a net shrink and under the 1500 budget.",
+      "startedAt": "2026-11-03T21:05:14.633Z",
+      "completedAt": "2026-11-03T21:05:37.731Z"
     },
     {
       "stepId": "step-4",
       "description": "docs/MCP_SERVER.md, section `### moe.propose_rail` (about :1297), with your Edit tool. Directly after the paragraph that starts \"A supplied nonempty `workerId` is recorded as `proposal.workerId`\", add this one paragraph (governor ruling comment-d45684e2: include it and don't defer):\n\"`currentValue` is required for `MODIFY_RAIL` and `REMOVE_RAIL` and must match one stored rail, exactly or up to trailing whitespace. For `GLOBAL` it is looked up in `globalRails.customRules`, `forbiddenPatterns` and `requiredPatterns` (the two lists `moe.submit_plan` enforces): exactly one list must hold it, and approval re-resolves it and edits that list. `ADD_RAIL` on `GLOBAL` appends to `customRules`. `EPIC` and `TASK` proposals edit `epicRails` and `taskRails`, which `moe.submit_plan` does not enforce, so they cannot lift a rail refusal. A value in no list is refused `NOT_FOUND` (`Rail not found for proposal …`), and one held by two lists or matching two entries `INVALID_INPUT` (`Ambiguous rail match for proposal …`); neither writes a proposal.\"\nThe GREEN gate greps the exact clause \"exactly one list must hold it, and approval re-resolves it and edits that list\". task-55a5a9f9 and task-7d3428d1 (both REVIEW) edit other sections of this file, so merge-tree lands them side by side.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added the one paragraph to the moe.propose_rail section, as the governor ruled (comment-d45684e2). It sits right after the workerId paragraph and contains the exact GREEN-gate clause.",
+      "startedAt": "2026-11-03T21:05:41.359Z",
+      "completedAt": "2026-11-03T21:05:49.238Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification, once. Never in the shared checkout (rail). Each command snapshots into a fresh mktemp dir and works the same in your task worktree with uncommitted edits and, after landing, in QA's control checkout. The architect dry-ran both both ways, and GREEN exits 1 on the unfixed tree.\nGREEN, which is complete_task's verification:\n`cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"exactly one list must hold it, and approval re-resolves it and edits that list\" docs/MCP_SERVER.md && S=$(mktemp -d) && D=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $D/state/railChange.ts $D/state/StateManager.ts $S/$D/state/ && cp $D/tools/proposeRail.ts $D/tools/proposeRail.globalPatterns.test.ts $S/$D/tools/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/proposeRail src/state/StateManager.test.ts src/state/stateModules.test.ts src/tools/submitPlan.test.ts`\nExpect `Test Files 5 passed (5)` and `Tests 282 passed (282)`.\nRED-AT-BASE, which proves the new cases fail on the unfixed sources:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && D=packages/moe-daemon/src && git archive 8ca8d38951e5279bf01f47578550b18d6ec87088 packages/moe-daemon | tar -x -C $S && cp $D/tools/proposeRail.globalPatterns.test.ts $S/$D/tools/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/proposeRail.globalPatterns.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +7 failed \\| 1 passed \\(8\\)\" $S/l && ! grep -aqF \"> (g8) \" $S/l && echo RED-AT-BASE; }`\nIt must print RED-AT-BASE.\nError handling for a red run: read the first FAIL line before editing.\n- A count other than 282 means a case drifted from step 1.\n- A stateModules failure means StateManager grew past 1500.\n- A StateManager.test.ts 'Rail not found' failure means the coded text changed.\nQuote both outputs in complete_task's summary.\nEach gate dir is about 106 MB. Afterwards delete only yours: `for d in /tmp/tmp.*; do f=$d/packages/moe-daemon/src/tools/proposeRail.globalPatterns.test.ts; [ -O \"$d\" ] && [ -f \"$f\" ] && grep -q '(task-34e42a0a)' \"$f\" && rm -rf -- \"$d\"; done`.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T21:05:52.293Z"
     },
     {
       "stepId": "step-6",
@@ -78,11 +104,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:42:09.506Z",
-  "updatedAt": "2026-11-03T21:02:25.025Z",
+  "updatedAt": "2026-11-03T21:05:52.293Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:51:29.372Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -92,7 +119,12 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:01:46.273Z",
   "executionContract": {
@@ -164,5 +196,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T21:01:46.305Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T21:04:43.020Z"
 }

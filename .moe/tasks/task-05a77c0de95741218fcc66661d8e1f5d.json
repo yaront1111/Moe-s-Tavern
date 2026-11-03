@@ -59,7 +59,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -72,16 +72,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:43:27.452Z",
-  "updatedAt": "2026-11-03T21:02:30.809Z",
+  "updatedAt": "2026-11-03T21:06:18.028Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:43:35.791Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T21:05:38.092Z",
+    "wallClockMs": 1322301
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -191,9 +194,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T20:54:11Z",
-    "at": "2026-11-03T21:02:30.809Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T21:03:03Z",
+    "at": "2026-11-03T21:06:18.028Z"
+  },
+  "completedAt": "2026-11-03T21:05:38.092Z",
+  "reviewCompletedAt": "2026-11-03T21:05:38.092Z",
+  "reviewSummary": "Reviewed completion ac3ea38f (on moe/control and moe/work-2026-10-24; 2 files, +155/-5, net 150). Re-ran task.verification in git-archive snapshots outside the shared checkout (npm ci, node 24, env -i). Gate leg: tsc and tt.json typecheck clean, 7 files / 177 tests passed, exit 0. Red-at-base leg (activityLog.ts pinned at 8ca8d389): 7 failed | 1 passed (8), FAIL for r1-r7, (c0) green, RED-AT-BASE printed. DoD 1: r1 (filtered query finds the event a real LogRotator moved into .1.gz) and r2 (unfiltered {limit:1} hasMore:true, {offset:1,limit:1} returns the rotated event) fail at base, pass now. DoD 2: r3 (complete:true when every generation read, newest-first), r4 (scan ends inside .1.gz, target in .2.gz: complete:false), r5 (window fills exactly at a generation end with an older one present: complete:false), r7 (fills exactly at the last generation: complete:true), r6 (corrupt .1.gz: warn, skip, complete:false, no throw). DoD 3: the named vitest set passes in a snapshot. Code read adversarially: readActivityTail walks live file then .1.gz, .2.gz newest-first; stops at a missing generation, a full window (hasMoreOlderLines true) or n>50; gunzipSync capped at 64 MiB; unreadable generation gets warn plus a gap forcing hasMoreOlderLines true; slice(-need) is safe (need>0); outer try/catch keeps it non-throwing; no cache, no writes under .moe/. Response shape, order and 5000 limit unchanged; getActivityLog.ts, StateManager.ts, LogRotator.ts, reverseReader.ts, docs/MCP_SERVER.md untouched. No forbiddenPatterns in added lines. Non-blocking: sub-ms window inside LogRotator.rotate() where .1.gz is absent while .2.gz exists, so a query then can report complete:true (a retry heals it; outside the plan's stop-at-first-missing design).",
+  "requiredCheckAtDone": null
 }

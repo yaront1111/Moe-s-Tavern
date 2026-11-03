@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "Write the tests first (load test-driven-development). Create packages/moe-daemon/src/tools/waitForTask.ownFinalizing.test.ts with the Write tool. Never cp the scratch draft into the tree: a shell write leaves no TOOL witness. Read-only reference: /mnt/d/moe-scratch/plan-4fbd3c69/waitForTask.ownFinalizing.test.ts. The architect dry-ran it red at base and green with the fix.\n\nFixture:\n- ToolTestHarness: h.setupMoeFolder({ schemaVersion: 6 }), h.createEpic(), then createTask task-W (WORKING, one COMPLETED step on file.ts, order 1) and task-next (WORKING, order 2), then await h.state.load().\n- afterEach unsubscribes and clears every entry in activeWaiters (exported from ./waitForTask.js), then calls h.state.clearEmitter() and h.cleanup().\n- Helper completeLeavingFinalizing():\n  1. claim_next_task {statuses:['WORKING'], taskId:'task-W', workerId:'worker-1'};\n  2. complete_task {taskId:'task-W', workerId:'worker-1', verification:{command:'npm test', exitCode:0}};\n  3. assert that listAttempts(h.state,'task-W') is [['worker-1','finalizing']];\n  4. return the claim's attemptId and generation.\n\nUse exactly these case-title prefixes, because the red checkRef greps them:\n- (c1) control: claim_next_task {statuses:['WORKING'], workerId:'worker-1'} is refused with a MoeError whose codeName is ATTEMPT_FINALIZING.\n- (c2) control: the hold is worker-scoped. wait_for_task for worker-2 (timeoutMs 1000) answers hasNext:true with task-next.\n- (f1) DoD 1: wait_for_task {statuses:['WORKING'], workerId:'worker-1', timeoutMs:1000} answers hasNext:false, with no task and no claim_next_task nextAction.\n- (f2) DoD 2:\n  1. Start the same wait with timeoutMs 5000 and do not await it.\n  2. After a 50 ms tick, assert that activeWaiters.has('worker-1').\n  3. Call finalize_attempt {taskId:'task-W', workerId:'worker-1', attemptId, generation, outcome:'nothing-to-commit'}.\n  4. The parked promise resolves hasNext:true with task-next and a claim_next_task nextAction.\n  5. The claim run with those args returns task-next, and getTask('task-next').assignedWorkerId is 'worker-1'.\n\nRun the file once against the unfixed code. Expected: Tests 2 failed | 2 passed (4), with (f1) and (f2) red.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/waitForTask.ownFinalizing.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T21:05:55.771Z"
     },
     {
       "stepId": "step-2",
@@ -44,7 +45,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-ed0f6a9e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -56,14 +57,15 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:43:54.639Z",
-  "updatedAt": "2026-11-03T21:02:56.184Z",
+  "updatedAt": "2026-11-03T21:05:55.771Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:54:28.772Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
+    "architect-1dd28c7c",
+    "worker-ed0f6a9e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -130,5 +132,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T21:02:56.184Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T21:05:55.771Z"
 }
