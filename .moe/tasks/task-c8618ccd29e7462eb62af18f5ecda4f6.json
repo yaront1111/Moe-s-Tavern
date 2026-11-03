@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-ed0f6a9e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -98,10 +98,17 @@
   ],
   "priority": "LOW",
   "order": 436.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8cbb385753954d77b174b55069b7b854",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-03T22:33:02.266Z",
+      "content": "Landing unlanded (contention) 1 time(s) in a row; attempt attempt-d96c951620a64e7588a0143454a45088 (generation 2); paths: (none reported); rescue ref: refs/moe/rescue/task-c8618ccd29e7462eb62af18f5ecda4f6/20261103T223301Z; target tip: unknown; task WORKING."
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:31.406Z",
-  "updatedAt": "2026-11-03T22:02:16.863Z",
+  "updatedAt": "2026-11-03T22:33:39.019Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:14:27.370Z",
@@ -115,7 +122,8 @@
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-c9368191"
+    "worker-c9368191",
+    "worker-ed0f6a9e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -203,5 +211,36 @@
     "packages/moe-daemon/src/tools/getPendingQuestions.ts",
     "packages/moe-daemon/src/tools/waitForTask.ts"
   ],
-  "completionSummary": "get_pending_questions and wait_for_task now derive unanswered human questions through one shared helper, util/taskPayload unansweredHumanComments. A comment authored 'moe-daemon' (landing notes, repair diagnostics) is no longer taken as an answer, so a human question followed only by daemon comments stays pending on both surfaces. A real agent comment, any workerId, 'agent' or an author-less legacy comment still answers it. A daemon comment neither ends nor joins the unanswered run. A non-array comments value yields none.\n\nChanges (4 files): util/taskPayload.ts (SYSTEM_COMMENT_AUTHORS + unansweredHumanComments); tools/getPendingQuestions.ts (inline scan replaced); tools/waitForTask.ts (findPendingQuestion only, plus one import; event filter and wake path untouched); new tools/pendingQuestions.daemonComment.test.ts with cases p1-p4, p1 being the ported hunt repro.\n\nVerification, in a git-archive snapshot outside the shared checkout: tsc --noEmit clean; Test Files 5 passed (5), Tests 30 passed (30); exit 0.\nNegative control at the merge-base (new test file only): \"Tests  3 failed | 1 passed (4)\", then RED-AT-BASE. p1, p2 and p4 fail, p3 passes."
+  "completionSummary": "get_pending_questions and wait_for_task now derive unanswered human questions through one shared helper, util/taskPayload unansweredHumanComments. A comment authored 'moe-daemon' (landing notes, repair diagnostics) is no longer taken as an answer, so a human question followed only by daemon comments stays pending on both surfaces. A real agent comment, any workerId, 'agent' or an author-less legacy comment still answers it. A daemon comment neither ends nor joins the unanswered run. A non-array comments value yields none.\n\nChanges (4 files): util/taskPayload.ts (SYSTEM_COMMENT_AUTHORS + unansweredHumanComments); tools/getPendingQuestions.ts (inline scan replaced); tools/waitForTask.ts (findPendingQuestion only, plus one import; event filter and wake path untouched); new tools/pendingQuestions.daemonComment.test.ts with cases p1-p4, p1 being the ported hunt repro.\n\nVerification, in a git-archive snapshot outside the shared checkout: tsc --noEmit clean; Test Files 5 passed (5), Tests 30 passed (30); exit 0.\nNegative control at the merge-base (new test file only): \"Tests  3 failed | 1 passed (4)\", then RED-AT-BASE. p1, p2 and p4 fail, p3 passes.",
+  "commits": [
+    {
+      "sha": "b1e626033477f815898dc573fe3d9f4ca65caa80",
+      "ref": "refs/moe/rescue/task-c8618ccd29e7462eb62af18f5ecda4f6/20261103T223301Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T21:20:18Z",
+      "paths": [],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T22:33:00.820Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-c8618ccd29e7462eb62af18f5ecda4f6 ref=refs/moe/rescue/task-c8618ccd29e7462eb62af18f5ecda4f6/20261103T223301Z sha=b1e626033477f815898dc573fe3d9f4ca65caa80 reason=contention"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "failed",
+    "kind": "completion",
+    "code": "MOE_COMMIT_FAILED_LAND_LEASE",
+    "sessionId": "worker-c9368191@2026-11-03T21:20:18Z",
+    "at": "2026-11-03T22:33:01.599Z"
+  },
+  "landingRetry": {
+    "reason": "contention",
+    "rescueRef": "refs/moe/rescue/task-c8618ccd29e7462eb62af18f5ecda4f6/20261103T223301Z",
+    "targetTip": null,
+    "paths": [],
+    "count": 1,
+    "at": "2026-11-03T22:33:02.266Z"
+  }
 }

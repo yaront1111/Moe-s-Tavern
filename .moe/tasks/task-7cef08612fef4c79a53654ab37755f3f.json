@@ -1,0 +1,34 @@
+{
+  "id": "task-7cef08612fef4c79a53654ab37755f3f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: delete_task and delete_epic have no role gate, unlike their restricted siblings set_task_status, set_task_priority and set_task_dependencies (workerHasRole + notAllowed in the handler), so any worker or QA seat can irreversibly delete a live peer's WORKING row, skip QA by deleting its own REVIEW row, or cascade-delete a whole epic",
+  "description": "Filed by defect hunt #12 (task-f6f0b580, architect-1dd28c7c). Reproduced at moe/work-2026-10-24 f159784e; the lane files are unchanged at cbae6070.\n\nPROBLEM (packages/moe-daemon/src/):\n- tools/index.ts TOOL_AUDIENCE gives moe.delete_task (:219) and moe.delete_epic (:211) the same [A] audience as moe.set_task_status (:213). TOOL_AUDIENCE only filters tools/list (McpAdapter.ts:270). A worker or QA seat that calls a hidden tool by name still reaches its handler, and a role-less seat sees it listed.\n- The restricted siblings therefore gate in their handlers:\n  - setTaskStatus.ts:100-113 (task-629ddc99): when the workerId key is present, `workerHasRole(state, callerId, 'architect', 'governor')`, else notAllowed, before the task lookup and any write. An absent key is the human path; '' or null is judged like any id.\n  - setTaskDependencies.ts:69 and setTaskPriority.ts:47 gate the same way.\n- deleteTask.ts:18-33 and deleteEpic.ts:23-56 never resolve the caller's role. workerId is used only as the actor (deleteTask.ts:30, deleteEpic.ts:48).\n- The delete cannot be undone, because the file is unlinked.\n  - state.deleteTask closes the task's open attempts (taskStore.ts:700) and sets the holder IDLE (:739).\n  - delete_epic with cascadeDelete deletes every task in the epic.\n\nEVIDENCE: /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_deleteRoleGate.test.ts, run in a git-archive snapshot of f159784e with `npx vitest run src/tools/zzHuntA_deleteRoleGate.test.ts`. Result: Tests 3 failed | 3 passed (6).\n- × (r1) a qa seat deleting a live peer's WORKING row is refused and the peer keeps its row → AssertionError: promise resolved \"{ success: true, task: { …(20) } }\" instead of rejecting\n- × (r2) a worker seat deleting a REVIEW row (skipping qa_approve) is refused → the same\n- × (r3) a worker seat cascade-deleting the whole epic is refused → AssertionError: promise resolved \"{ success: true, …(2) }\" instead of rejecting\n- ✓ controls: set_task_status refuses the same caller; a governor-prefixed seat and a workerId-less (human) call still delete.\n- My re-run: /mnt/d/moe-scratch/hunt-f6f0b580/me/me-zzHuntA_deleteRoleGate.log\n- Callers: both IDE plugins delete through /ws DELETE_TASK with no workerId (MoeCommandSender.kt:65, MoeDaemonClient.ts:1180), not through this tool. No role doc, skill or script tells a worker or QA seat to call moe.delete_task or moe.delete_epic.\n- Exposure: not measurable from board state, because a deleted row leaves no file.\n\nFIX DIRECTION: copy 629ddc99's gate into both handlers. When the workerId key is present and !workerHasRole(state, id, 'architect', 'governor'), throw notAllowed naming the role and pointing at #governors. Do this before the task or epic lookup and any write. Keep the workerId-less human path. If an existing deleteTask or deleteEpic test passes a worker-prefixed id only as the actor, switch it to an architect- or governor- id.\n\nFILES: packages/moe-daemon/src/tools/deleteTask.ts, packages/moe-daemon/src/tools/deleteEpic.ts, a new packages/moe-daemon/src/tools/deleteTask.roleGate.test.ts, and existing delete tests only if their actor ids need the role. Sync the `### moe.delete_task` and `### moe.delete_epic` sections of docs/MCP_SERVER.md only if lanes.js shows that file free at planning time (ruling msg-71db57ac).",
+  "definitionOfDone": [
+    "With a workerId that resolves to neither architect nor governor ('worker-1', 'qa-1', and an explicit '' or null), moe.delete_task and moe.delete_epic (with and without cascadeDelete) are refused NOT_ALLOWED before any lookup or write: the task and epic files, the holder's worker record and its open attempts are unchanged.",
+    "An architect- or governor-role caller and a call with no workerId key still delete exactly as before.",
+    "A new vitest file covers the refusals and the allowed paths, and `npx vitest run src/tools/deleteTask.roleGate.test.ts src/tools/deleteTask.test.ts src/tools/deleteEpic.test.ts` passes in a snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 442.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:32:04.154Z",
+  "updatedAt": "2026-11-03T22:33:51.264Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:33:47.343Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

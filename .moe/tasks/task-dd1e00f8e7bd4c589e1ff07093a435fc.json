@@ -8,10 +8,40 @@
     "docs/MCP_SERVER.md's submit_plan Rail refusal note states that only a GLOBAL proposal can lift a rail refusal. The vitest run of the submit_plan and rails tests passes in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development). Use your Edit tool, never a shell write (rail).\n\nIn packages/moe-daemon/src/tools/submitPlan.test.ts, inside `describe('rail refusal on the MCP wire')` (about :1663-1712), find the it.each body's line `expect(response.error?.message).toContain('taskId: \"task-1\"');`. It is unique in the file. Insert these lines directly after it:\n```ts\n    // Only a GLOBAL MODIFY_RAIL or REMOVE_RAIL of the quoted entry can lift a rail\n    // refusal (task-dd1e00f8): the plan check reads no EPIC, TASK or customRules rail.\n    const entry = violation.slice(violation.indexOf(': ') + 2);\n    expect(response.error?.message).toContain(\n      `moe.propose_rail { proposalType: \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\", taskId: \"task-1\", currentValue: ${JSON.stringify(entry)}, `\n    );\n    expect(response.error?.message).not.toMatch(/EPIC|TASK|ADD_RAIL/);\n```\nWhat stays as it is: the block's existing assertions already pin `code: -32003`, the `[CONSTRAINT_VIOLATION] Rail violation: \"<v>\". Default action: ` prefix and `data: { tool, codeName }` for all three cases (forbidden in a step, required missing, forbidden only in the contract). Keep them, so the DoD's 'code and prefix unchanged' holds. Change no other line.\n\nThen run the RED gate (the second checkRef). It must print RED-AT-BASE: `Tests  3 failed | 92 skipped (95)`, with all three it.each cases failing against fa405c59's util/rails.ts. That matches the architect's /tmp dry run.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix. Use your Edit tool.\n\n(a) packages/moe-daemon/src/util/rails.ts, in assertPlanRails. Replace the `const message = ...` statement (the five concatenated template lines after `const v = railsCheck.violation || {};`) with:\n```ts\n    // Only a GLOBAL MODIFY_RAIL/REMOVE_RAIL of the quoted entry can lift this\n    // refusal: the check reads globalRails.forbiddenPatterns and requiredPatterns\n    // only (never epicRails, taskRails or customRules), and propose_rail resolves\n    // a GLOBAL currentValue in those lists (task-34e42a0a). Every violation is\n    // built by listPlanRailViolations, so the entry is the text after its label.\n    const entry = typeof v === 'string'\n      ? /^(?:Forbidden pattern|Required pattern missing): ([\\s\\S]*)$/.exec(v)?.[1]\n      : undefined;\n    const currentValue = entry === undefined\n      ? '<the exact forbiddenPatterns or requiredPatterns entry>'\n      : JSON.stringify(entry);\n    const message =\n      `Rail violation: ${JSON.stringify(v)}. ` +\n      `Default action: ${defaultAction}. ` +\n      `Escape hatch: if this rail is genuinely wrong for task ${taskId} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +\n      `moe.propose_rail { proposalType: \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\", taskId: \"${taskId}\", currentValue: ${currentValue}, proposedValue, reason, workerId } ` +\n      `to request a human-approved change to that globalRails entry. Only that GLOBAL change can lift this refusal: the plan check enforces no other rail. ` +\n      `Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;\n```\nLeave everything else in assertPlanRails unchanged: the MoeError code (CONSTRAINT_VIOLATION, -32003), the codeName, the `{ violation, suggestedAction }` context, the `Rail violation:` and `Default action:` lead, and the defaultAction parameter amend_plan_step passes. No other function changes either: checkPlanRails, listPlanRailViolations, planRailText and SUBMIT_PLAN_RAIL_ACTION stay as they are.\n\nBoth tools share this helper: submit_plan's step and contract checks, and amend_plan_step's introduced-violation check. amendPlanStep.rails.test.ts asserts only the lead and `moe.propose_rail`, so it keeps passing.\n\nError handling: the message builder cannot throw. A violation that is not a string, or that has another shape, gets the placeholder currentValue instead of a parse error. JSON.stringify quotes and escapes a pattern that contains quotes or backslashes.\n\n(b) docs/MCP_SERVER.md, submit_plan notes, the **Rail refusal** bullet (about :380) ONLY. Replace the sentence fragment `the message goes on to name the `moe.propose_rail` escape hatch.` (unique in the file) with: `the message goes on to name the `moe.propose_rail` escape hatch as `proposalType` `MODIFY_RAIL` or `REMOVE_RAIL`, `targetScope: \"GLOBAL\"`, with `currentValue` set to the quoted pattern: the exact `forbiddenPatterns` or `requiredPatterns` entry, which `moe.propose_rail` resolves (task-34e42a0a). Only a GLOBAL proposal can lift a rail refusal: EPIC and TASK proposals edit `epicRails` and `taskRails`, which the plan check never reads (see **Guidance rails**), and a GLOBAL `ADD_RAIL` only appends to `customRules`, which it does not read either.`\nThe GREEN gate greps `Only a GLOBAL proposal can lift a rail refusal`. Change no other line: a024ac57 and 83cf11f5 edit other sections, and merge-tree lands separate sections cleanly.\n\nCheck: run the GREEN gate (first checkRef). In the architect's /tmp dry run of this exact code, tsc was clean and 6 files / 175 tests passed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/rails.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once.\n\nRun the GREEN gate (first checkRef) verbatim. It is complete_task's verification and takes about 2 min, mostly npm ci in a fresh /tmp snapshot. Never run npm or vitest in the checkout (rail). Expect:\n- the docs grep ok;\n- `npx tsc --noEmit` clean;\n- `Test Files  6 passed (6)` and `Tests  175 passed (175)`. The `src/tools/proposeRail` filter matches proposeRail.test.ts and proposeRail.globalPatterns.test.ts, and the counts move only if a peer adds tests to those files.\n\nThe vitest output is large (logger INFO lines). Read only the `Test Files`, `Tests` and `FAIL` lines (mem:gotcha-propose-rail-global-lists).\n\nThen run the RED gate once more. It must still print RED-AT-BASE, because it pins fa405c59's rails.ts. Quote its output in your completion summary.\n\nError handling for a red run:\n- If an amendPlanStep or proposeRail test fails, re-run it in a second snapshot with HEAD's rails.ts overlaid.\n- If it fails there too, it is pre-existing. Report it in #general and call moe.report_blocked with the evidence; do not edit those files.\n- If it fails only with your change, fix rails.ts, never the test.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load adversarial-self-review) of your `git diff`. Fix any finding, then re-run step 3's gates.\n\n(1) Scope: exactly 3 files.\n- rails.ts: the message block and its comment.\n- submitPlan.test.ts: the inserted lines only.\n- MCP_SERVER.md: the one Rail refusal sentence.\n\n(2) Nothing else moved:\n- the code is still -32003 / CONSTRAINT_VIOLATION;\n- the message still starts `[CONSTRAINT_VIOLATION] Rail violation: \"<v>\". Default action: <defaultAction>. `;\n- error.data is still `{ tool, codeName }`;\n- the MoeError context is unchanged.\n\n(3) No EPIC, TASK or ADD_RAIL is offered anywhere in the message, for any violation. The architect's dry run printed the forbidden, required, odd-string and missing-violation shapes. The odd and missing shapes get the placeholder currentValue.\n\n(4) currentValue is the exact entry:\n- `rm -rf` for `Forbidden pattern: rm -rf`;\n- `error handling` for `Required pattern missing: error handling`;\n- a pattern that itself contains `: ` keeps everything after the FIRST label, because the regex anchors on the label.\n\n(5) The amend_plan_step refusal shares the text. Its own default action is unchanged.\n\nFollow-up, out of scope: the `Rail Proposals (escape hatch)` template in docs/roles/{architect,worker,governor}.reference.md still lists every scope for propose_rail in general (valid for editing guidance rails). Say in the completion summary that a refused plan needs GLOBAL MODIFY/REMOVE.\n\nThen call moe.complete_task with step 3's evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -27,16 +57,82 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T21:02:46.344Z",
-  "updatedAt": "2026-11-03T22:29:32.585Z",
+  "updatedAt": "2026-11-03T22:34:12.035Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:05:47.251Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T22:29:29.371Z"
+    "firstClaimAt": "2026-11-03T22:29:29.371Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-74d9e1c7"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:34:07.689Z",
+  "executionContract": {
+    "intendedBehavior": "The shared rail refusal (util/rails.ts assertPlanRails, thrown by submit_plan's step and contract checks and by amend_plan_step) names only the escape hatch that can lift it: moe.propose_rail with proposalType MODIFY_RAIL or REMOVE_RAIL, targetScope GLOBAL, and currentValue set to the exact forbiddenPatterns or requiredPatterns entry that the violation quotes, JSON-quoted. It says that only that GLOBAL change can lift the refusal. EPIC, TASK and ADD_RAIL are no longer offered. docs/MCP_SERVER.md's Rail refusal note says the same.",
+    "acceptanceCriteria": [
+      "DoD 1: through McpAdapter, all three refusal cases (forbidden in a step, required missing, forbidden only in the contract) keep code -32003, the '[CONSTRAINT_VIOLATION] Rail violation: \"<v>\". Default action: ' prefix and data { tool, codeName }. Each now contains 'moe.propose_rail { proposalType: \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\", taskId: \"task-1\", currentValue: \"<entry>\", ' and matches no EPIC, TASK or ADD_RAIL.",
+      "DoD 2: the MCP_SERVER.md Rail refusal bullet contains 'Only a GLOBAL proposal can lift a rail refusal'. The submit_plan, rails, amend_plan_step and propose_rail tests pass in a /tmp snapshot (GREEN checkRef). The new assertions fail 3 of 3 against fa405c59's rails.ts (RED checkRef)."
+    ],
+    "invariants": [
+      "The code, codeName, the lead text through 'Default action: <defaultAction>. ', and the MoeError context { violation, suggestedAction } are unchanged.",
+      "checkPlanRails, listPlanRailViolations, planRailText and SUBMIT_PLAN_RAIL_ACTION are untouched. What is refused, and when, does not change: only the wording does.",
+      "The message builder never throws. An unexpected violation shape gets a placeholder currentValue."
+    ],
+    "compatibility": [
+      "No MCP contract break: only error message text changes, and existing assertions on the lead and on 'moe.propose_rail' still pass (amendPlanStep.rails.test.ts included)."
+    ],
+    "approvedScope": [
+      "assertPlanRails's message block in util/rails.ts.",
+      "The it.each in submitPlan.test.ts 'rail refusal on the MCP wire' (inserted assertions only).",
+      "The docs/MCP_SERVER.md submit_plan Rail refusal bullet (one sentence)."
+    ],
+    "reuse": [
+      "The existing wire-level test already pins the code, prefix and data for all three refusal paths. The new assertions extend it rather than duplicating the McpAdapter setup."
+    ],
+    "sourceAssumptions": [
+      "util/rails.ts:73-103 (fa405c59): assertPlanRails builds the refusal. It is called at submitPlan.ts:407 and :413 and at amendPlanStep.ts:111.",
+      "listPlanRailViolations (rails.ts:32-51) builds every violation as 'Forbidden pattern: <p>' or 'Required pattern missing: <p>'.",
+      "Since 6ded0c93 (task-34e42a0a), propose_rail resolves a GLOBAL MODIFY/REMOVE currentValue across customRules, forbiddenPatterns and requiredPatterns, and exactly one list must hold it. ADD_RAIL GLOBAL appends to customRules only."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'Only a GLOBAL proposal can lift a rail refusal' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/util/rails.ts $P/tools/submitPlan.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/submitPlan.test.ts src/util/rails.test.ts src/tools/amendPlanStep.rails.test.ts src/tools/amendPlanStep.test.ts src/tools/proposeRail",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/tools/submitPlan.test.ts \"$S\" && git show fa405c59554d114e6137adbb2cd0bfd6ccc2c707:$P/util/rails.ts > \"$S/$P/util/rails.ts\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/submitPlan.test.ts -t \"rail refusal on the MCP wire\" > \"$S/l\" 2>&1; grep -aE \"^ +Tests |^ FAIL \" \"$S/l\"; grep -aqE \"^ +Tests +3 failed \\| [0-9]+ skipped\" \"$S/l\" && echo RED-AT-BASE; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Name the scope only and leave currentValue generic. Rejected: quoting the exact entry, parsed from the violation's own label, makes the hatch copy-paste correct and avoids propose_rail's coded NOT_FOUND and ambiguity refusals. (2) Add a structured hatch to the MoeError context or suggestedAction. Rejected: the /ws and MCP boundary strips the context (error.data is { tool, codeName } only), so agents see only the message. (3) A new test block. Rejected in favour of extending the existing wire-level it.each, which already pins code, prefix and data across all three refusal paths. (4) Also fix the role reference docs' propose_rail template. Out of scope: the governor scoped this row to the Rail refusal note, and that template is a general propose_rail form.",
+    "codebaseInsights": "Since fa405c59 (2cc41d1a), assertPlanRails lives in util/rails.ts and is shared by submit_plan (steps, and the contract with requiredPatterns emptied) and amend_plan_step (with its own defaultAction). One edit therefore fixes all three refusal sites. MoeError prefixes '[CONSTRAINT_VIOLATION] ' to the message. tsconfig excludes tests, and the vitest output is large (logger lines).\n\nArchitect's /tmp dry run:\n- RED: 3 failed | 92 skipped (95) with -t 'rail refusal on the MCP wire'.\n- GREEN: tsc rc 0, 6 files / 175 tests passed in 4.3 s.\n- The new messages were printed and reviewed for the forbidden, required, odd and missing violation shapes.",
+    "risks": "docs/MCP_SERVER.md is also declared by 83cf11f5 (list_metrics and GET_METRICS sections, a step conditional on lanes.js). This row edits only the Rail refusal bullet, and merge-tree lands separate sections cleanly. If a test elsewhere asserts the old 'targetScope: \"GLOBAL\" | \"EPIC\" | \"TASK\"' text, the GREEN suites would catch it. The architect grepped for it and found none.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/rails.ts",
+      "packages/moe-daemon/src/tools/submitPlan.test.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/amendPlanStep.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3586957fa94abf27e885075de127bab6ad395acd",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:34:07.721Z",
+  "approvedPlanRevision": 1
 }

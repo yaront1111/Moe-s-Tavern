@@ -1,0 +1,28 @@
+{
+  "id": "task-42aeed8accc54ac799b1f22c1d8a12b6",
+  "epicId": "epic-be924fb8",
+  "title": "bug: switching approvalMode on the board neither cancels nor arms SPEED auto-approval timers, so a plan armed under SPEED is still auto-approved seconds after the human switches to CONTROL, and plans pending when the human switches to SPEED wait until the next daemon restart",
+  "description": "Filed by defect hunt #12 (task-f6f0b580, architect-1dd28c7c). Reproduced at moe/work-2026-10-24 f159784e; the files are unchanged at cbae6070.\n\nPROBLEM (packages/moe-daemon/src/):\n- The only settings write path is /ws UPDATE_SETTINGS (server/WebSocketServer.ts:828-833) → StateManager.updateSettings (StateManager.ts:1308) → updateProjectSettings (state/profileRollout.ts:140). That function validates, writes and emits, but never touches the SPEED timers.\n- Under SPEED, submit_plan arms a per-task timer (tools/submitPlan.ts armSpeedModeApproval, :114-155).\n  - The timer re-checks only that the task is still AWAITING_APPROVAL (:127-128), then writes WORKING with PLAN_AUTO_APPROVED.\n  - It never re-reads approvalMode.\n- The twin rule: under CONTROL, set_task_status refuses AWAITING_APPROVAL→WORKING (\"requires human approval in CONTROL mode\", setTaskStatus.ts:151-162). An armed timer bypasses that gate for up to speedModeDelayMs (default 2000 ms) after the human switches to CONTROL.\n- The reverse direction: rearmSpeedModeApprovals (submitPlan.ts:170) runs only at startup (index.ts:842).\n  - AWAITING_APPROVAL rows that are pending when the human switches CONTROL→SPEED are never armed.\n  - They all approve at once after the next daemon restart.\n- docs/CONFIGURATION.md:190-191 describes SPEED as \"auto after delay\". Nothing in the docs says a mode switch applies to new submissions only.\n\nEVIDENCE:\n- /mnt/d/moe-scratch/hunt-f6f0b580/B/zzHuntB_speedModeSwitch.test.ts uses zzHuntB_harness.ts: a real StateManager, McpAdapter and MoeWebSocketServer, a JetBrains-shaped UPDATE_SETTINGS { approvalMode: 'CONTROL', … } and speedModeDelayMs 400. Run in a git-archive snapshot of f159784e: Tests 1 failed | 1 passed (2).\n  - ✓ twin rule: under CONTROL, set_task_status refuses AWAITING_APPROVAL -> WORKING\n  - × a plan armed under SPEED is NOT auto-approved after the board switches the project to CONTROL → AssertionError: expected 'WORKING' to be 'AWAITING_APPROVAL'. A PLAN_AUTO_APPROVED event is logged.\n- My re-run: /mnt/d/moe-scratch/hunt-f6f0b580/me/me-zzHuntB_speedModeSwitch.log\n- Plugin reach: the JetBrains MoeSettingsDialog approval-mode combo (MoeCommandSender.kt:80-89, UPDATE_SETTINGS) and the VS Code SettingsPanel (MoeDaemonClient UPDATE_SETTINGS).\n- Exposure: this project runs TURBO, which arms no timers. SPEED users are the ones affected.\n\nFIX DIRECTION: after a successful settings write that changes approvalMode:\n- becoming CONTROL → call clearAllSpeedModeTimeouts();\n- becoming SPEED → call rearmSpeedModeApprovals(state). It is already idempotent: it skips armed rows and non-SPEED projects.\n- TURBO can keep armed timers, since it approves anyway.\nBoth functions are exported from tools/submitPlan.ts. Import them; do not edit submitPlan.ts, which task dd1e00f8 holds. Put the calls in updateProjectSettings (profileRollout.ts) so every settings path gets them. If the state→tools import is unwanted, put them in WebSocketServer.ts's UPDATE_SETTINGS case instead, a hunk distinct from the update_epic row's UPDATE_EPIC case.\n\nFILES: packages/moe-daemon/src/state/profileRollout.ts (or the UPDATE_SETTINGS case of packages/moe-daemon/src/server/WebSocketServer.ts), and a new test such as src/state/approvalModeSwitch.test.ts. docs/CONFIGURATION.md's approvalMode row may gain one sentence. No docs/MCP_SERVER.md change is needed.",
+  "definitionOfDone": [
+    "A plan armed under SPEED is not auto-approved when approvalMode changes to CONTROL before its timer fires: it stays AWAITING_APPROVAL and no PLAN_AUTO_APPROVED event is logged (fake timers or a short speedModeDelayMs).",
+    "An AWAITING_APPROVAL row pending when approvalMode changes to SPEED is auto-approved after speedModeDelayMs without a daemon restart, and a row that is already armed is not armed twice.",
+    "A new vitest file covers both directions and passes, and the existing submit_plan SPEED-mode tests stay green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 444.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:32:36.150Z",
+  "updatedAt": "2026-11-03T22:32:36.150Z"
+}

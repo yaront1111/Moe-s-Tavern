@@ -1,0 +1,28 @@
+{
+  "id": "task-c90b41f12c0044fba832e95f8735279f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_task writes the row before it trips on a non-array definitionOfDone (createTask.ts:197 then throws an uncoded TypeError), so the caller gets an error for a task that exists and its retry files a duplicate, and taskRails entries are stored with no type or length check (a non-string rail later crashes propose_rail)",
+  "description": "Filed by defect hunt #12 (task-f6f0b580, architect-1dd28c7c). Reproduced at moe/work-2026-10-24 f159784e; the files are unchanged at cbae6070. This is a guard gap, not a live incident.\n\nPROBLEM (packages/moe-daemon/src/):\n- create_task checks dependsOn's shape before the write (tools/createTask.ts:87-92, \"shape errors throw\").\n- definitionOfDone is not checked.\n  - state.createTask (createTask.ts:157-166) sanitizes a non-array to the placeholder ['Task completed as described'] (state/taskStore.ts:315-317) and writes the row.\n  - Then createTask.ts:197 runs `params.definitionOfDone?.filter(...)` on the raw value. That throws \"params.definitionOfDone?.filter is not a function\", which reaches the caller as -32000 with no task id.\n  - The schema says array (createTask.ts:35), but McpAdapter does not enforce schemas. The natural retry files a second row.\n- taskRails: taskStore.ts:327 stores `input.taskRails.slice(0, 100)` raw, with no string check and no length cap.\n  - epicRails are refused when they are not strings or exceed MAX_EPIC_RAIL_CHARS (validateEpicUpdates, state/validators.ts:584).\n  - A stored non-string rail crashes railChange.ts:12 `rail.trimEnd()` with an uncoded TypeError. That line is reached from proposeRail.ts:62 for a TASK-scope MODIFY or REMOVE.\n  - get_context serves an over-long rail to every seat.\n\nEVIDENCE (git-archive snapshot of f159784e; my re-runs are in /mnt/d/moe-scratch/hunt-f6f0b580/me/):\n- /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_createTaskDodShape.test.ts: Tests 5 failed | 1 passed (6).\n  - ✓ (sibling) a malformed dependsOn is refused with INVALID_INPUT and writes nothing\n  - × a plain string, a stringified JSON array and an object each → AssertionError: expected { wrote: true, threw: true, …(1) } to deeply equal { wrote: false, threw: true, …(1) }\n  - × (r-msg) → expected 'TypeError: params.definitionOfDone?.f…' not to match /is not a function/\n  - × (r-retry) → expected [ 'bug: x', 'bug: x' ] to have a length of 1 but got 2\n- /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_createTaskRails.test.ts: Tests 3 failed | 1 passed (4).\n  - ✓ (sibling) create_epic refuses a non-string or over-long rail with INVALID_INPUT\n  - × (r1) a non-string rail is stored\n  - × (r2) a 200k-char rail is stored\n  - × (r3) → expected 'TypeError: rail.trimEnd is not a func…' not to match /is not a function/\n- Exposure:\n  - Of the 956 rows, no pair shares a title, carries the placeholder DoD and was created minutes apart (the retry signature).\n  - 0 of the 897 live rows that have taskRails hold a bad entry.\n\nFIX DIRECTION: in create_task, before state.createTask:\n- refuse a present definitionOfDone or taskRails that is not an array of strings, with INVALID_INPUT, as dependsOn is refused (the state-level sanitizer can stay as a backstop);\n- refuse a taskRails entry longer than MAX_EPIC_RAIL_CHARS, as create_epic does for epicRails (validateStringArrayValue may fit);\n- compute dodCount from the stored task.definitionOfDone, not the raw param.\nA bound placed in taskStore.createTask also covers /ws CREATE_TASK.\n\nFILES: packages/moe-daemon/src/tools/createTask.ts, packages/moe-daemon/src/state/taskStore.ts (createTask only), and a new packages/moe-daemon/src/tools/createTask.shape.test.ts. Sync `### moe.create_task` only if docs/MCP_SERVER.md is free at planning time.\n\nHeld for after this row lands, because they touch the same files:\n- create_task stores `order` unchecked, and nextTaskOrder (taskStore.ts:844-848) lets one non-finite order poison every later default order. This is the task twin of 68a47060's epic fix. Repro: A/zzHuntA_createTaskOrder.test.ts. 0 live rows are affected.\n- /ws CREATE_TASK stores any status (taskStore.ts:334). Repro: B/zzHuntB_createTaskStatus.test.ts. No plugin sends status.",
+  "definitionOfDone": [
+    "create_task with a definitionOfDone or taskRails that is present but not an array of strings (a string, a stringified JSON array, an object, or an array holding a number) is refused INVALID_INPUT naming the field, no task file is written, and a retry with valid input creates exactly one row.",
+    "A taskRails entry longer than MAX_EPIC_RAIL_CHARS is refused INVALID_INPUT, as create_epic refuses an over-long epicRails entry.",
+    "A new vitest file covers these cases and the valid path (array DoD and rails stored as given) and passes, and createTask.test.ts stays green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 445.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:32:50.949Z",
+  "updatedAt": "2026-11-03T22:32:50.949Z"
+}
