@@ -295,7 +295,9 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
             throw new Error(`Protected execution profile: ${pinned.refused}. Moe runs account commands only with an interpreter outside the project, so nothing was started.`);
         }
         const cli = pinned === null ? rotation.cli : { ...rotation.cli, node: pinned.node };
-        const line = accountsCommandLine(cli, rotation.registryFile, args, windows, pinned?.shellPath); // throws on a C0 control or DEL
+        // The CLI then takes claude only from outside the checked project (task-55710898).
+        const words = pinned === null ? args : ['--protected-project', pinned.project, ...args];
+        const line = accountsCommandLine(cli, rotation.registryFile, words, windows, pinned?.shellPath); // throws on a C0 control or DEL
         let terminal: vscode.Terminal;
         try {
             // The win32 line is PowerShell, so the terminal starts powershell.exe whatever the default profile is (AgentLauncher WINDOWS_SHELL);

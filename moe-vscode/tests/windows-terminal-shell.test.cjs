@@ -6,7 +6,8 @@
 // terminals exactly as before: no shellPath key at all. The launcher harness is copied from powershell-quoting.test.cjs
 // and the provider harness from accounts-actions.test.cjs: tests share no helper module. The corpus and the bundle are
 // read here, never edited. W4-W10 (task-a6227f4e): under the protected profile the Accounts terminal starts and types
-// only validated absolute interpreters (AgentLauncher.protectedAccountsTerminal), and a refusal opens nothing.
+// only validated absolute interpreters (AgentLauncher.protectedAccountsTerminal), and a refusal opens nothing. The selection
+// also carries the project it checked, and the protected line passes it as --protected-project right after the registry (task-55710898).
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -255,12 +256,12 @@ test('W5 protectedAccountsTerminal checks the win32 interpreter, then the node, 
     }
     const win = stubbed('win32');
     protect(win.workspace);
-    assert.deepEqual(win.select(true), { node: `${node}.real`, shellPath: `${psPath}.real` }, 'win32: the accepted values');
+    assert.deepEqual(win.select(true), { node: `${node}.real`, shellPath: `${psPath}.real`, project: win.workspace }, 'win32: the accepted values');
     assert.deepEqual(win.calls, [[psPath, win.workspace, PS_LABEL], [node, win.workspace, NODE_LABEL]], 'win32: interpreter first, then node');
     const posix = stubbed('linux');
     protect(posix.workspace);
     const accepted = posix.select(false);
-    assert.deepEqual([accepted, Object.hasOwn(accepted, 'shellPath')], [{ node: `${node}.real` }, false], 'POSIX: the node only, no shellPath key');
+    assert.deepEqual([accepted, Object.hasOwn(accepted, 'shellPath')], [{ node: `${node}.real`, project: posix.workspace }, false], 'POSIX: the node only, no shellPath key');
     assert.deepEqual(posix.calls, [[node, posix.workspace, NODE_LABEL]], 'POSIX: only the node is checked');
     const badShell = stubbed('win32', p => (p === psPath ? { rejected: 'interpreter refused' } : { accepted: `${p}.real` }));
     protect(badShell.workspace);
@@ -279,8 +280,8 @@ test('W6 on POSIX the protected Accounts node is the real path of an absolute re
     const real = fs.realpathSync.native(process.execPath);
     const outside = tempDir();
     fs.symlinkSync(process.execPath, path.join(outside, 'node-link'));
-    assert.deepEqual(select(real), { node: real }, 'the real node');
-    assert.deepEqual(select(path.join(outside, 'node-link')), { node: real }, 'an outside link answers its real path');
+    assert.deepEqual(select(real), { node: real, project: l.workspace }, 'the real node');
+    assert.deepEqual(select(path.join(outside, 'node-link')), { node: real, project: l.workspace }, 'an outside link answers its real path');
     const planted = path.join(l.workspace, 'node');
     fs.writeFileSync(planted, '#!/bin/sh\n', { mode: 0o755 });
     fs.symlinkSync(planted, path.join(outside, 'planted-link'));
@@ -296,7 +297,7 @@ test('W7 on Windows the protected Accounts terminal pins the SystemRoot PowerShe
     const select = (node, env) => plain(l.launcher.protectedAccountsTerminal(node, true, env));
     const systemRoot = { SystemRoot: process.env.SystemRoot };
     const powershell = fs.realpathSync.native(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
-    assert.deepEqual(select(process.execPath, systemRoot), { node: fs.realpathSync.native(process.execPath), shellPath: powershell });
+    assert.deepEqual(select(process.execPath, systemRoot), { node: fs.realpathSync.native(process.execPath), shellPath: powershell, project: l.workspace });
     assert.deepEqual(select(process.execPath, {}), { refused: `${PS_LABEL} not found` });
     const fake = path.join(l.workspace, 'System32', 'WindowsPowerShell', 'v1.0');
     fs.mkdirSync(fake, { recursive: true });
@@ -309,7 +310,8 @@ test('W7 on Windows the protected Accounts terminal pins the SystemRoot PowerShe
 
 const W_POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 const W_NODE = 'C:\\Program Files\\nodejs\\node.exe';
-const ACCOUNT_WORDS = "'/opt/moe/daemon/dist/accounts/cli.js' '--accounts-file' '/home/dev/.moe/claude-accounts.json' 'login' 'acct-2'";
+const PROJECT = '/home/dev/app';
+const ACCOUNT_WORDS = "'/opt/moe/daemon/dist/accounts/cli.js' '--accounts-file' '/home/dev/.moe/claude-accounts.json' '--protected-project' '/home/dev/app' 'login' 'acct-2'";
 const W_DECODED = `& '${W_NODE}' ${ACCOUNT_WORDS}`;
 const W_LINE = `& '${W_POWERSHELL}' -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(W_DECODED, 'utf16le').toString('base64')}`;
 const P_LINE = `'/opt/node/bin/node' ${ACCOUNT_WORDS}`;
@@ -320,7 +322,7 @@ test('W8 a protected C05 sign-in types and starts only the selected interpreters
     const row = rowOf('C05');
     for (const platform of ['win32', 'linux', 'darwin']) {
         const windows = platform === 'win32';
-        const answer = windows ? { node: W_NODE, shellPath: W_POWERSHELL } : { node: '/opt/node/bin/node' };
+        const answer = windows ? { node: W_NODE, shellPath: W_POWERSHELL, project: PROJECT } : { node: '/opt/node/bin/node', project: PROJECT };
         const line = windows ? W_LINE : P_LINE;
         const r = recording(answer);
         const s = loadProvider(platform, row.rotation, { connected: true, select: r.select });
@@ -369,9 +371,15 @@ test('W10 a protected refusal shows exactly one error and opens no terminal, and
         }
     }
     for (const refuse of [false, true]) {
-        const s = loadProvider('win32', row.rotation, { connected: true, refuse, select: recording({ node: W_NODE, shellPath: `${W_POWERSHELL}\n` }).select });
+        const s = loadProvider('win32', row.rotation, { connected: true, refuse, select: recording({ node: W_NODE, shellPath: `${W_POWERSHELL}\n`, project: PROJECT }).select });
         await s.signIn(row.selectedId);
         assert.deepEqual([s.rec.terminals.length, s.rec.clipboard, s.rec.warnings, s.rec.errors],
             [0, [], [], ['Account action failed: Invalid interpreter: contains control characters']], `win32 newline interpreter, refuse=${refuse}`);
+    }
+    for (const platform of ['win32', 'linux']) {
+        const s = loadProvider(platform, row.rotation, { connected: true, refuse: true, select: recording({ node: W_NODE, project: `${PROJECT}\n` }).select });
+        await s.signIn(row.selectedId);
+        assert.deepEqual([s.rec.terminals.length, s.rec.clipboard, s.rec.warnings, s.rec.errors],
+            [0, [], [], ['Account action failed: Invalid accounts command word: contains control characters']], `${platform} newline project`);
     }
 });

@@ -45,8 +45,11 @@ export function protectedInterpreter(
     return installedExecutable(candidate, basePath, defaultFoldCase, label);
 }
 
-/** What the Accounts terminal starts and types under the protected profile: accepted real paths, or why not. */
-export type AccountsTerminal = { node: string; shellPath?: string } | { refused: string };
+/**
+ * What the Accounts terminal starts and types under the protected profile: accepted real paths, or why not. `project` is
+ * the folder both interpreters were checked against, which the line passes to the accounts CLI as --protected-project (task-55710898).
+ */
+export type AccountsTerminal = { node: string; shellPath?: string; project: string } | { refused: string };
 
 /**
  * The protected Accounts terminal's interpreters (task-a6227f4e; JetBrains TerminalAgentLauncher.accountsCommandFor):
@@ -60,7 +63,7 @@ export function protectedAccountsTerminal(node: string, windows: boolean, env: N
     if (shell !== undefined && 'rejected' in shell) { return { refused: shell.rejected }; }
     const checked = installedExecutable(node, basePath, defaultFoldCase, 'Accounts node executable');
     if ('rejected' in checked) { return { refused: checked.rejected }; }
-    return shell === undefined ? { node: checked.accepted } : { node: checked.accepted, shellPath: shell.accepted };
+    return shell === undefined ? { node: checked.accepted, project: basePath } : { node: checked.accepted, shellPath: shell.accepted, project: basePath };
 }
 
 const TERMINAL_NAMES: Record<AgentRole, string> = {
