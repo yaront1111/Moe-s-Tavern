@@ -74,10 +74,21 @@ export function parseRawMentions(content: string): string[] {
 export class MentionRouter {
   private hopCounts = new Map<string, number>();
   private pausedChannels = new Set<string>();
-  private readonly maxHops: number;
+  private maxHops: number;
 
   constructor(maxHops = 4) {
     this.maxHops = maxHops;
+  }
+
+  /**
+   * Re-apply the configured hop limit without touching hop counts or pauses.
+   * StateManager.load() runs on every FileWatcher reload; it used to build a new
+   * router there, which cleared every pause with no human message. Anything but
+   * an integer >= 1 means the default 4, so a missing or hand-edited setting
+   * neither disables the guard nor wedges every channel.
+   */
+  setMaxHops(maxHops: number | undefined): void {
+    this.maxHops = Number.isInteger(maxHops) && (maxHops as number) >= 1 ? (maxHops as number) : 4;
   }
 
   /**

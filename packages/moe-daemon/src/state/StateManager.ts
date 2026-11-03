@@ -1129,8 +1129,8 @@ export class StateManager {
       const activityLogPath = path.join(this.moePath, 'activity.log');
       this.logRotator = new LogRotator(activityLogPath);
 
-      // Re-initialize MentionRouter with project-configured maxHops
-      this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4);
+      // Keep the one router: a new one here cleared every pause and hop count.
+      this.mentionRouter.setMaxHops(this.project?.settings?.chatMaxAgentHops);
 
     });
 
