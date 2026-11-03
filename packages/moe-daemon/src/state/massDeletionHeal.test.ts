@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { StateManager } from './StateManager.js';
-import { healMassDeletion } from './massDeletionHeal.js';
+import { healMassDeletion, MASS_DELETION_FRACTION, MASS_DELETION_MIN } from './massDeletionHeal.js';
 import { acquireResource } from './resourceStore.js';
 import { openAttempt } from './attemptStore.js';
 import type { RailProposal } from '../types/schema.js';
@@ -203,5 +203,42 @@ describe('healMassDeletion on a board-tracking project (runtime dirs wiped, boar
 
     await state.load();
     expect(state.tasks.size).toBe(39);
+  });
+
+  it('(z1) rewrites runtime kinds whose directories are gone though each held fewer than MASS_DELETION_MIN entries', async () => {
+    // Only the dirGone clause can fire: each kind is under MASS_DELETION_MIN, and neither is a combined kind.
+    const gone = ['resources', 'attempts'] as const;
+    for (const dir of gone) {
+      expect(before[dir].length).toBeLessThan(MASS_DELETION_MIN);
+      fs.rmSync(path.join(moePath, dir), { recursive: true, force: true });
+    }
+
+    expect(await healMassDeletion(state)).toBe(2);
+    for (const dir of gone) {
+      for (const [id, entity] of before[dir]) {
+        expect(JSON.parse(fs.readFileSync(fileOf(dir, id), 'utf-8'))).toEqual(entity);
+      }
+    }
+
+    await state.load();
+    for (const dir of RUNTIME_DIRS) expect(entriesOf(dir)).toEqual(before[dir]);
+    expect(state.resources.get('box-heal')?.holders.map((h) => h.taskId)).toEqual([taskIds[0]]);
+  });
+
+  it('(z2) rewrites a runtime kind that lost MASS_DELETION_MIN and MASS_DELETION_FRACTION of its files, directory kept', async () => {
+    // Only the per-kind fraction branch can fire: 3 of 4 workers, dir kept; 3 of 59 combined is 5%.
+    const lost = workerIds.slice(0, 3);
+    const combinedKnown = state.tasks.size + state.epics.size + state.teams.size + state.workers.size + state.proposals.size;
+    expect(lost.length).toBeGreaterThanOrEqual(MASS_DELETION_MIN);
+    expect(lost.length).toBeGreaterThanOrEqual(workerIds.length * MASS_DELETION_FRACTION);
+    expect(lost.length).toBeLessThan(combinedKnown * MASS_DELETION_FRACTION);
+    for (const id of lost) fs.rmSync(fileOf('workers', id));
+
+    expect(await healMassDeletion(state)).toBe(3);
+    const was = new Map(before.workers);
+    for (const id of lost) expect(JSON.parse(fs.readFileSync(fileOf('workers', id), 'utf-8'))).toEqual(was.get(id));
+
+    await state.load();
+    for (const dir of RUNTIME_DIRS) expect(entriesOf(dir)).toEqual(before[dir]);
   });
 });
