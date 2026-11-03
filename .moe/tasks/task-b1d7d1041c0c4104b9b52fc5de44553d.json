@@ -89,8 +89,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -102,12 +102,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:34:03.097Z",
-  "updatedAt": "2026-11-03T02:29:33.974Z",
+  "updatedAt": "2026-11-03T02:33:14.108Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T02:05:37.954Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T02:32:44.027Z",
+    "wallClockMs": 1626073
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -237,9 +239,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T02:18:38Z",
-    "at": "2026-11-03T02:29:17.485Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T02:29:20Z",
+    "at": "2026-11-03T02:33:14.108Z"
+  },
+  "completedAt": "2026-11-03T02:32:44.027Z",
+  "reviewCompletedAt": "2026-11-03T02:32:44.027Z",
+  "reviewSummary": "Reviewed completion 48dd6b8a, which is contained and pushed on origin/moe/work-2026-10-24. 7 files, +215/-30 (net 185); no daemon, proxy or VS Code files.\n\nRe-ran checkRefs[0] verbatim from the control checkout root, holding the jetbrains-gradle lease (released after). HEAD 1b329836 and the working tree are clean against 48dd6b8a for moe-jetbrains, scripts, docs/roles and package.json, so the run used the reviewed bytes. Results: parity PASS, lint OK, compile and `> Task :test` executed, BUILD SUCCESSFUL 33s, JUnit totals tests=594 skipped=0 failures=0 errors=0, EXIT=0. The fresh XMLs show MoeProjectInitializerTest 22/0/0 and MoeDaemonSupervisorTest 83/0/0, with all 9 new testcases present.\n\nDoD1: ensureMoeInitialized's existing-.moe branch syncs with upgrade=false. The single upgrade=true call in ensureDaemonRunningImpl sits after `val direct`, which puts it past the reachable/other-side, max-attempt, cooldown and protected-refusal returns, and before the launch. The missing-.moe initializeProject branch is unchanged. connect() runs ensureMoeInitialized then ensureDaemonRunning, so a reachable daemon only ever gets create-only syncs. The overwrite is gated on `upgrade && shouldUpgradeGeneratedDoc`, the stamps are unchanged, unmarked files are kept and non-.md assets stay create-only. A sync failure is caught and never blocks connect or spawn.\n\nDoD2: I1-I5 and S1-S4 assert full text and full event lists (connect [sync:false]; reachable [sync:false,sync:false] with 0 starts; spawn [sync:false,sync:true,start], with cooldown adding only sync:false; refused spawn [sync:false]).\n\nDoD3: the command and counts above. The docs hunks are single-line and accurate, and the residual windows are disclosed.\n\nNon-blocking notes: the syncDocs catch overlaps the companion's per-sync catches. syncRoleDocs' `bundled` test seam is public and could be internal.",
+  "requiredCheckAtDone": null
 }
