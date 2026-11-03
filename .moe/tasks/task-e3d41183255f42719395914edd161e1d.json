@@ -1,0 +1,28 @@
+{
+  "id": "task-e3d41183255f42719395914edd161e1d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: complete_step stores modifiedFiles unchecked and the plan sanitizer keeps only the first 50 on the next write, so paths 51+ silently leave the ASSERTED tier, while its siblings (submit_plan, the note cap) refuse past the same bound",
+  "description": "Found by hunt task-859eff80 (architect-74d9e1c7). It was held back only by the hunt's 4-row cap. The governor filed it at 16:30Z on 2026-11-03, after re-checking the citations at d5f36e82.\n\nPROBLEM. complete_step accepts any number of modifiedFiles and stores them as given. The plan sanitizer then keeps only the first 50 on the next task write (state/validators.ts:790, `.slice(0, 50)`). The call succeeds, and no warning says paths were lost. Paths 51+ drop out of the ASSERTED attribution tier: the wrapper commits a task from its completed steps' modifiedFiles, and get_commit_scope's `asserted` no longer lists them. In shared mode those bytes stay unstaged. In every mode task.filesModified under-reports.\n\nThe sibling guards refuse instead:\n- complete_step's own note cap, completeStep.ts:83-88, \"refuse it up front instead, like every other capped text field\";\n- submit_plan, submitPlan.ts:395-402: \"Step N has too many affected files (max 50)\" and the same for newFiles.\n\nEVIDENCE (HEAD ef5c7101, re-checked at d5f36e82). /mnt/d/moe-scratch/hunt-859e/A/zzHuntAModifiedFiles.test.ts, output in zzHuntAModifiedFiles.output.txt:\n- complete_step with 60 modifiedFiles returns success with no warning;\n- the stored list has 50 entries;\n- get_commit_scope's asserted is missing src/gen/file51.ts through file60.ts;\n- the sibling control, submit_plan with 51 affectedFiles, is refused \"too many affected files (max 50)\".\n\nFIX DIRECTION. Never lose a reported path silently. Two acceptable shapes; the planner picks one and says why:\n(a) Refuse more than 50 modifiedFiles with INVALID_INPUT before any write, consistent with the siblings. The step stays IN_PROGRESS and no evidence is recorded. The message names the cap and the escape: report the first 50, then moe.declare_files the rest.\n(b) Keep every reported path, with a bound of its own large enough for a regenerate step, e.g. record_commit's 500.\nEither way, document it in docs/MCP_SERVER.md's complete_step section (around :475-490).\n\nPLACEMENT (no dependsOn edge). task-314405bb edits MCP_SERVER.md's chat_decision section, and the docs-drift row filed alongside this one edits its set_task_status, archive_task and chat_send sections. Touch only the complete_step section.\n\nVERIFICATION. vitest in the task worktree, never in the shared checkout: the new and changed completeStep test files, plus the existing completeStep and getCommitScope tests.",
+  "definitionOfDone": [
+    "No reported path is lost silently. complete_step with more than 50 modifiedFiles is either refused with INVALID_INPUT before any write (the step stays IN_PROGRESS and the message names the cap and moe.declare_files), or stores every reported path so all of them appear in get_commit_scope's asserted. 50 or fewer behave exactly as today.",
+    "vitest covers 50 paths (all stored and asserted) and 60 paths (the chosen refusal or full retention), and the existing completeStep and getCommitScope tests still pass.",
+    "docs/MCP_SERVER.md's complete_step section states the bound and what happens past it."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 376.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:29:11.925Z",
+  "updatedAt": "2026-11-03T16:29:11.925Z"
+}

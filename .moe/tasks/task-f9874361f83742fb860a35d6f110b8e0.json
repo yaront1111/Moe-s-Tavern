@@ -93,8 +93,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -113,7 +113,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:30:24.086Z",
-  "updatedAt": "2026-11-03T15:30:21.789Z",
+  "updatedAt": "2026-11-03T16:29:16.869Z",
   "contextFetchedBy": [
     "governor-e6b40560",
     "architect-24611a0a",
@@ -129,7 +129,9 @@
     "firstClaimAt": "2026-11-03T13:08:25.095Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T16:28:41.122Z",
+    "wallClockMs": 12016027
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -219,10 +221,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T13:36:42.176Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T15:21:44Z",
-    "at": "2026-11-03T15:29:48.208Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T15:30:07Z",
+    "at": "2026-11-03T16:29:16.869Z"
   },
   "commits": [
     {
@@ -279,5 +282,9 @@
     "reportedAt": "2026-11-03T15:29:01.162Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Worktree completions now fail closed when post-flight cannot read .moe/project.json, and they land on the attempt's pinned workspace.target. Both twins changed; 84 net LOC across 5 files.\n\n- sh: read_commit_settings emits an 11th field, CS_SETTINGS_READABLE. It defaults to false, so a failed python run also refuses.\n- ps1: Read-MoeCommitSettings gets the matching settingsReadable flag. It uses PSObject.Properties and the full PSCustomObject type name.\n- Readable means a JSON object whose settings is absent, null or an object. Shared-mode CS_* and other keys are unchanged for every input (checked on 20+ inputs per engine).\n- land_worktree_completion re-reads the settings. Its target is MOE_WT_TARGET / $script:MoeWtTarget, else the old settings rule. A differing settings target prints MOE_LAND_TARGET_MISMATCH, and the landing still goes to the pinned target.\n- MOE_LAND_SETTINGS_UNREADABLE refuses right after the L2-failed branch: no lease, merge-tree, gate, journal or push. unlanded_reason maps it to gate, so the task branch tip is parked on a rescue ref, a failed row is recorded with pushed false, and the attempt is finalized unlanded with reason gate.\n- Tests: wt-settings in postflight-worktree.cjs covers missing, empty, truncated (remote), array, settings-string, absent, pinned and agree. RED on the unmodified wrappers on both engines.\n- Docs: two rows in CONFIGURATION.md and the unlanded-route line in scripts/CLAUDE.md.\n\nMutants (wt-settings): M1-M6 and P1-P4 are all killed with an AssertionError. P5 (-cne to -ne) survives as expected, since no case covers a branch pair that differs only by case.\n\nVerification:\n- The plan's command ran in full 13:52-15:18Z, EXIT=0, on bytes sha256-identical to checkpoint 5ae55687. This session did not re-run the 86-min command.\n- Rechecked this session on the merged tree (target 2b934dce, which includes d2d6ac4b; merge-tree clean): parity-check.sh, lint, and wt-settings plus codes pass on sh and on PS 5.1.\n\nResiduals, out of scope"
+  "completionSummary": "Worktree completions now fail closed when post-flight cannot read .moe/project.json, and they land on the attempt's pinned workspace.target. Both twins changed; 84 net LOC across 5 files.\n\n- sh: read_commit_settings emits an 11th field, CS_SETTINGS_READABLE. It defaults to false, so a failed python run also refuses.\n- ps1: Read-MoeCommitSettings gets the matching settingsReadable flag. It uses PSObject.Properties and the full PSCustomObject type name.\n- Readable means a JSON object whose settings is absent, null or an object. Shared-mode CS_* and other keys are unchanged for every input (checked on 20+ inputs per engine).\n- land_worktree_completion re-reads the settings. Its target is MOE_WT_TARGET / $script:MoeWtTarget, else the old settings rule. A differing settings target prints MOE_LAND_TARGET_MISMATCH, and the landing still goes to the pinned target.\n- MOE_LAND_SETTINGS_UNREADABLE refuses right after the L2-failed branch: no lease, merge-tree, gate, journal or push. unlanded_reason maps it to gate, so the task branch tip is parked on a rescue ref, a failed row is recorded with pushed false, and the attempt is finalized unlanded with reason gate.\n- Tests: wt-settings in postflight-worktree.cjs covers missing, empty, truncated (remote), array, settings-string, absent, pinned and agree. RED on the unmodified wrappers on both engines.\n- Docs: two rows in CONFIGURATION.md and the unlanded-route line in scripts/CLAUDE.md.\n\nMutants (wt-settings): M1-M6 and P1-P4 are all killed with an AssertionError. P5 (-cne to -ne) survives as expected, since no case covers a branch pair that differs only by case.\n\nVerification:\n- The plan's command ran in full 13:52-15:18Z, EXIT=0, on bytes sha256-identical to checkpoint 5ae55687. This session did not re-run the 86-min command.\n- Rechecked this session on the merged tree (target 2b934dce, which includes d2d6ac4b; merge-tree clean): parity-check.sh, lint, and wt-settings plus codes pass on sh and on PS 5.1.\n\nResiduals, out of scope",
+  "completedAt": "2026-11-03T16:28:41.122Z",
+  "reviewCompletedAt": "2026-11-03T16:28:41.122Z",
+  "reviewSummary": "Reviewed completion 6cca2104 (moe/work-2026-10-24 and origin; squash onto 2b934dce): +107/-23, 84 net, 5 declared files, in scope.\n\nRe-ran task.verification on clones at 6cca2104 (blobs = recorded), MOE_/CLAUDE stripped, 15:33-16:28Z:\n- Linux: parity-check.sh PASS; lint OK; wt-settings+codes sh 2 ok; postflight-safe bash exit 0, Z, NONE; worktree-landing.sh 18/18.\n- PS 5.1: parity-check.ps1 PASS; wt-settings+codes ps1 2 ok; postflight-safe powershell exit 0, Z, NONE; worktree-landing.ps1 18/18.\n\nMutants on landed bytes: sh M1/M2/M3/M5 and ps1 P1/P2/P3 each die with an AssertionError; controls pass.\n\nShared mode: sh read_commit_settings at HEAD^ vs HEAD on 24 inputs (missing, empty, [], null, scalar, truncated, BOM, non-utf8, odd settings values, full, glob). The first ten CS_* match on all; the flag is false on every unreadable input and when python fails.\n\nDoD1: the refusal follows the l2-failed branch in both twins, before lease, merge-tree, gate, journal and push. Routed unlanded (gate), it rescues T from the task branch. Tests assert all of this.\nDoD2: target = MOE_WT_TARGET / $script:MoeWtTarget. A mismatch prints the same sentence once in both twins; the lease is git-land-moe-work-x.\nDoD3: a scenario per engine; both parity checks exit 0.\n\nDocs present. No forbidden patterns; no existing case changed.\n\nResiduals (non-blocking, worker-listed): follow, QA preflight and sweep still read the settings target; the L2 exclude list is empty when unreadable; pwsh 7 unwraps a one-element array; a half-written file counts toward the 3-unlanded block.",
+  "requiredCheckAtDone": null
 }

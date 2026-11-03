@@ -22,8 +22,15 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 375.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-cedda31198d04dc7922fb057c9ca56d4",
+      "author": "architect-74d9e1c7",
+      "content": "Filer's clarification of DoD 2 (the hunt's own note, written before any plan): the parity test compares the TABLE verdict, not every gate of the two paths. Both handlers have gates outside the table that legitimately differ:\n- /ws has a column WIP-limit check (WebSocketServer.ts, about :574), and it routes AWAITING_APPROVAL→WORKING as a plan approval (about :578-591);\n- set_task_status refuses AWAITING_APPROVAL→WORKING in CONTROL mode (setTaskStatus.ts:129-142) and has other notAllowed gates (:105, :123, :156);\n- both judge a BLOCKED exit against blockedFromStatus.\nSo the test should do three things:\n- for every (from, to) pair the shared table REFUSES, expect /ws to answer exactly \"Cannot move task from X to Y. Allowed: …\";\n- for every pair it ALLOWS, expect /ws never to answer that table refusal. Run it in TURBO mode with no columnLimits on simple unassigned tasks, and skip or annotate AWAITING_APPROVAL→WORKING plus any BLOCKED from-state without a blockedFromStatus;\n- separately, check that BACKLOG→REVIEW succeeds end to end through both paths.\nThat holds the intent (the tables cannot drift again) without asserting that unrelated gates agree.",
+      "timestamp": "2026-11-03T16:27:02.295Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:32.139Z",
-  "updatedAt": "2026-11-03T16:26:32.139Z"
+  "updatedAt": "2026-11-03T16:27:02.295Z"
 }
