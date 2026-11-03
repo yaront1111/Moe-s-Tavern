@@ -10,10 +10,43 @@
     "Verification, in a snapshot outside the shared checkout: `cd packages/moe-daemon && npx vitest run src/tools/<new test file> src/tools/createTask.test.ts src/tools/recordCommit.test.ts && npx tsc --noEmit` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first (RED). Create packages/moe-daemon/src/tools/createCommitActor.test.ts with the Write tool. It is a tracked file: never cp, heredoc or shell-write it into the tree (global rail 3: a shell write leaves no TOOL witness and the path is HELD at landing). The architect validated a prototype against HEAD 9578c609 and against the fix: read /mnt/d/moe-scratch/plan-c05b/createCommitActor.test.ts.prototype and Write the same content (README.md beside it holds the dry-run evidence). Keep the `(z1) `, `(z2) ` and `(z3) ` title prefixes and the soft-assertion labels: mutants.sh matches on them.\n\nShape (modeled on tools/taskEventActor.test.ts; mem:gotcha-task-event-actor-inventory):\n- Fixture: ToolTestHarness (tools/toolTestHarness.ts), epic-1 and four REVIEW rows assigned to qa-1 (task-done, task-none, task-guard, task-anon). No worker records are needed: resolveWorkerRole (util/workerRole.ts) falls back to the governor- id prefix, and record_commit's touchWorker no-ops for an unknown seat.\n- Helpers: actorsOf(event, taskId) maps state.getActivityLog(200) to the top-level workerId (null when absent); seatEvents(seat) is get_activity_log { workerId: seat } filtered to TASK_CREATED/TASK_COMMIT_RECORDED as `<event> <taskId>`.\n- (z1) caller ids: create_task {workerId:'governor-g1'} (response createdBy still 'GOVERNOR'); record_commit committed {task-done, worker-1}; outcome 'nothing' checkpoint {task-none, worker-2}; the owner-guard refusal {task-guard, worker-3, MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE} as the parity control. Soft-asserts each actor list, recordedBy ['worker-1'] unchanged, and each seat's get_activity_log result.\n- (z2) caller-less: create_task with no workerId (createdBy still 'WORKER') and record_commit committed on task-anon with no workerId (recordedBy stays 'unknown'). Soft-asserts [null] for both and empty seatEvents for 'unknown' and 'WORKER'.\n- (z3) the board: an HTTP server on 127.0.0.1:0, a MoeWebSocketServer over the harness state, and a ws client that sends CREATE_TASK with a payload carrying workerId and actorWorkerId 'smuggled-seat'. Asserts the TASK_CREATED reply, actor [null] and an empty seatEvents('smuggled-seat'); the socket, the WS server and the HTTP server are closed in finally.\n\nExpected at the unfixed base (dry-run, /mnt/d/moe-scratch/plan-c05b/red-9578c609.txt): z1 fails on exactly six assertions (create_task TASK_CREATED actor; committed and nothing TASK_COMMIT_RECORDED actors; seats governor-g1, worker-1, worker-2). z2 and z3 pass there, because they pin that caller-less and board rows stay actor-less. Do not run it in the worktree: the step-3 gate is where it runs (global rail 1). Do not edit createTask.test.ts or recordCommit.test.ts (DoD 3: they pass unchanged).",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/createCommitActor.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix: thread the caller's bare workerId through as the event actor, with the Edit tool (global rail 3). Match /mnt/d/moe-scratch/plan-c05b/fix.diff (+8/-6) text for text, so that mutants.sh's anchors apply; match on the call text, not line numbers, in case a peer lands first.\n(1) state/taskStore.ts:289: `export async function createTask(state: StateManager, input: Partial<Task>, actorWorkerId?: string): Promise<Task> {`\n(2) state/taskStore.ts:361: replace the TASK_CREATED line with fix.diff's two comment lines (the actor is a parameter, never read from `input`, because the board passes its raw /ws payload as `input`) followed by `state.appendActivity('TASK_CREATED', { title: task.title }, task, undefined, undefined, undefined, actorWorkerId);`. appendActivity's 7th parameter (state/activityLog.ts:37) is the actor channel updateTask already uses.\n(3) state/StateManager.ts:667-668: `async createTask(input: Partial<Task>, actorWorkerId?: string): Promise<Task> {` and `return createTask(this, input, actorWorkerId);`.\n(4) tools/createTask.ts:169: the closing `});` of the `state.createTask({ ... })` call becomes `}, params.workerId);`.\n(5) tools/recordCommit.ts:379: `updated = await state.updateTask(task.id, updates, 'TASK_COMMIT_RECORDED', params.workerId);`, the value the owner-guard branch (:364-370) already passes.\n\nRules: pass params.workerId BARE. Never recordedBy (it falls back to UNIDENTIFIED_RELEASER 'unknown', recordCommit.ts:296), never resolvedCreatedBy/createdBy (a role, not a seat), never `|| 'unknown'`, never task.assignedWorkerId (state/activityLog.ts:74-83: an audit actor is never guessed). Keep the actor a separate parameter and never read it from `input`. Leave server/WebSocketServer.ts:451 byte-identical, so the board create stays actor-less. Leave create_task's cycle-drop updateTask (:190, `{ dependsOn: kept }`) alone: its comment says it cannot fire today, and it is outside the DoD. No response, inputSchema, tool description or docs change (DoD: no contract change).\n\nError handling: unchanged by design. A failed writeEntity or updateTask still throws out of the tool exactly as before, and appendActivity stays best-effort (backpressure drop, logged append failures). The extra argument adds no failure path and no try/catch.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate (DoD 4). Run it ONCE, fresh, after the last tracked edit; its output is moe.complete_task's verification evidence (command, exitCode 0, and an outputTail holding the Test Files/Tests lines). Run the executionContract checkRef exactly (byte-identical copy: /mnt/d/moe-scratch/plan-c05b/checkref.txt), from anywhere inside your task worktree:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && P=packages/moe-daemon/src && cp --parents $P/state/taskStore.ts $P/state/StateManager.ts $P/tools/createTask.ts $P/tools/recordCommit.ts $P/tools/createCommitActor.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/createCommitActor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && { npx vitest run src/tools/createCommitActor.test.ts src/tools/createTask.test.ts src/tools/recordCommit.test.ts src/state/StateManager.test.ts src/tools/getActivityLog.test.ts src/server/executionPolicySnapshot.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ]; } && npx tsc --noEmit && npx tsc -p tt.json'\n\nWhat it does: archives the worktree HEAD into a mktemp snapshot outside the repo, overlays this row's five owned paths (uncommitted edits included), runs npm ci under env -i with Linux node v24.21.0, then runs DoD 4's three vitest files plus three neighbours (StateManager.test.ts owns state.createTask's own cases, getActivityLog.test.ts the workerId filter, server/executionPolicySnapshot.test.ts W4 the board's CREATE_TASK over /ws), then `tsc --noEmit` for the sources and tt.json for the new test (the package tsconfig excludes tests; mem:gotcha-daemon-linux-snapshot-gate). It is a strict superset of DoD 4's command.\n\nNever run vitest, npm ci or npm test in the shared checkout or in your worktree (global rail 1). A `TMPDIR=<your scratchpad>` prefix on the OUTER command is fine; never pass TMPDIR into the env -i (mem:convention-daemon-full-suite-gate-checkref: a long temp root breaks tsx IPC pipes). If a run hangs, stop only a PID your own session started (global rail 2: no pkill, killall or name-matched kill).\n\nExpected tail: ` Test Files  6 passed (6)` and `      Tests  252 passed (252)`, exit 0 (dry-run from a scratch clone at 9578c609 in about 30 s). With the test but without the fix, the same text exits 1 with only z1 failing (Tests 1 failed | 251 passed (252)).\n\nPlanning also ran the full daemon suite on the fixed snapshot: 240 files, 7066 passed, 24 skipped, exit 0 (/mnt/d/moe-scratch/plan-c05b/full-suite-fixed.txt). No other test pins an absent actor on these two events, so this narrow gate fits a 14-line change. (The epic has no finalTaskId; this row is epic-final only by the highest-order fallback, like the three actor rows before it.)\n\nError handling for a red run: if a file other than createCommitActor.test.ts fails, read it before touching anything, since the fix only adds an optional argument. Check `uptime` and rerun that one file in the same snapshot before calling it a regression (load flakes: mem:gotcha-daemon-linux-snapshot-gate). If npm ci or tsc fails, the && chain exits with that failure's code: fix the cause, never weaken the command.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this row's diff (adversarial-self-review skill), once, as the last step; then moe.complete_task with step 3's evidence.\n(1) Scope: `git status --short` and `git diff --stat` against the task base show exactly the four source files (+8/-6, the same text as /mnt/d/moe-scratch/plan-c05b/fix.diff) plus the new test file. No edits to createTask.test.ts, recordCommit.test.ts, server/WebSocketServer.ts, docs or any .moe/ path; every tracked write was made with Edit or Write.\n(2) Mutation check (DoD 3: restoring either call site fails the test). From your worktree run `bash /mnt/d/moe-scratch/plan-c05b/mutants.sh`. It only READS the worktree: it archives HEAD, overlays the five owned paths into its own mktemp snapshot, runs npm ci there under env -i, requires the fixed baseline at 3/3, then applies 8 mutants one at a time: M1 drop create_task's argument; M2 drop record_commit's argument; M3 taskStore drops actorWorkerId; M4 the StateManager wrapper drops it; M5 `params.workerId || 'unknown'`; M6 `recordedBy`; M7 `resolvedCreatedBy`; M8 taskStore reads input.workerId. Each must fail its expected case (z1: M1-M4; z2: M5, M6; z1 and z2: M7; z3: M8). It then restores the files and byte-compares them with your worktree. Expected: 8 `killed` lines naming their assertions, `restored fix: Tests  3 passed (3)` and `mutants exit=0` (architect dry-run: /mnt/d/moe-scratch/plan-c05b/mutants.output.txt). Paste the output into the step note. A `NOT APPLIED` line means your text differs from fix.diff: match it. Never mutate the worktree yourself.\n(3) Edge cases, confirmed by reading, not by new code: a caller-less call records no workerId (z2); an explicit workerId '' records workerId \"\", exactly like the review-loop rows (normalizing belongs in appendActivity, a shared surface; out of scope per mem:gotcha-task-event-actor-inventory); a /ws payload naming workerId or actorWorkerId cannot set the actor (z3, M8); recordedBy keeps its 'unknown' fallback while the event records none; the owner-guard branch is untouched; no #general 'Task moved to' line changes, because record_commit never writes status and a create is not a move; concurrency is unchanged (both tools run under the global state mutex).\n(4) After the gate is green, add create_task (TASK_CREATED) and record_commit's normal branch to the Fixed list in mem:gotcha-task-event-actor-inventory with Serena edit_memory. .serena/ is gitignored, so this is not a tracked write.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-2dc72348",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -25,11 +58,92 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:21:44.730Z",
-  "updatedAt": "2026-11-03T16:22:28.687Z",
+  "updatedAt": "2026-11-03T16:39:58.298Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T16:22:13.076Z"
+    "firstClaimAt": "2026-11-03T16:22:13.076Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-2dc72348"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T16:39:39.457Z",
+  "executionContract": {
+    "intendedBehavior": "create_task records the calling seat (its bare params.workerId) as the TASK_CREATED activity event's top-level workerId, and record_commit's normal (non-owner-guard) branch records it on TASK_COMMIT_RECORDED, as the owner-guard branch already does. get_activity_log { workerId } then returns a seat's task creations and the commits its wrapper recorded. A caller-less create_task or record_commit, and the board's /ws CREATE_TASK, record no workerId: never 'unknown', a role or the assignee. No tool response, input schema or documented contract changes.",
+    "acceptanceCriteria": [
+      "create_task { workerId: W } writes TASK_CREATED whose top-level workerId is W, and get_activity_log { workerId: W } returns it; the response (including createdBy) is unchanged.",
+      "A create_task without workerId, and the board's CREATE_TASK over /ws (even with a payload carrying workerId or actorWorkerId), write TASK_CREATED with no workerId.",
+      "record_commit's normal branch (committed, nothing, and refused/failed with a code other than the two owner-guard codes) writes TASK_COMMIT_RECORDED with the caller as top-level workerId; a caller-less call records none (commits[].recordedBy keeps its 'unknown' fallback).",
+      "The new tools/createCommitActor.test.ts fails when either call site is restored (mutants M1, M2) or the store or wrapper drops the actor (M3, M4), when a placeholder actor is introduced ('unknown' M5, recordedBy M6, the createdBy role M7), and when taskStore reads the actor from input (M8); createTask.test.ts and recordCommit.test.ts pass unchanged."
+    ],
+    "invariants": [
+      "An activity actor is never guessed: no assignee, recordedBy, createdBy-role or 'unknown' fallback (state/activityLog.ts:74-83).",
+      "The actor is a separate optional parameter of taskStore.createTask and StateManager.createTask, never read from the input object, which on the board path is the raw /ws payload.",
+      "record_commit's owner-guard branch, response shape, commits[].recordedBy, lastCommitOutcome, path sets and chat lines are unchanged.",
+      "create_task's response, createdBy role attribution, advisory warnings and PLANNING announcements are unchanged."
+    ],
+    "compatibility": [
+      "Existing .moe/activity.log lines without workerId stay valid; get_activity_log's filter and response shape are unchanged.",
+      "server/WebSocketServer.ts:451 keeps its one-argument state.createTask(payload) call; JetBrains and VS Code CREATE_TASK frames are unchanged.",
+      "StateManager.createTask's new parameter is optional, so every existing caller, tests included, compiles unchanged."
+    ],
+    "approvedScope": [
+      "state/taskStore.ts createTask: optional actorWorkerId parameter, passed as appendActivity's 7th argument on TASK_CREATED.",
+      "state/StateManager.ts createTask wrapper: forwards the optional actorWorkerId.",
+      "tools/createTask.ts: passes params.workerId as state.createTask's second argument.",
+      "tools/recordCommit.ts: passes params.workerId as updateTask's 4th argument on the normal branch.",
+      "New test packages/moe-daemon/src/tools/createCommitActor.test.ts (cases z1, z2, z3)."
+    ],
+    "reuse": [
+      "appendActivity's existing actorWorkerId parameter (state/activityLog.ts:30-37, :83) and updateTask's 4th argument, the channel d981e0b0, 2e3012b9 and e977c32b used.",
+      "ToolTestHarness (tools/toolTestHarness.ts), the taskEventActor.test.ts assertion pattern, and the http + MoeWebSocketServer + ws client wiring of server/executionPolicySnapshot.test.ts."
+    ],
+    "sourceAssumptions": [
+      "HEAD 9578c609: state/taskStore.ts:289 createTask(state, input) and :361 appendActivity('TASK_CREATED', { title: task.title }, task) with no actor.",
+      "state/StateManager.ts:667-668 createTask(input) delegates to taskStore.createTask(this, input).",
+      "tools/createTask.ts:157-169 calls state.createTask({...}); params.workerId only resolves createdBy (:135-137).",
+      "tools/recordCommit.ts:379 updateTask(task.id, updates, 'TASK_COMMIT_RECORDED') has no actor; the owner-guard branch at :364-370 passes params.workerId; :296 recordedBy = params.workerId || UNIDENTIFIED_RELEASER.",
+      "tools/getActivityLog.ts:131-132 filters on the event's top-level workerId only.",
+      "server/WebSocketServer.ts:451 calls this.state.createTask(message.payload) with one argument."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && P=packages/moe-daemon/src && cp --parents $P/state/taskStore.ts $P/state/StateManager.ts $P/tools/createTask.ts $P/tools/recordCommit.ts $P/tools/createCommitActor.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/createCommitActor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && { npx vitest run src/tools/createCommitActor.test.ts src/tools/createTask.test.ts src/tools/recordCommit.test.ts src/state/StateManager.test.ts src/tools/getActivityLog.test.ts src/server/executionPolicySnapshot.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ]; } && npx tsc --noEmit && npx tsc -p tt.json'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) The actor as a field of `input` (e.g. input.actorWorkerId): rejected. The board's CREATE_TASK passes its raw /ws payload as `input`, so a client could name its own actor. A separate parameter keeps the board actor-less by construction; mutant M8 and case z3 pin it. (2) recordedBy as record_commit's actor: rejected, it falls back to UNIDENTIFIED_RELEASER 'unknown' (M6). (3) The createdBy role: rejected, a role is not a seat (M7). (4) Also passing the actor at create_task's cycle-drop updateTask (:190): rejected, its comment says it cannot fire today, so it is untestable and outside the DoD. (5) Normalizing an explicit '' workerId: rejected, it belongs in appendActivity, a shared surface (mem:gotcha-task-event-actor-inventory). (6) Docs or tool-description edits: none. The DoD says no contract change, no doc enumerates per-event actors, and the three earlier actor rows (d981e0b0, 2e3012b9, e977c32b) changed no docs. (7) A state-level board row (state.createTask(payload) with a smuggled field) was prototyped first, then replaced by z3 over a real /ws socket, so DoD 1's board clause is tested literally.",
+    "codebaseInsights": "appendActivity's 7th parameter actorWorkerId (state/activityLog.ts:30-37) becomes the event's top-level workerId (:83, worker?.id || proposal?.workerId || actorWorkerId) and never falls back to the assignee. updateTask's 4th argument feeds it (taskStore.ts:647-649), and get_activity_log filters on that field only (getActivityLog.ts:131-132). StateManager's task API is thin delegation to state/taskStore.ts. The only callers of state.createTask are tools/createTask.ts:157 and server/WebSocketServer.ts:451; benchmarks/baselineRun.ts has an unrelated local createTask. record_commit's touchWorker no-ops for an unregistered seat, and resolveWorkerRole falls back to the id prefix, so the test needs no worker records. The MoeWebSocketServer constructor starts no timers, so a z3-style socket row needs only an HTTP listener on port 0 and closes cleanly.",
+    "risks": "The fix text must match fix.diff, or mutants.sh reports NOT APPLIED. Never run vitest or npm ci in the shared checkout or the worktree (global rail 1): the checkRef and mutants.sh each run in their own mktemp snapshot and only read the tree. z3 binds 127.0.0.1:0 and closes the socket, WS server and HTTP server in finally; under heavy host load rerun the file once before calling it flaky. An explicit workerId '' records workerId \"\" (accepted, matching the review-loop rows). The package tsconfig excludes tests, so tt.json is what type-checks the new test. Error handling is unchanged: the extra argument adds no failure path. Rail 2 (no pattern-kill) applies to any hung test run.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/createTask.ts",
+      "packages/moe-daemon/src/tools/recordCommit.ts",
+      "packages/moe-daemon/src/state/activityLog.ts",
+      "packages/moe-daemon/src/tools/getActivityLog.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/tools/taskEventActor.test.ts",
+      "/mnt/d/moe-scratch/plan-c05b/README.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "27fc6aeded948c7794f46284859dd8e7c59248f6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T16:39:39.486Z",
+  "approvedPlanRevision": 1
 }

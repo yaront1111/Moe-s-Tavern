@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,16 +82,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:21:31.497Z",
-  "updatedAt": "2026-11-03T16:37:59.746Z",
+  "updatedAt": "2026-11-03T16:39:55.869Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T16:22:12.646Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:39:36.027Z",
+    "wallClockMs": 1043381
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -210,9 +213,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T16:33:20Z",
-    "at": "2026-11-03T16:37:59.746Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T16:38:30Z",
+    "at": "2026-11-03T16:39:55.869Z"
+  },
+  "completedAt": "2026-11-03T16:39:36.027Z",
+  "reviewCompletedAt": "2026-11-03T16:39:36.027Z",
+  "reviewSummary": "Reviewed completion 27fc6aed (on moe/work-2026-10-24, contained in control HEAD) via git diff 27fc6aed^ 27fc6aed: 4 files, +139/-2 (net 137 LOC), all inside approvedScope (daemonClient.ts resolveConnectHost, daemonClient.test.ts, postToolUse.test.ts env hooks only, README WSL paragraph). Re-ran the exact verification in a fresh git-archive snapshot of 27fc6aed under /tmp (npm ci --prefer-offline, Linux rolldown binding present): `MOE_DAEMON_HOST=172.26.208.1 npx vitest run` -> 2 files / 23 tests passed; `env -u MOE_DAEMON_HOST npx vitest run` -> 23/23 passed (127.0.0.2 end-to-end ran, not skipped); `npx tsc --noEmit` exit 0. Mutation check (DoD 2): in the snapshot I restored the original `host: typeof obj.host === 'string' ? obj.host : '127.0.0.1'` and got exactly 3 failures: both new precedence tests (expected '127.0.0.1' to be '172.26.208.1'; expected '10.1.2.3' to be '172.26.208.1') and the end-to-end test with CONNECT_FAILED. DoD 1: resolver reads env per call, trims, falls to trimmed legacy host then loopback; bindHost appears only in a comment; 'wsl' and 192.0.2.7 bindHost cases covered. DoD 2: the e2e test starts a ws server listening only on 127.0.0.2 with bindHost 'wsl' and no host, asserts callTool resolves, exactly one /mcp frame, and the /ws frame equals the event; skip only on EADDRNOTAVAIL. DoD 3: the only removed test line is the import line (now adds postEvent); no assertion changed, no .only/.skip; file-scope beforeEach/afterEach hooks make both suites hermetic (this seat exports MOE_DAEMON_HOST=172.26.208.1 and passes). DoD 4 satisfied. sendOnce, wire format, timeouts, error codes and fail-open hook untouched. README states that on WSL CONNECT_FAILED means MOE_DAEMON_HOST is unset or wrong. Only stderr noise is the pre-existing negative hook case. Complexity pass: nothing to cut. Snapshot dir removed (own mktemp only). Handoff memory retired after approval; reusable facts already live in gotcha-claude-plugin-host-hermetic-tests.",
+  "requiredCheckAtDone": null
 }
