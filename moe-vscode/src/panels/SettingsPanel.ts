@@ -58,6 +58,44 @@ function landingBranchRow(branch: string): PolicyRow {
     return { label, value: branch, detail: 'Peel target and the branch complete_task requires.' };
 }
 
+/**
+ * validators.ts resolveWorktreeMode: a stored 'on'/'off' is honoured; an unset mode is on only
+ * with a non-blank string qualityGate. Any other stored value, null included, reads as unset here
+ * (the daemon refuses it), so a hand-edited mode degrades to the gate rule instead of throwing.
+ */
+function worktreeModeOf(s: JsonObject): { on: boolean; fromDefault: boolean } {
+    const stored = s.worktreeMode === 'on' || s.worktreeMode === 'off' ? s.worktreeMode : undefined;
+    const fromDefault = stored === undefined && trimmedString(s.qualityGate) !== '';
+    return { on: stored === 'on' || fromDefault, fromDefault };
+}
+
+/** validators.ts resolveWorktreeTarget over an already-trimmed branch: the literal, else main (a glob reads main). */
+const worktreeTarget = (branch: string): string => (branch !== '' && !/[*?\[]/.test(branch) ? branch : 'main');
+
+function worktreeLandingRow(branch: string): PolicyRow {
+    const label = 'Landing branch';
+    const value = worktreeTarget(branch);
+    if (branch === '') {
+        return { label, value, detail: 'No consolidationBranch set; each completion lands as one squash commit on main.' };
+    }
+    if (value !== branch) {
+        return { label, value, detail: 'A glob consolidationBranch is not a landing target; each completion lands on main.' };
+    }
+    return { label, value, detail: 'Each completion lands as one merge-tree squash commit on this branch.' };
+}
+
+function gateScopeRow(worktree: boolean, everyTask: boolean): PolicyRow {
+    const label = 'Quality gate scope';
+    if (worktree) {
+        return { label, value: 'Every completion (worktree mode)', detail: 'Every worktree landing runs the gate, whatever qualityGateScope says.' };
+    }
+    return {
+        label,
+        value: everyTask ? 'Every task' : 'Epic-final task only',
+        detail: everyTask ? "The gate runs before every task's completion commit." : 'The gate runs only on the last open task of an epic.',
+    };
+}
+
 function attributionRow(undeclared: unknown): PolicyRow {
     const label = 'Undeclared-file attribution';
     if (undeclared === 'never') {
@@ -86,35 +124,40 @@ function sizingRow(taskSizing: unknown): PolicyRow {
  * The effective landing and gate policy the daemon and wrappers apply, in display order. A port
  * of JetBrains' MoeSettingsDialog.effectivePolicyRows, but over the RAW wire settings: VS Code
  * keeps project.json untyped, so each value goes through the reader the daemon uses. It never
- * throws; project.json is hand-editable and a wrong type means the daemon default.
+ * throws; project.json is hand-editable and a wrong type means the daemon default. Worktree mode
+ * on adds a mode row before Landing branch and swaps in the worktree board, landing and scope rows.
  */
 export function effectivePolicyRows(settings: unknown): PolicyRow[] {
     const s = isJsonObject(settings) ? settings : {};
     const attribution = isJsonObject(s.attribution) ? s.attribution : {};
     const qualityGate = trimmedString(s.qualityGate);
-    const gateEveryTask = s.qualityGateScope === 'everyTask';
+    const branch = trimmedString(s.consolidationBranch);
     const commitHooks = s.commitHooks === true;
+    const mode = worktreeModeOf(s);
+    const modeRow: PolicyRow = {
+        label: 'Worktree mode',
+        value: mode.fromDefault ? 'On (unset; a qualityGate is set)' : 'On',
+        detail: 'Each WORKING claim works in .worktrees/<taskId> on moe/task/<taskId>.',
+    };
     return [
         toggleRow('Auto-commit', s.autoCommit !== false, "Every session exit lands this task's attributed paths.", 'No completion, checkpoint or rescue commits.'),
         toggleRow('Checkpoint commits', s.checkpointCommits !== false, 'Non-final exits commit as wip(task-<id>): ...', 'No wip(task-<id>) commits; unlanded bytes wait for completion.'),
         toggleRow('Push checkpoints', s.checkpointPush !== false, 'Checkpoint commits are pushed to the remote.', 'Checkpoints stay local.'),
-        toggleRow('Commit board state', s.commitBoardState !== false, "Landing also stages this task's .moe/tasks/<id>.json.", "This task's .moe/tasks/<id>.json is left uncommitted."),
+        mode.on
+            ? toggleRow('Commit board state', s.commitBoardState !== false, 'Landings carry no .moe/ path; board history is snapshotted to refs/moe/board.', 'Landings carry no .moe/ path; no refs/moe/board snapshot is written.')
+            : toggleRow('Commit board state', s.commitBoardState !== false, "Landing also stages this task's .moe/tasks/<id>.json.", "This task's .moe/tasks/<id>.json is left uncommitted."),
         {
             label: 'Commit hooks',
             value: commitHooks ? 'Run on completion commits' : 'Skipped (plumbing commits)',
             detail: commitHooks ? 'Completion commits run git hooks; checkpoints stay plumbing.' : 'Landing writes the commit directly, so no git hook runs.',
         },
-        landingBranchRow(trimmedString(s.consolidationBranch)),
+        ...(mode.on ? [modeRow, worktreeLandingRow(branch)] : [landingBranchRow(branch)]),
         {
             label: 'Quality gate',
             value: qualityGate === '' ? 'Disabled (no command configured)' : qualityGate,
             detail: qualityGate === '' ? 'Nothing gates the completion commit.' : 'Must exit 0 before the completion commit lands.',
         },
-        {
-            label: 'Quality gate scope',
-            value: gateEveryTask ? 'Every task' : 'Epic-final task only',
-            detail: gateEveryTask ? "The gate runs before every task's completion commit." : 'The gate runs only on the last open task of an epic.',
-        },
+        gateScopeRow(mode.on, s.qualityGateScope === 'everyTask'),
         attributionRow(attribution.undeclared),
         sizingRow(s.taskSizing),
     ];

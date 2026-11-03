@@ -59,8 +59,22 @@ data class ProjectSettings(
     val qualityGate: String = "",
     val qualityGateScope: String = "epicFinal",
     val attributionUndeclared: String = "solo",
-    val taskSizing: TaskSizingThresholds = TaskSizingThresholds()
-)
+    val taskSizing: TaskSizingThresholds = TaskSizingThresholds(),
+    /**
+     * The stored `worktreeMode` when it is exactly "on" or "off", else null (unset). The
+     * computed values below mirror `resolveWorktreeMode`/`resolveWorktreeTarget` in the
+     * daemon's `state/validators.ts`. A malformed stored mode reads as unset here, while
+     * the daemon refuses it: this display copy degrades instead of throwing.
+     */
+    val worktreeMode: String? = null
+) {
+    /** Unset mode with a non-blank gate ([qualityGate] is already strict and trimmed). */
+    val worktreeModeFromDefault: Boolean get() = worktreeMode == null && qualityGate.isNotBlank()
+    val worktreeModeOn: Boolean get() = worktreeMode == "on" || worktreeModeFromDefault
+    /** The literal [consolidationBranch] (already trimmed) with no `*`, `?` or `[`, else main. */
+    val worktreeTarget: String
+        get() = consolidationBranch.takeIf { it.isNotEmpty() && it.none { c -> c == '*' || c == '?' || c == '[' } } ?: "main"
+}
 
 /** Plan-size bands from `settings.taskSizing`; defaults mirror `util/planSize.ts`. */
 data class TaskSizingThresholds(

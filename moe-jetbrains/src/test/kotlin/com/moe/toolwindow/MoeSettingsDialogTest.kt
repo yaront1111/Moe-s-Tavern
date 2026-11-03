@@ -65,6 +65,7 @@ class MoeSettingsDialogTest {
             consolidationBranch = "release/train",
             qualityGate = "npm run lint",
             qualityGateScope = "everyTask",
+            worktreeMode = "off",
             attributionUndeclared = "never",
             taskSizing = TaskSizingThresholds(
                 warnSteps = 3,

@@ -141,6 +141,7 @@ class SettingsPolicyCorpusTest {
             "consolidationBranch" to null,
             "qualityGate" to null,
             "qualityGateScope" to null,
+            "worktreeMode" to null,
             "attribution" to setOf("undeclared"),
             "taskSizing" to setOf("warnSteps", "maxSteps", "warnDistinctFiles", "maxDistinctFiles")
         )

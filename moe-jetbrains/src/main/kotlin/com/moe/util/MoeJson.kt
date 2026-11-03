@@ -304,7 +304,8 @@ object MoeJson {
             attributionUndeclared = attribution.getStringOrDefault("undeclared", "solo")
                 .takeIf { it in setOf("solo", "never", "always") }
                 ?: "solo",
-            taskSizing = parseTaskSizing(settings)
+            taskSizing = parseTaskSizing(settings),
+            worktreeMode = settings.getStrictStringOrNull("worktreeMode")?.takeIf { it == "on" || it == "off" }
         )
     }
 

@@ -307,6 +307,44 @@ class MoeJsonTest {
     }
 
     @Test
+    fun `worktree mode and target resolve exactly as the daemon's resolveWorktreeMode and resolveWorktreeTarget`() {
+        fun settingsOf(block: String) = requireNotNull(
+            parseState("""{"project":{"id":"p","name":"n","settings":$block},"epics":[],"tasks":[]}""").project.settings
+        )
+        // settings block to (stored mode, resolves on, on only through the qualityGate default)
+        val modes = listOf(
+            """{"worktreeMode":"on"}""" to Triple("on", true, false),
+            """{"worktreeMode":"off","qualityGate":"npm test"}""" to Triple("off", false, false),
+            """{"qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"qualityGate":"   "}""" to Triple(null, false, false),
+            """{}""" to Triple(null, false, false),
+            """{"qualityGate":42}""" to Triple(null, false, false),
+            """{"worktreeMode":42,"qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"worktreeMode":"maybe","qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"worktreeMode":null,"qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"worktreeMode":"ON","qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"worktreeMode":42}""" to Triple(null, false, false),
+            """{"worktreeMode":"maybe"}""" to Triple(null, false, false),
+            """{"worktreeMode":null}""" to Triple(null, false, false)
+        )
+        modes.forEach { (block, expected) ->
+            val s = settingsOf(block)
+            assertEquals(block, expected, Triple(s.worktreeMode, s.worktreeModeOn, s.worktreeModeFromDefault))
+        }
+        val targets = listOf(
+            """{"consolidationBranch":"  release/train  "}""" to "release/train",
+            """{"consolidationBranch":""}""" to "main",
+            """{"consolidationBranch":"   "}""" to "main",
+            """{}""" to "main",
+            """{"consolidationBranch":true}""" to "main",
+            """{"consolidationBranch":"moe/work-*"}""" to "main",
+            """{"consolidationBranch":"a?b"}""" to "main",
+            """{"consolidationBranch":"a[b"}""" to "main"
+        )
+        targets.forEach { (block, expected) -> assertEquals(block, expected, settingsOf(block).worktreeTarget) }
+    }
+
+    @Test
     fun `parseState preserves task runtime fields and step metadata`() {
         val state = parseState(
             """
