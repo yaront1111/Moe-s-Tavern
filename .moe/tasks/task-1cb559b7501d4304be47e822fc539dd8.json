@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "Write the tests first (load test-driven-development). Create packages/moe-daemon/src/tools/completeStep.pathShape.test.ts with the Write tool. Never cp the scratch draft into the tree: a shell write leaves no TOOL witness. Read-only reference: /mnt/d/moe-scratch/plan-1cb559b7/completeStep.pathShape.test.ts. The architect dry-ran it red at base, green with the fix, and clean under the gate's tt.json typecheck.\n\nFixture:\n- ToolTestHarness with setupMoeFolder({ schemaVersion: 6 }) and createEpic.\n- Task task-w: WORKING, assigned to worker-1, contextFetchedBy ['worker-1'], one IN_PROGRESS step step-1 with affectedFiles ['src/planned.ts'].\n- Worker worker-1: CODING, currentTaskId task-w.\n- await h.state.load(). afterEach calls flushActivityLog(h.state), then h.cleanup().\n\nUse exactly these case-title prefixes, because the red checkRef greps them:\n- (p1)-(p5), DoD 1, as one it.each over a typed table `Array<[string, string, () => unknown]>`. Use the typed table, not `as const`: that form fails tt.json with TS7024. The values:\n  - (p1) [`${h.testDir}/src/x.ts`]\n  - (p2) ['../x.ts']\n  - (p3) ['C:\\\\x.ts']\n  - (p4) [{path:'a.ts'}]\n  - (p5) the bare string 'src/a.ts'\n  Each call passes a note. Each must reject with a MoeError whose code is MoeErrorCode.INVALID_INPUT (-32602). Afterwards .moe/tasks/task-w.json must be byte-identical to a read taken before the call, step-1 must still be IN_PROGRESS with note undefined, and stepsCompleted must be [].\n- (n1) DoD 2: ['./src/a.ts','src\\\\b.ts','src/a.ts'] is stored as exactly ['src/a.ts','src/b.ts'], and get_commit_scope {taskId:'task-w', workerId:'worker-1'} asserted contains both.\n- (c1) control: ['src/ok.ts'] is stored as given, with no warning.\n- (c2) control: an omitted modifiedFiles keeps the warning matching /fell back to the step's affectedFiles \\(1 path\\(s\\)\\)/, stores no modifiedFiles, and asserted still contains src/planned.ts.\n\nRun it once against the unfixed code. Expected: Tests 6 failed | 2 passed (8), with only (c1) and (c2) green.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/completeStep.pathShape.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T21:11:29.492Z"
     },
     {
       "stepId": "step-2",
@@ -54,7 +55,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:42:26.509Z",
-  "updatedAt": "2026-11-03T21:09:09.589Z",
+  "updatedAt": "2026-11-03T21:12:25.236Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:03:10.634Z",
     "plannedStepCount": 4,
@@ -125,5 +126,14 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T21:08:40.977Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T21:11:29.492Z",
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "worker-26483323@2026-11-03T21:08:40Z",
+    "at": "2026-11-03T21:12:25.236Z"
+  }
 }

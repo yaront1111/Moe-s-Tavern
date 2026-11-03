@@ -96,8 +96,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -116,12 +116,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:42:09.506Z",
-  "updatedAt": "2026-11-03T21:09:53.382Z",
+  "updatedAt": "2026-11-03T21:12:30.905Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:51:29.372Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T21:11:52.755Z",
+    "wallClockMs": 1223383
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -251,9 +253,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T21:01:43Z",
-    "at": "2026-11-03T21:09:10.197Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T21:09:14Z",
+    "at": "2026-11-03T21:12:30.905Z"
+  },
+  "completedAt": "2026-11-03T21:11:52.755Z",
+  "reviewCompletedAt": "2026-11-03T21:11:52.755Z",
+  "reviewSummary": "Reviewed completion 6ded0c93 (on moe/work-2026-10-24; 5 declared paths byte-identical to control HEAD). +160/-33, 5 files, net 127 (94 is the new test file), under the 400 cap.\n\nRe-ran task.verification in a git-archive snapshot of 6ded0c93 outside the checkout: docs grep ok, tsc --noEmit clean, vitest proposeRail + StateManager.test + stateModules.test + submitPlan.test = Test Files 5 passed (5), Tests 282 passed (282), exit 0. StateManager.ts 1480 lines (was 1493, budget 1500). RED-AT-BASE re-run at 8ca8d389: 7 failed | 1 passed (8), (g8) the passer. Snapshot dirs removed.\n\nDoD 1: g1-g4 (GLOBAL REMOVE/MODIFY of a forbiddenPatterns and a requiredPatterns entry) are PENDING, submit_plan refuses first, approval edits exactly that entry in memory and on disk after reload, then the same plan is accepted.\nDoD 2: g5 MoeError NOT_FOUND 'Rail not found', g6 INVALID_INPUT 'Ambiguous rail match'; no proposal in memory, .moe/proposals/ empty.\nDoD 3: 4-suite command 282/282; the existing substrings at StateManager.test.ts:936 and proposeRail.test.ts:127 still match.\n\nInvariants: g7 approval of a vanished value is coded NOT_FOUND, project.json byte-identical, proposal PENDING. g8 ADD_RAIL GLOBAL appends to customRules only. Record shape and EPIC/TASK unchanged. Write-then-adopt is safe: approveProposal's only caller (WebSocketServer.ts:815) runs under withMutex. Docs: the one planned paragraph.\n\nNon-blocking follow-up for the governor: submitPlan.ts:194-206 refusal text still offers EPIC/TASK scope, which can never lift a rail refusal.",
+  "requiredCheckAtDone": null
 }
