@@ -553,10 +553,10 @@ export class TaskDetailPanel implements vscode.Disposable {
                     } else {
                         if (idx <= 0) { break; }
                         if (currentStatus === 'REVIEW' || currentStatus === 'DONE') {
-                            const reason = await vscode.window.showInputBox({
+                            const reason = (await vscode.window.showInputBox({
                                 prompt: 'Reason for reopening',
                                 placeHolder: 'Why is this task being reopened?',
-                            });
+                            }))?.trim();
                             if (reason) {
                                 if (this.client.reopenTask(this.taskId, reason)) {
                                     vscode.window.showInformationMessage('Task reopened');
@@ -565,7 +565,11 @@ export class TaskDetailPanel implements vscode.Disposable {
                                 }
                             }
                         } else {
-                            this.client.updateTaskStatus(this.taskId, workflowOrder[idx - 1]);
+                            // Twin: media/board.js previousMove and JetBrains BoardMoves.previous. WORKING goes
+                            // back to PLANNING, never AWAITING_APPROVAL, which /ws refuses from WORKING.
+                            const target = currentStatus === 'PLANNING' ? 'BACKLOG'
+                                : currentStatus === 'WORKING' || currentStatus === 'AWAITING_APPROVAL' ? 'PLANNING' : undefined;
+                            if (target) { this.client.updateTaskStatus(this.taskId, target); }
                         }
                     }
                     break;

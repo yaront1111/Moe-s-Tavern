@@ -363,6 +363,15 @@
 
         const workflowOrder = ['BACKLOG','PLANNING','AWAITING_APPROVAL','WORKING','REVIEW','DONE'];
 
+        // Twin: TaskDetailPanel.ts 'prev' and JetBrains BoardMoves.previous.
+        // WORKING goes back to PLANNING, never AWAITING_APPROVAL: /ws refuses WORKING -> AWAITING_APPROVAL.
+        function previousMove(status) {
+            if (status === 'WORKING' || status === 'AWAITING_APPROVAL') { return { status: 'PLANNING' }; }
+            if (status === 'PLANNING') { return { status: 'BACKLOG' }; }
+            if (status === 'REVIEW' || status === 'DONE') { return { reopen: true }; }
+            return null;
+        }
+
         function updateEpicFilter(epics) {
             var filterEl = document.getElementById('epicFilter');
             var toolbar = document.getElementById('boardToolbar');
@@ -992,7 +1001,7 @@
             // Nav arrows
             const statusIdx = workflowOrder.indexOf(task.status);
             let navHtml = '';
-            const showPrev = statusIdx > 0;
+            const showPrev = previousMove(task.status) !== null;
             const showNext = statusIdx >= 0 && statusIdx < workflowOrder.length - 1;
             if (showPrev || showNext) {
                 navHtml = '<div class="task-nav-arrows">';
@@ -1143,16 +1152,12 @@
                 // From AWAITING_APPROVAL the next status is WORKING: an approval.
                 vscode.postMessage(moveMessage(task, workflowOrder[idx + 1]));
             } else if (direction === 'prev') {
-                if (idx <= 0) { return; }
-                if (task.status === 'REVIEW' || task.status === 'DONE') {
-                    const reason = prompt('Reason for reopening:');
-                    if (reason) {
-                        vscode.postMessage({ type: 'reopenTask', taskId: taskId, reason: reason });
-                    }
-                } else {
-                    const newStatus = workflowOrder[idx - 1];
-                    vscode.postMessage({ type: 'updateTaskStatus', taskId: taskId, status: newStatus });
-                }
+                const move = previousMove(task.status);
+                if (!move) { return; }
+                // The webview sandbox has no allow-modals, so the host asks for the reopen reason.
+                vscode.postMessage(move.reopen
+                    ? { type: 'reopenTask', taskId: taskId }
+                    : { type: 'updateTaskStatus', taskId: taskId, status: move.status });
             }
         }
 

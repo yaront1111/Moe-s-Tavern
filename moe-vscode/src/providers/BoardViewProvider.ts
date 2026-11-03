@@ -172,9 +172,21 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                 case 'rejectTask':
                     this.daemonClient.rejectTask(message.taskId, message.reason);
                     break;
-                case 'reopenTask':
-                    this.daemonClient.reopenTask(message.taskId, message.reason);
+                case 'reopenTask': {
+                    // The webview cannot show a modal (no allow-modals), so ask here.
+                    const taskId = message.taskId;
+                    if (typeof taskId !== 'string') { break; }
+                    vscode.window.showInputBox({ prompt: 'Reason for reopening', placeHolder: 'Why is this task being reopened?' }).then(answer => {
+                        const reason = answer?.trim();
+                        if (!reason) { return; }
+                        if (!this.daemonClient.reopenTask(taskId, reason)) {
+                            vscode.window.showWarningMessage('Not connected to Moe daemon — task was not reopened.');
+                        }
+                    }).then(undefined, (err: unknown) => {
+                        vscode.window.showErrorMessage(`Reopen failed: ${err instanceof Error ? err.message : String(err)}`);
+                    });
                     break;
+                }
                 case 'openTaskDetail':
                     this.openTaskDetail(message.taskId);
                     break;
