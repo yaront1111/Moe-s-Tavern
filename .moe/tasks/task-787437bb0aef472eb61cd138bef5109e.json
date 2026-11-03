@@ -12,27 +12,36 @@
     {
       "stepId": "step-1",
       "description": "Fix the fake stop child's scheduling in moe-vscode/tests/protected-daemon-provenance.test.cjs. It is the only file this task changes: edit it with the Edit tool, never a shell write. moe-vscode/src stays byte-identical. Read mem:gotcha-vscode-provenance-test-deadlines first.\nWhy it flakes: loadClient's fake spawn answers the installed stop on setImmediate. MoeDaemonClient.stopProtectedDaemon arms setTimeout(kill + finish(false), replaceStopTimeoutMs = 25) right after spawn() returns. An immediate queued from a check-phase callback runs only after the next timers phase. A stall of 25 ms or more under full-suite load therefore lets the deadline kill and refuse a stop that succeeded.\n(a) RED first, in scratch only:\n- From the task worktree: X=$(mktemp -d /tmp/787437bb-red.XXXXXX); git archive HEAD | tar -x -C \"$X\". Archive the whole tree (mem:gotcha-vscode-tests-need-full-repo-snapshot).\n- In \"$X/moe-vscode\" run npm ci --no-audit --no-fund under the same env -i HOME/PATH (nvm node v24.21.0) as checkRef [0].\n- Write \"$X/defer-immediate.cjs\" containing exactly the one line: globalThis.setImmediate = (fn, ...args) => setTimeout(fn, 30, ...args);\n  It simulates load: every immediate waits behind a 30 ms timer, so a 25 ms deadline armed after it fires first.\n- From \"$X/moe-vscode\" run: node --require ../defer-immediate.cjs tests/protected-daemon-provenance.test.cjs\n  Expected, architect-validated at 5f731334: exit 1, tests 47 / pass 38 / fail 9. The failing rows are exactly: (7) replace succeeds; (8) replace fails closed: nonzero, ENOENT, alive, new pid, unreadable, oversize; cancel during stop; replacement must verify the fresh daemon rather than trusting its spawn.\n- Without --require the file passes 47/47.\n- Keep the logs.\n(b) The fix, in loadClient's fake spawn:\n- Replace `setImmediate(() => {` with `(args[1].includes('stop') ? process.nextTick : setImmediate)(() => {`.\n- The stop outcome then arrives on process.nextTick: the exit with f.stopCode, the ENOENT error, or nothing for hang. That queue drains before the event loop can run any timer, so the outcome always precedes the 25 ms stop deadline. Only the hang row reaches that deadline.\n- The start child's 'spawn' and StubWebSocket's 'open' stay on setImmediate. No short production timer races them.\n- Add a two-line comment above the call saying this; Node itself delivers a spawn error on process.nextTick.\n- Keep these byte-identical: the callback body, client.replaceStopTimeoutMs = client.replaceExitTimeoutMs = 25; client.replacePollMs = 2;, every row and every assertion.\n- Expected diff: 1 file, about +3/-1.\n(c) GREEN in the same scratch tree:\n- cp the edited file over $X's copy, then cmp them.\n- The --require run must exit 0 with 47/47 (Windows: 45 pass, 2 POSIX-only skips).\n- The plain run must also pass 47/47.\n(d) Show that the timeout/failure rows still test refusal:\n- Mutate only $X/moe-vscode/src/services/MoeDaemonClient.ts. After each mutant, restore it from git show HEAD:moe-vscode/src/services/MoeDaemonClient.ts and cmp it.\n- MA: delete the try { child.kill(); } catch { ... } statement in stopProtectedDaemon's timer callback. Exactly '(8) replace fails closed: hang' must fail.\n- MB: insert if (pid) { return true; } as the first statement of waitForReplacementExit. Exactly (8) alive, new pid, unreadable and oversize must fail.\n- Both are architect-validated. Record the logs.\nError handling: no production error handling changes. The fixture still emits the ENOENT 'error' that stopProtectedDaemon's error listener turns into a refusal, and the t.after cleanup is unchanged. Delete only your own mktemp dirs, case-guarded on the /tmp/787437bb-red. prefix.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/protected-daemon-provenance.test.cjs"
       ],
-      "startedAt": "2026-11-03T09:23:05.517Z"
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+      ],
+      "note": "Only fake stop scheduler + two-line comment changed (+3/-1); production, callback body, deadlines/poll, rows/assertions unchanged. Scratch /tmp/787437bb-red.or67KN: npm ci --prefer-offline; RED deferred 47/38/9/0 exit 1 (exact expected nine rows); base plain 47/47/0/0 exit 0. Edited file overlaid and cmp: GREEN deferred and plain each 47/47/0/0 exit 0. MA exit 1, exactly hang failed (46 pass); MB exit 1, exactly alive/new pid/unreadable/oversize failed (43 pass). Production restored from git show HEAD and cmp after each mutant. All logs retained there. Working in wrapper-owned task worktree per docs/roles/worker.md, no Git writes.",
+      "startedAt": "2026-11-03T09:23:05.517Z",
+      "completedAt": "2026-11-03T09:24:09.222Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification for DoD 1 and DoD 2. Run once, from the task worktree, after step 1. The complete_task verification.command is executionContract.checkRefs [0], [1] and [2] joined with ' && ', exactly as stored. Its output tail is the evidence.\n- [0] Linux leg: a fresh full-tree git archive HEAD in /tmp, with the edited file overlaid (cp, then cmp). Under env -i and nvm node v24.21.0 it runs npm ci, then the provenance file under the deferred-setImmediate preload, then npm test, then npm run compile.\n- [1] Windows leg: the same steps in a fresh /mnt/d/moe-scratch dir, through cmd.exe with native node. Its node_modules are its own, never shared.\n- [2] The project qualityGate: bash scripts/tests/parity-check.sh && npm run lint.\nExpected:\n- Each leg prints two summary blocks.\n  - The first is the deferred provenance run: Linux tests 47 / pass 47 / fail 0 / skipped 0; Windows tests 47 / pass 45 / fail 0 / skipped 2. Its tests 47 also proves that no row was added or removed.\n  - The second is the full suite, with fail 0.\n- LINUX_EXIT=0, WINDOWS_EXIT=0, and PASS parity-check.sh plus the lint OK lines.\n- Architect dry run of this exact command at 5f731334 plus the fix: exit 0. Linux full suite 671 tests / 667 pass / 4 skipped; Windows 667 / 659 / 8 skipped. The counts move if another moe-vscode row lands first.\n- Report every count in the complete_task summary.\nNever run npm in the control checkout /mnt/d/projexts/moes.\nIf an unrelated row fails, don't edit it and don't widen scope:\n- Rerun the unchanged command once and cite both logs.\n- A failure that persists in a row this task did not change becomes a follow-up task (mem:gotcha-vscode-provenance-test-deadlines shows the precedent).\n- Any failure in protected-daemon-provenance is this task's to fix.\nPut the printed snapshot paths in the summary. If you delete them, delete only those exact paths.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/protected-daemon-provenance.test.cjs"
-      ]
+      ],
+      "note": "Fresh exact executionContract.checkRefs [0] && [1] && [2] exited 0; command stored verbatim /tmp/787437bb-verification-command.sh; combined output /tmp/787437bb-verification.log. Linux /tmp/787437bb-linux.kgtdl1: deferred tests/pass/fail/skipped 47/47/0/0; full suite 685/676/0/9; compile passed, LINUX_EXIT=0. Windows /mnt/d/moe-scratch/787437bb-win.vYw1Y1: deferred 47/45/0/2; full 681/669/0/12; compile passed, WINDOWS_EXIT=0. Both npm ci installs isolated; overlay cmp passed; snapshots/logs retained. PASS parity-check.sh and lint all three role-doc OK lines. No unrelated failures or rerun needed.",
+      "startedAt": "2026-11-03T09:24:09.251Z",
+      "completedAt": "2026-11-03T09:25:06.126Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of the one-file diff before complete_task. Fix anything you find within this file only, and record each answer in the complete_task summary.\n1. Scope: git diff --stat shows exactly moe-vscode/tests/protected-daemon-provenance.test.cjs, and git diff -- moe-vscode/src is empty. Only the scheduler expression and its comment changed: no deadline, poll interval, row or assertion.\n2. Lost events: re-read stopProtectedDaemon in moe-vscode/src/services/MoeDaemonClient.ts and confirm that spawn(), the deadline timer and both child.once listeners sit in one synchronous Promise executor, so a nextTick delivery cannot be missed. If production ever attaches listeners after an await, (7) fails loudly; it does not pass silently.\n3. Refusal paths (from step 1's MA and MB results):\n   - hang reaches the stop deadline (killed true).\n   - alive, new pid, unreadable and oversize reach the 25 ms exit deadline.\n   - nonzero and ENOENT finish false without a kill.\n4. Cancellation: in 'cancel during stop', afterStop calls disconnect() before 'exit'. connect()'s connectCancelled() fences then return before waitForReplacementExit and startProtectedDaemon: 0 sockets, 0 errors, 1 spawn.\n5. Concurrency and globals:\n   - The two concurrent connect() calls still rely on connectInProgress.\n   - process.nextTick is the test file's own global.\n   - The vm sandbox (setTimeout/clearTimeout/setInterval/clearInterval) is unchanged, and nothing else in the file uses process.nextTick.\n6. Name, don't fix: StubWebSocket 'open' on setImmediate against the 15 s handshakeTimeoutMs, shared by every connect row.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/tests/protected-daemon-provenance.test.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T09:25:06.155Z"
     }
   ],
   "planRevision": 1,
@@ -56,7 +65,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T09:01:08.650Z",
-  "updatedAt": "2026-11-03T09:23:05.517Z",
+  "updatedAt": "2026-11-03T09:25:06.155Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T09:02:44.827Z",
@@ -65,7 +74,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T09:03:23.739Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -76,7 +86,10 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T09:20:33.979Z",
   "executionContract": {

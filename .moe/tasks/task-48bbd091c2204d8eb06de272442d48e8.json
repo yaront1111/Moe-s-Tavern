@@ -80,8 +80,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -115,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:58:07.768Z",
-  "updatedAt": "2026-11-03T09:22:24.496Z",
+  "updatedAt": "2026-11-03T09:25:29.161Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T07:18:49.566Z",
@@ -125,7 +125,9 @@
     "firstClaimAt": "2026-11-03T07:32:11.443Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T09:24:57.290Z",
+    "wallClockMs": 6765847
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -133,10 +135,11 @@
     "qa-af7be174"
   ],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T09:14:25Z",
-    "at": "2026-11-03T09:20:17.209Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T09:21:43Z",
+    "at": "2026-11-03T09:25:29.161Z"
   },
   "tier": "standard",
   "effort": "high",
@@ -250,5 +253,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T09:24:57.290Z",
+  "reviewCompletedAt": "2026-11-03T09:24:57.290Z",
+  "reviewSummary": "Approved. Reviewed completion 41b8b579 (parent 9dee717a, on moe/work-2026-10-24, pushed, in task.commits) via git diff 41b8b579^ 41b8b579: +42/-10 over exactly the three docs, no code or test files (DoD 2).\n\nRe-ran checkRefs [0]-[6], extracted verbatim from the executionContract into scratch scripts outside the repo, at HEAD with MOE_LAND_TARGET=41b8b579^. All seven are green:\n- [0] npm run lint exit 0 (DoD 3). Only the three docs changed. The VS Code heading and its TOC link are intact.\n- [1] The stale phrases are gone. No VS Code passage says session-only.\n- [2]-[3] The refusal, Keep Protected, Allow Downgrade, Stop and Replace, MOE_SPAWN_PROOF_KEY, protected-state and 64 KiB appear in the right passages. The 20 s and 15 s bounds match the code. Every backticked identifier is in moe-vscode/src.\n- [4] account-trust-docs passed 5/5. The four daemon doc-guard vitest files passed (48 tests) in a clone snapshot under /tmp with the docs overlaid. npm ran only in the snapshot.\n\nHand audit against MoeDaemonClient.ts and extension.ts at HEAD; every claim holds:\n- Store: owner-only modes, no-link regular file, 64 KiB, hex name, written only outside the project.\n- Pin: modal text and buttons verbatim, only Allow persists legacy, asked once per window.\n- Provenance: HMAC challenge, a configured endpoint refused outright, verbatim refusal, no auto-retry.\n- Replace: Stop and Replace is the only button, runs installed CLI stop, waits, restarts with a fresh key and re-verifies. A failure keeps the refusal.\n\nNo JetBrains-only behaviour is claimed for VS Code, no key value is shown, and the JetBrains text, Accepted Windows costs bullet and anchors are untouched, except the planned 'VS Code keeps no such store' deletion.\n\nNit, not a gap: 'daemon.json is cleared' also covers a daemon.json that is still present but names a dead pid. The CONFIGURATION.md collision notice needs no action: this completion already landed and its hunk is confined to File Structure.",
+  "requiredCheckAtDone": null
 }

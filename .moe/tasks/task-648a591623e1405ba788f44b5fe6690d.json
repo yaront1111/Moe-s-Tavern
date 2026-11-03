@@ -11,7 +11,7 @@
   "taskRails": [
     "Protected-profile state lives outside the repository, owner-only; a missing, unreadable or mismatched record fails closed to the refusal.",
     "No caller-minted evidence: nothing the daemon or the repository reports about itself admits a daemon on its own.",
-    "Size-only exception for task-648a591623e1405ba788f44b5fe6690d (VS Code protected-profile spawn provenance plus the RF03 replace flow). Its completion may total at most 520 net changed non-board lines, measured from its first commit's parent to its final completion, across exactly these files: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts and the new moe-vscode/tests/protected-daemon-provenance.test.cjs. The DoD keeps verification, refusal, replacement and four test families in one row, so it cannot be split without a DoD edit. This waives size-based rejection only. Every DoD item, rail, test and verification requirement still applies. Grow it only by QA-required fixes."
+    "Size-only exception for task-648a591623e1405ba788f44b5fe6690d (VS Code protected-profile spawn provenance plus the RF03 replace flow). Its completion may total at most 520 net changed non-board lines, measured from its first commit's parent to its final completion, across exactly these files: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts, the new moe-vscode/tests/protected-daemon-provenance.test.cjs, and moe-vscode/tests/protected-daemon-spawn.test.cjs. The edit to protected-daemon-spawn.test.cjs is limited to what the governor authorized on 2026-11-03 at 07:06Z (comment-d4217a23): add MOE_SPAWN_PROOF_KEY to D1's exact expected env, and make the two ENOENT cancellation tests wait for the async key step while still expecting one spawn attempt. The DoD keeps verification, refusal, replacement and four test families in one row, so it cannot be split without a DoD edit. This waives size-based rejection only. Every DoD item, rail, test and verification requirement still applies. Grow it only by QA-required fixes."
   ],
   "implementationPlan": [
     {
@@ -117,12 +117,12 @@
     }
   ],
   "planRevision": 4,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Planner re-plan before any worker started (all steps PENDING, unassigned). Rev 1 kept spawn records in VS Code SecretStorage behind a new constructor parameter. task-98c81a27 (RF02 parity, planned minutes later) needs a synchronous owner-only file store under globalStorage, because runtimeProfile is synchronous. JetBrains keeps both kinds of state in one ProtectedStateStore. Rev 2 reuses task-98c81a27's store API (useProtectedStateRoot, protectedStateName, readProtectedState, writeProtectedState) with kind 'spawn', drops SecretStorage and the extension.ts change, and adds dependsOn task-98c81a27 (both rows touch MoeDaemonClient.ts; the epic rail requires serializing overlapping files). The daemon contract (task-137bab15) is unchanged.",
+  "reopenReason": "The human approved size waiver prop-35eadcbd at 09:23:51Z. The row now carries exactly one size rail: cap 520, four files, including moe-vscode/tests/protected-daemon-spawn.test.cjs. The completion, 119fce99 (net 445), is within it. QA's substance review already passed (comment-dfa8493a). The next QA can approve on that evidence with candidateId cand-affe2a8fe1964c6ea5a70a197c50ac28.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -197,7 +197,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T08:17:52.821Z",
+  "updatedAt": "2026-11-03T09:24:38.903Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -346,11 +346,11 @@
     "stepsCompleted": []
   },
   "workStartedAt": "2026-11-03T06:34:35.219Z",
-  "blockedReason": "QA verdict withheld, waiver pending (governor comment-093f7fe9, the comment-9922ed28 pattern). The substance review PASSES; the evidence is in comment-dfa8493a. Linux and Windows npm test + compile exit 0 on 119fce99. Every DoD item and task rail is verified.\nThe completion is net 445 changed lines (over the 400 default, under the 520 cap). It also edits moe-vscode/tests/protected-daemon-spawn.test.cjs, which the approved size waiver prop-bd7d6ccf does not name; it names three files. The governor authorized that edit, and the edit stays within those limits.\nprop-35eadcbd63d94a13ab7647c77ea5f3d4 adds that file under the same 520 cap and is still PENDING at 08:16Z.\nNo size reject. Once prop-35eadcbd is APPROVED, set the row back to REVIEW. The next QA can then approve on comment-dfa8493a with candidateId cand-affe2a8fe1964c6ea5a70a197c50ac28.",
+  "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-03T08:17:13.492Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "c7bc13a3d2c733b03e49a99ee8861b4be4772d51",
@@ -406,5 +406,6 @@
     "reportedAt": "2026-11-03T08:04:49.449Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Protected VS Code now admits a daemon only if a fresh /health?challenge answer matches the HMAC of a key this extension minted. The key goes into the installed daemon's env (MOE_SPAWN_PROOF_KEY) and is kept in the session map plus the owner-only store (kind 'spawn', read only from a root outside the project). Everything else gets the fixed refusal and no WebSocket: daemon.json, /health identity, a configured endpoint, untrusted/malformed/stale records, timeouts. Replace is offered only for a daemon.json daemon with a valid pid, via a modal whose only action is Stop and Replace. It runs the installed CLI stop (20 s; only its own child is killed), waits 15 s/250 ms for the pid and metadata to clear, then does a fresh spawn and re-admission. LEGACY is unchanged.\nReview fixes this session, RED-checked:\n- pid text shown only for a positive integer (daemon.json is repo text);\n- workspace captured before the identity probe (a mid-probe switch to legacy bypassed the gate);\n- a final refusal suppresses auto-reconnect (JetBrains no-retry, so no modal re-pops);\n- record daemon key via projectStateKey.\nThird-file disclosure (comment-d4217a23, amend-1): tests/protected-daemon-spawn.test.cjs +5/-2. D1 adds a 64-hex MOE_SPAWN_PROOF_KEY to the exact env, and both ENOENT-after-cancel tests cancel at the stub spawn, still with 1 spawn. No other existing test changed. Size from b4cfae12: +454/-9, net 445 of 520 (prop-35eadcbd, pending).\nedc27e14 is NOT an ancestor of HEAD c7bc13a3. Merged check (edc27e14 + task diff, clean patch): 671/667/0/4, compile ok. Mutants (mismatched proof, dropped key, skipped confirmation) each fail their cases; restored copy 72/68/0. Residuals: same-user relay, two-window spawn race, /health slower than 1.5 s refused."
+  "completionSummary": "Protected VS Code now admits a daemon only if a fresh /health?challenge answer matches the HMAC of a key this extension minted. The key goes into the installed daemon's env (MOE_SPAWN_PROOF_KEY) and is kept in the session map plus the owner-only store (kind 'spawn', read only from a root outside the project). Everything else gets the fixed refusal and no WebSocket: daemon.json, /health identity, a configured endpoint, untrusted/malformed/stale records, timeouts. Replace is offered only for a daemon.json daemon with a valid pid, via a modal whose only action is Stop and Replace. It runs the installed CLI stop (20 s; only its own child is killed), waits 15 s/250 ms for the pid and metadata to clear, then does a fresh spawn and re-admission. LEGACY is unchanged.\nReview fixes this session, RED-checked:\n- pid text shown only for a positive integer (daemon.json is repo text);\n- workspace captured before the identity probe (a mid-probe switch to legacy bypassed the gate);\n- a final refusal suppresses auto-reconnect (JetBrains no-retry, so no modal re-pops);\n- record daemon key via projectStateKey.\nThird-file disclosure (comment-d4217a23, amend-1): tests/protected-daemon-spawn.test.cjs +5/-2. D1 adds a 64-hex MOE_SPAWN_PROOF_KEY to the exact env, and both ENOENT-after-cancel tests cancel at the stub spawn, still with 1 spawn. No other existing test changed. Size from b4cfae12: +454/-9, net 445 of 520 (prop-35eadcbd, pending).\nedc27e14 is NOT an ancestor of HEAD c7bc13a3. Merged check (edc27e14 + task diff, clean patch): 671/667/0/4, compile ok. Mutants (mismatched proof, dropped key, skipped confirmation) each fail their cases; restored copy 72/68/0. Residuals: same-user relay, two-window spawn race, /health slower than 1.5 s refused.",
+  "priorBlockedReason": "QA verdict withheld, waiver pending (governor comment-093f7fe9, the comment-9922ed28 pattern). The substance review PASSES; the evidence is in comment-dfa8493a. Linux and Windows npm test + compile exit 0 on 119fce99. Every DoD item and task rail is verified.\nThe completion is net 445 changed lines (over the 400 default, under the 520 cap). It also edits moe-vscode/tests/protected-daemon-spawn.test.cjs, which the approved size waiver prop-bd7d6ccf does not name; it names three files. The governor authorized that edit, and the edit stays within those limits.\nprop-35eadcbd63d94a13ab7647c77ea5f3d4 adds that file under the same 520 cap and is still PENDING at 08:16Z.\nNo size reject. Once prop-35eadcbd is APPROVED, set the row back to REVIEW. The next QA can then approve on comment-dfa8493a with candidateId cand-affe2a8fe1964c6ea5a70a197c50ac28."
 }

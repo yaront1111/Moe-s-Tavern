@@ -8,10 +8,50 @@
     "Legacy Accounts lines remain byte-identical and tests cover native Windows and WSL refusal/selection."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Edit moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt only, with the Edit tool (JUnit 4; reuse the TemporaryFolder rule and the helpers powerShellFixture, typedScript and typedPsScript). Read mem:gotcha-protected-interpreter-windows-tests and mem:decision-protected-launch-interpreter first.\n\nLeave every existing row untouched. These rows are DoD 2's byte-identity proof for legacy Accounts lines:\n- `PowerShell accounts command quotes every word inside its encoded script`;\n- `WSL accounts command runs WSL node on mnt paths`;\n- `bash accounts command single-quotes every word`;\n- the C0/DEL and space/tilde rows;\n- AccountPresentationTest's vm-token row (that file is not edited).\n\nNew rows A1-A7 use two internal symbols that steps 2 and 3 add: `TerminalAgentLauncher.accountsCommandFor(profile, cli, registryFile, args, shell, basePath, systemRoot)` and `TerminalAgentLauncher.PROTECTED_WSL_NODE_PROGRAM`. A refusal is an IllegalArgumentException (assertThrows). Its message starts with `Protected execution profile: ` and never contains `node executable` or `agent wrapper`.\n\nA1, any host: legacy is unchanged.\n- For each AccountsShell, `accountsCommandFor(LEGACY, cli, file, args, shell, basePath)` equals `buildAccountsCommand(cli, file, args, shell)`.\n- Use basePath `D:\\projexts\\app` and a cli.node that does not exist, because legacy never validates.\n\nA2, Windows only: the native PowerShell line.\n- Guards: assumeTrue(SystemInfo.isWindows), plus P2's assume-skip on temporaryFolder.root's real path (copy it).\n- Lay out powerShellFixture(sysroot), an outside `node.exe` file and a sibling project folder. Run PROTECTED on AccountsShell.POWERSHELL with systemRoot = sysroot.path and args login, acct-1.\n- The line starts with `<fixture real path, every backslash turned into '/'> -NoProfile -ExecutionPolicy Bypass -EncodedCommand `, and does not start with `powershell`.\n- typedScript(line, <that word>) equals typedPsScript(buildAccountsCommand(AccountCli(<node real path>, script), file, args, AccountsShell.POWERSHELL)). So the decoded script is today's, with the validated node.\n\nA3, Windows only: PowerShell refusals.\n- systemRoot null, empty or blank: the message names SystemRoot.\n- A sysroot inside the project, a `sys root` folder and a missing folder: the message names that path and `the Accounts command's PowerShell`.\n- A valid sysroot with node inside the project: the message names the node path.\n\nA4, any host: node on AccountsShell.BASH.\n- An outside node file gives exactly buildAccountsCommand(AccountCli(<its real path>, script), file, args, AccountsShell.BASH).\n- A relative `bin/node` (named in the message), a bare `node`, a file inside the project, a missing path and a directory (each named) all refuse.\n\nA5, any host: the WSL line.\n- Inputs: basePath `D:\\projexts\\app`; cli `C:\\Program Files\\nodejs\\node.exe` with `C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js`; registry `C:\\Users\\Yaron\\.moe\\claude-accounts.json`; args remove, acct-2, --sign-out. Kotlin literals double each backslash.\n- The line equals `'/bin/bash' -c '` + PROTECTED_WSL_NODE_PROGRAM + `' moe-accounts '/mnt/d/projexts/app' '/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.2/plugins/moe-jetbrains/daemon/accounts/cli.js' '--accounts-file' '/mnt/c/Users/Yaron/.moe/claude-accounts.json' 'remove' 'acct-2' '--sign-out'`.\n- The program holds no single quote, backslash, `!`, C0 control or DEL, so it types unchanged inside single quotes in bash, zsh and fish. It ends with `exec node \"$@\"`.\n\nA6, any host: WSL refusals.\n- basePath `\\\\server\\share\\app`, `/home/u/app`, `D:app` (drive-relative) and empty each refuse. Each non-empty one is named.\n- A basePath holding a C0 control throws the existing `Invalid accounts command word` message. Build it at runtime, as `\"D:/p\" + 1.toChar() + \"q\"`.\n\nA7, POSIX only: the program's behaviour.\n- Guard: assumeTrue(!SystemInfo.isWindows && File(\"/bin/bash\").canExecute()).\n- Run `ProcessBuilder(\"/bin/bash\", \"-c\", PROTECTED_WSL_NODE_PROGRAM, \"moe-accounts\", <projectArg>, \"a b\", \"c\")` with directory(<cwd>) and environment()[\"PATH\"] = <path>.\n- Fake nodes: a file named `node` holding `#!/bin/sh` then `printf '%s|' <tag> \"$@\"`, setExecutable(true). Put them in project/ (tag cwd), project/bin/ (tag inside) and outside/ (tag outside). `link` is a symlink to project/bin.\n- Wait at most 10 s, and on a timeout destroyForcibly only that child.\n- (a) cwd project, PATH = `.`, an empty entry, `bin`, project/bin, link, outside, joined with ':'. Stdout is `outside|a b|c|` and exit 0.\n- (b) The same PATH without outside: exit 1, empty stdout, and stderr contains MOE_PROTECTED_INTERPRETER_NOT_FOUND.\n- (c) cwd a work folder outside the project holding rel/node (tag rel), PATH `rel`: exit 1 and empty stdout.\n- (d) A missing project folder, PATH outside: exit 1 and empty stdout.\n- In a WSL probe, the architect killed three program mutants with (a) to (c): keeping relative entries, dropping the empty-keep guard, and comparing only the entry instead of walking its ancestors.\n\nRED: take the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). From the worktree, run `W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.TerminalAgentLauncherTest\"`. It must fail at compileTestKotlin on the missing symbols. Release the lease and keep the output for the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The protected WSL route, in moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt, with the Edit tool. Builders stay pure: no I/O.\n\n1. Next to buildAccountsCommand (:549), declare the program on ONE line: `internal const val PROTECTED_WSL_NODE_PROGRAM = \"...\"`.\n- Use a normal Kotlin string whose line ends with its closing quote. Escape each `\"` as `\\\"` and each `$` as `\\$`. Step 4's probe extracts it with sed, so keep this exact form.\n- The value, byte for byte (523 characters):\n`f() { echo \"[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start.\" >&2; exit 1; }; p=$(cd -- \"$1\" 2>/dev/null && pwd -P) || f; shift; k=; IFS=: read -r -a e <<< \"$PATH\"; for d in \"${e[@]}\"; do case $d in /*) ;; *) continue ;; esac; r=$(cd -- \"$d\" 2>/dev/null && pwd -P) || continue; u=$r; while :; do [ \"$u\" -ef \"$p\" ] && continue 2; [ \"$u\" = / ] && break; u=${u%/*}; u=${u:-/}; done; k=${k:+$k:}$r; done; [ -n \"$k\" ] || f; PATH=$k; exec node \"$@\"`\n- Put a short comment above it:\n  - builtins only;\n  - the same rule as protected_trusted_dir in scripts/moe-agent.sh and scripts/moe-call.sh (task-0b2ea570): keep absolute PATH entries whose real path is neither the project nor under it, as real paths, in order, walking ancestors with `-ef` so a link cannot hide the project;\n  - keeping nothing refuses, because an empty PATH makes bash search the cwd, which is the project;\n  - then it execs node, so WSL's node, which has no fixed system path, is found only outside the project.\n\n2. Add `private fun protectedAccountsRefusal(reason: String): Nothing`. It throws IllegalArgumentException(\"Protected execution profile: $reason. Moe runs account commands only with an interpreter outside the project, so nothing was started.\").\n\n3. Add `private fun protectedWslAccountsCommand(cli: AccountCli, registryFile: String, args: List<String>, basePath: String): String`.\n- Refuse unless basePath starts with a drive letter, a colon, and a slash or backslash (Regex `^[A-Za-z]:[\\\\/]`). The reason is \"the project $basePath has no /mnt path in WSL, so WSL's node cannot be checked against it\". UNC, rooted, drive-relative, POSIX and empty basePaths all refuse here.\n- project = toWslPath(basePath). Pass every typed word (project, toWslPath(cli.script), toWslPath(registryFile) and each arg) through requireSafeArg(\"accounts command word\", ...).\n- The word is protectedInterpreter(ScriptKind.BASH, wslAgents = true, basePath, windows = true), which is Ready(\"/bin/bash\"); on Refused, refuse with its reason. The WSL_BASH shell exists only on a Windows host, so windows = true is literally true, and the A5 pin stays host-independent.\n- Return `shQuote(word) + \" -c \" + shQuote(PROTECTED_WSL_NODE_PROGRAM) + \" moe-accounts \" + shQuote(project) + \" \" + (listOf(toWslPath(cli.script), \"--accounts-file\", toWslPath(registryFile)) + args).joinToString(\" \") { shQuote(it) }`.\n- cli.node is not typed on this route. As today, WSL's own node runs the CLI, so claude signs in where WSL agents run it.\n\nError handling:\n- A refusal or a control character throws IllegalArgumentException before any line exists.\n- Inside WSL, a missing node outside the project prints `[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND ...` and exits 1 before any node runs. The IDE cannot see WSL's PATH, so that refusal happens in the opened tab.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Native routes and the dispatch, in moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt, with the Edit tool.\n\n1. protectedInterpreter (:130) gets a last parameter `subject: String = \"the agent wrapper's interpreter\"`. Its two path messages become \"$subject $candidate is not an absolute regular file outside the project\" and \"$subject ${file.path} holds a character a terminal cannot take unquoted\". The default keeps b071e3bf's text, so P1-P3 stay green unchanged.\n\n2. buildAccountsCommand (:549) gets `interpreter: String? = null`. Only the POWERSHELL arm uses it: `powerShellLine(<the unchanged \"& \" + psQuoted words>, interpreter ?: \"powershell\")`. The WSL_BASH and BASH arms are unchanged. Legacy callers pass nothing, so their bytes are identical. Mention the parameter in the KDoc.\n\n3. Add `internal fun accountsCommandFor(profile: RuntimeProfile, cli: AccountCli, registryFile: String, args: List<String>, shell: AccountsShell, basePath: String, systemRoot: String? = System.getenv(\"SystemRoot\")): String`.\n- LEGACY: `return buildAccountsCommand(cli, registryFile, args, shell)`, and nothing else.\n- PROTECTED node check, used by BASH and POWERSHELL: RuntimeSelectionPolicy.installedExecutable(cli.node, basePath). Accepted gives selection.file.path, the real path. Rejected gives protectedAccountsRefusal(\"the Accounts command's node ${cli.node} is not an absolute regular file outside the project\"). Never pass on installedExecutable's own node-labelled text.\n- BASH (native POSIX): `buildAccountsCommand(cli.copy(node = <real node>), registryFile, args, shell)`. The first typed word is that absolute real path, so no PATH or cwd lookup happens.\n- POWERSHELL (native Windows):\n  - word = protectedInterpreter(ScriptKind.POWERSHELL, wslAgents = false, basePath, systemRoot = systemRoot, subject = \"the Accounts command's PowerShell\"); Refused gives protectedAccountsRefusal(reason);\n  - then the node check;\n  - return `buildAccountsCommand(cli.copy(node = <real node>), registryFile, args, shell, interpreter = word)`. It types the forward-slash System32 powershell.exe that QA verified for b071e3bf in cmd, PowerShell 5.1 and Git Bash.\n- WSL_BASH: protectedWslAccountsCommand(cli, registryFile, args, basePath), from step 2.\n\n4. accountsCommandLine (:563): `val basePath = project.basePath ?: \"\"`, then `accountsCommandFor(RuntimeSelectionPolicy.profile(basePath), cli, registryFile, args, accountsShellFor(SystemInfo.isWindows, isWslAgentsEnabled(project)), basePath)`.\n- profile(\"\") is LEGACY, so a project with no path keeps today's line.\n- profile() is the reader that seat launches use, so the downgrade pin and prompt apply the same way.\n\n5. runAccountsCommand (:572): keep `val line = accountsCommandLine(...)` as its first statement, before resolveTerminalManager.\n- Extend its KDoc: it also throws IllegalArgumentException, before any tab opens, when the protected profile has no trusted interpreter.\n- AccountsPanel.runCli (AccountsPanel.kt:310-328) already turns that into one error dialog, and it types and copies nothing. Do not edit AccountsPanel.kt.\n- Its no-terminal copy fallback calls accountsCommandLine again, so it can only copy a protected line.\n\nError handling: installedExecutable and protectedInterpreter never throw. Every refusal is the single IllegalArgumentException from protectedAccountsRefusal, and it is raised before any terminal manager, widget or clipboard is touched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once and fresh, from the task worktree after the last tracked edit.\n\nTake the shared `jetbrains-gradle` lease with moe.acquire_resource (mem:convention-jetbrains-gradle-lease). Release it right after the run, and before any report_blocked. Run the two checkRefs joined with ' && ', exactly:\ncd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}' && cd \"$(git rev-parse --show-toplevel)\" && P=$(sed -n 's/^ *internal const val PROTECTED_WSL_NODE_PROGRAM = \"\\(.*\\)\"$/\\1/p' moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt | sed 's/\\\\\\([\"$\\\\]\\)/\\1/g') && [ -n \"$P\" ] && T=$(mktemp -d) && mkdir -p \"$T/p/bin\" \"$T/o\" \"$T/w/rel\" && for x in p:cwd p/bin:inside o:outside w/rel:rel; do printf '#!/bin/sh\\nprintf \"%%s|\" %s \"$@\"\\n' \"${x#*:}\" > \"$T/${x%%:*}/node\" && chmod +x \"$T/${x%%:*}/node\" || exit 1; done && ln -s \"$T/p/bin\" \"$T/l\" && r() { (cd \"$1\" && env PATH=\"$2\" /bin/bash -c \"$P\" moe-accounts \"$3\" 'a b' c 2>/dev/null); } && [ \"$(r \"$T/p\" \".::bin:$T/p/bin:$T/l:$T/o\" \"$T/p\")\" = 'outside|a b|c|' ] && o=$(r \"$T/p\" \".::bin:$T/p/bin:$T/l\" \"$T/p\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && o=$(r \"$T/w\" rel \"$T/p\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && o=$(r \"$T/p\" \"$T/o\" \"$T/missing\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && echo \"WSL probe: outside node selected; 3 refusals ran no node\"\n\nExpected:\n- JUnit failures=0 and errors=0.\n- A2 and A3 run, because this gate is Windows.\n- A7 is POSIX-only, so it skips here and runs in CI's ubuntu JetBrains job.\n- The second command is the local behavioural proof on WSL bash. It extracts PROTECTED_WSL_NODE_PROGRAM from the source, then checks that the outside node is selected and that three refusals run no node. It prints `WSL probe: outside node selected; 3 refusals ran no node`.\n- These pass unchanged: P1-P3, PINNED_LEGACY, the legacy Accounts pins, AccountPresentationTest, RuntimeSelectionPolicyTest and VerifiedLocalLaunchTest.\n\nThe completion summary must include:\n- the per-class counts for TerminalAgentLauncherTest, saying which A rows ran and which skipped;\n- step 1's RED;\n- step 5's mutant results.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff, as an attacker.\n\nMutants: at most two Gradle runs, in a `git archive` copy of the worktree under /mnt/d/moe-scratch. Never mutate the worktree. Run each with `.\\gradlew.bat test --tests com.moe.util.TerminalAgentLauncherTest` through the same cmd.exe line, under the jetbrains-gradle lease. Each must turn an A row red:\n- k1: the POWERSHELL arm ignores the interpreter, so it types a bare `powershell`. A2 must go red.\n- k2: the BASH and POWERSHELL arms skip the node check. A4 must go red.\nAlso run step 4's WSL probe from inside the copy, with its program's `[ -n \"$k\" ] || f; ` removed. The probe must fail.\n\nCheck by reading:\n- Every protected Accounts route reaches a pinned or validated interpreter: native Windows, native POSIX, WSL, and the clipboard fallback.\n- A refusal throws before resolveTerminalManager, createTerminalWidget or the clipboard.\n- No protected line starts with a bare `powershell` or `node`.\n- The decoded PowerShell script differs from legacy only in the node path.\n- psQuote and shQuote still guard every typed value.\n- The program runs builtins only before `exec node`.\n- Under LEGACY nothing changes.\n\nResiduals are already filed, so do not fix or refile them:\n- task-55710898dca44f67b4687130b34cd801: the accounts CLI's own `claude` lookup, and claude.cmd's cwd-first `node`, on native routes.\n- task-a6227f4e309c4d7a8c554db672146f5f: the VS Code Accounts twin.\n\nKill only PIDs you started yourself, never by pattern. If the review changes any tracked byte, re-run step 4's exact command and use that output as the evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-d6c1cb7a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -26,16 +66,96 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:40:06.793Z",
-  "updatedAt": "2026-11-03T08:58:31.224Z",
+  "updatedAt": "2026-11-03T09:25:23.464Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:57:52.111Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T08:58:10.864Z"
+    "firstClaimAt": "2026-11-03T08:58:10.864Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-d6c1cb7a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T09:24:48.596Z",
+  "executionContract": {
+    "intendedBehavior": "Under the protected profile, the JetBrains Accounts tab never starts the accounts CLI through an interpreter found by the project cwd or an unsafe PATH entry. Native Windows types <SystemRoot>/System32/WindowsPowerShell/v1.0/powershell.exe in forward-slash form, and its decoded script runs the real path of the daemon's node, validated as an absolute regular file outside the project. Native POSIX types that validated real node path as the first word. WSL agent mode types /bin/bash -c with a builtins-only program. The program keeps only absolute PATH entries whose real path is outside the project, refuses with MOE_PROTECTED_INTERPRETER_NOT_FOUND when none is kept or the project does not resolve, and then execs node. An IDE-side refusal throws IllegalArgumentException before any terminal or clipboard is touched, so AccountsPanel shows one error dialog and types and copies nothing. Under LEGACY every Accounts line is byte-identical.",
+    "acceptanceCriteria": [
+      "A1: accountsCommandFor(LEGACY, ...) equals buildAccountsCommand(...) for every AccountsShell, and every existing legacy Accounts pin in TerminalAgentLauncherTest and AccountPresentationTest passes unchanged.",
+      "A2 and A3 (Windows): the protected PowerShell line starts with the forward-slash fixture powershell.exe, and its decoded script equals the legacy script with the validated node. An unset, blank, in-project, untypable or missing SystemRoot refuses, naming SystemRoot or the path and the Accounts subject, and so does an in-project node.",
+      "A4: on the BASH route an outside node gives the legacy-shaped line with its real path, and a relative, bare, in-project, missing or directory node refuses, naming it.",
+      "A5 and A6: the protected WSL line is exactly '/bin/bash' -c '<PROTECTED_WSL_NODE_PROGRAM>' moe-accounts '<project /mnt path>' plus the quoted /mnt script, flag, registry and args. The program has no single quote, backslash, '!', C0 or DEL. A UNC, POSIX, drive-relative or empty basePath refuses, and a control character keeps the existing message.",
+      "A7 (POSIX, CI) and step 4's WSL probe (local): the program selects the outside node over '.', empty, relative, in-project and symlinked in-project entries, passes arguments intact, and refuses with exit 1 and no node run when only unsafe entries remain, when a relative entry would point outside, or when the project is missing.",
+      "The new rows fail on today's bytes (RED recorded), and mutants k1, k2 and the program's empty-keep guard are killed."
+    ],
+    "invariants": [
+      "Under PROTECTED no Accounts line starts with a bare powershell or node, and none of its interpreters is looked up through the project cwd or an empty, '.', relative or in-project PATH entry.",
+      "A refusal throws before resolveTerminalManager, createTerminalWidget or the clipboard, because runAccountsCommand computes the line first.",
+      "Builders stay pure string functions. On the IDE side only installedExecutable and protectedInterpreter touch the file system.",
+      "PROTECTED_WSL_NODE_PROGRAM runs bash builtins only before exec node, and stays one Kotlin line whose value is free of single quotes, backslashes and '!'."
+    ],
+    "compatibility": [
+      "LEGACY Accounts lines are byte-identical: accountsCommandFor's LEGACY branch returns buildAccountsCommand unchanged, and buildAccountsCommand's new interpreter parameter defaults to the bare powershell word.",
+      "protectedInterpreter's default subject keeps b071e3bf's messages, and P1-P3, PINNED_LEGACY, RuntimeSelectionPolicyTest and VerifiedLocalLaunchTest pass unchanged.",
+      "AccountsPanel.kt, AccountPresentationTest.kt, RuntimeSelectionPolicy.kt, the daemon's accounts CLI and VS Code are not edited.",
+      "The WSL route keeps running WSL's own node on /mnt paths, so claude signs in where WSL agents run it."
+    ],
+    "approvedScope": [
+      "TerminalAgentLauncher: PROTECTED_WSL_NODE_PROGRAM, protectedAccountsRefusal, protectedWslAccountsCommand, accountsCommandFor, a subject parameter on protectedInterpreter, an interpreter parameter on buildAccountsCommand, accountsCommandLine's profile dispatch, and runAccountsCommand's KDoc.",
+      "TerminalAgentLauncherTest rows A1-A7."
+    ],
+    "reuse": [
+      "protectedInterpreter (task-b071e3bf) for the forward-slash System32 PowerShell word and the WSL /bin/bash word.",
+      "RuntimeSelectionPolicy.installedExecutable for the node check, and RuntimeSelectionPolicy.profile as the profile reader, as seat launches use it.",
+      "toWslPath, shQuote, psQuote, powerShellLine and requireSafeArg, with AccountsPanel's existing IllegalArgumentException dialog as the refusal channel.",
+      "The protected_trusted_dir rule of scripts/moe-agent.sh and scripts/moe-call.sh (task-0b2ea570) for the WSL PATH filter. An inline copy is needed because nothing installed can run before node in WSL without a PATH lookup.",
+      "Test helpers powerShellFixture, typedScript and typedPsScript."
+    ],
+    "sourceAssumptions": [
+      "TerminalAgentLauncher.kt: protectedInterpreter :130-168 (BASH with WSL agents gives Ready('/bin/bash')); buildAccountsCommand :549-560; accountsCommandLine :563-564; runAccountsCommand :572-578 builds the line before resolveTerminalManager; powerShellLine(psCommand, exe) :712; requireSafeArg :807; shQuote :829; toWslPath :295.",
+      "AccountsPanel.kt:310-328: runCli catches IllegalArgumentException with one error dialog, and copies the line only when runAccountsCommand returns false.",
+      "AccountCli comes from the daemon snapshot: packages/moe-daemon/src/state/accountStore.ts:219 sets node = process.execPath and script = dist/accounts/cli.js, and MoeJson.parseAccountRotation parses it strictly.",
+      "RuntimeSelectionPolicy.profile(basePath) never throws, and answers LEGACY for a blank path and PROTECTED for an untrusted project.json. installedExecutable(path, basePath) gives Accepted(file = real path) only for an absolute, real, regular file outside the project."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'",
+      "cd \"$(git rev-parse --show-toplevel)\" && P=$(sed -n 's/^ *internal const val PROTECTED_WSL_NODE_PROGRAM = \"\\(.*\\)\"$/\\1/p' moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt | sed 's/\\\\\\([\"$\\\\]\\)/\\1/g') && [ -n \"$P\" ] && T=$(mktemp -d) && mkdir -p \"$T/p/bin\" \"$T/o\" \"$T/w/rel\" && for x in p:cwd p/bin:inside o:outside w/rel:rel; do printf '#!/bin/sh\\nprintf \"%%s|\" %s \"$@\"\\n' \"${x#*:}\" > \"$T/${x%%:*}/node\" && chmod +x \"$T/${x%%:*}/node\" || exit 1; done && ln -s \"$T/p/bin\" \"$T/l\" && r() { (cd \"$1\" && env PATH=\"$2\" /bin/bash -c \"$P\" moe-accounts \"$3\" 'a b' c 2>/dev/null); } && [ \"$(r \"$T/p\" \".::bin:$T/p/bin:$T/l:$T/o\" \"$T/p\")\" = 'outside|a b|c|' ] && o=$(r \"$T/p\" \".::bin:$T/p/bin:$T/l\" \"$T/p\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && o=$(r \"$T/w\" rel \"$T/p\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && o=$(r \"$T/p\" \"$T/o\" \"$T/missing\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && echo \"WSL probe: outside node selected; 3 refusals ran no node\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "WSL node has no fixed system path (apt, NodeSource, nvm, volta, brew), so no IDE-side pin exists. Rejected:\n(1) Refuse every protected WSL Accounts launch. Protected WSL seats are supported (b071e3bf pins /bin/bash for them), so this would strand their sign-in.\n(2) A fixed PATH of /usr/local/bin:/usr/bin:/bin. It breaks nvm and volta node, and claude in ~/.local/bin.\n(3) Ask wsl.exe for node's path at click time. It is slow, and the answer can change before the line runs.\n(4) Ship a new installed helper script. That means bundling plus ps1/sh parity for one line of logic.\nChosen: an inline, builtins-only bash program typed after the absolute /bin/bash. It applies the wrappers' protected_trusted_dir rule (task-0b2ea570) and then runs exec node. Its scrubbed PATH is also what the CLI's claude inherits.\nNative Windows reuses b071e3bf's protectedInterpreter for the PowerShell word. The node is checked with installedExecutable, which costs nothing.\nRefusal channel: an IllegalArgumentException, which AccountsPanel already turns into one dialog with nothing typed or copied. That keeps AccountsPanel.kt unchanged and the plan at 2 files.\nI filed two residual rows instead of widening this one: task-55710898 (the accounts CLI's own claude lookup) and task-a6227f4e (the VS Code twin).",
+    "codebaseInsights": "AccountCli comes from the daemon snapshot: accountStore.ts:219 sets node = process.execPath and script = dist/accounts/cli.js, and MoeJson parses it strictly. Under PROTECTED the IDE connects only to a provenance-checked installed daemon.\nrunAccountsCommand builds the line before it resolves the terminal manager. AccountsPanel catches IllegalArgumentException with one dialog, and copies the line only when no tab could open.\nLegacy pins:\n- TerminalAgentLauncherTest: the three accounts rows, plus the C0/DEL and space rows.\n- AccountPresentationTest: the vm-token row.\nprotectedInterpreter (task-b071e3bf) already yields Ready('/bin/bash') for WSL, and the forward-slash System32 powershell.exe for Windows.\nThe architect dry-ran the WSL program and step 4's probe in this WSL host:\n- The outside node won over '.', empty, relative, in-project and symlinked entries.\n- Each refusal ran no node.\n- Three mutants failed the probe.",
+    "risks": "- Kotlin string templates: every $ in the program must be escaped as \\$, and the declaration must stay on one line, or step 4's sed extraction fails (it fails loudly).\n- The typed program must stay free of ', backslash and !, because fish treats backslashes inside single quotes as escapes.\n- The WSL refusal runs inside the opened tab: the IDE cannot read WSL's PATH. It prints MOE_PROTECTED_INTERPRETER_NOT_FOUND and exits 1 before any node runs.\n- A7 skips on the Windows gate by design, so the WSL probe in step 4 is the local behavioural evidence. CI's ubuntu job runs A7.\n- profile() may show the downgrade prompt from the Accounts tab, as seat launches already do.\n- A project opened through a subst or alias drive passes its alias /mnt path. That is the same exposure as the WSL seat's --project, so it is not widened here.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "scripts/moe-agent.sh",
+      "scripts/moe-call.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "41b8b57930ec5b410fb313b6fc82f4ca1ee9c375",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T09:24:48.647Z",
+  "approvedPlanRevision": 1
 }
