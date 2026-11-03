@@ -1902,7 +1902,16 @@ function Invoke-MoeRpc {
             }
             if ($d.result -and $d.result.content -and $d.result.content.Count -gt 0) {
                 $text = $d.result.content[0].text
-                try { return ($text | ConvertFrom-Json -ErrorAction Stop) } catch { return $text }
+                # Keep the reply's wire shape. A top-level JSON array, one-element and
+                # empty ones included, comes back as ONE array, so an object consumer
+                # can tell [{...}] from {...}: 5.1's ConvertFrom-Json emits an array
+                # whole, pwsh 7 needs -NoEnumerate, and ',' keeps return from unrolling
+                # it. Every tool this wrapper calls answers an object (task-044c7410).
+                try {
+                    $value = if ($PSVersionTable.PSVersion.Major -ge 7) { ConvertFrom-Json -InputObject $text -NoEnumerate -ErrorAction Stop } else { $text | ConvertFrom-Json -ErrorAction Stop }
+                } catch { return $text }
+                if ($value -is [array]) { return ,$value }
+                return $value
             }
         } catch {
             continue
