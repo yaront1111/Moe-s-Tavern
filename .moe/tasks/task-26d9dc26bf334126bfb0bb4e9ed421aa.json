@@ -78,8 +78,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -94,7 +94,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:40:06.793Z",
-  "updatedAt": "2026-11-03T09:38:17.897Z",
+  "updatedAt": "2026-11-03T09:39:12.631Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:57:52.111Z",
@@ -200,5 +200,18 @@
     "sessionId": "architect-24611a0a@2026-11-03T08:58:08Z",
     "at": "2026-11-03T09:26:42.560Z"
   },
-  "workStartedAt": "2026-11-03T09:27:46.205Z"
+  "workStartedAt": "2026-11-03T09:27:46.205Z",
+  "reviewStartedAt": "2026-11-03T09:39:12.628Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}' && cd \"$(git rev-parse --show-toplevel)\" && P=$(sed -n 's/^ *internal const val PROTECTED_WSL_NODE_PROGRAM = \"\\(.*\\)\"$/\\1/p' moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt | sed 's/\\\\\\([\"$\\\\]\\)/\\1/g') && [ -n \"$P\" ] && T=$(mktemp -d) && mkdir -p \"$T/p/bin\" \"$T/o\" \"$T/w/rel\" && for x in p:cwd p/bin:inside o:outside w/rel:rel; do printf '#!/bin/sh\\nprintf \"%%s|\" %s \"$@\"\\n' \"${x#*:}\" > \"$T/${x%%:*}/node\" && chmod +x \"$T/${x%%:*}/node\" || exit 1; done && ln -s \"$T/p/bin\" \"$T/l\" && r() { (cd \"$1\" && env PATH=\"$2\" /bin/bash -c \"$P\" moe-accounts \"$3\" 'a b' c 2>/dev/null); } && [ \"$(r \"$T/p\" \".::bin:$T/p/bin:$T/l:$T/o\" \"$T/p\")\" = 'outside|a b|c|' ] && o=$(r \"$T/p\" \".::bin:$T/p/bin:$T/l\" \"$T/p\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && o=$(r \"$T/w\" rel \"$T/p\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && o=$(r \"$T/p\" \"$T/o\" \"$T/missing\"; echo \"rc=$?\") && [ \"$o\" = rc=1 ] && echo \"WSL probe: outside node selected; 3 refusals ran no node\"",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n> Task :compileKotlin\n> Task :compileTestKotlin\n> Task :test\n\nBUILD SUCCESSFUL in 33s\n11 actionable tasks: 7 executed, 4 up-to-date\nJUnit totals: tests=625 skipped=6 failures=0 errors=0\nWSL probe: outside node selected; 3 refusals ran no node",
+    "reportedAt": "2026-11-03T09:39:12.628Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+  ],
+  "completionSummary": "PROTECTED Accounts launches no longer look up their interpreter through the project cwd or PATH. accountsCommandFor dispatches by profile:\n- LEGACY: buildAccountsCommand, unchanged.\n- Windows: the forward-slash System32 powershell.exe from protectedInterpreter (subject \"the Accounts command's PowerShell\"), plus the installedExecutable-checked real node inside the encoded script.\n- POSIX: the real node path as the first word.\n- WSL: '/bin/bash' -c PROTECTED_WSL_NODE_PROGRAM, a builtins-only PATH filter, then exec node.\nRefusals throw IllegalArgumentException before any terminal or clipboard; AccountsPanel is unchanged.\n\nRED: Windows gradlew.bat --tests TerminalAgentLauncherTest exited 1 at compileTestKotlin (19 e: lines for the missing symbols).\n\nGate, after the last edit: parity and lint pass; gradlew.bat test --rerun gave 625 tests, 6 skipped, 0 failures/errors.\n- TerminalAgentLauncherTest 60, 1 skipped. A1, A2, both A3 rows, A4, A5 and A6 ran. A7 skipped as POSIX-only; there is no Linux JDK in WSL, so CI ubuntu runs it.\n- P1-P3 and PINNED_LEGACY pass unchanged, as do RuntimeSelectionPolicyTest 80 (3 skipped), VerifiedLocalLaunchTest 8/8 and AccountPresentationTest 19/19.\n- The WSL probe passed.\n\nMutants, in scratch /mnt/d/moe-scratch/26d9dc26/mutants.Vq5EmH:\n- k1 (bare powershell): A2 failed.\n- k2 (no node check): A4 and the A3 in-project-node row failed.\n- Dropping the empty-keep guard: the probe failed, because it ran the cwd node.\n\nResiduals already filed: task-55710898 and task-a6227f4e. Theoretical: bash -c sources the user's BASH_ENV. Logs are in /mnt/d/moe-scratch/26d9dc26/."
 }
