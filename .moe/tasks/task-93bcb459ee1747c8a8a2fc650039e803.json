@@ -47,7 +47,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -60,7 +60,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:42:59.971Z",
-  "updatedAt": "2026-11-02T22:32:18.565Z",
+  "updatedAt": "2026-11-03T01:01:34.708Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:02:44.338Z",
@@ -70,11 +70,14 @@
     "firstClaimAt": "2026-11-02T22:03:31.065Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T01:01:03.045Z",
+    "wallClockMs": 10651980
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-8cf0816c"
+    "worker-8cf0816c",
+    "qa-af7be174"
   ],
   "tier": "light",
   "effort": "high",
@@ -141,9 +144,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-02T22:29:42Z",
-    "at": "2026-11-02T22:32:18.565Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T00:59:41Z",
+    "at": "2026-11-03T01:01:34.708Z"
+  },
+  "completedAt": "2026-11-03T01:01:03.045Z",
+  "reviewCompletedAt": "2026-11-03T01:01:03.045Z",
+  "reviewSummary": "Reviewed completion commit 33abb3e7 (ancestor of HEAD 12d7bb62; branch moe/control contains it; recorded in task.commits as kind=completion, pushed). Diff `git diff 33abb3e7^ 33abb3e7` = scripts/tests/postflight-worktree.cjs only, +5/-3 (8 net LOC), all inside markerScan() and its header comment; no cases-map or :52-54 edits, so no overlap with the other rows that declare this file. Change: the sh engine's fixture dir moves from `root` (the drvfs-prone parent) to `path.join(wrapperTmp,'marker scan')`, an os.tmpdir() dir the suite already deletes in its final cleanup; ps1 stays on `root` (`base=win?root:...`), so the Windows legs are byte-for-byte unchanged and never call mkfifo; the mkfifo call is wrapped to throw an actionable message naming `base`; the FIFO is not made conditional and not dropped, so the sh expected set still asserts fifo.txt and fl.txt (no assertion weakened, nothing skipped). The space in 'marker scan' keeps the quoting coverage. Verification re-run by me (control checkout clean for the touched files): the task.verification command exited 0: parity-check.sh PASS; `[worktree] marker-scan ok` and `1 ok, 0 failed` twice (a /mnt/d/moe-scratch parent and a /tmp parent). RED/GREEN in git-archive snapshots under /mnt/d/moe-scratch with a /mnt/d parent: pre-fix bytes (33abb3e7^) give `marker-scan FAILED: Error: Command failed: mkfifo … Operation not supported`, exit 1; the fixed bytes give `marker-scan ok`, exit 0. No wrapperTmp dir left by my runs. DoD (single item: task completed as described) met. Ran no npm build/test; the rails allow the scripts/tests harness in place. Not verified here: the ps1/Windows legs (unchanged by construction) and macOS temp-dir behavior (os.tmpdir() and postflight.sh's mktemp parent sit in the same /var/folders tree, so unchanged). Complexity pass: nothing to cut; the diff is minimal.",
+  "requiredCheckAtDone": null
 }
