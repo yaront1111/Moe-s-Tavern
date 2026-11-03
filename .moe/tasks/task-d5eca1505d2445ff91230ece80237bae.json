@@ -57,23 +57,40 @@
     {
       "stepId": "step-4",
       "description": "Verification (DoD 3). Run it once, from the task worktree. It runs both legs, and its output tail is the complete_task evidence. Archive the WHOLE tree, never `git archive HEAD moe-vscode` (mem:gotcha-vscode-tests-need-full-repo-snapshot).\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly the four files (cp, then cmp each). Then cd \"$S/moe-vscode\" || exit 1, and run env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'.\n- Windows leg: the same archive and overlay into a fresh /mnt/d/moe-scratch/<dir>, with Windows-native node_modules that are never shared. Then cmd.exe /d /c \"cd /d D:\\moe-scratch\\<dir>\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\".\n\nRules:\n- Both legs must exit 0.\n- Report tests / pass / fail / skipped for each leg, against the base (for example 622/618 on Linux at 9eca3971) plus the new rows. L5's off-platform halves skip.\n- Never run npm in the shared control checkout.\n- The diff touches exactly the four files; declare them as modifiedFiles.\n- Size: about 120 net lines, well under the 400 cap.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/util/AgentLauncher.ts",
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/protected-runtime.test.cjs",
         "moe-vscode/tests/verified-local-launch.test.cjs"
       ],
-      "startedAt": "2026-11-03T08:58:18.163Z"
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "note": "Both native snapshot gates now pass: Linux npm ci --no-audit --no-fund && npm test && npm run compile under env -i exits 0, 685 tests / 676 pass / 0 fail / 9 skipped (/tmp/d5eca150-linux.x3fOok/verification-rerun.log); Windows same commands through cmd.exe exit 0, 681 / 669 / 0 / 12 (/mnt/d/moe-scratch/d5eca150-win.TzGUeB/verification.log). Whole-tree HEAD 66f43585 archives with exactly four overlays cmp-verified, independent native node_modules. Fourteen new test rows: Linux +9 pass/+5 off-platform skips, Windows +10 pass/+4 off-platform skips (base counts derived 671/667/4 and 667/659/8). Initial Linux run failed two unrelated protected-daemon-provenance stop tests with 25ms fixture deadlines; isolated 47/47 and unchanged full rerun passed. Filed a dedicated bug; no out-of-scope test changes. Added L7 coverage and kept legacy suites unchanged. The first combined command stopped before Windows on that flake, so a fresh combined two-leg command will run after scratch mutations to provide a single exit-0 completion evidence.",
+      "startedAt": "2026-11-03T08:58:18.163Z",
+      "completedAt": "2026-11-03T09:01:08.676Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, once (load adversarial-self-review), recorded in complete_step:\n- (a) No protected path reaches createTerminal or sendText without an accepted interpreter.\n- (b) The legacy line, the legacy options and the call order of runtimeProfile are byte-identical. windows-terminal-shell W1, powershell-quoting and agent-launcher-controls stay unchanged and green.\n- (c) A VM seat (vmSeat) follows the same rule.\n- (d) The interpreter path is quoted in both shells. A quote in it is handled by psQuote and shQuote; a control character is handled by assertSafeArg.\n- (e) Windows: SystemRoot's case (process.env is case-insensitive there), and an 8.3 or subst SystemRoot (realpath.native canonicalises it; isWindowsAlias refuses non-drive forms).\n\nThen run mutants in a scratch copy of the Linux snapshot, and record each as KILLED and by which row:\n- M1: the typed word reverted to 'bash' under protected -> L1 and V4.\n- M2: the refusal falls through to createTerminal -> L6.\n- M3: protectedInterpreter consulted for legacy -> L6's zero-call assertion.\n- M4: the label dropped, so messages say 'node executable' -> L5.\n- M5: protectedInterpreter returns posixBash without installedExecutable -> L5.\n- M6: the win32 shellPath reverted to 'powershell.exe' -> L1, in the Windows snapshot.\nThen confirm the restored copies pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/util/AgentLauncher.ts",
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "note": "Adversarial self-review complete: read scoped diff top-to-bottom (+140/-25, net115, exactly four files). No new shared mutation, handles or retry state; interpreter resolution is synchronous and fail-closed before readiness await/createTerminal/sendText. runtimeProfile remains first in the same OR and called once; VM seats share the protected branch. Missing/relative/in-project paths refuse; new interpreter arguments use shell quoting and C0/DEL guards. Legacy strings/options unchanged; windows-terminal-shell, powershell-quoting and agent-launcher-controls diffs empty and suites green. Native Windows process.env handles SystemRoot case; existing realpath.native and alias checks reused, no duplicate path policy. System-path TOCTOU retains existing installed-file threat model; no executable search fallback. POSIX default-profile terminal and Accounts remain explicit residuals. M1 KILLED L1/V4 (+V2/L7); M2 KILLED protected L6; M3 KILLED legacy L6 (+L4/V1); M4 KILLED missing/relative/project L5; M5 KILLED L5; M6 KILLED Windows L1. Scratch logs /tmp/d5eca150-mutants.v0v702_m/M1..M5.log and /mnt/d/moe-scratch/d5eca150-win.TzGUeB/M6.log. Restored narrow suites exit0: Linux68/63pass/5skip; Windows68/61pass/7skip. Final fresh combined whole-repo two-snapshot gate exits0: Linux685/676pass/0fail/9skip, Windows681/669pass/0fail/12skip, both npm compile pass; parity and root lint pass. Final logs /tmp/d5eca150-linux.HZKXyh/verification.log and /mnt/d/moe-scratch/d5eca150-win.DCbq6H/verification.log. Unrelated initial provenance flake tracked separately as task-787437bb0aef472eb61cd138bef5109e; no out-of-scope fix. No tracked edits after the green gate.",
+      "startedAt": "2026-11-03T09:01:21.666Z",
+      "completedAt": "2026-11-03T09:03:39.467Z"
     }
   ],
   "planRevision": 1,
@@ -93,12 +110,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:28.153Z",
-  "updatedAt": "2026-11-03T08:58:18.163Z",
+  "updatedAt": "2026-11-03T09:03:39.467Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:30:35.858Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -111,7 +128,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:36:36.108Z",

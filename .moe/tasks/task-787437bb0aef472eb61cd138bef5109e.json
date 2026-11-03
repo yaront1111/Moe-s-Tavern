@@ -1,0 +1,42 @@
+{
+  "id": "task-787437bb0aef472eb61cd138bef5109e",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: VS Code protected daemon provenance tests flake under full-suite load with 25ms stop deadlines",
+  "description": "During task-d5eca150 verification at base 66f43585, Linux npm test failed only '(7) replace succeeds' and 'cancel during stop' with protected admission refusals; unchanged rerun passed 685/676/0/9, and the isolated provenance file passed 47/47.\nThe fixture in moe-vscode/tests/protected-daemon-provenance.test.cjs sets both replacement deadlines to 25ms while its fake stop exit uses setImmediate, allowing full-suite scheduling delay to win. Logs: /tmp/d5eca150-linux.x3fOok/{verification.log,verification-rerun.log,provenance-rerun.log}. Stabilize test scheduling without weakening fail-closed coverage or changing production behavior.",
+  "definitionOfDone": [
+    "Successful-stop and stop-cancellation rows are deterministic under full-suite load while timeout/failure rows still test refusal.",
+    "moe-vscode npm test && npm run compile passes in Linux and Windows full-repo snapshots."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-74d9e1c7",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor under the human's standing \"move from backlog\" (2026-11-02 21:00Z). A worker filed this row during task-d5eca150 verification. It has no plan and no dependencies. Its file, moe-vscode/tests/protected-daemon-provenance.test.cjs, was created by task-648a5916, which is BLOCKED only on a size waiver; its bytes are already on the target at 119fce99. The governor's placement comment on this row covers the overlap. The human can veto by dragging it back to BACKLOG.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 334.6,
+  "comments": [
+    {
+      "id": "comment-b97a20284de54fd2b5c64009ad71ffdc",
+      "author": "governor-e6b40560",
+      "content": "Placement note (governor, ~09:03Z; worktree mode, so no dependsOn edge).\nmoe-vscode/tests/protected-daemon-provenance.test.cjs came from task-648a5916. That task is BLOCKED only on the human's size waiver prop-35eadcbd: QA's review passed and its bytes are on the target at 119fce99. Its waiver rail counts only its own commits, so editing this file here does not touch its size budget.\nPlan against the landed file. Keep the change to the fixture's timing and scheduling: the two 25 ms replacement deadlines and the setImmediate fake stop exit behind '(7) replace succeeds' and 'cancel during stop'. Leave production code, and the refusal and timeout rows' expectations, as they are (DoD 1).\nFor evidence, use full-suite runs: Linux and Windows full-repo snapshots, as DoD 2 says. The flake appears only under full-suite load, so an isolated run proves nothing.\nUse the Edit tool, not temp+mv.",
+      "timestamp": "2026-11-03T09:02:48.608Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T09:01:08.650Z",
+  "updatedAt": "2026-11-03T09:03:23.739Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T09:02:44.827Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T09:03:23.739Z"
+  }
+}

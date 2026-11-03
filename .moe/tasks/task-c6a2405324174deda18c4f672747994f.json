@@ -116,17 +116,23 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review, once (load adversarial-self-review), recorded in complete_step.\n\nThen run mutants in a scratch copy outside the repo: /mnt/d/moe-scratch/c6a24053-mut/<name> = `git archive HEAD scripts`, plus the three files copied over (cp then cmp). Run an unmutated control first. Then run `node --test scripts/tests/serena-ignore.test.mjs` on Linux for each mutant (M12 needs Linux), and record KILLED (by which row) or SURVIVED:\n- M1: convertGitignore's '**/' branch removed -> U1.\n- M2: TextDecoder without ignoreBOM -> F1 (sub/inner's BOM).\n- M3: the check-ignore pruning removed, so every dir is walked -> F1 (big/, .venv/lib).\n- M4: the walk replaced by `git ls-files -z --cached --others --exclude-standard -- ':(glob)**/.gitignore'` -> F1 (.venv/**/* missing, vend included).\n- M5: bin = 'git' even under the marker -> F3 5a and 5b, and F5.\n- M6: the check-ignore -q gate skipped -> F3 6 and 7.\n- M7: always rewrite -> F1's rerun (line, inode).\n- M8: a content skip leaves the block -> F4.\n- M9: the user-key opt-out removed -> F2 (d).\n- M10: the begin marker matched exactly instead of by prefix -> F2 (b).\n- M11: plain scalars accept a leading '*' -> U3.\n- M12: no './' prefix for check-ignore -> F6.\n- M13: the YAML escape replace removed -> U4.\nA SURVIVED mutant needs a new assertion. After any fix, re-run step 5's command and use its fresh output.\n\nChecklist; state an answer for each:\n- Two seats racing on one root: identical bytes and an atomic rename.\n- A CRLF or BOM user part.\n- A root path with spaces.\n- A very wide or deep tree against the 60 s budget.\n- A WSL seat and a Windows seat on one root read different global excludes, so each may rewrite the other's block. The bytes are valid either way; this churn is accepted.\n- Nothing but the one line reaches stdout, and no env value is printed.\n- Exit 0 on every path, including a thrown error.\n\nUpdate the handoff memory task-task-c6a2405324174deda18c4f672747994f-handoff. The architect wrote its contract section; append the delivered facts (timings, reasons, and anything e3e81c45's launcher tests should know).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-serena-ignore.mjs",
         "scripts/tests/serena-ignore.test.mjs"
       ],
-      "startedAt": "2026-11-03T08:54:46.287Z"
+      "modifiedFiles": [
+        "scripts/moe-serena-ignore.mjs",
+        "scripts/tests/serena-ignore.test.mjs"
+      ],
+      "note": "Adversarial self-review and mutant pass are done.\n\nFixes:\n- (1) A BOM before a Moe block at byte 0 left the BEGIN marker undetectable. An editor re-saving a file whose block we wrote first would then skip forever with unpaired markers. readLocal now offsets past a leading U+FEFF, so the BOM stays in the user part. Covered by a new F2 row (BOM + EXPECTED → up to date).\n- (2) Every fixture base path now contains a space, which covers root paths with spaces. git is spawned with argv and no shell.\n\nMutants M1-M14 were all KILLED, after an unmutated control passed. M14 is the BOM fix, killed by F2.\n\nChecklist:\n- Concurrency: racing seats write identical bytes, through a temp file opened with 'wx' and an atomic rename. A concurrent user edit between our read and our rename can be lost; that is accepted and documented.\n- Inputs: CRLF and BOM user parts are preserved, and the block is LF. Invalid UTF-8 is a content skip. Unpaired or duplicate markers are a skip.\n- Size and timing: a 5000-pattern cap and a 60 s discovery budget, checked per directory and per git call, with one check-ignore call per walk level. Going over is an access skip.\n- Symlinks: the target is checked with lstat, rename replaces a link rather than writing through it, and a symlinked .serena makes check-ignore exit 128, which is an access skip.\n- Env scrub: GIT_DIR, GIT_WORK_TREE and the pathspec variables are removed. Protected mode takes git only from an absolute MOE_PROTECTED_GIT.\n- Output: only one line goes to stdout, with newlines collapsed. git stderr is captured and no env value is printed. Exit is 0 on every path: cli catches everything into an `internal error:` skip, and the script never calls process.exit. The theoretical exception is an EPIPE on stdout.\n- WSL and Windows seats may rewrite each other's block churn-free only if their pattern sets match. Either way the bytes are valid; this is accepted.\n\nFresh run:\n- Linux node: 27/27 pass.\n- Windows node.exe: 25 pass, 2 skipped (F3-8 symlink EPERM, F6 ':x' filename).\n- npm run lint: OK.\n- parity-check.sh: PASS.\n\nSize: 348 + 319 lines, plus 2 one-line edits, is 669 net (cap 680).",
+      "startedAt": "2026-11-03T08:54:46.287Z",
+      "completedAt": "2026-11-03T09:01:26.605Z"
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-7328a40d",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -151,12 +157,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:41:40.072Z",
-  "updatedAt": "2026-11-03T08:58:09.704Z",
+  "updatedAt": "2026-11-03T09:03:38.571Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:45:57.717Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -171,7 +177,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:26:37.704Z",
@@ -261,18 +268,45 @@
       "treeId": "a062af6f6bde44f0bce058a58271a26d83b572d6",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "5f731334191584d06391686579235033f484cb5f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T08:37:26Z",
+      "paths": [
+        "scripts/bundle-manifest.json",
+        "scripts/moe-serena-ignore.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/serena-ignore.test.mjs"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T09:03:34.169Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/moe-serena-ignore.mjs",
-    "scripts/tests/serena-ignore.test.mjs"
+    "scripts/tests/serena-ignore.test.mjs",
+    "scripts/bundle-manifest.json",
+    "scripts/tests/local-runner-bundle.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-24611a0a@2026-11-03T07:45:53Z",
-    "at": "2026-11-03T08:37:50.832Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T08:37:26Z",
+    "at": "2026-11-03T09:03:35.596Z"
+  },
+  "reviewStartedAt": "2026-11-03T09:02:02.457Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && node --test scripts/tests/serena-ignore.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/serena-ignore.test.mjs && npm run lint",
+    "exitCode": 0,
+    "outputTail": "[Linux node] ℹ tests 27 ℹ pass 27 ℹ fail 0 ℹ skipped 0\n[Windows node.exe] ﹣ F3 8 a symlinked file # this host cannot create symlinks (EPERM)\n﹣ F6 # ':' is illegal in Windows names\nℹ tests 27 ℹ pass 25 ℹ fail 0 ℹ skipped 2\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nEXIT=0\n[qualityGate] bash scripts/tests/parity-check.sh -> PASS parity-check.sh",
+    "reportedAt": "2026-11-03T09:02:02.457Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Delivered scripts/moe-serena-ignore.mjs (348 lines, node: builtins only). It is the producer for task-e3e81c45 and is run as `node moe-serena-ignore.mjs <serena-root>`.\n\nWhat it does:\n- It builds Serena's ignored_paths from git's own ignore sources: '/.git', the project.yml ignored_paths, core.excludesFile (or the XDG default), the `rev-parse --git-path info/exclude` file, and every non-ignored .gitignore.\n- The .gitignore files are found by a breadth-first walk pruned with one `git check-ignore --no-index -z --stdin` call per level, fed './'-prefixed paths.\n- It writes `ignore_all_files_in_gitignore: false` and those paths into a marked block in .serena/project.local.yml. Bytes outside the block are the user's and are kept, including CRLF and a leading BOM. The write is atomic: a temp file opened 'wx', then a rename.\n- A rerun that changes nothing leaves the file alone (same inode and mtime).\n- It prints exactly one stdout line and always exits 0, so it fails open.\n\nSkips:\n- Access skips change nothing: not a work tree, not top level, the file not ignored or tracked, no git or a protected bare git, a symlinked or invalid file, unpaired markers, too slow (60 s), over the 5000-pattern cap.\n- Content skips remove an earlier block: the MOE_SERENA_IGNORE_OVERRIDE=0 env opt-out, the user's own keys, a non-block-mapping user part, an unreadable ignored_paths, a nested repo or submodule.\n\nOther details:\n- Under MOE_RUNTIME_PROTECTED=1, git comes only from an absolute MOE_PROTECTED_GIT.\n- The GIT_DIR, GIT_WORK_TREE and pathspec env vars are scrubbed.\n\nFiles changed:\n- Added to scripts/bundle-manifest.json, so both IDE bundles ship it.\n- scripts/tests/local-runner-bundle.test.mjs got a one-line fixture addition (scope growth), so its bundler fixture has the newly manifested file. That file's 9 failures on HEAD are older than this task and are filed as task-a6591f29.\n\nTests: scripts/tests/serena-ignore.test.mjs, 27 tests.\n- Linux: 27/27.\n- Windows node.exe: 25 pass and 2 skip"
 }

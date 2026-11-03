@@ -14,43 +14,75 @@
     {
       "stepId": "step-1",
       "description": "RED tests first (load test-driven-development). Create packages/moe-daemon/src/tools/echoedReasonNotices.test.ts. Do NOT edit qaReject.test.ts, releaseTask.test.ts or any other existing test.\n\nHarness: ToolTestHarness (init, setupMoeFolder, createEpic, createTask, createWorker), in the shape of completeStep.test.ts block 'moe.complete_step chat notice' (:516-600):\n- load state, map channel names to ids with h.state.getChannels(), and push every MESSAGE_CREATED event as { message, routingTargets } via h.state.subscribe; unsubscribe in afterEach;\n- mock '../util/diskState.js' exactly as releaseTask.test.ts:21 does (release_task's handoff fingerprint spawns git);\n- before every load, register the busy seat worker-busy (status CODING). It is the seat today's routing pages, so it is what makes each case fail without the fix.\n\nFree text: build the at-sign at runtime with String.fromCharCode(64). Never spell it in code, comments or test titles (checkRef [0] greps the file for it). Each free-text value holds:\n- the known busy seat id worker-busy, mid-prose;\n- code-shaped tokens no seat owns: JvmOverloads and types/node;\n- a second line that opens with the all-hands tag and the workers role tag (group tags address only at line start).\n\nOne helper asserts: exactly one message in the named channel with exactly the expected content, its mentions are [], and its event routingTargets are [].\n\nCases:\n(a) qa_reject. task-1 is REVIEW, assigned to qa-a, with contextFetchedBy ['qa-a']. Call qaRejectTool with { taskId: 'task-1', reason, workerId: 'qa-a' }. #general carries exactly `task-1: QA rejected: <reason>` (postSystemMessage prefixes the id), unaddressed, and worker-busy has 0 unread in #general.\n(b) request_replan. task-1 is WORKING, assigned to worker-a (worker record CODING, currentTaskId task-1), with one IN_PROGRESS step step-1. Call with { taskId, stepId: 'step-1', reason, workerId: 'worker-a' }, reason under 200 chars. #general carries exactly `task-1: Replan requested (broke at step step-1): <reason>`, unaddressed.\n(c) release_task, assigned path. task-1 is WORKING, assigned to worker-a, and its title holds an at-token. Call with { taskId, workerId: 'worker-a', reason, handoffNote: { whatIsDone, whatRemains } }, each under 140 chars. The expected line is `🔓 worker-a released task: <title> (<reason>)` followed by `\\n  done: <whatIsDone>\\n  remains: <whatRemains>`. It is unaddressed in #general and in #workers. The #governors copy has the same text and still records its mentions (they contain worker-busy): it is the governor's page and stays out of scope.\n(d) release_task, auto-route path. task-1 is WORKING, unassigned, with one COMPLETED step. Call with { taskId, reason }. The line `🔧 task task-1 was unassigned but stuck in WORKING; auto-routed to REVIEW` is unaddressed in #general and in #workers. It names no one, so the #general copy is feed with or without the option: also spy (call-through) on h.state.postToGeneral and assert it was called with (line, { parseMentions: false }).\n(e) The helper stays opt-in. h.state.postToRoleChannel('workers', content), with content naming worker-busy, records ['worker-busy'] and routes to ['worker-busy']. The same call with { parseMentions: false } records [] and routes to [].\n\nKeep the file small: the architect's dry run of these five cases was 129 lines.\n\nRED: run only the new file in a snapshot (step 4's checkRef [1] recipe, overlaying only this file, vitest only). tsconfig excludes *.test.ts, so tsc does not see this file. Against the unchanged code all five cases must fail: (a), (b) and (c) on recorded mentions, (d) on the #workers copy routing to worker-busy, (e) on the ignored option. Quote the failures in complete_step.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/echoedReasonNotices.test.ts"
       ],
-      "startedAt": "2026-11-03T08:58:33.008Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/echoedReasonNotices.test.ts"
+      ],
+      "note": "RED: created src/tools/echoedReasonNotices.test.ts (126 lines, 0 at-signs: grep -c returns 0; built via String.fromCharCode(64)). Snapshot /tmp/echo-snap-QRnR (git clone --shared of HEAD 66f43585, only the test overlaid, npm ci): `npx vitest run src/tools/echoedReasonNotices.test.ts` -> Tests 5 failed (5). (a) :63 mentions ['worker-busy','JvmOverloads',…] != []; (b) :77 same; (c) :91 #general mentions ['JvmOverloads','worker-busy',…] != []; (d) :109 #workers routingTargets ['worker-busy'] != [] (the #general copy at :108 passes, as expected for a feed line); (e) :124 echoed post mentions ['worker-busy'] != [] (option ignored). No existing test edited.",
+      "startedAt": "2026-11-03T08:58:33.008Z",
+      "completedAt": "2026-11-03T09:00:14.087Z"
     },
     {
       "stepId": "step-2",
       "description": "The helper, mirroring task-85df8bf0's postToGeneral (state/chatStore.ts:395-421).\n- state/chatStore.ts, postToRoleChannel (:425): add `opts?: SystemPostOptions` and pass `...(opts?.parseMentions === false ? { parseMentions: false } : {})` into the sendMessage call object. A plain call then still sends exactly { channel, sender, content }, so spies on that shape keep matching. Update its doc comment in one line.\n- state/StateManager.ts, the postToRoleChannel wrapper (:882): add `opts?: SystemPostOptions` and forward it only when given, exactly as the postSystemMessage and postToGeneral wrappers above it do (:874-880).\nChange nothing else: not the 47 existing callers (they keep two arguments), not the channel lookup, not the never-throw catch and its logger.warn.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/chatStore.ts",
         "packages/moe-daemon/src/state/StateManager.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "chatStore.postToRoleChannel gains `opts?: SystemPostOptions`, spreading `{ parseMentions: false }` into the sendMessage call only when opts.parseMentions === false (a plain call still sends exactly { channel, sender, content }); doc comment +1 line. StateManager.postToRoleChannel wrapper forwards opts only when given (same pattern as postSystemMessage/postToGeneral). Channel lookup, catch + logger.warn and all 47 callers untouched. Snapshot: echoedReasonNotices.test.ts -> 4 failed | 1 passed ((e) now green; (a)-(d) await step 3). npx tsc --noEmit exit 0.",
+      "startedAt": "2026-11-03T09:00:17.348Z",
+      "completedAt": "2026-11-03T09:00:46.035Z"
     },
     {
       "stepId": "step-3",
       "description": "The call sites. Add { parseMentions: false } as the last argument at exactly six posts, with one short comment per file: the line echoes agent-written text (a reason, a title, a handoff summary), so a tag it spells must not page seats (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions).\n- qaReject.ts:368, postSystemMessage `QA rejected: ...`.\n- requestReplan.ts:90, postSystemMessage `Replan requested...`.\n- releaseTask.ts:253-254, the auto-route line: postToGeneral and postToRoleChannel('workers', ...).\n- releaseTask.ts:369-370, the released line: postToGeneral and postToRoleChannel('workers', ...).\n\nLeave byte-for-byte unchanged:\n- every content string;\n- qa_reject's #governors cross-post (:378-381) and its #architects/#governors escalation posts (:319-359);\n- request_replan's #architects post (:93-96);\n- release_task's #governors copy (:371) and its cascade post (:382).\nThose role posts are the deliberate pages a governor or architect waits on. The flag is whole-message, so taking the echo out of them needs a split post (as for amend_plan_step), which is out of scope. No response field, return value, error or nextAction changes.\n\nThen re-run the new file in the snapshot: all five cases pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/qaReject.ts",
         "packages/moe-daemon/src/tools/requestReplan.ts",
         "packages/moe-daemon/src/tools/releaseTask.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "note": "Added `{ parseMentions: false }` as the last argument at exactly six posts: qaReject.ts postSystemMessage 'QA rejected'; requestReplan.ts postSystemMessage 'Replan requested'; releaseTask.ts auto-route postToGeneral + postToRoleChannel('workers'); releaseTask.ts released-line postToGeneral + postToRoleChannel('workers'). Content strings unchanged. Comments: one each in qaReject/requestReplan; releaseTask has two short ones (the auto-route line is a mention-less status notice that would page every busy seat in #workers, a different reason from the echo, so one comment could not cover both sites honestly). Untouched: qa_reject #governors cross-post and #architects/#governors escalations, request_replan #architects post, release_task #governors copy and cascade post. Snapshot re-run: echoedReasonNotices.test.ts Tests 5 passed (5).",
+      "startedAt": "2026-11-03T09:00:49.150Z",
+      "completedAt": "2026-11-03T09:01:31.771Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, run once (DoD 1-4). From your task worktree, run checkRefs [0] and [1] joined with ' && ' as ONE command. Its output tail is the complete_task evidence.\n- [0] Scope: only the six planned files changed against the merge-base with MOE_LAND_TARGET, there is no stray untracked file under the source dirs, and the new test file exists and holds no at-sign.\n- [1] A git-clone snapshot of your HEAD, with the six files overlaid, runs npm ci, then vitest on the new file plus qaReject.test.ts, releaseTask.test.ts, completeStep.test.ts, chatSystemFeed.test.ts and src/state/reloadHold.test.ts, then npx tsc --noEmit. npm never runs in the shared checkout (global rail). The architect's dry run of the planned edits at 68d51927: 6 files, 154/154 passed, tsc clean, 'C1 OK'.\n\nError handling for a red run: fix the code or the new test, never an existing test, then re-run the whole command.\n\nDeclare modifiedFiles: the six files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/echoedReasonNotices.test.ts"
+      ],
+      "note": "Ran checkRefs [0] && [1] as one command from the task worktree (MOE_LAND_TARGET=moe/work-2026-10-24): 'C0 OK'; snapshot /tmp/tmp.Cis3VADb3i (clone of HEAD 66f43585 + six files overlaid), npm ci, vitest: echoedReasonNotices 5, chatSystemFeed 16, completeStep 25, qaReject 24, reloadHold 25, releaseTask 59 -> Test Files 6 passed (6), Tests 154 passed (154); npx tsc --noEmit clean; 'C1 OK'; exit 0. No existing test edited.",
+      "startedAt": "2026-11-03T09:01:35.822Z",
+      "completedAt": "2026-11-03T09:02:19.798Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")`.\n\n(a) Mutation check in a scratch copy of the step-4 snapshot. Each mutant must fail at least one case; then restore and confirm green. Quote every run.\n- Drop the option at each of the six sites, one mutant per site.\n- Make chatStore's postToRoleChannel ignore opts.\n- Make the StateManager wrapper drop opts.\n- Make postToRoleChannel always pass parseMentions false: case (e) and the #governors assertion in (c) must catch it.\n- Add the option to release_task's #governors copy: the #governors assertion must catch it.\nThe architect's dry run killed all ten.\n(b) Every posted text is byte-identical: on each posting line the only change is the added argument, plus the comments.\n(c) The contract is intact: no response shape, field, error or nextAction changed; the #governors and #architects posts are untouched; no existing postToRoleChannel caller changed.\n(d) Never-throw holds: every post is still inside its own try/catch, and the helper still swallows and logs.\n(e) Size: `git diff --numstat` against the merge-base. Expect about +150/-10, far under the 400 net-LOC cap.\n\nRecord the review in complete_step.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T09:02:22.840Z"
     }
   ],
   "planRevision": 1,
@@ -67,11 +99,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:23.746Z",
-  "updatedAt": "2026-11-03T08:58:33.008Z",
+  "updatedAt": "2026-11-03T09:02:22.841Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:38:33.924Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 6
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -84,7 +117,12 @@
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:55:10.385Z",
   "executionContract": {
