@@ -113,8 +113,8 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -149,7 +149,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T09:21:15.725Z",
-  "updatedAt": "2026-11-03T13:14:27.769Z",
+  "updatedAt": "2026-11-03T13:22:30.583Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-03T12:47:19.800Z",
@@ -159,13 +159,16 @@
     "firstClaimAt": "2026-11-03T11:47:29.595Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 13
+    "executedStepCount": 13,
+    "doneAt": "2026-11-03T13:21:54.711Z",
+    "wallClockMs": 5665116
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
     "worker-ed0f6a9e",
     "architect-74d9e1c7",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-93f9625e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -263,10 +266,11 @@
   "planApprovedAt": "2026-11-03T13:04:06.179Z",
   "approvedPlanRevision": 3,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T13:04:10Z",
-    "at": "2026-11-03T13:14:08.913Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T13:14:26Z",
+    "at": "2026-11-03T13:22:30.583Z"
   },
   "workStartedAt": "2026-11-03T12:19:45.351Z",
   "commits": [
@@ -429,5 +433,9 @@
     "reportedAt": "2026-11-03T13:13:05.085Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Under the protected profile, both IDEs' accounts CLI lines now pass --protected-project <project>. With it, the CLI takes claude only from absolute PATH entries (or MOE_CLAUDE_BIN) whose real path and ancestors are outside the project. The claude child runs with PATH = those entries and cwd = home; on Windows it also gets NoDefaultCurrentDirectoryInExePath=1 and the absolute System32 cmd.exe for a .cmd/.bat. Otherwise the CLI exits 1 (MOE_PROTECTED_CLAUDE_REFUSED / MOE_PROTECTED_CLAUDE_NOT_FOUND) before any folder, prompt, registry write or spawn.\n\n8 files vs 13683b4e, +410/-48 (net 362).\n- Steps 1-4 (CLI + JetBrains): checkpoint 4fa4cc9b, unchanged.\n- Step 5 (VS Code, +27/-14): AccountsTerminal.project = the checked basePath. runCli puts the pair right after the registry only when pinned; cli.ts header comment reworded.\n\nRED: W5, W6, W8, W10 failed. GREEN 9/0, W7 skipped on Linux.\n\nGate, fresh, exit 0:\n- Daemon: Linux 62 passed + 5 skipped (pp1-pp3, pc1); Windows 19 + 7 (pw1-pw4, pc1); tsc clean.\n- VS Code: Linux 695/685/0/10 (W6); Windows 691/678/0/13 (W7); W4, W5, W8-W10 on both; compile OK on both.\n- Parity and lint pass; JUnit 625/6/0/0 (A1-A6 ran, A7 POSIX-only).\n\nMutants: V1-V7 killed by exactly the planned rows (W8/W10, W8/W10, W8, W2/W3, W5/W6, W5/W6, W10). Rev 1's M1-M9, J1, J2 stand, since only a cli.ts comment changed.\n\nLegacy unchanged: USAGE, cli.test.ts, extension.ts, W1-W4/W9, accounts-actions, accounts-view, powershell-quoting.\n\nResiduals, not fixed:\n- contract docs stay in task-3a98393f;\n- a network-share home is refused under protected;\n- claude's children inherit only the pinned PATH and cwd;\n- cli.script is unchecked in both IDEs;\n- VS Code's POSIX default-profile shell is task-f3f364a6."
+  "completionSummary": "Under the protected profile, both IDEs' accounts CLI lines now pass --protected-project <project>. With it, the CLI takes claude only from absolute PATH entries (or MOE_CLAUDE_BIN) whose real path and ancestors are outside the project. The claude child runs with PATH = those entries and cwd = home; on Windows it also gets NoDefaultCurrentDirectoryInExePath=1 and the absolute System32 cmd.exe for a .cmd/.bat. Otherwise the CLI exits 1 (MOE_PROTECTED_CLAUDE_REFUSED / MOE_PROTECTED_CLAUDE_NOT_FOUND) before any folder, prompt, registry write or spawn.\n\n8 files vs 13683b4e, +410/-48 (net 362).\n- Steps 1-4 (CLI + JetBrains): checkpoint 4fa4cc9b, unchanged.\n- Step 5 (VS Code, +27/-14): AccountsTerminal.project = the checked basePath. runCli puts the pair right after the registry only when pinned; cli.ts header comment reworded.\n\nRED: W5, W6, W8, W10 failed. GREEN 9/0, W7 skipped on Linux.\n\nGate, fresh, exit 0:\n- Daemon: Linux 62 passed + 5 skipped (pp1-pp3, pc1); Windows 19 + 7 (pw1-pw4, pc1); tsc clean.\n- VS Code: Linux 695/685/0/10 (W6); Windows 691/678/0/13 (W7); W4, W5, W8-W10 on both; compile OK on both.\n- Parity and lint pass; JUnit 625/6/0/0 (A1-A6 ran, A7 POSIX-only).\n\nMutants: V1-V7 killed by exactly the planned rows (W8/W10, W8/W10, W8, W2/W3, W5/W6, W5/W6, W10). Rev 1's M1-M9, J1, J2 stand, since only a cli.ts comment changed.\n\nLegacy unchanged: USAGE, cli.test.ts, extension.ts, W1-W4/W9, accounts-actions, accounts-view, powershell-quoting.\n\nResiduals, not fixed:\n- contract docs stay in task-3a98393f;\n- a network-share home is refused under protected;\n- claude's children inherit only the pinned PATH and cwd;\n- cli.script is unchecked in both IDEs;\n- VS Code's POSIX default-profile shell is task-f3f364a6.",
+  "completedAt": "2026-11-03T13:21:54.711Z",
+  "reviewCompletedAt": "2026-11-03T13:21:54.711Z",
+  "reviewSummary": "Completion fb126280 is on moe/work-2026-10-24 and origin. Its tree matches the candidate treeSha and its parent is baseRevision 99cae90a. 8 files, +410/-48, net 362.\n\nRe-ran task.verification verbatim from a scratch clone at fb126280. All parts exit 0:\n- checkRefs[0]: Linux tsc clean, 62 passed + 5 skipped (pp1-pp3, pc1 pass). Windows 19 passed + 7 skipped (pw1-pw4, pc1 pass).\n- checkRefs[2]: Linux 695 tests, 685 pass, 0 fail, 10 skipped (W6 runs). Windows 691 tests, 678 pass, 0 fail, 13 skipped (W7 runs). W4, W5 and W8-W10 pass on both; compile OK.\n- checkRefs[1], under the jetbrains-gradle lease (released): parity PASS, lint OK, JUnit 625 tests, 6 skipped, 0 failures, 0 errors. A1-A6 ran; A7 is POSIX-only.\n\nDoD 1:\n- The CLI keeps only local absolute PATH entries whose real path and ancestors are outside the project, by path or dev+ino.\n- The child gets PATH = the kept entries and cwd = home. On win32 it also gets NoDefault...=1 and the SystemRoot cmd.exe.\n- Refusals come before any mkdir, prompt, registry write or spawn. Checked in login, vmToken, check, signOut and remove --sign-out.\n- JetBrains passes the option on its PowerShell, bash and WSL routes. VS Code adds it only when pinned, with project = the checked basePath, and assertSafeArg covers that word (W10).\n\nDoD 2:\n- Legacy paths are unchanged: claudeCommand, findWindowsCommand, runClaude options, USAGE.\n- cli.test.ts, extension.ts and the accounts-actions, accounts-view and powershell-quoting tests are untouched; W1-W4 and W9 are byte-unchanged.\n- Coverage: pw1 covers PATHEXT, pw3 the cmd shim, pp1-pp3 POSIX. Assertions are exact.\n\nMy own mutants, all killed: claude() after mkdir (pc1), no PATH dedup (pp1), refusal with an 'accounts:' prefix (pc1). The worker's M1-M9 were also killed. No forbidden patterns. Complexity pass: nothing to cut.\n\nResiduals the worker named: the docs are task-3a98393f; a network-share home is refused.",
+  "requiredCheckAtDone": null
 }
