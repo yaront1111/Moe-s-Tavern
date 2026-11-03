@@ -1143,6 +1143,46 @@ async function wtResume(){
   assert.deepEqual([parents(p.top,c),['src/a.txt','src/m.txt','src/p.txt','.gemini/g.md'].map(f=>git(p.top,'show',`${c}:${f}`)),parents(p.top,l2)[1],mh(),retryOf(p),finals(p)],
     [[b],['resolved\n','main m\n','partial\n','main g\n'],b,null,null,[['landed',c]]],'the resolved landing'+tail(r.log));
 }
+// A non-conflict unlanded route (gate) stores no paths, so the resume's conflict is outside landingRetry.paths: only the
+// `--diff-filter=U` half of L2's marker scan can catch the markers a completion keeps there (task-c6436215).
+async function wtResumeUnmerged(){
+  const p=repo('wt-resume-unmerged',{settings:{...LANDS,qualityGate:gateCmd()}}),log=path.join(root,'wt-resume-unmerged-gate.jsonl'),
+    rec=path.join(root,'wt-resume-unmerged-cli.jsonl');
+  await landRun(p,'wt-resume-unmerged-0',{'src/a.txt':'task a\n'});
+  let r=await landRun(p,'wt-resume-unmerged-1',{},{...REVIEW,WT_GATE_LOG:log,WT_GATE_EXIT:'3'});
+  assert.deepEqual([r.log.includes('MOE_COMMIT_FAILED_GATE'),rows(log).length,retryOf(p)&&[retryOf(p).reason,retryOf(p).paths]],[true,1,['gate',[]]],
+    'wt-resume-unmerged-1: no gate-routed landingRetry without paths, the premise of this case'+tail(r.log));
+  const b=commitOn(p,'refs/heads/main',{'src/a.txt':'main a\n'}),gateRuns=rows(log).length;
+  // A typed CLI: only typeShim forwards the prompt argv to WT_CLI_RECORD. It writes nothing, so the markers stay.
+  r=await landRun(p,'wt-resume-unmerged-2',{},{...REVIEW,WT_GATE_LOG:log,WT_CLI_RECORD:rec},{type:'claude'});
+  assert.deepEqual([promptOf(rec),mainOf(p),revOf(p.W,'MERGE_HEAD'),/^<<<<<<< /m.test(read(path.join(p.W,'src','a.txt'))),
+    r.log.includes('[WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT'),unlanded(p).map(x=>[x.outcome,x.unlandedReason,x.conflictPaths]),(retryOf(p)||{}).paths,rows(log).length],
+    ['LANDING-CONFLICT: src/a.txt',b,b,true,true,[['unlanded','conflict',['src/a.txt']]],['src/a.txt'],gateRuns],
+    'wt-resume-unmerged-2: the prompt, main, MERGE_HEAD, the markers, the refusal, the finalize, the stored paths, or a gate ran before L2'+tail(r.log));
+}
+// Markers stay in a retry path after the pending merge was committed by hand (a human commit, an older wrapper): MERGE_HEAD
+// is gone, nothing is unmerged and the resume's merge is a no-op. Only landingRetry.paths, scanned because a landingRetry
+// is set, can catch them (task-c6436215).
+async function wtResumeRetryPath(){
+  const p=repo('wt-resume-retry-path',{settings:LANDS}),rec=path.join(root,'wt-resume-retry-path-cli.jsonl'),mh=()=>revOf(p.W,'MERGE_HEAD'),
+    marked=()=>/^<<<<<<< /m.test(read(path.join(p.W,'src','a.txt')));
+  await landRun(p,'wt-resume-retry-path-0',{'src/a.txt':'task a\n'});
+  const b=commitOn(p,'refs/heads/main',{'src/a.txt':'main a\n'});
+  let r=await landRun(p,'wt-resume-retry-path-1',{},REVIEW);
+  assert.deepEqual([mainOf(p),(retryOf(p)||{}).reason,(retryOf(p)||{}).paths],[b,'conflict',['src/a.txt']],'wt-resume-retry-path-1: no conflict-routed landingRetry'+tail(r.log));
+  r=await landRun(p,'wt-resume-retry-path-2',{});
+  assert.deepEqual([mh(),marked()],[b,true],'wt-resume-retry-path-2: the resume left no MERGE_HEAD or no markers'+tail(r.log));
+  git(p.W,'add','--','src/a.txt');git(p.W,'commit','-q','--no-verify','--no-edit');
+  assert.deepEqual([mh(),marked(),git(p.W,'ls-files','-u'),(retryOf(p)||{}).paths,probe(p.W,'merge-base','--is-ancestor',b,'HEAD'),mainOf(p)],
+    [null,true,'',['src/a.txt'],'0:',b],'the hand-committed merge: MERGE_HEAD, the markers, unmerged stages, the retry paths, B in W, or main moved');
+  const main0=mainOf(p);
+  // A typed CLI: only typeShim forwards the prompt argv to WT_CLI_RECORD.
+  r=await landRun(p,'wt-resume-retry-path-3',{},{...REVIEW,WT_CLI_RECORD:rec},{type:'claude'});
+  assert.deepEqual([promptOf(rec),mainOf(p),mh(),marked(),r.log.includes('[WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT'),
+    unlanded(p).map(x=>[x.outcome,x.unlandedReason,x.conflictPaths]),finals(p).filter(x=>x[0]==='landed')],
+    ['LANDING-RETRY: conflict',main0,null,true,true,[['unlanded','conflict',['src/a.txt']]],[]],
+    'wt-resume-retry-path-3: the prompt, main, MERGE_HEAD, the markers, the refusal, the finalize, or a landing'+tail(r.log));
+}
 // The marker scan, from this wrapper's own function: each marker shape (CRLF too), a path out of W and a linked parent
 // (out of W, or in W over a missing file) are hits, as are a file link and a FIFO (never opened) under sh and a name
 // Windows cannot parse under ps1; a resolved deletion (absent) and marker look-alikes are not. sh builds under the suite's
@@ -1547,7 +1587,7 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
   'wt-serena-yml':wtSerenaYml,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
-  'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
+  'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'wt-resume-unmerged':wtResumeUnmerged,'wt-resume-retry-path':wtResumeRetryPath,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
   'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});
 cases['wt-follow-lock']=wtFollowLock;
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
