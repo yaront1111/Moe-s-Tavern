@@ -1,0 +1,28 @@
+{
+  "id": "task-57fe7ad1b29f470cbce66cbd94b41385",
+  "epicId": "epic-be924fb8",
+  "title": "docs: TROUBLESHOOTING.md prescribes a moe.update_settings tool that does not exist, a reinstall block whose install-all.ps1 call installs no plugin, copying worktree edits into the project root although worktree mode lands from the worktree, and a Tools > Moe > Initialize Project item that is named Initialize Moe",
+  "description": "Filed by defect hunt #7 (task-44785c82, architect-1dd28c7c). Checked against moe/work-2026-10-24 22348856; detector outputs are in /mnt/d/moe-scratch/hunt-44785c82/B/. Docs-only: edit docs/TROUBLESHOOTING.md and nothing else.\n\nITEMS (doc line, then the code or doc line that contradicts it), worst first:\n1. :936-937 says \"Apply via `moe.update_settings` / `scripts/moe-call.sh`, never by hand-editing `.moe/`\".\n   - No moe.update_settings tool exists: `git show moe/work-2026-10-24:packages/moe-daemon/src/tools/index.ts | grep -c update_settings` prints 0.\n   - The only settings route is the plugin's /ws UPDATE_SETTINGS, as the same doc says at :1231.\n2. :631-635, the \"rebuild and reinstall\" block: `cd packages/moe-daemon && npm run build`, then `cd moe-jetbrains && ./gradlew buildPlugin`, then `.\\scripts\\install-all.ps1`.\n   - install-all.ps1 installs the plugin only with -InstallPlugin (scripts/install-all.ps1:116 `if ($InstallPlugin) { Install-JetBrainsPlugin }`; :142 says \"re-run with -BuildPlugin\").\n   - The second cd is relative to packages/moe-daemon, so it fails.\n   - The block never builds moe-proxy, which buildPlugin requires (moe-jetbrains/build.gradle.kts:129-131).\n   - The same doc's working form is at :119 and :442: `.\\scripts\\install-all.ps1 -BuildPlugin -InstallPlugin -IdeVersion <IDE folder>`.\n3. :554-556 says \"edited inside a `.worktrees/` checkout the post-flight cannot see … Move the edits into the project root\". :667-668 says \"invisible to the post-flight, which only ever runs against the project root. Copy them into the root\".\n   - In worktree mode the wrapper lands from the task worktree. scripts/CLAUDE.md:13 says a worker \"works in, and lands from, its own task worktree\", and scripts/moe-agent.sh:7291-7292 takes MOE_WT_PATH as the landing top. The same doc says so at :1226-1227.\n   - This repo runs worktree mode, so copying the edits into the control checkout is harmful advice. Scope both passages to shared mode.\n4. :103 and :220 say \"Tools > Moe > Initialize Project\".\n   - The action is \"Initialize Moe\": moe-jetbrains/src/main/resources/META-INF/plugin.xml:85 has `text=\"Initialize Moe\"`, and DEVELOPMENT.md:55 already has it right.\n   - :104 \"Or manually create .moe/project.json\" contradicts the never-hand-edit rule. Point to `node packages/moe-daemon/dist/index.js init --project <path>`.\n5. :341-343 quotes the error \"Worker not registered\". No code emits it: 0 hits in packages, scripts, moe-jetbrains/src and moe-vscode/src. The real refusal is chatJoin.ts:31 `Unknown worker: workerId must be a registered worker, \"human\", or \"system\"`.\n6. :168 says `# Shows: { \"port\": 3141, ... }`. The default is 9876: packages/moe-daemon/src/index.ts:43 reads `MOE_DEFAULT_PORT || '9876'`, and the daemon auto-scans the next 50 ports.",
+  "definitionOfDone": [
+    "`grep -cE 'moe\\.update_settings|Initialize Project|Worker not registered|3141' docs/TROUBLESHOOTING.md` prints 0.",
+    "`grep 'install-all.ps1' docs/TROUBLESHOOTING.md | grep -vc -- '-InstallPlugin'` prints 0. The :631-635 reinstall block is that one install-all.ps1 command, or it builds moe-proxy before buildPlugin.",
+    "`grep -c 'only ever runs against the project root' docs/TROUBLESHOOTING.md` prints 0, and both .worktrees passages say what applies in worktree mode. `git diff --name-only` against the merge base lists only docs/TROUBLESHOOTING.md."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 400.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:19:52.719Z",
+  "updatedAt": "2026-11-03T18:19:52.719Z"
+}

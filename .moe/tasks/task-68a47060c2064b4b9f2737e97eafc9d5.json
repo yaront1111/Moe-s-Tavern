@@ -1,0 +1,34 @@
+{
+  "id": "task-68a47060c2064b4b9f2737e97eafc9d5",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_epic silently turns a bad or ARCHIVED status into PLANNED and stores order unchecked, where update_epic refuses both with INVALID_INPUT, and one string order then gives every later default-order epic NaN in memory and null on disk",
+  "description": "Filed by defect hunt #7 (task-44785c82, architect-1dd28c7c). Reproduced on moe/work-2026-10-24 22348856; the files are unchanged at c89e4c59.\n\nPROBLEM (packages/moe-daemon/src/):\n- Sibling update_epic runs StateManager.updateEpic (state/StateManager.ts:1287), which calls validateEpicUpdates (state/validators.ts):\n  - status must be PLANNED, ACTIVE, COMPLETED or ARCHIVED (:586-588);\n  - order must be an integer from 0 to MAX_SAFE_INTEGER (:589-591);\n  - anything else is refused with INVALID_INPUT.\n- Member create_epic (tools/createEpic.ts:38) runs StateManager.createEpic (:1245-1279):\n  - Only epicRails goes through validateEpicUpdates (:1255).\n  - status is `sanitizeEnum(input.status, ['PLANNED','ACTIVE','COMPLETED'], 'PLANNED')` (:1256-1257). Both \"BOGUS\" and \"ARCHIVED\" silently become PLANNED, though createEpic.ts:18's schema advertises \"PLANNED, ACTIVE, COMPLETED or ARCHIVED\".\n  - order is `input.order ?? this.nextEpicOrder()` (:1268) with no check, so \"abc\" and -5 are written to the epic file.\n  - The board's /ws CREATE_EPIC goes through the same state.createEpic.\n- Cascade: nextEpicOrder (:1477-1481) is `Math.max(...epics.map(e => e.order)) + 1`. After one string order, every later create_epic that omits order gets NaN, which JSON writes as null.\n\nEVIDENCE: repros at /mnt/d/moe-scratch/hunt-44785c82/A/createEpic.validation.test.ts and createEpic.orderCascade.test.ts, run in a git-archive snapshot (/tmp/hunt-44785c82-A/packages/moe-daemon):\n`LOG_LEVEL=silent npx vitest run src/tools/createEpic.validation.test.ts src/tools/createEpic.orderCascade.test.ts`\n- The update_epic baseline passes: it refuses BOGUS, \"abc\" and -5.\n- FAIL \"create_epic answers the same inputs the same way\": {\"bogusStatus\":{\"refused\":false,\"status\":\"PLANNED\",\"order\":2},\"stringOrder\":{\"refused\":false,\"status\":\"PLANNED\",\"order\":\"abc\"},\"negativeOrder\":{\"refused\":false,\"status\":\"PLANNED\",\"order\":-5}}\n- FAIL \"create_epic keeps the ARCHIVED status its schema advertises (or refuses it), never PLANNED\": {\"refused\":false,\"status\":\"PLANNED\",\"order\":2}\n- FAIL \"a later default-order epic still gets a finite numeric order on disk\": \"in memory NaN, on disk null\"\n\nFIX DIRECTION:\n- In StateManager.createEpic, validate a supplied status and order through validateEpicUpdates, as epicRails already is: refuse with INVALID_INPUT, never coerce. Keep the defaults when they are omitted (PLANNED, nextEpicOrder()).\n- Decide ARCHIVED explicitly: accept it as update_epic does, or refuse it and fix createEpic.ts:18's description.\n- Epic rail (backward-compatible with existing .moe/ state): make nextEpicOrder ignore a non-finite order already on disk, so an existing bad epic file can't poison it. Do not rewrite such files.\n\nFILES:\n- packages/moe-daemon/src/state/StateManager.ts (createEpic and nextEpicOrder only)\n- packages/moe-daemon/src/tools/createEpic.ts (schema text, only if ARCHIVED is refused)\n- new test files adopted from the two repros",
+  "definitionOfDone": [
+    "In a git-archive snapshot outside the shared checkout, `npx vitest run src/tools/createEpic.validation.test.ts src/tools/createEpic.orderCascade.test.ts` (the hunt repros, adopted) passes. create_epic refuses status \"BOGUS\" and order \"abc\" / -5 with INVALID_INPUT, as update_epic does. \"ARCHIVED\" is either kept or refused, never turned into PLANNED. The next default order is a finite number, and the same number is on disk.",
+    "Omitted status and order still give PLANNED and nextEpicOrder(). A test loads an epic file that already holds a non-numeric order and shows the next default order stays finite, without rewriting that file.",
+    "In that snapshot, `npx vitest run src/tools/createEpic.test.ts src/tools/updateEpic.test.ts src/state/StateManager.test.ts src/state/validators.test.ts` stays green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 399.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:19:40.914Z",
+  "updatedAt": "2026-11-03T18:21:26.787Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T18:21:02.727Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "id": "task-1064df99444f466f89e4138c39aedff9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: archive_epic shelves a BLOCKED task another seat holds, which archive_task refuses to the same caller, and records no actor on TASK_ARCHIVED, so #general reads \"Task moved to ARCHIVED by unknown\" (the archive_task fix 2e3012b9 never reached its sibling)",
+  "description": "Filed by defect hunt #7 (task-44785c82, architect-1dd28c7c). Reproduced on moe/work-2026-10-24 22348856; the tool files are unchanged at c89e4c59.\n\nPROBLEM (packages/moe-daemon/src/tools/):\n- Sibling archive_task (archiveTask.ts):\n  - :71-77 refuses a held PLANNING/BLOCKED row (HOLDER_ONLY_FROM, :18) when the caller's workerId is not the holder. A caller with no workerId (a human) is allowed.\n  - :79 passes params.workerId as the TASK_ARCHIVED actor (2e3012b9).\n- Member archive_epic (archiveEpic.ts):\n  - Its schema (:19-26) has no workerId. The proxy injects one anyway, McpAdapter does not enforce additionalProperties, and the handler ignores it.\n  - Its IN_FLIGHT gate (:12) covers only PLANNING/AWAITING_APPROVAL/WORKING, so a BLOCKED task passes with no holder check.\n  - :64 calls `state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED')` with no 4th (actor) argument.\n- Effect:\n  - An architect's or governor's archive_epic shelves a task that a resourceId block keeps parked on worker-x. The same caller's archive_task on that row is refused \"held by worker-x\". archiveUpdates also clears blockedResourceId, so the lease grant can no longer restore the row.\n  - Every TASK_ARCHIVED that archive_epic writes has no workerId, so get_activity_log { workerId } misses it.\n  - #general reads \"Task moved to ARCHIVED by unknown\". For a held row it names the assignee instead, because the notice falls back to assignedWorkerId (mem:gotcha-task-event-actor-inventory).\n\nEVIDENCE: repro at /mnt/d/moe-scratch/hunt-44785c82/A/archiveEpic.holderActor.test.ts, run in a git-archive snapshot (/tmp/hunt-44785c82-A/packages/moe-daemon):\n`LOG_LEVEL=silent npx vitest run src/tools/archiveTask.test.ts src/tools/archiveEpic.holderActor.test.ts`\n- The archive_task baseline passes: it refuses the non-holder with \"held by worker-x\".\n- FAIL \"archive_epic applies the same holder-only refusal to the same caller\": expected { outcome: 'rejected', taskStatus: 'BLOCKED' }, got { outcome: 'resolved', taskStatus: 'ARCHIVED' }.\n- FAIL \"archive_epic records the caller on each TASK_ARCHIVED and names it in #general\": expected { archived: [ 'architect-c' ], lines: [ 'task-done: Task moved to ARCHIVED by architect-c' ] }, got archived [ null ] and \"task-done: Task moved to ARCHIVED by unknown\".\n\nFIX DIRECTION:\n- Add workerId to archive_epic's schema, worded like archive_task's.\n- Extend the all-or-nothing gate before the first write. Refuse NOT_ALLOWED, naming the task and its holder, when any not-yet-archived BLOCKED task in the epic is assigned to a seat other than a caller that has a workerId. That is archive_task's exact condition: reuse HOLDER_ONLY_FROM by exporting it from archiveTask.ts, rather than copying it.\n- Pass params.workerId as the 4th argument of each updateTask(..., 'TASK_ARCHIVED', ...). Never record a placeholder; a caller-less call records no workerId.\n- Touch docs/MCP_SERVER.md's archive_epic section only if it contradicts the new rule. Check lanes first, because that file is often held.\n\nFILES: packages/moe-daemon/src/tools/archiveEpic.ts; packages/moe-daemon/src/tools/archiveTask.ts (export only); new packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts (adopt the repro).",
+  "definitionOfDone": [
+    "In a git-archive snapshot outside the shared checkout, `npx vitest run src/tools/archiveEpic.holderActor.test.ts` (the hunt repro, adopted) passes 3/3. archive_epic refuses an epic holding a BLOCKED task assigned to another seat, and no task in that epic changes status. Each TASK_ARCHIVED carries the caller's workerId, and #general reads \"Task moved to ARCHIVED by <caller>\".",
+    "A test pins the allowed paths. archive_epic with no workerId (a human) still archives that epic, and so does the holder itself. A caller-less call records no workerId on TASK_ARCHIVED.",
+    "In that snapshot, `npx vitest run src/tools/archiveEpic.test.ts src/tools/archiveTask.test.ts src/tools/taskMoveActor.test.ts` stays green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 398.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:19:28.473Z",
+  "updatedAt": "2026-11-03T18:20:23.451Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T18:20:06.822Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}

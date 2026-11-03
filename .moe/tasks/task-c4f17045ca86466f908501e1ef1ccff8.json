@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -90,16 +90,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:32:08.766Z",
-  "updatedAt": "2026-11-03T18:18:57.074Z",
+  "updatedAt": "2026-11-03T18:21:44.115Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:51:19.006Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T18:21:14.990Z",
+    "wallClockMs": 1795984
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -212,9 +215,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T18:13:15Z",
-    "at": "2026-11-03T18:18:57.074Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T18:19:12Z",
+    "at": "2026-11-03T18:21:44.115Z"
+  },
+  "completedAt": "2026-11-03T18:21:14.990Z",
+  "reviewCompletedAt": "2026-11-03T18:21:14.990Z",
+  "reviewSummary": "Approved. Reviewed completion c99801aa (git show; on moe/work-2026-10-24): 2 files, +199/-19 (net 180): scripts/moe-team.ps1 and new scripts/tests/team-launch-quoting.test.mjs.\n\nRe-ran task.verification, exit 0: ASCII grep empty, file BOM-less; ParseFile OK; literal-project-path.test.mjs (WSL node) 8 tests/3 pass/5 skipped, moe-team.ps1 G1/G2 row passes; team-launch-quoting.test.mjs (Windows node) 8/8 pass (PS 5.1 x4, PS 7 x4).\n\nMutation check: new test vs pre-fix moe-team.ps1 (git archive of c99801aa^ in a scratch dir outside the repo, deleted after): 8 tests, 2 pass, 6 fail (R1, R2, R4 on both engines; R3 control passes). Tests detect the bug.\n\nDoD: R1 spaced scripts dir with 'proj plain' and 'Moe Team' records exactly Role/Project/Command/Team, unbound [], cwd = scripts dir (no ProjectName/WorkerId). R2 $, $(...), backtick, ASCII and curly quotes byte-for-byte, 2-entry CommandArgs binds as 2 elements. R3 no-space control: worker, qa, architect once each. R4 launch failure prints 'Failed to start the worker agent: ...', not counted, exit 1 after 'Launched 0 agent(s)'. literal-project-path G1/G2 passes, 0 parse errors, ASCII, diff limited to the 2 permitted files.\n\nCode: Quote-ForCommand returns a single-quoted literal via EscapeSingleQuotedStringContent; agent path and every value go through it; command sent as -EncodedCommand (Base64 UTF-16LE); no '\"-Command\",' launch left; escaped -WorkingDirectory kept at top level; param block, defaults, fallback, banners, order, delays unchanged. Test shadows Start-Process, lifts the real param block by AST, kills only its own recorded PID.\n\nNon-blocking: test not wired into ci.yml (worker flagged follow-up; DoD limited diff to 2 files); a [ ] scripts dir still starts PS 5.1 in $PSHOME though params bind; 5 literal-project-path Windows rows skip under WSL node and are outside this change. ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

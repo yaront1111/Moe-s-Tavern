@@ -1,0 +1,28 @@
+{
+  "id": "task-b22f82b2f7ea43ae89db5b2da0ddf873",
+  "epicId": "epic-be924fb8",
+  "title": "docs: DEVELOPMENT.md's WSL fix installs Node 20 although the daemon needs 22.22+, it seeds the board by hand-editing .moe/ and calls the existing epic/task UI unimplemented, its plugin build runs gradlew from packages/moe-daemon without the proxy, and it still names Gradle 8.10.2, port 3141 and a loopback daemon WSL can reach",
+  "description": "Filed by defect hunt #7 (task-44785c82, architect-1dd28c7c). Checked against moe/work-2026-10-24 22348856; detector outputs are in /mnt/d/moe-scratch/hunt-44785c82/B/. Docs-only: edit docs/DEVELOPMENT.md and nothing else.\n\nITEMS (doc line, then the code or doc line that contradicts it), worst first:\n1. :355, the \"Node not found\" fix, runs `setup_20.x`. But packages/moe-daemon/package.json sets `\"engines\": { \"node\": \">=22.22.0\" }`, the same doc's :9 says 22.22+/24/26, and TROUBLESHOOTING.md:68-69 says Node 18/20 cannot run the daemon. Use setup_24.x.\n2. :144-147 says \"The current UI does not create epics or tasks yet … Create epic and task JSON files under `.moe/epics/` and `.moe/tasks/`\". :306-310 lists Epic CRUD, task creation, worker status and settings/status bar as \"Not yet implemented\".\n   - All of them exist: moe-jetbrains/src/main/kotlin/com/moe/toolwindow/{CreateEpicDialog,CreateTaskDialog,WorkerPanel,MoeSettingsDialog}.kt, statusbar/MoeStatusBarWidget.kt, and the plugin.xml:106 action Moe.CreateTask.\n   - Hand-writing .moe/ JSON contradicts CLAUDE.md's never-hand-edit rule. Point to the board dialogs or moe.create_epic / moe.create_task.\n3. :120-128, \"Run the JetBrains Plugin\", runs `cd packages/moe-daemon && npm run build` and then `./gradlew runIde` from there.\n   - gradlew exists only in moe-jetbrains/.\n   - requireBundledAssets in moe-jetbrains/build.gradle.kts:119-135 fails without moe-proxy's dist and node_modules (\"Bundled moe-proxy dist not found … Build it first (cd packages/moe-proxy && npm run build)\").\n   - The same doc's :267-270 block does it right.\n4. :361 says \"Daemon runs on `127.0.0.1` which WSL can access\", and :368 says \"The plugin connects to daemon via localhost (works across WSL/Windows boundary)\".\n   - The default bind is loopback: packages/moe-daemon/src/index.ts:75 `DEFAULT_BIND_HOST = '127.0.0.1'`.\n   - WSL agents in NAT mode reach a Windows daemon only when it runs with `--host wsl` / MOE_BIND_HOST=wsl (JetBrains: Agents > Run Agents in WSL), through the WSL gateway (TROUBLESHOOTING.md:183, CLAUDE.md).\n   - Measured on this box by hunt #3 (task-ede88939): 127.0.0.1:9876 is refused from WSL (curl rc 7), while the gateway returns 200.\n5. :138 says the Gradle wrapper \"targets Gradle 8.10.2\" and gives regeneration advice with `--gradle-version 8.10.2`. moe-jetbrains/gradle/wrapper/gradle-wrapper.properties pins gradle-9.8.2-bin.zip, so following the advice would downgrade it.\n6. :329 says \"Port 3141 in use\". The default port is 9876 (index.ts:43).\n7. :170 says \"`-Role` / `--role`: `architect`, `worker`, or `qa`\". Both launchers also accept governor: moe-agent.sh:495 checks `^(architect|worker|qa|governor)$`, and moe-agent.ps1 has the same ValidateSet.\n8. :426 says \"Config location | `MoeSettings`\". No such class exists. It is MoeSettingsDialog (toolwindow/MoeSettingsDialog.kt:22), which writes .moe/project.json settings through UPDATE_SETTINGS.",
+  "definitionOfDone": [
+    "`grep -cE 'setup_20\\.x|8\\.10\\.2|3141' docs/DEVELOPMENT.md` prints 0.",
+    "`grep -cE 'does not create epics or tasks yet|Task creation UI|Create epic and task JSON files' docs/DEVELOPMENT.md` prints 0.",
+    "`grep -cE 'which WSL can access|works across WSL/Windows boundary|`MoeSettings`' docs/DEVELOPMENT.md` prints 0. The -Role line names governor, and the Run-the-JetBrains-Plugin block builds moe-proxy and runs gradlew from moe-jetbrains/. `git diff --name-only` against the merge base lists only docs/DEVELOPMENT.md."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 401.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:20:05.391Z",
+  "updatedAt": "2026-11-03T18:20:05.391Z"
+}

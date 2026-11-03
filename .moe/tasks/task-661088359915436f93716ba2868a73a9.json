@@ -1,0 +1,28 @@
+{
+  "id": "task-661088359915436f93716ba2868a73a9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_wait's backlog drain returns the whole tail of every unread channel, so one message routed to a seat in an unwatched channel delivers every other seat's messages there too, and the channels filter (\"routed mentions still arrive from any channel\") is not honored",
+  "description": "Found by the governor at 18:20Z on 2026-11-03, live on its own seat. Code read at moe/work-2026-10-24 c99801aa.\n\nPROBLEM:\n- The live wake path filters correctly. ChatWaiter.isRelevant (packages/moe-daemon/src/tools/chatWait.ts:169-183) admits a message from a watched channel, or one whose routingTargets include the caller (:179). With no filter, it admits routed messages and humans only (:183).\n- The backlog drain does not. backlogChannelIds (packages/moe-daemon/src/util/chatBacklog.ts:125) scans the filter's channels PLUS every channel with an unread count, on the assumption that \"Unread channels are already mention-routed (including groups)\" (:133). With no filter it scans the unread channels.\n- collectChatBacklog (:153) then returns EVERY message after the caller's cursor in each scanned channel (:196 pushes everything not sent by the caller). The doc comment at :147 says so: \"No mention/human relevance filter is applied\".\n- So one routed message in an unwatched channel marks it unread, and the next drain (entry drain or wake drain) delivers that channel's whole tail, including threads addressed to other seats.\n\nLIVE EVIDENCE (governor-e6b40560, chat_wait channels [\"#governors\",\"#general\"]):\n- Trigger: mention-less system lines in #workers, the file-collision notices msg-f9df6a37 (17:26:17Z) and msg-3f3261f9 (18:14:48Z). These route to every busy seat (packages/moe-daemon/src/state/chatStore.ts:228, unread at :247), the governor included.\n- The 18:14Z wake then returned 7 #workers messages. 6 were addressed to other seats: msg-95448c0a and msg-4212ed1d mention worker-26483323/qa-7328a40d and worker-d6c1cb7a/qa-7328a40d; msg-ad0a356c and msg-eaeef84f are QA replies to those workers; msg-e841d20d and msg-3d887c9d are a worker's acks with no mentions.\n- The 17:26Z wake likewise returned three 16:25Z worker acks (msg-2b4bea99, msg-23f5966d, msg-d6485b61) next to the routed msg-f9df6a37.\n- The tool contract (chatWait.ts:371) promises \"Optional ambient channel filter ... Routed mentions still arrive from any channel\", i.e. only the routed ones.\n\nIMPACT: every seat that gets one routed line in a busy channel such as #workers receives that channel's chatter. Notification-only worker sessions then \"acknowledge\" threads that were never theirs (e.g. msg-2b4bea99), adding to the collision/ack churn the governor measured on 11-02 (56 collision notices, 349 pages and 133 threaded acks in 3h). Related, already DONE: 48edc21b (deregistration presence lines defeating the filter) and 06cf7baf (which added unread channels to the drain).\n\nFIX DIRECTION (the planner decides): make the drain apply the live path's relevance to every channel the caller doesn't watch (and to all channels when there is no filter). Deliver a message there only if it is routed to the caller: its raw mentions name the caller or a group token that resolves to it, a human sent it, or it is a mention-less system line (which routes to busy seats). Skipped messages still advance that channel's cursor and clear its unread, so they are never re-delivered later. Watched channels keep returning everything. Optional, as a separate call: whether mention-less #workers system lines should route to governor seats at all.",
+  "definitionOfDone": [
+    "With a channels filter, chat_wait's backlog drains (entry and wake) deliver from an unwatched channel only messages routed to the caller, the same relevance isRelevant applies to live events. With no filter, the same holds for every scanned channel. Skipped messages advance that channel's cursor and are not delivered by a later call.",
+    "A vitest reproduces the defect: a caller watching #governors, a #workers message mentioning another seat, then a mention-less system line in #workers. The caller's chat_wait returns the system line but not the other seat's message. It fails on c99801aa (RED evidence in a task comment) and passes with the fix.",
+    "The existing chat_wait and chatBacklog tests stay green, including the routed-mention-outside-watched-channels case (06cf7baf), the registration floor (5902a670) and the sinceId cases (8b0b3edc). The vitest command and its result are in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 402.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:20:35.156Z",
+  "updatedAt": "2026-11-03T18:20:35.156Z"
+}

@@ -34,39 +34,57 @@
     {
       "stepId": "step-2",
       "description": "The VM route in the main loop of scripts/moe-agent.sh: seat-start before the claim, the marked claim, the post-claim backstop, and no taskless host launch.\n\nPer-iteration state. Reset it in the pre-flight reset block, with the other per-task variables:\n- a route flag (reuse CQ-M07m1's if it has one, else VM_ROUTE=false);\n- CLAIM_ITER_JSON=\"$CLAIM_RPC_JSON\".\nBoth claim_next_task calls (the pre-flight claim and the single-shot wait loop) send \"$CLAIM_ITER_JSON\", which is byte-identical on every non-VM iteration. The wrapper never calls wait_for_task itself, so no other call needs the marker.\n\nReplace CQ-M07m1's placeholder refusal MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE with the route. The placeholder is reached only when the profile is verified-local and ready and every m1 check has passed, before the claim. After this task neither the wrapper nor the harness contains that code. In order:\n1. CLI_TYPE codex: print `[ERROR] MOE_VM_CREDENTIAL_UNAVAILABLE: codex VM credentials are not wired yet; refusing to run codex on the host.` and exit 1, before seat-start and the claim. CQ-M07m replaces this with its key check. gemini and grok are refused by m1's CLI check.\n2. Build CLAIM_ITER_JSON = CLAIM_RPC_JSON plus \"executionRoute\":\"vm\", using $PYTHON_CMD json, never string splicing. If it cannot be built, print `[ERROR] MOE_VERIFIED_LOCAL_CLAIM_UNBUILDABLE` and exit 1: never send an unmarked claim on this route. The marker only refuses; it never grants readiness (CQ-M07q).\n3. Set the route flag.\n4. If no VM is held: `seat_vm_start || { echo \"[ERROR] MOE_SEAT_START_FAILED: $SEAT_START_CODE\" >&2; exit 1; }`. In this slice anything but ok fails closed, exit 75 included; CQ-M07m turns 75 into a capacity wait. A held VM is reused, so later tasks run no seat-start.\n\nPost-claim backstop. Put it right after the worker's provision_worktree call, before worktree_preflight and the pre-flight landing.\n- Condition: the route is on, ROLE=worker, PREFLIGHT_OK, a task is bound, and MOE_WT_MODE != worktree.\n- Action: print `[ERROR] MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED: the claim for <task> is in shared mode; the VM route runs only in worktree mode, so no job runs.` and exit 1, before any baseline or job.\n- It is WORKER-ONLY on purpose; say why in a comment. claimNextTask.ts openClaimAttempt (about :156) derives workspaceMode 'worktree' only for a WORKING task, so a QA claim of a REVIEW row always reads shared. m1's pre-claim settings.worktreeMode check covers QA, and a QA job writes nothing.\n\nLaunch decision. Add this after the existing MOE_SKIP_LAUNCH block.\n- Condition: the route is on, no task is bound (PREFLIGHT_OK != true, or no PREFLIGHT_TASK_ID), and the existing logic would still launch: a chat-only session for routed mentions, or a launch-outage probe.\n- Action: set MOE_SKIP_LAUNCH=true and LAUNCH_PROBE=false, and print `MOE_TASKLESS_NO_LAUNCH reason=vm-route role=<r> worker=<w> - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job.`\n- Rail: never run the host CLI under verified-local. The existing skip reasons stay byte-identical.\n\nNew codes use only MOE_SEAT_, MOE_VM_ and MOE_VERIFIED_LOCAL_, plus a new reason on the existing MOE_TASKLESS_NO_LAUNCH line. parity-check.sh compares MOE_COMMIT_, MOE_ATTR_, MOE_CHECKPOINT_, MOE_ATTRIBUTION_ and MOE_ACCOUNT_ (and WT-19's MOE_WORKTREE_ and MOE_LAND_ families once they land); never add a code in one of those families here.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-03T18:18:27.543Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Implemented marked per-iteration claim JSON at both claim sites, one held VM reused, no-auto-claim/codex fail-closed refusals, worker-only shared backstop, and taskless host-launch suppression. Includes planner clarification 2. bash -n exit 0; extracted gate matrix PASS (marker, one start over repeated gate calls, both refusals). Retained full-route rows follow step 5.",
+      "startedAt": "2026-11-03T18:18:27.543Z",
+      "completedAt": "2026-11-03T18:19:02.025Z"
     },
     {
       "stepId": "step-3",
       "description": "The VM job replaces the host CLI launch, in scripts/moe-agent.sh.\n\nAdd one branch at the head of the launch chain, right after the MOE_SKIP_LAUNCH branch and before codex: `elif <route on>; then run_vm_job`. Nothing on this route runs $COMMAND_BIN or agent_git_exec, and nothing falls back to them. The shared steps around the chain stay unchanged: the claude lease (get_account_lease), the prompt-cache check, the git guard, CLI_LAUNCHED_AT, the heartbeat sidecar, the launch classification and the post-flight.\n\nrun_vm_job lives beside the step 1 helpers, above the main loop. In order:\n\n1. Credential.\n- ACCOUNT_LEASED_ID must be set, and `\"$NODE_CMD\" \"$ACCOUNT_HELPER\" vm-credential \"$ACCOUNT_LEASED_ID\" >/dev/null 2>&1` must exit 0.\n- Otherwise print `[ERROR] MOE_VM_CREDENTIAL_UNAVAILABLE: account <id|none> has no VM token; mint one with 'accounts vm-token <id>' (Accounts tab).` and exit 1. CQ-M07m turns this into the held wait.\n- There is NO vm-credential seam: the rows serve the canary from a temp token store through MOE_ACCOUNTS_FILE.\n\n2. Inputs. When one is missing, print `[ERROR] MOE_SEAT_JOB_INPUT_MISSING: <attempt identity|worktree HEAD|landed completion commit>` and exit 1.\n- MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION, from pin_attempt_identity.\n- worker: checkout=\"$MOE_WT_PATH\" and commit=`git -C \"$MOE_WT_PATH\" rev-parse --verify 'HEAD^{commit}'`, which is W's HEAD at job start, after the pre-flight landing.\n- qa: checkout=\"$PROJECT\" and commit = task.landing.lastCompletion.sha, read from PREFLIGHT_CONTEXT with $PYTHON_CMD.\n- The commit must match ^[0-9a-f]{40}([0-9a-f]{24})?$.\n\n3. The job.\n- Print `[seat] job role=<r> task=<id> instance=<i> commit=<c>`.\n- Run ONE pipeline; the token moves only through pipes:\n`\"$NODE_CMD\" \"$ACCOUNT_HELPER\" vm-credential \"$ACCOUNT_LEASED_ID\" 2>/dev/null | seat_credential_json CLAUDE_CODE_OAUTH_TOKEN | seat_cli seat-job --project \"$PROJECT\" --worker \"$WORKER_ID\" --runner \"$MOE_PROCESS_STARTED_AT\" --host \"$MOE_HOST\" --instance \"$SEAT_VM_INSTANCE\" --role \"$ROLE\" --task \"$PREFLIGHT_TASK_ID\" --attempt \"$MOE_ATTEMPT_ID\" --generation \"$MOE_ATTEMPT_GENERATION\" --checkout \"$checkout\" --commit \"$commit\" --cli claude | tee \"$out\"`\n- Read PIPESTATUS on the very next line.\n- seat_credential_json NAME is a one-line $PYTHON_CMD (or $NODE_CMD) stage. It reads the raw secret from stdin and writes only {\"name\":NAME,\"value\":<secret>}. Empty input means exit 3 with no output. NAME is its only argument. CQ-M07m will feed it from the printf builtin for codex.\n- seat-job's stderr goes straight to the terminal. Only stdout passes through tee, into a private file in SECURE_TEMP_DIR that is deleted right after reading.\n- CLAUDE_CODE_OAUTH_TOKEN is the name that the guest JOBS table and decision 5 use.\n\n4. Failures.\n- vm-credential or the JSON stage exited non-zero: MOE_VM_CREDENTIAL_UNAVAILABLE, as in 1.\n- The outcome is the last stdout line: a JSON object with \"seatJob\":1, in CQ-M07j's landed shape.\n- A failed job is any of: seat-job exit != 0; no marked line; ok !== true; role != ROLE; commit != the commit passed in. On a failed job, print `[ERROR] MOE_SEAT_JOB_FAILED: <the line's fixed code, or exit n>` and exit 1. This is fail-closed, and the EXIT trap stops the VM. CQ-M07m turns it into seat-stop, forget the VM, a held retry and the launch budgets.\n\n5. ok.\n- CLI_EXIT_CODE = the outcome's exitCode when it is an integer 0-255, else 1 (for example null after a signal).\n- worker: call CQ-M07m2's helper with exactly the inputs its landed signature takes: the task plus the outcome's commit, baseTree and tree. The helper commits the admitted tree onto refs/heads/moe/task/<id> with commit as the parent, syncs W, and no-ops when tree == baseTree.\n- If the helper returns non-zero, exit 1 and land nothing else. It has already printed its own MOE_VM_CANDIDATE_* line, and a lost CAS is parked on a rescue ref.\n- Call the helper whatever settings.autoCommit says. The admitted tree is the job's only copy of the work, and the helper moves only the task-private branch and W, never the target.\n- qa: nothing lands.\n\n6. Return 0, then the normal post-flight.\n\nerror handling: every refusal in this step and in step 2 is fail-closed.\n- It prints one fixed code on stderr (never a token, a path value or stderr text from a child) and exits 1 before anything lands.\n- The EXIT trap then stops the VM and deregisters.\n- No failure ever falls through to the host CLI.\n\nDocs (scripts/CLAUDE.md, CONFIGURATION.md MOE_AGENT_SEAT_PATH) belong to the CQ-M07 final row, not here.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "VM launch uses real vm-credential through pipes, sanitized seat_cli, final stdout line validation, exit-code mapping and m2 helper with required LAND_* globals. QA lands nothing. Per planner comments bypassed worktree host tooling and both postflight checkpoint sites on VM route. Also guarded account_after_exit on VM route: inspection showed its signin-state probe invokes $COMMAND_BIN on nonzero guest exits, violating the no-host-CLI invariant (scope addition within wrapper). bash -n PASS; outcome parser matrix PASS (identity/marker/ok/tree/null exit). End-to-end retained tests follow steps 4/5.",
+      "startedAt": "2026-11-03T18:19:02.054Z",
+      "completedAt": "2026-11-03T18:19:52.208Z"
     },
     {
       "stepId": "step-4",
       "description": "Test fixtures.\n\n(a) NEW scripts/tests/postflight-fake-agent-seat.js: the agent-seat stub that MOE_AGENT_SEAT_PATH names. It is CommonJS like postflight-fake-proxy.js, with the same style of header, and is shared so CQ-M07m and the ps1 twin (CQ-M07n) can reuse it.\n- Its argv is exactly the real CLI's (`<cmd> --project <abs> ...`).\n- Every call appends ONE row {tool:'agent-seat', args:{cmd, argv, env: process.env, ...}} to <project>/.moe/evidence-rpcs.jsonl, the fake proxy's RPC log. Rows can then order seat calls against claim_next_task and deregister_worker in one file.\n- seat-start: answers {ok:true, instance, executionReady:false} and exits 0. The instance is moe-vm-<20 hex from a per-project counter>, so each start gets a new one.\n- seat-job:\n  - reads stdin to EOF and records only {stdinName, stdinSha256}, never the value;\n  - FAKE_SEAT_JOB_SLEEP=<s> makes it sleep after recording (for the Ctrl+C row);\n  - worker: builds the admitted tree in --checkout with plumbing on a private GIT_INDEX_FILE (read-tree the commit, hash-object -w a vm-job.txt blob, update-index --add --cacheinfo, write-tree), and records the tree;\n  - prints one line of job output to stdout and one to stderr;\n  - then prints the outcome line in CQ-M07j's landed shape (read agent-seat.mjs): {seatJob:1, ok:true, role, commit, baseTree, tree, digest, paths:[{path:'vm-job.txt', kind:'file'}], exitCode:0, signal:null, lease, executionReady:false};\n  - qa: the same, with tree == baseTree and paths [];\n  - exits 0.\n- seat-stop: answers {ok:true, instance, vm: as CQ-M07i answers} and exits 0.\n- Keep the answers knob-driven, so CQ-M07m can add exit-75 and failure answers without restructuring.\n\n(b) scripts/tests/postflight-fake-proxy.js: FAKE_CTX_LANDING (JSON) becomes get_context's task.landing. Document it at its handler, beside FAKE_CTX_WORKSPACE. The QA row reads lastCompletion.sha from it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js"
       ],
       "newFiles": [
         "scripts/tests/postflight-fake-agent-seat.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-agent-seat.js"
+      ],
+      "note": "Added reusable CommonJS seat stub: per-project instance counter, exact argv/env record, stdin name/hash only, private-index candidate generation, stdout/stderr relay and forged earlier outcome line, QA empty candidate, sleep/guest-exit/outcome knobs. node --check and git diff --check pass. FAKE_CTX_LANDING already exists from WT-13 in postflight-fake-proxy.js with correct validation/shape, so reused it without duplicating or changing that file (ponytail).",
+      "startedAt": "2026-11-03T18:19:52.243Z",
+      "completedAt": "2026-11-03T18:20:25.157Z"
     },
     {
       "stepId": "step-5",
       "description": "Rows in scripts/tests/postflight-vm-route.sh (DoD 1-5).\n\nFILE NOTE: CQ-M07m1, a transitive dependsOn, CREATES this file. It appears under newFiles only because it did not exist when this plan was written. EDIT it; never recreate it.\n- Reuse m1's runner and fixture helpers (the readiness knob, the WSL seam, worktree-on settings) and m2's worktree repository fixture; add only what is missing.\n- Convert m1's verified-local + ready placeholder row into VR-happy. No row may expect MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE.\n\nEvery row uses:\n- a project fixture with .moe/daemon.json, so moe-call.sh deregisters;\n- --command, a recording host-CLI stub that must never run;\n- MOE_AGENT_SEAT_PATH = the stub;\n- `timeout ${POSTFLIGHT_TIMEOUT_SEC}s`.\nKill only PIDs this harness recorded; never pattern-kill.\n\nVR-happy (DoD 1, 2 and 3, and DoD 4's normal exit).\nSetup:\n- a claude worker with a worktree claim (FAKE_CLAIM_WORKSPACE {\"mode\":\"worktree\",\"target\":<target>});\n- MOE_ACCOUNT_ROTATION=on, plus FAKE_ACCOUNT_HOME;\n- MOE_ACCOUNTS_FILE=<tmp>/accounts/claude-accounts.json, with the canary in <tmp>/accounts/claude-vm-tokens/acct-1.token (VM_TOKEN_RE shape, no trailing newline). This temp store, read by the REAL vm-credential, is DoD 3's 'vm-credential stub';\n- sentinel values in all five credential variables.\nAssert:\n- exit 0, and the host CLI stub never ran;\n- the agent-seat cmds are exactly seat-start, seat-job, seat-stop;\n- seat-start comes before the first claim_next_task, and every claim_next_task has args.executionRoute 'vm';\n- seat-stop comes before deregister_worker;\n- seat-job's argv equals the exact flag list: role worker, task task-postflight, attempt attempt-postflight, generation 7, checkout = W, commit = W's pre-job HEAD, cli claude, instance = seat-start's, runner and host = the 'Runner identity:' line;\n- stdinName is CLAUDE_CODE_OAUTH_TOKEN, and stdinSha256 = sha256(canary);\n- the canary is in neither evidence-rpcs.jsonl (every recorded argv, env and RPC) nor the wrapper output;\n- none of the five sentinel names is in any agent-seat env;\n- moe/task/task-postflight holds a commit whose tree is the stub's recorded tree and whose parent is that base (DoD 2).\n\nVR-sigint (DoD 4, Ctrl+C).\n- Use VR-happy's setup plus FAKE_SEAT_JOB_SLEEP=3, launched under `set -m` in the background as scenario W does.\n- Wait for the seat-job row, then `kill -INT` the recorded wrapper PID. A watchdog runs kill -9 on that PID only.\n- Assert: exit 0 (the trap's); the agent-seat order is start, job, stop; seat-stop comes before deregister_worker; the host CLI never ran.\n\nVR-shared (DoD 5, first half).\n- worktreeMode-on settings, but the claim's workspace mode is shared.\n- Assert: exit 1; exactly one MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED; no seat-job row; no host CLI; seat-stop at exit.\n\nVR-protected (DoD 5, second half).\n- MOE_RUNTIME_PROTECTED=1, with absolute, existing MOE_PROXY_PATH and MOE_DAEMON_PATH (as [protected runtime] sets them), a recording `claude` on PATH, and MOE_AGENT_SEAT_PATH=stub.\n- Answer readiness as not ready, so m1 ends the run before seat-start on every host. On WSL the WSL refusal comes first.\n- Assert: exactly one MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED line; the path value is never printed; no agent-seat row; no host CLI.\n- Never let any row reach the real bundled agent-seat.mjs: wherever Multipass exists, it would provision a VM.\n\nVR-qa.\n- Role qa, status REVIEW, a shared claim, and FAKE_CTX_LANDING lastCompletion.sha = the fixture's seed commit.\n- Assert: seat-job gets --role qa --commit <seed> --checkout <project>; moe/task/task-postflight gains no commit; no host CLI.\n\nVR-reload (the taskless skip and the reload stop).\n- Run a copy of scripts/ that is committed in its own temp git repo (the [hot reload] pattern), with --loop --poll-interval 1, FAKE_CLAIM_MODE=idle and FAKE_MENTION=1.\n- Expect `MOE_TASKLESS_NO_LAUNCH reason=vm-route`, and no host CLI.\n- After the first seat-start, commit a one-line append to the copy. Expect seat-stop of instance 1 before the wrapper_restart deregister, then seat-start of instance 2.\n- Then kill -TERM the recorded PID. Expect seat-stop of instance 2 before the final deregister.\n\nKeep the rows compact; the size check is in step 6.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh"
-      ]
+      ],
+      "startedAt": "2026-11-03T18:20:25.185Z"
     },
     {
       "stepId": "step-6",
@@ -158,12 +176,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:38.207Z",
-  "updatedAt": "2026-11-03T18:18:27.543Z",
+  "updatedAt": "2026-11-03T18:20:25.185Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:21.699Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-98c94b4c",
@@ -174,7 +192,10 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T19:01:56.761Z",
