@@ -56,15 +56,20 @@
     {
       "stepId": "step-4",
       "description": "Verify once (DoD 2), from the task worktree root, after the last edit:\n`cd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && T=scripts/tests A=scripts/moe-agent N=\"/mnt/c/Program Files/nodejs/node.exe\" P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && export MOE_WORKTREE_ONLY=wt-remote-rejected,wt-unlanded,wt-push,wt-completion,wt-replay-remote,codes WSLENV=MOE_WORKTREE_ONLY && S=$(mktemp -d /mnt/d/moe-scratch/bc6b-v.XXXXXX) && cp $T/postflight-fake-proxy.js $S/fp.js && w(){ wslpath -w \"$1\"; } && x(){ env $E node $T/$1 sh \"$PWD/$A.sh\" $S/fp.js $S \"$BASH\" && env $E \"$N\" \"$(w $T/$1)\" ps1 \"$(w $A.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell; } && bash -n $A.sh && bash $T/parity-check.sh && $P \"$(w $T/parity-check.ps1)\" && x postflight-worktree.cjs && x postflight-migration.cjs && env $E bash $T/worktree-landing.sh && $P \"$(w $T/worktree-landing.ps1)\"`\n\nIts fresh output is the complete_task evidence.\n- The command is task-d2d6ac4b's DONE gate pattern.\n- The scratch dir sits on /mnt/d: a /tmp cwd breaks the Windows legs (mem:gotcha-qa-ps1-postflight-from-wsl).\n- The migration suite runs too, because migration shares the push function.\n- If the run passes the 600 s foreground cap, launch it in the background into a log and poll for the end, per mem:gotcha-qa-session-env-and-signals-leak-into-harness.\n- Don't edit the wrappers mid-run (mem:gotcha-editing-wrapper-while-harness-runs).\n- Kill only PIDs your session recorded.\n\nError handling for a red run:\n- If a Windows leg fails, rerun it on HEAD's scripts before blaming the change.\n- Fix the cause in step 1's or step 2's file, never by weakening a case or touching worktree-landing.{sh,ps1}.\n- Then re-run the whole command.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T23:14:49.158Z"
+      "note": "Ran the plan's verification command verbatim, detached (set -m, SigIgn 0x5) from /mnt/d/moe-scratch/bc6b-gate/run.sh, log gate.log, GATE_EXIT=0 in ~17 min: bash -n OK; PASS parity-check.sh / parity-check.ps1; postflight-worktree.cjs sh 6 ok and ps1 6 ok (wt-push, wt-completion, wt-replay-remote, wt-unlanded, wt-remote-rejected, codes); postflight-migration.cjs sh 12 ok, ps1 11 ok (signal n/a there), remote-rejected ok on both; worktree-landing.sh and .ps1 18 passed each (push-remote-rejected included). No edits during the run.",
+      "startedAt": "2026-11-03T23:14:49.158Z",
+      "completedAt": "2026-11-03T23:32:18.650Z"
     },
     {
       "stepId": "step-5",
       "description": "Last: an adversarial self-review of the 5-file diff. Check that:\n- a truly refused push (pre-receive hook) still makes exactly ONE push, ends MOE_PUSH_FAILED and moves no tracking ref past B (the held-out remoteRejected case);\n- the re-check never re-pushes and never forces;\n- a failed or unresolvable fetch is never read as published;\n- a C that origin holds only below a peer's later commit still counts (ancestry, not equality);\n- the `[rejected]`, unknown and reconcile paths are byte-identical;\n- the new line is byte-identical in both wrappers;\n- migration landing inherits the re-check correctly;\n- no other function and none of the VM-route blocks were touched, and the BOM is intact.\n\nIf the review changes any byte, re-run step 4 and submit that fresh output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review of the 5-file diff (checkpoint 3147c313), no byte changed. Checked: (1) a truly refused push (pre-receive) makes exactly ONE push; the re-check only fetches into refs/remotes/origin/T, which stays at B, so worktree-landing push-remote-rejected still passes on sh and ps1; (2) no re-push, no new round, no force flag (the wt-remote-rejected stub logs every porcelain push and asserts exactly 1); (3) a failed land_fetch, an unresolvable ref (merge-base exits 128) or any non-0 answer all keep rc 2, so they are never read as published; (4) the test is merge-base --is-ancestor, so a C that origin holds below a peer's later commit still counts; (5) the [rejected], unknown and reconcile_push/Resolve-MoePushOutcome paths are byte-identical, and wt_publish/Publish-MoeWorktreeLanding are unchanged apart from comments; (6) the MOE_PUSH_REMOTE_REJECTED_APPLIED line is byte-identical in both wrappers apart from colour, goes to stdout or Write-Host, and no caller captures it (both callers checked: wt_publish/:7696 migration, ps1 :7133/:7350); (7) migration inherits the re-check through the shared function (the migration remote-rejected case is green); (8) no VM-route block was touched, and the ps1 BOM ef bb bf is intact. Ps1 pipeline hygiene: Invoke-MoeLandFetch and Wait-MoeLandBackoff emit only $true/$false, so Send-MoeLandPush still returns a scalar. npm run lint (the qualityGate's second half) exits 0. Residual, the DoD-kept path: a re-check fetch that fails while origin holds C still deletes the journal. Filed as LOW task-561d347c, dependsOn this row. Re-running the step-4 gate fresh in this session for complete_task evidence.",
+      "startedAt": "2026-11-03T23:34:03.054Z",
+      "completedAt": "2026-11-03T23:38:11.080Z"
     }
   ],
   "planRevision": 1,
@@ -81,12 +86,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:48:03.572Z",
-  "updatedAt": "2026-11-03T23:14:49.158Z",
+  "updatedAt": "2026-11-03T23:38:11.080Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:52:29.147Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -99,7 +104,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:59:31.743Z",
@@ -170,5 +177,40 @@
   },
   "planApprovedAt": "2026-11-03T22:59:31.772Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T23:00:34.632Z"
+  "workStartedAt": "2026-11-03T23:00:34.632Z",
+  "commits": [
+    {
+      "sha": "3147c313f21bf9736b8f43e88a82f4ce9b1ca6a1",
+      "ref": "refs/heads/moe/task/task-bc6ba91b03b4435781ade6d4159e5ed7",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T22:59:36Z",
+      "paths": [
+        "docs/plans/2026-10-30-per-task-worktrees.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T23:32:58.377Z",
+      "treeId": "506e50915198918cf71555f89b29692e1dd9c95d",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/plans/2026-10-30-per-task-worktrees.md",
+    "scripts/CLAUDE.md",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-2dc72348@2026-11-03T22:59:36Z",
+    "at": "2026-11-03T23:32:58.377Z"
+  }
 }

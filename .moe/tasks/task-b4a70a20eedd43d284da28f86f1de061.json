@@ -1,0 +1,31 @@
+{
+  "id": "task-b4a70a20eedd43d284da28f86f1de061",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code's epic detail panel sends its typed edits and an Archived status in one UPDATE_EPIC frame, toasts \"updated\" and disposes before the reply, so since 09529122 (task-625c7cfe) a refused save loses every edit with no message, and its error-context allowlist drops the epicId the daemon sends (VS Code twin of task-048bfae2)",
+  "description": "Filed by the governor from hunt #14's held items (task-d5d58972, architect-1dd28c7c, msg-1656a684). Re-verified at HEAD d5431577. It waits in BACKLOG on its JetBrains twin, task-048bfae2, because JetBrains is the primary IDE: the VS Code fix should mirror whatever save/archive split 048bfae2 lands. The governor promotes it once 048bfae2 is DONE.\n\nPROBLEM\n- moe-vscode/src/panels/EpicDetailPanel.ts:291 offers Archived in the epic status combo. The save handler (:96-114) puts the typed title, description, architectureNotes and epicRails together with that status in one updateEpic (UPDATE_EPIC) frame (:110). It then shows `Epic \"<title>\" updated.` (:111) and disposes the panel (:112) without waiting for the reply.\n- Since 09529122 (task-625c7cfe), an UPDATE_EPIC to ARCHIVED runs archive_epic's guards. With any PLANNING, AWAITING_APPROVAL or WORKING row in the epic, the daemon refuses the whole frame (NOT_ALLOWED \"archive epic not allowed: ... in-flight task(s)\"). Every typed edit is lost, and the user has already been told it was saved. On a quiet epic the same pick archives every task with no confirmation.\n- The refusal reaches no surface. MoeDaemonClient.ts:99-114 (allowlistedErrorContext) keeps only taskId, expectedPlanRevision and currentPlanRevision. It drops the epicId that the daemon's /ws error frame carries (WebSocketServer.ts:1216) and that types/moe.ts:533-544 declares, so nothing can tie the error to the epic.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-d5d58972/B/zzHuntB_vscodeRefusals.test.cjs test 1, run at HEAD 942717bc in a snapshot; output in zzHuntB_vscodeRefusals.run.txt.\n- FRAME SENT carries title, description, notes, rails and status ARCHIVED.\n- The \"updated\" toast is shown before the reply, and the panel is disposed.\n- onError fires with [NOT_ALLOWED] archive epic not allowed..., and no error toast follows.\nThe panel code is unchanged at d5431577.\n\nFIX DIRECTION\nMirror task-048bfae2's landed design. Read its plan and completion first. At minimum:\n- don't claim success before the reply;\n- keep the panel open (or the edits recoverable) on a refusal, and show the daemon's message;\n- don't let a status pick silently ride along with the field edits: an archive goes through its own confirmed action;\n- carry epicId through allowlistedErrorContext so the error can be attributed.\nError handling: surface the refusal message, never a raw frame. Test it in moe-vscode's node test suite (npm test there, run in a snapshot outside the shared checkout).\n\nFILES\nmoe-vscode/src/panels/EpicDetailPanel.ts, moe-vscode/src/services/MoeDaemonClient.ts, and one moe-vscode test file. No daemon change.",
+  "definitionOfDone": [
+    "Saving the VS Code epic panel with Archived on an epic that has an in-flight row shows the daemon's refusal message. It shows no \"updated\" toast, and the typed edits are not lost (the panel stays open or the edits are re-applied). A moe-vscode test drives the save against a refusing daemon frame.",
+    "Archiving from the panel is a separate, confirmed action: one status pick can no longer archive every task alongside an unrelated field edit. This mirrors task-048bfae2's JetBrains behavior.",
+    "allowlistedErrorContext passes a string epicId through, covered by a unit test. moe-vscode npm test and npm run compile pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-048bfae2d60c4a7bbfbcb7b2f68a3b1e"
+  ],
+  "priority": "MEDIUM",
+  "order": 462.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:34:21.111Z",
+  "updatedAt": "2026-11-03T23:34:21.111Z"
+}

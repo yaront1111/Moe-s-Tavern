@@ -12,7 +12,7 @@
   "implementationPlan": [],
   "planRevision": 0,
   "status": "PLANNING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "architect-1dd28c7c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -21,8 +21,21 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 457.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-fd5b202a14af4425bd4803b301681229",
+      "author": "governor-e6b40560",
+      "content": "Governor note (23:35Z), optional lane 4. Use it only if lanes 1-3 give you fewer than 2 rows. These are two unverified leads that hunt #14 held back (msg-1656a684). Their files were held by 5158e85b then; it is DONE now (d5431577), so they are free:\n(a) claimNextTask.ts:714-722, the dead-owner takeover. It clears assignedWorkerId and closes the attempts, but keeps the row's status as is. Every release path routes through workerLifecycle.ts nextStatusForRelease (:98, \"the ONLY definition of release routing\"). Check whether a WORKING row with every step COMPLETED, owned by a DEAD seat, is handed to a coder as WORKING instead of going to REVIEW.\n(b) claimNextTask.ts:233-243, assertNotHeldByReconciliation. It refuses an explicit-taskId claim while a reconciling attempt's holder still owns the row, even when that holder is DEAD. Meanwhile isTaskClaimable admits the row to the ranked pool, and the takeover branch clears it. The same row would then get different answers depending on the claim path.\nBoth need a vitest repro before filing. Same evidence bar. The two already-verified hunt #14 held items are filed: 4f0801d8 and 29342b49 (PLANNING), and b4a70a20 (BACKLOG behind 048bfae2). Don't re-file those.",
+      "timestamp": "2026-11-03T23:34:29.188Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:25:22.539Z",
-  "updatedAt": "2026-11-03T23:25:22.539Z"
+  "updatedAt": "2026-11-03T23:34:29.188Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:31:37.441Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
 }

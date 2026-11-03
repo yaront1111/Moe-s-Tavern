@@ -1,0 +1,28 @@
+{
+  "id": "task-4f0801d81cb54226a245e15233c69cf0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: updateWorkerCursors, the cursor write behind every chat_read and chat_wait delivery, stamps a fresh lastActivityAt on a DEAD worker and re-publishes it as WORKER_UPDATED, unlike touchWorker and updateWorker, so a deregistered seat that still reads chat comes back onto the boards and its stale prune never comes due",
+  "description": "Filed by the governor from hunt #14's held items (task-d5d58972, architect-1dd28c7c, msg-1656a684). Re-verified at HEAD d5431577.\n\nPROBLEM\npackages/moe-daemon/src/state/workerStore.ts:211-227 (updateWorkerCursors) merges the cursor, writes `lastActivityAt: new Date().toISOString()` and emits WORKER_UPDATED for any worker in the map, DEAD included. Its two siblings in the same file refuse exactly that:\n- touchWorker (:104-106) never refreshes a DEAD worker's heartbeat, \"so an in-flight tool call must not reset its prune clock and resurrect it in the UI\".\n- updateWorker (:176-202) keeps lastActivityAt on the DEAD transition and emits WORKER_DELETED, not WORKER_UPDATED.\nThe callers are chatRead.ts:174 (every cursor-mode chat_read) and util/chatBacklog.ts:343 (chat_wait's backlog delivery). The contract is packages/moe-daemon/CLAUDE.md, Dead-worker handling: DEAD workers are dropped from the UI, and their records are pruned once they own nothing.\n\nEFFECT\nTake a seat that is DEAD but whose CLI still reads chat, for example a chat_wait parked across a wrapper_restart or a governor deregister.\n- Every delivery resets its prune clock.\n- Every delivery re-publishes it with status DEAD. Both IDE clients upsert on WORKER_UPDATED, so the deregistered seat reappears on the board. JetBrains' 3 s full-state refresh masks this; VS Code's board does not.\n- While the reads continue, the Layer-3 prune (staleWorkerTimeoutMs) never removes the record.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_deadCursorWrite.test.ts, run at HEAD 942717bc in a snapshot outside the checkout; output in deadCursorWrite.vitest.txt in the same folder. deregister_worker marks the worker DEAD and keeps its 2-hour-old lastActivityAt. One chat_read from that worker then:\n- refreshes lastActivityAt;\n- emits WORKER_UPDATED with status DEAD;\n- leaves a record that checkBlockedTimeouts no longer prunes.\nThe code is unchanged at d5431577.\n\nFIX DIRECTION\nIn updateWorkerCursors, treat a DEAD record the way touchWorker does: keep its lastActivityAt and emit no WORKER_UPDATED. Persisting the merged cursor is fine and avoids re-delivery if the seat re-registers; say in the plan which you chose. Keep the mutex. Add a regression test (adapt the hunt repro), with error handling unchanged for a missing worker (still a silent skip).\n\nFILES AND PLACEMENT\npackages/moe-daemon/src/state/workerStore.ts plus one vitest file. Same defect family as task-fa70e835 (sweeps.ts) and task-a133bd6a (setTaskStatus.ts), but those are other files, so there is no dependsOn. Docs: sync your own docs/MCP_SERVER.md section (ruling msg-71db57ac); if no section states this behavior, the summary says none was owed. Gate: the daemon vitest file(s) you touch, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "A DEAD worker's cursor write leaves its lastActivityAt unchanged and emits no WORKER_UPDATED for it. A vitest case drives both callers (a cursor-mode chat_read, and a chat_wait backlog delivery) against a deregistered worker.",
+    "A live worker's cursor write behaves as before: cursor merged, lastActivityAt refreshed, WORKER_UPDATED emitted (a regression case).",
+    "After the DEAD worker reads chat, the Layer-3 prune past staleWorkerTimeoutMs still removes its record (the hunt repro's third assertion passes)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 460.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:33:53.283Z",
+  "updatedAt": "2026-11-03T23:33:53.283Z"
+}

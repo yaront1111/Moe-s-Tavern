@@ -9,10 +9,44 @@
     "EpicDetailDialog only sends ARCHIVED after a confirmation that states the task count, and Cancel sends nothing; the dialog calls the helper rather than building frames itself. Under the jetbrains-gradle lease, `./gradlew test --tests 'com.moe.toolwindow.EpicArchiveTest'` and the full `./gradlew test` both exit 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1 and 2, and the decision half of DoD 3. Reference bytes are in /mnt/d/moe-scratch/plan-048bfae2/ (outside the repo; SHA256SUMS lists every file). They are UNCOMPILED, because an architect seat cannot hold the jetbrains-gradle lease (mem:gotcha-architect-cannot-take-gradle-lease). Your first gated compile proves them; if it fails, read the FIRST Kotlin `e:` line. Copy them with your own editor tool only (Edit/Write on Claude, apply_patch on codex exec), never a shell write or git apply (project rail). All targets are LF.\n\nTEST FIRST: create moe-jetbrains/src/test/kotlin/com/moe/toolwindow/EpicArchiveTest.kt from EpicArchiveTest.kt (sha256 ef74826b12ff770e04d1a8db0e41b65bf1d710a9c9a136d28398fac79c79421c). It is a headless JUnit4 class of 13 tests (no MoeBundle call, no DialogWrapper: mem:pattern-jetbrains-headless-pure-render-helper) that asserts full data-class equality. Fixture: epic-1 'Epic one' at order 7.0; tasks titled 'Title of <id>'; quietBoard holds epic-1 BACKLOG, REVIEW, DONE, BLOCKED and ARCHIVED rows plus an epic-2 WORKING row and DONE row.\n- plan() tests: 'archiving with in-flight tasks sends nothing and names them by title' (PLANNING, AWAITING_APPROVAL and WORKING rows give frames [] and their TITLES in board order); 'each in-flight status alone blocks the archive'; 'a quiet epic sends its edits with the current status before a status-only ARCHIVED frame' ([Details(edits,'ACTIVE'), Status('ARCHIVED',7.0)] with archiveTaskCount 4: the ARCHIVED row and epic-2 never count, and epic-2's WORKING row never blocks); 'an unchanged non-archived status still sends exactly one frame' (PLANNED, ACTIVE and COMPLETED, even with a WORKING row); 'a move between non-archived statuses sends one frame with the chosen status'; 'an epic that is already ARCHIVED stays a one-frame save' (the daemon treats it as a plain update); 'an epic with no tasks still asks with a zero count'.\n- save() tests: 'in-flight titles are shown and nothing is asked or sent'; 'Cancel on the archive confirmation sends nothing' (asked once with 4, returns false); 'confirming sends the edits then the archive in order'; 'a plain save sends its one frame without asking'.\n- Guards: 'the archive messages exist as MessageFormat-safe ASCII' (the 3 new keys exist, are ASCII with no apostrophe, carry {0} and {1} where used, and start with a letter so an agent-written title never starts a message: mem:gotcha-jetbrains-headless-presentation-bundle-keys); 'the dialog Save plans with the helper and sends only through it' (step 2's RED source guard: mem:gotcha-jetbrains-dialog-order-untestable).\n\nRED: hold the jetbrains-gradle lease for every Gradle run (moe.acquire_resource {resourceId:'jetbrains-gradle', taskId, workerId, note}; moe.release_resource after EVERY run, even a failed one: mem:convention-jetbrains-gradle-lease). WSL has no JDK (mem:gotcha-jetbrains-gradle-from-wsl), so from the worktree root run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$(git rev-parse --show-toplevel)\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.toolwindow.EpicArchiveTest --rerun\"`. The worktree's first run compiles cold (1-3 min). compileTestKotlin must fail with Unresolved reference 'EpicArchive' (and EpicEdits, EpicSavePlan, EpicSaveFrame).\n\nTHEN create moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicArchive.kt from EpicArchive.kt (sha256 501b97c23b6e75208edee7b30a00d41ad93f61900ff4584b73d57c16b84c9f3b). It declares, top-level and internal: data class EpicEdits(title, description, architectureNotes, epicRails); sealed interface EpicSaveFrame { Details(edits, status); Status(status, order) }; data class EpicSavePlan(frames, inFlightTitles = [], archiveTaskCount = null); and object EpicArchive with ARCHIVED, TITLE_KEY, CONFIRM_MESSAGE_KEY, IN_FLIGHT_MESSAGE_KEY, IN_FLIGHT = {PLANNING, AWAITING_APPROVAL, WORKING} (mirrors IN_FLIGHT in packages/moe-daemon/src/tools/archiveEpic.ts), plan(epic, allTasks, edits, chosenStatus) and save(plan, warnInFlight, confirmArchive, send): Boolean. Keep the DTOs top-level, never inside a companion (mem:gotcha-kotlin-companion-nested-class). Then insert edits.md section 2's three lines into MoeBundle.properties directly after `moe.message.archiveDoneTitle=Archive Done Tasks` (HEAD line 162). The full expected file is ref/MoeBundle.expected.properties (sha256 be475d90c2174fd528d8c669e21848983b51e0cda30515c2d4c780a2195905c2).\n\nGREEN: the same focused run, under the lease, shows tests=13 with exactly ONE failure: 'the dialog Save plans with the helper and sends only through it', which step 2 turns green. Any other failure is a real defect; fix it in this step. Keep the test names verbatim: Kotlin backtick names cannot contain '.' (mem:gotcha-kotlin-test-names-no-dot).",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicArchive.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/EpicArchiveTest.kt"
+      ],
+      "startedAt": "2026-11-03T23:44:14.640Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 3 wiring. In EpicDetailDialog.kt, replace the Save action's doAction body (HEAD lines 78-88, from `val newTitle =` through `close(OK_EXIT_CODE)`) with edits.md section 1's NEW block, verbatim. Then diff the file against ref/EpicDetailDialog.expected.kt (sha256 526dd899328272c7f2c0947518ad3b95445ea82179c45c78c09f8f5caed0a805); it must match byte for byte.\n\nWhat the new Save does:\n- It builds EpicEdits with today's normalization (trimmed, a blank title keeps the old one, blank rail lines dropped) and reads chosenStatus from the combo.\n- It reads service.getState() once and plans from the NEWEST cached epic (`current`, falling back to the dialog's open-time `epic`) and the whole cached task list. Planning from the open-time copy alone would let an untouched ARCHIVED combo re-archive an epic that someone un-archived meanwhile, with no confirmation.\n- It calls EpicArchive.save with three callbacks. warnInFlight: Messages.showWarningDialog with IN_FLIGHT_MESSAGE_KEY (epic.title, then one '- <title>' line per task) and TITLE_KEY. confirmArchive: Messages.showOkCancelDialog with CONFIRM_MESSAGE_KEY (epic.title and the count), 'Archive Epic' as title and OK text, moe.button.cancel as Cancel text and the warning icon, compared == Messages.OK. send: a when over EpicSaveFrame, where Details calls service.updateEpicDetails(epic.id, the edits, frame.status) and Status calls service.updateEpicStatus(epic.id, frame.status, frame.order).\n- It closes only `if (sent)`. With tasks in flight, or on Cancel, nothing is sent and the dialog stays open with the typed edits, so the human can pick another status and Save, or cancel the dialog.\n\nThe source guard anchors on these exact strings, so keep them verbatim: `val state = service.getState()`, `val current = state?.epics?.firstOrNull { it.id == epic.id } ?: epic`, `EpicArchive.plan(current, state?.tasks.orEmpty(), edits, chosenStatus)`, `EpicArchive.save(`, `MoeBundle.message(EpicArchive.CONFIRM_MESSAGE_KEY, epic.title, count)`, `) == Messages.OK`, `send = { frame ->` and `if (sent) close(OK_EXIT_CODE)`. No `service.updateEpic` text, comments included, may appear before `send = { frame ->`, and the Save action holds exactly one `close(OK_EXIT_CODE)`.\n\nNo import changes: the new types share the package, and Messages is already imported. The status combo keeps all four entries, and the Delete and Cancel actions stay untouched. MoeCommandSender, MoeProjectService and MoeToolWindowPanel need no edit; the epic-header drag never sends ARCHIVED (mapEpicStatus).\n\nError handling: MoeCommandSender.sendMessage never throws, and a disconnected sender sends nothing and fires onDisconnected. When the cache lagged a task going in flight, the daemon refuses the ARCHIVED frame and the existing UPDATE_EPIC error balloon reports it, but only after the details frame has landed, so the typed edits are kept (mem:gotcha-epic-update-archive).\n\nDocs: docs/PLUGIN_SPEC.md:21 and :51, docs/DEVELOPMENT.md:305 and docs/UI_SPEC.md:15 only name the dialog, and no doc describes the status combo, so there is no doc edit. Out of scope: moe-vscode/** (its twin is held back), any daemon change, and docs/MCP_SERVER.md.\n\nFocused run under the lease, released afterwards: EpicArchiveTest tests=13 failures=0 errors=0.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicDetailDialog.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run ONCE after steps 1-2, from the task worktree root. Take the jetbrains-gradle lease first; if a peer holds it for a short window, moe.wait_for_resource in-session beats report_blocked (mem:gotcha-jetbrains-snapshot-gradle-test). Release it afterwards, even on failure.\n\nRun the checkRef exactly as written (copy in /mnt/d/moe-scratch/plan-048bfae2/checkref.txt, sha256 2f5e2a9a4c7e0e170b63cfebd6d30c85218fb0b6541b0c26baa349aca0c66af9). It runs the Windows equivalents of the DoD's `./gradlew test --tests 'com.moe.toolwindow.EpicArchiveTest'` and then the full `./gradlew test`, each with --rerun. WSL has no JDK, and gradlew.bat lives in moe-jetbrains/ (mem:gotcha-gradle-jetbrains-shared-box, section 2c). The command prints its log path, both BUILD lines, the module XML totals and EpicArchiveTest's counts. It exits non-zero on a build failure, or when EpicArchiveTest's XML is missing or is not failures=0 errors=0.\n\nExpected: two BUILD SUCCESSFUL lines, and EpicArchiveTest tests=13 skipped=0 failures=0 errors=0. The module total should be about the base plus 13: the control checkout's 2026-11-03 18:12Z results were 651 tests with 6 skipped, so about 664, plus any JetBrains landings since. Report it in complete_task as Windows evidence, never relabelled as the POSIX command.\n\nError handling for a red run:\n- Read the log the command names. Compile errors cascade, so read the FIRST `e:` line.\n- `> Task :test UP-TO-DATE` means nothing ran; never accept it.\n- An exit 1 with green XML can be the Gradle daemon MessageIOException IPC flake: grep the Gradle daemon log, then rerun once.\n- An unexplained compile error in a file you did not touch is a stale Kotlin incremental cache: run `compileKotlin --rerun` once (mem:gotcha-jetbrains-stale-kotlin-ic).\n- Never run cleanTest or --rerun-tasks, and never delete shared build output. Never kill Gradle or java processes by name (project rail: kill only PIDs you started, by recorded PID).\n\nThis run's fresh output is the complete_task verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of THIS task's diff: load adversarial-self-review. The epic is a rolling bucket, and isEpicFinal comes from the highest-order fallback, so the review covers this task. Step 3's full plugin suite is the regression gate: only moe-jetbrains changes, with no daemon, proxy, VS Code or docs change.\n\nMutants run under the jetbrains-gradle lease in a copy outside the checkout, never in the worktree, because a crash mid-mutant would land the mutant (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, worker variant). Run `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/m-048b`, then `cp --parents` every path that `git status --porcelain -- moe-jetbrains` lists. Per mutant, run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\m-048b\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.EpicArchiveTest --rerun\"`, restore the file, and sha256-compare the copy at the end.\n- M1: delete plan()'s in-flight return. 'archiving with in-flight tasks sends nothing and names them by title' and 'each in-flight status alone blocks the archive' must fail.\n- M2: the archive Details frame carries chosenStatus instead of epic.status (today's one-frame bug). 'a quiet epic sends its edits with the current status before a status-only ARCHIVED frame' and 'an epic with no tasks still asks with a zero count' must fail.\n- M3: save() calls confirmArchive but ignores its answer. 'Cancel on the archive confirmation sends nothing' must fail.\n- M4: archiveTaskCount = epicTasks.size. The quiet-epic test must fail (5, not 4).\n- M5: the copy's EpicDetailDialog Save goes back to the HEAD one-frame body. 'the dialog Save plans with the helper and sends only through it' must fail.\n\nAlso check by reading:\n- The dialogs are modal, so two Saves cannot overlap.\n- Both frames go out synchronously on the EDT over one socket. The daemon applies them in arrival order, because WebSocketServer.handlePluginMessage reaches the FIFO StateManager mutex before its first await, so the details frame lands before the archive.\n- A cache that lags a task going in flight only makes the daemon refuse the ARCHIVED frame after the edits landed; the task accepts that.\n- service.getState() is null only after MoeProjectService.dispose, when the sender is disconnected and sends nothing.\n- Agent-written titles reach only Messages dialogs whose bundle value starts with literal text.\n- The cascade count excludes ARCHIVED rows and other epics.\n\nRecord the mutant results in complete_task's summary.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +58,95 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:23:15.930Z",
-  "updatedAt": "2026-11-03T23:23:46.034Z",
+  "updatedAt": "2026-11-03T23:44:14.640Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T23:23:20.563Z"
+    "firstClaimAt": "2026-11-03T23:23:20.563Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-26483323"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:42:12.253Z",
+  "executionContract": {
+    "intendedBehavior": "The JetBrains Epic detail Save decides an Archived pick locally, from the newest cached board, before sending. With a PLANNING, AWAITING_APPROVAL or WORKING task in the epic, it sends nothing, shows those tasks by title, and keeps the dialog open with the typed edits. Otherwise it asks 'Archive epic X and its N task(s)?', where N is the epic's not-yet-ARCHIVED tasks. Cancel sends nothing and keeps the dialog open. OK sends the field edits with the epic's current status, then a separate updateEpicStatus ARCHIVED frame, and closes the dialog. Any other status choice, or an epic that is already ARCHIVED, still sends exactly one frame, as today.",
+    "acceptanceCriteria": [
+      "EpicArchive.plan returns no frames, plus the in-flight tasks' titles (not ids, in board order), when Archived is chosen for a not-yet-ARCHIVED epic with a PLANNING, AWAITING_APPROVAL or WORKING task of that epic.",
+      "With none in flight it returns [Details(edits, the epic's current status), Status(ARCHIVED, the epic's order)], with archiveTaskCount equal to that epic's non-ARCHIVED tasks.",
+      "A non-ARCHIVED choice, or an already-ARCHIVED epic, returns exactly one Details frame with the chosen status.",
+      "EpicArchive.save warns and sends nothing for in-flight titles. It asks with the count before sending an archive, sends nothing on Cancel, and otherwise sends every frame in order.",
+      "EpicDetailDialog's Save calls EpicArchive.plan and EpicArchive.save, sends only through save's send callback, and closes only when save returns true.",
+      "Both Gradle runs in checkRefs exit 0 under the jetbrains-gradle lease; EpicArchiveTest has 13 tests and 0 failures."
+    ],
+    "invariants": [
+      "No ARCHIVED frame is sent without a confirmation that quotes the task count.",
+      "The field-edit frame always precedes the ARCHIVED frame, so a daemon refusal never drops typed edits.",
+      "A locally refused or cancelled Save sends nothing and leaves the dialog open.",
+      "Only tasks of this epic count, and ARCHIVED rows never block the cascade or count toward it."
+    ],
+    "compatibility": [
+      "No daemon, MCP or /ws contract change: the frames reuse MoeCommandSender.updateEpicDetails and updateEpicStatus unchanged.",
+      "A non-archive Save still sends one UPDATE_EPIC frame with every field and the chosen status.",
+      "The status combo keeps PLANNED, ACTIVE, COMPLETED and ARCHIVED.",
+      "moe-vscode is untouched; its twin is held back until this lands."
+    ],
+    "approvedScope": [
+      "New moe-jetbrains toolwindow/EpicArchive.kt: internal EpicEdits, EpicSaveFrame {Details, Status}, EpicSavePlan, and object EpicArchive {ARCHIVED, TITLE_KEY, CONFIRM_MESSAGE_KEY, IN_FLIGHT_MESSAGE_KEY, IN_FLIGHT, plan, save}",
+      "The body of the Save action in EpicDetailDialog.createActions only",
+      "MoeBundle keys moe.message.archiveEpicTitle, moe.message.archiveEpic and moe.message.archiveEpicInFlight",
+      "New EpicArchiveTest (13 JUnit4 tests)"
+    ],
+    "reuse": [
+      "MoeCommandSender.updateEpicStatus as the status-only frame (the task's fix direction 3).",
+      "BoardRelease.release's pure flow with UI callbacks; DoneColumnClearTest's source-slice guard; BoardReleaseTest's bundle guard.",
+      "The existing bundle key moe.button.cancel."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/archiveEpic.ts: any IN_FLIGHT task (PLANNING, AWAITING_APPROVAL, WORKING) refuses the archive; otherwise every non-ARCHIVED task is archived.",
+      "packages/moe-daemon/src/tools/updateEpic.ts applyEpicUpdate: an already-ARCHIVED epic gets a plain update; a move to ARCHIVED runs archive_epic before the companion fields are written.",
+      "packages/moe-daemon/src/server/WebSocketServer.ts: handlePluginMessage reaches withMutex (the FIFO StateManager mutex) before any other await, so one socket's frames apply in order; sendStateSnapshot drops ARCHIVED tasks and epics.",
+      "moe-jetbrains MoeProjectService.getState() is set by snapshots and cleared only in dispose(); MoeCommandSender.sendMessage never throws.",
+      "MoeToolWindowPanel onOpenEpic builds EpicDetailDialog(project, epic, service), and mapEpicStatus never yields ARCHIVED."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.toolwindow.EpicArchiveTest --rerun && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; X=$R/TEST-com.moe.toolwindow.EpicArchiveTest.xml; echo \"toolwindow.EpicArchiveTest: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; exit $r"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) A local refusal that still sends the typed edits and closes: rejected. It half-applies a Save the human never confirmed. Keeping the dialog open loses nothing and lets them choose another status; both readings meet DoD 1 (no ARCHIVED frame). 2) A source-order guard as the only proof of the dialog flow (DoneColumnClear style): replaced by BoardRelease's shape, a headless save() flow with UI callbacks, so 'Cancel sends nothing' is a behavioral test; a slim source guard pins only the wiring. 3) Planning from the dialog's open-time epic: rejected. An epic un-archived while the dialog is open would be re-archived by an untouched ARCHIVED combo with no confirmation, so Save reads the newest cached epic. 4) A new status-only sender without order: rejected as scope. The task names the existing updateEpicStatus (status plus the unchanged order), the same frame the epic-header drag sends. 5) A Kotlin test that reads archiveEpic.ts to pin IN_FLIGHT: rejected, because QA's archive-copy route extracts only moe-jetbrains and the test would throw there; the KDoc names the daemon source instead. 6) Skipping the details frame when no field changed: rejected. The extra frame is harmless, and an equality check could drop a whitespace-only edit.",
+    "codebaseInsights": "The toolwindow pure helpers are BoardMoves, BoardApproval, BoardRelease (a pure flow plus an EDT adapter with callbacks) and DoneColumnClear. Tests are JUnit4 on a bare JVM: build.gradle.kts strips the IntelliJ platform from :test, so MoeBundle and DialogWrapper cannot run there, while internal declarations are visible from the test source set. WebSocketServer.sendStateSnapshot drops ARCHIVED tasks and epics from the plugin snapshot, so the cached board rarely holds ARCHIVED rows; plan() excludes them anyway. handlePluginMessage reaches the FIFO StateManager mutex before its first await, so one socket's frames apply in arrival order. MoeProjectService.getState() is cleared only in dispose(). Plugin Kotlin and bundle files are LF (.gitattributes eol=lf). The key moe.button.cancel (=Cancel) already exists.",
+    "risks": "The reference bytes are uncompiled: on a compile failure, read the FIRST e: line, because the cascade hides the cause. The source guard depends on literal anchors: keep them verbatim, comments included. A cache that lags a task going in flight makes the daemon refuse the ARCHIVED frame (the existing balloon) after the edits landed; the task accepts that. Each archive Save emits two or three EPIC_UPDATED events (details, archive, and the order write that updateEpicStatus carries); accepted. Many long in-flight titles make a tall warning, and IntelliJ's Messages dialog scrolls long text. A transport drop between the two synchronous sends gets no handling beyond the existing onDisconnected path, and both sends pass the same connected check.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicDetailDialog.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardRelease.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DoneColumnClearTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardReleaseTest.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "packages/moe-daemon/src/tools/archiveEpic.ts",
+      "packages/moe-daemon/src/tools/updateEpic.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d5431577a5e4e4e823811e30cb4f92cc4dcdc341",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:42:12.284Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:44:14.640Z"
 }

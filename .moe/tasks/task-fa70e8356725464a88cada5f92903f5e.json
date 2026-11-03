@@ -1,0 +1,34 @@
+{
+  "id": "task-fa70e8356725464a88cada5f92903f5e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the blocked-timeout sweep times a silent BLOCKED seat out as a corpse, but its IDLE write stamps a fresh lastActivityAt, unlike its two sibling seat clears (REVIEW self-heal, reconcile-window sweep). So the corpse reads alive for 120 s, a restart in that window spares it, and the same pass's Layer-3 prune slips by a full staleWorkerTimeoutMs",
+  "description": "Filed by hunt #14 (task-d5d58972, 2026-11-03, architect-1dd28c7c). Lane: dead-worker handling. This is one write skipping a convention its two siblings document and apply.\n\nPROBLEM (HEAD 942717bc)\n- The convention:\n  - workerStore.updateWorker (packages/moe-daemon/src/state/workerStore.ts:176-188) stamps lastActivityAt = now on every non-DEAD update \"unless the caller passes an explicit lastActivityAt (system-side repairs like the REVIEW self-heal, which must not gift a crashed worker a fresh heartbeat and resurrect it as alive)\".\n  - packages/moe-daemon/CLAUDE.md:7: presence (isWorkerAlive, 120 s) is display-only, and records are pruned once they own nothing.\n- The two sibling seat clears in state/sweeps.ts follow it:\n  - the reconcile-window sweep, :290-298: `updateWorker(owner.id, { currentTaskId: null, lastActivityAt: owner.lastActivityAt })`. Its comment says a fresh stamp \"would resurrect a suspected corpse as alive and defeat the Layer-3 prune that removes it once it owns nothing\";\n  - the REVIEW self-heal, :515-525, the same pattern.\n- The blocked-timeout does not. Its IDLE write, sweeps.ts:485-489, is `updateWorker(worker.id, { status: 'IDLE', lastError: null, currentTaskId: null }, 'WORKER_TIMEOUT')`, with no lastActivityAt. So the seat it has just judged a corpse (silent past blockedTimeoutMs, 1 h) gets lastActivityAt = now.\n- Effects:\n  - The corpse reads alive (isWorkerAlive) for 120 s in list_workers and chat_who. The architect page in report_blocked (findFreshestLiveWorkerByRole) can pick a timed-out architect in that window.\n  - A daemon restart in that window spares the record as recently active (purgeAllWorkers).\n  - The Layer-3 prune at the end of the same pass (sweeps.ts:567-584) skips it, so the record lingers another staleWorkerTimeoutMs (30 min) even when it owns nothing.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_blockedTimeoutHeartbeat.test.ts, run from packages/moe-daemon/src/__hunt__/ of a `git archive 942717bc` snapshot.\n- Setup: a seat parked BLOCKED by a third-party block and silent 2 h. The real checkBlockedTimeouts runs, and the row is correctly parked to BACKLOG.\n- `npx vitest run src/__hunt__/zzHuntA_blockedTimeoutHeartbeat.test.ts` → 1 failed:\n  AssertionError: expected '2026-11-03T23:28:21.322Z' to be '2026-11-03T21:28:21.286Z'   (lastActivityAt re-stamped)\n  AssertionError: expected true to be false                                              (isWorkerAlive(corpse))\n  AssertionError: expected { id: 'worker-walled', …(13) } to be null                       (the same pass's Layer-3 prune skipped it)\n- The architect re-ran it at 23:28Z with the same three failures. The output is in /mnt/d/moe-scratch/hunt-d5d58972/A/blockedTimeoutHeartbeat.vitest.txt.\n- Exposure: every blocked-timeout of a silent seat. That is any seat parked BLOCKED (a resource block, or a third-party block on an assigned row) whose wrapper died. The blocked-timeout did not fire in today's activity.log, so this is a guard gap, not a live incident. LOW.\n\nFIX DIRECTION\n- One line: pass `lastActivityAt: worker.lastActivityAt` in the IDLE write at sweeps.ts:485-489, exactly as :297 and :523 do.\n- The WORKER_TIMEOUT activity event stays.\n- Do not change the task writes above it, or the resource or dependency arms.\n\nFILES (planner to confirm)\n- packages/moe-daemon/src/state/sweeps.ts\n- packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts (new), or a new case in the existing sweeps.test.ts\n\nOUT OF SCOPE: setTaskStatus.ts and dependencyUnblock.ts (the sibling row task-a133bd6a, no shared file); the sweep's #governors stale-block alert (hunt #11's lane); chat cursor writes on DEAD records (held back, reported to the governor). Docs: no tool contract changes and no doc describes this stamp, so there is nothing to sync.\n\nVERIFICATION (in a git-archive snapshot, never in place): `cd packages/moe-daemon && npx vitest run src/state/sweeps.test.ts src/state/blockedTimeoutPresence.test.ts`",
+  "definitionOfDone": [
+    "A new test runs the real checkBlockedTimeouts on a seat parked BLOCKED and silent past blockedTimeoutMs. It asserts that afterwards the record's lastActivityAt equals its pre-sweep value, and that isWorkerAlive(record) is false.",
+    "The same test asserts that, when the timed-out seat owns nothing after the park, the same pass's Layer-3 prune removes the record (getWorker returns null), matching the REVIEW self-heal and reconcile-window behaviour.",
+    "sweeps.ts's blocked-timeout IDLE write passes the worker's existing lastActivityAt, and nothing else in the sweep changes. In a snapshot, `cd packages/moe-daemon && npx vitest run src/state/sweeps.test.ts src/state/blockedTimeoutPresence.test.ts` exits 0 (adjust the second path if the case lands in sweeps.test.ts)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 459.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:30:26.280Z",
+  "updatedAt": "2026-11-03T23:42:42.394Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:42:40.480Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}

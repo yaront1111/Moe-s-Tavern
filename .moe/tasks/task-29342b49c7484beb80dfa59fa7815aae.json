@@ -1,0 +1,28 @@
+{
+  "id": "task-29342b49c7484beb80dfa59fa7815aae",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_who and chat_join compute presence inline instead of isWorkerAlive, skipping its DEAD test, so a seat deregistered moments ago (or a DEAD seat still parked in chat_wait) is listed online; chat_join's copy also drops every live IDLE seat, against its own MCP_SERVER.md note",
+  "description": "Filed by the governor from hunt #14's held items (task-d5d58972, architect-1dd28c7c, msg-1656a684). Re-verified at HEAD d5431577.\n\nPROBLEM\npackages/moe-daemon/src/util/workerLiveness.ts:15-21 defines isWorkerAlive as \"The ONE predicate for 'is this worker alive'\": not DEAD, and lastActivityAt within LIVENESS_TIMEOUT_MS. It says it is \"Shared by listWorkers, chat_who and the sweeps... Do not re-implement this check inline.\" Two chat tools do re-implement it:\n- chat_who (tools/chatWho.ts:6, :51-53) has its own PRESENCE_TIMEOUT_MS and checks lastActivityAt only. A DEAD record with recent activity is listed. Its Pass 2 (:82-108) also lists any worker parked in chat_wait, DEAD included.\n- chat_join (tools/chatJoin.ts:62-69) requires `status !== 'IDLE' && recent`. So it lists a just-deregistered DEAD seat and omits every live IDLE seat. docs/MCP_SERVER.md's `### moe.chat_join` note says \"Online workers are those with activity within the last 120 seconds\", with no IDLE exclusion. Its own code comment says \"active status or recent activity\".\n- list_workers already uses isWorkerAlive, so a seat list_workers reports isAlive:false shows as online in chat_who.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_chatWhoDead.test.ts, run at HEAD 942717bc in a snapshot; output in chatWhoDead.vitest.txt. Right after deregister_worker, list_workers reports isAlive:false, while chat_who returns `worker-closed:DEAD` in online. The code is unchanged at d5431577.\n\nFIX DIRECTION\nMake both tools call isWorkerAlive, with the shared LIVENESS_TIMEOUT_MS, and drop the inline constants.\n- chat_who's Pass 2: keep \"parked in chat_wait counts as present\", since a long wait does not refresh activity, but never for a DEAD record.\n- chat_join: choose between the doc's rule (every live seat) and the IDLE exclusion, and make the code and its `### moe.chat_join` note agree.\nSync both sections, `### moe.chat_join` and `### moe.chat_who` (ruling msg-71db57ac): online means not DEAD and active within 120 s, or (chat_who with a channel) parked in chat_wait.\nError handling is unchanged.\n\nFILES AND PLACEMENT\ntools/chatWho.ts, tools/chatJoin.ts, one vitest file, and docs/MCP_SERVER.md (those two sections only). The sibling row filed alongside this one fixes updateWorkerCursors (workerStore.ts). The two are independent: there is no dependsOn and no shared file. Gate: that vitest file, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "chat_who (with and without a channel, including a DEAD worker parked in chat_wait) and chat_join never list a DEAD worker. A vitest case deregisters a recently active seat and checks both tools.",
+    "A live IDLE seat that list_workers reports isAlive:true is listed by both tools. If chat_join keeps an IDLE exclusion, its `### moe.chat_join` note documents it instead, and the test pins whichever rule ships.",
+    "Both tools take presence from isWorkerAlive (no inline PRESENCE_TIMEOUT_MS left in chatWho.ts or chatJoin.ts), and the two MCP_SERVER.md sections state the same rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 461.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:34:06.481Z",
+  "updatedAt": "2026-11-03T23:34:06.481Z"
+}

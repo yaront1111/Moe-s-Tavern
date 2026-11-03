@@ -1,0 +1,31 @@
+{
+  "id": "task-561d347c3e5b44129ecf9d6c91bbab9f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a worktree completion whose push origin applied but answered [remote rejected] still loses its receipt journal when the one re-check fetch also fails, so the retry records plain nothing-to-commit and QA's landed gate parks the row BLOCKED again (residual of task-bc6ba91b, both launchers)",
+  "description": "Residual of task-bc6ba91b (named in its plan's approachesConsidered #3; that DoD kept this path exactly as before). After task-bc6ba91b, a `![remote rejected]` push gets one re-check fetch (wt_remote_holds / Test-MoeRemoteHolds). When all 3 land_fetch tries of that re-check fail while origin really holds C, wt_publish still runs `rm -f` on the receipt journal (moe-agent.sh ~:7530; ps1 Publish-MoeWorktreeLanding ~:7144 Remove-Item) and routes MOE_PUSH_FAILED unlanded remote. The retry's L5 then finds the merged tree equal to origin's target, but with no journal the $jc recovery (sh ~:7600, LAND_WT_RECOVERED) cannot owe the completion row, so it records plain MOE_COMMIT_NOTHING_TO_COMMIT and qa_landed_gate blocks: the task-7cef0861 incident loop, only rarer.\nRepro: the postflight-worktree.cjs case wt-remote-rejected, arm fetch-fails (WT_GIT_PUSH_REMOTE_REJECTED + WT_GIT_FETCH_FAIL_AFTER_PUSH), followed by a LANDING-RETRY completion with fetch restored.\nDirection (the planner decides): when the re-check could not run (fetch failed), keep the journal (for example 'push remote-rejected-unverified: …'), so the retry's L5 or a pre-flight replay (reconcile_push) can still prove C and owe the row; a re-check that proves C absent still deletes it.",
+  "definitionOfDone": [
+    "In both launchers, a [remote rejected] push whose re-check fetch fails keeps a receipt journal naming C, while still routing MOE_PUSH_FAILED unlanded remote with the rescue ref as today.",
+    "The landing retry of such a task, once origin's target is fetchable and holds C, records the owed completion row (pushed:true) and a landed finalize instead of a plain MOE_COMMIT_NOTHING_TO_COMMIT; a re-check that proves C absent still removes the journal.",
+    "The worktree landing harness covers both launchers; parity-check.{sh,ps1} and worktree-landing.{sh,ps1} pass; scripts/CLAUDE.md and the design doc's L9 text describe the kept journal."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-bc6ba91b03b4435781ade6d4159e5ed7"
+  ],
+  "priority": "LOW",
+  "order": 463.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:38:02.611Z",
+  "updatedAt": "2026-11-03T23:38:02.611Z"
+}
