@@ -78,8 +78,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,12 +91,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:37:04.594Z",
-  "updatedAt": "2026-11-03T13:54:20.451Z",
+  "updatedAt": "2026-11-03T13:56:37.382Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T13:39:40.903Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T13:56:13.407Z",
+    "wallClockMs": 992504
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -192,9 +194,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T13:44:16Z",
-    "at": "2026-11-03T13:48:00.950Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T13:54:03Z",
+    "at": "2026-11-03T13:56:37.382Z"
+  },
+  "completedAt": "2026-11-03T13:56:13.407Z",
+  "reviewCompletedAt": "2026-11-03T13:56:13.407Z",
+  "reviewSummary": "Reviewed completion 40c82161 (on moe/work-2026-10-24, pushed; own diff +143/-3 = 140 net, 3 owned files, under the 400 cap). Fresh git-archive snapshot of that exact sha in /tmp, npm ci under env -i node v24.21.0; 3 owned files cmp-identical to the commit.\nRe-ran task.verification verbatim: 8 files, 107 passed, exit 0 (matches the worker's claim). Wider run: tsc --noEmit exit 0; full daemon suite 236 files, 7014 passed, 24 skipped, exit 0.\nOwn mutant: restored the old `this.mentionRouter = new MentionRouter(... ?? 4)` line in load() and ran mentionRouter.reload.test.ts: 3 failed / 7 passed (pause-survives, hop-count-survives, human-resets-after-reload), so the regression tests do kill the bug. Snapshot restored and cmp-verified.\nDoD: (1) paused channel stays paused across load(): next hop routes [] and getChannelState is {hopCount:5,paused:true} (test 1). (2) 4 hops, reload, 5th pauses (test 2); lowering settings.chatMaxAgentHops to 2 in project.json then load() governs hop 3 (test 3). (3) human message after reload gives {0,false} and routes again (test 4); mentionRouter, SystemHops, chatSystemFeed suites untouched by the diff and green.\nCode: setMaxHops stores an integer >= 1 else 4, never touches hopCounts/pausedChannels, never throws. Constructor, route(), resetChannel(), getChannelState unchanged. StateManager.ts is net zero lines (1483 by split('\\n'), under 1500; stateModules green). No schema/MCP/doc change needed. Only remaining new MentionRouter is the constructor at :490.\nNote only: update_settings still applies chatMaxAgentHops at the next load(), as the plan scoped out.",
+  "requiredCheckAtDone": null
 }

@@ -27,17 +27,25 @@
     {
       "stepId": "step-2",
       "description": "IMPLEMENT + DOCS. One concern: the reload-hold banner is a routine presence line.\n(a) packages/moe-daemon/src/util/chatPayload.ts. After QUIET_DEREGISTER_BANNER, add this comment and regex:\n// The reload-hold banner (state/workerLifecycle.ts beginReloadHold). A hot reload\n// keeps the seat's tasks assigned for its relaunch, so it frees nothing either.\n// The reason is always RELOAD_HOLD_REASON (beginReloadHold refuses any other), the\n// deadline is toISOString(), and the <taskId>(<STATUS>) list ends the line, so\n// appended text keeps routing. A hold that runs out is a full reload_hold_expired\n// deregister, whose \"released N task\" banner still routes.\nconst RELOAD_HOLD_BANNER = /^\\u{1F50C} \\S+ reloading \\(wrapper_restart\\); holding \\d+ task\\(s\\) for its relaunch until \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z: [^\\s(),]+\\([A-Z_]+\\)(?:, [^\\s(),]+\\([A-Z_]+\\))*$/u;\nThen make isRoutinePresenceLine's expression `PRESENCE_LEFT_LINE.test(content) || QUIET_DEREGISTER_BANNER.test(content) || RELOAD_HOLD_BANNER.test(content)`. Change the first sentence of its doc comment to say a routine presence line is a seat leaving, a deregistration that freed nothing, or a hot reload that holds its tasks for the relaunch.\n - Write the escape as \\u{1F50C}, as the line above does, and keep the u flag. A raw plug character is equivalent under the u flag. Check the result with `grep -c 'u{1F50C}' packages/moe-daemon/src/util/chatPayload.ts`, which should print 2 (mem:gotcha-edit-tool-unescapes-unicode-literals).\n - Do not import RELOAD_HOLD_REASON from state/: util stays free of state imports. (h1) drives the real producer and is the coupling guard (mem:decision-chat-system-feed-presence-lines).\n - Change nothing else. isSystemFeedMessage, chatStore sendMessage (:231 routingTargets = []), chat_wait's isRelevant (chatWait.ts:172) and getMessages' hideSystemFeed (chatStore.ts:340) already take all their behaviour from this one predicate.\n - Error handling: the predicate stays total. The typeof guard stays first, a regex test cannot throw, and there is no IO, so sendMessage, chat_wait and every agent read keep today's failure behaviour.\n(b) docs/MCP_SERVER.md, in the '### moe.chat_read' Notes. Find by text the one-line bullet that starts '- **Skips the system feed**' (about :2551). Its presence-line list now ends: and a `🔌 <id> deregistered (<reason>); (no tasks held)` banner that released no tasks and dropped no resource claims. Change that ending to: a `🔌 <id> deregistered (<reason>); (no tasks held)` banner that released no tasks and dropped no resource claims, and the `🔌 <id> reloading (wrapper_restart); holding N task(s) for its relaunch until <holdUntil>: <taskId>(<status>), …` banner of a hot reload, which holds its tasks instead of releasing them. Leave every other byte of the file alone, including the next sentence ('Feed lines are routed to nobody ...').\nThen run step 3's recipe with vitest on chatSystemFeed.test.ts alone, and see (h1)-(h4) green before step 3.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/chatPayload.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "GREEN: chatSystemFeed 30/30 pass in snapshot; grep -c u{1F50C} = 2.",
+      "startedAt": "2026-11-03T13:55:25.523Z",
+      "completedAt": "2026-11-03T13:55:43.996Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFICATION. Run it once, fresh, from this task worktree's root after the last tracked edit; its output is the complete_task evidence. Never run npm in the shared checkout or in the worktree (rail). The command archives HEAD into mktemp, overlays exactly the three owned files, and runs the following under env -i with nvm node v24.21.0 (mem:gotcha-daemon-linux-snapshot-gate): npm ci, tsc --noEmit, a scratch-tsconfig typecheck of the test file (tsc skips tests otherwise), and the FULL daemon vitest suite. Run exactly:\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/chatPayload.ts packages/moe-daemon/src/tools/chatSystemFeed.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatSystemFeed.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'\nExpect exit 0, a 'Test Files N passed' line and no FAIL line. The architect dry-ran this exact command at target tip 40c82161 with the files unchanged: 236 files passed, 7014 tests passed, 24 skipped, exit 0. Your counts should be that plus your new cases, which is +13 tests if you wrote exactly the rows above. DoD 3: the chatSystemFeed (existing cases), reloadHold, mentionRouter and mentionRouter.reload suites are all inside this full run.\nIf a FAIL is in a file this task does not touch, rerun that file alone in the same snapshot before calling it a regression. Known load flakes are index.version, bindHosts D-fail and baselineRun E2 (mem:gotcha-daemon-linux-snapshot-gate). Report both runs, and never edit outside the three owned files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T13:55:44.668Z"
     },
     {
       "stepId": "step-4",
@@ -63,12 +71,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:38:33.967Z",
-  "updatedAt": "2026-11-03T13:55:23.771Z",
+  "updatedAt": "2026-11-03T13:55:44.668Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T13:40:22.435Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -79,7 +87,8 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:53:48.421Z",
