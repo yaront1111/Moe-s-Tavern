@@ -57,20 +57,29 @@
     {
       "stepId": "step-4",
       "description": "Verification, once, before moe.complete_task (DoD 2 and 3).\n1. Take the jetbrains-gradle lease: moe.acquire_resource { resourceId: 'jetbrains-gradle', taskId, workerId, note }. If you are queued, call moe.report_blocked with that resourceId.\n2. From the task worktree root, run exactly the checkRef. It is byte-for-byte /mnt/d/moe-scratch/6d5d3db2-plan/verify.sh, with its sha256 in SHA256SUMS there. In order, it runs:\n   - parity-check.sh;\n   - npm run lint;\n   - the DoD's `gradlew.bat test --rerun`, through cmd.exe in this worktree's moe-jetbrains (WSL has no JDK; mem:gotcha-jetbrains-gradle-from-wsl);\n   - a sum of the JUnit XML totals that fails on any failure or error.\n3. Release the lease on every path.\nThe fresh output of that run is the complete_task evidence: command, exitCode, and an outputTail that shows the totals. Report it as the Windows run of the DoD's command, in this worktree.\nExpected: D1-D12 and PS1-PS8 pass unchanged, and D13 and D14 pass.\nNever run clean. Never pattern-kill a Gradle or Java process. Never run npm install, build or test in the shared checkout's packages.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T03:16:41.702Z"
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Fresh exact checkRef (/mnt/d/moe-scratch/6d5d3db2-plan/verify.sh) in task worktree exits 0: parity PASS, lint OK, Windows gradlew.bat test --rerun BUILD SUCCESSFUL in 28s; JUnit totals 600 tests, 0 skipped, 0 failures, 0 errors. RuntimeSelectionPolicyTest 75/75, D1-D12 + PS1-PS8 unchanged, D13/D14 green. green.log preserved. Lease granted during report_blocked (task never blocked), then released after gate. Attribution correction: Serena rejected docs as ignored; main apply_patch immediately applied both approved docs changes after step-3 note and before step-4 start. Re-listing docs paths ensures truthful attribution; no production edits in this verification step.",
+      "startedAt": "2026-11-03T03:16:41.702Z",
+      "completedAt": "2026-11-03T03:18:16.720Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review: one pass over this task's diff, using the adversarial-self-review skill. Check:\n(a) Concurrency. Run an Allow and a verified-local read on two threads, in both orders. No order may leave LEGACY after a verified-local read that follows the answer. The lock must never be held across confirmer.ask, or across a blocking store seam (D6 blocks the first store() call).\n(b) Two answers, or a confirmer that throws (D4).\n(c) An unreadable, oversize or BOM-prefixed project.json, at read time and at answer time.\n(d) A missing, unusable or untrusted store. No new exception may escape, and only a verified-local read rewrites an UNTRUSTED record.\n(e) Windows aliases are written only inside the guarded block.\n(f) Cost: each pinned call reads project.json exactly once.\n(g) The error handling of every new exit path.\n(h) Mutants. Re-run each under the lease with --tests com.moe.util.RuntimeSelectionPolicyTest; each must fail:\n- the pinned-key check moved back above the declaration read: D13 fails;\n- stillWeaker always returns true: D14 fails;\n- the alias persist moved outside the guard: D14's Windows part fails;\n- the verified-local persist dropped for pinned keys: D13 fails.\nList the RED run and the killed and surviving mutants in the completion summary.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial diff review complete; no findings. Scoped diff 4 files +84/-18. External scratch snapshot control 75/75; all 4 required mutants KILLED, none surviving: early pin=D13, stillWeaker=true=D14, alias outside guard=D14 Windows assertion line350, omit pinned persist=D13. Each compiled and failed intended assertion. Extra scratch suite 78/78: S1 forces real threads BLOCKED on recordLock in both Allow-first/read-first orders and verifies protected + next restart asks; S2 malformed/oversize/BOM at read/answer time cause no writes and first answer consumed; S3 only verified-local repairs pinned untrusted record. Existing D1/D4/D6, D2 store paths and PS1-PS8 unchanged/pass in main full 600/600 gate. No lock across ask/legacy seam; one declaration read per pinned call, store only for verified-local; all new failure exits caught. Evidence /mnt/d/moe-scratch/6d5d3db2-worker/{mutants.py,results.json,*.log}. All lease(s) released, scratch fixed sources restored, no tracked edits after main green gate. Handoff and record-lock gotcha memories written.",
+      "startedAt": "2026-11-03T03:18:20.867Z",
+      "completedAt": "2026-11-03T03:22:40.287Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -82,7 +91,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:39.471Z",
-  "updatedAt": "2026-11-03T03:16:41.702Z",
+  "updatedAt": "2026-11-03T03:23:32.275Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:18.807Z",
@@ -92,7 +101,7 @@
     "firstClaimAt": "2026-11-03T02:54:20.407Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -108,7 +117,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T03:01:33.393Z",
@@ -175,5 +186,46 @@
   },
   "planApprovedAt": "2026-11-03T03:01:33.426Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T03:14:18.141Z"
+  "workStartedAt": "2026-11-03T03:14:18.141Z",
+  "reviewStartedAt": "2026-11-03T03:22:52.330Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED\r\n> Task :initializeIntellijPlatformPlugin\r\n> Task :patchPluginXml UP-TO-DATE\r\n> Task :processResources UP-TO-DATE\r\n> Task :generateManifest UP-TO-DATE\r\n> Task :processTestResources UP-TO-DATE\r\n> Task :compileKotlin\r\n> Task :compileJava NO-SOURCE\r\n> Task :classes UP-TO-DATE\r\n> Task :jar\r\n> Task :composedJar\r\n> Task :prepareTestSandbox\r\n> Task :prepareTest\r\n> Task :compileTestKotlin\r\n> Task :compileTestJava NO-SOURCE\r\n> Task :testClasses UP-TO-DATE\r\n> Task :instrumentTestCode SKIPPED\r\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module (file:/C:/Users/Yaron/.gradle/caches/9.8.2/transforms/252d726876db45402d601288a6657911/transformed/idea-2026.2.3-win/lib/util-8.jar)\nWARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module\nWARNING: Restricted methods will be blocked in a future release unless native access is enabled\n\r\n> Task :test\r\n\r\nBUILD SUCCESSFUL in 28s\r\n11 actionable tasks: 7 executed, 4 up-to-date\r\nConsider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html\r\nJUnit totals: tests=600 skipped=0 failures=0 errors=0\n",
+    "reportedAt": "2026-11-03T03:22:52.330Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "docs/ARCHITECTURE.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completionSummary": "Implemented approved JetBrains downgrade re-declaration fix across 4 files (+84/-18). profile() reads declarations before the pin return and re-records PROTECTED for verified-local even when pinned. recordLock serializes that decision/write with Allow's strict re-read; LEGACY base/alias writes occur only while still weaker. Unreadable declarations write nothing; declaredProfile, callers and v1 format unchanged. Added D13/D14 and updated architecture/troubleshooting.\nRED: focused Windows Gradle 75 tests, exactly D13/D14 failed expected protected-vs-legacy assertions. Fresh exact checkRef in task worktree: parity PASS, lint OK, Windows gradlew.bat test --rerun exit 0; JUnit 600 tests/0 skipped/0 failures/0 errors. Existing D1-D12/PS1-PS8 unchanged; policy 75/75 and VerifiedLocalLaunchTest 8/8.\nAdversarial external snapshot: control 75/75; 4/4 mutants KILLED, 0 survive: early pinned return (D13), stillWeaker=true (D14), alias write outside guard (D14 Windows), skip persist for pinned key (D13). Scratch augmented suite 78/78 verifies two-thread record-lock ordering both ways, malformed/oversize/BOM at read and answer time, consumed first answer, and untrusted record repair only on verified-local. No tracked edits after main gate. All processes finished and leases released. Evidence /mnt/d/moe-scratch/6d5d3db2-plan/{red,green}.log and /mnt/d/moe-scratch/6d5d3db2-worker/{results.json,mutants.py,*.log}. Handoff + record-lock gotcha memories written. Docs used main apply_patch after Serena ignored-path refusal.",
+  "commits": [
+    {
+      "sha": "b1e689781fb8243e0318a6721ea12aff079787b6",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T03:13:04Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T03:23:32.275Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T03:13:04Z",
+    "at": "2026-11-03T03:23:32.275Z"
+  }
 }
