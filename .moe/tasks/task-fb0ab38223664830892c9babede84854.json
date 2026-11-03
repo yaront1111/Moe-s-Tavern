@@ -58,7 +58,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -71,7 +71,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:45.607Z",
-  "updatedAt": "2026-11-03T03:08:28.167Z",
+  "updatedAt": "2026-11-03T03:17:06.623Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:20.099Z",
@@ -81,11 +81,14 @@
     "firstClaimAt": "2026-11-03T03:01:50.632Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T03:16:51.271Z",
+    "wallClockMs": 900639
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-8cf0816c"
+    "worker-8cf0816c",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -183,9 +186,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T03:04:16Z",
-    "at": "2026-11-03T03:08:28.167Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T03:14:26Z",
+    "at": "2026-11-03T03:17:06.623Z"
+  },
+  "completedAt": "2026-11-03T03:16:51.271Z",
+  "reviewCompletedAt": "2026-11-03T03:16:51.271Z",
+  "reviewSummary": "Reviewed completion ba67fa97 (on moe/control, moe/work-2026-10-24 and the task branch). Diff is +68/-0 in one file, MoeDaemonSupervisorTest.kt (rows W36-W39 plus one comment line, inserted after W35). Production is untouched: `git diff --stat ba67fa97^ ba67fa97 -- moe-jetbrains/src/main` prints nothing. I compared the four row bodies against RF04 QA's qa-probes.patch (QA1-QA4); they match apart from the QA->W renames. No fixture, helper or existing row changed, so no test was weakened or deleted. Under the jetbrains-gradle lease I re-ran the gate (verify.sh, sha256 verified): parity-check and lint passed, `gradlew.bat test --rerun` was BUILD SUCCESSFUL, and the JUnit totals were tests=598 skipped=0 failures=0 errors=0. The moe-jetbrains tree was clean at HEAD, so the in-place run covered exactly the landed bytes. The MoeDaemonSupervisorTest class report shows 87 tests, 0 failures, and W36, W37, W38 and W39 each present and passing. I also re-ran mutant.sh (sha256 verified), which drops `roots` from OldTree.survivor() in a scratch snapshot with the new test file: gradle exit 1, 87 tests completed, 1 failed, and the only FAILED row is W36. That meets DoD 1 and acceptance criterion 2. The scratch snapshot is removed and the lease is released. Not an epic-final task and no rail waives size; at +68 it is well under 400. Rows W37-W39 pass on current production and assert specific refusal text, absent kill: events and gated starts. Only W36 was required to be mutation-proven.",
+  "requiredCheckAtDone": null
 }

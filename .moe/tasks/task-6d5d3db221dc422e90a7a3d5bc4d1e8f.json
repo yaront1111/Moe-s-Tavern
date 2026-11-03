@@ -13,33 +13,53 @@
     {
       "stepId": "step-1",
       "description": "Tests first (RED). Add two rows to RuntimeSelectionPolicyTest.kt, after D12. Use withProfileStore, profileOf, writeProfile, writeProjectJson, profileJson, key, project and RecordingConfirmer the way D1-D12 do.\n\nD13: `D13 a verified-local read after an allowed downgrade records protected again, so a later weaker declaration asks after restart`.\n1. profileOf(dir) is PROTECTED and records protected.\n2. writeProfile(dir, 'legacy'), then forgetSessionForTest(). profileOf is PROTECTED and asks once. asks.answers.single()(true) records legacy.\n3. writeProjectJson(dir, '{'). profileOf is PROTECTED and the record stays legacy: an unreadable declaration records nothing, as D4 expects.\n4. writeProfile(dir, 'verified-local'). profileOf is PROTECTED, and the record now equals profileJson(dir, 'protected'). This assertion fails today, because a pinned key returns before the declaration is read.\n5. writeProfile(dir, 'legacy'). profileOf is PROTECTED, and there is no second ask this session (asks.paths.size == 1).\n6. forgetSessionForTest() (a restart). profileOf is PROTECTED and asks again: asks.paths == [dir.path, dir.path]. Today it answers LEGACY with no ask.\n\nD14: `D14 an Allow answered after the project re-declares verified-local, or while project.json is unreadable, records nothing`.\n1. profileOf(dir) records protected. Then, for each later declaration in ['{\"settings\":{\"executionProfile\":\"verified-local\"}}', '{']:\n   - writeProfile(dir, 'legacy'), then forgetSessionForTest();\n   - profileOf is PROTECTED, with one more ask;\n   - writeProjectJson(dir, later), then asks.answers.last()(true);\n   - the record still equals profileJson(dir, 'protected').\n   Today the first case records legacy.\n2. Windows only: return@withProfileStore when !windowsHost, as D8 does. This part checks that the matched spellings stay untouched too.\n   - Set up as D8 does: base = <newFolder b>/proj and local = <newFolder a>/proj, both declaring legacy.\n   - store.write(localName, profileJson(local, 'protected')).\n   - RuntimeSelectionPolicy.sameDirectory = { stored, _ -> stored == Paths.get(key(local)) }.\n   - profileOf(base) is PROTECTED and asks for base.path.\n   - writeProfile(base, 'verified-local'), then asks.answers.last()(true).\n   - store.read(localName) is still profileJson(local, 'protected'), and base has no record (assertNull).\n   Today both get recorded legacy.\n\nRED run, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). Take it with moe.acquire_resource; if it is busy, call moe.report_blocked with that resourceId; release it on every path. From the task worktree root, run: W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\". Keep the --tests value unquoted (mem:gotcha-jetbrains-gradle-from-wsl). D13 and D14 must fail on their record assertions, and every other row must pass. Record the result in the step note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Added D13/D14 immediately after D12 (51 lines); D14 name says unreadable project rather than project.json because JVM method names cannot contain a dot. Exact planned Windows focused RED under jetbrains-gradle exited 1: 75 tests, exactly D13 and D14 failed with ComparisonFailure expecting protected but seeing legacy (lines 318, 338); all unchanged rows passed (host skips retained). Evidence /mnt/d/moe-scratch/6d5d3db2-plan/red.log and JUnit XML. Released lease.",
+      "startedAt": "2026-11-03T03:14:18.141Z",
+      "completedAt": "2026-11-03T03:15:27.046Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix RuntimeSelectionPolicy.kt (DoD 1).\n\n(1) Add `private val recordLock = Any()` with a one-line comment. Every record-write decision runs under it: a verified-local read's PROTECTED record, and an Allow's LEGACY records. A re-declaration seen after an Allow then always leaves PROTECTED.\n\n(2) Reorder profile():\n- Read the declaration first. On a failure, return PROTECTED exactly as today: log and fail closed, with no pin and no write.\n- If verifiedLocal: `pinned += key`, then `synchronized(recordLock) { if (storedProfile(basePath, key) != StoredProfile.PROTECTED) persist(basePath, key, RuntimeProfile.PROTECTED) }`, then return PROTECTED. This now runs on a pinned key too, with the same single store read the unpinned path does today.\n- Next, `if (key in pinned) return RuntimeProfile.PROTECTED`, before any store read, as today.\n- Then the existing legacy-like path, unchanged: stored, weaker, aliases, ask.\n\n(3) askDowngrade's callback becomes `if (answered.compareAndSet(false, true) && allow) synchronized(recordLock) { if (stillWeaker(basePath)) { persist the key LEGACY; persist the aliases LEGACY } }`.\n- Add a private stillWeaker(basePath) that returns `!declaresVerifiedLocal(...)`. It catches Exception, logs with describe(ex) and returns false: an unreadable declaration keeps the record.\n- The first answer still consumes `answered`, so only the first answer counts (D4).\n- ProfileDowngradeDialog answers on a pooled thread (executeOnPooledThread) and ask() never blocks. So the lock is never held across confirmer.ask, and the IO stays off the EDT.\n\n(4) Update the `pinned` comment and the object's KDoc to say two things:\n- a verified-local read later in the session withdraws an allowed downgrade;\n- an Allow downgrades only a declaration that is still weaker when it is answered.\n\nError handling:\n- persist already swallows and logs store failures.\n- storedProfile maps any failure to UNTRUSTED, which is not PROTECTED, so a verified-local read rewrites it, as the unpinned path does today.\n- Nothing new can throw out of profile() or the callback.\n\nBehaviour that must not change:\n- A malformed declaration gives PROTECTED with no pin and no write (D4).\n- Concurrent first reads produce one ask (D1).\n- In D6's delayed reader, the legacy path calls store() in the same order.\n\nCost: a pinned project now reads project.json (strict, at most 1 MiB) on every call, and only a verified-local read also reads the store. Unpinned legacy projects already pay both reads.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "note": "Implemented approved recordLock, declaration-before-pin ordering and serialized verified-local persistence. Allow now re-reads strictly under recordLock before any base/alias LEGACY writes; stillWeaker catches/logs failures and declines. No lock spans confirmer.ask or the legacy store seam (D6); declaredProfile untouched. Updated KDoc/pin comment. git diff --check exits 0. GREEN/full Gradle gate remains in planned step 4; RED evidence from step 1 preserved.",
+      "startedAt": "2026-11-03T03:15:45.399Z",
+      "completedAt": "2026-11-03T03:15:47.080Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs.\n- docs/ARCHITECTURE.md, Profile pin bullet: replace \"Open: task-6d5d3db2 (a same-session re-declaration after an allowed downgrade).\" with the new fact, citing task-6d5d3db2. A `verified-local` read later in the same session records the project protected again. An Allow answered while the project declares `verified-local`, or while its `project.json` is unreadable, records nothing. Keep the bullet's ~120-column wrap.\n- docs/TROUBLESHOOTING.md, section 'Protected profile: project stays protected after a legacy declaration', the **Allow Downgrade** bullet: add one sentence. If the project declares `verified-local` again before the restart, the allowed downgrade is withdrawn, and the question comes back once it declares legacy again.\n- No other doc names this behavior; confirm with a grep for 'Allow Downgrade' and 'allowed downgrade'.\n- docs/ARCHITECTURE.md is also declared by task-0b2ea570, in a different bullet. That is why this row dependsOn it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md",
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Replaced the Profile pin open item with the verified-local re-record and guarded Allow facts, citing task-6d5d3db2 and preserving ~120-column wrap. Added one precise sentence to Allow Downgrade troubleshooting: the plugin must read the re-declaration, then the next-session question returns for legacy. grep confirmed these are the only docs naming Allow Downgrade/allowed downgrade; diff --check exits 0. Reused existing strict declaration reader/store helpers and JVM synchronized; no new abstraction or dependency.",
+      "startedAt": "2026-11-03T03:15:56.357Z",
+      "completedAt": "2026-11-03T03:16:18.421Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, once, before moe.complete_task (DoD 2 and 3).\n1. Take the jetbrains-gradle lease: moe.acquire_resource { resourceId: 'jetbrains-gradle', taskId, workerId, note }. If you are queued, call moe.report_blocked with that resourceId.\n2. From the task worktree root, run exactly the checkRef. It is byte-for-byte /mnt/d/moe-scratch/6d5d3db2-plan/verify.sh, with its sha256 in SHA256SUMS there. In order, it runs:\n   - parity-check.sh;\n   - npm run lint;\n   - the DoD's `gradlew.bat test --rerun`, through cmd.exe in this worktree's moe-jetbrains (WSL has no JDK; mem:gotcha-jetbrains-gradle-from-wsl);\n   - a sum of the JUnit XML totals that fails on any failure or error.\n3. Release the lease on every path.\nThe fresh output of that run is the complete_task evidence: command, exitCode, and an outputTail that shows the totals. Report it as the Windows run of the DoD's command, in this worktree.\nExpected: D1-D12 and PS1-PS8 pass unchanged, and D13 and D14 pass.\nNever run clean. Never pattern-kill a Gradle or Java process. Never run npm install, build or test in the shared checkout's packages.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T03:16:41.702Z"
     },
     {
       "stepId": "step-5",
@@ -62,7 +82,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:39.471Z",
-  "updatedAt": "2026-11-03T03:13:14.259Z",
+  "updatedAt": "2026-11-03T03:16:41.702Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:18.807Z",
@@ -71,7 +91,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T02:54:20.407Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -84,7 +105,11 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T03:01:33.393Z",
   "executionContract": {
@@ -149,5 +174,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T03:01:33.426Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T03:14:18.141Z"
 }
