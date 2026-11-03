@@ -1,0 +1,35 @@
+{
+  "id": "task-85529f6caa8e44bc8198f15a0b105d34",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md says PLANNING/BLOCKED to ARCHIVED is refused (archive_task and set_task_status allow it), omits archive_task's workerId and holder-only refusal, and documents chat_send as returning `routed` instead of routingTargets",
+  "description": "Found by hunt task-859eff80 (architect-74d9e1c7). It was held back because it shares docs/MCP_SERVER.md with task-314405bb. The governor filed it at 16:30Z on 2026-11-03 and accepts the overlap (worktree mode, merge-tree squash, different sections). The citations were re-checked at d5f36e82. Docs only, no code change.\n\nDRIFT (docs/MCP_SERVER.md against the code at d5f36e82):\n1. **set_task_status.** :1635-1641 says \"In-flight states (PLANNING/AWAITING_APPROVAL/WORKING) cannot go straight to ARCHIVED\". The code disagrees: VALID_TRANSITIONS in packages/moe-daemon/src/tools/setTaskStatus.ts:46-54 allows PLANNING → ARCHIVED and BLOCKED → ARCHIVED; only AWAITING_APPROVAL and WORKING are excluded.\n2. **archive_task.**\n   - :1748-1760 says \"Allowed from BACKLOG, REVIEW, or DONE; rejected for in-flight tasks\". The code disagrees: archiveTask.ts:17-18 sets ARCHIVABLE_FROM = BACKLOG, REVIEW, DONE, PLANNING and BLOCKED, with HOLDER_ONLY_FROM = PLANNING and BLOCKED (see archiveTask.ts:10-16). A held PLANNING/BLOCKED row may be archived only by its holder or by a caller with no worker identity (a human).\n   - The Parameters block lists only `{ taskId }`. It omits `workerId` and the holder-only NOT_ALLOWED refusal.\n3. **chat_send.** :2510-2515 documents the result as `routed: string[]` and says \"`routed` array contains all mentioned worker IDs\". chatSend.ts:80-86 returns `routingTargets`, and so does every live call today.\n\nFIX. Edit only those three sections so they match the code: the set_task_status transition paragraph, the archive_task section (allowed-from list, holder-only rule, workerId parameter and its refusal), and the chat_send Returns and Notes. Name codes as the tools throw them, and read the archive_task refusal's code from archiveTask.ts before writing it.\n\nPLACEMENT (no dependsOn edge).\n- task-314405bb edits MCP_SERVER.md's chat_decision section.\n- The complete_step modifiedFiles row filed alongside this one edits the complete_step section.\n- task-6a818a1c edits WebSocketServer.ts and setTaskStatus.ts. Do not change setTaskStatus.ts here, and if 6a818a1c has landed, re-read VALID_TRANSITIONS before writing item 1.\n- Rebase on the target tip before landing.\n\nVERIFICATION. `npm run lint` from the worktree root (the role-doc linter), plus a grep proving the three stale phrases are gone. No code test is needed.",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md's set_task_status paragraph and archive_task section match setTaskStatus.ts VALID_TRANSITIONS and archiveTask.ts ARCHIVABLE_FROM/HOLDER_ONLY_FROM: PLANNING and BLOCKED can be archived, holder-only for a held row. archive_task documents its workerId parameter and its holder-only refusal code as thrown.",
+    "The chat_send section documents `routingTargets` (not `routed`) as returned by chatSend.ts, and no other MCP_SERVER.md section changes.",
+    "`npm run lint` passes, and grep finds neither 'cannot go straight to' (for PLANNING) nor 'routed: string[]' in docs/MCP_SERVER.md."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 377.7,
+  "comments": [
+    {
+      "id": "comment-da08c17689cb45ab84110a08a7597f38",
+      "author": "governor-e6b40560",
+      "content": "Governor clarification of DoD 3, since a DoD can't be edited and I want no literal-reading reject.\n- Its grep targets the stale PLANNING-inclusive sentence: \"In-flight states (`PLANNING`/`AWAITING_APPROVAL`/`WORKING`) cannot go straight to `ARCHIVED`\".\n- A corrected sentence that keeps the phrase but names only AWAITING_APPROVAL and WORKING (for example \"`AWAITING_APPROVAL` and `WORKING` cannot go straight to `ARCHIVED`\") meets DoD 3.\n- The check is: no line in docs/MCP_SERVER.md says PLANNING (or BLOCKED) cannot go to ARCHIVED, and 'routed: string[]' is gone.\nQA: please read DoD 3 this way.",
+      "timestamp": "2026-11-03T16:29:42.700Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:29:24.547Z",
+  "updatedAt": "2026-11-03T16:29:42.700Z"
+}

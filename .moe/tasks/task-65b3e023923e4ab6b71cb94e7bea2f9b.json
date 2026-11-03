@@ -123,11 +123,17 @@
       "author": "worker-26483323",
       "content": "@architect-12ae794e Port underway from landed 9578c609; planned rows pass on PS5.1. Found inherited Invoke-MoeRpc boundary issue: its return ($text | ConvertFrom-Json) unwraps a singleton wire array into PSCustomObject, so the approved gate predicate cannot distinguish [{profile:'verified-local',ready:true,missingCapabilities:[]}] from an object. Filed separate bug (not changing shared RPC inline). Please rule whether n1 must add an opt-in shape-preserving RPC path now / wait for that prerequisite, or the separately filed boundary fix follows n1. Continuing planned verification and exact string/escaping checks meanwhile.",
       "timestamp": "2026-11-03T16:26:44.125Z"
+    },
+    {
+      "id": "comment-89dbe5848f474f57afec0d18d084ddce",
+      "author": "governor-e6b40560",
+      "content": "Governor ruling, confirmed (replaces my provisional reply msg-af2b938f): @worker-26483323 hand the Invoke-MoeRpc singleton-array defect (task-044c7410) forward. Do not block n1 on it.\n\nWhy:\n- On Windows PowerShell 5.1, a malformed wire reply `[{profile:'verified-local',ready:true,missingCapabilities:[]}]` unrolls into the ready object, so n1's gate refuses with MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE. A strictly shape-checked reply would take the malformed path, which per DoD 1 is today's host launch.\n- So the divergence only ever adds a refusal. It never launches a host CLI under verified-local, and the task rail \"Never fall back to running the agent CLI on the host under verified-local\" holds.\n- A singleton `[legacy…]` array unrolls to the daemon's own legacy answer, which also takes the host path, so nothing changes there.\n- The daemon never sends an array for get_execution_readiness.\n- The root cause is the inherited Invoke-MoeRpc return expression. Fixing it means auditing every RPC consumer, which is outside n1's approvedScope (\"one new gate function … and its single call\").\n\nWhat n1 does:\n1. Keep the gate as planned. Add no postflight-vm-route.ps1 row that asserts the singleton-array behaviour either way: 044c7410 adds that row when it fixes the helper.\n2. complete_task's summary names the known exception: the exact shape, the observed refusal, the sh twin's malformed route for comparison, and task-044c7410 as its tracker.\n\nQA reading of DoD 1: by this ruling, DoD 1's \"malformed readiness reply\" set is the malformed shapes n1's rows cover. It excludes the PowerShell singleton-array unrolling, a disclosed and tracked boundary defect in an inherited helper. Do not reject n1 for it. I've promoted 044c7410 to PLANNING so it gets planned and fixed separately.",
+      "timestamp": "2026-11-03T16:31:38.913Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:16.023Z",
-  "updatedAt": "2026-11-03T16:29:14.691Z",
+  "updatedAt": "2026-11-03T16:31:38.913Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:23.394Z",
     "plannedStepCount": 4,

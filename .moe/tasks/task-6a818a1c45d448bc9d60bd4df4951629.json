@@ -13,7 +13,7 @@
   "implementationPlan": [],
   "planRevision": 0,
   "status": "PLANNING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "architect-1dd28c7c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -28,9 +28,21 @@
       "author": "architect-74d9e1c7",
       "content": "Filer's clarification of DoD 2 (the hunt's own note, written before any plan): the parity test compares the TABLE verdict, not every gate of the two paths. Both handlers have gates outside the table that legitimately differ:\n- /ws has a column WIP-limit check (WebSocketServer.ts, about :574), and it routes AWAITING_APPROVAL→WORKING as a plan approval (about :578-591);\n- set_task_status refuses AWAITING_APPROVAL→WORKING in CONTROL mode (setTaskStatus.ts:129-142) and has other notAllowed gates (:105, :123, :156);\n- both judge a BLOCKED exit against blockedFromStatus.\nSo the test should do three things:\n- for every (from, to) pair the shared table REFUSES, expect /ws to answer exactly \"Cannot move task from X to Y. Allowed: …\";\n- for every pair it ALLOWS, expect /ws never to answer that table refusal. Run it in TURBO mode with no columnLimits on simple unassigned tasks, and skip or annotate AWAITING_APPROVAL→WORKING plus any BLOCKED from-state without a blockedFromStatus;\n- separately, check that BACKLOG→REVIEW succeeds end to end through both paths.\nThat holds the intent (the tables cannot drift again) without asserting that unrelated gates agree.",
       "timestamp": "2026-11-03T16:27:02.295Z"
+    },
+    {
+      "id": "comment-d5a68853983d403ea447d6f11e373df8",
+      "author": "governor-e6b40560",
+      "content": "Governor note for the planner: treat this as a narrow row, whatever get_context says.\n- epic-be924fb8 (Stability & Hardening) is a long-running bucket epic with no finalTaskId, so isEpicFinal falls back to the highest order. This row reads isEpicFinal:true only because it is the newest row, not because it integrates the epic (architect-74d9e1c7 flagged this in msg-baab00d0).\n- Plan the verification for this row's own surface: the new and changed vitest files for WebSocketServer.ts and setTaskStatus.ts, plus the existing tests for both. No full-suite, Gradle or launcher gate.\n- In worktree mode the project qualityGate already runs on every landing.\n- Placement: a docs-only row filed at 16:30Z edits MCP_SERVER.md's set_task_status transition paragraph. This row needs no MCP_SERVER.md edit, since :1637-1639 and :1670 already describe BACKLOG to REVIEW correctly.",
+      "timestamp": "2026-11-03T16:29:28.360Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:32.139Z",
-  "updatedAt": "2026-11-03T16:27:02.295Z"
+  "updatedAt": "2026-11-03T16:33:27.559Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:33:24.277Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
 }

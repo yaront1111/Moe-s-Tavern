@@ -10,10 +10,67 @@
     "Verification, in a snapshot outside the shared checkout: `cd packages/moe-claude-plugin && MOE_DAEMON_HOST=172.26.208.1 npx vitest run && env -u MOE_DAEMON_HOST npx vitest run && npx tsc --noEmit` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD red: write the tests before touching src. Use the Edit tool only; the rail forbids shell writes to tracked files. Work in your task checkout, and never `cd /mnt/d/projexts/moes` (mem:decision-doc-row-checkrefs-worktree-mode).\n\n(a) Hermetic env in BOTH test files. Put the hooks at FILE scope, outside every describe: in daemonClient.test.ts after the makeProjectWithDaemon helper (line 24), in postToolUse.test.ts after its helper (line 29):\n  // moe-agent exports MOE_DAEMON_HOST (the Windows host address) to WSL seats.\n  // Clear it so the loopback fixtures never dial that address.\n  beforeEach(() => { vi.stubEnv('MOE_DAEMON_HOST', undefined); });\n  afterEach(() => { vi.unstubAllEnvs(); });\nIn vitest 5.0.5, stubEnv accepts undefined and deletes the var; unstubAllEnvs restores the seat's value. Do not change any existing assertion or fixture, or the MOE_PROJECT_PATH / MOE_WORKER_ID save-and-restore code (DoD 3). In postToolUse.test.ts this hunk is the ONLY change.\n\n(b) daemonClient.test.ts: import postEvent next to callTool/findDaemonInfo/DaemonError, and add `import net, { type AddressInfo } from 'node:net';`. Add a helper makeProjectWithDaemonFields(port: number, extra: Record<string, unknown>): string. It mkdtemps a dir, writes .moe/daemon.json = { port, pid: process.pid, startedAt: new Date().toISOString(), projectPath: <tmp>, ...extra }, and returns the dir.\n\n(c) describe('connect host'), for DoD 1. Every case asserts on findDaemonInfo({ projectPath }).host:\n  1. vi.stubEnv('MOE_DAEMON_HOST', '172.26.208.1') with { bindHost: 'wsl' } gives '172.26.208.1'.\n  2. The same env with { host: '10.1.2.3' } gives '172.26.208.1': the env wins over the file.\n  3. With the env unset by the file hook, { host: '10.1.2.3' } gives '10.1.2.3'. Then vi.stubEnv('MOE_DAEMON_HOST', '   ') still gives '10.1.2.3'.\n  4. vi.stubEnv('MOE_DAEMON_HOST', '') with { bindHost: 'wsl' }, and again with { bindHost: '192.0.2.7' }, gives '127.0.0.1' each time. bindHost is never dialed, even when it looks like an address.\n\n(d) End-to-end block, for DoD 2.\n- Define `const ALT_LOOPBACK = '127.0.0.2';`.\n- Write async canListenOn(host): net.createServer().listen(0, host) returns true. On 'error' it returns false ONLY for code === 'EADDRNOTAVAIL' (macOS configures only 127.0.0.1) and rethrows anything else. Close the probe in finally.\n- At module top level: `const altLoopbackBindable = await canListenOn(ALT_LOOPBACK);`. ESM top-level await works here.\n- Wrap the block in describe.skipIf(!altLoopbackBindable)('MOE_DAEMON_HOST end to end (WSL agent mode)', ...).\n- beforeEach:\n  - set frames = [];\n  - create an http createServer plus new WebSocketServer({ server }), with no path filter;\n  - on connection(ws, req), record { url: req.url, text } for each message. Only when req.url === '/mcp', reply { jsonrpc: '2.0', id: <request id>, result: { ok: true } };\n  - call listen(0, ALT_LOOPBACK), so the server listens ONLY there;\n  - then call vi.stubEnv('MOE_DAEMON_HOST', ALT_LOOPBACK).\n- afterEach closes wss, then server.\n- One it():\n  - project = makeProjectWithDaemonFields(port, { bindHost: 'wsl' }), with no `host`;\n  - `await expect(callTool('moe.list_tasks', {}, { projectPath: project, timeoutMs: 2000 })).resolves.toEqual({ ok: true })`;\n  - `await postEvent(event, { projectPath: project, timeoutMs: 2000 })`, where event = { type: 'AGENT_TOOL_EVENT', payload: { tool: 'moe.list_tasks' } };\n  - `await vi.waitFor(() => expect(frames.some((f) => f.url === '/ws')).toBe(true), { timeout: 1000 })`, because postEvent is fire-and-forget;\n  - then assert exactly one '/mcp' frame, and that JSON.parse(text of the '/ws' frame) toEqual(event).\n\n(e) Red evidence. Build step 3's /tmp snapshot from your checkout while daemonClient.ts is still unmodified, then run `MOE_DAEMON_HOST=172.26.208.1 npx vitest run`.\n- My dry run on d5f36e82 gave exactly 3 failed and 20 passed (23).\n- The three failures:\n  - 'uses a non-blank MOE_DAEMON_HOST…': expected '127.0.0.1' to be '172.26.208.1';\n  - 'puts MOE_DAEMON_HOST ahead…': expected '10.1.2.3' to be '172.26.208.1';\n  - the end-to-end case: DaemonError: Cannot reach daemon at 127.0.0.1:<port> … CONNECT_FAILED.\n- Every pre-existing test passes.\n- Quote those 3 lines in complete_step. They are the DoD 2 proof that today's daemonClient.ts:149 fails the new test.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ],
+      "note": "Added hermetic file-scope env hooks, 4 precedence cases (including trimmed env/legacy host and blank legacy host assertions), and live /mcp + /ws test on 127.0.0.2, skipping only EADDRNOTAVAIL. Used Serena editor as the available Edit-equivalent in this one-shot task checkout; no shell writes to tracked files. Fresh red run in /tmp/moe-ede8-Q909GN snapshot after npm ci --prefer-offline --no-audit --no-fund: 3 failed / 20 passed (23), all existing tests passed. Exact failures: \"expected '127.0.0.1' to be '172.26.208.1'\"; \"expected '10.1.2.3' to be '172.26.208.1'\"; \"DaemonError: Cannot reach daemon at 127.0.0.1:43091: connect ECONNREFUSED 127.0.0.1:43091\", code CONNECT_FAILED. End-to-end ran, not skipped. Source still untouched.",
+      "startedAt": "2026-11-03T16:34:35.367Z",
+      "completedAt": "2026-11-03T16:35:53.554Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Green. Use the Edit tool only.\n\n(a) packages/moe-claude-plugin/src/daemonClient.ts: add a module-private resolveConnectHost(fileHost: unknown): string right after readDaemonJson:\n  const envHost = process.env.MOE_DAEMON_HOST?.trim();\n  if (envHost) return envHost;\n  if (typeof fileHost === 'string' && fileHost.trim()) return fileHost.trim();\n  return '127.0.0.1';\nGive it a JSDoc that says why:\n- the host is resolved like moe-proxy's getDaemonHost (packages/moe-proxy/src/utils.ts), plus the legacy daemon.json `host`;\n- moe-agent exports the Windows host address to WSL seats, where loopback is not the Windows host;\n- `bindHost` is never dialed: it records how the daemon bound ('wsl' is a bind mode), not where a client can reach it.\nReplace line 149 with `host: resolveConnectHost(obj.host),`.\n- Read the env inside the function on every call. Never cache it at module load: the tests stub it after import.\n- Add `/** The address to dial; see resolveConnectHost. */` on DaemonInfo.host, and keep the field optional.\n- Never read obj.bindHost.\n- Leave sendOnce untouched: its `info.host || '127.0.0.1'` fallback, the Host header, the timeouts and the frame code. Also leave callTool, postEvent and the fail-open hook untouched.\n\nError handling: the fix adds no new failure path, and the existing error handling stays as it is. An unreachable or wrong MOE_DAEMON_HOST surfaces as DaemonError CONNECT_FAILED (or TIMEOUT) with sendOnce's message naming that host:port. callTool rejects with it. The PostToolUse hook still logs it to stderr and returns { forwarded: false, reason: 'send-failed' } (fail-open). Do not add a try/catch around the env read: reading process.env cannot throw.\n\n(b) packages/moe-claude-plugin/README.md, Troubleshooting: insert this paragraph right after the **Port mismatch** paragraph (line 75), with blank lines around it:\n**WSL agent mode** — The plugin dials `MOE_DAEMON_HOST` when it is set, else a `host` recorded in `.moe/daemon.json`, else 127.0.0.1; `moe-agent.sh` exports `MOE_DAEMON_HOST` for the WSL seats it launches. It never dials daemon.json's `bindHost` (`wsl` is a bind mode, not an address). Loopback inside WSL is not the Windows host, so on WSL a `CONNECT_FAILED` means `MOE_DAEMON_HOST` is unset or wrong: set it to the address the Windows daemon is reachable at (the WSL gateway in NAT mode, `127.0.0.1` in mirrored mode).\n\nMy dry run changed src by +16/-1, and step 3's gate then passed 23/23 in both env modes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-claude-plugin/src/daemonClient.ts",
+        "packages/moe-claude-plugin/README.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-claude-plugin/src/daemonClient.ts",
+        "packages/moe-claude-plugin/README.md"
+      ],
+      "note": "Added private resolveConnectHost with per-call trimmed env -> trimmed legacy host -> loopback resolution, optional DaemonInfo.host documentation, and WSL troubleshooting paragraph. No bindHost reads, wire/client/hook/error handling changes. Serena editor only. Full fresh green verification follows in step 3 as planned.",
+      "startedAt": "2026-11-03T16:35:53.582Z",
+      "completedAt": "2026-11-03T16:35:54.165Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification: run the gate ONCE, fresh, in a /tmp snapshot of your checkout. Never run npm in /mnt/d/projexts/moes or in your worktree (global rail; the shared tree's plugin node_modules are win32). From your task checkout:\n  R=$(git rev-parse --show-toplevel); S=$(mktemp -d /tmp/moe-ede8-XXXXXX); P=$S/packages/moe-claude-plugin; mkdir -p \"$P\"\n  tar -C \"$R/packages/moe-claude-plugin\" --exclude=node_modules --exclude=dist -cf - . | tar -xf - -C \"$P\"\n  (cd \"$P\" && npm ci --no-audit --no-fund) && test -d \"$P/node_modules/@rolldown/binding-linux-x64-gnu\"\nFallback: npm ci can fail, or leave out the Linux rolldown binding (mem:gotcha-gate-snapshot-psparse-and-proxy-rolldown). If either happens, check that `cmp \"$P/package-lock.json\" /tmp/hunt-859e-snap/packages/moe-claude-plugin/package-lock.json` shows the files are equal. Then run `rm -rf \"$P/node_modules\" && cp -al /tmp/hunt-859e-snap/packages/moe-claude-plugin/node_modules \"$P/node_modules\" && rm -rf \"$P/node_modules/.vite\"`.\n\nThen, from \"$S\", run the exact checkRef:\n  cd packages/moe-claude-plugin && MOE_DAEMON_HOST=172.26.208.1 npx vitest run && env -u MOE_DAEMON_HOST npx vitest run && npx tsc --noEmit\nIt must exit 0:\n- each vitest run reports 'Test Files 2 passed (2)' and 'Tests 23 passed (23)' (18 pre-existing + 5 new);\n- the end-to-end case runs on Linux and is NOT skipped;\n- tsc prints nothing.\nSubmit that command, its exit code and the output tail as the complete_task verification. State that it ran in a /tmp snapshot of `git rev-parse HEAD` plus your working-tree bytes, with matching sha256sum of the 4 files in the snapshot and in your checkout. Afterwards delete only your own mktemp dir. Kill only PIDs your own session started (rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh exact checkRef in /tmp/moe-ede8-WO7XwP snapshot of HEAD d5f36e82d8d7f348c916ab32de636b3aebddc42b plus working-tree bytes, exit 0: 2 files / 23 tests passed in each env mode, no skipped end-to-end test, tsc no diagnostics. npm ci --prefer-offline --no-audit --no-fund installed 41 packages and Linux rolldown binding; fallback unnecessary. All 4 source/test/README files matched checkout SHA256 pairwise (also cmp). Expected existing unreachable-daemon hook stderr appeared in each run, no new console output. Snapshot cleanup follows review.",
+      "startedAt": "2026-11-03T16:36:00.775Z",
+      "completedAt": "2026-11-03T16:36:15.236Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review: one pass over your own diff, `git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") -- packages/moe-claude-plugin` plus anything uncommitted. Check each item and fix what fails:\n(1) `grep -n bindHost packages/moe-claude-plugin/src/daemonClient.ts` hits only comments.\n(2) The env is read on every call, so a stub set after import still takes effect.\n(3) A blank or whitespace MOE_DAEMON_HOST, and a blank legacy `host`, both fall through to the next source.\n(4) DoD 3: in the test files, the only removed line is daemonClient.test.ts's import line (`git diff -U0 <base> -- packages/moe-claude-plugin/tests | grep '^-[^-]'`), and no existing expect changed.\n(5) The env hooks sit at file scope, so they cover every describe, and unstubAllEnvs runs in afterEach even when a case fails.\n(6) No listener leaks: the probe closes in finally, and each server closes in afterEach.\n(7) The 127.0.0.2 case skips only on EADDRNOTAVAIL, so ubuntu CI and Windows still run it.\n(8) No .only or stray .skip is left, there is no console noise, and tracked files were written only with Edit/Write.\nCheck the edge cases too:\n- two hook processes running concurrently share no state;\n- an IPv6 literal in MOE_DAEMON_HOST is out of scope (the proxy does not bracket one either).\nIf you change anything, re-run step 3's command and submit THAT output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-claude-plugin/src/daemonClient.ts",
+        "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts",
+        "packages/moe-claude-plugin/README.md"
+      ],
+      "note": "Reviewed task-scoped diff against merge-base with MOE_LAND_TARGET, plus uncommitted bytes. All 8 planned checks satisfied: bindHost only in comment; per-call env read; whitespace/blank fallback tests; only removed existing test line is import (all old expectations/fixtures unchanged); file-scope env hooks restore after failures; probe finally + server teardown; skip only EADDRNOTAVAIL; no .only, stray .skip, or new console output (existing negative hook test logs expected stderr). No shared mutable state added; concurrent hook processes independent. Invalid non-string legacy host falls through safely; bad addresses retain existing CONNECT_FAILED/TIMEOUT behavior and fail-open hook. IPv6 out of scope as approved. No review changes, so fresh step-3 evidence remains final: 23/23 twice, tsc clean, exit 0. Four-file approved scope retained; existing single test file grows above default 300-line cap per approved plan instead of adding off-plan files. Tracked edits exclusively via Serena editor.",
+      "startedAt": "2026-11-03T16:36:15.271Z",
+      "completedAt": "2026-11-03T16:36:55.586Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -25,11 +82,137 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:21:31.497Z",
-  "updatedAt": "2026-11-03T16:22:27.695Z",
+  "updatedAt": "2026-11-03T16:37:59.746Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T16:22:12.646Z"
+    "firstClaimAt": "2026-11-03T16:22:12.646Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
-  ]
+    "architect-1dd28c7c",
+    "worker-fdb2af60"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T16:33:03.400Z",
+  "executionContract": {
+    "intendedBehavior": "The Claude Code plugin's daemon client dials a non-blank (trimmed) MOE_DAEMON_HOST first, then a non-blank legacy daemon.json `host`, then 127.0.0.1. This applies to callTool (/mcp) and to postEvent (/ws, which carries the PostToolUse hook's AGENT_TOOL_EVENT). daemon.json's `bindHost` is never dialed. The plugin's loopback test suites no longer depend on the MOE_DAEMON_HOST that a WSL seat inherits.",
+    "acceptanceCriteria": [
+      "findDaemonInfo(...).host equals MOE_DAEMON_HOST.trim() whenever that is non-empty, whatever daemon.json's host or bindHost says.",
+      "An unset or blank MOE_DAEMON_HOST falls back to a non-blank daemon.json `host`, else '127.0.0.1'. bindHost ('wsl' or an IP-looking value) is never returned.",
+      "Take a daemon listening only on 127.0.0.2, daemon.json {bindHost:'wsl'} with no host, and MOE_DAEMON_HOST=127.0.0.2. callTool resolves and postEvent's frame arrives on /ws. With today's daemonClient.ts:149 the same case fails with CONNECT_FAILED at 127.0.0.1.",
+      "The pre-existing daemonClient and postToolUse tests pass with unchanged assertions, both with MOE_DAEMON_HOST unset and with it set to 172.26.208.1.",
+      "The README Troubleshooting section says that on WSL, CONNECT_FAILED means MOE_DAEMON_HOST is unset or wrong."
+    ],
+    "invariants": [
+      "bindHost is never read as a connect address.",
+      "MOE_DAEMON_HOST is read on every findDaemonInfo call, never cached at module load.",
+      "These stay unchanged: the wire format (handshake, frames, the /mcp and /ws paths), the timeouts, the DaemonError codes, and the hook's fail-open error handling.",
+      "No existing test assertion is changed or removed."
+    ],
+    "compatibility": [
+      "With MOE_DAEMON_HOST unset, every existing daemon.json resolves exactly as before: the legacy `host` is honored, otherwise 127.0.0.1.",
+      "DaemonInfo keeps its field names and its optional `host`. Callers of findDaemonInfo, callTool and postEvent need no change."
+    ],
+    "approvedScope": [
+      "daemonClient.ts: a new module-private resolveConnectHost(fileHost), its use in readDaemonJson's return value, and a doc comment on DaemonInfo.host",
+      "tests/daemonClient.test.ts: file-scope env hooks, the makeProjectWithDaemonFields helper, describe('connect host'), and the canListenOn probe with the describe.skipIf end-to-end block on 127.0.0.2",
+      "tests/postToolUse.test.ts: the file-scope env hooks only",
+      "README.md: one 'WSL agent mode' troubleshooting paragraph"
+    ],
+    "reuse": [
+      "The resolution order mirrors moe-proxy's getDaemonHost. There are no npm workspaces, so the 4-line helper stays local rather than shared.",
+      "The test servers reuse the existing callTool describe's http createServer + ws WebSocketServer({ server }) fixture pattern."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-claude-plugin/src/daemonClient.ts:149 (readDaemonJson) returns host: typeof obj.host === 'string' ? obj.host : '127.0.0.1'. sendOnce (:237) dials info.host for both /mcp and /ws.",
+      "packages/moe-daemon/src/index.ts:876 writes bindHost only when non-loopback, and the daemon never writes host.",
+      "packages/moe-proxy/src/utils.ts:72-74 getDaemonHost returns process.env.MOE_DAEMON_HOST || '127.0.0.1'.",
+      "scripts/moe-agent.sh:1902 exports MOE_DAEMON_HOST after WSL host discovery.",
+      "docs/ARCHITECTURE.md:674-678: WebSocket upgrades rely on the Origin rule, not on Host. The client sends no Origin.",
+      "vitest 5.0.5 (node_modules/vitest/dist/index.d.ts:804): stubEnv(name, string | undefined). unstubAllEnvs restores the original values.",
+      "packages/moe-claude-plugin/tsconfig.json includes src only, so tests are not type-checked by tsc --noEmit.",
+      "CI runs the plugin tests on ubuntu-latest only (.github/workflows/ci.yml, test-typescript job)."
+    ],
+    "checkRefs": [
+      "cd packages/moe-claude-plugin && MOE_DAEMON_HOST=172.26.208.1 npx vitest run && env -u MOE_DAEMON_HOST npx vitest run && npx tsc --noEmit"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected four alternatives:\n(1) Dial bindHost when it looks like an IP. bindHost is a bind mode ('wsl', '0.0.0.0'), and the daemon and proxy never dial it either.\n(2) A vitest setupFiles entry that clears the env. It touches vitest.config.ts and adds a new file, while file-scope hooks keep each suite self-contained.\n(3) A platform === 'darwin' skip. A bind probe that skips only on EADDRNOTAVAIL never silently skips on Linux or Windows.\n(4) Exporting resolveConnectHost for direct unit tests. The DoD asserts through findDaemonInfo, so the helper stays private.\nI dry-ran the exact plan on d5f36e82 in a scratch copy:\n- red: 3 failed / 20 passed with today's src;\n- green: 23/23 with MOE_DAEMON_HOST=172.26.208.1 and with it unset, and tsc clean;\n- mutants: the original postToolUse.test.ts with the fixed src fails 'forwards moe.* tool events' after a 3009 ms timeout to the gateway, so the hermetic hooks are load-bearing; an untrimmed-env mutant fails the blank case.",
+    "codebaseInsights": "- The daemon writes bindHost only when it binds non-loopback, and it never writes host (packages/moe-daemon/src/index.ts:876).\n- moe-proxy's getDaemonHost is `MOE_DAEMON_HOST || '127.0.0.1'` (packages/moe-proxy/src/utils.ts:72-74).\n- scripts/moe-agent.sh:1902 exports MOE_DAEMON_HOST after WSL host discovery, so the claude CLI and its PostToolUse hook child inherit it.\n- WebSocket upgrades are guarded by the Origin rule, not by Host (docs/ARCHITECTURE.md:674-678). A gateway IP in the client's Host header is therefore fine.\n- vitest 5.0.5: stubEnv(name, undefined) deletes the var; unstubAllEnvs restores it; vi.waitFor exists; ESM test files allow top-level await.\n- tsconfig includes src only, so `tsc --noEmit` checks src.\n- CI runs the plugin tests on ubuntu-latest only (ci.yml, test-typescript job).\n- The plugin lock already lists @rolldown/binding-linux-x64-gnu 1.2.15, and /tmp/hunt-859e-snap holds a Linux node_modules for that byte-identical lock.",
+    "risks": "- Put the env hooks at file scope, not inside one describe. Otherwise the size-cap and callTool describes stay exposed.\n- postEvent resolves about 25 ms after it writes, so wait for the frame with vi.waitFor rather than a fixed sleep.\n- Do not run npm in the shared checkout or in the worktree. Use the /tmp snapshot in step 3.\n- QA re-run: `git archive <completion sha> packages/moe-claude-plugin | tar -x -C $S/...`, with no working-tree overlay, then the same checkRef. For red, swap in `git show <sha>^:packages/moe-claude-plugin/src/daemonClient.ts`: the 3 new cases must fail.\n- IPv6 literals are out of scope.",
+    "keyFiles": [
+      "packages/moe-claude-plugin/src/daemonClient.ts",
+      "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+      "packages/moe-claude-plugin/tests/postToolUse.test.ts",
+      "packages/moe-claude-plugin/README.md",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d5f36e82d8d7f348c916ab32de636b3aebddc42b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T16:33:03.426Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T16:34:35.367Z",
+  "reviewStartedAt": "2026-11-03T16:37:13.843Z",
+  "verification": {
+    "command": "cd packages/moe-claude-plugin && MOE_DAEMON_HOST=172.26.208.1 npx vitest run && env -u MOE_DAEMON_HOST npx vitest run && npx tsc --noEmit",
+    "exitCode": 0,
+    "outputTail": "Fresh run in /tmp/moe-ede8-WO7XwP (HEAD d5f36e82d8d7f348c916ab32de636b3aebddc42b plus working-tree bytes); 4 files SHA256/cmp matched. npm ci --prefer-offline --no-audit --no-fund: added 41 packages; Linux rolldown binding present.\nRUN v5.0.5\n[moe-claude-plugin] PostToolUse hook failed: Cannot reach daemon at 127.0.0.1:1: connect ECONNREFUSED 127.0.0.1:1\nTest Files 2 passed (2)\nTests 23 passed (23)\nDuration 397ms\nRUN v5.0.5\n[moe-claude-plugin] PostToolUse hook failed: Cannot reach daemon at 127.0.0.1:1: connect ECONNREFUSED 127.0.0.1:1\nTest Files 2 passed (2)\nTests 23 passed (23)\nDuration 357ms\nnpx tsc --noEmit: no diagnostics; exit 0. End-to-end test ran, none skipped. Expected stderr from existing negative hook case only.",
+    "reportedAt": "2026-11-03T16:37:13.843Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+    "packages/moe-claude-plugin/tests/postToolUse.test.ts",
+    "packages/moe-claude-plugin/src/daemonClient.ts",
+    "packages/moe-claude-plugin/README.md"
+  ],
+  "completionSummary": "Plugin now resolves trimmed nonblank MOE_DAEMON_HOST before legacy daemon.json host and loopback, never bindHost. Added WSL troubleshooting, hermetic env hooks in both suites, 4 precedence tests and live 127.0.0.2 /mcp + /ws regression. Existing assertions unchanged. Red proved 3 expected failures with original source; green 23/23 twice and tsc clean. Final verification ran in /tmp snapshot of HEAD d5f36e82d8d7f348c916ab32de636b3aebddc42b plus working-tree bytes, all 4 files SHA256/cmp matched checkout. Adversarial review and diff whitespace check clean. Own snapshots removed; Serena handoff and host-testing gotcha saved.",
+  "commits": [
+    {
+      "sha": "27fc6aeded948c7794f46284859dd8e7c59248f6",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T16:33:20Z",
+      "paths": [
+        "packages/moe-claude-plugin/README.md",
+        "packages/moe-claude-plugin/src/daemonClient.ts",
+        "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T16:37:59.746Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-03T16:33:20Z",
+    "at": "2026-11-03T16:37:59.746Z"
+  }
 }

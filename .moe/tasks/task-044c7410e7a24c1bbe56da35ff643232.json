@@ -9,18 +9,36 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Promoted from BACKLOG by the governor under the human's standing \"move from backlog\" (2026-11-02 21:00Z). worker-26483323 filed it from CQ-M07n1 (msg-43f05c7a), and it has no dependsOn. The human can drag it back to BACKLOG to veto. Governor ruling on n1, comment on task-65b3e023: n1 hands this defect forward, and this row fixes Invoke-MoeRpc's singleton-array unrolling on its own.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 237.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-52d1826afdd24855a74b88899d65000f",
+      "author": "worker-26483323",
+      "content": "Full-wrapper repro now confirmed, not just a language microprobe: scratch harness /mnt/d/moe-scratch/n1-singleton.ps1 points at n1 worktree, first T row serves FAKE_READINESS=[{\"profile\":\"verified-local\",\"ready\":true,\"missingCapabilities\":[]}]. PS5.1 exits 1 with MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED and no CLI, instead of malformed-reply legacy launch. Log /mnt/d/moe-scratch/n1-singleton.log. No shared Invoke-MoeRpc edit made. A fix should be opt-in for object consumers, preserve existing list callers, and run 5.1/7 tests.",
+      "timestamp": "2026-11-03T16:30:09.284Z"
+    },
+    {
+      "id": "comment-b2d18e3bd4314cef858423d77902eaff",
+      "author": "governor-e6b40560",
+      "content": "Governor notes for the planner (16:33Z).\n\nScope: this row is ps1-only. On Windows PowerShell 5.1, `return ($text | ConvertFrom-Json)` in Invoke-MoeRpc (scripts/moe-agent.ps1, around :1830) unrolls a one-element JSON array into its element.\n\nMake the scalar/object consumers shape-preserving. Note that -NoEnumerate is pwsh 7 only. Keep every existing list caller's behaviour unchanged, and audit each Invoke-MoeRpc caller to show it.\n\nThen add the CQ-M07n1 row this ruling deferred (comment on task-65b3e023): a malformed `[{profile:'verified-local',ready:true,…}]` readiness reply takes the same route as the sh twin's malformed reply.\n\nThe DoD here is the worker's one-liner. So the plan's verification must name concrete checks:\n- the new and changed postflight-vm-route.ps1 rows under Windows PowerShell 5.1 and pwsh 7;\n- postflight.ps1 under 5.1;\n- bash scripts/tests/parity-check.sh;\n- the UTF-8 BOM is kept.\n\nPlacement, with no dependsOn edge since this is worktree mode: the CQ-M07n chain edits moe-agent.ps1. n1 (65b3e023, live) adds a gate function near Stop-MoeWorktreeSeat and one call in the pre-flight. Keep this row's hunks inside Invoke-MoeRpc and the callers it audits, and edit with the Edit tool (no temp+mv). Land it before CQ-M07n (62ec51f1) closes the ps1 VM route.",
+      "timestamp": "2026-11-03T16:31:50.904Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:44.109Z",
-  "updatedAt": "2026-11-03T16:26:44.109Z"
+  "updatedAt": "2026-11-03T16:31:50.904Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T16:31:41.317Z",
+    "seq": 1
+  }
 }
