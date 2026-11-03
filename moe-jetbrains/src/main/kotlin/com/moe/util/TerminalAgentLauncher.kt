@@ -133,7 +133,8 @@ object TerminalAgentLauncher {
         basePath: String,
         windows: Boolean = SystemInfo.isWindows,
         systemRoot: String? = System.getenv("SystemRoot"),
-        bash: String = "/bin/bash"
+        bash: String = "/bin/bash",
+        subject: String = "the agent wrapper's interpreter"
     ): ProtectedInterpreter {
         val candidate = when {
             !windows && kind == ScriptKind.BASH -> bash
@@ -156,13 +157,13 @@ object TerminalAgentLauncher {
         val file = when (val selection = RuntimeSelectionPolicy.installedExecutable(candidate, basePath)) {
             is RuntimeSelection.Accepted -> selection.file
             is RuntimeSelection.Rejected -> return ProtectedInterpreter.Refused(
-                "the agent wrapper's interpreter $candidate is not an absolute regular file outside the project"
+                "$subject $candidate is not an absolute regular file outside the project"
             )
         }
         if (!windows) return ProtectedInterpreter.Ready(file.path)
         val word = file.path.replace('\\', '/')
         if (!Regex("^[A-Za-z]:(/[A-Za-z0-9._-]+)+$").matches(word)) return ProtectedInterpreter.Refused(
-            "the agent wrapper's interpreter ${file.path} holds a character a terminal cannot take unquoted"
+            "$subject ${file.path} holds a character a terminal cannot take unquoted"
         )
         return ProtectedInterpreter.Ready(if (wslAgents) toWslPath(file.path) else word)
     }
@@ -544,13 +545,17 @@ object TerminalAgentLauncher {
     /**
      * `node <cli.js> --accounts-file <file> <args>` with every word quoted. Under
      * WSL the daemon's Windows paths become /mnt paths for WSL's own node, so
-     * claude signs in where WSL agents run it.
+     * claude signs in where WSL agents run it. [interpreter] replaces the PowerShell line's bare `powershell`
+     * word (the protected profile's pinned System32 path); the other shells ignore it.
      */
-    internal fun buildAccountsCommand(cli: AccountCli, registryFile: String, args: List<String>, shell: AccountsShell): String {
+    internal fun buildAccountsCommand(
+        cli: AccountCli, registryFile: String, args: List<String>, shell: AccountsShell, interpreter: String? = null
+    ): String {
         (listOf(cli.node, cli.script, registryFile) + args).forEach { requireSafeArg("accounts command word", it) }
         return when (shell) {
             AccountsShell.POWERSHELL -> powerShellLine(
-                "& " + (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { psQuote(it) }
+                "& " + (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { psQuote(it) },
+                interpreter ?: "powershell"
             )
             AccountsShell.WSL_BASH ->
                 "node " + (listOf(toWslPath(cli.script), "--accounts-file", toWslPath(registryFile)) + args).joinToString(" ") { shQuote(it) }
@@ -559,15 +564,78 @@ object TerminalAgentLauncher {
         }
     }
 
+    /**
+     * The protected WSL Accounts program, typed after the fixed /bin/bash: WSL's node has no fixed system path. Bash
+     * builtins only, then `exec node`. It applies protected_trusted_dir from scripts/moe-agent.sh and scripts/moe-call.sh
+     * (task-0b2ea570): keep, as real paths and in order, the absolute PATH entries whose real path is neither the project
+     * ($1) nor under it, walking ancestors with -ef so a link cannot hide the project. Keeping nothing refuses, because an
+     * empty PATH makes bash search the cwd, which is the project. No ', backslash or ! so bash, zsh and fish type it alike.
+     */
+    internal const val PROTECTED_WSL_NODE_PROGRAM = "f() { echo \"[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start.\" >&2; exit 1; }; p=\$(cd -- \"\$1\" 2>/dev/null && pwd -P) || f; shift; k=; IFS=: read -r -a e <<< \"\$PATH\"; for d in \"\${e[@]}\"; do case \$d in /*) ;; *) continue ;; esac; r=\$(cd -- \"\$d\" 2>/dev/null && pwd -P) || continue; u=\$r; while :; do [ \"\$u\" -ef \"\$p\" ] && continue 2; [ \"\$u\" = / ] && break; u=\${u%/*}; u=\${u:-/}; done; k=\${k:+\$k:}\$r; done; [ -n \"\$k\" ] || f; PATH=\$k; exec node \"\$@\""
+
+    private fun protectedAccountsRefusal(reason: String): Nothing = throw IllegalArgumentException(
+        "Protected execution profile: $reason. Moe runs account commands only with an interpreter outside the project, so nothing was started."
+    )
+
+    /** `/bin/bash -c <PROTECTED_WSL_NODE_PROGRAM> moe-accounts <project> <cli.js> ...`: WSL's own node, found only outside the project. */
+    private fun protectedWslAccountsCommand(cli: AccountCli, registryFile: String, args: List<String>, basePath: String): String {
+        if (!Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(basePath)) {
+            protectedAccountsRefusal("the project $basePath has no /mnt path in WSL, so WSL's node cannot be checked against it")
+        }
+        val project = toWslPath(basePath)
+        val words = listOf(toWslPath(cli.script), "--accounts-file", toWslPath(registryFile)) + args
+        (listOf(project) + words).forEach { requireSafeArg("accounts command word", it) }
+        val word = when (val resolved = protectedInterpreter(ScriptKind.BASH, wslAgents = true, basePath = basePath, windows = true)) {
+            is ProtectedInterpreter.Ready -> resolved.word
+            is ProtectedInterpreter.Refused -> protectedAccountsRefusal(resolved.reason)
+        }
+        return shQuote(word) + " -c " + shQuote(PROTECTED_WSL_NODE_PROGRAM) + " moe-accounts " + shQuote(project) + " " +
+            words.joinToString(" ") { shQuote(it) }
+    }
+
+    /**
+     * LEGACY: [buildAccountsCommand] unchanged. PROTECTED: no interpreter is looked up through the project cwd or PATH.
+     * Native routes type the real path of [cli]'s node, checked outside the project, and Windows the pinned System32
+     * PowerShell; WSL runs [PROTECTED_WSL_NODE_PROGRAM]. A refusal throws IllegalArgumentException.
+     */
+    internal fun accountsCommandFor(
+        profile: RuntimeProfile,
+        cli: AccountCli,
+        registryFile: String,
+        args: List<String>,
+        shell: AccountsShell,
+        basePath: String,
+        systemRoot: String? = System.getenv("SystemRoot")
+    ): String {
+        if (profile == RuntimeProfile.LEGACY) return buildAccountsCommand(cli, registryFile, args, shell)
+        if (shell == AccountsShell.WSL_BASH) return protectedWslAccountsCommand(cli, registryFile, args, basePath)
+        val interpreter = if (shell != AccountsShell.POWERSHELL) null else when (val resolved = protectedInterpreter(
+            ScriptKind.POWERSHELL, wslAgents = false, basePath = basePath, systemRoot = systemRoot, subject = "the Accounts command's PowerShell"
+        )) {
+            is ProtectedInterpreter.Ready -> resolved.word
+            is ProtectedInterpreter.Refused -> protectedAccountsRefusal(resolved.reason)
+        }
+        val node = when (val selection = RuntimeSelectionPolicy.installedExecutable(cli.node, basePath)) {
+            is RuntimeSelection.Accepted -> selection.file.path
+            is RuntimeSelection.Rejected ->
+                protectedAccountsRefusal("the Accounts command's node ${cli.node} is not an absolute regular file outside the project")
+        }
+        return buildAccountsCommand(cli.copy(node = node), registryFile, args, shell, interpreter)
+    }
+
     /** The accounts CLI line for this project's agent shell, for a person to run when no terminal tab can. */
-    fun accountsCommandLine(project: Project, cli: AccountCli, registryFile: String, args: List<String>): String =
-        buildAccountsCommand(cli, registryFile, args, accountsShellFor(SystemInfo.isWindows, isWslAgentsEnabled(project)))
+    fun accountsCommandLine(project: Project, cli: AccountCli, registryFile: String, args: List<String>): String {
+        val basePath = project.basePath ?: ""
+        val shell = accountsShellFor(SystemInfo.isWindows, isWslAgentsEnabled(project))
+        return accountsCommandFor(RuntimeSelectionPolicy.profile(basePath), cli, registryFile, args, shell, basePath)
+    }
 
     /**
      * Runs the daemon's `accounts` CLI in a new terminal tab (sign in, check, sign
      * out): claude's own sign-in prompts need a person, and the daemon never runs
      * claude. False when no terminal tab could run it. Throws IllegalArgumentException,
-     * before any tab opens, for a word holding a control character.
+     * before any tab opens, for a word holding a control character, or when the
+     * protected profile has no trusted interpreter for the line.
      */
     fun runAccountsCommand(project: Project, cli: AccountCli, registryFile: String, args: List<String>, tabName: String): Boolean {
         val line = accountsCommandLine(project, cli, registryFile, args)

@@ -20,7 +20,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.nio.file.Files
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 
 class TerminalAgentLauncherTest {
     @get:Rule
@@ -603,6 +605,198 @@ class TerminalAgentLauncherTest {
     }
 
     @Test
+    fun `A1 legacy accounts lines stay byte-identical on every shell`() {
+        // Legacy never validates, so a node that does not exist still builds today's line.
+        val cli = AccountCli("C:\\missing\\node.exe", "C:\\moe\\daemon\\accounts\\cli.js")
+        val args = listOf("login", "acct-1")
+        for (shell in AccountsShell.values()) {
+            assertEquals(
+                "$shell",
+                TerminalAgentLauncher.buildAccountsCommand(cli, "C:\\moe\\claude-accounts.json", args, shell),
+                TerminalAgentLauncher.accountsCommandFor(LEGACY, cli, "C:\\moe\\claude-accounts.json", args, shell, "D:\\projexts\\app")
+            )
+        }
+    }
+
+    @Test
+    fun `A2 protected PowerShell accounts line types the System32 PowerShell and the validated node`() {
+        assumeTrue(SystemInfo.isWindows)
+        assumeTrue(Regex("""[A-Za-z0-9:\\._-]+""").matches(temporaryFolder.root.toPath().toRealPath().toString()))
+        val project = temporaryFolder.newFolder("project")
+        val sysroot = temporaryFolder.newFolder("sysroot")
+        val word = powerShellFixture(sysroot).toPath().toRealPath().toString().replace('\\', '/')
+        val node = temporaryFolder.newFile("node.exe")
+        val args = listOf("login", "acct-1")
+        val line = TerminalAgentLauncher.accountsCommandFor(
+            PROTECTED, AccountCli(node.path, ACCOUNTS_SCRIPT), ACCOUNTS_FILE, args, AccountsShell.POWERSHELL, project.path, sysroot.path
+        )
+        assertTrue(line, line.startsWith("$word -NoProfile -ExecutionPolicy Bypass -EncodedCommand "))
+        assertFalse(line, line.startsWith("powershell"))
+        val legacy = TerminalAgentLauncher.buildAccountsCommand(
+            AccountCli(node.toPath().toRealPath().toString(), ACCOUNTS_SCRIPT), ACCOUNTS_FILE, args, AccountsShell.POWERSHELL
+        )
+        assertEquals(typedPsScript(legacy), typedScript(line, word))
+    }
+
+    @Test
+    fun `A3 protected PowerShell accounts line refuses an absent or unsafe SystemRoot`() {
+        assumeTrue(SystemInfo.isWindows)
+        val project = temporaryFolder.newFolder("project")
+        val inside = temporaryFolder.newFolder("project", "sysroot")
+        val untypable = temporaryFolder.newFolder("sys root")
+        val missing = temporaryFolder.newFolder("missing")
+        powerShellFixture(inside)
+        powerShellFixture(untypable)
+        val node = temporaryFolder.newFile("node.exe")
+        for (root in listOf(null, "", " ", inside.path, untypable.path, missing.path)) {
+            val message = accountsRefusal {
+                TerminalAgentLauncher.accountsCommandFor(
+                    PROTECTED, AccountCli(node.path, ACCOUNTS_SCRIPT), ACCOUNTS_FILE, listOf("check"), AccountsShell.POWERSHELL, project.path, root
+                )
+            }
+            if (root.isNullOrBlank()) {
+                assertTrue(message, message.contains("SystemRoot"))
+            } else {
+                assertTrue(message, message.contains(root))
+                assertTrue(message, message.contains("the Accounts command's PowerShell"))
+            }
+        }
+    }
+
+    @Test
+    fun `A3 protected PowerShell accounts line refuses a node inside the project`() {
+        assumeTrue(SystemInfo.isWindows)
+        assumeTrue(Regex("""[A-Za-z0-9:\\._-]+""").matches(temporaryFolder.root.toPath().toRealPath().toString()))
+        val project = temporaryFolder.newFolder("project")
+        val sysroot = temporaryFolder.newFolder("sysroot")
+        powerShellFixture(sysroot)
+        val node = temporaryFolder.newFile("project/node.exe")
+        val message = accountsRefusal {
+            TerminalAgentLauncher.accountsCommandFor(
+                PROTECTED, AccountCli(node.path, ACCOUNTS_SCRIPT), ACCOUNTS_FILE, listOf("check"), AccountsShell.POWERSHELL, project.path, sysroot.path
+            )
+        }
+        assertTrue(message, message.contains(node.path))
+    }
+
+    @Test
+    fun `A4 protected bash accounts line types the real outside node and refuses any other`() {
+        val project = temporaryFolder.newFolder("project")
+        val node = temporaryFolder.newFile("node")
+        val args = listOf("check")
+        assertEquals(
+            TerminalAgentLauncher.buildAccountsCommand(
+                AccountCli(node.toPath().toRealPath().toString(), ACCOUNTS_SCRIPT), ACCOUNTS_FILE, args, AccountsShell.BASH
+            ),
+            TerminalAgentLauncher.accountsCommandFor(PROTECTED, AccountCli(node.path, ACCOUNTS_SCRIPT), ACCOUNTS_FILE, args, AccountsShell.BASH, project.path)
+        )
+        val inside = temporaryFolder.newFile("project/node")
+        val missing = File(temporaryFolder.root, "missing-node")
+        val directory = temporaryFolder.newFolder("node-directory")
+        for (candidate in listOf("bin/node", "node", inside.path, missing.path, directory.path)) {
+            val message = accountsRefusal {
+                TerminalAgentLauncher.accountsCommandFor(
+                    PROTECTED, AccountCli(candidate, ACCOUNTS_SCRIPT), ACCOUNTS_FILE, args, AccountsShell.BASH, project.path
+                )
+            }
+            assertTrue(message, message.contains(candidate))
+        }
+    }
+
+    @Test
+    fun `A5 protected WSL accounts line runs the PATH-filtering program under the fixed bash`() {
+        val line = wslAccountsLine("D:\\projexts\\app")
+        assertEquals(
+            "'/bin/bash' -c '" + TerminalAgentLauncher.PROTECTED_WSL_NODE_PROGRAM + "' moe-accounts '/mnt/d/projexts/app' " +
+                "'/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.2/plugins/moe-jetbrains/daemon/accounts/cli.js' " +
+                "'--accounts-file' '/mnt/c/Users/Yaron/.moe/claude-accounts.json' 'remove' 'acct-2' '--sign-out'",
+            line
+        )
+        // Typed unchanged inside single quotes by bash, zsh and fish.
+        val program = TerminalAgentLauncher.PROTECTED_WSL_NODE_PROGRAM
+        assertFalse(program, program.any { it == '\'' || it == '\\' || it == '!' || it < ' ' || it == '\u007f' })
+        assertTrue(program, program.endsWith("exec node \"\$@\""))
+    }
+
+    @Test
+    fun `A6 protected WSL accounts line refuses a project with no mnt path`() {
+        for (base in listOf("\\\\server\\share\\app", "/home/u/app", "D:app", "")) {
+            val message = accountsRefusal { wslAccountsLine(base) }
+            if (base.isNotEmpty()) assertTrue(message, message.contains(base))
+        }
+        val ex = assertThrows(IllegalArgumentException::class.java) { wslAccountsLine("D:/p" + 1.toChar() + "q") }
+        assertEquals("Invalid accounts command word: contains control characters", ex.message)
+    }
+
+    @Test
+    fun `A7 the WSL node program runs only a node outside the project`() {
+        assumeTrue(!SystemInfo.isWindows && File("/bin/bash").canExecute())
+        val project = temporaryFolder.newFolder("project")
+        val bin = temporaryFolder.newFolder("project", "bin")
+        val outside = temporaryFolder.newFolder("outside")
+        val work = temporaryFolder.newFolder("work")
+        fakeNode(project, "cwd")
+        fakeNode(bin, "inside")
+        fakeNode(outside, "outside")
+        fakeNode(temporaryFolder.newFolder("work", "rel"), "rel")
+        val link = Files.createSymbolicLink(File(temporaryFolder.root, "link").toPath(), bin.toPath()).toString()
+        val unsafe = listOf(".", "", "bin", bin.path, link)
+        assertEquals(ProgramRun(0, "outside|a b|c|"), runProgram(project, (unsafe + outside.path).joinToString(":"), project.path).withoutStderr())
+        val refused = runProgram(project, unsafe.joinToString(":"), project.path)
+        assertEquals(ProgramRun(1, ""), refused.withoutStderr())
+        assertTrue(refused.stderr, refused.stderr.contains("MOE_PROTECTED_INTERPRETER_NOT_FOUND"))
+        assertEquals(ProgramRun(1, ""), runProgram(work, "rel", project.path).withoutStderr())
+        assertEquals(ProgramRun(1, ""), runProgram(project, outside.path, File(temporaryFolder.root, "missing").path).withoutStderr())
+    }
+
+    private data class ProgramRun(val exit: Int, val stdout: String, val stderr: String = "") {
+        fun withoutStderr() = copy(stderr = "")
+    }
+
+    /** A fake `node` in [dir] that prints [tag] and its arguments, each followed by `|`. */
+    private fun fakeNode(dir: File, tag: String) {
+        val node = File(dir, "node")
+        node.writeText("#!/bin/sh\nprintf '%s|' $tag \"\$@\"\n")
+        assertTrue(node.setExecutable(true))
+    }
+
+    /** Runs PROTECTED_WSL_NODE_PROGRAM as the WSL line does, in [cwd] with [path] as PATH; kills only its own child. */
+    private fun runProgram(cwd: File, path: String, projectArg: String): ProgramRun {
+        val out = temporaryFolder.newFile()
+        val err = temporaryFolder.newFile()
+        val builder = ProcessBuilder("/bin/bash", "-c", TerminalAgentLauncher.PROTECTED_WSL_NODE_PROGRAM, "moe-accounts", projectArg, "a b", "c")
+            .directory(cwd).redirectOutput(out).redirectError(err)
+        builder.environment()["PATH"] = path
+        val process = builder.start()
+        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            throw AssertionError("the program did not exit within 10 s (PATH=$path)")
+        }
+        return ProgramRun(process.exitValue(), out.readText(), err.readText())
+    }
+
+    private fun wslAccountsLine(basePath: String): String = TerminalAgentLauncher.accountsCommandFor(
+        PROTECTED,
+        AccountCli(
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js"
+        ),
+        "C:\\Users\\Yaron\\.moe\\claude-accounts.json",
+        listOf("remove", "acct-2", "--sign-out"),
+        AccountsShell.WSL_BASH,
+        basePath
+    )
+
+    /** The one IllegalArgumentException a protected Accounts refusal throws, in its own words, never the seat launch's. */
+    private fun accountsRefusal(build: () -> String): String {
+        val message = assertThrows(IllegalArgumentException::class.java) { build() }.message ?: ""
+        assertTrue(message, message.startsWith("Protected execution profile: "))
+        assertFalse(message, message.contains("node executable"))
+        assertFalse(message, message.contains("agent wrapper"))
+        return message
+    }
+
+    @Test
     fun `legacy agent command passes the explicit value, then the setting, then claude through unchanged`() {
         assertEquals(Run("codex"), commandFor(LEGACY, "codex", "gemini"))
         assertEquals(Run("gemini"), commandFor(LEGACY, null, "gemini"))
@@ -1005,6 +1199,8 @@ class TerminalAgentLauncherTest {
         // U+0027, U+2018, U+2019, U+201A and U+201B: PowerShell's tokenizer reads each as a single quote (CharExtensions.IsSingleQuote).
         const val PS_SINGLE_QUOTES = "'‘’‚‛"
         val BASE64_TAIL = Regex("[A-Za-z0-9+/]+={0,2}")
+        const val ACCOUNTS_SCRIPT = "C:\\moe\\daemon\\accounts\\cli.js"
+        const val ACCOUNTS_FILE = "C:\\moe\\claude-accounts.json"
 
         // Captured from buildCommand before PowerShell moved to -EncodedCommand (agentCommand claude, no team, workerId <role>-0000abcd).
         // A POWERSHELL row holds the script the typed line runs; the BASH rows hold the typed line itself.
