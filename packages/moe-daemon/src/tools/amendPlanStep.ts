@@ -112,7 +112,7 @@ export function amendPlanStepTool(_state: StateManager): ToolDefinition {
 
       // No runExclusive here: MCP dispatch already serializes tool handlers on
       // the global state mutex, and re-taking it would only add a nesting layer.
-      const updated = await state.updateTask(task.id, { implementationPlan: nextSteps }, 'TASK_UPDATED');
+      const updated = await state.updateTask(task.id, { implementationPlan: nextSteps }, 'TASK_UPDATED', params.workerId);
 
       // Best-effort chat: the @mention wakes the assigned worker's wait. A chat
       // failure must never fail a persisted amendment.

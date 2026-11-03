@@ -246,7 +246,7 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
             repairUpdates.priorHandoffs = repairedHandoffs;
           }
 
-          const repaired = await state.updateTask(task.id, repairUpdates, 'WORKER_RELEASED');
+          const repaired = await state.updateTask(task.id, repairUpdates, 'WORKER_RELEASED', params.workerId);
 
           if (correctedStatus !== task.status) {
             const msg = `🔧 task ${repaired.id} was unassigned but stuck in ${task.status}; auto-routed to ${correctedStatus}`;
@@ -329,7 +329,7 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           updates.status = parkStatus;
         }
 
-        const updated = await state.updateTask(task.id, updates, 'WORKER_RELEASED');
+        const updated = await state.updateTask(task.id, updates, 'WORKER_RELEASED', params.workerId);
 
         // The seat is given up, so the attempt that held it ends here — keyed on
         // the release itself, never on where the routing above sent the task.
