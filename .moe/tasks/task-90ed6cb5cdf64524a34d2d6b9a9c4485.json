@@ -80,14 +80,19 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review over this task's own diff only (load the adversarial-self-review skill):\n1. `git diff --stat $(git merge-base HEAD moe/work-2026-10-24)` lists exactly the 5 owned paths. No daemon source, no test file and no docs/MCP_SERVER.md.\n2. Exposure: nothing publishes on a non-loopback host address. No bare 9876:9876 remains, comments and prose included, and the CI step publishes on 127.0.0.1 only.\n3. Under `bash -e`, every exit path ends in the trap, which removes the container and keeps the status. The paths: docker run fails, the container crashes, curl runs out of tries, bad JSON, wrong projectPath, failed HEALTHCHECK. Also check that `$$` and `${port##*:}` survived, and that the `if` still reads github.event_name == 'pull_request'.\n4. Twice or concurrently: the per-shell container name and the Docker-assigned host port mean two runs never collide.\n5. Empty or odd input: an empty HEALTH (no answer) or a non-JSON body takes the 'Expected a healthy daemon' path and never crashes the check. A project path with spaces stays quoted (\"$PWD\") everywhere.\n6. Compatibility:\n   - an image run without MOE_PROJECT_PATH still serves /project;\n   - `docker run <image> --version` is unchanged;\n   - compose defaults to the image's own uid.\n7. No added line contains a project.json globalRails.forbiddenPatterns string.\nFix anything you find, then rerun checkRefs `green` and `static` before complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T19:41:16.278Z"
+      "modifiedFiles": [
+        ".github/workflows/docker.yml"
+      ],
+      "note": "Self-review over the 5 owned paths (git diff --stat vs merge-base lists exactly them: no daemon source, tests or docs/MCP_SERVER.md). Exposure: every published port is 127.0.0.1 (compose, both docs, CI step); no bare 9876:9876. Trap: docker run failure, crash (empty docker port gives empty curl, then 'no answer'), curl out of tries, bad JSON, wrong projectPath and a failed HEALTHCHECK all exit through the cleanup trap; the workflow sets no shell: key so it is plain bash -e; $$, ${port##*:} and the if == 'pull_request' survived. FIXED one real gap: a body of `null` is valid JSON, so JSON.parse returned null and h.status threw a TypeError stack instead of the 'Expected a healthy daemon' line; changed to `JSON.parse(...) ?? {}` in docker.yml. Verified bodies null, empty, 'not json', 5, \"x\" and a healthy body with the wrong projectPath all take the Expected path. Compat checked on a throwaway image: --version prints 0.8.0 (matches package.json); a project mounted at /project with no MOE_PROJECT_PATH is served as projectPath /project and its HEALTHCHECK probe passes; an unmounted image crashes with ENOENT /project/.moe/project.json exactly as HEAD's does (the image only mkdirs an empty .moe). Concurrency: per-shell container name plus Docker-assigned host port, no collision. No added line has a forbiddenPatterns string. Reran green and static after the fix: healthy / image HEALTHCHECK passed / exit 0, and STATIC-OK. The red and repro legs ran before the one-token fix; it does not touch their paths (empty HEALTH still prints 'no answer'). Cleaned up my own throwaway container and tag by exact name.",
+      "startedAt": "2026-11-03T19:41:16.278Z",
+      "completedAt": "2026-11-03T19:43:29.536Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,12 +104,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:11:21.835Z",
-  "updatedAt": "2026-11-03T19:41:16.278Z",
+  "updatedAt": "2026-11-03T19:44:59.642Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:15:40.612Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -119,7 +124,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:36:40.142Z",
@@ -197,5 +203,48 @@
   },
   "planApprovedAt": "2026-11-03T19:36:40.180Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T19:38:22.691Z"
+  "workStartedAt": "2026-11-03T19:38:22.691Z",
+  "reviewStartedAt": "2026-11-03T19:43:44.445Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon .moe | tar -x -C $S && cp --parents packages/moe-daemon/Dockerfile .github/workflows/docker.yml $S && python3 -c 'import sys,yaml;[s]=[s for s in yaml.safe_load(open(sys.argv[1]))[\"jobs\"][\"build-and-push\"][\"steps\"] if s.get(\"name\")==\"Test Docker image\"];assert \"pull_request\" in s[\"if\"];open(sys.argv[2],\"w\").write(s[\"run\"])' $S/.github/workflows/docker.yml $S/step.sh && cd $S && { bash -e step.sh > step.log 2>&1; r=$?; grep -aE \"^(healthy:|Expected|image HEALTHCHECK)\" step.log; [ $r = 0 ]; }",
+    "exitCode": 0,
+    "outputTail": "healthy: /tmp/tmp.Qn6nu5gXHZ\nimage HEALTHCHECK passed\n(exit 0; docker ps -a --filter name=moe-daemon-health lists nothing)",
+    "reportedAt": "2026-11-03T19:43:44.445Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/Dockerfile",
+    "docker-compose.yml",
+    "docs/DEVELOPMENT.md",
+    "docs/CONFIGURATION.md",
+    ".github/workflows/docker.yml"
+  ],
+  "completionSummary": "The moe-daemon image now listens on 0.0.0.0 inside the container and takes its project from MOE_PROJECT_PATH, so the documented recipe gives a daemon host clients can reach and accept. Five owned files only (git diff --stat vs merge-base).\n- Dockerfile: ENV MOE_BIND_HOST=0.0.0.0, CMD [\"start\"] (grep -c '\"--project\", \"/project\"' = 0), HEALTHCHECK on 127.0.0.1 (busybox wget tries localhost as ::1 first), timings unchanged, /project default + mkdir + ENTRYPOINT kept.\n- docker-compose.yml: user ${MOE_UID:-1001}:${MOE_GID:-1001}, ports 127.0.0.1:9876:9876, ${PWD}:${PWD} mount, MOE_PROJECT_PATH=${PWD}, 127.0.0.1 healthcheck.\n- DEVELOPMENT.md and CONFIGURATION.md Docker sections: every docker run passes --user, -p 127.0.0.1:9876:9876, -v \"$PWD\":\"$PWD\", -e MOE_PROJECT_PATH=\"$PWD\", with the reasons ('/mcp has no authentication', 'refuse a daemon that reports another project') and the Windows /mnt/d note.\n- docker.yml 'Test Docker image' (still PR-only): after --version, a trap-cleaned named container, Docker-assigned loopback port, 30x curl poll, node check of status+projectPath, and docker exec of the image's own HEALTHCHECK.\nEvidence, each run fresh from the task worktree:\n- green: 'healthy: /tmp/tmp.Qn6nu5gXHZ', 'image HEALTHCHECK passed', exit 0.\n- static: compose lines (MOE_PROJECT_PATH /srv/p, host_ip 127.0.0.1, user 1001:1001, source/target /srv/p) then STATIC-OK.\n- red (Dockerfile at af8ca2bb): 'Expected a healthy daemon serving /tmp/tmp.fouYiLYpJz on 127.0.0.1, got: no answer', then RED-ON-HEAD-IMAGE.\n- repro: 'LISTEN 0 511 0.0.0.0:19876', both '-> exit=0 {' (127.0.0.1 and 172.26.208.246), then DOD1-BIND-OK.\nCaveat: red and repro ran before the final one-token docker.yml fix (`JSON.parse(...) ?? {}`, so a `null` body prints the Expected line instead of a TypeError stack); it does not touch their paths. green and static were rerun after it. Compat on a throwaway image: --version 0.8.0; a project mounted at /project with no MOE_PROJECT_PATH is served as /project. No m",
+  "commits": [
+    {
+      "sha": "291a34e3a4905b214fd7ed2d76b02c7499c5ba31",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T19:37:16Z",
+      "paths": [
+        ".github/workflows/docker.yml",
+        "docker-compose.yml",
+        "docs/CONFIGURATION.md",
+        "docs/DEVELOPMENT.md",
+        "packages/moe-daemon/Dockerfile"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T19:44:59.642Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T19:37:16Z",
+    "at": "2026-11-03T19:44:59.642Z"
+  }
 }
