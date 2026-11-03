@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { MAX_STEP_FILES, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
+import { normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { assertContextFetched, assertWorkerHoldsTask } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
@@ -94,6 +95,10 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         throw invalidInput('modifiedFiles', `too many paths (${params.modifiedFiles.length}). At most ${MAX_STEP_FILES} per step: report ${MAX_STEP_FILES} here and pass the rest to moe.declare_files.`);
       }
 
+      // Same normalizer as declare_files and submit_plan: get_commit_scope
+      // drops paths it cannot normalize, so refuse them here instead of storing them.
+      const modifiedFiles = normalizeAffectedFiles(params.modifiedFiles, 'modifiedFiles');
+
       // Strict evidence goes on the attempt BEFORE the task write, on purpose:
       // evidence without the task write is repaired by the worker's retry, while
       // the reverse order would strand a COMPLETED step with no evidence, which
@@ -112,7 +117,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
               status: 'COMPLETED' as const,
               completedAt: new Date().toISOString(),
               ...(params.note ? { note: params.note } : {}),
-              ...(params.modifiedFiles?.length ? { modifiedFiles: params.modifiedFiles } : {}),
+              ...(modifiedFiles.length ? { modifiedFiles } : {}),
             }
           : step
       );
@@ -155,7 +160,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       // complete_step.modifiedFiles (falling back to affectedFiles), so a step
       // that reports nothing leaves its real edits to planned/measured
       // attribution — or unattributed when peers are active.
-      const modifiedFilesOmitted = !Array.isArray(params.modifiedFiles) || params.modifiedFiles.length === 0;
+      const modifiedFilesOmitted = modifiedFiles.length === 0;
       const warning = modifiedFilesOmitted
         ? `MODIFIED-FILES-OMITTED: step ${params.stepId} completed without modifiedFiles — the wrapper attributes this task's commit from complete_step.modifiedFiles and fell back to the step's affectedFiles (${(existingStep.affectedFiles || []).length} path(s)). Report every path you created or modified, or declare them with moe.declare_files.`
         : undefined;
