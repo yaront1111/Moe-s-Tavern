@@ -71,8 +71,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -139,7 +139,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-11-02T23:32:50.567Z",
+  "updatedAt": "2026-11-03T00:11:26.689Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",
@@ -165,7 +165,9 @@
     "firstClaimAt": "2026-10-30T07:17:11.675Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T00:10:37.688Z",
+    "wallClockMs": 320006013
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -247,10 +249,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-02T22:29:49Z",
-    "at": "2026-11-02T23:09:29.681Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-02T23:32:38Z",
+    "at": "2026-11-03T00:11:26.689Z"
   },
   "reviewStartedAt": "2026-11-02T23:08:32.099Z",
   "verification": {
@@ -260,5 +263,9 @@
     "reportedAt": "2026-11-02T23:08:32.099Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-RF07 epic-final integration. Docs only, no code changed.\n\nDocs:\n- ARCHITECTURE Security Notes: JetBrains protected state (daemon provenance, profile pin, which is per IDE system dir), unverified-daemon replacement, Windows Restart Daemon, VS Code parity gaps, accepted Windows costs, and a link to the threat model with its single-user host assumption.\n- TROUBLESHOOTING: 5 protected-profile entries and 3 MOE_PROTECTED_* code rows.\n- CONFIGURATION: the location and rules of the JetBrains protected state store.\n\nGates, each exit 0:\n- Daemon: snapshot of 28df02f7, plus the landed d1e127a1 codex fix, plus the docs: 228/228 files, 6881 passed, 20 skipped.\n- JetBrains: 585 tests, 0 failures (Windows, on moe/control 091c7dd0).\n- VS Code: 587 tests, 0 fail, tsc OK (Linux and Windows).\n- Postflight: PASS.\n- Lint: OK.\n- Not from this epic: target tip d1e127a1 fails heartbeatStop.test.ts. The cause is peer commit 373dc3d4 (task-69c02444, in REVIEW), and it is filed as task-f6d9c532.\n\nAdversarial review of the whole RF01-RF06 diff: NO protected-profile bypass. No repository runtime is selected and no silent downgrade exists. Findings:\n1. The CLI stop trusts daemon.json bindHost for /health and then sends SIGTERM. Filed task-d6ebe4ab (MEDIUM).\n2. VS Code workspace moe.daemon.host/port can redirect the connection. Commented on task-648a5916.\n3. The pin is per IDE dir. Documented.\n4. The wrappers keep NODE_OPTIONS/NODE_PATH. Commented on task-0b2ea570.\n5. Daemon cwd is the project. Covered by task-2f22237b's class.\n6. ps1 path containment compares spellings. Commented on task-2f22237b.\n7-9. JetBrains reads have no regular-file guard, vm-control is resolved directly, and ensureDaemonRunning has a check-then-act. Filed task-7faede18 (LOW).\n10. The Accounts CLI is the known daemon self-report gap.\n\nRows filed earlier by this task: task-648a5916, task-98c81a27, task-2f22237b, task-0b2ea570, task-6d5d3db2, task-fb0ab382. Related known costs: task-dd545bf1, task-9a1da6f6. Related prere"
+  "completionSummary": "CQ-RF07 epic-final integration. Docs only, no code changed.\n\nDocs:\n- ARCHITECTURE Security Notes: JetBrains protected state (daemon provenance, profile pin, which is per IDE system dir), unverified-daemon replacement, Windows Restart Daemon, VS Code parity gaps, accepted Windows costs, and a link to the threat model with its single-user host assumption.\n- TROUBLESHOOTING: 5 protected-profile entries and 3 MOE_PROTECTED_* code rows.\n- CONFIGURATION: the location and rules of the JetBrains protected state store.\n\nGates, each exit 0:\n- Daemon: snapshot of 28df02f7, plus the landed d1e127a1 codex fix, plus the docs: 228/228 files, 6881 passed, 20 skipped.\n- JetBrains: 585 tests, 0 failures (Windows, on moe/control 091c7dd0).\n- VS Code: 587 tests, 0 fail, tsc OK (Linux and Windows).\n- Postflight: PASS.\n- Lint: OK.\n- Not from this epic: target tip d1e127a1 fails heartbeatStop.test.ts. The cause is peer commit 373dc3d4 (task-69c02444, in REVIEW), and it is filed as task-f6d9c532.\n\nAdversarial review of the whole RF01-RF06 diff: NO protected-profile bypass. No repository runtime is selected and no silent downgrade exists. Findings:\n1. The CLI stop trusts daemon.json bindHost for /health and then sends SIGTERM. Filed task-d6ebe4ab (MEDIUM).\n2. VS Code workspace moe.daemon.host/port can redirect the connection. Commented on task-648a5916.\n3. The pin is per IDE dir. Documented.\n4. The wrappers keep NODE_OPTIONS/NODE_PATH. Commented on task-0b2ea570.\n5. Daemon cwd is the project. Covered by task-2f22237b's class.\n6. ps1 path containment compares spellings. Commented on task-2f22237b.\n7-9. JetBrains reads have no regular-file guard, vm-control is resolved directly, and ensureDaemonRunning has a check-then-act. Filed task-7faede18 (LOW).\n10. The Accounts CLI is the known daemon self-report gap.\n\nRows filed earlier by this task: task-648a5916, task-98c81a27, task-2f22237b, task-0b2ea570, task-6d5d3db2, task-fb0ab382. Related known costs: task-dd545bf1, task-9a1da6f6. Related prere",
+  "completedAt": "2026-11-03T00:10:37.688Z",
+  "reviewCompletedAt": "2026-11-03T00:10:37.688Z",
+  "reviewSummary": "Reviewed completion b7f0afd9 on moe/work-2026-10-24 and origin. Candidate tree c46be188 equals its tree. Docs only: 3 files, +140/-6, net 134. git diff --check clean.\n\nGates, re-run fresh by QA. Snapshot = git archive of HEAD a0269bcd, whose 3 docs cmp-equal b7f0afd9; env -i, Node 24.21.0.\n- Daemon npm test: 229/229 files, 6927 passed, 14 skipped, EXIT 0.\n- JetBrains gradlew.bat test --rerun (cmd.exe, jetbrains-gradle lease, in place on moe/control): BUILD SUCCESSFUL. Fresh XML: 39 files, 585 tests, 0 fail, 0 error.\n- VS Code npm test && npm run compile: 622 tests, 618 pass, 0 fail, 4 skip; tsc OK; EXIT 0.\n- postflight.sh (MOE_* scrubbed, timeout 240): PASS, EXIT 0, 23:36Z-00:01Z.\n- npm run lint and parity-check: OK. account-trust-docs: 5/5.\n\nDoD 2: I grepped each quoted dialog and refusal text in the landed Kotlin/TS/sh; all are present, including wrapped strings. The store rules, provenance and pin logic, the 20 s stop and 15 s exit bounds, NODE_OPTIONS/NODE_PATH scrub, Windows restart order and refusals, VS Code selection and wrapper codes match the code. The threat-model link and single-user host assumption are present, all ToC anchors resolve, and every comment ask is covered.\n\nDoD 3: rows exist for the findings: d6ebe4ab and 7faede18 filed, comments on 648a5916, 0b2ea570 and 2f22237b; fb0ab382 covers RF04 QA1. Finding 5 holds: the daemon spawns only absolute paths besides git, which gitExecutable already handles. No bypass found.\n\nNote: the later 9eca3971 (task-98c81a27, REVIEW) makes the VS Code pin persistent, so 3 doc lines go stale once it lands. Flagged in comment-75ad3777 on that row. This is not an RF07 defect. Complexity: nothing to cut.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
