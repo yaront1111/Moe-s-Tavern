@@ -74,7 +74,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -87,16 +87,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:25:49.539Z",
-  "updatedAt": "2026-11-03T13:45:57.795Z",
+  "updatedAt": "2026-11-03T13:53:07.910Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T13:38:13.350Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T13:52:44.011Z",
+    "wallClockMs": 870661
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -198,9 +201,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T13:40:24Z",
-    "at": "2026-11-03T13:45:57.795Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T13:51:15Z",
+    "at": "2026-11-03T13:53:07.910Z"
+  },
+  "completedAt": "2026-11-03T13:52:44.011Z",
+  "reviewCompletedAt": "2026-11-03T13:52:44.011Z",
+  "reviewSummary": "Reviewed completion 3ba2bddd (kind=completion, pushed, on moe/work-2026-10-24 and in control HEAD; owned paths clean and unchanged since). Diff +127/-3: three one-argument edits (params.workerId as 4th state.updateTask arg in completeTask/qaApprove/qaReject, one updateTask call each) plus new 121-line reviewLoopActor.test.ts. No schema/contract/.moe change; far under the 400 cap. Re-ran task.verification verbatim in a fresh git-archive snapshot outside the shared checkout: npm ci OK, tsc --noEmit clean, vitest 6/6 files, 391/391 passed, exit 0. Ran my own drop-argument mutants in that snapshot, one tool at a time: each fails its own actor, seat-query and notice assertions (completeTask: TASK_COMPLETED/worker-a/REVIEW; qaApprove: QA_APPROVED/DONE; qaReject: QA_REJECTED/WORKING). Restored file passes 1/1; snapshot deleted. DoD1: deep-equal {TASK_COMPLETED:worker-a, QA_REJECTED:qa-b, QA_APPROVED:qa-b}. DoD2: get_activity_log qa-b returns QA_REJECTED+QA_APPROVED, worker-a returns TASK_COMPLETED. DoD3: #general has 'Task moved to REVIEW by worker-a', 'WORKING by qa-b', 'DONE by qa-b', no 'by unknown'; existing suites pass unchanged. updateTask fallback (actorWorkerId || assignee || 'unknown') untouched, so workerId-less calls behave as before. Tests await every call and assert status; no swallowed catch. TASK_BLOCKED/TASK_REOPENED correctly out of scope. ponytail-review: nothing to cut. Not re-run by me: worker's parity-check+lint gate (no scripts/docs touched; worker reports exit 0).",
+  "requiredCheckAtDone": null
 }
