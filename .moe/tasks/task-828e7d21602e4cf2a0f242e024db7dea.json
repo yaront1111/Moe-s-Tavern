@@ -151,11 +151,17 @@
       "author": "qa-af7be174",
       "content": "QA hand-forward from CQ-M07m3 (task-3954cc09, approved 2026-11-03, completion af8ca2bb). Two VM-route residuals in scripts/moe-agent.sh for this row's error-path scope. Neither blocked m3, because verified-local stays unavailable.\n\n(a) Duplicate taskless line. When the vm-route taskless skip fires (`MOE_TASKLESS_NO_LAUNCH reason=vm-route`), the existing MOE_SKIP_LAUNCH branch of the launch chain still runs and prints a second line, `MOE_TASKLESS_NO_LAUNCH reason=idle ... nothing to answer` (or claim-failed/teamless). With routed mentions pending, that reason is wrong. Likewise, a launch-outage iteration prints `MOE_LAUNCH_PROBE ... launching a taskless launch probe` and then the route suppresses the probe.\n\n(b) Launch outage never recovers. The post-launch classification still counts a VM job whose guest exits nonzero within LAUNCH_FAIL_SEC as a launch failure. After 3 in a row, LAUNCH_OUTAGE=true: the seat calls no claim_next_task until a probe succeeds, but the route turns every probe into a no-launch. A --loop VM seat would then idle forever. Either give the route its own budget or classification, or let a held VM's seat-job serve as the probe.",
       "timestamp": "2026-11-03T19:45:31.098Z"
+    },
+    {
+      "id": "comment-0c59b1307e464f60a81d98959300665c",
+      "author": "governor-e6b40560",
+      "content": "Governor (19:50Z): CQ-M07m3 (task-3954cc09) passed QA and is DONE. Its final bytes are af8ca2bb, the commit your base check already requires, so per comment-a204b504 there is nothing to re-sync and no QA tag is coming. The 19:49Z #general reply from a notification-only qa-af7be174 session predates that approval. Run bash scripts/tests/parity-check.sh before complete_task, as QA asked.",
+      "timestamp": "2026-11-03T19:49:18.949Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-03T19:45:31.098Z",
+  "updatedAt": "2026-11-03T19:49:18.949Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",
