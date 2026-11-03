@@ -9,10 +9,56 @@
     "New moe-vscode tests pin the protected interpreter on both platforms and fail on today's bytes (RED recorded). `npm test && npm run compile` for moe-vscode is green in a snapshot run, per the live-runtime rail."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development). This row mirrors task-b071e3bf: JetBrains goes first, and this row dependsOn it. Read its landed plan and code before starting. If it settled a different interpreter or check, mirror that instead, and say so in complete_step.\n\nThe rule applies under protected only (runtimeProfile(...) === 'protected' || vmSeat). The wrapper's interpreter is an absolute path outside the workspace, chosen by a new export in moe-vscode/src/util/AgentLauncher.ts: `protectedInterpreter(basePath, windows = process.platform === 'win32', env = process.env, posixBash = '/bin/bash')`.\n- POSIX: posixBash, which is moe-agent.sh's own shebang.\n- win32: path.win32.join(env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe').\n- Both go through MoeDaemonClient.installedExecutable with a label (step 2). The POSIX label is `wrapper interpreter ${posixBash}`; the win32 label is the fixed text 'wrapper interpreter %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'. The result is { accepted: <real path> } or { rejected: <reason> }.\n\nThe protected typed line starts with that real path:\n- POSIX: `<env> '<interp>' '<wrapper>' --role ...`.\n- win32: `<env>& '<interp>' -NoProfile -ExecutionPolicy Bypass -EncodedCommand <b64>`. The win32 terminal's shellPath is the same path.\n\nA rejection shows `Protected execution profile: <reason>. Moe starts the agent wrapper only with an interpreter outside the project.` and creates no terminal. Legacy is unchanged: the typed `bash` and `powershell`, the win32 shellPath 'powershell.exe', and every legacy row.\n\nRows in moe-vscode/tests/protected-runtime.test.cjs (reuse its harness; tests share no helper module):\n- interp() gives the expected real path: fs.realpathSync.native('/bin/bash'), or on win32 fs.realpathSync.native(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')).\n- L1 already exists. It pins the PROTECTED line, which DoD 1 changes. expectedCommand gains an optional interpreter argument, and L1 expects the interpreter form. L1 also asserts the terminal options: on win32 {name: 'Moe Coder', cwd: dir, shellPath: interp()}; elsewhere, no shellPath key. L4 (legacy) passes no interpreter and stays byte-identical.\n- L5 tests protectedInterpreter in one table; each row is skipped off its platform.\n  - POSIX: the defaults give { accepted: interp() }. posixBash '/nonexistent/bash' gives { rejected: 'wrapper interpreter /nonexistent/bash not found' }. posixBash 'bash' gives '... is not an absolute path'. posixBash set to a file written inside the project gives '... resolves inside the project'.\n  - win32: env { SystemRoot: process.env.SystemRoot } gives { accepted: interp() }. env {} gives '... not found'. { SystemRoot: 'Windows' } gives '... is not an absolute path'. { SystemRoot: <a temp dir outside the project with no powershell.exe> } gives '... not found'. { SystemRoot: <the project dir> }, with System32\\WindowsPowerShell\\v1.0\\powershell.exe written inside it, gives '... resolves inside the project'.\n- L6: a protected launch (declare('verified-local') plus extension()). The client stub's installedExecutable returns { rejected: 'wrapper interpreter X not found' } and counts its calls.\n  - errors === ['Protected execution profile: wrapper interpreter X not found. Moe starts the agent wrapper only with an interpreter outside the project.'];\n  - no terminal is created, and the stub was called once;\n  - under a legacy launch (project(undefined, true)) the same stub gets zero calls, and L4's line is unchanged.\n\nIn moe-vscode/tests/verified-local-launch.test.cjs, expectedCommand's marker rows (V2 for architect and governor, V4 for worker and QA: the protected runtime) expect the interpreter form. Marker-false rows stay byte-identical.\n\nThese are the only existing rows that change, because they pin exactly the protected line that DoD 1 changes. Record that reading of DoD 2 in complete_step.\n\nRun both files RED in a Linux snapshot (step 4's archive, overlay and npm ci, then `node --test tests/protected-runtime.test.cjs tests/verified-local-launch.test.cjs`). L1, V2, V4, L5 and L6 must fail on today's bytes, and the legacy rows must pass. Keep that tail: it is the RED that DoD 3 asks for.\n\nError handling in the tests: every temp dir goes into the existing `made` cleanup, and no row depends on PATH.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/tests/protected-runtime.test.cjs",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "In moe-vscode/src/services/MoeDaemonClient.ts, give installedExecutable (:582) a label parameter: `installedExecutable(p, basePath, foldCase = defaultFoldCase, label = 'node executable')`. Its two early returns and its selectInstalledFile call use `label`.\n\nEvery existing caller and message stays as it is ('node executable ...'); protected-daemon-spawn.test.cjs pins those messages. Nothing else in this file changes. It is a hot file (task-648a5916 and task-0900b936), so keep this hunk confined to those lines.\n\nError handling: unchanged. selectInstalledFile still maps every fs error to a { rejected } reason.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implementation in moe-vscode/src/util/AgentLauncher.ts:\n- Import installedExecutable and defaultFoldCase (and the ArtifactSelection type) from '../services/MoeDaemonClient'.\n- Add the exported protectedInterpreter(...) from step 1, with a doc comment naming task-d5eca150 and its JetBrains twin.\n- In launchRole, compute `const protectedRun = runtimeProfile(workspacePath) === 'protected' || vmSeat;` once and choose `resolved` from it. runtimeProfile still runs first, exactly as today, because it pins.\n- After the existing refusal and not-found checks, when protectedRun: `const selection = protectedInterpreter(workspacePath)`. A rejection shows step 1's message and returns, before the readiness await and before createTerminal. Otherwise interpreter = selection.accepted.\n- buildPowerShellCommand and buildBashCommand take an optional last `interpreter`, and assertSafeLaunchArgs checks it for control characters when it is set.\n  - PowerShell: `${prefix}${interpreter ? `& ${psQuote(interpreter)}` : 'powershell'} -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`.\n  - Bash: `${prefix}${interpreter ? shQuote(interpreter) : 'bash'} ${shQuote(scriptPath)} ...`.\n- createTerminal: `...(isWin ? { shellPath: interpreter ?? WINDOWS_SHELL } : {})`. POSIX options stay {name, cwd}, so the user's profile shell still sets PATH for node and claude.\n\nError handling: protectedInterpreter never throws, because installedExecutable maps every fs error to a reason. The existing try/catch still covers the builders.\n\nResiduals belong to the epic final task (task-f3f364a6), not this row:\n- On POSIX the terminal's own shell is the user's default profile, which VS Code resolves itself. This row fixes the typed interpreter, as JetBrains does.\n- The Accounts sign-in terminal is not a seat launch and stays unchanged.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification (DoD 3). Run it once, from the task worktree. It runs both legs, and its output tail is the complete_task evidence. Archive the WHOLE tree, never `git archive HEAD moe-vscode` (mem:gotcha-vscode-tests-need-full-repo-snapshot).\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly the four files (cp, then cmp each). Then cd \"$S/moe-vscode\" || exit 1, and run env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'.\n- Windows leg: the same archive and overlay into a fresh /mnt/d/moe-scratch/<dir>, with Windows-native node_modules that are never shared. Then cmd.exe /d /c \"cd /d D:\\moe-scratch\\<dir>\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\".\n\nRules:\n- Both legs must exit 0.\n- Report tests / pass / fail / skipped for each leg, against the base (for example 622/618 on Linux at 9eca3971) plus the new rows. L5's off-platform halves skip.\n- Never run npm in the shared control checkout.\n- The diff touches exactly the four files; declare them as modifiedFiles.\n- Size: about 120 net lines, well under the 400 cap.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, once (load adversarial-self-review), recorded in complete_step:\n- (a) No protected path reaches createTerminal or sendText without an accepted interpreter.\n- (b) The legacy line, the legacy options and the call order of runtimeProfile are byte-identical. windows-terminal-shell W1, powershell-quoting and agent-launcher-controls stay unchanged and green.\n- (c) A VM seat (vmSeat) follows the same rule.\n- (d) The interpreter path is quoted in both shells. A quote in it is handled by psQuote and shQuote; a control character is handled by assertSafeArg.\n- (e) Windows: SystemRoot's case (process.env is case-insensitive there), and an 8.3 or subst SystemRoot (realpath.native canonicalises it; isWindowsAlias refuses non-drive forms).\n\nThen run mutants in a scratch copy of the Linux snapshot, and record each as KILLED and by which row:\n- M1: the typed word reverted to 'bash' under protected -> L1 and V4.\n- M2: the refusal falls through to createTerminal -> L6.\n- M3: protectedInterpreter consulted for legacy -> L6's zero-call assertion.\n- M4: the label dropped, so messages say 'node executable' -> L5.\n- M5: protectedInterpreter returns posixBash without installedExecutable -> L5.\n- M6: the win32 shellPath reverted to 'powershell.exe' -> L1, in the Windows snapshot.\nThen confirm the restored copies pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -27,11 +73,76 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:28.153Z",
-  "updatedAt": "2026-11-03T08:30:38.791Z",
+  "updatedAt": "2026-11-03T08:36:36.138Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T08:30:35.858Z"
+    "firstClaimAt": "2026-11-03T08:30:35.858Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T08:36:36.108Z",
+  "executionContract": {
+    "intendedBehavior": "Under the protected profile (a protected runtime, or a verified-local VM seat), the VS Code seat launch starts the installed wrapper's interpreter by an absolute path outside the workspace:\n- POSIX: the real path of /bin/bash, typed as the first word.\n- win32: %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe, used as the terminal's shellPath and typed after `&`.\nThe path passes installedExecutable's checks, so no PATH or current-directory lookup can select a workspace file. A refused interpreter shows an error and creates no terminal. Legacy launches are byte-identical.",
+    "acceptanceCriteria": [
+      "The protected typed lines and the win32 shellPath name the real absolute interpreter path (L1, V2, V4).",
+      "protectedInterpreter refuses a missing, relative or in-project candidate on each platform (L5).",
+      "A refusal creates no terminal, and a legacy launch never consults the interpreter check (L6).",
+      "Every legacy row and the legacy terminal options are unchanged.",
+      "npm test && npm run compile is green in Linux and Windows full-repo snapshots."
+    ],
+    "invariants": [
+      "runtimeProfile is called first and exactly once per launch, as today",
+      "no sendText or createTerminal on a protected launch without an accepted interpreter",
+      "a legacy launch line and its options are byte-identical to HEAD"
+    ],
+    "compatibility": [
+      "installedExecutable's default label keeps every existing 'node executable' message",
+      "the protected rows that pin the old bare-word line (protected-runtime L1, verified-local-launch V2 and V4) are updated by design; no legacy row changes"
+    ],
+    "reuse": [
+      "MoeDaemonClient.installedExecutable (with a new label parameter) for the outside-the-project and regular-file checks",
+      "the protected-runtime.test.cjs harness (loadLauncher, project, extension, declare) for the new rows"
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/util/AgentLauncher.ts:30 WINDOWS_SHELL, :258-288 buildPowerShellCommand, :290-321 buildBashCommand, :351 the protected choice, :411-415 createTerminal",
+      "moe-vscode/src/services/MoeDaemonClient.ts:582 installedExecutable, :588 selectInstalledFile, :616 isFullyQualified, :269 defaultFoldCase",
+      "scripts/moe-agent.sh line 1 is #!/bin/bash"
+    ],
+    "checkRefs": [
+      "two-leg full-repo snapshot: cd moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile, run on Linux under env -i and on Windows through cmd.exe, with the four files overlaid (step 4)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Absolute interpreter in the typed line, plus an absolute win32 shellPath. This mirrors the fix direction of the JetBrains twin task-b071e3bf; a parity note was posted to architect-74d9e1c7 at 08:35Z.\n\nRejected alternatives:\n- A scrubbed PATH through createTerminal's env option: profile rc files can re-add '.', and the typed bare word would still be resolved.\n- An absolute POSIX shellPath (/bin/bash) for the terminal itself: zsh users' PATH setup for node and claude lives in .zshrc, so seats would fail with MOE_PROTECTED_INTERPRETER_NOT_FOUND. It is recorded as a residual instead.\n- Reimplementing the outside-the-project check: installedExecutable already does it (fully qualified, a regular file by realpath, not a Windows alias, outside the project). It only needs a label parameter.\n\nDoD 2 reading: only the rows that pin the PROTECTED typed line change (protected-runtime L1, verified-local-launch V2 and V4), because DoD 1 changes exactly that line. Every legacy row and the legacy options stay byte-identical.",
+    "codebaseInsights": "AgentLauncher.ts:\n- :351 picks the protected runtime when runtimeProfile(...) === 'protected' || vmSeat. runtimeProfile pins, so it must still be called first and exactly once.\n- :287 (PowerShell) and :307 (bash) build the typed lines.\n- :411-415 creates the terminal; WINDOWS_SHELL ('powershell.exe') is the shellPath on win32 only.\n\nMoeDaemonClient.ts:\n- installedExecutable (:582) and selectInstalledFile (:588) hold the protected file checks. defaultFoldCase (:269) and ArtifactSelection (:261) are exported.\n\nTests:\n- They load AgentLauncher in a vm context with an injected client module, so a stubbed installedExecutable can force a refusal on any host.\n- windows-terminal-shell.test.cjs simulates win32 on any host, but only for legacy launches. Protected rows must run on their native host, because isFullyQualified and realpath use the real platform.\n- moe-agent.sh's shebang is #!/bin/bash.",
+    "risks": "- task-b071e3bf is still in PLANNING and may settle a different rule. Mirror the landed rule (step 1 says so).\n- MoeDaemonClient.ts is a hot file; keep the label hunk minimal.\n- /bin/bash on macOS is bash 3.2, but the wrapper's own shebang already requires it.\n- Windows leg: the symlink and NTFS rows skip as they do today.\n- PowerShell's `&` invocation needs the quoted path; never type a bare path.",
+    "keyFiles": [
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/protected-runtime.test.cjs",
+      "moe-vscode/tests/verified-local-launch.test.cjs",
+      "moe-vscode/tests/windows-terminal-shell.test.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9657a30c4fe9f4a644987ec33c440820da83c3e6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T08:36:36.138Z",
+  "approvedPlanRevision": 1
 }

@@ -11,29 +11,169 @@
     "In a snapshot outside the shared checkout: cd packages/moe-daemon && npx vitest run src/tools/claimNextTask.test.ts <new test file> && npx tsc --noEmit exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first (load test-driven-development). Create packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts. Do NOT edit claimNextTask.test.ts (it is in the open WT-19 row task-b1ca54f2's plan) or governanceFeatures.test.ts.\n\nCopy the minimal harness from governanceFeatures.test.ts, block 'collision notice marks live peers and pages them' (:191-488): setupMoe, writeEpic, writeTask, the live-worker createWorker, openAttempt for the peer, and one MESSAGE_CREATED subscriber per channel.\n\nFixtures:\n- a WORKING peer task-live in epic-2, assigned to a live CODING worker-live, whose plan names src/foo.ts;\n- the claimed row in epic-1 with a COMPLETED plan that names src/foo.ts: task-R with status REVIEW, or task-P with status PLANNING;\n- the claim goes through claimNextTaskTool(state).handler({ workerId, statuses: [status], taskId }, state).\n\nCases:\n(a) worktreeMode 'on' (state.updateSettings). A REVIEW claim by qa-1:\n  - posts NO line to #workers (collect every #workers MESSAGE_CREATED, whatever its wording);\n  - returns hasNext true with fileCollision equal to [{ task: 'task-live', files: ['src/foo.ts'], liveAssignee: 'worker-live' }];\n  - leaves task-R assigned to qa-1.\n  Run it with the peer attempt as 'worktree' and as 'shared' (it.each): a control-seat claimer coordinates with nobody either way.\n(b) The same as (a) for a PLANNING claim of task-P by architect-1.\n(c) worktreeMode unset (off). The same REVIEW claim posts exactly one #workers heads-up: its mentions are ['worker-live', 'qa-1'] and its text ends 'Coordinate before either of you lands.' This is today's behaviour.\n(d) An invalid worktreeMode value. Set settings.worktreeMode = 'yes' in memory, as claimNextTask.test.ts:83 does. The REVIEW claim still succeeds and still posts today's heads-up. Error handling: an unreadable mode never suppresses a page and never fails the claim.\n(e) The claim notice. With a busy (CODING) seat registered, a REVIEW claim of a row whose title holds an at-token produces exactly one #general message:\n  - its content is exactly `qa-1 claimed task: <title>`;\n  - its mentions are [];\n  - its event routingTargets are [].\n  Build the at-token at runtime with String.fromCharCode(64). Never spell the at-sign in the test source or the test titles.\n\nRED: run only the new file in a snapshot (step 4's recipe, overlaying only this file). Against the unchanged claimNextTask.ts, (a), (b) and (e) must fail, while (c) and (d) pass. Quote the failures in complete_step.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts"
+      ],
+      "note": "RED in a clone snapshot (/tmp/moe-df34-pjvlNX, HEAD + only the new test file), vitest run src/tools/claimNextTask.controlSeatNotice.test.ts: 4 failed | 2 passed (6). Failing: (a) x2 (peer attempt worktree and shared): expected #workers posts [] but received \"@worker-live @qa-1 ... file collision on task-R ... Coordinate before either of you lands.\"; (b) PLANNING claim: \"@worker-live @architect-1 ⚠️ file collision on task-P. Live: task-live: `src/foo.ts`...\" in #workers; (e) claim notice mentions: expected [] received [\"mentions\"]. Passing before the fix, as planned: (c) worktreeMode off pages as today, (d) invalid worktreeMode 'yes' keeps the heads-up and the claim.",
+      "startedAt": "2026-11-03T08:41:58.939Z",
+      "completedAt": "2026-11-03T08:43:30.676Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix, in packages/moe-daemon/src/tools/claimNextTask.ts.\n\n- Add a small helper next to worktreeOnlyCollision (:353), for example controlSeatClaim(state, task). It is true when task.status is REVIEW or PLANNING AND resolveWorktreeMode(state.project?.settings) is 'on'. That is the same call openAttempt makes at :157-158, and it is already imported.\n  - Reading the live setting is deliberate here. A REVIEW or PLANNING claim always opens a shared attempt, so no attempt can say which mode the project runs. In worktree mode those seats work in the control checkout on moe/control, which lands nothing (scripts/CLAUDE.md, Control seats).\n  - Error handling: resolveWorktreeMode throws on an invalid value. Catch it, log one warn line with the task id, and return false, so today's heads-up is kept.\n- In the collision block (:862-874), skip the post when worktreeOnlyCollision(...) || controlSeatClaim(...). Log the skip the way the existing worktree branch does.\n  - fileCollision in the response stays computed and returned exactly as today.\n  - The surrounding try/catch, which keeps a post failure from failing the claim, stays.\n- Update the doc comment on worktreeOnlyCollision and the block comment above the scan. They currently say REVIEW/PLANNING claims keep today's paging; that no longer holds when worktree mode is on.\n- At :882, post the claim notice with { parseMentions: false }. The signature is postToGeneral(content, opts?: SystemPostOptions) (StateManager.ts:878), and completeStep.ts:143 is the precedent. The text stays byte-identical.\n\nScope limits:\n- No other source file, and no new import.\n- No change to computeFileCollisions, markLivePeers, collisionNotice or the response shape (epic rail: no MCP contract break).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "claimNextTask.ts: added controlSeatClaim(state, task) (REVIEW/PLANNING and resolveWorktreeMode 'on'; a throw is caught, logged as one warn with the task id, and returns false so today's heads-up is kept); the collision gate now skips the #workers post on worktreeOnlyCollision(...) || controlSeatClaim(...); fileCollision computation and response untouched; updated the worktreeOnlyCollision doc comment and the block comment above the scan; the claim notice is posted with { parseMentions: false }, text unchanged. No new import (Task and resolveWorktreeMode were already imported). Snapshot check: new file 6/6 pass, tsc --noEmit OK.",
+      "startedAt": "2026-11-03T08:43:32.453Z",
+      "completedAt": "2026-11-03T08:43:57.802Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/MCP_SERVER.md: the `fileCollision[]` bullet in the moe.claim_next_task notes (:1525 at 119fce99). Change only this sentence: 'A live peer with no open attempt, or a `shared` or legacy one, and any claimer that is not in a worktree keep the heads-up described above'.\n\nAdd to it:\n- a REVIEW or PLANNING claim posts no heads-up while `settings.worktreeMode` is 'on', because that seat works in the control checkout, which lands nothing;\n- `fileCollision` is unchanged;\n- an invalid worktreeMode value keeps the heads-up.\n\nKeep every other sentence of the bullet, and every other line of the file, byte-identical. task-f81c85ac's MCP_SERVER.md hunks (deregister_worker reload hold) are already on the target: edit on top of them and never revert them. Its dependency edge was dropped (worktree mode: file overlap is a placement note, not an edge).\n\nError handling in the text: state the invalid-value fallback.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md line 1525 (the fileCollision[] bullet): one sentence changed in place, 1 insertion/1 deletion in git diff --numstat. It now says a REVIEW or PLANNING claim posts no heads-up while settings.worktreeMode is on (that seat works in the control checkout, which lands nothing; an invalid worktreeMode value keeps the heads-up), and fileCollision itself is the same in every case. Every other sentence and line of the file is untouched, including f81c85ac's hunks.",
+      "startedAt": "2026-11-03T08:43:59.721Z",
+      "completedAt": "2026-11-03T08:44:16.498Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once (DoD 1-5). From your task worktree, run checkRefs [0] and [1] joined with ' && ' as ONE command. Its output tail is the complete_task evidence.\n- [0] Scope: only claimNextTask.ts, the new test file and docs/MCP_SERVER.md changed against the merge-base with MOE_LAND_TARGET, and there is no stray untracked file under the source dirs.\n- [1] A git-clone snapshot of your HEAD with the three files overlaid runs npm ci, then the vitest suites, then `npx tsc --noEmit`. The suites are the new file plus claimNextTask.test.ts, claimNextTask.contract.test.ts, governanceFeatures.test.ts and chatSystemFeed.test.ts; at 119fce99 those four existing files pass 174/174. npm never runs in the shared checkout (global rail).\n\nError handling for a red run: fix the code or the new test, never an existing test, then re-run the whole command.\n\nDeclare modifiedFiles: the three files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "checkRefs [0] and [1] joined with && as one command (script /tmp/moe-df34-verify.sh, MOE_LAND_TARGET=moe/work-2026-10-24): exit 0, 'C0 OK' (scope: only the three files changed against the merge-base, no stray untracked file), then in a fresh clone snapshot with the three files overlaid: npm ci, vitest 5 files passed, 180 tests passed (174 existing + 6 new), npx tsc --noEmit clean, 'C1 OK'.",
+      "startedAt": "2026-11-03T08:44:19.029Z",
+      "completedAt": "2026-11-03T08:45:01.190Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")`.\n\n(a) Mutation check in a scratch copy of the step-4 snapshot. Each mutant must fail:\n- drop the controlSeatClaim condition: (a) and (b) fail;\n- drop { parseMentions: false }: (e) fails;\n- make the helper ignore the setting: (c) fails;\n- let the resolver's throw escape: (d) fails.\nRestore the code and confirm the suite is green. Quote all four runs.\n(b) The WORKING-claim path is unchanged: governanceFeatures (h)-(k) still pass, unedited.\n(c) fileCollision in the response is identical in every case, so the claimer's advisory and the tool contract are intact.\n(d) No new await sits between the claim's assignment and the post that could fail the claim. A post or resolver failure is swallowed as before.\n(e) The claim notice text is byte-identical; only its mention parsing changes. A PLANNING claim without a plan computes no collision, so it posts nothing, as before.\n\nRecord the review in complete_step.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T08:45:03.219Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
   "reopenReason": null,
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
-  "dependsOn": [
-    "task-f81c85acfec54b0f89affccb7a833b6a"
-  ],
+  "dependsOn": [],
   "priority": "MEDIUM",
   "order": 353.7,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:10.941Z",
-  "updatedAt": "2026-11-03T08:35:38.643Z",
+  "updatedAt": "2026-11-03T08:45:03.219Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T08:35:19.081Z"
+    "firstClaimAt": "2026-11-03T08:35:19.081Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
-  ]
+    "architect-1dd28c7c",
+    "worker-33f67e5b"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T08:39:14.331Z",
+  "executionContract": {
+    "intendedBehavior": "With worktree mode on, claim_next_task's #workers file-collision heads-up is no longer posted for a REVIEW or PLANNING claim. A mention-less line there pages every busy seat, and those seats land nothing from the control checkout. The response's fileCollision is unchanged. The '<workerId> claimed task: <title>' notice is posted with mention parsing off, so an at-token in a title pages nobody. WORKING claims and shared mode keep today's behaviour.",
+    "acceptanceCriteria": [
+      "New test file cases (a)-(e) pass. Before the fix (a), (b) and (e) fail, while (c) and (d) pass both before and after.",
+      "claimNextTask.test.ts, claimNextTask.contract.test.ts, governanceFeatures.test.ts and chatSystemFeed.test.ts pass unedited, and tsc --noEmit exits 0."
+    ],
+    "invariants": [
+      "The fileCollision array returned to the claimer is identical in every mode.",
+      "A collision computation, setting read or post failure never fails or alters the claim.",
+      "An invalid settings.worktreeMode keeps today's heads-up.",
+      "The WORKING-claim worktree rule (worktreeOnlyCollision) and the shared-mode paging are unchanged.",
+      "Only claimNextTask.ts, the new test file and docs/MCP_SERVER.md change."
+    ],
+    "compatibility": [
+      "The moe.claim_next_task response shape and every field are unchanged (epic rail: no MCP contract break).",
+      "The claim notice text is byte-identical."
+    ],
+    "approvedScope": [
+      "claimNextTask.ts: one helper (REVIEW/PLANNING claim + resolveWorktreeMode 'on'), its use in the collision-post gate, the two comments, and { parseMentions: false } on the claim notice.",
+      "docs/MCP_SERVER.md: one sentence of the fileCollision bullet."
+    ],
+    "reuse": [
+      "Harness copied from governanceFeatures.test.ts :28-70 and :191-488 (setupMoe, writeTask, the live worker, openAttempt, MESSAGE_CREATED capture). The existing resolveWorktreeMode and SystemPostOptions are reused."
+    ],
+    "sourceAssumptions": [
+      "claimNextTask.ts at 119fce99:\n- :157-158 openAttempt picks 'worktree' only for a WORKING claim with resolveWorktreeMode(settings) === 'on';\n- :353-360 worktreeOnlyCollision returns false for a non-worktree claimer attempt;\n- :862-874 holds the collision post;\n- :882 posts the claim notice.",
+      "state/validators.ts:293 resolveWorktreeMode: undefined means 'off', and an invalid value throws through validateEnumValue.",
+      "state/StateManager.ts:878 postToGeneral(content, opts?: SystemPostOptions). Pattern: completeStep.ts:143 { parseMentions: false } (task-85df8bf0).",
+      "Routing:\n- state/chatStore.ts:196-231 parses mentions unless parseMentions is false;\n- util/chatPayload.ts:54 treats only #general and presence lines as feed;\n- util/mentionRouter.ts:255-267 sends a line with no known mention to every busy seat."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && D='packages docs scripts moe-jetbrains moe-vscode' && X=$(git diff --name-only \"$B\" -- $D | grep -vxF -e packages/moe-daemon/src/tools/claimNextTask.ts -e packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts -e docs/MCP_SERVER.md || true) && N=$(git ls-files --others --exclude-standard -- $D | grep -vxF packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts || true) && { [ -z \"$X$N\" ] || { echo \"FAIL: out of scope vs $B: $X $N\"; exit 1; }; } && echo 'C0 OK'",
+      "cd \"$(git rev-parse --show-toplevel)\" && H=$(git rev-parse HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && for f in packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts docs/MCP_SERVER.md; do cp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npx vitest run src/tools/claimNextTask.controlSeatNotice.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts src/tools/governanceFeatures.test.ts src/tools/chatSystemFeed.test.ts && npx tsc --noEmit' && echo 'C1 OK'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Make every mention-less system line in a role channel feed (chatPayload.isSystemFeedMessage): rejected here. It changes routing for every daemon post in #workers, #qa and #governors, which is a broad behaviour change for a separate row.\n(2) Key the skip off the claimed task's last WORKING attempt mode: rejected. Whether QA or an architect lands anything depends on this project's mode now (control checkout on moe/control), not on how the row was delivered.\n(3) Skip REVIEW claims in every mode: rejected. DoD 1 keeps shared mode as today.\nThe f81c85ac edge was dropped: its MCP_SERVER.md hunks are already on the target, and in worktree mode a file overlap is a placement note, not an edge (governor rule).",
+    "codebaseInsights": "Collision tests live in governanceFeatures.test.ts ('collision notice marks live peers and pages them', cases (a)-(k); (h)-(k) are the worktree rows from task-97740aed). The claim's attempt mode comes from openAttempt :157. QA and PLANNING claims always open a 'shared' attempt, which is why worktreeOnlyCollision cannot help them.\nEvidence for the row:\n- 33 of 69 collision notices since 97740aed came from qa-* claims;\n- every QA-claim notice since 02:18Z mentions nobody, so each routed to every busy seat;\n- 97740aed's own title produced 3 claim notices with mentions ['mentions'].",
+    "risks": "- A PLANNING row normally has no plan at claim time, so no collision. Only a re-planned row with an old plan reaches the new branch, and case (b) builds one explicitly.\n- resolveWorktreeMode throws on an invalid value. The helper must catch it so the claim and today's heads-up are kept (case (d)).\n- Test text must not contain a literal at-sign: amend_plan_step and request_replan still echo text with mention parsing on.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9657a30c4fe9f4a644987ec33c440820da83c3e6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T08:39:14.372Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T08:41:58.939Z"
 }

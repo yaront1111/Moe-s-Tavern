@@ -80,8 +80,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T03:02:36.827Z",
-  "updatedAt": "2026-11-03T08:36:01.092Z",
+  "updatedAt": "2026-11-03T08:45:57.498Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:56.321Z",
@@ -107,7 +107,9 @@
     "firstClaimAt": "2026-11-03T07:32:07.350Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T08:45:05.740Z",
+    "wallClockMs": 4378390
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -118,8 +120,8 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-af7be174@2026-11-03T08:34:49Z",
-    "at": "2026-11-03T08:36:01.092Z"
+    "sessionId": "qa-af7be174@2026-11-03T08:36:18Z",
+    "at": "2026-11-03T08:45:57.498Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -241,5 +243,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T08:45:05.740Z",
+  "reviewCompletedAt": "2026-11-03T08:45:05.740Z",
+  "reviewSummary": "Reviewed completion 8f3a262c: pushed, and on moe/work-2026-10-24 and its origin. HEAD has the same bytes for all 4 files.\nDiff: +116/-4 (net 112), exactly approvedScope: moe-call.sh +19/-1 (#!/bin/sh + builtins-only hand-over; body unchanged; 100755; LF), test +92/-2 (directCall + D1-D5; no existing row touched), ARCHITECTURE +4, TROUBLESHOOTING +1/-1.\nRe-ran task.verification on a git-archive snapshot of 8f3a262c:\n- Linux env -i: bash -n OK; 133 tests, 102 pass, 0 fail, 31 skip (pwsh-only); D1-D5 all ran (D4 via dash).\n- Windows node.exe: 46 tests, 44 pass, 0 fail, 2 skip (D2 and D4 skip on win32 by design).\n- parity PASS; lint OK.\nRED re-proved: the new rows against the 8f3a262c^ helper fail 5/5.\nDoD1 met: D1 and D3 plant bash and sh in the '.'-first cwd. D1's legacy half still reaches the plant (exit 42) and is the non-vacuity control.\nDoD2 met: legacy runs `exec bash` by PATH, the same argv as env bash. Every Moe caller names bash explicitly (moe-agent.sh x2, fallback prompt, claudeHook.ts, baselineRun.ts; checked with git grep). The /bin/bash refusal and the explicit-interpreter limitation are documented.\nOwn probe under the marker: plants named [ test true false echo export unset exec exit case if bash sh env node shopt printf on '.'. None ran via dash, via bash-as-sh or via direct exec, also with POSIXLY_CORRECT or a forged BASH_VERSION (env forgery, fails closed at pipefail).\nAssertions are exact. Complexity pass: nothing to cut. Non-blocking: no row asserts the sentinel is absent from the proxy env; the unset precedes the body, so it holds by reading.",
+  "requiredCheckAtDone": null
 }
