@@ -80,8 +80,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -93,12 +93,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:11:45.670Z",
-  "updatedAt": "2026-11-03T19:30:30.977Z",
+  "updatedAt": "2026-11-03T19:32:23.850Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:20:21.764Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T19:32:02.867Z",
+    "wallClockMs": 701103
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -214,9 +216,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T19:24:34Z",
-    "at": "2026-11-03T19:29:24.122Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T19:30:11Z",
+    "at": "2026-11-03T19:32:23.850Z"
+  },
+  "completedAt": "2026-11-03T19:32:02.867Z",
+  "reviewCompletedAt": "2026-11-03T19:32:02.867Z",
+  "reviewSummary": "Reviewed completion 3463c538 (contained in HEAD and moe/work-2026-10-24; +15/-11, net +4, 5 files, no size issue). Diff read directly: architect.md:30 now says \"key on `error.data.codeName` and follow the call `error.message` names (`error.data` is exactly `{ tool, codeName }`)\" (matches McpAdapter.ts:316-323, which sends exactly { tool, codeName }). qa.reference.md landing-gap reject and moe-qa-loop SKILL.md landing-gap bullet now state the 500-char issue-description cap (matches qaReject.ts:103-104; reason cap 2000 matches qaReject.ts:81) and route the held-path remedy text to `reason` or a task comment; the issue keeps only codes/refs/paths (`MOE_CONTESTED_HELD`). 'A second landing gap is not rejected again' rule and qa.md untouched. Re-ran task.verification (checkRefs[0]) myself in a fresh --shared clone of HEAD outside the shared checkout: exit 0 — `grep data.nextAction` over docs/roles, docs/skills and src/generated prints nothing; 500 present in both qa.reference.md and SKILL.md; lint OK (architect.md 39 lines, max 40); npm ci + generate-init-files + generate-skill-files both print Generated and `sha1sum -c` against the committed generated files is clean (vendored copies byte-identical to generator output); vitest initFiles/skillFiles/qaCommitPolicy: 3 files, 44 tests passed. Working tree for the 5 owned files matches HEAD. No forbidden patterns (eval(/innerHTML/dangerouslySetInnerHTML/__proto__) in added lines; no daemon runtime code changed, doc strings only). DoD 1-3 all met. Not run: the full daemon suite and JetBrains/launcher gates, not required by this docs-only row. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

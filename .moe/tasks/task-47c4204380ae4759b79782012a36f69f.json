@@ -43,20 +43,26 @@
     {
       "stepId": "step-3",
       "description": "Tests in chatPin.test.ts. task-3064fd45 created this file; it lands before this row (dependsOn), so extend it. It is listed as newFiles only because HEAD at planning time (f8b8d60c) does not have it yet.\n\nReuse its fixture and helpers: h, generalId(), send, pin, unpin, posted(), expectNoPin(). Import getActivityLogTool from './getActivityLog.js'. Before reading events, call `await flushActivityLog(h.state)`.\n\nAdd one describe block:\n(a1) chat_pin as 'worker-a' records PIN_CREATED with event.workerId 'worker-a'. Its payload deep-equals `{ channelId: generalId(), messageId, pinnedBy: 'worker-a' }` (unchanged).\n(a2) A pin as 'human', then an unpin as 'worker-a', records PIN_REMOVED with event.workerId 'worker-a'. Its payload deep-equals `{ channelId, messageId }`.\n(a3) `getActivityLogTool(h.state).handler({ workerId: 'worker-a', eventTypes: ['PIN_CREATED', 'PIN_REMOVED'] }, h.state)` returns exactly those two events for the seat. Assert the event names and ids, not only a count.\n(a4) chat_unpin with workerId 'system' rejects { code: MoeErrorCode.NOT_ALLOWED }; with 'worker-ghost' it rejects { code: MoeErrorCode.INVALID_INPUT }. Each time the pin is still listed in h.state.getPins(generalId()), and no PIN_REMOVED was appended.\n(a5) chat_unpin as 'human', and chat_unpin with workerId omitted, each succeed and record PIN_REMOVED with workerId 'human'.\n(a6) The board path: `await h.state.unpinMessage(generalId(), messageId)` with no actor still removes the pin, and its PIN_REMOVED has no workerId (unchanged).\n\n(a1)-(a5) fail on HEAD plus task-3064fd45: no actor is recorded, and chat_unpin has no guard.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/chatPin.test.ts"
       ],
-      "startedAt": "2026-11-03T19:30:58.661Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatPin.test.ts"
+      ],
+      "note": "Extended chatPin.test.ts (landed by 3064fd45) with a 'pin events record the caller as actor' describe: a1-a6. First gate run: a3/a5 failed only because get_activity_log reads newest-first; assertions made order-independent; re-verified in step 5.",
+      "startedAt": "2026-11-03T19:30:58.661Z",
+      "completedAt": "2026-11-03T19:32:05.842Z"
     },
     {
       "stepId": "step-4",
       "description": "Contract text in docs/MCP_SERVER.md, the '### moe.chat_pin' and '### moe.chat_unpin' sections only. Edit with your seat's editor (Edit, or apply_patch on codex exec). Never use a shell write or Serena: the global rail on TOOL witnesses.\n\nchat_pin params:\n- channel: 'channel id, or name in either \"general\" or \"#general\" form'.\n- workerId: 'a registered worker or \"human\"; \"system\" is refused NOT_ALLOWED and an unregistered id INVALID_INPUT'. That rule landed with task-3064fd45, which left this file alone.\n\nchat_unpin params:\n- the same channel wording;\n- a new line `workerId?: string  // Optional: worker removing the pin, a registered worker or \"human\" (omitted: \"human\"); same refusals as chat_pin`.\n\nAdd one note under the two sections: PIN_CREATED and PIN_REMOVED record the caller as the activity event's workerId, so get_activity_log { workerId } finds them. Payloads are unchanged.\n\nPlacement: task-66108835 (chat_wait, in REVIEW at planning time) also declares docs/MCP_SERVER.md, for its own chat_wait section. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` first. Edit only these two sections: they are distinct hunks, and worktree-mode merge-tree lands distinct hunks cleanly.\n\nError handling: if a section header has moved, locate it by its '### moe.chat_unpin' heading. Never rewrite the whole file.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "startedAt": "2026-11-03T19:32:13.563Z"
     },
     {
       "stepId": "step-5",
@@ -88,12 +94,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:22:41.722Z",
-  "updatedAt": "2026-11-03T19:30:58.661Z",
+  "updatedAt": "2026-11-03T19:32:13.563Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:24:33.842Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -105,7 +111,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:28:15.039Z",
