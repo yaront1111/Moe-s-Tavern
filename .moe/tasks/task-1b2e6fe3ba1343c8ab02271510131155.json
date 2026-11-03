@@ -15,8 +15,9 @@
     {
       "stepId": "step-1",
       "description": "Preconditions and spelling inventory. Read-only: no tracked file changes.\n\nWHERE YOU WORK. Read `get_context.workspace.mode`. Expect `worktree`, because this row's dependsOn chain runs through the worktree switch (flip gate task-6519ed9127ad4c359fd64b71f1a08be5, then WT-10M, then WT-14).\n- In worktree mode your cwd is your task worktree: `$MOE_WORKTREE_PATH` = `.worktrees/<taskId>`, on `moe/task/<taskId>`.\n- Every path in this plan is relative to `git rev-parse --show-toplevel`, which is that worktree. Edit only those copies, with the Edit tool.\n- NEVER write /mnt/d/projexts/moes/<file>. That is the control checkout: the wrapper reports such edits as MOE_WORKTREE_STRAY_EDIT and never lands them.\n- In shared mode, work in the project root as usual.\n\nPREREQUISITES. These docs describe behaviour from these rows, all upstream of this one:\n- WT-10 (task-5c2e6cdf2494412ca0c2bc40e26d9da3), WT-11 (task-dd1ee586b90d4fc785434454b1423e76), WT-12 (task-06910296f63b4868849dc46cbb38a731), WT-13 (task-fbe8e3880ddf47dfa8546f220acea770);\n- 31187ec1 (task-31187ec10ae54dd2b03f4c166f083f31), WT-10M (task-253884005a59471fb7c59ef38e1f3cc1), WT-14 (task-befdddf7e1f047a0ba4f71dd900c9b8f).\nFor each one, `git log HEAD --all-match --grep 'Moe-Task: <full id>' --grep 'Moe-Kind: completion' --format=%h -1` must print a sha.\n- A row that was ARCHIVED instead is not an error; leave its behaviour out. The human may drop WT-10M, because this repo switched without the migration.\n- A DONE row with no completion on HEAD: call moe.report_blocked with blockedOnTaskIds [that id] and stop.\n\nINVENTORY. Write it to a scratch file outside the checkout (`mktemp -d`). The landed code wins over docs/plans/2026-10-30-per-task-worktrees.md.\n- Codes and env vars, from `git show HEAD:scripts/moe-agent.sh` and `HEAD:scripts/moe-agent.ps1`:\n  - every code and env var of the worktree arms, at least everything `grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH|MIGRATION)_[A-Z0-9_]*[A-Z0-9]|MOE_WRAPPER_IN_WORKTREE'` finds (step 5 requires each one in the new scripts/CLAUDE.md bullet);\n  - plus MOE_ATTR_EXCLUDED, MOE_CHECKPOINT_RECOVERED, MOE_COMMIT_NOTHING_TO_COMMIT, MOE_COMMIT_FAILED_{CONFLICT,GATE,LAND_LEASE,REF_CONTENTION} and MOE_RESCUE_REF.\n  - For each, write one line from the code: what triggers it and what follows (the seat stops with report_blocked and no CLI, the unlanded route, or a warning only), and what moves and what never moves.\n- Helpers and their twins:\n  - sync_land_target / Sync-MoeLandTarget;\n  - reconcile_push / Resolve-MoePushOutcome;\n  - denied_wt (a python def inside moe-agent.sh) / Test-MoeDenyPathWorktree;\n  - task_branch_landed / Test-MoeTaskBranchLanded;\n  - control_worktree_mode / Test-MoeControlWorktreeMode;\n  - gate_integrity_wt / Test-MoeGateIntegrityWorktree;\n  - `run_frozen_gate worktree` / `Invoke-MoeFrozenGate -WorktreeMode`;\n  - wt_land_rounds (3 rounds, 2 with a qualityGate);\n  - plus whatever WT-11..WT-14 and WT-10M named for the unlanded route, the board snapshot, the control follow, removal and the sweep.\n  - The design's take_unlanded_route, board_snapshot and follow_control_checkout are names to look for, not to copy.\n- Refs, prompts and flags: moe/task/<taskId>, refs/moe/rescue/<taskId>/<utc-ts> and its reasons, refs/moe/board, moe/control, git-land-<target>, the LANDING-CONFLICT: and LANDING-RETRY: prompts, and --land-branch / -LandBranch.\n- Daemon:\n  - resolveWorktreeMode (state/validators.ts);\n  - ExecutionAttempt.workspaceMode and AttemptWorkspace, and Task.landingRetry (LandingRetry, UnlandedReason), in types/schema.ts;\n  - finalize_attempt outcome 'unlanded' (tools/finalizeAttempt.ts);\n  - the complete_task worktree branch rule.\n  Spell them as WT-17a's docs/MCP_SERVER.md and docs/SCHEMA.md do. If WT-17's docs/CONFIGURATION.md and WT-16's docs/TROUBLESHOOTING.md runbook have landed, read them so nothing here contradicts them.\n- This repo: `.moe/project.json` settings.worktreeMode and settings.consolidationBranch. On 2026-11-02 the human decided to keep main PR-only and land this repo on its consolidationBranch (the flip gate row).\n\nCollect every design/code mismatch (a renamed, missing or extra helper, code or rule) for the completion summary and for one moe.add_comment on WT-19 (task-b1ca54f2716442be889a14623eb59983). A family code that HEAD mentions only in a comment goes on that list too. Never present a design-only name as shipped.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T06:34:14.532Z"
     },
     {
       "stepId": "step-2",
@@ -57,7 +58,7 @@
   ],
   "planRevision": 2,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-ed0f6a9e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -66,7 +67,6 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
-    "task-befdddf7e1f047a0ba4f71dd900c9b8f",
     "task-fad5ef971b0941b590621aa40702ad4b",
     "task-48f0b3aaa82c4b938d3a15f3710a66e5",
     "task-a4ca766a67184630842d4a6d12338cf8",
@@ -121,11 +121,17 @@
       "author": "governor-e6b40560",
       "content": "Governor note for WT-18's planner and worker (19:44Z): one more mode-aware sentence for scripts/CLAUDE.md, found live after the switch.\n\nThe Hot reload bullet (:14) says \"Wrapper saves must not rely on in-place rewrites being safe for older seats\". Planners copy that into wrapper-row plans as \"write the whole file to temp, bash -n, mv -f; never edit in place\" (414eae5a, befdddf7, f6228433). At 19:39Z it blocked a Codex seat on 414eae5a, because Serena and apply_patch edit in place and customRule [2] bars shell mv into the tree.\n\nIn worktree mode the premise doesn't hold:\n- Seats execute only the control checkout's committed bytes, which change only through git's fast-forward checkout, a new inode.\n- A task worktree's scripts/moe-agent.{sh,ps1} is executed by no seat, only by that row's own harness runs.\n\nGovernor ruling comment-4908ce55 on 414eae5a says this. Please add one sentence to the worktree-mode arm (or the Hot reload bullet if your step 2 allows it): in a task worktree, edit the wrapper in place with a TOOL-witnessed editor, then run bash -n or ParseFile; the atomic-save rule applies only to the shared or control checkout's copy. Note that task-69c02444 (WORKING) also edits that Hot reload bullet, so anchor your sentence in the new worktree-mode bullet to avoid overlapping its hunk.",
       "timestamp": "2026-11-02T19:41:54.401Z"
+    },
+    {
+      "id": "comment-97a5018ae60c473494fa768f1705ab4f",
+      "author": "governor-e6b40560",
+      "content": "Governor early start, 06:35Z: I dropped dependsOn WT-14 (task-befdddf7).\n\nWhy it is safe: WT-14's completion 78cfa1c1 is on moe/work-2026-10-24 (local and origin), and QA passed it on substance at 02:43Z (qa-af7be174, comment-e1687a8e). Only its size waiver prop-6812056d is still pending, and the waiver changes no bytes.\n\nWhat this means for your plan:\n- Step 1's PREREQUISITES, including WT-14, are met by those landed bytes.\n- Your worktree is cut from the target. Confirm with `git merge-base --is-ancestor 78cfa1c1 HEAD`, then write from HEAD as planned.\n- This row shares no file with WT-14.\n- If a later WT-14 rework changes behaviour you describe, re-sync before landing.\nWT-19 keeps its own edge to WT-14.",
+      "timestamp": "2026-11-03T06:32:32.656Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:58:01.619Z",
-  "updatedAt": "2026-11-02T19:41:54.401Z",
+  "updatedAt": "2026-11-03T06:34:14.532Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T07:59:08.907Z",
@@ -139,7 +145,8 @@
   "contextFetchedBy": [
     "architect-bd1eb82d",
     "architect-0fcb7226",
-    "architect-d54b05fd"
+    "architect-d54b05fd",
+    "worker-ed0f6a9e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -266,5 +273,6 @@
     "kind": "checkpoint",
     "sessionId": "architect-d54b05fd@2026-11-02T08:45:06Z",
     "at": "2026-11-02T09:16:01.855Z"
-  }
+  },
+  "workStartedAt": "2026-11-03T06:34:14.532Z"
 }

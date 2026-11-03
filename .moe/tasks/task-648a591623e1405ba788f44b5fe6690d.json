@@ -16,11 +16,12 @@
     {
       "stepId": "step-1",
       "description": "RED tests first (test-driven-development). Rev 2 builds on task-98c81a27's owner-only store, which this row dependsOn. Re-read MoeDaemonClient.ts in your worktree: these must exist, and you call them, never re-implement them: useProtectedStateRoot, projectStateKey, protectedStateName(kind, key), readProtectedState, writeProtectedState.\n\nCreate moe-vscode/tests/protected-daemon-provenance.test.cjs with the Write tool. Build its harness on the fixture() in tests/protected-daemon-spawn.test.cjs: transpile src/services/MoeDaemonClient.ts and run it in vm.runInNewContext with a permissive require map. Add these stubs and seams:\n- 'ws' is a StubWebSocket class that records every construction.\n- vscode.window has showErrorMessage (collect) and showWarningMessage (records its arguments and returns f.choice, default undefined).\n- child_process.spawn records [cmd, args, opts]. A daemon spawn emits 'spawn'. A spawn whose args include 'stop' emits 'exit' with f.stopCode (default 0), or never exits when f.stopHang is set, and exposes kill().\n- f.api.useProtectedStateRoot(<a temp dir OUTSIDE the project>).\n- The client is new MoeDaemonClient(extension); there is no constructor change.\n- Instance seams:\n  - client.probeSpawnProof = async (_info, _project, challenge) => HMAC of f.daemonKey, or undefined;\n  - client.isPidAlive = pid => f.alive.has(pid);\n  - client.waitForDaemonInfo = async () => {};\n  - short bounds: replaceStopTimeoutMs, replaceExitTimeoutMs, replacePollMs.\n\nCover these cases (group them as you like, but name them):\n(1) Verified in session. A protected startDaemon('start', project) passes env MOE_SPAWN_PROOF_KEY as 64 lowercase hex chars. It writes one store record under protectedStateName('spawn', key): {\"version\":1,\"project\":<key>,\"key\":<hex>,\"daemon\":<installed daemon key>}, mode 0600 on POSIX. A daemon answering that key's HMAC is admitted.\n(2) Verified after a restart. A freshly loaded module (empty session map) over the same store root admits it.\n(3) Unverified, no record. The answer is exactly 'Protected execution profile: the running Moe daemon (pid 4242) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.' Through connect(), that text is shown, no StubWebSocket is built and no 'stop' spawns.\n(4) Stale or untrusted record. Each of these refuses: a stored key whose HMAC does not match; a record naming another installed daemon path (refused without probing); malformed JSON, an extra field, a wrong version, another project's key or a non-hex key; readProtectedState throwing (on POSIX a 0644 record or a symlink; on every OS an oversize record).\n(5) The known-answer vector shared with task-137bab15: the client's HMAC helper gives 583630234f7e60ecfa2a6ae2e98ee37876e3ff6344457723cb4b42fcf77f7fc0 for key 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f and challenge 'ab' repeated 32 times.\n(6) Declined. The modal returns undefined: no 'stop' spawn, the refusal stays, no socket.\n(7) Replace succeeds. The choice is 'Stop and Replace'.\n  - The stop spawn is [installed node real path, [installed daemon real path, 'stop', '--project', project]] with the installed cwd, an env without MOE_SPAWN_PROOF_KEY, stdio 'ignore' and windowsHide.\n  - Once the captured pid is dead and daemon.json is gone, a fresh protected spawn carries a NEW key, and the store record is replaced.\n  - Admission then passes.\n(8) Replace fails. Each of these keeps the refusal and starts no new daemon: stop exits 1; stop hangs (its child.kill() is called); the pid stays alive past the bound; daemon.json names another live pid.\n(9) LEGACY is unchanged: no key in the env, no store write, no probe.\n(10) A configured endpoint (moe.daemon.port) under protected with no record is refused with no replace offer.\n(11) A store root INSIDE the project: the spawn still runs with a key kept in session only (no file written), and a fresh load then refuses.\n\nRED: run `node --test tests/protected-daemon-provenance.test.cjs` in the step-5 Linux snapshot with only this test file overlaid. The new cases must fail against the unchanged client. Quote the failures in complete_step.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/protected-daemon-provenance.test.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T06:34:35.219Z"
     },
     {
       "stepId": "step-2",
@@ -66,7 +67,7 @@
   ],
   "planRevision": 3,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,11 +100,17 @@
       "author": "worker-c9368191",
       "content": "Planner/worker input from CQ-RF07 (task-f3f364a6), epic-final review, finding 2. This falls under this row's DoD 1 (\"activates a daemon only when it can prove this extension started it\"), so it is consolidated here rather than filed as a new row.\n\nmoe-vscode/package.json declares `moe.daemon.host` and `moe.daemon.port` (187-196) with no `scope`. A trusted workspace's `.vscode/settings.json` can therefore set both. When the port is above 0, `MoeDaemonClient.getDaemonInfo` (1220-1224) returns `{host: configHost, port: configPort, fromConfig: true}` before it reads daemon.json at all. `getVerifiedDaemonInfo` (1184-1210) then refuses only a `foreign` identity, so a remote daemon that reports this project, or reports nothing, is adopted.\n\nMake sure the provenance check also covers the fromConfig path. Under the protected profile, either refuse a configured endpoint outright, or give the two settings `\"scope\": \"machine\"` and refuse a non-loopback host. Pin it with a test that sets a workspace-level host and port.\n\ndocs/ARCHITECTURE.md's VS Code parity bullet now names this case beside this row.",
       "timestamp": "2026-11-02T23:06:07.161Z"
+    },
+    {
+      "id": "comment-3bd26c145be848879bbb9471b9c15aa1",
+      "author": "governor-e6b40560",
+      "content": "Governor early start, 06:35Z: I dropped dependsOn task-98c81a27. Its completion 9eca3971 (the owner-only store and the RF02 pin your rev 2 builds on) is on moe/work-2026-10-24 (local and origin). That row was held only for its size waiver prop-b13568c2. I have just sent it back to REVIEW for a substance review, with the verdict withheld while the waiver is pending. task-137bab15 is DONE. Your worktree is cut from the target, so it already holds both; confirm with `git merge-base --is-ancestor 9eca3971 HEAD`. Both rows edit MoeDaemonClient.ts. If 98c81a27's QA asks for changes to the store or pin API before you land, re-sync against them; a landing conflict comes back as a LANDING-CONFLICT resume. Your own size exception prop-bd7d6ccf (cap 520) is pending too, so stay within it.",
+      "timestamp": "2026-11-03T06:32:36.242Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-02T23:06:07.161Z",
+  "updatedAt": "2026-11-03T06:34:35.219Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -115,11 +122,11 @@
     "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-26483323"
   ],
   "dependsOn": [
-    "task-137bab15f35949fa8a4902cedd74b372",
-    "task-98c81a274c4f45e58a137e1f50d782a5"
+    "task-137bab15f35949fa8a4902cedd74b372"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -239,5 +246,6 @@
       }
     ],
     "stepsCompleted": []
-  }
+  },
+  "workStartedAt": "2026-11-03T06:34:35.219Z"
 }
