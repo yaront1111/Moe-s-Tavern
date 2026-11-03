@@ -707,9 +707,12 @@ switch (tool) {
     //                                is the same as unset because PowerShell
     //                                deletes a variable set to '', so the named
     //                                sentinel carries "unassigned" on every engine.
-    //                                A caller that is not the assignee joins
-    //                                activePeerIds and makes peersActive true,
-    //                                as the daemon's orphan rule does.
+    //                                A caller that is neither the assignee nor the holder
+    //                                of the task's finalizing attempt (read from
+    //                                .moe/attempts, whatever FAKE_SCOPE_FINALIZING
+    //                                serves) joins activePeerIds and makes peersActive
+    //                                true, as the daemon's orphan rule does since
+    //                                task-7d3428d1.
     //   FAKE_SCOPE_ASSIGNEE_ALIVE=0|1  assigneeAlive. Default true, false for `none`.
     //   FAKE_SCOPE_ASSIGNEE_PROTECTED=0|1  assigneeProtected. Default: true when
     //                                a worker holds the task, false when none does
@@ -753,25 +756,25 @@ switch (tool) {
     const taskId = args.taskId || 'task-postflight';
     const rec = readTask(taskId);
     const { asserted, planned } = rec ? declaredSets(rec) : { asserted: [], planned: [] };
-    let finalizingAttempt = null;
-    if (finalizingMode !== null) {
-      // isHoldingFinalizingAttempt: phase finalizing, non-blank id/workerId,
-      // safe-integer generation >= 1; the highest generation wins.
-      const nonBlank = (v) => typeof v === 'string' && v.trim() !== '';
-      let best = null;
-      let attemptFiles = [];
-      try { attemptFiles = fs.readdirSync(path.join(moe, 'attempts')).filter((f) => f.endsWith('.json')).sort(); } catch {}
-      for (const f of attemptFiles) {
-        let a;
-        try { a = JSON.parse(fs.readFileSync(path.join(moe, 'attempts', f), 'utf8').replace(/^\uFEFF/, '')); } catch { continue; }
-        if (!a || a.phase !== 'finalizing' || a.taskId !== taskId || !nonBlank(a.id) || !nonBlank(a.workerId)
-          || !Number.isSafeInteger(a.generation) || a.generation < 1) continue;
-        if (!best || a.generation >= best.generation) best = a;
-      }
-      const named = best && { attemptId: best.id, workerId: best.workerId, generation: best.generation };
-      if (finalizingMode === 'computed') finalizingAttempt = named || null;
-      if (finalizingMode === 'malformed') finalizingAttempt = named ? { ...named, generation: String(named.generation) } : 'null';
+    // The task's finalizing attempt, read from .moe/attempts in every
+    // FAKE_SCOPE_FINALIZING mode: the orphan rule below exempts its holder.
+    // isHoldingFinalizingAttempt: phase finalizing, non-blank id/workerId,
+    // safe-integer generation >= 1; the highest generation wins.
+    const nonBlank = (v) => typeof v === 'string' && v.trim() !== '';
+    let best = null;
+    let attemptFiles = [];
+    try { attemptFiles = fs.readdirSync(path.join(moe, 'attempts')).filter((f) => f.endsWith('.json')).sort(); } catch {}
+    for (const f of attemptFiles) {
+      let a;
+      try { a = JSON.parse(fs.readFileSync(path.join(moe, 'attempts', f), 'utf8').replace(/^\uFEFF/, '')); } catch { continue; }
+      if (!a || a.phase !== 'finalizing' || a.taskId !== taskId || !nonBlank(a.id) || !nonBlank(a.workerId)
+        || !Number.isSafeInteger(a.generation) || a.generation < 1) continue;
+      if (!best || a.generation >= best.generation) best = a;
     }
+    const named = best && { attemptId: best.id, workerId: best.workerId, generation: best.generation };
+    let finalizingAttempt = null;
+    if (finalizingMode === 'computed') finalizingAttempt = named || null;
+    if (finalizingMode === 'malformed') finalizingAttempt = named ? { ...named, generation: String(named.generation) } : 'null';
     const peerDeclared = [];
     const peerIds = [];
     const addPeer = (p, id) => { if (p && !peerDeclared.some((e) => e.path === p)) peerDeclared.push({ path: p, taskId: id }); };
@@ -792,7 +795,7 @@ switch (tool) {
     if (peerActive === '0' || peerActive === '1') for (const e of peerDeclared) e.peerActive = peerActive === '1';
     if (process.env.FAKE_SCOPE_PEER_FIELDS) for (const e of peerDeclared) Object.assign(e, JSON.parse(process.env.FAKE_SCOPE_PEER_FIELDS));
     const livePeers = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
-    const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId;
+    const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId && named?.workerId !== args.workerId;
     const activePeerIds = [...(livePeers ? ['worker-peer'] : []), ...(orphanCaller ? [args.workerId] : [])];
     ok({
       taskId,

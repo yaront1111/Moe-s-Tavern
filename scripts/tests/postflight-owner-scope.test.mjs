@@ -183,3 +183,44 @@ test('seat exports of FAKE_* and MOE_* in the parent process do not steer the fi
         Object.assign(process.env, saved);
     }
 });
+
+// The orphan rule's finalizing-holder exemption, as getCommitScope.ts landed it in
+// task-7d3428d1: complete_task clears the assignee before the holder's own landing.
+// seedAttempt writes one .moe/attempts record, by default a well-formed finalizing hold on TASK_ID.
+function seedAttempt(dir, file, fields) {
+    fs.mkdirSync(path.join(dir, '.moe', 'attempts'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.moe', 'attempts', file), JSON.stringify({ taskId: TASK_ID, phase: 'finalizing', generation: 1, ...fields }));
+}
+const COMPLETION_KNOBS = { FAKE_SCOPE_ASSIGNEE: 'none', FAKE_TASK_STATUS: 'REVIEW' };
+const UNASSIGNED_COMPLETION = { ...LEGACY, status: 'REVIEW', assignedWorkerId: null, assigneeAlive: false, assigneeProtected: false };
+
+test('(f1) a completion call by the holder of the finalizing attempt is not an orphan peer', (t) => {
+    const dir = makeProject(t);
+    seedAttempt(dir, 'attempt-mine.json', { id: 'attempt-mine', workerId: 'architect-x' });
+    assert.deepStrictEqual(scope(dir, COMPLETION_KNOBS), UNASSIGNED_COMPLETION);
+    assert.deepStrictEqual(scope(dir, { ...COMPLETION_KNOBS, FAKE_SCOPE_FINALIZING: 'computed' }), {
+        ...UNASSIGNED_COMPLETION, finalizingAttempt: { attemptId: 'attempt-mine', workerId: 'architect-x', generation: 1 },
+    });
+});
+
+test('(f2) a caller that does not hold the finalizing attempt stays an orphan peer', (t) => {
+    const dir = makeProject(t);
+    seedAttempt(dir, 'attempt-done.json', { id: 'attempt-done', workerId: 'worker-done' });
+    assert.deepStrictEqual(scope(dir, COMPLETION_KNOBS), { ...UNASSIGNED_COMPLETION, activePeerIds: ['architect-x'], peersActive: true });
+});
+
+test('(f3) a hold on another task, or a record that is not a well-formed hold, exempts nobody', (t) => {
+    for (const fields of [{ taskId: 'task-other' }, { phase: 'running' }, { generation: 0 }, { generation: '1' }, { generation: 1.5 }, { id: ' ' }]) {
+        const dir = makeProject(t);
+        seedAttempt(dir, 'attempt-x.json', { id: 'attempt-x', workerId: 'architect-x', ...fields });
+        assert.deepStrictEqual(scope(dir, COMPLETION_KNOBS), { ...UNASSIGNED_COMPLETION, activePeerIds: ['architect-x'], peersActive: true }, JSON.stringify(fields));
+    }
+});
+
+test('(f4) the exempt holder still counts a real live peer', (t) => {
+    const dir = makeProject(t);
+    seedAttempt(dir, 'attempt-mine.json', { id: 'attempt-mine', workerId: 'architect-x' });
+    assert.deepStrictEqual(scope(dir, { ...COMPLETION_KNOBS, FAKE_SCOPE_PEERS_ACTIVE: '1' }), {
+        ...UNASSIGNED_COMPLETION, livePeerIds: ['worker-peer'], activePeerIds: ['worker-peer'], peersActive: true,
+    });
+});
