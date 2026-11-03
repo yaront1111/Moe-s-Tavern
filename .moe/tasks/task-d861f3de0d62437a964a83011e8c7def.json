@@ -109,7 +109,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:51.655Z",
-  "updatedAt": "2026-11-03T18:56:34.600Z",
+  "updatedAt": "2026-11-03T18:57:39.017Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:54:05.533Z",
     "plannedStepCount": 4,
@@ -195,11 +195,10 @@
   "approvedPlanRevision": 1,
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-8cf0816c@2026-11-03T18:14:58Z",
-    "at": "2026-11-03T18:25:11.498Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-03T18:25:49Z",
+    "at": "2026-11-03T18:57:39.017Z"
   },
   "workStartedAt": "2026-11-03T18:32:08.179Z",
   "reviewStartedAt": "2026-11-03T18:56:34.597Z",
@@ -214,5 +213,22 @@
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight-vm-route.ps1"
   ],
-  "completionSummary": "CQ-M07n2: ported CQ-M07m2's sh helpers to moe-agent.ps1. Invoke-MoeVmCandidateLanding (unwired, in its own VM candidate block) has the sh's refusal order, MOE_VM_CANDIDATE_* codes, messages and effects: commit-tree, W read-tree, a seam guarded by MoeRuntimeProtected, then the CAS; a lost CAS rolls W back and parks the commit on a vm-ref-contention rescue ref, a failed W update parks it on vm-sync-failed, and EMPTY writes nothing. Test-MoeWorktreeStrongIntent is called once per Invoke-MoeWorktreeRounds round, after the L6 gate and before L7.\n\nDoD: 1=R1/R1u; 2=R2a-R5b; 3=R6/R7/R8; 4=every row asserts the control checkout is unchanged; 5=the gate. The gate passed (5.1 and pwsh 7 PASS, worktree-landing 18/0/0 unedited, parity PASS, BOM). 10 of 10 mutants were killed.\n\nPATH CHOICE: the plan's command named D:\\projexts\\moes\\scripts\\tests. Each harness resolves the wrapper from its own location, so that would test the control checkout's bytes, which lack this change. I ran the identical chain on W's copies from W, with the MOE_*/CLAUDE*/FAKE_* variables removed. After landing, QA can run the original from the control checkout.\n\nPLAN DEVIATION: the strong-intent function takes the round's local $frozen, passed inline only when a gate is configured, instead of $script:MoeFrozen. The ps1 rounds keep the candidate local and only the shared arm sets the global; a caller also holds a local $frozen that dynamic scoping would leak (row G6d). With no gate, the result equals the sh's empty FROZEN_*.\n\nThe other idiom differences are a returned hashtable, the ComSpec seam, the message file in W's gitdir as L2 does, a rescue row without treeId/cliExitCode as Invoke-MoeRescueRef already sends, and a PowerShell-only catch.\n\nSIZE: net 436 (moe-agent.ps1 +135/-2, postflight-vm-route.ps1 +303). Pre-filed the EPIC waiver prop-017815cb04d34c61a6fac191fa5bd2e6 (PENDING) per plan step 4; QA can park rather than size-reject."
+  "completionSummary": "CQ-M07n2: ported CQ-M07m2's sh helpers to moe-agent.ps1. Invoke-MoeVmCandidateLanding (unwired, in its own VM candidate block) has the sh's refusal order, MOE_VM_CANDIDATE_* codes, messages and effects: commit-tree, W read-tree, a seam guarded by MoeRuntimeProtected, then the CAS; a lost CAS rolls W back and parks the commit on a vm-ref-contention rescue ref, a failed W update parks it on vm-sync-failed, and EMPTY writes nothing. Test-MoeWorktreeStrongIntent is called once per Invoke-MoeWorktreeRounds round, after the L6 gate and before L7.\n\nDoD: 1=R1/R1u; 2=R2a-R5b; 3=R6/R7/R8; 4=every row asserts the control checkout is unchanged; 5=the gate. The gate passed (5.1 and pwsh 7 PASS, worktree-landing 18/0/0 unedited, parity PASS, BOM). 10 of 10 mutants were killed.\n\nPATH CHOICE: the plan's command named D:\\projexts\\moes\\scripts\\tests. Each harness resolves the wrapper from its own location, so that would test the control checkout's bytes, which lack this change. I ran the identical chain on W's copies from W, with the MOE_*/CLAUDE*/FAKE_* variables removed. After landing, QA can run the original from the control checkout.\n\nPLAN DEVIATION: the strong-intent function takes the round's local $frozen, passed inline only when a gate is configured, instead of $script:MoeFrozen. The ps1 rounds keep the candidate local and only the shared arm sets the global; a caller also holds a local $frozen that dynamic scoping would leak (row G6d). With no gate, the result equals the sh's empty FROZEN_*.\n\nThe other idiom differences are a returned hashtable, the ComSpec seam, the message file in W's gitdir as L2 does, a rescue row without treeId/cliExitCode as Invoke-MoeRescueRef already sends, and a PowerShell-only catch.\n\nSIZE: net 436 (moe-agent.ps1 +135/-2, postflight-vm-route.ps1 +303). Pre-filed the EPIC waiver prop-017815cb04d34c61a6fac191fa5bd2e6 (PENDING) per plan step 4; QA can park rather than size-reject.",
+  "commits": [
+    {
+      "sha": "99d390047c6b23217ed2cbfa1aa14605842530ee",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T18:25:49Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T18:57:38.407Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ]
 }
