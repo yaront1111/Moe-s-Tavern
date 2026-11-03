@@ -110,8 +110,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -130,12 +130,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:25:34.188Z",
-  "updatedAt": "2026-11-03T13:03:45.559Z",
+  "updatedAt": "2026-11-03T14:26:10.668Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:31:25.007Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T14:25:35.803Z",
+    "wallClockMs": 24850796
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -296,10 +298,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T12:34:49Z",
-    "at": "2026-11-03T13:03:12.726Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T13:03:34Z",
+    "at": "2026-11-03T14:26:10.668Z"
   },
   "reviewStartedAt": "2026-11-03T13:02:28.645Z",
   "verification": {
@@ -309,5 +312,9 @@
     "reportedAt": "2026-11-03T13:02:28.645Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Both launchers now run scripts/moe-serena-ignore.mjs (from task-c6a24053) on Serena's final project root. That is the shared root after the '[OK] Serena MCP' line, and the worktree W after WT-06's project.yml rewrite. Serena then gets git's own ignore set, with its startup .gitignore walk turned off.\n- sh: serena_ignore_override (set -e safe).\n- ps1: Invoke-MoeSerenaIgnoreOverride (local EAP Continue; try/catch/finally restores EAP and LASTEXITCODE).\n- Both print the script's one line. A missing or failing script gives a byte-identical [WARN] MOE_SERENA_IGNORE_SKIPPED line and never fails the launch.\n- Tests: postflight-worktree.cjs adds serena-ignore (literal file text, plus a second run that keeps bytes and inode), serena-ignore-off (no Serena / opt-out / plain dir / broken repo) and serena-ignore-wt. 'codes' now compares the MOE_SERENA_IGNORE_ family across the wrappers.\n- Docs: docs/MEMORY.md has a Caveats subsection, scripts/CLAUDE.md the MCP-servers bullet, and docs/CONFIGURATION.md a MOE_SERENA_IGNORE_OVERRIDE row.\n- Verification (gate2): run after the last edit on snapshot v-e3e81c45.HU9KJA, whose scripts tree is byte-identical to HEAD 25d88eb9. Exit 0: parity PASS, producer suite ok, postflight.sh PASS and postflight.ps1 PASS (frozen 106/106, owner guard 16/16 each), the three new cases ok on both engines, lint OK.\n- Mutants: M1-M6 plus the ps1 twins M5p/M6p, 8 in all, every one killed; the controls pass (D:/moe-scratch/e3e81c45-work/mut, review.md).\n- Known limit: the ps1 wrapper does not export MOE_PROTECTED_GIT, so a protected ps1 seat skips fail-open."
+  "completionSummary": "Both launchers now run scripts/moe-serena-ignore.mjs (from task-c6a24053) on Serena's final project root. That is the shared root after the '[OK] Serena MCP' line, and the worktree W after WT-06's project.yml rewrite. Serena then gets git's own ignore set, with its startup .gitignore walk turned off.\n- sh: serena_ignore_override (set -e safe).\n- ps1: Invoke-MoeSerenaIgnoreOverride (local EAP Continue; try/catch/finally restores EAP and LASTEXITCODE).\n- Both print the script's one line. A missing or failing script gives a byte-identical [WARN] MOE_SERENA_IGNORE_SKIPPED line and never fails the launch.\n- Tests: postflight-worktree.cjs adds serena-ignore (literal file text, plus a second run that keeps bytes and inode), serena-ignore-off (no Serena / opt-out / plain dir / broken repo) and serena-ignore-wt. 'codes' now compares the MOE_SERENA_IGNORE_ family across the wrappers.\n- Docs: docs/MEMORY.md has a Caveats subsection, scripts/CLAUDE.md the MCP-servers bullet, and docs/CONFIGURATION.md a MOE_SERENA_IGNORE_OVERRIDE row.\n- Verification (gate2): run after the last edit on snapshot v-e3e81c45.HU9KJA, whose scripts tree is byte-identical to HEAD 25d88eb9. Exit 0: parity PASS, producer suite ok, postflight.sh PASS and postflight.ps1 PASS (frozen 106/106, owner guard 16/16 each), the three new cases ok on both engines, lint OK.\n- Mutants: M1-M6 plus the ps1 twins M5p/M6p, 8 in all, every one killed; the controls pass (D:/moe-scratch/e3e81c45-work/mut, review.md).\n- Known limit: the ps1 wrapper does not export MOE_PROTECTED_GIT, so a protected ps1 seat skips fail-open.",
+  "completedAt": "2026-11-03T14:25:35.803Z",
+  "reviewCompletedAt": "2026-11-03T14:25:35.803Z",
+  "reviewSummary": "Landed completion 3a0bf930 (pushed to moe/work-2026-10-24): 6 files, +171/-4 (net 167), in scope.\nQA gate re-run on the exact bytes: the plan's command on a `git archive 3a0bf930` snapshot, 13:05Z-14:25Z, exit 0 (log /mnt/d/moe-scratch/qa-e3e81c45/out):\n- parity PASS; serena-ignore.test.mjs 27/27.\n- postflight.sh PASS (frozen 106, owner 16, migration 12, [worktree] 69 ok / 0 failed).\n- postflight.ps1 PASS (frozen 106, owner 16, migration 11, the same before this task; [worktree] 69 ok / 0 failed).\n- serena-ignore, -off and -wt ok on both engines; lint OK.\nDoD:\n1. A literal file assert: user bytes, walk off, '/.git', 'keep-me/', 'big/', '.serena/', 'src/**/*.tmp', and none of big/'s 30 nested patterns. Run 2 keeps bytes and inode.\n2. none / opt-out / plain / broken leave files unchanged and the CLI exits 0.\n3. Parity, plus 'codes' extended to MOE_SERENA_IGNORE_. WT-06's project_name rewrite is asserted; wt-deny ok.\n4. MEMORY.md, scripts/CLAUDE.md and CONFIGURATION.md updated.\nCode: the sh helper is set -e safe, and ensure_mcp_config runs for every CLI after the protected node pin. The ps1 helper restores EAP and LASTEXITCODE, BOM kept, no CR. The W call is guarded and comes after the tooling program. The worker's 8 mutants were killed; their needles match the landed lines.\nNon-blocking:\n- MEMORY.md says a skip \"changes nothing\", but the nested-repo and cap skips also remove an earlier block.\n- About 5 s per call, twice in worktree mode.\n- ps1 does not export MOE_PROTECTED_GIT, so protected ps1 seats skip (task-3acf7f79).",
+  "requiredCheckAtDone": null
 }
