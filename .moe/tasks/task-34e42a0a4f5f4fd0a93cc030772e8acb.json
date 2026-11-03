@@ -72,20 +72,32 @@
     {
       "stepId": "step-5",
       "description": "Verification, once. Never in the shared checkout (rail). Each command snapshots into a fresh mktemp dir and works the same in your task worktree with uncommitted edits and, after landing, in QA's control checkout. The architect dry-ran both both ways, and GREEN exits 1 on the unfixed tree.\nGREEN, which is complete_task's verification:\n`cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"exactly one list must hold it, and approval re-resolves it and edits that list\" docs/MCP_SERVER.md && S=$(mktemp -d) && D=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $D/state/railChange.ts $D/state/StateManager.ts $S/$D/state/ && cp $D/tools/proposeRail.ts $D/tools/proposeRail.globalPatterns.test.ts $S/$D/tools/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/proposeRail src/state/StateManager.test.ts src/state/stateModules.test.ts src/tools/submitPlan.test.ts`\nExpect `Test Files 5 passed (5)` and `Tests 282 passed (282)`.\nRED-AT-BASE, which proves the new cases fail on the unfixed sources:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && D=packages/moe-daemon/src && git archive 8ca8d38951e5279bf01f47578550b18d6ec87088 packages/moe-daemon | tar -x -C $S && cp $D/tools/proposeRail.globalPatterns.test.ts $S/$D/tools/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/proposeRail.globalPatterns.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +7 failed \\| 1 passed \\(8\\)\" $S/l && ! grep -aqF \"> (g8) \" $S/l && echo RED-AT-BASE; }`\nIt must print RED-AT-BASE.\nError handling for a red run: read the first FAIL line before editing.\n- A count other than 282 means a case drifted from step 1.\n- A stateModules failure means StateManager grew past 1500.\n- A StateManager.test.ts 'Rail not found' failure means the coded text changed.\nQuote both outputs in complete_task's summary.\nEach gate dir is about 106 MB. Afterwards delete only yours: `for d in /tmp/tmp.*; do f=$d/packages/moe-daemon/src/tools/proposeRail.globalPatterns.test.ts; [ -O \"$d\" ] && [ -f \"$f\" ] && grep -q '(task-34e42a0a)' \"$f\" && rm -rf -- \"$d\"; done`.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T21:05:52.293Z"
+      "note": "GREEN passed: tsc clean, Test Files 5 passed (5), Tests 282 passed (282), exit 0. RED-AT-BASE printed: at 8ca8d389 the new file gives 7 failed | 1 passed (8), with (g8) the passing case. Both snapshot dirs were removed.",
+      "startedAt": "2026-11-03T21:05:52.293Z",
+      "completedAt": "2026-11-03T21:06:37.164Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of your `git diff` plus the new file. Fix any finding, re-run step 5, then call complete_task.\n(1) Scope:\n- railChange.ts is rewritten.\n- proposeRail.ts changes only the import, the GLOBAL/EPIC/TASK lookup and the currentValue description.\n- StateManager.ts changes only the import and the GLOBAL branch, and its line count is no higher than 1493.\n- MCP_SERVER.md gains one paragraph in the propose_rail section.\n- The new test file is the only other change.\n(2) Exactly-one semantics:\n- A value in two lists is refused, never 'first wins'; mutant M-first-hit kills only (g6).\n- Two trimEnd matches inside one list are refused, as findRailIndex always did.\n- An exact match beats trimEnd matches, as before.\n(3) No write before a refusal:\n- propose_rail resolves before createProposal.\n- Approval resolves inside applyGlobalRailChange before atomicWriteJsonAsync, and adopts only after the write.\n(4) Backward compatibility:\n- The proposal record shape is unchanged.\n- An old PENDING GLOBAL proposal whose value sits in customRules approves exactly as before.\n- The message substrings 'Rail not found' / 'Ambiguous rail match' survive, so StateManager.test.ts:936 and proposeRail.test.ts:127 still match.\n- The coded prefix only adds `[NOT_FOUND] ` or `[INVALID_INPUT] ` in front.\n(5) Security: a GLOBAL REMOVE can now drop a forbidden pattern. It takes effect only on a human approval (approveProposal, the /ws APPROVE_PROPOSAL message). That is the documented escape hatch, not a new bypass.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/railChange.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/proposeRail.ts",
+        "packages/moe-daemon/src/tools/proposeRail.globalPatterns.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review found no defects, so no re-run was needed. Checked:\n- Scope: only the planned files changed. StateManager.ts is 1480 lines, down from 1493 and under the 1500 budget.\n- Exactly-one: a value in two lists is refused, never first-hit-wins. The exact-then-trimEnd match runs per list, and (g6) pins the two-list case.\n- No write before a refusal: propose_rail resolves before createProposal. Approval resolves inside applyGlobalRailChange before the write and adopts only after it. (g7) shows a refused approval leaves project.json byte-identical and the proposal PENDING.\n- Concurrency: the write-then-adopt order cannot lose an update. approveProposal's only production caller, the WS APPROVE_PROPOSAL handler (WebSocketServer.ts:815), runs under withMutex, which calls state.runExclusive.\n- Compatibility: record shape unchanged, EPIC/TASK untouched, and the 'Rail not found' / 'Ambiguous rail match' text survives, so the existing suites still match.\n- Security: a GLOBAL REMOVE of a forbidden pattern takes effect only on human approval. That is the documented escape hatch, not a new bypass.",
+      "startedAt": "2026-11-03T21:06:38.028Z",
+      "completedAt": "2026-11-03T21:07:00.937Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -104,12 +116,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:42:09.506Z",
-  "updatedAt": "2026-11-03T21:05:52.293Z",
+  "updatedAt": "2026-11-03T21:09:10.197Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:51:29.372Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -123,7 +135,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:01:46.273Z",
@@ -197,5 +211,48 @@
   },
   "planApprovedAt": "2026-11-03T21:01:46.305Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T21:04:43.020Z"
+  "workStartedAt": "2026-11-03T21:04:43.020Z",
+  "reviewStartedAt": "2026-11-03T21:07:22.508Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"exactly one list must hold it, and approval re-resolves it and edits that list\" docs/MCP_SERVER.md && S=$(mktemp -d) && D=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $D/state/railChange.ts $D/state/StateManager.ts $S/$D/state/ && cp $D/tools/proposeRail.ts $D/tools/proposeRail.globalPatterns.test.ts $S/$D/tools/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/proposeRail src/state/StateManager.test.ts src/state/stateModules.test.ts src/tools/submitPlan.test.ts",
+    "exitCode": 0,
+    "outputTail": " Test Files  5 passed (5)\n      Tests  282 passed (282)\n   Start at  23:06:05\n   Duration  7.01s (tests 82%, transform 15%, import 3%)\n\nEXIT=0 (tsc --noEmit clean before vitest; docs grep passed)",
+    "reportedAt": "2026-11-03T21:07:22.508Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/proposeRail.globalPatterns.test.ts",
+    "packages/moe-daemon/src/state/railChange.ts",
+    "packages/moe-daemon/src/tools/proposeRail.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "GLOBAL MODIFY_RAIL/REMOVE_RAIL in moe.propose_rail now resolve currentValue across globalRails.customRules, forbiddenPatterns and requiredPatterns, so the escape hatch submit_plan's rail refusal names can lift a forbidden-pattern false positive or an unfitting required phrase.\n\n- Exactly one list must hold the value. None is a coded NOT_FOUND ('Rail not found for proposal <id>'). Two lists, or two matches in one list, is a coded INVALID_INPUT ('Ambiguous rail match for proposal <id>'). Both are refused before any write, so .moe/proposals/ stays empty.\n- Approval re-resolves in applyGlobalRailChange and edits exactly that entry; a value that has disappeared is a coded NOT_FOUND, project.json stays byte-identical and the proposal stays PENDING.\n- ADD_RAIL GLOBAL still appends to customRules only. EPIC/TASK behaviour and the proposal record shape are unchanged.\n- findRailIndex's two refusals are now coded MoeErrors with the same text.\n- Files: state/railChange.ts (rewritten), tools/proposeRail.ts, state/StateManager.ts (GLOBAL branch now writes project.json before adopting it; 1493 -> 1480 lines, under the 1500 budget), the new tools/proposeRail.globalPatterns.test.ts (8 cases), and one paragraph in docs/MCP_SERVER.md's propose_rail section.\n\nEvidence:\n- GREEN (the command submitted here): tsc clean, Test Files 5 passed (5), Tests 282 passed (282), exit 0.\n- RED-AT-BASE at 8ca8d389: 'Tests 7 failed | 1 passed (8)', RED-AT-BASE printed, (g8) the passing case.\n- Both gates ran in mktemp snapshots outside the checkout; my two snapshot dirs were removed.\n\nSelf-review: the write-then-adopt order is safe because the only production caller of approveProposal (WS APPROVE_PROPOSAL, WebSocketServer.ts:815) runs under withMutex -> runExclusive. A GLOBAL REMOVE of a forbidden pattern takes effect only on human approval.\n\nFollow-up for the governor, out of scope: submitPlan.ts:194-206's refusal text still offers targetScope EPIC/TASK, which can never lift a rail refusal.",
+  "commits": [
+    {
+      "sha": "6ded0c935e82f850493411b41e1b61e6bfc9ca1a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T21:01:43Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/railChange.ts",
+        "packages/moe-daemon/src/tools/proposeRail.globalPatterns.test.ts",
+        "packages/moe-daemon/src/tools/proposeRail.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T21:09:10.197Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T21:01:43Z",
+    "at": "2026-11-03T21:09:10.197Z"
+  }
 }

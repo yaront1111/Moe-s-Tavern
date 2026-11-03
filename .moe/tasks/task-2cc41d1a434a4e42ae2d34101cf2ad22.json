@@ -28,41 +28,66 @@
     {
       "stepId": "step-2",
       "description": "Share the rail check in packages/moe-daemon/src/util/rails.ts, and make submit_plan use it with byte-identical behaviour. Edit with the Edit tool only. The architect's dry-run diffs are /mnt/d/moe-scratch/plan-2cc41d1a/rails.diff (+70/-18, mostly the moved refusal) and submitPlan.diff (+2/-33).\n\n(a) rails.ts:\n- Add `import { MoeError, MoeErrorCode } from './errors.js';` (errors.ts imports nothing, so no cycle).\n- Add `export function planRailText(steps: ReadonlyArray<{ description: string; affectedFiles?: unknown; newFiles?: unknown }>): string`.\n  - It returns each step's `${description} ${files(affectedFiles)} ${files(newFiles)}` joined with ' ', where files(v) is v.join(' ') for an array and '' otherwise. A hand-edited non-array field then never throws.\n  - For submit_plan's normalized arrays this is byte-identical to today's inline map at submitPlan.ts:433-435. Keep that site's newFiles comment in the helper's doc.\n- Add `export function listPlanRailViolations(planText: string, projectRails: GlobalRails): string[]`.\n  - It lowercases once and returns every violation in today's order: each present forbidden pattern as 'Forbidden pattern: <p>', then each missing global required pattern as 'Required pattern missing: <p>'.\n  - Empty patterns are skipped.\n- Rewrite checkPlanRails to keep its signature and comment and return `violation === undefined ? { ok: true } : { ok: false, violation }` from the list's first entry. Return exactly `{ ok: true }` (no undefined key): commands/checkArchitecture.test.ts:62 uses toEqual({ ok: true }).\n- Move assertPlanRails here verbatim from submitPlan.ts:193-220 as `export function assertPlanRails(railsCheck: RailsCheckResult, taskId: string, defaultAction: string = SUBMIT_PLAN_RAIL_ACTION): void`.\n  - Add `export const SUBMIT_PLAN_RAIL_ACTION = 'revise the plan to satisfy this rail and resubmit moe.submit_plan';`.\n  - The only text change is that 'Default action: ' is followed by `${defaultAction}. `, which with the default is exactly today's sentence.\n\n(b) submitPlan.ts:\n- The import becomes `import { assertPlanRails, checkPlanRails, planRailText } from '../util/rails.js';` (RailsCheckResult is no longer used there).\n- Delete the local assertPlanRails, with its doc comment.\n- Replace the planText map with `const planText = planRailText(normalizedSteps);`.\n- Keep the contract-text check at :444 as it is; it now calls the imported assertPlanRails.\n- MoeError and MoeErrorCode stay imported: :33 and :321 still use them.\n\nError handling: no new failure path. submit_plan's refusal stays the same coded CONSTRAINT_VIOLATION with the same message and data. submitPlan.test.ts:1690 pins the prefix '[CONSTRAINT_VIOLATION] Rail violation: <json>. Default action: ', and :1172 pins 'Rail violation'.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/rails.ts",
         "packages/moe-daemon/src/tools/submitPlan.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/rails.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "rails.ts gains planRailText, listPlanRailViolations, assertPlanRails (moved, defaultAction param) and SUBMIT_PLAN_RAIL_ACTION; submitPlan.ts uses them. Verified in step 4.",
+      "startedAt": "2026-11-03T21:06:21.464Z",
+      "completedAt": "2026-11-03T21:06:44.519Z"
     },
     {
       "stepId": "step-3",
       "description": "GREEN: amend_plan_step refuses a rail violation that the amendment INTRODUCES, before any write. Edit packages/moe-daemon/src/tools/amendPlanStep.ts with the Edit tool only. The architect's dry-run diff (+20/-0) is /mnt/d/moe-scratch/plan-2cc41d1a/amendPlanStep.diff.\n\nThe reading this row implements, for DoD 3's pre-existing-violation question:\n- Build the effective plan text twice, with the same planRailText and rules submit_plan uses: the stored plan with each step's effectiveStepDescription, and the same plan with this step's text replaced by the new description. affectedFiles and newFiles are unchanged by an amendment.\n- Compute listPlanRailViolations for both.\n- Refuse only when the after-list holds a violation that the before-list does not.\n- A violation the plan already had (a rail tightened after approval, or a plan an older daemon let through) neither blocks the amendment nor is named in the refusal. An amendment may also remove one. So adding the same forbidden pattern that another step already carries is not a new violation, while a different forbidden pattern, or the loss of a required phrase's last occurrence, is.\n\nCode:\n- Import `{ assertPlanRails, listPlanRailViolations, planRailText }` from '../util/rails.js'.\n- Insert the check after the MAX_AMENDMENTS_PER_STEP refusal and before `const previousDescription`, so the existing refusal order (missing/invalid input, role gate, task, step, COMPLETED, cap) is unchanged:\n  - `const project = state.project; if (!project) throw notFound('Project', 'current');` (as submit_plan does);\n  - a local `railText(replacement?)` that maps the plan to { description: the replacement for this stepId, else effectiveStepDescription(s), affectedFiles: s.affectedFiles, newFiles: s.newFiles } and returns planRailText of that;\n  - `const already = new Set(listPlanRailViolations(railText(), project.globalRails));`\n  - `const introduced = listPlanRailViolations(railText(description), project.globalRails).find((v) => !already.has(v));`\n  - if introduced is defined: `assertPlanRails({ ok: false, violation: introduced }, task.id, 'revise the replacement text to satisfy this rail and call moe.amend_plan_step again');`\n- Add a 4-line comment stating the reading above.\n\nError handling: the refusal is thrown before the amendment is built, so nothing is written: no updateTask, no planRevision change, no activity event, no chat post. A compliant amendment runs exactly the code it runs today.\n\nDo not edit docs/MCP_SERVER.md: task-7d3428d1 holds it, and a024ac57 is queued on it. The amend_plan_step section's new refusal is the governor's doc follow-up.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/amendPlanStep.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/amendPlanStep.ts"
+      ],
+      "note": "Introduced-violation delta check inserted after the cap refusal, before any write.",
+      "startedAt": "2026-11-03T21:06:48.343Z",
+      "completedAt": "2026-11-03T21:06:57.218Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification (DoD 3). Run this ONCE from the task worktree root after steps 1-3, exactly:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/rails.ts packages/moe-daemon/src/tools/submitPlan.ts packages/moe-daemon/src/tools/amendPlanStep.ts packages/moe-daemon/src/tools/amendPlanStep.rails.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/amendPlanStep.rails.test.ts src/tools/amendPlanStep.test.ts src/tools/submitPlan.test.ts src/util/rails.test.ts src/commands/checkArchitecture.test.ts\n\nWhat it does:\n- Copies HEAD's packages/moe-daemon into a mktemp snapshot and overlays the four files. They are uncommitted in the worktree; for QA after landing they equal HEAD.\n- Runs tsc --noEmit, which type-checks the sources.\n- Runs the amend_plan_step and submit_plan test files, plus rails.test.ts and checkArchitecture.test.ts, the only other callers of checkPlanRails.\n- Never runs in the shared checkout (global rail).\n\nThe architect dry-ran it at 9834628e with the prototype: exit 0, 5 files, 155 tests.\n\nIts fresh output is complete_task's verification { command, exitCode: 0, outputTail }.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot run: tsc clean; 5 files, 155 tests passed, exit 0.",
+      "startedAt": "2026-11-03T21:06:58.168Z",
+      "completedAt": "2026-11-03T21:07:19.385Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff. This is the final step: load the adversarial-self-review skill.\n\n(1) Negative control: the new tests must fail on the old code. Run from the worktree root:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\")\" packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/amendPlanStep.rails.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/amendPlanStep.rails.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests \" \"$S/l\"; grep -aqE \"^ +Tests +4 failed \\| 3 passed \\(7\\)\" \"$S/l\" && ! grep -aqF \"> (c1) \" \"$S/l\" && ! grep -aqF \"> (a3) \" \"$S/l\" && ! grep -aqF \"> (a4) \" \"$S/l\" && echo RED-AT-BASE; }\n\n- Expect 'Tests  4 failed | 3 passed (7)' and RED-AT-BASE. The architect's dry run printed exactly that.\n- Quote both lines in the completion summary.\n- Mutate nothing in the worktree (mem:convention-daemon-vitest-mutant-checkref).\n- QA variant after landing: replace the merge-base with <completion sha>^.\n\n(2) submit_plan is byte-identical:\n- the refusal text for the default action;\n- planText for normalized steps;\n- checkPlanRails results, including the exact { ok: true } shape.\nsubmitPlan.test.ts (with :1690's prefix pin), rails.test.ts and checkArchitecture.test.ts pass unchanged.\n\n(3) Pre-existing violations never block (a4, a5); an introduced one is named by itself, never by a pre-existing one (a5).\n\n(4) A refusal writes nothing (a6): disk bytes, planRevision and events.\n\n(5) Inputs:\n- A hand-edited step whose affectedFiles or newFiles is not an array contributes '' and never throws.\n- An unknown or missing project refuses as NOT_FOUND, as submit_plan does.\n- The refusal is checked after the cap, so the existing tests' refusal order holds.\n\n(6) Concurrency: amend_plan_step is not `blocking`, so it runs under the global state mutex. The before and after texts come from the same in-memory plan as the write.\n\n(7) Error handling: no new catch. The coded MoeError reaches McpAdapter as -32003 CONSTRAINT_VIOLATION, the same as submit_plan's.\n\n(8) The diff touches only the four planned files. In the completion summary, note the docs/MCP_SERVER.md follow-up: amend_plan_step's section gains no refusal note here (held by 7d3428d1).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/rails.ts",
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/tools/amendPlanStep.ts",
         "packages/moe-daemon/src/tools/amendPlanStep.rails.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/rails.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/amendPlanStep.ts",
+        "packages/moe-daemon/src/tools/amendPlanStep.rails.test.ts"
+      ],
+      "note": "Negative control at merge-base: \"Tests  4 failed | 3 passed (7)\" and RED-AT-BASE. Self-review: submit_plan refusal text/planText/{ok:true} shape unchanged (submitPlan/rails/checkArchitecture tests pass unchanged); pre-existing violations never block; refusal precedes any write; non-array file fields yield ''; missing project -> NOT_FOUND; check sits after the amendment cap so refusal order holds; handler runs under the global state mutex. Diff touches only the four planned files. docs/MCP_SERVER.md amend_plan_step refusal note is the governor follow-up (held by 7d3428d1).",
+      "startedAt": "2026-11-03T21:07:45.745Z",
+      "completedAt": "2026-11-03T21:07:49.473Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -74,12 +99,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:44:36.392Z",
-  "updatedAt": "2026-11-03T21:06:14.941Z",
+  "updatedAt": "2026-11-03T21:07:56.120Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:57:04.180Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -90,7 +115,11 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:03:40.791Z",
@@ -157,5 +186,20 @@
   },
   "planApprovedAt": "2026-11-03T21:03:40.822Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T21:05:56.743Z"
+  "workStartedAt": "2026-11-03T21:05:56.743Z",
+  "reviewStartedAt": "2026-11-03T21:07:56.118Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/rails.ts packages/moe-daemon/src/tools/submitPlan.ts packages/moe-daemon/src/tools/amendPlanStep.ts packages/moe-daemon/src/tools/amendPlanStep.rails.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/amendPlanStep.rails.test.ts src/tools/amendPlanStep.test.ts src/tools/submitPlan.test.ts src/util/rails.test.ts src/commands/checkArchitecture.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  5 passed (5)\n      Tests  155 passed (155)\n   Duration  5.32s",
+    "reportedAt": "2026-11-03T21:07:56.118Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/amendPlanStep.rails.test.ts",
+    "packages/moe-daemon/src/util/rails.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "packages/moe-daemon/src/tools/amendPlanStep.ts"
+  ],
+  "completionSummary": "amend_plan_step now applies submit_plan's rail check to the plan an amendment would leave behind, before any write. It refuses with the same coded CONSTRAINT_VIOLATION \"Rail violation: ...\" (propose_rail escape hatch kept; default action names moe.amend_plan_step) only for a violation the amendment INTRODUCES: a new forbidden pattern, or loss of a required pattern's last occurrence. Violations the plan already had neither block nor are named. rails.ts gains planRailText, listPlanRailViolations, assertPlanRails (moved from submitPlan.ts, defaultAction param) and SUBMIT_PLAN_RAIL_ACTION; checkPlanRails keeps its signature and exact {ok:true} shape; submit_plan's text/refusal are unchanged. New amendPlanStep.rails.test.ts has cases c1,a1-a6. Negative control at merge-base: \"Tests  4 failed | 3 passed (7)\" / RED-AT-BASE. Snapshot run: tsc clean, 5 files / 155 tests passed. Follow-up for governor: docs/MCP_SERVER.md amend_plan_step section gains no refusal note here (file held by 7d3428d1)."
 }
