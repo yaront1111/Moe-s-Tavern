@@ -1,0 +1,30 @@
+{
+  "id": "task-8cb8ff4a339748dcaf40d4c981191832",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a SPEED auto-approval timer that has already fired and is queued on the state mutex re-checks only status AWAITING_APPROVAL, never approvalMode, so a switch to CONTROL landing in that window still approves one row (residual of task-42aeed8a)",
+  "description": "Residual race reported by task-42aeed8accc54ac799b1f22c1d8a12b6 (approvalMode switch now clears/arms SPEED timers in profileRollout.updateProjectSettings).\n\nPROBLEM: tools/submitPlan.ts armSpeedModeApproval's timer callback (:123-153) takes state.runExclusive and re-checks only status === 'AWAITING_APPROVAL' (:127-129). A callback that fired before a CONTROL switch but is queued on the mutex behind the UPDATE_SETTINGS write runs after the switch (clearAllSpeedModeTimeouts cannot cancel a fired timer) and still writes WORKING with PLAN_AUTO_APPROVED, which setTaskStatus.ts:151-162 refuses under CONTROL.\n\nFIX DIRECTION: inside the locked section, return unless state.project?.settings.approvalMode === 'SPEED' (TURBO approves anyway, so allow SPEED and TURBO, refuse CONTROL). Add a regression test next to approvalModeSwitch.test.ts that queues the fired timer behind a held mutex while the mode flips to CONTROL (see queueTimerBehind in automaticApprovalRevision.test.ts).\n\nFILES: packages/moe-daemon/src/tools/submitPlan.ts (held by task-dd1e00f8 until it is DONE), a new case in packages/moe-daemon/src/state/approvalModeSwitch.test.ts.",
+  "definitionOfDone": [
+    "A SPEED timer whose callback is already queued on the state mutex does not approve its row when approvalMode becomes CONTROL before the callback takes the lock: the row stays AWAITING_APPROVAL and no PLAN_AUTO_APPROVED event is logged.",
+    "A new vitest case covers that window (fake timers, the callback held behind the mutex while updateSettings switches to CONTROL) and the existing submit_plan SPEED, automaticApprovalRevision and approvalModeSwitch tests stay green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-dd1e00f8e7bd4c589e1ff07093a435fc"
+  ],
+  "priority": "LOW",
+  "order": 447.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:44:42.438Z",
+  "updatedAt": "2026-11-03T22:44:42.438Z"
+}
