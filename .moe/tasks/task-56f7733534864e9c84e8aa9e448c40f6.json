@@ -47,7 +47,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -60,16 +60,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:01:58.605Z",
-  "updatedAt": "2026-11-03T17:10:20.021Z",
+  "updatedAt": "2026-11-03T17:11:56.063Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:03:46.655Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T17:11:35.456Z",
+    "wallClockMs": 468801
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-8cf0816c"
+    "worker-8cf0816c",
+    "qa-7328a40d"
   ],
   "tier": "light",
   "effort": "medium",
@@ -170,9 +173,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T17:07:44Z",
-    "at": "2026-11-03T17:10:20.021Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T17:10:35Z",
+    "at": "2026-11-03T17:11:56.063Z"
+  },
+  "completedAt": "2026-11-03T17:11:35.456Z",
+  "reviewCompletedAt": "2026-11-03T17:11:35.456Z",
+  "reviewSummary": "Reviewed completion c4121a4b (on moe/work-2026-10-24, contained in control HEAD): packages/moe-proxy/README.md only, +7/-2, docs-only, inside '## Environment Variables'. Re-ran the executionContract checkRef with MOE_LAND_TARGET=c4121a4b^ QA_TIP=c4121a4b: exit 0. DoD 1: literal `git grep -n MOE_DAEMON_PORT HEAD -- packages docs scripts moe-jetbrains moe-vscode` prints nothing. DoD 2: names diff re-run against the commit tree prints nothing, exit 0 (13 names each side). DoD 3: MOE_PROJECT_PATH says 'default: the current directory', no 'required' (utils.ts:162); MOE_MESSAGE_TIMEOUT_MS says 'default: 30000' (index.ts:40). DoD 4: `git diff --name-only c4121a4b^ c4121a4b` lists only the README; the hunk stays inside the section, existing lines are untouched context. Audited each new line against source: MOE_WORKER_ID vs injectWorkerId (utils.ts:180-245, get_activity_log filter exemption, blank = unset); runner pair vs injectRunnerIdentity (utils.ts:250-286, both non-blank, architect/QA/governor only, sh:3977); MOE_TOOL_NAME_STYLE vs toolNameStyleFromEnv and the grok pin (moe-agent.sh:1652). List renders as one list; no forbiddenPatterns in the added text. No src/test change, so no npm gate applies; the qualityGate does not read this README. Size 9 changed lines. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
