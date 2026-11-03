@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:40.138Z",
-  "updatedAt": "2026-11-03T22:18:07.580Z",
+  "updatedAt": "2026-11-03T22:21:05.921Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T20:50:32.996Z",
@@ -88,11 +88,14 @@
     "firstClaimAt": "2026-11-03T21:15:50.946Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:20:32.861Z",
+    "wallClockMs": 3881915
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -203,9 +206,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T22:13:26Z",
-    "at": "2026-11-03T22:18:07.580Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T22:18:21Z",
+    "at": "2026-11-03T22:21:05.921Z"
+  },
+  "completedAt": "2026-11-03T22:20:32.861Z",
+  "reviewCompletedAt": "2026-11-03T22:20:32.861Z",
+  "reviewSummary": "Reviewed completion cbae6070 (on moe/work-2026-10-24, HEAD of control): one file, docs/MCP_SERVER.md, +11/-4, far under the size cap.\n\nRe-ran the task verification byte-exact (/mnt/d/moe-scratch/plan-a024/verification-command.txt, sha256 matches the worker's /tmp copy): parity-check PASS, npm run lint OK (architect 39, worker 30, qa 36 lines), section-presence awk and no-'Epic already has an active worker' grep pass, exit 0. checkRef 3 is vacuous on control (B=HEAD), so I ran the strip-diff by hand with B=cbae6070^: bytes outside the two sections identical, git diff --check clean. DoD 2 greps both print 3 (395172f0, 6ded0c93, 6272d308 each landed their own hunk, so none was owed). The error string appears nowhere in the repo now.\n\nDoD 1, traced to code: parseExecutionRoute (claimEligibility.ts:116) takes undefined or 'vm' only, and null, '' and 'VM' throw `Invalid executionRoute: must be 'vm' when present` (-32602). It runs right after readProcessIdentity, before the project-loaded check and any write (claimNextTask.ts:451). In wait_for_task it runs after the statuses check and before assertAgentClaimableStatuses, the workerId check and any waiter (waitForTask.ts:291). executionAdmissionRefusal asserts readiness first, then strict && WORKING|REVIEW && route!=='vm' gives NOT_ALLOWED -32003 EXECUTION_ROUTE_REQUIRED, with the own-attempt snapshot counted. The explicit path throws (claimNextTask.ts:590), the ranked pool skips (:648), the own-task match and pool in wait both pass the route, and every hint spreads routeArg. The Worker Constraint rewrite matches the solo-rule `continue` plus noTeamMembershipRefusal tail. No doc line trips daemonGitDocs. Pinning tests exist (executionRoute.test.ts, claimNextTask.routeHint.test.ts).\n\nNot run: the daemon vitest suite, since this is docs only and no code or test changed. Taste only: the new paragraph is one very long line.",
+  "requiredCheckAtDone": null
 }

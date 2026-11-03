@@ -12,25 +12,37 @@
     {
       "stepId": "step-1",
       "description": "Tests first (DoD 1, 2), in scripts/tests/postflight-vm-route.sh. Line numbers are approximate; anchor on the quoted text.\n\nAdd a helper next to vmr_fail: `vmr_one_reason ROW REASON`. It fails the row unless $OUT holds exactly one `MOE_TASKLESS_NO_LAUNCH reason=` line, and that line starts `MOE_TASKLESS_NO_LAUNCH reason=REASON role=`. Count with `grep -c ... || true`, so a zero count stays set -e-safe.\n\n(a) Today's path. After the T_ROWS loop (~:135), with legacy readiness (\"$LEGACY\" - -):\n- T-taskless-idle, FAKE_CLAIM_MODE=idle: exit 0, no $REC, `vmr_one_reason T-taskless-idle idle`.\n- T-taskless-mention, FAKE_CLAIM_MODE=idle FAKE_MENTION=1: `vmr_launched` (the notification-only CLI still runs, and its claim is unmarked) and zero MOE_TASKLESS_NO_LAUNCH lines.\n- Add both rows to the `[vm route] ok today's path` line.\n\n(b) vmj_rows (~:263). Mode `taskless` expects the seats ['seat-start','seat-stop'], as `shared` does: the gate starts the VM, no seat-job runs, and the exit trap stops it. Leave every other check unchanged: no host CLI ($REC), no token, claims marked vm, seat-start before the first claim, and the last seat row before deregister_worker.\n\n(c) Seat-job block. After VR-sigint and before the `[seat job] VR-reload` echo (~:480), with VMR_ARGS=(--no-loop --poll-interval 0) set explicitly:\n- VR-taskless, \"$READY\" on 0 FAKE_CLAIM_MODE=idle FAKE_MENTION=1: exit 0, `vmr_one_reason VR-taskless vm-route`, `vmj_rows taskless`.\n- VR-taskless-teamless, the same plus FAKE_JOIN_FULL=1: exit 1 with exactly one MOE_SEAT_UNREGISTERED (the one-shot teamless tail, by design), reason vm-route, `vmj_rows taskless`.\n- VR-taskless-idle, FAKE_CLAIM_MODE=idle only: exit 0, reason idle (the legacy rule already skipped: nothing to answer), `vmj_rows taskless`.\n\n(d) VR-reload (~:489). Keep every check, and add one: the count of `MOE_TASKLESS_NO_LAUNCH reason=` lines equals the count of `MOE_TASKLESS_NO_LAUNCH reason=vm-route ` lines.\n\n(e) Name the new rows in the `[seat job] PASS` line (~:497).\n\nOn the current wrapper, VR-taskless, VR-taskless-teamless and the VR-reload count are RED (vm-route, then an idle or teamless line). T-taskless-* and VR-taskless-idle are guards that pass before and after the fix. Error handling in the rows: every failed check goes through vmr_fail, which dumps $OUT. Edit the file with your session's TOOL-witnessed editor (Edit/Write, apply_patch or Serena), then run bash -n on it.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-03T22:17:43.813Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Added vmr_one_reason, T-taskless-idle/mention, vmj_rows taskless mode, VR-taskless/-teamless/-idle, VR-reload count assertion. bash -n OK.",
+      "startedAt": "2026-11-03T22:17:43.813Z",
+      "completedAt": "2026-11-03T22:18:40.253Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix (DoD 1, 2) in scripts/moe-agent.sh. Change only the single taskless launch decision and its no-launch chain:\n- At `MOE_SKIP_LAUNCH=false` (~:11034), also reset `VM_TASKLESS_SKIP=false`. The flag resets every iteration, before anything reads it.\n- In the VM-route block (~:11045-11048), keep the condition and `MOE_SKIP_LAUNCH=true; LAUNCH_PROBE=false`, add `VM_TASKLESS_SKIP=true`, and delete the block's echo.\n- In `if [ \"$MOE_SKIP_LAUNCH\" = true ]` (~:11070), make the first branch `if [ \"$VM_TASKLESS_SKIP\" = true ]; then`. It echoes the vm-route line, moved byte-identical: `MOE_TASKLESS_NO_LAUNCH reason=vm-route role=$ROLE worker=$WORKER_ID - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job.` The existing claim-failed, teamless and idle branches follow unchanged as elif/else.\n- Add one short comment: each skipped iteration prints one reason. vm-route comes first because only the route stopped a launch the legacy rules allow: a routed mention, a claim-failed or teamless seat with mentions, or the unparseable-claim fallback. When the legacy rule skipped first, its reason stands.\n\nKeep unchanged:\n- the legacy first block, including the MOE_LAUNCH_PROBE echo (task-cc4213c0 covers the carried-over outage);\n- the post-launch classification (~:11923);\n- the team-join code near ~:2571;\n- moe-agent.ps1, the M07n/M07n3 twin (advisory comment-32161fb0 on task-62ec51f1).\n\nThe flag is a plain shell variable: not exported and not MOE_-prefixed. parity-check compares MOE_* code families, and the T-* rows byte-compare the CLI env.\n\nError handling: this adds no failure path. Under set -e the flag is assigned before it is read, and a VM_ROUTE=false iteration never sets it, so every legacy line stays byte-identical.\n\nEdit your worktree copy with your TOOL-witnessed editor, then run `bash -n scripts/moe-agent.sh`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "VM_TASKLESS_SKIP flag; vm-route echo moved byte-identical to first branch of the no-launch chain. bash -n OK.",
+      "startedAt": "2026-11-03T22:18:41.188Z",
+      "completedAt": "2026-11-03T22:19:00.764Z"
     },
     {
       "stepId": "step-3",
       "description": "Verify once (DoD 2), from the task worktree root, after the last edit:\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight-vm-route.sh'`\n\nIts fresh output is the complete_task evidence.\n- The harness can pass the 600 s foreground cap. Run it in the background with job control, writing to a log, and poll for the EXIT line, per mem:gotcha-qa-session-env-and-signals-leak-into-harness. VR-sigint and the VE-wait rows send SIGINT, so check that SigIgn bit 0x2 is clear.\n- Don't edit moe-agent.sh while the run is live (mem:gotcha-editing-wrapper-while-harness-runs).\n- Kill only PIDs your session recorded, never by name.\n- A full postflight.sh run is not required. The DoD asks for the focused rows plus parity, the T-taskless rows pin the legacy taskless lines, and the qualityGate (parity + lint) runs at landing.\n\nError handling for a red run: read the failing row's dumped output, fix that cause in step 1's or step 2's file, and re-run the whole command. Never weaken a row.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T22:19:01.865Z"
     },
     {
       "stepId": "step-4",
@@ -56,7 +68,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:52:12.386Z",
-  "updatedAt": "2026-11-03T22:17:43.813Z",
+  "updatedAt": "2026-11-03T22:19:01.865Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T20:43:51.548Z",
@@ -65,7 +77,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T21:27:43.047Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -75,7 +88,10 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:15:24.291Z",
   "executionContract": {
