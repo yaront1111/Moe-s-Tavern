@@ -13,9 +13,114 @@
   "taskRails": [
     "Do not edit scripts/moe-agent.sh or scripts/moe-agent.ps1 in this row: every landing that changes either file hot-reloads the whole fleet, and the live daemon still releases on wrapper_restart until it is rebuilt."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Schema and resolver.\n\nIn packages/moe-daemon/src/types/schema.ts:\n- Worker gains optional `reloadHoldUntil?: string | null`, with a doc comment: the ISO deadline of a wrapper_restart hold; absent or null means no hold. Existing records load unchanged.\n- ProjectSettings gains `reloadHoldMs?: number`, with a doc comment like reconcileWindowMs's: default 120000; 0 disables; capped at 1800000; measured from the deregister, never from idle time.\n\nIn packages/moe-daemon/src/state/workerLifecycle.ts, export:\n- RELOAD_HOLD_REASON = 'wrapper_restart'\n- RELOAD_HOLD_EXPIRED_REASON = 'reload_hold_expired'\n- DEFAULT_RELOAD_HOLD_MS = 120_000\n- MAX_RELOAD_HOLD_MS = 1_800_000\n- resolveReloadHoldMs(settings?: Pick<ProjectSettings, 'reloadHoldMs'>): number. A finite number of at least 0 is used, capped at MAX_RELOAD_HOLD_MS. Anything else (absent, negative, NaN, Infinity, a string) gives DEFAULT_RELOAD_HOLD_MS.\n\nError handling: the resolver never throws. It is read at use time from state.project?.settings, like the sweeps' thresholds.\n\nLike reconcileWindowMs, the setting is read from project.json only. Leave validateSettingsUpdate's allowlist (state/validators.ts) unchanged, so tests seed the setting through setupMoeFolder({ settings }) or the loaded project.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/reloadHold.test.ts"
+      ],
+      "note": "Added optional schema fields and bounded/defaulted resolver. Pulled the first planned regression fixture forward from step 5 for TDD (same approved six-file scope): Linux /tmp archive with npm ci --prefer-offline; npx vitest run src/state/reloadHold.test.ts RED: Tests 1 failed, observed releasedTaskIds [task-1] instead of heldTaskIds. Remaining test coverage and compile/full gate stay in steps 5–6.",
+      "startedAt": "2026-11-03T07:04:04.941Z",
+      "completedAt": "2026-11-03T07:04:52.118Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The hold, in deregisterWorker (packages/moe-daemon/src/state/workerLifecycle.ts) and the tool response (packages/moe-daemon/src/tools/deregisterWorker.ts).\n\nThe hold condition is checked after closeOwnFinalizingAttempts and the missing-record and already-DEAD answers, all unchanged, and before releaseWorkerTasks. It holds when all of these are true:\n- reason === RELOAD_HOLD_REASON;\n- worker.status !== 'DEAD';\n- state.getActiveTasksAssignedToWorker(workerId) is non-empty;\n- resolveReloadHoldMs(state.project?.settings) > 0.\n\nWhen it holds:\n- If worker.reloadHoldUntil is already set: return held ids plus that stored value, and write nothing, post nothing, log no activity. A hold never extends itself; the sweep handles a past deadline.\n- Otherwise: holdUntil = new Date(Date.now() + ms).toISOString(), then await state.updateWorker(workerId, { reloadHoldUntil: holdUntil }).\n  - Error handling: if that write throws, logger.warn and fall through to today's release. A hold that cannot be recorded is no hold, and must never strand the row.\n  - Then post one banner to #workers and #governors, each in try/catch as the existing banner is: `🔌 <id> reloading (wrapper_restart); holding N task(s) for its relaunch until <holdUntil>: <taskId>(<status>), ...`. Write no chat-leave lines: the seat is coming back.\n  - Append WORKER_DISCONNECTED {workerId, reason, releasedTaskIds: [], heldTaskIds, holdUntil}.\n  - Return { workerId, released: [], alreadyDead: false, held: ids, holdUntil }.\n- Leave the task, its attempt, worker.status, currentTaskId, resource claims, chat cursors and team membership untouched.\n\nThe existing DEAD write adds reloadHoldUntil: null ONLY when the record has one set. Every other record stays byte-identical, so existing tests that compare whole records still pass.\n\nDeregisterResult gains held: string[] ([] on every other path) and holdUntil?: string.\n\nderegisterWorker.ts response:\n- Add heldTaskIds: result.held, plus holdUntil only when set. Keep every existing field.\n- On a hold, the message reads `<id> reloading; holding N task(s) for its relaunch until <holdUntil>`.\n- Add one sentence about the hold to the tool description. Avoid any phrase saying the daemon never runs git (daemonGitDocs.test.ts scans tool descriptions).\n- The /ws DEREGISTER_WORKER ack in WebSocketServer.ts reads only workerId, alreadyDead and releasedTaskIds, so it stays as is.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/deregisterWorker.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/deregisterWorker.ts"
+      ],
+      "note": "Implemented bounded, idempotent active-task hold after finalizing cleanup; failed hold write falls through to existing release. Added additive heldTaskIds/holdUntil and hold banner/response. DEAD clears only existing hold fields. /ws ack unchanged. Snapshot targeted regression now GREEN: npx vitest run src/state/reloadHold.test.ts — 1 file/1 test passed; full suite remains step 6.",
+      "startedAt": "2026-11-03T07:04:52.153Z",
+      "completedAt": "2026-11-03T07:05:32.070Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "The seat's return, in packages/moe-daemon/src/tools/claimNextTask.ts.\n\nRight after `await refreshWorkerType(state, params.workerId, params.workerType)` and before the one-task-per-worker block (blockingHold), call a new exported helper in workerLifecycle.ts: endReloadHold(state, workerId?).\n- When the record exists and reloadHoldUntil is set, it runs await state.updateWorker(workerId, { reloadHoldUntil: null }) and logs at info.\n- Otherwise it is a no-op with no write.\n- The same claim then answers alreadyAssigned for the held task through the existing heldTaskRefusal, with no other change.\n\nError handling: a failed clear PROPAGATES (fail closed). Resuming under a hold that would still expire lets the sweep release the row out from under a live seat. The claim writes nothing else, and the wrapper simply claims again next loop.\n\nNothing else ends a hold: not join_team, chat, heartbeat or wait_for_task. The governor branch above returns before this point; governors hold no tasks.\n\nNo ranked-pool or explicit-taskId change. The held record is neither missing nor DEAD, so isTaskClaimable is already false for every peer.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/state/reloadHold.test.ts"
+      ],
+      "note": "Added fail-closed endReloadHold immediately after non-governor refreshWorkerType, before blockingHold, under existing claim lock. No peer eligibility changes. Targeted snapshot RED: 1 failed/1 passed (deadline remained set); GREEN: 2 passed after clear. Recommended ponytail skill absent from advertised skills and both standard/local SKILL.md locations; reused existing state.updateWorker and existing heldTaskRefusal as approved.",
+      "startedAt": "2026-11-03T07:05:32.101Z",
+      "completedAt": "2026-11-03T07:05:53.940Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Expiry sweep, in packages/moe-daemon/src/state/sweeps.ts.\n\nAdd `export async function runReloadHoldSweep(state, nowMs = Date.now()): Promise<string[]>`.\n- Walk Array.from(state.workers.values()). For each record whose reloadHoldUntil is set and either does not parse or is <= nowMs, await deregisterWorker(state, id, RELOAD_HOLD_EXPIRED_REASON).\n- That is a non-hold reason, so it runs today's full release unchanged: nextStatusForRelease routing, the attempt close, DEAD (which clears the field), releaseOnDeregister drops, chat-leave lines and the 🔌 banner.\n- Error handling: per-record try/catch with logger.error; one failure never stops the pass. A record whose DEAD write failed keeps its deadline, so the next tick retries it.\n- An unparseable deadline counts as expired on purpose. Releasing is the old behaviour; holding is the new one.\n\nAdd `export async function checkReloadHolds(state, nowMs = Date.now())`. It wraps runReloadHoldSweep in state.mutex.runExclusive, as checkReconcileWindow does.\n\nWire it into startStaleWorkerWatcher's interval callback, before state.checkStaleWorkers(...), with its own .catch that logs: 'Error expiring reload holds'. checkStaleWorkers returns early when no governor is online, so the call must not sit inside it.\n\nResult: a dead reload's row is released between reloadHoldMs and reloadHoldMs + 60 s after the reload. A daemon restart keeps the persisted deadline, and the first tick after load enforces it. Add no new interval handle: armPeriodicSweeps and the stop functions stay as they are.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/reloadHold.test.ts"
+      ],
+      "note": "Added per-worker defensive sweep, mutex entry point and awaited reload expiry before stale-worker notification on the existing interval (no new handle or lifecycle edits). Reuses deregisterWorker with reload_hold_expired. Added watcher/no-governor regression: RED 1 failed/2 passed, GREEN 3 passed in snapshot. Found and loaded the recommended ponytail skill from docs/skills/ponytail/SKILL.md; reused the existing timer and release lifecycle.",
+      "startedAt": "2026-11-03T07:05:53.970Z",
+      "completedAt": "2026-11-03T07:06:59.668Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Tests: the new file packages/moe-daemon/src/state/reloadHold.test.ts, using ToolTestHarness.\n\nSetup:\n- h.init(); h.setupMoeFolder(); h.createEpic(); a WORKING unassigned task.\n- await h.state.load(), then spy on state.postToRoleChannel and postToGeneral (mockResolvedValue) and read the banners from the spies.\n- The seat claims through claimNextTaskTool(h.state).handler({statuses:['WORKING'], workerId:'worker-reload'}), so it holds a real running attempt (currentAttempt or listAttempts from attemptStore).\n- Teams: claim_next_task's single-worker-per-epic+status rule blocks a TEAMLESS peer while another live seat holds a WORKING row in the same epic. Give the peer a team (state.createTeam + state.addTeamMember), or keep each fixture in its own test or epic.\n\nCases, with exact-value assertions:\n1. DoD 1. deregister_worker {reason:'wrapper_restart'} answers heldTaskIds [T], releasedTaskIds [] and holdUntil equal to the record's reloadHoldUntil, within now + 120000. The task stays WORKING and assigned to the seat. Its attempt phase stays 'running'. Worker status is not DEAD. Exactly one holding banner each to workers and governors.\n2. DoD 2. During the hold:\n   - the peer's ranked claim answers hasNext:false, with no task and no alreadyAssigned;\n   - its explicit-taskId claim rejects with /already assigned/;\n   - the seat's next claim answers alreadyAssigned.taskId T, and reloadHoldUntil is now null;\n   - runReloadHoldSweep after the old deadline then changes nothing.\n3. DoD 3. With no claim, runReloadHoldSweep(state, deadline - 1) changes nothing. runReloadHoldSweep(state, deadline) releases the task. Compare [task.status, task.assignedWorkerId, attempt phase, worker.status] with a second seat whose task was deregistered with 'terminal_closed'; they must be equal. A peer's ranked claim then gets T.\n4. DoD 4.\n   - resolveReloadHoldMs table: undefined → 120000; 0 → 0; 1800001 and 5e6 → 1800000; -1, NaN, Infinity and '5000' → 120000.\n   - With reloadHoldMs 0 (set on the loaded project's settings), wrapper_restart releases at once as today.\n   - A 'terminal_closed' deregister during a hold releases at once and clears reloadHoldUntil.\n5. A repeat wrapper_restart during a hold returns the same holdUntil, posts no second banner and writes no second WORKER_DISCONNECTED row.\n6. A wrapper_restart from a seat holding no active task is DEAD at once, with banner '(no tasks held)', as today.\n\nKeep the file lean: one shared setup helper, and table-driven cases where it fits. This row's net LOC must stay under 400 with the runtime.\n\nCount a test RED only on a real Tests failure line. Mutation check, run once in the snapshot: the test must fail when the hold branch is disabled, and when endReloadHold is skipped.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/reloadHold.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/reloadHold.test.ts",
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/deregisterWorker.ts"
+      ],
+      "note": "25 regression cases cover exact hold fields/banners/activity, untouched task/attempt/resource/team/cursors, peer exclusion, claim clearing, exact expiry vs terminal_closed, settings, repeat/idle behavior, write failures, malformed deadlines, retry/continue, locking and persisted watcher/no-governor expiry. Own scratch test tsconfig passes. Snapshot focused run: 40/40 tests (new 25 + sweeps existing 15). Found awaited timer dispatch changed synchronous stale tick count: pristine HEAD sweeps 15/15 proved baseline, fixed by invoking expiry before existing check with its own catch as plan specified; existing tests unchanged. Mutation hold-disabled: 11 failed/14 passed; clear-skipped: 3 failed/22 passed; both compile and fail real assertions. Same-file scope includes corrected inserted JSDoc placement and response indentation. New test 232 lines; total net scope ~320, below 400.",
+      "startedAt": "2026-11-03T07:06:59.697Z",
+      "completedAt": "2026-11-03T07:11:45.300Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Run the full daemon suite once, because types/schema.ts changes. Run it in a Linux snapshot from the task worktree; never run npm in the shared checkout.\n\nS=$(mktemp -d /tmp/moe-reload-hold-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/types/schema.ts packages/moe-daemon/src/state/workerLifecycle.ts packages/moe-daemon/src/tools/deregisterWorker.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/state/sweeps.ts packages/moe-daemon/src/state/reloadHold.test.ts; do cp \"$f\" \"$S/$f\"; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund && npx tsc --noEmit -p . && npx vitest run'\n\nOverlay ONLY these six owned paths, and cmp them against the snapshot before citing it (mem:gotcha-daemon-linux-snapshot-gate).\n\ntsconfig excludes tests. To type-check reloadHold.test.ts too, add a scratch tsconfig in the snapshot's packages/moe-daemon, following the recipe in that memory.\n\nThe existing chatSystemFeed, joinTeam.deadMembers, joinTeam.notification, workerType, resourceStore.deregister, attemptHandback, reattachAttempt, claimNextTask, workerStore, sweeps and StateManager tests must pass UNCHANGED. They cover the idle-seat wrapper_restart, the restart purge and reattach.\n\nIf a test fails, rerun it on a pristine git archive HEAD before calling it yours.\n\ncomplete_task verification:\n- command: this line, exactly as run;\n- exitCode: 0;\n- outputTail: the vitest Test Files/Tests summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the exact approved fresh git-archive + six-path overlay command in /tmp/moe-reload-hold-t1R8V4 with clean env and npm ci, tsc --noEmit, full vitest run: exit 0; 230 files passed, 6974 tests passed / 20 skipped (6994), 52.74s. cmp verified all six owned paths equal the snapshot. Separate scratch tsconfig type-checks reloadHold.test.ts successfully (types:[node], exclude:[]). Existing regression files unchanged. Quality gate also exit 0 in same snapshot: PASS parity-check.sh; role-doc lint OK 39/30/36 lines.",
+      "startedAt": "2026-11-03T07:11:45.332Z",
+      "completedAt": "2026-11-03T07:13:35.773Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this diff only. Check each of these:\n- Concurrency: every hold write, clear and expiry runs under state.mutex (the tool handler's runExclusive, the claim handler's lock, checkReloadHolds). Is there any path that reads the deadline outside the lock and writes inside it?\n- Could a live seat lose its row? Only an uncleared hold expires. A failed clear fails the claim; it never lets the seat resume.\n- Could a dead reload strand its row? A hold write failure falls through to release. An unparseable deadline expires.\n- Do non-reload reasons, idle seats, DEAD seats and reloadHoldMs 0 behave byte-identically to before? Check the records, banners, activity and the response's existing fields.\n- Do the restart purge and reattach still work for a held seat? It is non-DEAD with an open attempt, so the purge spares it and reattach is untouched.\n- Does any comment or description say the daemon never runs git?\n- Is scripts/moe-agent.{sh,ps1} untouched (this row's taskRail)?\n- isEpicFinal is true here only through the highest-order fallback: the epic has no finalTaskId and 128 rows. The full daemon suite is this row's regression; no epic-wide sweep is planned.\nFix findings in their own files and re-run the gate.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/reloadHold.test.ts"
+      ],
+      "note": "Adversarial review completed on all six owned paths. Verified live tool/claim writes and expiry use the shared mutex; no deadline read-before-lock; failed hold write releases, failed clear refuses claim; repeat never extends; malformed deadlines expire; failed DEAD write retries; purge preserves held running attempt; non-reload/idle/DEAD behavior and /ws ack unchanged; scripts untouched. Strengthened no-chat-leave oracle to use a real channel id instead of a nonexistent name. Re-ran exact approved full snapshot gate after that test change: 230 files passed, 6974 tests passed / 20 skipped, exit 0 (41.14s), /tmp/moe-reload-hold-f1lp6W; cmp all six equal. Own test typecheck and parity+lint also exit 0. Net 321 LOC across six files. Handoff and gotcha memories saved. No unresolved findings.",
+      "startedAt": "2026-11-03T07:13:35.806Z",
+      "completedAt": "2026-11-03T07:16:20.367Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,5 +133,154 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T06:50:45.140Z",
-  "updatedAt": "2026-11-03T06:50:45.140Z"
+  "updatedAt": "2026-11-03T07:17:55.715Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T06:59:39.717Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 7
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-fdb2af60"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T07:02:26.870Z",
+  "executionContract": {
+    "intendedBehavior": "moe.deregister_worker with reason exactly wrapper_restart, from a non-DEAD seat holding a PLANNING/WORKING/REVIEW/BLOCKED task, holds those tasks for the seat's relaunch instead of releasing them.\n- It writes worker.reloadHoldUntil = now + settings.reloadHoldMs (default 120000, 0 disables, capped at 1800000), posts one 🔌 holding banner, logs WORKER_DISCONNECTED with heldTaskIds and holdUntil, and answers heldTaskIds plus holdUntil.\n- Peers cannot claim the row: its owner is neither missing nor DEAD.\n- The seat's next claim_next_task clears the hold and answers alreadyAssigned for its task.\n- If the seat has not claimed by the deadline, the 60 s worker sweep deregisters it with reason reload_hold_expired, which is the old full release.\n- Every other reason, an idle seat and a DEAD seat behave exactly as before.",
+    "acceptanceCriteria": [
+      "A wrapper_restart deregister of a seat holding a WORKING task answers heldTaskIds [task], releasedTaskIds [] and holdUntil. The task stays assigned and WORKING, the attempt running and the worker not DEAD.",
+      "During the hold, a peer's ranked claim answers hasNext:false and its explicit-taskId claim is refused as already assigned. The seat's next claim answers alreadyAssigned for the task and clears reloadHoldUntil.",
+      "runReloadHoldSweep before the deadline changes nothing. At the deadline it leaves the task, attempt and worker equal to a terminal_closed deregister's end state, and a peer's claim then gets the task.",
+      "resolveReloadHoldMs: absent → 120000; 0 → 0 (released at once); above 1800000 → 1800000; negative or non-finite or a string → 120000.",
+      "A non-reload deregister during a hold releases at once. A repeat wrapper_restart keeps the deadline with no new banner or activity row. An idle seat's wrapper_restart is DEAD at once.",
+      "The full daemon suite, tsc --noEmit included, passes in a Linux snapshot."
+    ],
+    "invariants": [
+      "No idle-based release: a hold ends only at the seat's claim, at a non-reload deregister, or at its own deadline.",
+      "Every hold write, clear and expiry runs under state.mutex.",
+      "A failure to record a hold falls back to the old release, and a failure to clear a hold fails the claim. Neither can strand a row or release a live seat's row."
+    ],
+    "compatibility": [
+      "Records without reloadHoldUntil load and behave as before. The DEAD write adds the key only when it was set.",
+      "deregister_worker keeps every existing response field. The /ws DEREGISTER_WORKER ack is unchanged.",
+      "Existing tests that deregister idle seats with wrapper_restart still see DEAD at once.",
+      "validateSettingsUpdate's allowlist is unchanged (project.json-only, like reconcileWindowMs).",
+      "scripts/moe-agent.sh and scripts/moe-agent.ps1 are not edited."
+    ],
+    "approvedScope": [
+      "types/schema.ts: Worker.reloadHoldUntil and ProjectSettings.reloadHoldMs.",
+      "state/workerLifecycle.ts: RELOAD_HOLD_REASON, RELOAD_HOLD_EXPIRED_REASON, DEFAULT_RELOAD_HOLD_MS, MAX_RELOAD_HOLD_MS, resolveReloadHoldMs and endReloadHold; the hold branch in deregisterWorker; DeregisterResult.held and holdUntil.",
+      "tools/deregisterWorker.ts: the heldTaskIds and holdUntil response fields, the hold message and the description sentence.",
+      "tools/claimNextTask.ts: the endReloadHold call between refreshWorkerType and blockingHold.",
+      "state/sweeps.ts: runReloadHoldSweep and checkReloadHolds, wired into startStaleWorkerWatcher's interval.",
+      "state/reloadHold.test.ts (new)."
+    ],
+    "reuse": [
+      "deregisterWorker's existing release flow is reused unchanged for expiry (reason reload_hold_expired).",
+      "isTaskClaimable and heldTaskRefusal give peer exclusion and the alreadyAssigned answer with no change.",
+      "The watcher interval and mutex.runExclusive pattern follow checkReconcileWindow.",
+      "ToolTestHarness and claimNextTaskTool are the test fixtures."
+    ],
+    "sourceAssumptions": [
+      "state/workerLifecycle.ts: deregisterWorker runs closeOwnFinalizingAttempts, then the missing-record and already-DEAD answers, then releaseWorkerTasks, then updateWorker DEAD, then releaseDeregisteredClaims, chat-leave, banner and WORKER_DISCONNECTED.",
+      "state/workerStore.ts:43: isTaskClaimable = !assignedWorkerId || isTaskAssignedToInactiveWorker (missing or DEAD).",
+      "tools/claimNextTask.ts: refreshWorkerType ~:478, then blockingHold → heldTaskRefusal ~:489; explicit-taskId refusal 'already assigned' ~:584.",
+      "state/sweeps.ts: startStaleWorkerWatcher ~:124 (60 s); checkStaleWorkers ~:334 returns early without a live governor; checkReconcileWindow ~:313 is the mutex-wrap pattern.",
+      "tools/toolTestHarness.ts: setupMoeFolder(projectOverrides) replaces settings wholesale; createEpic, createTask and createWorker exist."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/moe-reload-hold-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/types/schema.ts packages/moe-daemon/src/state/workerLifecycle.ts packages/moe-daemon/src/tools/deregisterWorker.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/state/sweeps.ts packages/moe-daemon/src/state/reloadHold.test.ts; do cp \"$f\" \"$S/$f\"; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund && npx tsc --noEmit -p . && npx vitest run'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Designed together with task-f81c85ac, which depends on this row and owns the postflight arms and docs. Full rationale: mem:decision-reload-hold-keys-on-wrapper-restart.\n- Keyed on the existing reason, not a new flag: every live seat's old bytes already send wrapper_restart, and a wrapper edit hot-reloads every seat.\n- A hold on the worker record, not the restart's reconciling attempt: the reconcile window is 2 h, and attempts belong to delivery.\n- A periodic sweep, not lazy expiry in claim: only a sweep publishes TASK_UPDATED at the deadline, so parked waiters wake.\n- No claim-path filter: isTaskClaimable already refuses rows whose owner is neither missing nor DEAD.\n- A fail-closed clear in claim: a hold must never expire under a live seat.",
+    "codebaseInsights": "- deregisterWorker (state/workerLifecycle.ts) is the single release path for the tool and the JetBrains /ws DEREGISTER_WORKER ('terminal_closed'). Its callers are only tools/deregisterWorker.ts and WebSocketServer.ts.\n- isTaskClaimable (state/workerStore.ts:43) keys strictly on a missing or DEAD owner.\n- claim_next_task: refreshWorkerType at ~:478, then blockingHold → heldTaskRefusal at ~:489 (util/claimEligibility.ts).\n- updateWorker bumps lastActivityAt except on the DEAD transition.\n- startStaleWorkerWatcher (sweeps.ts ~:124) ticks every 60 s. checkStaleWorkers returns early with no live governor.\n- validateSettingsUpdate rejects unknown keys, and reconcileWindowMs is not in its allowlist either, so these windows are project.json-only.\n- Existing tests deregister IDLE seats with wrapper_restart (chatSystemFeed:162, joinTeam.deadMembers:81, joinTeam.notification:40, workerType:108) and expect DEAD at once, so the hold must require an active task.",
+    "risks": "- Whole-record test comparisons: write reloadHoldUntil: null on the DEAD path only when it was set.\n- The single-worker-per-epic+status rule makes a teamless peer's claim skip rows in an epic where another live seat holds a WORKING row. Give the test peer a team.\n- daemonGitDocs.test.ts fails the suite on any comment or description saying the daemon never runs git.\n- Net LOC cap 400: runtime is about 110 and the test file must stay about 250 or less.\n- isEpicFinal=true only through the order fallback. The quality gate (parity-check + lint) then runs at landing, which is cheap.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/tools/deregisterWorker.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/state/sweeps.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "70e6698a8c13a9b2849758deaed7c2c11b833908",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T07:02:26.894Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T07:04:04.941Z",
+  "reviewStartedAt": "2026-11-03T07:16:30.464Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/moe-reload-hold-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/types/schema.ts packages/moe-daemon/src/state/workerLifecycle.ts packages/moe-daemon/src/tools/deregisterWorker.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/state/sweeps.ts packages/moe-daemon/src/state/reloadHold.test.ts; do cp \"$f\" \"$S/$f\"; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund && npx tsc --noEmit -p . && npx vitest run'",
+    "exitCode": 0,
+    "outputTail": "Test Files  230 passed (230)\n     Tests  6974 passed | 20 skipped (6994)\n  Start at  09:14:34\n  Duration  41.14s (tests 93%, transform 4%, import 4%)\nSnapshot /tmp/moe-reload-hold-f1lp6W: all six owned paths cmp-identical. Scratch test tsconfig passed. Quality gate: PASS parity-check.sh; role-doc lint OK (39/30/36 lines).",
+    "reportedAt": "2026-11-03T07:16:30.464Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/workerLifecycle.ts",
+    "packages/moe-daemon/src/state/reloadHold.test.ts",
+    "packages/moe-daemon/src/tools/deregisterWorker.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/state/sweeps.ts"
+  ],
+  "completionSummary": "Implemented daemon-only wrapper_restart holds: configurable 2-minute default/30-minute cap, idempotent persisted deadline, peer exclusion via existing ownership, fail-closed claim clearing, and mutex-protected expiry on existing watcher. All other deregistration behavior preserved; no launcher/live dist edits. Six files, net 321 LOC, 25 new regression cases. Full daemon suite: 230 files, 6974 passed / 20 skipped; production and new-test typechecks pass; parity/lint pass. Both requested compiled mutants killed (11 and 3 assertion failures). Final snapshot /tmp/moe-reload-hold-f1lp6W matches all six owned files; handoff/gotcha memories saved.",
+  "commits": [
+    {
+      "sha": "a13eb35468c76805c2fc211254912e552335e7ce",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T07:02:26Z",
+      "paths": [
+        "packages/moe-daemon/src/state/reloadHold.test.ts",
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/deregisterWorker.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T07:17:55.715Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-03T07:02:26Z",
+    "at": "2026-11-03T07:17:55.715Z"
+  }
 }

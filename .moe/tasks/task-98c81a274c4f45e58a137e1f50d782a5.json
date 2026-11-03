@@ -9,7 +9,8 @@
     "LEGACY projects never prompt; the existing moe-vscode tests are unchanged and new tests cover persist, ask, decline, dismiss and untrusted-record cases; `cd moe-vscode && npm test && npm run compile` exits 0 on Linux and on Windows."
   ],
   "taskRails": [
-    "Protected-profile state lives outside the repository, owner-only; a missing, unreadable or mismatched record fails closed to protected."
+    "Protected-profile state lives outside the repository, owner-only; a missing, unreadable or mismatched record fails closed to protected.",
+    "Size-only exception for task-98c81a274c4f45e58a137e1f50d782a5 (VS Code persistent verified-local pin with downgrade confirmation; RF02 parity). Its completion may total at most 450 net changed non-board lines, measured from its first commit's parent to its final completion, across exactly these files: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts and the new moe-vscode/tests/protected-profile-pin.test.cjs. The DoD bundles the owner-only store, the pin, the confirmation and five test families in one row. This waives size-based rejection only. Every DoD item, rail, test and verification requirement still applies. Grow it only by QA-required fixes."
   ],
   "implementationPlan": [
     {
@@ -93,12 +94,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-7328a40d",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Governor, 06:35Z: lifting the size hold so QA can review on substance while seats are idle. The waiver prop-b13568c2 is still pending; QA withholds the verdict per the row comment.",
+  "reopenReason": "Waiver prop-b13568c2 APPROVED by the human at 07:05:46Z. The TASK size exception (450 net) is in taskRails exactly once. Bytes are unchanged since QA's substance pass on completion 9eca3971 (comment-c01fee7f; net 443 across the 3 approvedScope files), so QA approves on that evidence. A re-run is needed only if the bytes changed.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -131,7 +132,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:10.352Z",
-  "updatedAt": "2026-11-03T06:41:05.631Z",
+  "updatedAt": "2026-11-03T07:16:13.844Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:15.663Z",
@@ -146,7 +147,8 @@
   "contextFetchedBy": [
     "architect-24611a0a",
     "worker-8cf0816c",
-    "qa-af7be174"
+    "qa-af7be174",
+    "qa-7328a40d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -251,10 +253,10 @@
     "sessionId": "qa-af7be174@2026-11-03T06:32:53Z",
     "at": "2026-11-03T06:41:05.631Z"
   },
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-03T06:40:25.110Z",
-  "blockedReason": "QA size hold, verdict withheld (governor's WT-14 pattern, comment-987a6218). The substance review PASSES; the evidence is in comment-c01fee7f. Completion 9eca3971 measures +461/-18, net 443 across exactly the 3 approvedScope files. That is over the 400 cap, and no rail waives it yet: the TASK exception prop-b13568c2 (cap 450 net) is still PENDING the human's IDE click.\n\nQA re-ran both legs on a fresh git archive of 9eca3971:\n- Linux: npm ci, test, compile and lint exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe): npm ci, test and compile exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips.\n- The new suite passes 30/30 on Linux and 26/26 on Windows, and 5 QA mutants are each killed.\n\nOnce prop-b13568c2 is approved, set REVIEW again; the next QA approves on that evidence, since the bytes are unchanged. Nothing for a worker to do. One non-blocking follow-up is suggested in the comment: the VS Code pathForms POSIX missing-leaf ancestor walk, for parity with JetBrains ancestorOutside.",
-  "priorBlockedReason": "Governor size hold: the landed completion 9eca3971 measures +461/-18 (net 443) across MoeDaemonClient.ts, extension.ts and protected-profile-pin.test.cjs, which is over the 400 cap. The architect's TASK size exception prop-b13568c2 (cap 450 net, same three files) is PENDING the human's IDE click. Held so that QA does not size-reject it; the governor sets REVIEW again as soon as the waiver is approved. Nothing for a worker to do.",
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "QA size hold, verdict withheld (governor's WT-14 pattern, comment-987a6218). The substance review PASSES; the evidence is in comment-c01fee7f. Completion 9eca3971 measures +461/-18, net 443 across exactly the 3 approvedScope files. That is over the 400 cap, and no rail waives it yet: the TASK exception prop-b13568c2 (cap 450 net) is still PENDING the human's IDE click.\n\nQA re-ran both legs on a fresh git archive of 9eca3971:\n- Linux: npm ci, test, compile and lint exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe): npm ci, test and compile exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips.\n- The new suite passes 30/30 on Linux and 26/26 on Windows, and 5 QA mutants are each killed.\n\nOnce prop-b13568c2 is approved, set REVIEW again; the next QA approves on that evidence, since the bytes are unchanged. Nothing for a worker to do. One non-blocking follow-up is suggested in the comment: the VS Code pathForms POSIX missing-leaf ancestor walk, for parity with JetBrains ancestorOutside.",
   "blockedResourceId": null,
   "blockedOnTaskIds": null
 }

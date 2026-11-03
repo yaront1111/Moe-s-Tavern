@@ -10,7 +10,9 @@
     "`cd packages/moe-daemon && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/setTaskStatus.test.ts` exits 0. Run it in the task's worktree or in a git-archive snapshot, never as an in-place build or test in the shared control checkout. Its output is the complete_task evidence.",
     "No docs/ edit. Only archiveEpic.ts, reportBlocked.ts and their two test files change, plus archiveTask.ts if the clearing code is extracted into a shared helper (its behaviour unchanged)."
   ],
-  "taskRails": [],
+  "taskRails": [
+    "DoD reading for task-5988c2267eeb4035a843bd65e524852f only: DoD 3's \"asserts blocked:true\" means the new reportBlocked.test.ts case asserts report_blocked's Blocked answer. That answer has no `blocked` key (docs/MCP_SERVER.md Returns: only the not-blocked arm answers blocked:false with dependenciesSatisfied:true). So the case asserts result.blocked is not false, result.dependenciesSatisfied is undefined, result.taskStatus is 'BLOCKED', and the stored row is BLOCKED with no blockedOnTaskIds. Adding a `blocked:true` response field is out of scope: it would change the documented response contract, and DoD 5 forbids the docs edit."
+  ],
   "implementationPlan": [
     {
       "stepId": "step-1",
@@ -144,7 +146,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:52.279Z",
-  "updatedAt": "2026-11-03T01:15:45.468Z",
+  "updatedAt": "2026-11-03T07:05:45.483Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:25.066Z",

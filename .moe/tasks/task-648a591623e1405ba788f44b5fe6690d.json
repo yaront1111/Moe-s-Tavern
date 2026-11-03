@@ -10,7 +10,8 @@
   ],
   "taskRails": [
     "Protected-profile state lives outside the repository, owner-only; a missing, unreadable or mismatched record fails closed to the refusal.",
-    "No caller-minted evidence: nothing the daemon or the repository reports about itself admits a daemon on its own."
+    "No caller-minted evidence: nothing the daemon or the repository reports about itself admits a daemon on its own.",
+    "Size-only exception for task-648a591623e1405ba788f44b5fe6690d (VS Code protected-profile spawn provenance plus the RF03 replace flow). Its completion may total at most 520 net changed non-board lines, measured from its first commit's parent to its final completion, across exactly these files: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts and the new moe-vscode/tests/protected-daemon-provenance.test.cjs. The DoD keeps verification, refusal, replacement and four test families in one row, so it cannot be split without a DoD edit. This waives size-based rejection only. Every DoD item, rail, test and verification requirement still applies. Grow it only by QA-required fixes."
   ],
   "implementationPlan": [
     {
@@ -143,11 +144,17 @@
       "author": "worker-26483323",
       "content": "Fresh full verification `bash /mnt/d/moe-scratch/648a-verify.sh` exited 1 on both platforms (Linux snapshot /tmp/moe-648a-linux.URl3Bh; Windows D:\\moe-scratch\\648a-win.mV5o7K). Linux 666 tests: 659 pass, 3 fail, 4 skipped. Windows 662: 652 pass, 3 fail, 7 skipped. All 44 new cases pass on Linux (42 pass/2 POSIX skips on Windows). Quality gate parity-check + lint exits 0. Three failures all in the prohibited third file protected-daemon-spawn.test.cjs: D1 exact env lacks the required key; two async ENOENT cancellation tests cancel synchronously before the new required crypto await finishes, so the new cancellation fence correctly prevents spawning (0 instead of their expected 1). Need authorization to update D1 and arrange those tests to cancel after the stubbed spawn begins, preserving their original late-error assertions. Compile passed in the focused Linux run; neither full-suite chain reached compile after npm test failed.\nAlso independently reproduced QA's out-of-scope POSIX containment bug and filed task-20a647976d404a009ea4cca6a458c580. With malformed project.json and an absent store root under a symlink into the project, the store API writes the newly minted spawn key inside the repo. This violates the task rail; no inline helper fix attempted. Awaiting that prerequisite plus test-scope correction. Steps 5/6 are not complete.",
       "timestamp": "2026-11-03T06:44:53.183Z"
+    },
+    {
+      "id": "comment-d4217a2369e043f0a8942b9ad11c82ac",
+      "author": "governor-e6b40560",
+      "content": "@worker-26483323 @architect-24611a0a Governor ruling on comment-fe7d4ea9 and comment-28b1180c (07:08Z): AUTHORIZED. A minimal adaptation of moe-vscode/tests/protected-daemon-spawn.test.cjs is in scope. All three failures follow directly from DoD 1: the daemon must receive the spawn-proof key, and admission awaits the lazy crypto.\n\nLimits:\n- D1: add MOE_SPAWN_PROOF_KEY to the exact expected env and change nothing else. The assertion stays exact.\n- The two ENOENT cancellation tests: wait for the spawn path's async key step, so they still expect one spawn attempt. Do not lower the expected count, and do not delete or skip a test.\n- Add no other edit to that file. Disclose its diff and line count in the complete_task evidence.\n\n@architect-24611a0a, two follow-ups are yours as planner:\n1. prop-bd7d6ccf names exactly three files. Re-file it with this fourth file and a cap that still covers the total, then add a row comment naming the superseded proposal, so the human clicks only the new one.\n2. Amend the plan's file scope if you want it formal.\n\nThe row stays BLOCKED on task-20a64797, a HIGH store-containment bug. I am promoting that row to PLANNING now, so it gets planned first.",
+      "timestamp": "2026-11-03T07:06:10.864Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T06:47:16.409Z",
+  "updatedAt": "2026-11-03T07:06:10.864Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
