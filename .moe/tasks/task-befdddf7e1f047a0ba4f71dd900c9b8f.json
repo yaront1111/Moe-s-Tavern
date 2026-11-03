@@ -107,7 +107,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -156,11 +156,23 @@
       "author": "governor-e6b40560",
       "content": "Governor note for QA, 00:00Z. WT-14's size exception prop-6812056d (EPIC, cap 1550 net) is still PENDING the human's IDE click. The worktree diff right now measures +1539/-43, which is 1496 net over the five named files. The moment this row leaves WORKING, I hold it BLOCKED at REVIEW, then set REVIEW again once the waiver is approved. If you claim it before that hold lands, review it on substance but end verdict-less, with no size reject: a size-only reject would burn a reopen on a row the waiver covers. Expect a LANDING-CONFLICT resume on its two hunks against da5823b5, which is normal.",
       "timestamp": "2026-11-02T23:58:46.710Z"
+    },
+    {
+      "id": "comment-e897fc98a93c4d8eb3bc6bddf64dd1e6",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-03T00:27:01.582Z",
+      "content": "Landing unlanded (conflict) 1 time(s) in a row; attempt attempt-fd000d891d624362b167f809908ed826 (generation 4); paths: scripts/moe-agent.ps1, scripts/moe-agent.sh; rescue ref: refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z; target tip: 5c5b3706f3ddc37c464ea09638a61110ad5db9c0; task WORKING."
+    },
+    {
+      "id": "comment-7f26129b74044b6cbf5e65cdf4dbcf8c",
+      "author": "governor-e6b40560",
+      "content": "Governor diagnosis of the 00:27Z landing conflict. This is a read-only `git merge-tree --write-tree 5c5b3706 refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z`; nothing was landed or edited.\n\nThe postflight test files and fake-proxy auto-merge cleanly. Each wrapper has exactly ONE conflict hunk, and both are the same shape: two new functions added at the same spot.\n- scripts/moe-agent.sh: the target (da5823b5, task-c7ca56e6) added `enable_worktree_config()` where WT-14 added `wt_porcelain()`. Both sit right before the `# provision_worktree --` comment block.\n- scripts/moe-agent.ps1: the target added `function Enable-MoeWorktreeConfig` where WT-14 added `function Get-MoeWorktreeRecords`.\n\nResolution: keep BOTH functions in full, with their header comments, the target's first. Add the closing `}` between them, because the merge shares one trailing brace, so a resolution that just drops the markers leaves the first function unclosed. Change no line inside either function.\n\nThen check:\n- `bash -n scripts/moe-agent.sh`;\n- the ps1 ParseFile check;\n- `bash scripts/tests/parity-check.sh`;\n- that `grep -c '^function Enable-MoeWorktreeConfig\\|^function Get-MoeWorktreeRecords'` finds 2 and the sh twins find 2.\n\n23 wrapper commits have landed since your base 0d8422ce. Re-run your step-5 gate on the merged tree before complete_task. The size waiver prop-6812056d is still PENDING.",
+      "timestamp": "2026-11-03T00:28:36.282Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-03T00:26:03.392Z",
+  "updatedAt": "2026-11-03T00:28:36.282Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",
@@ -175,7 +187,8 @@
   "contextFetchedBy": [
     "architect-899a90d6",
     "worker-33f67e5b",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "worker-26483323"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -269,20 +282,54 @@
       "treeId": "22b56d4ee76566eb4c670ef911e8a7e22dd54e21",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "3cd1e08abf16a0da01a8d81b8ffff3b366aafc35",
+      "ref": "refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-02T23:07:16Z",
+      "paths": [],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T00:27:00.532Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-befdddf7e1f047a0ba4f71dd900c9b8f ref=refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z sha=3cd1e08abf16a0da01a8d81b8ffff3b366aafc35 reason=conflict"
     }
   ],
   "filesModified": [
     "scripts/moe-agent.sh",
-    "scripts/tests/postflight-fake-proxy.js",
     "scripts/tests/postflight.sh",
+    "scripts/tests/postflight-fake-proxy.js",
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight.ps1"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-33f67e5b@2026-11-02T20:45:03Z",
-    "at": "2026-11-02T23:06:40.667Z"
+    "outcome": "failed",
+    "kind": "completion",
+    "code": "MOE_COMMIT_FAILED_CONFLICT",
+    "sessionId": "worker-fdb2af60@2026-11-02T23:07:16Z",
+    "at": "2026-11-03T00:27:00.983Z"
+  },
+  "reviewStartedAt": "2026-11-03T00:26:35.307Z",
+  "verification": {
+    "command": "S=$(mktemp -d /mnt/d/moe-scratch/v-befdddf7.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') bash scripts/tests/worktree-landing.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell",
+    "exitCode": 0,
+    "outputTail": "Verification snapshot: /mnt/d/moe-scratch/v-befdddf7.xiiXpy\nPASS parity-check.sh\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n",
+    "reportedAt": "2026-11-03T00:26:35.307Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-14: QA DONE cleanup and paced orphan sweeps delivered as Bash/PowerShell twins with 11 WT14 cases per harness. Scoped to registered .worktrees/task-* on matching moe/task refs; .moe, live attempts, nonterminal tasks and foreign worktrees are retained. Manifest validation/unlink precedes removal; non-DENY dirt and unlanded tips require verified rescue refs. Sweep: lock/stale recovery, interval, 5-cap, daily unregistered-path alerts.\nImplementation deviations: strict staged-count==dirt-count; missing W skipped/link W refused outside budget; lazy #general lookup; invalid interval warns once/value; rescue session worker@unknown; fake TASK_NOT_FOUND=-32001; fixture identity; alert sha1(path)[:16]; PS IO.Directory/File.Delete instead of cmd rmdir; WT_CONTROL_SEAT rename for parity; extra WT14U.\nFinal review added no tracked edits. Confirmed WT-06 reserves links first. Extra dirty+unlanded UNKNOWN-task/refused-ledger probes pass Bash/PS5.1. Caveats in comment-7c35384c: git partial-remove failure may deregister W; Windows git may leave unmanifested junction remnants (later UNREGISTERED); shared-mode gate uses existing read-only git predicate.\nFresh exact checkRefs command exit0: Bash and native PS5.1 postflight-safe NONE; worktree-landing 18/18; token parity and qualityGate pass. Snapshot v-befdddf7.xiiXpy; 5 files cmp-identical. Linux uid1000/Windows ACL case: WT14D not skipped. Syntax/diff checks clean. Log /mnt/d/moe-scratch/verify-befdddf7-fdb.log.\n1496 net (+1539/-43); size-only waiver prop-6812056da5e142f48194d673f33fb038 awaits human approval; governor directed REVIEW then hold. Handoff saved. Out-of-scope bug task-c25edf4561964340b3684f5ef0a1b5ff (safe runner misses prefixed SKIP); prior task-f977d76e9a9c44e7af0322be1eb76333 now DONE.",
+  "landingRetry": {
+    "reason": "conflict",
+    "rescueRef": "refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z",
+    "targetTip": "5c5b3706f3ddc37c464ea09638a61110ad5db9c0",
+    "paths": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh"
+    ],
+    "count": 1,
+    "at": "2026-11-03T00:27:01.582Z"
   }
 }

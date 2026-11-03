@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,7 +92,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:38.134Z",
-  "updatedAt": "2026-11-02T22:21:28.233Z",
+  "updatedAt": "2026-11-03T00:29:30.853Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:23.689Z",
@@ -102,11 +102,14 @@
     "firstClaimAt": "2026-11-02T21:55:49.053Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T00:29:12.826Z",
+    "wallClockMs": 9203773
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -214,9 +217,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-02T22:15:03Z",
-    "at": "2026-11-02T22:21:28.233Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T00:27:09Z",
+    "at": "2026-11-03T00:29:30.853Z"
+  },
+  "completedAt": "2026-11-03T00:29:12.826Z",
+  "reviewCompletedAt": "2026-11-03T00:29:12.826Z",
+  "reviewSummary": "Reviewed completion d958f21d (in control HEAD 5c5b3706; recorded on moe/work-2026-10-24, pushed). Diff +184/-1 over exactly 4 moe-jetbrains Kotlin paths, under the 400 cap. ChatPanel.kt +1: onStatus(connected) now calls service.requestDecisions() after requestChannels(); constructor requests and single listener unchanged. MoeMessageDispatcher.kt DECISIONS branch now mapNotNull-skips non-object entries and entries without a non-blank JSON-string id (strict stringOrNull, count-only log.warn, early returns and catch backstop unchanged). parseDecision, DECISION_PROPOSED/RESOLVED, Approve/Reject, channel/pin code untouched. Two new test files: 4 dispatcher tests (full named-field Decision equality, callback isolation) and 2 bounded source guards with positive delimiter asserts (not vacuous; I read the onStatus slice, it ends before onChatMessage). Existing onDecisions clear/refill/refreshMessages renders cards in either arrival order. No daemon, VS Code or .moe files in the commit.\nRe-ran under the jetbrains-gradle lease (acquired, released), Windows: W=$(wslpath ...) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> exit 0, BUILD SUCCESSFUL 34s, :test executed. Fresh TEST-*.xml (00:28Z): 39 classes, tests=585 skipped=0 failures=0 errors=0; MoeMessageDispatcherDecisionsTest 4/0/0, ChatPanelConnectTest 2/0/0. parity-check.sh PASS; git diff --check clean. RED-first matches by reasoning (42.asJsonObject threw inside the try, dropping the whole list; onStatus lacked requestDecisions) and the worker's quoted RED (6 run, exactly 2 failed). DoD 1-4 met. Unverified: live IDE behaviour (ChatPanel cannot be built headless). No size waiver needed; ponytail pass found nothing to cut.",
+  "requiredCheckAtDone": null
 }

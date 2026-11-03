@@ -43,24 +43,34 @@
     {
       "stepId": "step-3",
       "description": "Docs (Edit tool). Keep the surrounding line wrap, and use none of the daemonGitDocs phrases ('never runs git', 'runs no git', 'does not run git').\ndocs/ARCHITECTURE.md, Security Notes: add one new bullet right after **Restart Daemon on Windows** and before **VS Code parity**, for example **The daemon CLI's `stop` and `status`** (`packages/moe-daemon/src/index.ts`, task-d6ebe4ab). It states:\n- Both flows above reach the old daemon through the installed CLI's `stop`.\n- `stop`, `status` and the `start` gate find it through `.moe/daemon.json`, which is repository content.\n- So the CLI dials its `bindHost` only when the literal it resolves to is loopback (127.0.0.0/8 or `::1`) or an address that one of this machine's network interfaces holds. The name is resolved once, and that literal is the one dialed.\n- Otherwise nothing is probed. While the recorded pid is alive, `stop` sends no signal, removes nothing and exits 1. Stop and Replace then starts nothing, and the protected Restart Daemon reports that the stop request failed. `status` reports `stopped` with reason `bindHost not local`.\n- A dead pid's daemon.json is still removed, and `start` replaces the file as it does any daemon.json it cannot verify.\n- Loopback, `0.0.0.0`, `::`, `--host wsl`, and a name or address of a local interface stop as before.\n- For a daemon.json from the other side of the WSL boundary, the gateway from the routing table is still probed, and such a file is never signalled or removed.\ndocs/TROUBLESHOOTING.md:\n(1) Under ## Daemon Issues, after the `submit_plan` ... `spawn git ENOENT` entry and before the `---` that precedes ## Plugin Issues, add `### \\`moe-daemon stop\\` sends no signal: \\`bindHost not local\\``. It has three parts:\n- **Symptom:** `stop` exits 1 with step 2's error line. `status` shows `stopped` with reason `bindHost not local`. In JetBrains, Stop and Replace starts nothing, or Restart Daemon reports \"the stop request failed\".\n- **Cause:** `.moe/daemon.json` is repository content, and the CLI probes its `bindHost` for /health before it signals the recorded pid. A pull, a hand edit, or a DNS change for a daemon started with `--host <name>` can point it elsewhere.\n- **Solution:** Check what the pid is (`ps -p <pid> -o pid,lstart,args`, or Task Manager's Details tab). If it is this project's Moe daemon, stop it yourself. Otherwise leave that process alone and remove `.moe/daemon.json` as in [daemon.json is stale](#daemonjson-is-stale). Then start the daemon again (in JetBrains, Restart Daemon). A `--host` value should name this machine.\n(2) Append one sentence to the **Stop and Replace** bullet of \"Protected profile: daemon was not started by this IDE\", and one to the **Cause** of \"Restart Daemon refuses or starts nothing\". Each says that this `stop` signals nothing when daemon.json's `bindHost` is not an address of this machine, and links to (#moe-daemon-stop-sends-no-signal-bindhost-not-local).\nLeave the Table of Contents unchanged. Check that both anchors resolve to existing headings (GitHub slugs) and that every claim matches the step-2 code.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md",
         "docs/TROUBLESHOOTING.md"
       ],
-      "startedAt": "2026-11-03T00:26:09.555Z"
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "ARCHITECTURE.md Security Notes: new bullet **The daemon CLI's `stop` and `status`** (index.ts, task-d6ebe4ab) between **Restart Daemon on Windows** and **VS Code parity**, covering every planned point (repository content, loopback 127.0.0.0/8 or ::1 or local-interface address, resolved once and literal dialed, stop no signal/no removal/exit 1, Stop and Replace starts nothing, protected Restart Daemon \"the stop request failed\" (STOP_FAILED, MoeDaemonSupervisor.kt:952), status `stopped`/`bindHost not local`, dead pid still removed, start replaces like any unverifiable daemon.json, unchanged loopback/0.0.0.0/::/wsl/local cases, foreign gateway still probed and never signalled/removed). TROUBLESHOOTING.md: new Daemon Issues entry `### \\`moe-daemon stop\\` sends no signal: \\`bindHost not local\\`` after the spawn git ENOENT entry (Symptom quotes the stop error line verbatim; Cause; Solution with ps/Task Manager, link to #daemonjson-is-stale, Restart Daemon, --host names this machine), plus one pointer sentence each in the Stop and Replace bullet and the Restart Daemon Cause. Checked: all three anchors resolve to existing heading slugs (node slug script), the doc's quoted message equals the code string, no daemonGitDocs phrases, TOC unchanged.",
+      "startedAt": "2026-11-03T00:26:09.555Z",
+      "completedAt": "2026-11-03T00:27:42.644Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run this once, fresh, from the task worktree. This exact command is the complete_task evidence: verification.command is the command verbatim, exitCode 0, and outputTail holds the vitest Test Files/Tests lines plus the node --test summary. QA re-runs it.\ncd \"$(git rev-parse --show-toplevel)\" && S=\"$(mktemp -d /tmp/moe-d6ebe4ab.XXXXXX)\" && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$(git rev-parse HEAD)\" && for f in packages/moe-daemon/src/index.ts packages/moe-daemon/src/index.test.ts docs/ARCHITECTURE.md docs/TROUBLESHOOTING.md; do cp \"$f\" \"$S/repo/$f\" && cmp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run'\nWhat it does: it snapshots HEAD plus the 4 working-tree files (cmp-checked) and runs account-trust-docs, which reads both docs. Then, under env -i, it runs `npm ci`, `tsc --noEmit` and the full daemon test suite. The shared checkout's node_modules is Windows-native and must never be rebuilt (customRule 1, mem:gotcha-daemon-linux-snapshot-gate, mem:decision-doc-row-checkrefs-worktree-mode).\nExpected result: the planner's dry run at HEAD 5c5b3706 with the prototype applied gave 230 files, 6934 passed, 20 skipped, exit 0, in about 45 s.\nIf an unrelated file fails, check `uptime` and rerun that file alone. Known load flakes are src/index.version.test.ts, the bindHosts.test.ts D-fail row and baselineRun.test.ts E2. Report such a failure with evidence; never edit it.\nOn a Windows-native seat, run the same line in Git Bash, adding SYSTEMROOT=\"$SYSTEMROOT\" TEMP=\"$TEMP\" TMP=\"$TMP\" after env -i HOME=\"$HOME\" (Node on Windows needs them), and cite that variant verbatim.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the plan's step-4 command verbatim from the task worktree (WSL, node v24.21.0), snapshot /tmp/moe-d6ebe4ab.wpZWo6, exit 0, load avg 14. node --test account-trust-docs: tests 5, pass 5, fail 0. Daemon: tsc --noEmit clean; vitest \"Test Files  229 passed (229) / Tests  6934 passed | 20 skipped (6954)\", 44.3 s. The planner's 230 files counted the separate prototype test file; the test count (6934) matches exactly.",
+      "startedAt": "2026-11-03T00:27:43.561Z",
+      "completedAt": "2026-11-03T00:28:50.076Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (load the adversarial-self-review skill). Review `git diff \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\"` plus the working tree of the 4 files. Check:\n- Every DoD item maps to a passing test row.\n- A non-string, empty or huge bindHost still yields false or 'health check failed', never a throw.\n- The name is resolved once per validation, and the dialed literal equals the judged one (B2's lookup count and its dialed list).\n- A failed interface read refuses every non-loopback bindHost (B3, B4).\n- On a refusal, stop writes no sentinel, deletes nothing and keeps exit 1.\n- status and the start gate behave as the docs say.\n- No test can SIGTERM the vitest worker.\n- Repository strings reach only pino fields, never the message text.\nMutants: copy /mnt/d/moe-scratch/d6ebe4ab-plan/mut.py into your scratch dir. It drives 8 single-string mutants: probe gate, native gate, stop refusal, loopback /8 to /32, foreign gate, interface loop, catch rethrow, and ::1. Point it at your snapshot's index.ts and at src/index.test.ts, with the search strings updated to your final code. Back up once, and count a kill only when the Tests line shows real failures. Restore, then cmp against your worktree before you cite the results.\nSize: net non-board LOC must stay under 400 (expect about +190). Record the mutant table and any residual in the completion summary.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T00:28:50.933Z"
     }
   ],
   "planRevision": 1,
@@ -77,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:05:43.620Z",
-  "updatedAt": "2026-11-03T00:26:09.555Z",
+  "updatedAt": "2026-11-03T00:28:50.933Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:14.940Z",
@@ -87,7 +97,7 @@
     "firstClaimAt": "2026-11-02T23:51:39.790Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -99,7 +109,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T00:18:52.984Z",
