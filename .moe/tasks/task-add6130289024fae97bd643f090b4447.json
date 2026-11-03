@@ -1,0 +1,30 @@
+{
+  "id": "task-add6130289024fae97bd643f090b4447",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_task stores order unchecked, and nextTaskOrder (unlike nextEpicOrder) does not skip non-finite orders, so one non-numeric order makes every later default-order row in that epic NaN (null on disk) and breaks epic-final detection",
+  "description": "Filed by the governor at 22:38Z on 2026-11-03 from hunt #12's held items (task-f6f0b580; architect-1dd28c7c's report msg-7098bc70). It waits on task-c90b41f1, which edits the same two files (createTask.ts, taskStore.ts). Promote it when c90b41f1 is DONE.\n\nPROBLEM. create_task passes `params.order` straight into the task (createTask.ts:166 at tip 2f03c0f6). The default order comes from nextTaskOrder (taskStore.ts:844-848): `Math.max(...tasks.map((t) => t.order)) + 1` over every row in the epic, with no finiteness filter. So one non-numeric order makes every later default-order row in that epic NaN, which JSON writes as null. Its siblings already guard both halves:\n- create_epic refuses a bad order with INVALID_INPUT (context.field 'order'), fixed in 68a47060.\n- nextEpicOrder (StateManager.ts:1471-1479) skips non-finite orders, with a comment naming this exact failure.\nIt matters beyond sorting: epic-final detection (isEpicFinalTask in delivery/policy.ts) picks the epic's highest-order row, so a NaN order takes the \"final integration row\" status, and with it the full verification gate, away from the newest row.\n\nEVIDENCE. Hunt repro /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_createTaskOrder.test.ts, run at f159784e and re-run by the hunt holder (me/me-zzHuntA_createTaskOrder.log): 4 failed, 1 passed.\n- sibling: create_epic refuses order \"abc\" (PASS).\n- r1: create_task accepts order \"abc\" and resolves success:true.\n- r2: the next default-order task gets order NaN, and the disk holds null.\n- r3: a legacy row with order \"x\" on disk makes the next default NaN instead of 3.\n- r4: the epic's newest default-order row is no longer epic-final after one string order.\nThe board holds no such row today: I scanned 960 task files at 22:37Z and found 0 non-finite orders. That is why this is LOW.\n\nFIX DIRECTION (the planner decides). In create_task, refuse an order that is present but not a finite number with coded INVALID_INPUT (context.field 'order'), before any write. Do NOT copy create_epic's integer rule: task orders on this board are fractional (231.164, 434.7, 440.7), and placement relies on that. Make nextTaskOrder skip non-finite orders the way nextEpicOrder does. Port the hunt repro into a test file of the row's own. Sync the `### moe.create_task` section of docs/MCP_SERVER.md with the new refusal (ruling msg-71db57ac: each row syncs its own tool section).",
+  "definitionOfDone": [
+    "create_task refuses a present order that is not a finite number (\"abc\", NaN, Infinity, null, an object) with coded INVALID_INPUT naming field 'order', before any task is written, and still accepts fractional orders such as 231.164; docs/MCP_SERVER.md's `### moe.create_task` section names the refusal.",
+    "nextTaskOrder skips non-finite stored orders the way nextEpicOrder does, so a legacy non-numeric order on disk no longer yields a NaN/null default order and the epic's newest default-order row stays epic-final; a vitest file of the row's own proves the hunt repro's r1-r4 cases green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c90b41f12c0044fba832e95f8735279f"
+  ],
+  "priority": "LOW",
+  "order": 446.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:34:59.618Z",
+  "updatedAt": "2026-11-03T22:34:59.618Z"
+}

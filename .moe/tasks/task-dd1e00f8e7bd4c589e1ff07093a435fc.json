@@ -12,25 +12,39 @@
     {
       "stepId": "step-1",
       "description": "Tests first (load test-driven-development). Use your Edit tool, never a shell write (rail).\n\nIn packages/moe-daemon/src/tools/submitPlan.test.ts, inside `describe('rail refusal on the MCP wire')` (about :1663-1712), find the it.each body's line `expect(response.error?.message).toContain('taskId: \"task-1\"');`. It is unique in the file. Insert these lines directly after it:\n```ts\n    // Only a GLOBAL MODIFY_RAIL or REMOVE_RAIL of the quoted entry can lift a rail\n    // refusal (task-dd1e00f8): the plan check reads no EPIC, TASK or customRules rail.\n    const entry = violation.slice(violation.indexOf(': ') + 2);\n    expect(response.error?.message).toContain(\n      `moe.propose_rail { proposalType: \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\", taskId: \"task-1\", currentValue: ${JSON.stringify(entry)}, `\n    );\n    expect(response.error?.message).not.toMatch(/EPIC|TASK|ADD_RAIL/);\n```\nWhat stays as it is: the block's existing assertions already pin `code: -32003`, the `[CONSTRAINT_VIOLATION] Rail violation: \"<v>\". Default action: ` prefix and `data: { tool, codeName }` for all three cases (forbidden in a step, required missing, forbidden only in the contract). Keep them, so the DoD's 'code and prefix unchanged' holds. Change no other line.\n\nThen run the RED gate (the second checkRef). It must print RED-AT-BASE: `Tests  3 failed | 92 skipped (95)`, with all three it.each cases failing against fa405c59's util/rails.ts. That matches the architect's /tmp dry run.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "note": "RED-AT-BASE: Tests 3 failed | 92 skipped (95) against fa405c59's rails.ts.",
+      "startedAt": "2026-11-03T22:35:30.759Z",
+      "completedAt": "2026-11-03T22:35:52.303Z"
     },
     {
       "stepId": "step-2",
       "description": "The fix. Use your Edit tool.\n\n(a) packages/moe-daemon/src/util/rails.ts, in assertPlanRails. Replace the `const message = ...` statement (the five concatenated template lines after `const v = railsCheck.violation || {};`) with:\n```ts\n    // Only a GLOBAL MODIFY_RAIL/REMOVE_RAIL of the quoted entry can lift this\n    // refusal: the check reads globalRails.forbiddenPatterns and requiredPatterns\n    // only (never epicRails, taskRails or customRules), and propose_rail resolves\n    // a GLOBAL currentValue in those lists (task-34e42a0a). Every violation is\n    // built by listPlanRailViolations, so the entry is the text after its label.\n    const entry = typeof v === 'string'\n      ? /^(?:Forbidden pattern|Required pattern missing): ([\\s\\S]*)$/.exec(v)?.[1]\n      : undefined;\n    const currentValue = entry === undefined\n      ? '<the exact forbiddenPatterns or requiredPatterns entry>'\n      : JSON.stringify(entry);\n    const message =\n      `Rail violation: ${JSON.stringify(v)}. ` +\n      `Default action: ${defaultAction}. ` +\n      `Escape hatch: if this rail is genuinely wrong for task ${taskId} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +\n      `moe.propose_rail { proposalType: \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\", taskId: \"${taskId}\", currentValue: ${currentValue}, proposedValue, reason, workerId } ` +\n      `to request a human-approved change to that globalRails entry. Only that GLOBAL change can lift this refusal: the plan check enforces no other rail. ` +\n      `Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;\n```\nLeave everything else in assertPlanRails unchanged: the MoeError code (CONSTRAINT_VIOLATION, -32003), the codeName, the `{ violation, suggestedAction }` context, the `Rail violation:` and `Default action:` lead, and the defaultAction parameter amend_plan_step passes. No other function changes either: checkPlanRails, listPlanRailViolations, planRailText and SUBMIT_PLAN_RAIL_ACTION stay as they are.\n\nBoth tools share this helper: submit_plan's step and contract checks, and amend_plan_step's introduced-violation check. amendPlanStep.rails.test.ts asserts only the lead and `moe.propose_rail`, so it keeps passing.\n\nError handling: the message builder cannot throw. A violation that is not a string, or that has another shape, gets the placeholder currentValue instead of a parse error. JSON.stringify quotes and escapes a pattern that contains quotes or backslashes.\n\n(b) docs/MCP_SERVER.md, submit_plan notes, the **Rail refusal** bullet (about :380) ONLY. Replace the sentence fragment `the message goes on to name the `moe.propose_rail` escape hatch.` (unique in the file) with: `the message goes on to name the `moe.propose_rail` escape hatch as `proposalType` `MODIFY_RAIL` or `REMOVE_RAIL`, `targetScope: \"GLOBAL\"`, with `currentValue` set to the quoted pattern: the exact `forbiddenPatterns` or `requiredPatterns` entry, which `moe.propose_rail` resolves (task-34e42a0a). Only a GLOBAL proposal can lift a rail refusal: EPIC and TASK proposals edit `epicRails` and `taskRails`, which the plan check never reads (see **Guidance rails**), and a GLOBAL `ADD_RAIL` only appends to `customRules`, which it does not read either.`\nThe GREEN gate greps `Only a GLOBAL proposal can lift a rail refusal`. Change no other line: a024ac57 and 83cf11f5 edit other sections, and merge-tree lands separate sections cleanly.\n\nCheck: run the GREEN gate (first checkRef). In the architect's /tmp dry run of this exact code, tsc was clean and 6 files / 175 tests passed.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/rails.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/rails.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "assertPlanRails refusal now names only GLOBAL MODIFY_RAIL/REMOVE_RAIL with the quoted entry; MCP_SERVER.md Rail refusal bullet updated.",
+      "startedAt": "2026-11-03T22:35:53.394Z",
+      "completedAt": "2026-11-03T22:36:08.008Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification, run once.\n\nRun the GREEN gate (first checkRef) verbatim. It is complete_task's verification and takes about 2 min, mostly npm ci in a fresh /tmp snapshot. Never run npm or vitest in the checkout (rail). Expect:\n- the docs grep ok;\n- `npx tsc --noEmit` clean;\n- `Test Files  6 passed (6)` and `Tests  175 passed (175)`. The `src/tools/proposeRail` filter matches proposeRail.test.ts and proposeRail.globalPatterns.test.ts, and the counts move only if a peer adds tests to those files.\n\nThe vitest output is large (logger INFO lines). Read only the `Test Files`, `Tests` and `FAIL` lines (mem:gotcha-propose-rail-global-lists).\n\nThen run the RED gate once more. It must still print RED-AT-BASE, because it pins fa405c59's rails.ts. Quote its output in your completion summary.\n\nError handling for a red run:\n- If an amendPlanStep or proposeRail test fails, re-run it in a second snapshot with HEAD's rails.ts overlaid.\n- If it fails there too, it is pre-existing. Report it in #general and call moe.report_blocked with the evidence; do not edit those files.\n- If it fails only with your change, fix rails.ts, never the test.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T22:36:09.066Z"
     },
     {
       "stepId": "step-4",
@@ -57,7 +71,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T21:02:46.344Z",
-  "updatedAt": "2026-11-03T22:34:12.035Z",
+  "updatedAt": "2026-11-03T22:36:09.066Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:05:47.251Z",
@@ -66,16 +80,21 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T22:29:29.371Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
+    "architect-74d9e1c7",
+    "worker-33f67e5b"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:34:07.689Z",
   "executionContract": {
@@ -134,5 +153,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T22:34:07.721Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:35:30.759Z"
 }

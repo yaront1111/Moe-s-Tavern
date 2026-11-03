@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:16.002Z",
-  "updatedAt": "2026-11-03T22:34:08.170Z",
+  "updatedAt": "2026-11-03T22:36:23.113Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:06:40.467Z",
@@ -107,11 +107,14 @@
     "firstClaimAt": "2026-11-03T22:18:50.983Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T22:35:51.657Z",
+    "wallClockMs": 1020674
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -222,9 +225,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T22:29:18Z",
-    "at": "2026-11-03T22:34:08.170Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:34:11Z",
+    "at": "2026-11-03T22:36:23.113Z"
+  },
+  "completedAt": "2026-11-03T22:35:51.657Z",
+  "reviewCompletedAt": "2026-11-03T22:35:51.657Z",
+  "reviewSummary": "Reviewed recorded completion 2f03c0f6 (on moe/work-2026-10-24, control HEAD; reviewed paths clean). Size 4 files +115/-10 (net 105). metrics.ts adds module-local isDelivered (DONE, or ARCHIVED with non-blank string metrics.doneAt); doneCount, firstPass num/den and the wallClock sum/count all sit in that one branch; taskCount, avgReopenCount and totals still span every row. computeDashboardAggregate, filterTasksForMetrics, toPerTaskMetric, listMetrics.ts untouched, so totalCompleted and per-epic completed/avgWallClockMs follow; wire shape unchanged; only consumers are listMetrics.ts and WS GET_METRICS. Re-ran task.verification verbatim in a /tmp git-archive snapshot (nothing run in the shared checkout): tsc clean; 4 files / 61 tests passed (metrics, listMetrics.delivered, governanceFeatures, defensiveBatch). Re-ran RED checkRef against ab9b5237 metrics.ts: 'Tests 5 failed | 12 passed (17)', exactly (d1)-(d4)+(p1), RED-AT-BASE, so tests are mutation-resistant (exact-value asserts; (p2)/(d3) kill over-broad and untrimmed doneAt). DoD1 verified by (d1)(d2)(d4)(p2): shelved ARCHIVED and in-flight rows with stale wallClockMs count nowhere. DoD2: ported hunt repro (p1) passes, existing tests green; MCP_SERVER.md got six one-line wording edits in list_metrics/GET_METRICS blocks (lanes.js showed it free at edit time; dd1e00f8 now lists it, disjoint hunks, collision thread answered). SCHEMA.md untouched as planned. No weakened tests. Complexity pass: nothing to cut. Residual by design: a row moved to DONE without qa_approve may lack doneAt and drops out once archived; 6 pre-metrics 2026-02-08 ARCHIVED rows stay out.",
+  "requiredCheckAtDone": null
 }

@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -108,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:31.406Z",
-  "updatedAt": "2026-11-03T22:33:39.019Z",
+  "updatedAt": "2026-11-03T22:36:22.117Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:14:27.370Z",
@@ -197,12 +197,12 @@
   "planApprovedAt": "2026-11-03T21:19:24.646Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T22:00:42.053Z",
-  "reviewStartedAt": "2026-11-03T22:02:16.861Z",
+  "reviewStartedAt": "2026-11-03T22:34:56.113Z",
   "verification": {
-    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/taskPayload.ts packages/moe-daemon/src/tools/getPendingQuestions.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/pendingQuestions src/tools/getPendingQuestions src/tools/waitForTask src/tools/initHookFixes",
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git ls-files -z packages/moe-daemon | tar --null -T - -cf - | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/pendingQuestions src/tools/getPendingQuestions src/tools/waitForTask src/tools/initHookFixes",
     "exitCode": 0,
-    "outputTail": "Test Files  5 passed (5)\n      Tests  30 passed (30)\n   Start at  00:01:40\n   Duration  6.06s (tests 76%, transform 21%, import 3%)\n\ntsc --noEmit clean; exit=0",
-    "reportedAt": "2026-11-03T22:02:16.861Z",
+    "outputTail": "Test Files  6 passed (6)\n      Tests  33 passed (33)\n   Duration  6.01s\ntsc --noEmit clean; exit=0",
+    "reportedAt": "2026-11-03T22:34:56.113Z",
     "source": "agent-reported"
   },
   "filesModified": [
@@ -211,7 +211,7 @@
     "packages/moe-daemon/src/tools/getPendingQuestions.ts",
     "packages/moe-daemon/src/tools/waitForTask.ts"
   ],
-  "completionSummary": "get_pending_questions and wait_for_task now derive unanswered human questions through one shared helper, util/taskPayload unansweredHumanComments. A comment authored 'moe-daemon' (landing notes, repair diagnostics) is no longer taken as an answer, so a human question followed only by daemon comments stays pending on both surfaces. A real agent comment, any workerId, 'agent' or an author-less legacy comment still answers it. A daemon comment neither ends nor joins the unanswered run. A non-array comments value yields none.\n\nChanges (4 files): util/taskPayload.ts (SYSTEM_COMMENT_AUTHORS + unansweredHumanComments); tools/getPendingQuestions.ts (inline scan replaced); tools/waitForTask.ts (findPendingQuestion only, plus one import; event filter and wake path untouched); new tools/pendingQuestions.daemonComment.test.ts with cases p1-p4, p1 being the ported hunt repro.\n\nVerification, in a git-archive snapshot outside the shared checkout: tsc --noEmit clean; Test Files 5 passed (5), Tests 30 passed (30); exit 0.\nNegative control at the merge-base (new test file only): \"Tests  3 failed | 1 passed (4)\", then RED-AT-BASE. p1, p2 and p4 fail, p3 passes.",
+  "completionSummary": "LANDING-RETRY after contention: re-verified with the target merged in. Edited no files this session, so the four planned files are unchanged: util/taskPayload.ts (unansweredHumanComments), tools/getPendingQuestions.ts, tools/waitForTask.ts (findPendingQuestion only) and the new pendingQuestions.daemonComment.test.ts. Verification ran in a snapshot outside the shared checkout, built from `git ls-files packages/moe-daemon` in this worktree (not `git archive HEAD`, because HEAD lacks the merged target). tsc --noEmit was clean. Test Files 6 passed (6), Tests 33 passed (33); the sixth file is waitForTask.deleteWake.test.ts, which the merge brought in. Negative control from the earlier session: at the merge-base the new test file gave \"Tests 3 failed | 1 passed (4)\" then RED-AT-BASE.",
   "commits": [
     {
       "sha": "b1e626033477f815898dc573fe3d9f4ca65caa80",
@@ -225,22 +225,31 @@
       "status": "REVIEW",
       "pushed": false,
       "message": "MOE_RESCUE_REF task=task-c8618ccd29e7462eb62af18f5ecda4f6 ref=refs/moe/rescue/task-c8618ccd29e7462eb62af18f5ecda4f6/20261103T223301Z sha=b1e626033477f815898dc573fe3d9f4ca65caa80 reason=contention"
+    },
+    {
+      "sha": "b3ab4a83b490bd5f6c8ff14c156df501cfc6a130",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T22:33:17Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/getPendingQuestions.ts",
+        "packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/util/taskPayload.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T22:36:21.545Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "failed",
+    "outcome": "committed",
     "kind": "completion",
-    "code": "MOE_COMMIT_FAILED_LAND_LEASE",
-    "sessionId": "worker-c9368191@2026-11-03T21:20:18Z",
-    "at": "2026-11-03T22:33:01.599Z"
+    "sessionId": "worker-ed0f6a9e@2026-11-03T22:33:17Z",
+    "at": "2026-11-03T22:36:21.545Z"
   },
-  "landingRetry": {
-    "reason": "contention",
-    "rescueRef": "refs/moe/rescue/task-c8618ccd29e7462eb62af18f5ecda4f6/20261103T223301Z",
-    "targetTip": null,
-    "paths": [],
-    "count": 1,
-    "at": "2026-11-03T22:33:02.266Z"
-  }
+  "landingRetry": null
 }
