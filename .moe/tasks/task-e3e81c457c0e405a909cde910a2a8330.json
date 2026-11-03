@@ -95,13 +95,18 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this diff (load the adversarial-self-review skill). Then run mutants in scratch copies of the snapshot's scripts/: copy the whole scripts/ tree per mutant and run an unmutated control first (mem:gotcha-postflight-worktree-mutant-copy). Run only the three new cases through MOE_WORKTREE_ONLY for each engine.\n\nMutants, each to be KILLED:\n- M1: the sh shared call removed. serena-ignore (sh) must fail.\n- M2: the ps1 shared call removed. serena-ignore (ps1) must fail.\n- M3: the sh W call removed. serena-ignore-wt (sh) must fail.\n- M4: the ps1 W call removed. serena-ignore-wt (ps1) must fail.\n- M5: the call runs even when SERENA_CMD is empty. serena-ignore-off (a) must fail.\n- M6: the W call placed before the tooling program. serena-ignore-wt must fail on project_name, or on the block's project.yml entries.\n\nChecklist:\n- set -e safety;\n- PS 5.1 native-stderr handling under EAP Stop;\n- a Serena root with spaces or a trailing backslash;\n- concurrent seats writing the same file (the script renames atomically and writes only changed bytes);\n- protected seats: the script reads MOE_PROTECTED_GIT, and skips until task-3acf7f79 exports it;\n- the extra launch time, a few git calls.\n\nRecord the evidence under /mnt/d/moe-scratch/e3e81c45-work, and write the handoff memory task-task-e3e81c457c0e405a909cde910a2a8330-handoff.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-03T11:33:10.124Z"
+      "modifiedFiles": [
+        "docs/MEMORY.md"
+      ],
+      "note": "Adversarial review plus mutants. Evidence: /mnt/d/moe-scratch/e3e81c45-work/{mut,review.md}.\nMutants ran on a copy of the worktree's working scripts/, three new cases per engine, with an unmutated control first. ctl-sh and ctl-ps1: 3 ok each. All KILLED by AssertionErrors:\n- M1 (sh) and M2 (ps1), the shared call removed: serena-ignore failed 'run 1: .serena/project.local.yml'.\n- M3 (sh) and M4 (ps1), the W call removed: serena-ignore-wt failed 'W/.serena/project.local.yml'.\n- M5 (sh) and M5p (ps1), the call outside the Serena guard: serena-ignore-off failed 'none: .serena/project.local.yml changed'.\n- M6 (sh) and M6p (ps1), the W call before the tooling program: serena-ignore-wt failed on W's file. W/.serena/project.yml does not exist yet there, so the script skips.\nChecklist:\n- set -e safety: `|| rc=$?`, and the helper always returns 0.\n- PS 5.1 under EAP Stop: a local EAP Continue and 2>$null; finally restores EAP and LASTEXITCODE.\n- Spaced and trailing-backslash roots are covered (ps/ evidence).\n- Concurrency: the script writes only changed bytes, by atomic rename.\n- Protected seats: sh exports MOE_PROTECTED_GIT (:616). ps1 does not, so a protected ps1 seat skips, fail-open.\n- Launch time: measured on a --shared clone of this repo on /mnt/d (1973 tracked files, 61 patterns), 5.4 s to write and 4.6 s when up to date. Worktree mode runs it twice, about 10 s per launch, against Serena's 15-23 min stall. It is the producer's per-level git check-ignore walk; no change here.\nOne fix: docs/MEMORY.md said a launch without Serena prints a SKIPPED line, but the launcher never runs the script then. I reworded the sentence. No test or lint reads docs/MEMORY.md (grep), and a fresh `npm run lint` gave rc 0.\nThe handoff memory is written, and gotcha-serena-ignore-override-tests is extended.",
+      "startedAt": "2026-11-03T11:33:10.124Z",
+      "completedAt": "2026-11-03T11:36:39.731Z"
     }
   ],
   "planRevision": 2,
@@ -125,12 +130,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:25:34.188Z",
-  "updatedAt": "2026-11-03T11:33:10.124Z",
+  "updatedAt": "2026-11-03T11:36:39.731Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:31:25.007Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -149,7 +154,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T07:43:53.542Z",

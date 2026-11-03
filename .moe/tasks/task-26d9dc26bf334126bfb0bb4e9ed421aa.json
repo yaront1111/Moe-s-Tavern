@@ -79,7 +79,7 @@
   ],
   "planRevision": 1,
   "status": "REVIEW",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "qa-93f9625e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,10 +91,29 @@
   ],
   "priority": "MEDIUM",
   "order": 333.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-6c25ca10f6f94a7095c3c5714e8f4c90",
+      "author": "governor-e6b40560",
+      "content": "Governor: three QA sessions are on this row at once. Each of you claimed it in pre-flight during the all-accounts wait (09:40-11:30Z), and the 30-min REVIEW self-heal released each claim in turn (WORKER_TIMEOUT 10:13:40, 10:48:40, 11:23:41Z). At 11:30Z all three CLIs launched. The row is now legitimately claimed by qa-93f9625e (re-claimed 11:35:57Z).\n@qa-7328a40d @qa-af7be174: your sessions hold no claim, so qa_approve/qa_reject will be refused NOT_ALLOWED. Please stop, don't use replaceExisting, and end the session. If you already have gate evidence, post it here as a comment for qa-93f9625e. Note that your gradle runs overlapped under one task-keyed jetbrains-gradle lease, so a failure seen there is contention, not a verdict.\nRoot-cause row to follow (lease_account during the account wait doesn't count as presence).",
+      "timestamp": "2026-11-03T11:37:18.661Z"
+    },
+    {
+      "id": "comment-79970071a00740f095dde15eb8045ca7",
+      "author": "qa-af7be174",
+      "content": "qa-af7be174 is standing down as the governor asked. I made no qa_approve or qa_reject call and did not use replaceExisting. My gate evidence for @qa-93f9625e is below. It is evidence only, not a verdict.\n\nSnapshot: a --shared clone checked out detached at 1558f141, in /mnt/d/moe-scratch/26d9dc26-qa/repo. Its tree is bc3f4a5b, which matches cand-c308d6c0. 1558f141 is an ancestor of origin/moe/work-2026-10-24. Diff: 2 files, +273/-9, net 264. The test file has 0 deletions.\n\nLease: I held jetbrains-gradle for this task from 11:31:27Z. I released it at 11:36:35Z, and it went to task-b1ca54f2. Your queue entry (11:37:38Z) came after the release, so I did not strip a lease of yours.\n\n1. I ran task.verification verbatim from the snapshot root. Exit 0. Log: /mnt/d/moe-scratch/26d9dc26-qa/gate.log.\n- PASS parity-check.sh, and lint OK.\n- gradlew.bat test --rerun: BUILD SUCCESSFUL. JUnit totals: tests=625 skipped=6 failures=0 errors=0.\n- \"WSL probe: outside node selected; 3 refusals ran no node\".\n- TerminalAgentLauncherTest: 60 tests, 1 skipped. The skip is A7, which is POSIX-only. A1, A2, both A3 rows, A4, A5, A6 and the legacy Accounts pins all ran green.\n- RuntimeSelectionPolicyTest 80 (3 skipped), VerifiedLocalLaunchTest 8/8, AccountPresentationTest 19/19.\n\n2. Mutants, run in the snapshot with `gradlew.bat test --tests com.moe.util.TerminalAgentLauncherTest`. The snapshot was restored after each one.\n- k1 (line 558 `interpreter ?: \"powershell\"` changed to `\"powershell\"`): exit 1, A2 failed.\n- k2 (node check skipped): exit 1, A4 and the A3 in-project-node row failed.\n\n3. Program mutants, run through the probe:\n- Dropping the empty-keep guard, keeping relative entries, removing the ancestor walk and removing the project-resolve guard each fail the probe.\n- Keeping the raw entry `$d` instead of the real path `$r` survives. I see that as hardening only, not a DoD item.\n- Arguments `it's`, `$HOME` and an empty string pass through intact.\n\n4. On drvfs, the program refuses a case-variant spelling of an in-project PATH entry (/mnt/d/MOE-Scratch/... against /mnt/d/moe-scratch/...), because `-ef` matches by inode. It still selects an outside node.\n\n5. RED: /mnt/d/moe-scratch/26d9dc26/red.log has 19 `e:` lines for the unresolved accountsCommandFor and PROTECTED_WSL_NODE_PROGRAM.\n\nNon-blocking notes:\n- (a) The A3 SystemRoot row has no assume guard for the 'sys root' case. On a Windows host whose temp root has an 8.3 spelling, the message names the real long path, so `contains(root)` could fail. CI runs Gradle tests only on ubuntu, so A2 and A3 never run there.\n- (b) The AccountsPanel.runCli catch comment still says \"A word with a control character\". That file was out of scope.\n- (c) The BASH_ENV residual, as the worker noted.\n\nI found no DoD gap.",
+      "timestamp": "2026-11-03T11:38:16.682Z"
+    },
+    {
+      "id": "comment-383171f30a3449a88052f3713650f957",
+      "author": "qa-7328a40d",
+      "content": "QA evidence from qa-7328a40d, which now holds no claim and gives no verdict. This is for @qa-93f9625e. All of it is against completion 1558f141. That commit is on moe/work-2026-10-24 and origin, and its diff is 2 files, +273/-9, net 264.\n\n1. Gate, run 11:32-11:35Z: task.verification exactly as written, in a fresh clone at 1558f141 (/mnt/d/moe-scratch/qa-26d9dc26/repo; log gate.log), exit 0.\n- parity PASS and lint OK; gradlew.bat test --rerun BUILD SUCCESSFUL in 1m23s.\n- JUnit totals: tests=625 skipped=6 failures=0 errors=0.\n- \"WSL probe: outside node selected; 3 refusals ran no node\".\n- Rows that ran, per the XML: TerminalAgentLauncherTest 60, 1 skipped; A1, A2, both A3 rows, A4, A5 and A6 ran. A7 is POSIX-only and was skipped. CI's Gradle test runs only on ubuntu.\n- RuntimeSelectionPolicyTest 80/3 skipped; VerifiedLocalLaunchTest 8/8; AccountPresentationTest 19/19.\n- The lease overlap the governor noted did not hurt this run: it had its own clone and build dir, and it was green.\n\n2. My own probes:\n- Program mutants, each killed by the probe:\n  - m1 (no empty-keep guard): case (b) ran the cwd node.\n  - m2 (relative entries kept): case (c) ran the rel node.\n  - m3 (no ancestor walk, entry -ef only): case (b) ran the in-project node through the symlink.\n  - m4 (a missing project not refused): case (d) ran the outside node.\n- On a /mnt/d mount (case-insensitive), the typed line '/bin/bash' -c '<P>' ... with PATH .:<PROJ/BIN in upper case> refuses with MOE_PROTECTED_INTERPRETER_NOT_FOUND, rc=1. -ef catches the case variant. With an outside entry added, it runs the outside node, and the args reach it intact.\n- cmd.exe in a folder holding a planted powershell.bat and powershell.cmd:\n  - the protected word C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -EncodedCommand gives REAL;\n  - the bare legacy `powershell` gives PLANTED, the hole this task closes.\n- k1 and k2, by reading only, not run: A2 asserts both startsWith(word) and !startsWith(\"powershell\"); A4's assertThrows loop fails without the node check.\n\n3. Review by reading:\n- Every protected route reaches a pinned or validated interpreter. The refusal throws in accountsCommandLine, before resolveTerminalManager. AccountsPanel's copy fallback calls it inside the same try, so it copies nothing on refusal.\n- LEGACY returns buildAccountsCommand unchanged, with interpreter=null giving \"powershell\". The test file has 0 deleted lines.\n- The scope matches approvedScope. No forbidden patterns.\n- A4 and A7 hold on Linux: installedExecutable checks for a regular file, not an executable bit, and isPlainLocalPath is true off Windows.\n\n4. Non-blocking notes:\n- A3's \"sys root\" branch asserts message.contains(root), but the message carries the real path. On a host whose temp folder has an 8.3 short name, that branch would fail. That is local Windows only, since CI does not run Gradle on Windows.\n- Theoretical, besides the BASH_ENV residual: user-env exported bash functions (BASH_FUNC_cd%%) would shadow the program's builtins. That is the same user-env exposure as seat launches.\n\nI found no defect, and I would approve.",
+      "timestamp": "2026-11-03T11:38:40.019Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:40:06.793Z",
-  "updatedAt": "2026-11-03T11:34:56.555Z",
+  "updatedAt": "2026-11-03T11:39:00.437Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:57:52.111Z",
@@ -200,8 +219,8 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-93f9625e@2026-11-03T10:13:52Z",
-    "at": "2026-11-03T11:34:56.555Z"
+    "sessionId": "qa-af7be174@2026-11-03T10:49:01Z",
+    "at": "2026-11-03T11:39:00.437Z"
   },
   "workStartedAt": "2026-11-03T09:27:46.205Z",
   "reviewStartedAt": "2026-11-03T09:39:12.628Z",

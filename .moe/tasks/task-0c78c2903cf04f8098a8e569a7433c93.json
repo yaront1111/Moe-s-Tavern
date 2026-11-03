@@ -1,0 +1,42 @@
+{
+  "id": "task-0c78c2903cf04f8098a8e569a7433c93",
+  "epicId": "epic-be924fb8",
+  "title": "bug: lease_account during an all-accounts-spent wait never refreshes the seat's lastActivityAt, so a QA seat's REVIEW claim is released by the 30-min self-heal and re-claimed by the next waiting QA wrapper; when the accounts reset, every one of them reviews the same row",
+  "description": "Live on 2026-11-03. ACCOUNTS_EXHAUSTED fired at 09:40:05Z with retryAt 11:30Z.\n- qa-7328a40d claimed REVIEW task-26d9dc26 in pre-flight at 09:40:37Z. It then sat in the wrapper's MOE_ACCOUNT_WAIT loop: get_account_lease in scripts/moe-agent.sh, twin in moe-agent.ps1. That loop calls moe.lease_account every <= MOE_ACCOUNT_RETRY_SEC (300 s). scripts/CLAUDE.md documents this wait as \"the task held\".\n- The REVIEW self-heal (runBlockedTimeoutSweep in state/sweeps.ts, reviewStaleTimeoutMs 30 min) released the row at 10:13:40Z (WORKER_TIMEOUT), and the record was pruned (WORKER_DISCONNECTED).\n- qa-93f9625e's pre-flight claimed the row at 10:13:53Z and was released at 10:48:40Z. qa-af7be174 claimed it at 10:49:02Z and was released at 11:23:41Z.\n- At 11:30Z all three wrappers leased acct-1 and launched claude on the same row.\n  - Two of them shared the task-keyed jetbrains-gradle lease at 11:31-11:32Z, because acquire is idempotent per task. So the \"exclusive\" Windows gradle gate could overlap.\n  - qa-93f9625e then re-claimed the row at 11:35:57Z, and the other two sessions' verdicts are refused NOT_ALLOWED: wasted reviews.\n- The same silence pruned the idle governor's record at 10:13:40Z.\n\nCause: leaseAccount -> settleLease (state/accountStore.ts) calls touchWorker only when the seat's accountId changes. While every account is spent, each reply carries accountId null, so the wrapper's repeated polls never refresh lastActivityAt. The heartbeat sidecar runs only alongside a live CLI.\n\nFix (daemon only): count every lease_account call from a registered seat as presence. touchWorker refreshes lastActivityAt on every lease and still writes accountId only when it changes. A waiting wrapper then keeps its held task, as the wrapper contract says. touchWorker already refuses to create an unknown worker or refresh a DEAD one; keep that.\n\nOut of scope: a wrapper-side re-check of the claim before launching after a long wait (a possible follow-up row), and any change to reviewStaleTimeoutMs.",
+  "definitionOfDone": [
+    "Every moe.lease_account call from a registered, non-DEAD seat refreshes that worker's lastActivityAt. This includes the all-spent reply (accountId null with retryAt/retryInSec), a rotation:false reply, and a repeat lease of the same account. accountId is still written only when it changes. An unknown workerId creates no record, and a DEAD worker is not refreshed.",
+    "A daemon vitest regression test: a QA worker holds a REVIEW task with lastActivityAt older than reviewStaleTimeoutMs and calls lease_account while every signed-in account is spent. The REVIEW self-heal sweep then leaves the task assigned to that worker. The same sequence without the lease call releases the task, which shows the test discriminates.",
+    "docs/MCP_SERVER.md (moe.lease_account) and the Claude account rotation bullet in scripts/CLAUDE.md both state that each lease_account call counts as presence for the calling seat, so a task held through MOE_ACCOUNT_WAIT stays held.",
+    "The plan's daemon test command (cd packages/moe-daemon && npm test, or a narrowed suite plus npm run build that the plan justifies) exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 357.7,
+  "comments": [
+    {
+      "id": "comment-31792221c7204c9d8c2ef8a4d773bb2c",
+      "author": "governor-e6b40560",
+      "content": "Governor placement note for the planner. Files I expect the fix to touch: packages/moe-daemon/src/state/accountStore.ts (settleLease), maybe tools/leaseAccount.ts, a test in state/accountStore.test.ts or tools/accountTools.test.ts, and the docs in docs/MCP_SERVER.md and scripts/CLAUDE.md.\n- The only open row touching any of them is e3e81c45 (WORKING, worker-33f67e5b, at its verify/adversarial steps). It edits scripts/CLAUDE.md. Worktree mode lands both rows, so I added no edge. Keep the scripts/CLAUDE.md change to the one account-rotation bullet so the merge stays clean.\n- The REVIEW self-heal under test is in state/sweeps.ts (runBlockedTimeoutSweep, the \"REVIEW self-heal\" loop). Don't edit it; the row only changes what counts as presence.\n- After it lands, the live daemon needs a restage and swap before the fix takes effect. I'll handle that.",
+      "timestamp": "2026-11-03T11:38:15.230Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T11:37:39.579Z",
+  "updatedAt": "2026-11-03T11:38:26.230Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T11:37:52.806Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}
