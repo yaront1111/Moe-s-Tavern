@@ -19,13 +19,14 @@
     {
       "stepId": "step-1",
       "description": "1. Port land_vm_candidate as Invoke-MoeVmCandidateLanding, with its rows (DoD 1-4).\n\nPORT SOURCE, never re-derived. CQ-M07m2's own completion: `git log -1 --format=%H moe/work-2026-10-24 --grep 'Moe-Task: task-91ee455a601b411f97d5d951cc5f241c' -- scripts/moe-agent.sh`, then `git show <sha>` for land_vm_candidate and its [vm candidate] rows in scripts/tests/postflight-vm-route.sh. Copy every code, refusal order, message text, ledger field, rescue reason, return value and command. Also read mem:task-task-91ee455a601b411f97d5d951cc5f241c-handoff, and the planner note on this row.\n\nTHE FILE. scripts/tests/postflight-vm-route.ps1 is created by CQ-M07n1 (a dependency, landed first). It sits under newFiles only because it did not exist at planning time: EXTEND it, never recreate it.\n\nFUNCTION `Invoke-MoeVmCandidateLanding([string]$Commit, [string]$BaseTree, [string]$Tree, [hashtable]$M)`.\n- Place it next to Invoke-MoeWorktreeCheckpoint, with a `Twin: land_vm_candidate` comment. Nothing calls it yet (CQ-M07n3 will).\n- $M is Invoke-MoeWorktreeCommit's shape: TaskId, Title, Status, ReopenCount, CliExit, Sid.\n- It reads $script:MoeWtMode, $script:MoeWtPath and $script:MoeWtBranch (Initialize-MoeWorktree), the twins of MOE_WT_*.\n- It returns @{ Rc; Outcome; Code; Sha; Ref; RescueRef; RescueSha; PathCount }. Rc is the sh return code (0, 1 or 2); Outcome and Code are what the sh sets in LAND_OUTCOME and LAND_CODE.\n\nPOWERSHELL RULES.\n- Every git call goes through Invoke-MoeGit -Top <W> -GitArgs @(...), which already relaxes $ErrorActionPreference for native stderr under 5.1. Add -MergeStderr where a message tail is printed. Check .Rc explicitly on every call.\n- Every ref, sha and path is its own array element.\n- Status: @('--no-optional-locks','status','--porcelain','--untracked-files=all'). Any output, or a non-zero Rc, is DIRTY.\n- W's git dir comes from rev-parse --absolute-git-dir, compared with the control checkout's for NOT_WORKTREE.\n- Message: New-MoeCommitMessage -Kind 'checkpoint' ... -Recovered $false -PathCount <n> -InferredCount 0 -Contested @() -Reason '', then Write-MoeMessageFile into W's git dir, removed in a finally.\n- Commands, as in the sh: commit-tree TREE -p COMMIT -F <file>; `read-tree -m -u COMMIT NEW`; the seam; `update-ref -m \"moe: vm candidate <id>\" refs/heads/<branch> NEW COMMIT`; on a lost CAS, the rollback `read-tree -m -u NEW COMMIT`.\n- The seam is the existing ps1 form, `& $env:ComSpec /d /s /c $hook` in Push-Location W, cleared after one use and skipped when $script:MoeRuntimeProtected.\n- Rescue: Invoke-MoeRescueRef -Git @{Top=W; GitDir=<W git dir>} -TaskId -Reason <the sh reason> -Title -Status -Sid -Sha NEW.\n- Success: one Send-MoeRecordCommit, the committed checkpoint record that Invoke-MoeWorktreeCheckpoint sends (outcome committed, kind checkpoint, sha, treeId, ref refs/heads/<branch>, pushed $false, paths = the diff paths, empty inferred and unattributed), carrying the sh's fields.\n- Write-Host lines match the sh text.\n- Error handling: no throw escapes. Wrap the body in try/catch, and a catch returns Rc 1 with nothing written if it fires before commit-tree, or Rc 2 with the rescue if it fires after.\n- Edit moe-agent.ps1 only with Edit, ASCII only, and keep the UTF-8 BOM.\n\nROWS, in a `[vm candidate]` section in that file's style, mirroring m2's R1-R9 one for one.\n- Import every function through [Parser]::ParseFile and FindAll(FunctionDefinitionAst), then dot-source, as postflight.sh's WT_PS1 does. AFTER the import, redefine Send-MoeRecordCommit and Send-MoeGeneralChat as stubs that append to a log.\n- Set the script variables the functions read: $Role='worker', $myPid, $preflightTaskId, $projectPath, $WorkerId, $script:MoeRuntimeProtected and $script:MoeWt*.\n- The fixture is a temp repo under $env:TEMP: control checkout on main; tracked .moe/tasks/<id>.json, src/a.txt and lib/keep.txt; a linked sparse W (worktree add --no-checkout -b moe/task/<id>, then `sparse-checkout set --no-cone '/*' '!/.moe/'`, then read-tree -mu HEAD; PowerShell argv is not MSYS-converted); TREE built with a private GIT_INDEX_FILE.\n- Run the harness's own git with a relaxed ErrorActionPreference.\n- Every row asserts the control checkout (HEAD, index file Get-FileHash, --no-optional-locks status) and refs/heads/main unchanged (DoD 4).\n- Refusal rows also assert for-each-ref, W's index hash and W's files byte-identical.\n- Use W's index.lock for the SYNC_FAILED row.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
       "newFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-03T18:32:08.179Z"
     },
     {
       "stepId": "step-2",
@@ -83,7 +84,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:51.655Z",
-  "updatedAt": "2026-11-03T18:15:25.097Z",
+  "updatedAt": "2026-11-03T18:32:08.180Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:54:05.533Z",
     "plannedStepCount": 4,
@@ -160,5 +161,14 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T18:56:58.460Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "worker-8cf0816c@2026-11-03T18:14:58Z",
+    "at": "2026-11-03T18:25:11.498Z"
+  },
+  "workStartedAt": "2026-11-03T18:32:08.179Z"
 }

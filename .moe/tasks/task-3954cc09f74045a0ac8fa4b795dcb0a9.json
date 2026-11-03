@@ -79,17 +79,23 @@
     {
       "stepId": "step-5",
       "description": "Rows in scripts/tests/postflight-vm-route.sh (DoD 1-5).\n\nFILE NOTE: CQ-M07m1, a transitive dependsOn, CREATES this file. It appears under newFiles only because it did not exist when this plan was written. EDIT it; never recreate it.\n- Reuse m1's runner and fixture helpers (the readiness knob, the WSL seam, worktree-on settings) and m2's worktree repository fixture; add only what is missing.\n- Convert m1's verified-local + ready placeholder row into VR-happy. No row may expect MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE.\n\nEvery row uses:\n- a project fixture with .moe/daemon.json, so moe-call.sh deregisters;\n- --command, a recording host-CLI stub that must never run;\n- MOE_AGENT_SEAT_PATH = the stub;\n- `timeout ${POSTFLIGHT_TIMEOUT_SEC}s`.\nKill only PIDs this harness recorded; never pattern-kill.\n\nVR-happy (DoD 1, 2 and 3, and DoD 4's normal exit).\nSetup:\n- a claude worker with a worktree claim (FAKE_CLAIM_WORKSPACE {\"mode\":\"worktree\",\"target\":<target>});\n- MOE_ACCOUNT_ROTATION=on, plus FAKE_ACCOUNT_HOME;\n- MOE_ACCOUNTS_FILE=<tmp>/accounts/claude-accounts.json, with the canary in <tmp>/accounts/claude-vm-tokens/acct-1.token (VM_TOKEN_RE shape, no trailing newline). This temp store, read by the REAL vm-credential, is DoD 3's 'vm-credential stub';\n- sentinel values in all five credential variables.\nAssert:\n- exit 0, and the host CLI stub never ran;\n- the agent-seat cmds are exactly seat-start, seat-job, seat-stop;\n- seat-start comes before the first claim_next_task, and every claim_next_task has args.executionRoute 'vm';\n- seat-stop comes before deregister_worker;\n- seat-job's argv equals the exact flag list: role worker, task task-postflight, attempt attempt-postflight, generation 7, checkout = W, commit = W's pre-job HEAD, cli claude, instance = seat-start's, runner and host = the 'Runner identity:' line;\n- stdinName is CLAUDE_CODE_OAUTH_TOKEN, and stdinSha256 = sha256(canary);\n- the canary is in neither evidence-rpcs.jsonl (every recorded argv, env and RPC) nor the wrapper output;\n- none of the five sentinel names is in any agent-seat env;\n- moe/task/task-postflight holds a commit whose tree is the stub's recorded tree and whose parent is that base (DoD 2).\n\nVR-sigint (DoD 4, Ctrl+C).\n- Use VR-happy's setup plus FAKE_SEAT_JOB_SLEEP=3, launched under `set -m` in the background as scenario W does.\n- Wait for the seat-job row, then `kill -INT` the recorded wrapper PID. A watchdog runs kill -9 on that PID only.\n- Assert: exit 0 (the trap's); the agent-seat order is start, job, stop; seat-stop comes before deregister_worker; the host CLI never ran.\n\nVR-shared (DoD 5, first half).\n- worktreeMode-on settings, but the claim's workspace mode is shared.\n- Assert: exit 1; exactly one MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED; no seat-job row; no host CLI; seat-stop at exit.\n\nVR-protected (DoD 5, second half).\n- MOE_RUNTIME_PROTECTED=1, with absolute, existing MOE_PROXY_PATH and MOE_DAEMON_PATH (as [protected runtime] sets them), a recording `claude` on PATH, and MOE_AGENT_SEAT_PATH=stub.\n- Answer readiness as not ready, so m1 ends the run before seat-start on every host. On WSL the WSL refusal comes first.\n- Assert: exactly one MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED line; the path value is never printed; no agent-seat row; no host CLI.\n- Never let any row reach the real bundled agent-seat.mjs: wherever Multipass exists, it would provision a VM.\n\nVR-qa.\n- Role qa, status REVIEW, a shared claim, and FAKE_CTX_LANDING lastCompletion.sha = the fixture's seed commit.\n- Assert: seat-job gets --role qa --commit <seed> --checkout <project>; moe/task/task-postflight gains no commit; no host CLI.\n\nVR-reload (the taskless skip and the reload stop).\n- Run a copy of scripts/ that is committed in its own temp git repo (the [hot reload] pattern), with --loop --poll-interval 1, FAKE_CLAIM_MODE=idle and FAKE_MENTION=1.\n- Expect `MOE_TASKLESS_NO_LAUNCH reason=vm-route`, and no host CLI.\n- After the first seat-start, commit a one-line append to the copy. Expect seat-stop of instance 1 before the wrapper_restart deregister, then seat-start of instance 2.\n- Then kill -TERM the recorded PID. Expect seat-stop of instance 2 before the final deregister.\n\nKeep the rows compact; the size check is in step 6.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-03T18:20:25.185Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Added separate CQ-M07m3 block per governor: VR-happy/R1, nonzero guest exit, R2 codex, no-auto-claim, QA settings guard, protected override, worker shared backstop, QA, SIGINT + bounded watchdog, reload/taskless mentions. Reused fixture runner with setup/argv hooks; m2 rows untouched. Happy verifies exact flags, runner identity, canary hash/no leakage, clean W, admitted tree/parent and only one committed row; autoCommit=true exercises postflight suppression. 10 focused rows PASS (/tmp/moe-m3-rows.log), parser 11-case matrix PASS including PYTHONOPTIMIZE=1. RED: same happy row against HEAD wrapper fails at old placeholder (/tmp/moe-m3-red.log). Parser RED caught true==1 and optimized-away assert; replaced with strict integer check and explicit refusal. bash -n + git diff --check PASS. No package tests/builds required.",
+      "startedAt": "2026-11-03T18:20:25.185Z",
+      "completedAt": "2026-11-03T18:27:17.511Z"
     },
     {
       "stepId": "step-6",
       "description": "Verification gate, run ONCE (DoD 6). Run it in place from the repo root; the global rail allows that for launcher harnesses.\n\nExact command:\n`bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`\n- postflight.sh runs postflight-vm-route.sh through m1's hook.\n- env -i keeps the seat's own MOE_* and credential variables out of the rows (mem:gotcha-qa-session-env-and-signals-leak-into-harness).\n\nLaunching it:\n- The run takes about 15-20 min, longer than the Bash tool's 10-minute foreground cap.\n- Launch it WITH JOB CONTROL, or scenario W and VR-sigint lose SIGINT: `( set -m; nohup bash -c 'cd /mnt/d/projexts/moes && <command>; echo EXIT=$?' > <scratch log> 2>&1 & )`\n- Then poll with a foreground `timeout 590 bash -c 'until grep -q ^EXIT= <log>; do sleep 15; done'`.\n- It must end with EXIT=0 and print PASS postflight.sh. A row that also fails on HEAD's bytes is pre-existing: report it; don't fix it here.\n\nSize:\n- Measure `git diff --numstat HEAD -- scripts/moe-agent.sh scripts/tests/postflight-vm-route.sh scripts/tests/postflight-fake-proxy.js`, plus `wc -l` of the new stub.\n- QA counts additions plus deletions against 400 (mem:gotcha-cq-plan-size-vs-qa-cap).\n- If over, first merge rows that share setup.\n- If still over, file an EPIC ADD_RAIL size exception (moe.propose_rail) with the exact per-file numstat BEFORE complete_task. The CQ-M07k rail is the template.\n\nThe fresh output tail is the complete_task verification evidence.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/postflight-fake-proxy.js"
@@ -97,7 +103,8 @@
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh",
         "scripts/tests/postflight-fake-agent-seat.js"
-      ]
+      ],
+      "startedAt": "2026-11-03T18:27:17.566Z"
     },
     {
       "stepId": "step-7",
@@ -176,12 +183,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:38.207Z",
-  "updatedAt": "2026-11-03T18:20:25.185Z",
+  "updatedAt": "2026-11-03T18:27:17.566Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:21.699Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-98c94b4c",
@@ -195,7 +202,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T19:01:56.761Z",
