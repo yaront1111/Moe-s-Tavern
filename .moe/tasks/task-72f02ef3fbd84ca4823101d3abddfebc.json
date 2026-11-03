@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,16 +78,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:46:58.752Z",
-  "updatedAt": "2026-11-03T22:13:20.476Z",
+  "updatedAt": "2026-11-03T22:16:30.852Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:10:12.467Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:15:48.770Z",
+    "wallClockMs": 3936303
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -190,9 +193,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T21:15:30Z",
-    "at": "2026-11-03T22:13:20.475Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:13:29Z",
+    "at": "2026-11-03T22:16:30.852Z"
+  },
+  "completedAt": "2026-11-03T22:15:48.770Z",
+  "reviewCompletedAt": "2026-11-03T22:15:48.770Z",
+  "reviewSummary": "Reviewed completion f159784e (on moe/work-2026-10-24, recorded in task.commits): 2 files, +86/-1, under the 400 cap. Re-ran task.verification in a git-archive snapshot of f159784e outside the shared checkout: tsc --noEmit exit 0; 4 files / 23 tests passed. Also ran all 32 daemon test files referencing getActivityLog/queryActivityLog: 1023 passed. RED-at-base (snapshot of f159784e^ + new test): 'Tests 3 failed | 1 passed (4)', (e1)(e2)(e3) fail, (e4) green. Mutants in the snapshot, each killed by the intended case: drop dedupe -> (e3); always emit key -> (e2)+(e4); case-fold membership -> (e3); source restored (cmp), scratch dirs removed. DoD 1: description is '(e.g. STEP_COMPLETED, TASK_UPDATED, TASK_BLOCKED)', all in ACTIVITY_EVENT_TYPES, TASK_STATUS_CHANGED absent, pinned by (e1) parsing the parenthetical. DoD 2: top-level unknownEventTypes (deduped, first-seen, exact/case-sensitive) added only when non-empty; the eventTypes filter is untouched, so page and count equal the known-only query ((e3)); key absent otherwise ((e2),(e4)). /ws reads only events (WebSocketServer.ts:443), unchanged. No new throw/catch; validation untouched; docs/MCP_SERVER.md and backfillTaskMetrics.ts left alone per plan. Not run: full daemon suite and the lint/parity qualityGate (2-file tool change; 32 related files cover consumers). Follow-ups: governor to document unknownEventTypes in MCP_SERVER.md once 34e42a0a/c8d6dbd5 release it; backfillTaskMetrics.ts:63-69 keeps its own dead TASK_STATUS_CHANGED comparison. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
