@@ -89,7 +89,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T14:04:49.282Z",
-  "updatedAt": "2026-11-03T14:26:03.872Z",
+  "updatedAt": "2026-11-03T14:26:51.478Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T14:04:59.017Z",
     "plannedStepCount": 5,
@@ -180,11 +180,10 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T14:19:35.219Z",
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-1dd28c7c@2026-11-03T14:04:58Z",
-    "at": "2026-11-03T14:19:43.498Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-03T14:18:47Z",
+    "at": "2026-11-03T14:26:51.477Z"
   },
   "reviewStartedAt": "2026-11-03T14:26:03.869Z",
   "verification": {
@@ -198,5 +197,23 @@
     "packages/moe-daemon/src/state/resourceStore.landing.test.ts",
     "packages/moe-daemon/src/state/resourceStore.ts"
   ],
-  "completionSummary": "Fix for the stalled worktree landing (13:55Z WT-19 sequence). resourceStore.ts: heldByLiveSeat(state, task, requesterId) keeps the assignee branch unchanged, then falls through to a new private landingSeatHoldsTask. It returns true only when the queue entry's own seat has a worker record that is not DEAD and owns the task's open attempt in phase finalizing (the post-complete_task window in which the worktree wrapper takes git-land-<target>; complete_task has already cleared the assignee and left the seat IDLE). The seat lookup runs before the attempt comparison, so a blank or 'human' workerId can never match a malformed attempt. A missing attempt is a pass-over; a throwing or unreadable attempt read is caught, logged with logger.warn and passed over. grantNextLeases passes next.workerId; three comments updated; acquire/release/reap/restore/resume paths untouched. New resourceStore.landing.test.ts: the 13:55Z replay through the real completeTaskTool with a parked wait_for_resource (granted, RESOURCE_GRANTED logged, waiter resolves), plus an 8-seed it.each pass-over table (no attempt, closed, running, DEAD requester, deregistered requester, another seat's attempt, malformed record, unreadable record), each asserting the live waiter behind gets the slot and the entry keeps its requestedAt. Red-first confirmed on unmodified code (expected [] to deeply equal [['task-b','worker-b']]); per-guard mutants each turn only their own seed red. Verification: step-4 gate, exit 0, in a git-archive snapshot outside the shared checkout: resourceStore 6 files/77 tests, full daemon suite 237 files, 7060 passed, 24 skipped; epic-final quality gate (parity-check + lint) exit 0. Accepted residual risk: a hard-crashed landing seat that never deregisters (not DEAD, attempt still finalizing) now gets the lease when its entry comes up, bounded by maxLeaseMs (git-land 2h) and droppable via release_resource force; release_land_lease is idempotent and runs on every normal exit, so only a hard cr"
+  "completionSummary": "Fix for the stalled worktree landing (13:55Z WT-19 sequence). resourceStore.ts: heldByLiveSeat(state, task, requesterId) keeps the assignee branch unchanged, then falls through to a new private landingSeatHoldsTask. It returns true only when the queue entry's own seat has a worker record that is not DEAD and owns the task's open attempt in phase finalizing (the post-complete_task window in which the worktree wrapper takes git-land-<target>; complete_task has already cleared the assignee and left the seat IDLE). The seat lookup runs before the attempt comparison, so a blank or 'human' workerId can never match a malformed attempt. A missing attempt is a pass-over; a throwing or unreadable attempt read is caught, logged with logger.warn and passed over. grantNextLeases passes next.workerId; three comments updated; acquire/release/reap/restore/resume paths untouched. New resourceStore.landing.test.ts: the 13:55Z replay through the real completeTaskTool with a parked wait_for_resource (granted, RESOURCE_GRANTED logged, waiter resolves), plus an 8-seed it.each pass-over table (no attempt, closed, running, DEAD requester, deregistered requester, another seat's attempt, malformed record, unreadable record), each asserting the live waiter behind gets the slot and the entry keeps its requestedAt. Red-first confirmed on unmodified code (expected [] to deeply equal [['task-b','worker-b']]); per-guard mutants each turn only their own seed red. Verification: step-4 gate, exit 0, in a git-archive snapshot outside the shared checkout: resourceStore 6 files/77 tests, full daemon suite 237 files, 7060 passed, 24 skipped; epic-final quality gate (parity-check + lint) exit 0. Accepted residual risk: a hard-crashed landing seat that never deregisters (not DEAD, attempt still finalizing) now gets the lease when its entry comes up, bounded by maxLeaseMs (git-land 2h) and droppable via release_resource force; release_land_lease is idempotent and runs on every normal exit, so only a hard cr",
+  "commits": [
+    {
+      "sha": "946358a8dfbd32b511366755768fd2d36328a89a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T14:18:47Z",
+      "paths": [
+        "packages/moe-daemon/src/state/resourceStore.landing.test.ts",
+        "packages/moe-daemon/src/state/resourceStore.ts"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T14:26:51.477Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
