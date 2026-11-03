@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -75,16 +75,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:07.200Z",
-  "updatedAt": "2026-11-03T22:03:24.037Z",
+  "updatedAt": "2026-11-03T22:08:54.337Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:10:31.966Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:08:30.095Z",
+    "wallClockMs": 3478129
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -187,9 +190,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T21:17:34Z",
-    "at": "2026-11-03T22:03:24.037Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:07:15Z",
+    "at": "2026-11-03T22:08:54.337Z"
+  },
+  "completedAt": "2026-11-03T22:08:30.095Z",
+  "reviewCompletedAt": "2026-11-03T22:08:30.095Z",
+  "reviewSummary": "Reviewed completion a3330bce (contained in moe/work-2026-10-24 and control HEAD; +62/-3, net 59, well under the size cap). Diff is exactly the approved scope: claimNextTask.ts gains `params.workerId &&` on the firstClaimAt stamp condition and on the #workers collision-post condition (plus comments); the fileCollision scan and answer stay unconditional so a peek's response is unchanged. New claimNextTask.peek.test.ts has (k1) peek returns the same offered row + fileCollision, task-a stays unassigned with no attemptId, firstClaimAt undefined, zero events published; (k2) real claim by worker-1 stamps once, posts exactly one collision notice, and a resume keeps the same stamp. Re-ran task.verification in a git-archive snapshot outside the repo (working-tree copies of the two files confirmed clean vs HEAD): tsc --noEmit clean, `Test Files 10 passed (10), Tests 232 passed (232)`, exit 0. RED-AT-BASE at 6ded0c93 re-run: `Tests 1 failed | 1 passed (2)`, (k1) fails, printed RED-AT-BASE. Mutation check: removing only the collision-post guard in the snapshot makes (k1) fail again, so the test pins both writes. No existing tests deleted or weakened; no schema/MCP contract change; both writes keep their best-effort try/catch. DoD 1 and 2 both met. Snapshot dirs were mine only and are removed.",
+  "requiredCheckAtDone": null
 }
