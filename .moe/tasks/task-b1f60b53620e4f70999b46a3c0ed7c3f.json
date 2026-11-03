@@ -1,0 +1,28 @@
+{
+  "id": "task-b1f60b53620e4f70999b46a3c0ed7c3f",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md's moe.amend_plan_step and moe.get_activity_log sections omit what their DONE fixes added: amend_plan_step's rail refusal (task-2cc41d1a) and get_activity_log's unknownEventTypes reply field (task-72f02ef3)",
+  "description": "Doc-sync follow-up filed by architect-74d9e1c7 at the governor's request (#architects msg-71db57ac 21:06Z ruling; msg-e05b02f9). Both code rows reached DONE before their plans could be amended. Neither completion touched docs/MCP_SERVER.md. Checked on moe/work-2026-10-24 at 15728974.\n\nGAP 1: `### moe.amend_plan_step` (task-2cc41d1a, completion fa405c59)\n- packages/moe-daemon/src/tools/amendPlanStep.ts now rail-checks the replacement text with submit_plan's rules, before any write. It applies util/rails.ts listPlanRailViolations, global forbiddenPatterns then requiredPatterns, case-insensitive substring, to planRailText over every step's effective text plus affectedFiles and newFiles.\n- It refuses only a violation the amendment INTRODUCES. A violation the plan already had neither blocks the amendment nor is named, and an amendment may remove it.\n- The refusal is assertPlanRails: code -32003, message `[CONSTRAINT_VIOLATION] Rail violation: \"<violation>\". Default action: revise the replacement text to satisfy this rail and call moe.amend_plan_step again. Escape hatch: … moe.propose_rail { … targetScope: \"GLOBAL\" … }`. That is the same shape as submit_plan's **Rail refusal** note.\n- The section's Notes say none of this.\n\nGAP 2: `### moe.get_activity_log` (task-72f02ef3, completion f159784e)\n- queryActivityLog in packages/moe-daemon/src/tools/getActivityLog.ts adds `unknownEventTypes: string[]` to the reply, only when non-empty. It holds the distinct eventTypes values not in ACTIVITY_EVENT_TYPES (types/schema.ts).\n- Those values match nothing. They are reported, never refused, which keeps the contract additive.\n- The section documents neither the field nor the reply shape it extends.\n\nFIX\n- Add one Notes bullet to each of those two sections only.\n- Read the facts from the landed code; do not restate the whole submit_plan Rail refusal note, link to it instead.\n- No other section and no code changes.",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md `### moe.amend_plan_step` Notes state that the replacement text is rail-checked with submit_plan's global rules before any write, that only a violation the amendment introduces is refused (-32003 `[CONSTRAINT_VIOLATION] Rail violation: …`), and that a violation the plan already had neither blocks the amendment nor is named.",
+    "docs/MCP_SERVER.md `### moe.get_activity_log` states that eventTypes values outside ACTIVITY_EVENT_TYPES match nothing and are echoed in an additive `unknownEventTypes: string[]` reply field, present only when non-empty.",
+    "`git diff` of the completion touches only docs/MCP_SERVER.md, with hunks only inside those two sections, and `npm run lint` passes at the repo root."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 453.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:48:44.894Z",
+  "updatedAt": "2026-11-03T22:48:44.894Z"
+}

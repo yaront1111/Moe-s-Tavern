@@ -73,8 +73,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,12 +99,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:04.154Z",
-  "updatedAt": "2026-11-03T22:47:43.015Z",
+  "updatedAt": "2026-11-03T22:49:33.176Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:33:47.343Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:49:02.766Z",
+    "wallClockMs": 915423
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -243,10 +245,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T22:36:51Z",
-    "at": "2026-11-03T22:46:42.889Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:47:19Z",
+    "at": "2026-11-03T22:49:33.176Z"
   },
   "landingRetry": null,
   "blockedReason": null,
@@ -254,5 +257,9 @@
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-7cef08612fef4c79a53654ab37755f3f: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only"
+  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-7cef08612fef4c79a53654ab37755f3f: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only",
+  "completedAt": "2026-11-03T22:49:02.766Z",
+  "reviewCompletedAt": "2026-11-03T22:49:02.766Z",
+  "reviewSummary": "Reviewed landed completion 890b1831 (on moe/work-2026-10-24, in control HEAD; +150/-9 across 4 files, +44/-9 non-test, well under the 400 cap). Diff read: deleteTask.ts and deleteEpic.ts each gain a gate copied from setTaskStatus.ts:100-113 (params.workerId !== undefined -> callerId string-or-'' -> workerHasRole(architect, governor) else notAllowed), placed right after missingRequired and before getTask / getSnapshot / cascade refusal / any write; non-string and null ids fall back to '' and are refused; the actor passed to state.deleteTask/deleteEpic is only a string id. Role resolution goes through util/workerRole.workerHasRole (team role then prefix). Schemas gain description text only. /ws DELETE_TASK/DELETE_EPIC untouched. git grep found no non-test caller of the tools with a worker id outside tools/index.ts registration; existing tests (epicDeleteActor uses architect-c/governor-g, others pass no workerId) unchanged. Docs: Role gate paragraph, workerId note and NOT_ALLOWED Errors line added to the delete_task and delete_epic sections only (awk check on HEAD passes for both). Re-ran task.verification myself: docs check + snapshot of git ls-files packages/moe-daemon (tree clean vs HEAD) + npm ci + tsc --noEmit + vitest on 7 files -> exit 0, tsc clean, Test Files 7 passed, Tests 118 passed (roleGate file 13 tests). Mutation check in the snapshot: reverting only deleteTask.ts/deleteEpic.ts to 890b1831^ makes 9 of 13 roleGate tests fail (r1-r5), the 4 allowed-path cases (a1/a2) pass, so refusals are mutation-resistant and allowed paths are real. Tests assert codeName NOT_ALLOWED, rows still on disk, holder currentTaskId and attempt phase 'running'. Snapshot was outside the repo; no build/test run in the shared checkout. No ponytail findings worth routing. DoD: all three items met.",
+  "requiredCheckAtDone": null
 }
