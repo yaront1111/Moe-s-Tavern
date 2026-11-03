@@ -68,14 +68,16 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (load the adversarial-self-review skill). Review `git diff \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\"` plus the working tree of the 4 files. Check:\n- Every DoD item maps to a passing test row.\n- A non-string, empty or huge bindHost still yields false or 'health check failed', never a throw.\n- The name is resolved once per validation, and the dialed literal equals the judged one (B2's lookup count and its dialed list).\n- A failed interface read refuses every non-loopback bindHost (B3, B4).\n- On a refusal, stop writes no sentinel, deletes nothing and keeps exit 1.\n- status and the start gate behave as the docs say.\n- No test can SIGTERM the vitest worker.\n- Repository strings reach only pino fields, never the message text.\nMutants: copy /mnt/d/moe-scratch/d6ebe4ab-plan/mut.py into your scratch dir. It drives 8 single-string mutants: probe gate, native gate, stop refusal, loopback /8 to /32, foreign gate, interface loop, catch rethrow, and ::1. Point it at your snapshot's index.ts and at src/index.test.ts, with the search strings updated to your final code. Back up once, and count a kill only when the Tests line shows real failures. Restore, then cmp against your worktree before you cite the results.\nSize: net non-board LOC must stay under 400 (expect about +190). Record the mutant table and any residual in the completion summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T01:14:42.714Z"
+      "note": "Adversarial self-review of the whole task diff (5c5b3706 to the worktree): +248/-13, net 235 non-board LOC, under 400.\n- index.ts +55/-9\n- index.test.ts +158/-2\n- ARCHITECTURE.md +13/-0\n- TROUBLESHOOTING.md +22/-2\n\nMutants: round 1's script plus M11 and M12, run in /tmp/moe-d6ebe4ab-mut2.AlPrZK against snapshot /tmp/moe-d6ebe4ab-r2.ULLz8Z and src/index.test.ts. Backed up once; restored index.ts is cmp-equal to the worktree. Failures per mutant out of 69 tests:\n| Mutant | Tests failed |\n|---|---|\n| M1 probe gate | 7 |\n| M2 native gate | 8 |\n| M3 stop refusal | 7 |\n| M4 loopback /8 to /32 | 1 |\n| M5 foreign gate | 1 |\n| M6 no interfaces | 4 |\n| M7 catch rethrow | 8 |\n| M8 no ::1 | 1 |\n| M9 second lookup | 1 |\n| M10 type guard | 2 |\n| M11 zone check removed | 4 (B8 x3, B5) |\n| M12 QA's addSubnet(own, 64/24) | 2 (B7 x2) |\nAll 12 were killed.\n\nChecklist:\n- The DoD maps to rows. Item 1 (no signal or deletion off-host): B1, B4, B5, B7 and B8 zoned. Item 2: B2, B3, the unzoned B8, and the full suite (step 4: 229 files, 6943 passed). Item 3: the docs, with account-trust-docs 5/5.\n- Hostile inputs: a non-string bindHost (B6) gives 'health check failed'. Empty or huge strings fail resolution (null), and BlockList.check returns false and never throws on garbage or a family mismatch (probed). Any '%' is refused before BlockList.\n- One lookup per validation: B2's count, and M9 is killed.\n- A failed interface read leaves loopback only: B3, B4, and M7 is killed.\n- A refusal writes no sentinel, removes nothing and exits 1 (asserted in expectRefused).\n- A killSpy is installed before every stopDaemon. The repository string reaches only a pino field.\n\nResidual, considered and not changed:\n- An unzoned own link-local still counts. This relies on the OS delivering its own address locally. Probes show it does on Linux WSL (connects) and on Windows (all 7 adapters: ECONNREFUSED on port 1).\n- A real Moe daemon never answers /health over link-local anyway. Probe /mnt/d/moe-scratch/d6ebe4ab-r2/hostprobe.mjs with the real healthHost.ts: Host [fe80::…] on localAddress fe80::…%eth0 gives allowed:false, zoned or not.\n- Refusing all of fe80::/10 would lose nothing, but no attack needs it, so the fix stays QA's option 2.",
+      "startedAt": "2026-11-03T01:14:42.714Z",
+      "completedAt": "2026-11-03T01:17:59.057Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -87,7 +89,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:05:43.620Z",
-  "updatedAt": "2026-11-03T01:14:42.715Z",
+  "updatedAt": "2026-11-03T01:20:30.207Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:14.940Z",
@@ -97,7 +99,7 @@
     "firstClaimAt": "2026-11-02T23:51:39.790Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 9,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -113,7 +115,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [
     {
@@ -196,12 +199,12 @@
   "planApprovedAt": "2026-11-03T00:18:53.010Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T00:20:38.054Z",
-  "reviewStartedAt": "2026-11-03T00:33:47.534Z",
+  "reviewStartedAt": "2026-11-03T01:19:02.237Z",
   "verification": {
     "command": "cd \"$(git rev-parse --show-toplevel)\" && S=\"$(mktemp -d /tmp/moe-d6ebe4ab.XXXXXX)\" && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$(git rev-parse HEAD)\" && for f in packages/moe-daemon/src/index.ts packages/moe-daemon/src/index.test.ts docs/ARCHITECTURE.md docs/TROUBLESHOOTING.md; do cp \"$f\" \"$S/repo/$f\" && cmp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run'",
     "exitCode": 0,
-    "outputTail": "ℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ skipped 0\n...\n Test Files  229 passed (229)\n      Tests  6937 passed | 20 skipped (6957)\n   Duration  44.26s (tests 92%, transform 4%, import 4%)\n(snapshot /tmp/moe-d6ebe4ab.N6LzXN, WSL node v24.21.0, 2026-11-03 02:33Z)",
-    "reportedAt": "2026-11-03T00:33:47.534Z",
+    "outputTail": "ℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\n...\n Test Files  229 passed (229)\n      Tests  6943 passed | 20 skipped (6963)\n   Start at  03:13:49\n   Duration  46.08s (tests 92%, transform 4%, import 4%)\n(snapshot /tmp/moe-d6ebe4ab.J09dgc of worktree HEAD eae480c8 plus the 4 working-tree files, all cmp-equal to the final bytes; WSL node v24.21.0; 2026-11-03 03:13Z; load average 5.4)",
+    "reportedAt": "2026-11-03T01:19:02.237Z",
     "source": "agent-reported"
   },
   "filesModified": [
@@ -210,7 +213,7 @@
     "docs/ARCHITECTURE.md",
     "docs/TROUBLESHOOTING.md"
   ],
-  "completionSummary": "The daemon CLI now dials a .moe/daemon.json bindHost only when the literal it resolves to is loopback (127.0.0.0/8, ::1 or an IPv4-mapped form) or an address one of this machine's network interfaces holds. The name is resolved once, and that literal is the one dialed. An unreadable interface list leaves loopback only.\n- Native daemon.json with a live pid and an off-host bindHost: validate returns 'bindHost not local'. stop logs an error with only {pid, bindHost} as fields, sends no signal, writes no sentinel, removes nothing and exits 1. status reports 'stopped' with that reason.\n- Foreign daemon.json: an off-host bindHost is skipped; the WSL gateway is still probed.\n- Loopback, 0.0.0.0, ::, wsl and local-interface stops are unchanged.\n- probeDaemonHealth keeps its signature and refuses a non-local literal unless the caller passes a host.\nSelf-review finding, fixed: net.isIP coerces, so `bindHost: [\"192.0.2.10\"]` passed as a literal and threw a TypeError (pre-existing at HEAD via http.request). healthProbeAddress now returns null for a non-string target. That is a 1-line growth past approvedScope, in the same file.\nTests: index.test.ts rows B1-B6 (16 cases). Before the fix, B1 x2, B4 and B5 failed, and later B6 for the arrays. 10 mutants were all killed: the planner's 8, plus M9 (a second lookup) and M10 (the type guard removed).\nDocs: an ARCHITECTURE.md Security Notes bullet, and in TROUBLESHOOTING.md a new Daemon Issues entry plus pointers in the Stop and Replace and Restart Daemon entries. All anchors resolve.\nSize: +205/-13, net 192.\nVerification is the plan's command on the final bytes: exit 0, daemon 229 files, 6937 passed, 20 skipped, and account-trust-docs 5/5.",
+  "completionSummary": "Rework of QA reject 1: the zone bypass, the subnet test gap and the docs.\nFix: isLocalAddress (index.ts) now refuses any literal containing '%' before the BlockList check, so a zoned literal never counts as this machine (QA's option 2). That covers the native gate, the probeDaemonHealth default host and the foreign filter. No Moe daemon is lost: its /health refuses a zoned Host (healthHost.ts row '[fe80::1%eth0]').\nUnzoned own link-local stays local. Linux (WSL) connects locally, and Windows (node 24.16) gives ECONNREFUSED on all 7 adapters' link-locals, while %other-scope times out (D:\\moe-scratch\\d6ebe4ab-r2\\winprobe.js).\nTests (index.test.ts, describe task-d6ebe4ab):\n- B1's body is now expectRefused(bindHost, interfaces), with the same assertions.\n- B7: 192.0.2.10 and 2001:db8::10 against eth0 holding .11/24 and ::11/64 are refused.\n- B8: fe80::a%docker0, %eth0 and %2 are refused (eth0 holds fe80::a); unzoned fe80::a still gets one SIGTERM.\n- B5: a foreign fe80::a%docker0 gives 'foreign daemon unreachable' and dials nothing.\nRED against 12d7bb62's index.ts: B8 x3 and B5 fail ('expected { valid: true, ...'). GREEN after.\nMutants: all 12 killed, round 1's 10 plus M11 (zone check removed, 4 failed) and M12 (QA's addSubnet 64/24, 2 failed).\nDocs: the ARCHITECTURE Security Notes bullet and the TROUBLESHOOTING 'bindHost not local' Cause state the zone rule; Solution adds 'with no %zone'. Anchors unchanged.\nResidual: unzoned link-local relies on the OS delivering its own address locally (proven on Linux and Windows). A real Moe /health refuses every link-local connection anyway, because its localAddress carries %eth0.\nSize: +248/-13, net 235.\nVerification: the plan's step-4 command on the final bytes, exit 0. Daemon: 229 files, 6943 passed, 20 skipped. account-trust-docs: 5/5.",
   "commits": [
     {
       "sha": "12d7bb6249d85360ba54cb10a4d733214e2d0adb",
@@ -228,15 +231,31 @@
       "recordedAt": "2026-11-03T00:34:42.505Z",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "082554241e309875097ae066b545d61d91393c21",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T00:58:13Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T01:20:30.207Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-af7be174@2026-11-03T00:51:21Z",
-    "at": "2026-11-03T00:59:01.941Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T00:58:13Z",
+    "at": "2026-11-03T01:20:30.207Z"
   },
   "reviewCompletedAt": "2026-11-03T00:58:13.972Z",
   "rejectionDetails": {
