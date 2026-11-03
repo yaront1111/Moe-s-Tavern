@@ -9,10 +9,40 @@
     "`[System.Management.Automation.Language.Parser]::ParseFile` on scripts/doctor.ps1 reports 0 errors, and the diff touches only scripts/doctor.ps1 and the new test file."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: create scripts/tests/doctor-ps1.test.mjs with the Write tool. Never cp it into the tree: a shell write leaves no TOOL witness.\n\nREFERENCE: /mnt/d/moe-scratch/plan-b2c1/proto/scripts/tests/doctor-ps1.test.mjs is the architect's dry-run copy, run under Windows node v24.16.0 with Windows PowerShell 5.1. With the fix it went 3/3 green with 0 skipped. Against base doctor.ps1, DP1 and DP2 failed and DP3 passed. Reuse it, but write the file yourself.\n\nDESIGN:\n- An ESM node:test file. The rows use the repo's Windows-only option `{ skip: process.platform !== 'win32' && 'Windows only' }`, so they skip under WSL node.\n- runNative(calls) makes a temp dir in os.tmpdir() and writes two tools there: recorder.cmd, which appends `argv=[%*]` to argv.log and exits 0, and exit3.cmd, which exits 3.\n- It writes a probe.ps1 and runs it with `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File probe.ps1`. The probe:\n  - parses scripts/doctor.ps1 with `[System.Management.Automation.Language.Parser]::ParseFile` and throws on parse errors;\n  - finds exactly one FunctionDefinitionAst named Run-Native and dot-sources `[scriptblock]::Create($fn[0].Extent.Text)`;\n  - wraps each call in try/catch, writing `RESULT ok` or `RESULT thrown: <message>`.\n- Values are single-quoted PowerShell literals with `'` doubled. The temp dir is removed in a finally.\n\nROWS. Keep the exact ids: checkRef [2] greps `DP[0-9]`.\n- DP1: `@('buildPlugin')` gives results ['ok'] and argv ['argv=[buildPlugin]'].\n- DP2: `@('--version')` gives results ['ok'] and argv ['argv=[--version]'].\n- DP3: exit3.cmd gives one result matching /^thrown: .*exited with code 3/. It passes at base by design, because exit-code propagation does not depend on the bug. It pins that the rename keeps Run-Native's throw.\n\nRun it red before step 2 with WINDOWS node, from the worktree root: `node.exe --test --test-reporter=tap scripts/tests/doctor-ps1.test.mjs`. Expected: DP1 and DP2 not ok, DP3 ok, skipped 0. WSL `node` skips all three, which proves nothing.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/doctor-ps1.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix scripts/doctor.ps1 with Edit only. Reference: /mnt/d/moe-scratch/plan-b2c1/fixed-doctor.ps1.\n- Rename Run-Native's parameter: `function Run-Native([string]$Cmd, [string[]]$Arguments) {` (:14), and splat `& $Cmd @Arguments 2>&1 | Out-Host` (:23).\n- Add one comment line above the function: `# Not named Args: in a simple function the automatic unbound-arguments variable replaces a parameter of that name.`\n- The comment must not contain the literal token `$args` in any case, because DoD 1's case-insensitive grep would match it.\n- Do not make the function advanced, and change no other line. The callers at :45, :51 and :68 already pass arrays and stay as they are.\n- Keep the file ASCII with LF line endings and no BOM, as it is today.\n\nError handling is unchanged and must stay so:\n- Run-Native still throws \"$Cmd exited with code $LASTEXITCODE\" on a non-zero exit (DP3 pins it).\n- The finally still restores $ErrorActionPreference and PSNativeCommandUseErrorActionPreference.\nAfter the edit, re-run the step-1 command: 3 pass, 0 fail, 0 skipped.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/doctor.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification (once, fresh, from the task worktree root). Run the four executionContract.checkRefs joined with ' && ' in this order: [0] green, [1] static, [2] red, [3] scope. Submit that exact text, its exit code and the output tail as complete_task's verification.\n- [0] runs the new test with Windows node.exe and requires '# pass 3', '# fail 0' and '# skipped 0' (CR stripped).\n- [1] is DoD 1 and DoD 3's parse half. `grep -niE '\\$args\\b' scripts/doctor.ps1` must print nothing, and Windows PowerShell's ParseFile must report 0 errors (it prints PARSE_OK).\n- [2] puts the merge-base doctor.ps1 and the new test into a fresh /mnt/d/moe-scratch/rb2c1.XXXX layout, which Windows node can reach. It requires the not-ok rows to be exactly DP1 and DP2.\n- [3] is the scope check: only scripts/doctor.ps1 and the new test may differ, plus .moe/.\nError handling for a red run:\n- [0] or [2] failing prints the TAP counts. Fix doctor.ps1, never the assertions.\n- [1] failing names the line that still matches, or the parse error.\n- [3] names the stray path. Revert it.\nThe architect's dry run passed all four, and each negative control (base file, unparseable file) exited 1.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this row's diff. Load the adversarial-self-review skill first.\nChecklist:\n- Is every former use of the parameter renamed? A leftover splat of the automatic variable would silently pass nothing again.\n- Does the comment avoid the literal token?\n- Do Run-Native's three callers still pass arrays (`@(\"-version\")`, `@(\"--version\")`, `@(\"buildPlugin\")`)?\n- Is the throw text unchanged?\n- Is the file still ASCII with LF line endings and no BOM (`grep -c $'\\r' scripts/doctor.ps1` prints 0; `head -c3 | od -c` shows no BOM)?\n- Does the test clean up its temp dir on failure (finally), avoid hard-coded drive letters, and never invoke real java or Gradle?\n- `git diff` touches only the 2 files.\nIf you find something, fix it inside those files and re-run step 3's command before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,5 +54,76 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:31:44.716Z",
-  "updatedAt": "2026-11-03T17:31:44.716Z"
+  "updatedAt": "2026-11-03T17:52:36.059Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:49:07.939Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-33f67e5b"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:51:58.563Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/doctor.ps1's Run-Native passes its argument array through to the native tool, so `java -version`, Gradle `--version` and the -Full `buildPlugin` run with their arguments, and doctor.ps1 can pass on a correctly provisioned Windows host.",
+    "acceptanceCriteria": [
+      "Run-Native's array reaches the tool verbatim (buildPlugin, --version).",
+      "A non-zero tool exit still throws 'exited with code N'.",
+      "No line of scripts/doctor.ps1 matches \\$args\\b case-insensitively, and the file parses with 0 errors."
+    ],
+    "invariants": [
+      "Run-Native still throws \"<cmd> exited with code <N>\" on a non-zero exit and restores ErrorActionPreference / PSNativeCommandUseErrorActionPreference in its finally.",
+      "No other doctor.ps1 check changes; the file stays ASCII, LF, no BOM.",
+      "The test never runs real java or Gradle and removes its temp dir."
+    ],
+    "approvedScope": [
+      "scripts/doctor.ps1: Run-Native's parameter name and its one splat, plus a one-line comment.",
+      "scripts/tests/doctor-ps1.test.mjs: rows DP1-DP3."
+    ],
+    "sourceAssumptions": [
+      "scripts/doctor.ps1:14 `function Run-Native([string]$Cmd, [string[]]$Args) {`; :23 `& $Cmd @Args 2>&1 | Out-Host`; callers :45, :51, :68.",
+      "PowerShell 5.1.26100 on this host binds a simple function's declared $Args parameter to the empty automatic array (repro /mnt/d/moe-scratch/hunt-cea8/mine/args-shadow.out.txt: Args.Count=0 versus Arguments.Count=1).",
+      "Windows node v24.16.0 is on the WSL PATH as node.exe; repo convention for Windows-only rows is `{ skip: process.platform !== 'win32' && 'Windows only' }` (scripts/tests/moe-account-lease.test.mjs:221)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && O=$(mktemp) && { node.exe --test --test-reporter=tap scripts/tests/doctor-ps1.test.mjs > \"$O\" 2>&1; true; } && tr -d '\\r' < \"$O\" > \"$O.n\" && grep -E '^# (tests|pass|fail|skipped) [0-9]+$' \"$O.n\" && grep -qx '# pass 3' \"$O.n\" && grep -qx '# fail 0' \"$O.n\" && grep -qx '# skipped 0' \"$O.n\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && ! grep -niE '\\$args\\b' scripts/doctor.ps1 && powershell.exe -NoProfile -NonInteractive -Command '$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath scripts/doctor.ps1).Path, [ref]$null, [ref]$e); if ($e.Count) { $e | ForEach-Object { $_.ToString() }; exit 1 }; Write-Output PARSE_OK' | tr -d '\\r' | grep -qx PARSE_OK",
+      "( R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /mnt/d/moe-scratch/rb2c1.XXXX) && mkdir -p \"$L/scripts/tests\" && git -C \"$R\" show \"$B:scripts/doctor.ps1\" > \"$L/scripts/doctor.ps1\" && ! cmp -s \"$L/scripts/doctor.ps1\" \"$R/scripts/doctor.ps1\" && cp \"$R/scripts/tests/doctor-ps1.test.mjs\" \"$L/scripts/tests/\" && cd \"$L\" && { node.exe --test --test-reporter=tap scripts/tests/doctor-ps1.test.mjs > red.log 2>&1; true; } && N=$(tr -d '\\r' < red.log | grep -o '^not ok [0-9]* - DP[0-9]*' | grep -o 'DP[0-9]*' | tr '\\n' ' ') && echo \"RED: $N\" && [ \"$N\" = \"DP1 DP2 \" ] && [ $(grep -c '^not ok' red.log) = 2 ] )",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && T=scripts/tests/doctor-ps1.test.mjs && D=$(git diff --name-only \"$B\" -- . ':(exclude).moe' ':(exclude)scripts/doctor.ps1' \":(exclude)$T\"; git ls-files --others --exclude-standard -- . ':(exclude).moe' \":(exclude)$T\") && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Make Run-Native advanced with [CmdletBinding()] so `$Args` binds. Rejected: it keeps a misleading name and changes the function's semantics (common parameters, positional binding) for no gain. (2) Run doctor.ps1 end to end with stub java and gradle in the test. Rejected: the DoD pins Run-Native, and stubbing PATH lookups and ensure-gradle.ps1 adds fragile scaffolding.",
+    "codebaseInsights": "The architect dry-ran everything in /mnt/d/moe-scratch/plan-b2c1: proto/, fixed-doctor.ps1, base-doctor.ps1, green.tap.txt, red-at-base.tap.txt, checkref-*.txt and a dryrepo-* git sandbox. All 4 checkRefs exited 0 on the fix. Negative controls exited 1: [0] and [1] with the base file, [1] with an unparseable file. Windows PowerShell 5.1 and Windows node are both reachable from WSL (powershell.exe, node.exe). They need Windows-reachable paths, which is why the RED layout lives under /mnt/d/moe-scratch and not /tmp.",
+    "risks": [
+      "Under WSL node the rows SKIP and print pass 0, which would look green to a careless reader. checkRef [0] therefore requires `# skipped 0` with node.exe.",
+      "QA at the control checkout: checkRef [2] needs MOE_LAND_TARGET=<completion>^, because the merge-base of a landed completion is itself. [3] is vacuous there, so review `git diff <sha>^ <sha>`.",
+      "checkRef [2] leaves a /mnt/d/moe-scratch/rb2c1.XXXX dir per run. That is scratch; delete it by its literal path if needed."
+    ],
+    "keyFiles": [
+      "scripts/doctor.ps1",
+      "scripts/tests/moe-account-lease.test.mjs",
+      "scripts/tests/literal-project-path.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "195b656acfa3b6310fe3d940f7916210a8b3dbf3",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:51:58.591Z",
+  "approvedPlanRevision": 1
 }

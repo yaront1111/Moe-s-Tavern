@@ -13,35 +13,57 @@
     {
       "stepId": "step-1",
       "description": "Tests first: create moe-vscode/tests/chat-decisions-reconnect.test.cjs with the Write tool. Never cp it into the tree: a shell write leaves no TOOL witness.\n\nREFERENCE: /mnt/d/moe-scratch/plan-f802/chat-decisions-reconnect.test.cjs is the architect's dry-run copy. With the fix it ran 3/3 green, and against base ChatViewProvider.ts all 3 failed. Reuse it, but write the file yourself.\n\nHARNESS: hunt #5's /mnt/d/moe-scratch/hunt-b733/zz-hunt-b733-chat.test.cjs, which loads modules as tests/wire-parity.test.cjs does.\n- The real MoeDaemonClient and ChatViewProvider are transpiled with ts.transpileModule and run under node:vm, with a RecordingEventEmitter.\n- A view stub records webview.postMessage and captures the onDidReceiveMessage and onDidChangeVisibility handlers.\n- `connect()` installs a fake open socket that records each frame's type, then calls `client['setConnectionState']('connected')`. `disconnect()` sets 'disconnected'. `reply(frame)` feeds `client['handleMessage'](JSON.stringify(frame))`.\n\nROWS. Keep the exact id prefixes: checkRef [1] greps `CH[0-9]`.\n- CH1: ready while disconnected sends nothing. Connecting then sends GET_CHANNELS and at least one GET_DECISIONS.\n- CH2: connect, ready, disconnect, clear the records, connect again: at least one GET_DECISIONS. Then a DECISIONS reply {decisions:[d]} reaches the page as exactly [{type:'loadDecisions', decisions:[d]}].\n- CH3: connected and ready, clear the frames, then the visibility handler fires with view.visible true: GET_CHANNELS and at least one GET_DECISIONS.\nAssert at-least-one GET_DECISIONS, not an exact count: chat.js loadDecisions (:604-611) rebuilds decisionMap, so a repeat is harmless.\n\nRun it red before step 2, from moe-vscode/: `NODE_PATH=\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")/moe-vscode/node_modules\" node --test --test-reporter=tap tests/chat-decisions-reconnect.test.cjs`. Expected: CH1, CH2 and CH3 not ok.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/chat-decisions-reconnect.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/chat-decisions-reconnect.test.cjs"
+      ],
+      "note": "Created test CH1-CH3; red (3 fail) before fix.",
+      "startedAt": "2026-11-03T17:50:18.242Z",
+      "completedAt": "2026-11-03T17:50:39.008Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix moe-vscode/src/providers/ChatViewProvider.ts with Edit only. Reference diff: /mnt/d/moe-scratch/plan-f802/fix.diff, +4 lines.\n- In the onConnectionChanged listener's `status === 'connected'` branch (:85-90), call `daemonClient.requestDecisions()` after `daemonClient.requestChannels()`. Comment it: \"DECISIONS only answers GET_DECISIONS, so a page that was ready before this connection opened, or that missed an outage, must ask again (JetBrains ChatPanel twin).\"\n- In the onDidChangeVisibility handler's connected branch (:130-137), call `this.daemonClient.requestDecisions()` after `this.daemonClient.requestChannels()`.\n- Keep the 'ready' path (:159-164) as it is.\n\nError handling: no new failure path.\n- Both calls sit under an explicit 'connected' check, and MoeDaemonClient.sendMessage already returns false without throwing when the socket is not open.\n- A DECISIONS reply that arrives before the page is ready is dropped by postToWebview's `_webviewReady` guard (:263-267). The page's own 'ready' request then covers it.\n\nRun the step-1 command again: CH1-CH3 ok.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/providers/ChatViewProvider.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "note": "requestDecisions added to connected + visibility branches; CH1-3 green.",
+      "startedAt": "2026-11-03T17:50:39.825Z",
+      "completedAt": "2026-11-03T17:50:48.023Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification (once, fresh, from the task worktree). Run the three executionContract.checkRefs joined with ' && ' in this order: [0] GREEN, [1] RED, [2] scope. Submit that exact text, its exit code and the output tail as complete_task's verification.\n- [0] archives the whole repo at HEAD into a mktemp dir (mem:gotcha-vscode-tests-need-full-repo-snapshot). It overlays the 2 task files and runs `npm ci && npm test && npm run compile` under `env -i` with nvm node v24.21.0. It passes only on 'ℹ fail 0'. The architect's dry run at ff652048 printed tests 699, pass 689, fail 0, skipped 10.\n- [1] archives moe-vscode at the merge-base B, adds only the new test, and requires the not-ok rows to be exactly CH1 CH2 CH3. That is DoD 3's \"both cases fail at the merge-base\".\n- [2] allows only the 2 task files plus .moe/.\nError handling for a red run:\n- [0] prints the snapshot path and the last 40 log lines. Fix the code, never the assertions.\n- [1] failing means a row passes on base or was renamed. Restore the CH ids and the base-failing assertions.\n- [2] names the stray path. Revert it.\nNever run npm in the shared checkout. This is a narrow row (governor comment-052f42ce): no daemon suite, Gradle or launcher gate.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "All 3 checkRefs exit 0: GREEN tests 739 pass 729 fail 0 skipped 10; RED at merge-base CH1 CH2 CH3; scope clean.",
+      "startedAt": "2026-11-03T17:50:48.600Z",
+      "completedAt": "2026-11-03T17:51:26.802Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this row's diff. Load the adversarial-self-review skill first.\nChecklist:\n- Is GET_DECISIONS sent on EVERY transition to 'connected' (first connect and every reconnect), and on reveal while connected?\n- Is nothing sent while disconnected?\n- Did the 'ready' path stay intact?\n- Repeated DECISIONS are idempotent (loadDecisions rebuilds the map).\n- No new listener was added outside this.disposables or this.viewDisposables, and a re-resolved view does not double-register the visibility handler: the existing viewDisposables reset covers it.\n- The test uses no forbidden-pattern string from project.json globalRails.\n- `git diff` touches only the 2 files.\nIf you find something, fix it inside those files and re-run step 3's command before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts",
+        "moe-vscode/tests/chat-decisions-reconnect.test.cjs"
+      ],
+      "note": "Self-review clean; diff is +4 lines in ChatViewProvider.ts plus the new test; no forbidden patterns.",
+      "startedAt": "2026-11-03T17:51:27.617Z",
+      "completedAt": "2026-11-03T17:51:43.348Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -61,20 +83,27 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:27:40.881Z",
-  "updatedAt": "2026-11-03T17:48:49.640Z",
+  "updatedAt": "2026-11-03T17:51:53.149Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:45:34.012Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
+    "architect-1dd28c7c",
+    "worker-ed0f6a9e"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:48:49.613Z",
   "executionContract": {
@@ -136,5 +165,19 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T17:48:49.640Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:50:18.242Z",
+  "reviewStartedAt": "2026-11-03T17:51:53.146Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/gf802.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in src/providers/ChatViewProvider.ts tests/chat-decisions-reconnect.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log && grep -aq '^ℹ fail 0$' ../v.log ) && ( R=$(git rev-parse --show-toplevel) && C=$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\") && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/rf802.XXXX) && git -C \"$R\" archive \"$B\" moe-vscode | tar -x -C \"$L\" && P=moe-vscode/src/providers/ChatViewProvider.ts && ! cmp -s \"$L/$P\" \"$R/$P\" && cp \"$R/moe-vscode/tests/chat-decisions-reconnect.test.cjs\" \"$L/moe-vscode/tests/\" && cd \"$L/moe-vscode\" && { NODE_PATH=\"$C/moe-vscode/node_modules\" node --test --test-reporter=tap tests/chat-decisions-reconnect.test.cjs > ../red.log 2>&1; true; } && N=$(grep -o '^not ok [0-9]* - CH[0-9]*' ../red.log | grep -o 'CH[0-9]*' | tr '\\n' ' ') && echo \"RED: $N\" && [ \"$N\" = \"CH1 CH2 CH3 \" ] && [ $(grep -c '^not ok' ../red.log) = 3 ] ) && cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && V=moe-vscode && T=$V/tests/chat-decisions-reconnect.test.cjs && D=$(git diff --name-only \"$B\" -- . ':(exclude).moe' \":(exclude)$V/src/providers/ChatViewProvider.ts\" \":(exclude)$T\"; git ls-files --others --exclude-standard -- . ':(exclude).moe' \":(exclude)$T\") && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 739\nℹ pass 729\nℹ fail 0\nℹ skipped 10\nRED: CH1 CH2 CH3 \n(scope check: no output, exit 0)",
+    "reportedAt": "2026-11-03T17:51:53.146Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/chat-decisions-reconnect.test.cjs",
+    "moe-vscode/src/providers/ChatViewProvider.ts"
+  ],
+  "completionSummary": "VS Code ChatViewProvider now requests decisions (GET_DECISIONS) on every transition to 'connected' and when the view is revealed while connected, in addition to the page's 'ready'. New tests/chat-decisions-reconnect.test.cjs rows CH1-CH3 run the production ChatViewProvider + MoeDaemonClient; all fail at the merge-base and pass with the fix. Full-repo snapshot: npm ci && npm test (739 tests, 729 pass, 0 fail, 10 skipped) && npm run compile pass."
 }

@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -94,16 +94,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:26:41.845Z",
-  "updatedAt": "2026-11-03T17:48:58.281Z",
+  "updatedAt": "2026-11-03T17:52:30.458Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:29:03.070Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T17:51:54.000Z",
+    "wallClockMs": 1370930
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-7328a40d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -243,9 +246,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T17:42:31Z",
-    "at": "2026-11-03T17:48:55.642Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T17:48:55Z",
+    "at": "2026-11-03T17:52:30.458Z"
+  },
+  "completedAt": "2026-11-03T17:51:54.000Z",
+  "reviewCompletedAt": "2026-11-03T17:51:54.000Z",
+  "reviewSummary": "Reviewed completion 195b656a: pushed, on origin/moe/work-2026-10-24, and its tree d55a25e2 matches candidate cand-b6cb53fc. 7 files, +281/-8 (net 273 LOC).\n\nDoD1: All 4 renderers now show the active amendment. Both panels' renderSteps use stepTextHtml; planReview.js and taskDetail.js each carry activeStepAmendment.\n- Same rule as the daemon's planAmendments.ts activeAmendment: a non-empty string id, Array.isArray, the first named entry with a string description, else null. Never the latest.\n- Marker reads \"Amended by <who>\", or 'unknown'. Its title is \"Original step: <orig>\".\n- Values go through escapeHtml in the panels and textContent/title in the webviews.\n- Unamended HTML is unchanged.\n- No hunks in tokenForTask, applyRenderedTask, renderedPlanRevision or TaskDetail prev/next, which task-3ab5be0d owns.\n\nDoD2: The test's sha256 e4dcc63f matches the approved reference. It has 40 rows, all deepEqual. checkRef2 with MOE_LAND_TARGET=195b656a^ gave RED: 16 failing, 24 ok (exactly the A-rows).\n\nDoD3: I archived 195b656a into /tmp and ran npm ci, npm test and npm run compile on node 24.21 under env -i. Exit 0: 736 tests, 726 pass, 0 fail, 10 skipped. All 40 step-amendment rows passed; tsc was clean.\n\nOther checks:\n- checkRef3 scope (QA_TIP=195b656a): exit 0, exactly the 7 planned paths, no forbidden patterns.\n- Non-ASCII counts are unchanged, with 0 in added lines.\n- parity-check + lint: exit 0.\n- Complexity pass: no findings.\n- Nit: in taskDetail.js the \"Render steps (for live updates)\" comment now sits above activeStepAmendment instead of renderSteps.",
+  "requiredCheckAtDone": null
 }
