@@ -9,10 +9,49 @@
     "`npx vitest run src/tools/acquireResource.test.ts src/tools/waitForResource.test.ts src/state/resourceStore.test.ts src/tools/reportBlocked.test.ts` stays green in the same snapshot."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: create packages/moe-daemon/src/tools/acquireResource.ineligible.test.ts (vitest + ToolTestHarness, modelled on waitForResource.test.ts). Fixture (beforeEach): setupMoeFolder, createEpic; task-live WORKING assigned worker-1; unassigned ineligible rows task-backlog BACKLOG, task-awaiting AWAITING_APPROVAL, task-done DONE, task-archived ARCHIVED; unassigned eligible controls task-planning PLANNING, task-review REVIEW (as complete_task leaves it), task-blocked BLOCKED with blockedFromStatus WORKING; workers worker-1 (CODING, currentTaskId task-live) and worker-x (IDLE, the stale session); await state.load(); mock postToGeneral/postToRoleChannel/postSystemMessage. afterEach: resolve+delete every activeResourceWaiters entry (copy waitForResource.test.ts), vi.restoreAllMocks, h.cleanup. Shared matcher refusal(status) = { codeName: 'INVALID_STATE', message: expect.stringContaining(`is in ${status} state, expected PLANNING/WORKING/REVIEW/BLOCKED`) }. Prefix every title with its id. (i1) it.each over the 4 ineligible rows: with vi.spyOn(h.state, 'touchWorker'), acquire_resource {resourceId:'box', taskId, workerId:'worker-x'} rejects toMatchObject(refusal(status)); h.state.getResource('box') is null (not even a resource record was written); touchWorker not called; then acquire_resource for task-live/worker-1 returns granted:true (DoD 1). (i2) task-live takes box first; the DONE row's acquire is refused; box.holders map to ['task-live'] and box.queue equals [] (the busy path never queues it). (w1) wait_for_resource {task-done, worker-x, timeoutMs:1000} rejects with refusal('DONE'); getResource('box') null; activeResourceWaiters.has('worker-x') false; touchWorker not called; then task-live's acquire_resource returns granted:true (DoD 2). (w2) lock recheck: FIRST take the lock, const holding = h.state.runExclusive(async () => { await gate; await h.state.updateTask('task-live', { status: 'BACKLOG' }); }), THEN call wait_for_resource for task-live/worker-1 and attach .catch((error: unknown) => error) at once (no unhandled rejection), open the gate, await holding; the caught outcome matches refusal('BACKLOG'), getResource('box') is null, no waiter for worker-1. It works because the handler's pre-check runs synchronously before its first await (row still WORKING) and its locked section runs after the status change. (e1) it.each over [task-planning, worker-x], [task-live, worker-1], [task-review, worker-x], [task-blocked, worker-x]: acquire_resource returns granted:true and holders are exactly [taskId]. REVIEW must stay leasable: the worktree wrapper takes git-land-<target> after complete_task. About 120 lines; no other test file changes. Reference copy, dry-run green on the fixed sources and RED on HEAD a028ec65 (Tests 7 failed | 4 passed (11), only the (e1) rows pass): /mnt/d/moe-scratch/plan-9f34bac5/reference-acquireResource.ineligible.test.ts. Write your own bytes with Edit/Write (global rail: TOOL witness).",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/acquireResource.ineligible.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Export the rule and refuse in acquire_resource. packages/moe-daemon/src/state/resourceStore.ts: change ONLY the declaration to `export const RESOURCE_ELIGIBLE_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([...])` (same four statuses in the same order: PLANNING, WORKING, REVIEW, BLOCKED) and say in its doc comment that the grant path, the reaper and the acquire/wait tools share it. isResourceTaskEligible, grantNextLeases, reapResources and the store's acquireResource stay byte-identical: NO check in the store, because resourceStore.test.ts:229-245 seeds DONE/ARCHIVED leases through it to test the reaper, and report_blocked already refuses those statuses before its resource arm. packages/moe-daemon/src/tools/acquireResource.ts: add an exported `assertResourceTaskEligible(task: Task): void` that returns when RESOURCE_ELIGIBLE_STATUSES.has(task.status) and otherwise throws invalidState(`Task ${task.id}`, task.status, `${[...RESOURCE_ELIGIBLE_STATUSES].join('/')} to lease a resource. No grant path serves a lease on this row and the lease reaper revokes one: take the lease for the task your seat is working on, or move this row back with moe.set_task_status first. Nothing was written`) (import type Task from '../types/schema.js'; invalidState from '../util/errors.js'), with a short doc comment naming the shared rule. Call it in the handler right after the notFound check, BEFORE assertWorkerOwns and touchWorker. Error handling: the refusal is a coded MoeError (INVALID_STATE, data {entity, currentState, expectedState}) thrown before any write, so there is no resource record, lease, queue entry, RESOURCE_* activity or heartbeat; the input schema and the granted/queued response shapes stay unchanged. Leave the tool description and docs/MCP_SERVER.md alone (out of scope).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/resourceStore.ts",
+        "packages/moe-daemon/src/tools/acquireResource.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Refuse in wait_for_resource, twice. packages/moe-daemon/src/tools/waitForResource.ts: import { assertResourceTaskEligible } from './acquireResource.js' (no import cycle: acquireResource.ts imports nothing from waitForResource.ts). (a) Call it right after the notFound check, BEFORE assertWorkerOwns, touchWorker, the shouldContinue check and the cancel-and-replace of an existing waiter, so a refused call writes nothing and leaves any earlier waiter of the seat untouched. (b) Inside the state.runExclusive callback, after the existing shouldContinue check and before state.acquireResource, re-read the row: `const current = state.getTask(taskId); if (!current) throw notFound('Task', taskId); assertResourceTaskEligible(current);` with a one-line comment that the first check ran outside the lock. Why (b): wait_for_resource is blocking:true, so McpAdapter dispatches it WITHOUT the state mutex (mem:gotcha-daemon-global-mutex-dispatch); a row moved to BACKLOG/DONE, or deleted, while the call waited for the lock would otherwise still be granted. acquire_resource needs no second check because it is dispatched under the mutex. Error handling: a throw inside runExclusive releases the lock in its finally and rejects the handler with the same INVALID_STATE (NOT_FOUND for a deleted row); neither refusal path registers a waiter, and the granted/timed-out/cancelled response shapes are unchanged. Reference diff for steps 2-3 (35 changed lines): /mnt/d/moe-scratch/plan-9f34bac5/reference-fix.diff.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify once, in a snapshot outside the shared checkout (global rail: never run npm in the shared checkout; recipe mem:convention-daemon-full-suite-gate-checkref, traps mem:gotcha-daemon-linux-snapshot-gate). From your task worktree run exactly: cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/{state/resourceStore,tools/acquireResource,tools/waitForResource,tools/acquireResource.ineligible.test}.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/acquireResource.ineligible.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'v(){ npx vitest run \"$@\" 2>&1 | grep -aE \"^ +Test|^ FAIL \"; return ${PIPESTATUS[0]}; }; npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && v src/tools/acquireResource.ineligible.test.ts && v src/tools/{acquireResource,waitForResource,reportBlocked}.test.ts resourceStore attemptHandback reloadHold releaseResource McpAdapter.cancellation WebSocketServer.lifecycle waiter-ownership' . It archives HEAD of the whole repo, overlays your four owned files, typechecks the sources and the new test (the package tsconfig excludes tests), then runs vitest twice: DoD 1's file alone, then DoD 3's four files plus every other test that drives these tools. Expected (architect dry-run at a028ec65, 12 s): 'Tests 11 passed (11)', then 'Test Files 15 passed (15)' with 0 failed (246 tests then; peers may add some). Submit this command, its exit code and output tail as complete_task verification. Error handling for a red run: rerun a failing neighbour file alone in the same snapshot before blaming the change (load flakes are listed in mem:gotcha-daemon-linux-snapshot-gate); a real failure means some test drives these tools on an ineligible row: fix the code or the new test, never weaken an existing test, and say so in a task comment. Expected size: about 30 runtime + 120 test lines, far under the 400 net-LOC review cap.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of your own diff, once, at the end (load the adversarial-self-review skill). Check: (1) both tools refuse before every write: no resource record or persist, no RESOURCE_* activity, no touchWorker, no waiter, and no cancel of the seat's prior waiter; (2) concurrency: the in-lock recheck covers a status change or delete between the pre-check and the lock, and a second concurrent wait by the same seat still cancels-and-replaces as before; (3) REVIEW (unassigned, attempt finalizing) and BLOCKED stay leasable, so the wrapper's git-land-<target> acquire/wait after complete_task and report_blocked's resource arm behave exactly as before; (4) nothing else moved: isResourceTaskEligible, grantNextLeases, reapResources and the store's acquireResource are unchanged apart from the export line, TOOL_AUDIENCE untouched, only your four owned paths changed (no docs/MCP_SERVER.md edit); (5) no new comment matches daemonGitDocs.test.ts's forbidden git phrasing and no added line contains a project.json globalRails.forbiddenPatterns string; (6) the test assertions are mutation-resistant: dropping the wait pre-check must fail only (w1), dropping the in-lock recheck only (w2), dropping REVIEW from the set (e1) task-review (architect dry-run confirmed all three; repeat any mutant only in a scratch snapshot, never in your worktree). Name this accepted edge in your completion summary: a row a human moves out of REVIEW between complete_task and the wrapper's landing now fails that landing closed (MOE_COMMIT_FAILED_LAND_LEASE, bytes kept on the task branch and a rescue ref) instead of landing under a lease the reaper would revoke within 5 minutes.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +63,99 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:58:30.918Z",
-  "updatedAt": "2026-11-03T19:58:48.949Z",
+  "updatedAt": "2026-11-03T20:14:11.534Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T19:58:34.751Z"
+    "firstClaimAt": "2026-11-03T19:58:34.751Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
-  ]
+    "architect-1dd28c7c",
+    "worker-33f67e5b"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T20:13:14.354Z",
+  "executionContract": {
+    "intendedBehavior": "moe.acquire_resource and moe.wait_for_resource refuse, with INVALID_STATE naming the row's status, any task that is not PLANNING, WORKING, REVIEW or BLOCKED (the RESOURCE_ELIGIBLE_STATUSES rule grantNextLeases and reapResources already apply), before writing anything: no resource record, lease, queue entry, activity row, heartbeat or waiter. wait_for_resource re-checks the row inside its locked section, so a row that leaves an eligible status (or is deleted) while the call waits for the state lock gets no lease. Eligible rows are leased and queued exactly as before.",
+    "acceptanceCriteria": [
+      "acquire_resource on a BACKLOG, AWAITING_APPROVAL, DONE or ARCHIVED task rejects with codeName INVALID_STATE and a message containing 'is in <STATUS> state, expected PLANNING/WORKING/REVIEW/BLOCKED'; state.getResource('box') stays null, touchWorker is not called, and a WORKING task's acquire_resource afterwards is granted.",
+      "Behind a busy holder a refused row takes no queue entry: holders stay ['task-live'] and the queue stays [].",
+      "wait_for_resource on a DONE task rejects the same way, writes nothing, leaves no activeResourceWaiters entry for the caller and calls no touchWorker; a WORKING task's acquire_resource on the same resource afterwards returns granted: true.",
+      "A row moved to BACKLOG while wait_for_resource waits for the state lock is refused with INVALID_STATE and gets no lease and no waiter.",
+      "PLANNING, WORKING, REVIEW (unassigned) and BLOCKED rows are still granted through acquire_resource.",
+      "src/tools/acquireResource.test.ts, src/tools/waitForResource.test.ts, src/state/resourceStore.test.ts and src/tools/reportBlocked.test.ts, plus every other test that drives these tools, stay green unchanged."
+    ],
+    "invariants": [
+      "A refused call writes nothing: no resource record, lease, queue entry, RESOURCE_* activity, touchWorker or waiter, and no prior waiter of the seat is cancelled.",
+      "One eligibility rule: the tools read RESOURCE_ELIGIBLE_STATUSES; no second status list exists.",
+      "No docs/MCP_SERVER.md edit (out of scope for this row)."
+    ],
+    "compatibility": [
+      "Input schemas and the granted, queued, timed-out and cancelled response shapes of both tools are unchanged; TOOL_AUDIENCE is unchanged.",
+      "No .moe/ state format change: a lease already held by an ineligible row is still dropped by the reaper, not by this change.",
+      "resourceStore.acquireResource keeps no status check, so resourceStore.test.ts's DONE/ARCHIVED reaper seeds and report_blocked's resource arm (already status-gated) are untouched.",
+      "The worktree wrapper's git-land acquire/wait runs on REVIEW rows, which stay eligible."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/state/resourceStore.ts: export RESOURCE_ELIGIBLE_STATUSES as ReadonlySet<TaskStatus> (declaration and its doc comment only).",
+      "packages/moe-daemon/src/tools/acquireResource.ts: new exported assertResourceTaskEligible(task: Task): void, called after notFound and before assertWorkerOwns.",
+      "packages/moe-daemon/src/tools/waitForResource.ts: the same call before assertWorkerOwns, plus a re-read, notFound and assertResourceTaskEligible inside the state.runExclusive callback before state.acquireResource.",
+      "packages/moe-daemon/src/tools/acquireResource.ineligible.test.ts: new test file (cases i1, i2, w1, w2, e1)."
+    ],
+    "reuse": [
+      "invalidState from util/errors.ts, the same refusal report_blocked uses for its own status gate (reportBlocked.ts:104-113).",
+      "RESOURCE_ELIGIBLE_STATUSES from state/resourceStore.ts, exported rather than copied.",
+      "ToolTestHarness plus the activeResourceWaiters cleanup from tools/waitForResource.test.ts."
+    ],
+    "sourceAssumptions": [
+      "state/resourceStore.ts:57-67 holds RESOURCE_ELIGIBLE_STATUSES (PLANNING/WORKING/REVIEW/BLOCKED) and isResourceTaskEligible; grantNextLeases filters the queue with it (:468-470) and reapResources drops ineligible leases and entries (:626, :635).",
+      "tools/acquireResource.ts:42-45 and tools/waitForResource.ts:65-68 run getTask, notFound, assertWorkerOwns, touchWorker; waitForResource.ts:82-86 wraps state.acquireResource in state.runExclusive because the tool is blocking: true (McpAdapter dispatches it outside the mutex).",
+      "util/enforcement.ts assertWorkerOwns returns early when task.assignedWorkerId is null, so it never guards a human-gated row.",
+      "util/errors.ts invalidState(entity, currentState, expectedState) builds a MoeError with codeName INVALID_STATE and message '<entity> is in <state> state, expected <expected>'.",
+      "ToolTestHarness.createTask writes .moe/tasks/<id>.json; state.load() keeps ARCHIVED rows in state.tasks; taskStore.updateTask does not validate status transitions."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/{state/resourceStore,tools/acquireResource,tools/waitForResource,tools/acquireResource.ineligible.test}.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/acquireResource.ineligible.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'v(){ npx vitest run \"$@\" 2>&1 | grep -aE \"^ +Test|^ FAIL \"; return ${PIPESTATUS[0]}; }; npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && v src/tools/acquireResource.ineligible.test.ts && v src/tools/{acquireResource,waitForResource,reportBlocked}.test.ts resourceStore attemptHandback reloadHold releaseResource McpAdapter.cancellation WebSocketServer.lifecycle waiter-ownership'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Check inside resourceStore.acquireResource: rejected, because resourceStore.test.ts:229-245 seeds DONE/ARCHIVED leases through the store to test the reaper, and report_blocked's resource arm is already status-gated. (2) A copied status list in each tool: rejected; export the store's RESOURCE_ELIGIBLE_STATUSES (ReadonlySet) so the grant path, the reaper and the tools share one rule. (3) One exported helper assertResourceTaskEligible in acquireResource.ts, reused by waitForResource.ts at both call sites: one message and three call sites, and resourceStore.ts stays an export-only change as the row asks. (4) Pre-check only in wait_for_resource: insufficient, because the tool is blocking and runs outside the state mutex, so a status change while it waits for the lock would still be granted. Hence the in-lock recheck. (5) Tool description or docs/MCP_SERVER.md edits: out of scope per the row; the refusal message is self-explanatory.",
+    "codebaseInsights": "McpAdapter runs non-blocking tools inside the global reentrant state mutex, so acquire_resource's single check is atomic with its write; wait_for_resource (blocking: true) takes the lock only around state.acquireResource. assertWorkerOwns is a no-op on unassigned rows, which is why human-gated rows slipped through. touchWorker writes the worker file, so 'no heartbeat' is observable with vi.spyOn(h.state, 'touchWorker'). An async handler runs synchronously up to its first await, so a test can hold the lock (h.state.runExclusive plus a gate), call the handler (its pre-check passes on the old status), change the status inside the held section, then release, which deterministically exercises the in-lock recheck. Architect dry-run artifacts (reference diff, test, gate, RED/GREEN/mutant results): /mnt/d/moe-scratch/plan-9f34bac5/.",
+    "risks": "Narrow gate per the governor's standing epic-be924fb8 ruling (msg-bbf4f109): no full suite. (w2) must attach .catch before releasing the gate, or vitest may report an unhandled rejection. The tests pin the message fragment 'expected PLANNING/WORKING/REVIEW/BLOCKED': keep the set's order. Behaviour change to name in the summary: a row a human moves out of REVIEW between complete_task and the wrapper's L3 now fails that landing closed (MOE_COMMIT_FAILED_LAND_LEASE then the unlanded route; bytes stay on the task branch and a rescue ref), rather than landing under a lease the reaper would revoke within 5 minutes. Sibling hunt row 0adea941 edits releaseResource.ts, releaseTask.ts and claimGuards.ts only, so there is no file overlap. Never run npm in the shared checkout, and write tracked files only with Edit/Write (global rails).",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/resourceStore.ts",
+      "packages/moe-daemon/src/tools/acquireResource.ts",
+      "packages/moe-daemon/src/tools/waitForResource.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/waitForResource.test.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/util/enforcement.ts",
+      "packages/moe-daemon/src/util/errors.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "677d051a573ae7396ce11a4a92e0490eeb1dc02f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T20:13:14.393Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-1dd28c7c@2026-11-03T19:58:34Z",
+    "at": "2026-11-03T20:14:11.534Z"
+  }
 }

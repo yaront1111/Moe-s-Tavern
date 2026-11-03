@@ -49,7 +49,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -62,16 +62,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:58:54.137Z",
-  "updatedAt": "2026-11-03T20:12:33.383Z",
+  "updatedAt": "2026-11-03T20:14:09.176Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:00:08.205Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T20:13:42.508Z",
+    "wallClockMs": 814303
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-93f9625e"
   ],
   "tier": "light",
   "effort": "high",
@@ -181,9 +184,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T20:03:40Z",
-    "at": "2026-11-03T20:12:33.383Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T20:12:40Z",
+    "at": "2026-11-03T20:14:09.176Z"
+  },
+  "completedAt": "2026-11-03T20:13:42.508Z",
+  "reviewCompletedAt": "2026-11-03T20:13:42.508Z",
+  "reviewSummary": "Reviewed completion 677d051a (recorded kind=completion, on moe/work-2026-10-24 and contained in control HEAD). Diff is 2 files, +66/-3 (net 63), well under the 400 cap.\n\nRe-ran task.verification verbatim in a git-archive snapshot outside the shared checkout: tsc --noEmit, the test-file tsc, and vitest on createTeam.test.ts + joinTeam.deadMembers.test.ts all pass, exit 0 (Test Files 2 passed, Tests 14 passed).\n\nMutant check: I put the pre-fix createTeam.ts (677d051a^) back into the snapshot. Result: 2 failed | 5 passed. (t1) and (t2) fail and (t3) plus the 4 existing cases stay green, so the new tests detect the bug.\n\nDoD 1: (t1) makes three calls ('Coders ', 'Coders ', '  Coders'). It asserts created [true,false,false], the same ids, stored name 'Coders' and teams.size 1.\nDoD 2: (t2) shows ' Gov'+governor returns created:false with the first id. A roleless ' Gov ' creates a separate team with role null and name 'Gov', and size is 2. The null-role invariant holds.\nDoD 3: the gate command is green as above.\n\nSource review: createTeam.ts now calls validateTeamName(params.name) after the missingRequired, role and maxSize checks and before the lookup. The same value is used in both getTeamByNameAndRole branches and in state.createTeam. Refusal order and codes are unchanged. (t3) pins INVALID_INPUT for '   ' and 42, MISSING_REQUIRED for '', and teams.size 0 (nothing written). The response shape is unchanged. No existing tests were deleted or weakened, and scope matches approvedScope.\n\nComplexity pass: nothing to cut; the one-line normalization reuses the store's own validator.",
+  "requiredCheckAtDone": null
 }
