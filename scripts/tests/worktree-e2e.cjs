@@ -8,6 +8,9 @@
 // `<this file> cli` is the fake CLI, and with E2E_SEAT_STATE set this file is a seat's MOE_PROXY_PATH. That
 // interposer owns the land lease (the fake's grants every caller) and delegates every other tool to the
 // shared fake in a private state dir, translating the seat's ids to the fake's fixed ones and back.
+// The ps1 leg runs under Windows node only (engine: powershell.exe or pwsh.exe). cmd.exe runs its gate, and
+// Windows `bash` can be the WSL launcher, so its gate is the sh gate's Windows twin: the same .moe refusal and
+// gate-runs.log line, then parity-check.ps1 under the engine, with no lint.
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),util=require('node:util'),
   assert=require('node:assert/strict');
@@ -17,6 +20,10 @@ const present=f=>{try{fs.lstatSync(f);return true;}catch{return false;}};
 const readOr=f=>present(f)?read(f):null;
 const rows=f=>present(f)?read(f).trim().split('\n').filter(Boolean).map(l=>JSON.parse(l)):[];
 const sleep=ms=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Math.max(0,ms));
+// win32: a peer's open handle or a pending delete answers EPERM/EBUSY/EACCES for a moment. Retry 2 s, then throw.
+const winRetry=fn=>{
+  for(let i=0;;i++){try{return fn();}catch(err){if(process.platform!=='win32'||i>=80||!['EPERM','EBUSY','EACCES'].includes(err.code))throw err;sleep(25);}}
+};
 const sha=v=>typeof v==='string'&&/^[0-9a-f]{40}$/.test(v);
 const LEASE=['acquire_resource','wait_for_resource','release_resource'];
 
@@ -59,7 +66,7 @@ function seatMode(){
       const msg=JSON.parse(String(r.stdout).trim().split('\n').pop());
       // The wrapper reads attempts from <control>/.moe/attempts (moe_attempt_read): mirror this seat's.
       const src=path.join(moe,'attempts','attempt-postflight.json'),dst=path.join(e.E2E_CONTROL,'.moe','attempts',A+'.json');
-      if(present(src)){const tmp=path.join(path.dirname(dst),`.${A}.${process.pid}.tmp`);write(tmp,back(read(src)));fs.renameSync(tmp,dst);}
+      if(present(src)){const tmp=path.join(path.dirname(dst),`.${A}.${process.pid}.tmp`);write(tmp,back(read(src)));winRetry(()=>fs.renameSync(tmp,dst));}
       const out=JSON.parse(back(JSON.stringify(msg)));
       log(out.error?{error:out.error.message}:{reply:JSON.parse(out.result.content[0].text)});
       process.stdout.write(JSON.stringify(out)+'\n');
@@ -79,7 +86,7 @@ function leaseRpc(e,name,args){
   // A peer's release can unlink the lock mid-read (no holder) and a grant can be mid-write (retry).
   const holder=()=>{
     for(let i=0;i<40;i++){
-      let t;try{t=read(lock);}catch(err){if(err.code==='ENOENT')return null;throw err;}
+      let t;try{t=winRetry(()=>read(lock));}catch(err){if(err.code==='ENOENT')return null;throw err;}
       try{if(t)return JSON.parse(t);}catch{}
       sleep(25);
     }
@@ -88,7 +95,7 @@ function leaseRpc(e,name,args){
   const take=()=>{
     for(let i=0;i<3;i++){
       let fd;
-      try{fd=fs.openSync(lock,'wx');}catch(err){
+      try{fd=winRetry(()=>fs.openSync(lock,'wx'));}catch(err){
         if(err.code!=='EEXIST')throw err;
         const h=holder();if(h)return h.taskId===args.taskId?h:null;continue;
       }
@@ -103,7 +110,7 @@ function leaseRpc(e,name,args){
     assert.equal(args.force,undefined,'a forced release');
     const h=holder(),mine=Boolean(h&&h.taskId===args.taskId);
     if(mine&&args.ifAcquiredAt!==undefined)assert.equal(args.ifAcquiredAt,h.acquiredAt,'ifAcquiredAt names no held grant');
-    if(mine){fs.appendFileSync(llog,JSON.stringify({task:args.taskId,event:'release',at:Date.now()})+'\n');fs.rmSync(lock);}
+    if(mine){fs.appendFileSync(llog,JSON.stringify({task:args.taskId,event:'release',at:Date.now()})+'\n');winRetry(()=>fs.rmSync(lock));}
     return {success:true,resourceId:rid,released:mine?[args.taskId]:[],removedFromQueue:[],grantedTo:[]};
   }
   if(name==='acquire_resource'){
@@ -129,11 +136,11 @@ if(process.argv[2]==='cli')cliMode();
 if(process.env.E2E_SEAT_STATE)seatMode();
 
 // ---- main
-const [platform,wrapperArg,proxyArg,parent,engine]=process.argv.slice(2);
-if(platform==='ps1'){console.error("[worktree-e2e] the ps1 engine leg is WT-19's (task-b1ca54f2716442be889a14623eb59983); run the sh leg.");process.exit(2);}
-if(platform!=='sh'||!wrapperArg||!proxyArg||!parent||!engine){
+const [platform,wrapperArg,proxyArg,parent,engine]=process.argv.slice(2),win=platform==='ps1',winHost=process.platform==='win32';
+if(!['sh','ps1'].includes(platform)||!wrapperArg||!proxyArg||!parent||!engine){
   console.error('usage: node worktree-e2e.cjs <sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>');process.exit(2);
 }
+if(win&&!winHost){console.error(`[worktree-e2e] the ps1 leg runs under Windows node; this node is ${process.platform}.`);process.exit(2);}
 const WRAPPER=path.resolve(wrapperArg),FAKE=path.resolve(proxyArg),LIMIT=Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||900)*1000;
 // Hermetic: a seat's own MOE_*/CLAUDE*/E2E_* and a hook's GIT_* never reach the wrappers or the fixture's git.
 const inherited=Object.fromEntries(Object.entries(process.env)
@@ -141,23 +148,41 @@ const inherited=Object.fromEntries(Object.entries(process.env)
 const root=fs.realpathSync(fs.mkdtempSync(path.join(path.resolve(parent),'wt-e2e-')));
 const C=path.join(root,'control'),ORIGIN=path.join(root,'origin.git'),TARGET='moe/work-e2e',TREF='refs/heads/'+TARGET;
 const GATE_LOG=path.join(root,'gate-runs.log'),SEATS=['a','b','c'],seatDir=s=>path.join(root,'seat-'+s);
-const GATE=`test ! -e .moe && test ! -L .moe && printf '%s\\n' "$PWD" >> '${GATE_LOG}' && bash scripts/tests/parity-check.sh && npm run lint`;
+const SHIM=path.join(root,'shim-claude','claude'+(win?'.cmd':''));
+const GATE=win?winGate():`test ! -e .moe && test ! -L .moe && printf '%s\\n' "$PWD" >> '${GATE_LOG}' && bash scripts/tests/parity-check.sh && npm run lint`;
+// The ps1 leg's gate (see the header), a command line for cmd.exe.
+function winGate(){
+  const f=path.join(root,'gate.cjs'),ps1=path.join('scripts','tests','parity-check.ps1');
+  write(f,"'use strict';\nconst fs=require('fs'),cp=require('child_process');\n"+
+    "try{fs.lstatSync('.moe');console.error('[gate] .moe in the gate tree');process.exit(1);}catch(err){if(err.code!=='ENOENT')throw err;}\n"+
+    `fs.appendFileSync(${JSON.stringify(GATE_LOG)},process.cwd()+'\\n');\n`+
+    `const r=cp.spawnSync(${JSON.stringify(engine)},['-NoProfile','-ExecutionPolicy','Bypass','-File',${JSON.stringify(ps1)}],{stdio:'inherit'});\n`+
+    "process.exit(r.status===null?1:r.status);\n");
+  return `"${process.execPath}" "${f}"`;
+}
 const BAD=['MOE_CONTROL_NOT_FOLLOWING','MOE_CONTROL_CHECKOUT_BEHIND','MOE_CONTROL_CHECKOUT_DIVERGED'];
 const SHARED=Array.from({length:10},(_,i)=>`line ${i+1}\n`).join('');
 const edit=(s,n,v)=>s.split('\n').map((l,i)=>i===n-1?v:l).join('\n');
 const live=new Set(),ALL=[];
-let TIP0=null,MAIN=null;
+let TIP0=null,MAIN=null,TOPC=null;
+// A seat's W. ps1 spells it from `git rev-parse --show-toplevel` (forward slashes), as its wrapper does.
+const wOf=s=>win?TOPC+'/.worktrees/task-'+s:path.join(C,'.worktrees','task-'+s);
 
 function gitRun(dir,a){return cp.spawnSync('git',['-C',dir,...a],{encoding:'utf8',maxBuffer:1<<26,env:{...inherited,GIT_OPTIONAL_LOCKS:'0'}});}
 function git(dir,...a){const r=gitRun(dir,a);if(r.status!==0)throw new Error(`git ${a.join(' ')}: exit ${r.status} ${String(r.stderr).trim()}`);return r.stdout;}
 const probe=(dir,...a)=>{const r=gitRun(dir,a);return r.status+':'+r.stdout;};
 const revOf=(dir,ref)=>{const r=gitRun(dir,['rev-parse','--verify','--quiet',ref+'^{commit}']);return r.status===0?r.stdout.trim():null;};
-const norm=p=>{let r=p;try{r=fs.realpathSync(p);}catch{}return r.replace(/\/+$/,'');};
-const killTree=child=>{if(child.exitCode===null&&child.signalCode===null){try{process.kill(-child.pid,'SIGKILL');}catch{}}};
+// Comparable path: the real path when it exists, no trailing slash; on win32 also forward slashes, case-folded.
+const norm=p=>{let r=p;try{r=fs.realpathSync.native(p);}catch{}if(winHost)r=r.replace(/\\/g,'/').toLowerCase();return r.replace(/\/+$/,'');};
+const killTree=child=>{
+  if(child.exitCode!==null||child.signalCode!==null)return;
+  if(winHost)cp.spawnSync('taskkill',['/T','/F','/PID',String(child.pid)],{stdio:'ignore'});
+  else{try{process.kill(-child.pid,'SIGKILL');}catch{}}
+};
 function cleanup(){
   for(const child of live)killTree(child);
   if(process.env.MOE_KEEP_E2E_FIXTURE==='1')console.log(`[worktree-e2e] fixture kept at ${root}`);
-  else fs.rmSync(root,{recursive:true,force:true});
+  else fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});
 }
 for(const [sig,code] of [['SIGINT',130],['SIGTERM',143]])process.on(sig,()=>{console.log(`[worktree-e2e] ${sig}: stopping`);cleanup();process.exit(code);});
 
@@ -171,7 +196,7 @@ function fixture(){
   assert.ok(!/\s/.test(root),'the fixture root holds whitespace: '+root);
   git(root,'init','-q','--bare',ORIGIN);git(root,'init','-q','-b','main',C);
   for(const [k,v] of [['core.autocrlf','false'],['user.name','Moe Test'],['user.email','moe@test.local']])git(C,'config',k,v);
-  git(C,'fetch','-q','--depth=1','file://'+top,head);
+  git(C,'fetch','-q','--depth=1',(winHost?'file:///':'file://')+top,head);
   const tree=git(top,'rev-parse',head+'^{tree}').trim();
   assert.equal(git(C,'rev-parse','FETCH_HEAD^{tree}').trim(),tree,"commit 1's tree is not the wrapper checkout's HEAD tree");
   git(C,'update-ref','refs/heads/main',git(C,'commit-tree',tree,'-m','e2e seed: the tree of '+head).trim());
@@ -195,14 +220,15 @@ function fixture(){
     write(path.join(m,'tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'E2E task '+s,status:'WORKING'}));
     for(const d of ['home-','tmp-'])fs.mkdirSync(path.join(root,d+s),{recursive:true});
   }
-  const shim=path.join(root,'shim-claude','claude');
-  write(shim,`#!/usr/bin/env bash\nexec "${process.execPath}" "${__filename}" cli "$@"\n`);fs.chmodSync(shim,0o700);
-  [TIP0,MAIN]=[revOf(C,TREF),revOf(C,'refs/heads/main')];
+  write(SHIM,win?`@echo off\r\n"${process.execPath}" "${__filename}" cli %*\r\nexit /b %errorlevel%\r\n`
+    :`#!/usr/bin/env bash\nexec "${process.execPath}" "${__filename}" cli "$@"\n`);
+  fs.chmodSync(SHIM,0o700);
+  [TIP0,MAIN,TOPC]=[revOf(C,TREF),revOf(C,'refs/heads/main'),git(C,'rev-parse','--show-toplevel').trim()];
 }
 
 // One worker seat session through the forwarding `claude` shim (cliShim would drop argv, hence the prompt).
 async function launch(s,n,o={}){
-  const sd=seatDir(s),W=path.join(C,'.worktrees','task-'+s),ws=JSON.stringify({mode:'worktree',path:W,branch:'moe/task/task-'+s,target:TARGET});
+  const sd=seatDir(s),W=wOf(s),ws=JSON.stringify({mode:'worktree',path:W,branch:'moe/task/task-'+s,target:TARGET});
   const env={...inherited,MOE_PROXY_PATH:__filename,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',MOE_ACCOUNT_ROTATION:'off',
     MOE_DISABLE_ARGV_PROBE:'1',HOME:path.join(root,'home-'+s),USERPROFILE:path.join(root,'home-'+s),
     TMPDIR:path.join(root,'tmp-'+s),TMP:path.join(root,'tmp-'+s),TEMP:path.join(root,'tmp-'+s),
@@ -210,9 +236,11 @@ async function launch(s,n,o={}){
     E2E_SEAT:s,E2E_SESSION:String(n),E2E_SEAT_STATE:sd,E2E_FAKE:FAKE,E2E_ROOT:root,E2E_CONTROL:C,
     E2E_CLI_RECORD:path.join(sd,`cli-${n}.jsonl`),E2E_CLI_WRITE:JSON.stringify(o.writes||{}),E2E_CLI_EXPECT_MARKERS:(o.markers||[]).join(',')};
   env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER='1'; // `inherited` drops MOE_*: WT-13's guard refuses WRAPPER when it sits in a task worktree (task-86431c31)
-  const args=[WRAPPER,'--project',C,'--worker-id','worker-e2e-'+s,'--role','worker','--team','E2E','--no-start-daemon',
-    '--command',path.join(root,'shim-claude','claude'),'--no-loop','--poll-interval','0'];
-  const child=cp.spawn(engine,args,{env,stdio:['ignore','pipe','pipe'],detached:true});
+  const args=win?['-NoProfile','-ExecutionPolicy','Bypass','-File',WRAPPER,'-Project',C,'-WorkerId','worker-e2e-'+s,'-Role','worker',
+    '-Team','E2E','-NoStartDaemon','-Command',SHIM,'-NoLoop','-PollInterval','0']
+    :[WRAPPER,'--project',C,'--worker-id','worker-e2e-'+s,'--role','worker','--team','E2E','--no-start-daemon',
+      '--command',SHIM,'--no-loop','--poll-interval','0'];
+  const child=cp.spawn(engine,args,{env,stdio:['ignore','pipe','pipe'],detached:!winHost,windowsHide:true});
   live.add(child);
   let log='',timedOut=false;child.stdout.on('data',d=>{log+=d;});child.stderr.on('data',d=>{log+=d;});
   const timer=setTimeout(()=>{timedOut=true;killTree(child);},LIMIT);
@@ -223,6 +251,12 @@ async function launch(s,n,o={}){
   return run;
 }
 const seatRpcs=(s,n)=>rows(path.join(seatDir(s),'rpcs.jsonl')).filter(x=>x.session===n);
+// The session printed "[worktree] created <W> on moe/task/task-<seat>"; ps1 ends it CRLF and spells W its own way.
+const createdW=r=>{
+  if(!win)return r.log.includes(`[worktree] created ${r.W} on moe/task/task-${r.seat}\n`);
+  const m=new RegExp(`^\\[worktree\\] created (.+) on moe/task/task-${r.seat}\\r?$`,'m').exec(r.log);
+  return Boolean(m)&&norm(m[1])===norm(r.W);
+};
 const gateLines=()=>(readOr(GATE_LOG)||'').split('\n').filter(Boolean);
 const added=from=>git(C,'rev-list',`${from}..${TREF}`).trim().split('\n').filter(Boolean);
 // The target only fast-forwards: no merge commit since the fixture, every reflog entry descends from the one
@@ -252,8 +286,8 @@ function afterLanding(runs,g0){
   for(const r of runs)assert.ok(r.log.includes('[OK] qualityGate passed.'),`${r.name}: no "[OK] qualityGate passed." line`);
   const lines=gateLines().slice(g0),gated=runs.reduce((k,r)=>k+r.log.split('Post-flight: quality gate:').length-1,0);
   assert.ok(lines.length>=runs.length&&lines.length===gated,`${lines.length} gate-runs.log lines for ${gated} gate runs`);
-  const own=[C,...SEATS.map(s=>path.join(C,'.worktrees','task-'+s))].map(norm);
-  for(const l of lines)assert.ok(/\/moe-gate\.[^/]+\/tree\/?$/.test(l)&&!own.includes(norm(l)),'a gate ran outside a gate workspace: '+l);
+  const own=[C,...SEATS.map(wOf)].map(norm),ws=win?/\/moe-gate-[0-9a-f]{32}\/tree$/:/\/moe-gate\.[^/]+\/tree\/?$/;
+  for(const l of lines)assert.ok(ws.test(win?norm(l):l)&&!own.includes(norm(l)),'a gate ran outside a gate workspace: '+l);
   for(const r of ALL)for(const code of BAD)assert.ok(!r.log.includes(code),`${r.name} printed ${code}`);
   for(const r of runs)assert.ok(r.log.includes('MOE_CONTROL_ADVANCED'),`${r.name}: no MOE_CONTROL_ADVANCED line`);
   assert.equal(probe(C,'symbolic-ref','-q','HEAD'),'0:refs/heads/moe/control\n','the control checkout left moe/control');
@@ -279,7 +313,7 @@ async function parallel(){
   for(const r of runs){
     assert.equal(r.code,0,`${r.name}: exit code ${r.code}`);
     assert.deepEqual(seatRpcs(r.seat,1).filter(x=>x.tool==='report_blocked').map(x=>x.args.reason),[],`${r.name}: report_blocked`);
-    assert.ok(r.log.includes(`[worktree] created ${r.W} on moe/task/task-${r.seat}\n`),`${r.name}: no "[worktree] created ${r.W}" line`);
+    assert.ok(createdW(r),`${r.name}: no "[worktree] created ${r.W}" line`);
     assert.ok(!present(path.join(r.W,'.moe')),`${r.name}: W holds .moe`);
   }
   const tip=revOf(C,TREF),news=added(TIP0);
@@ -297,7 +331,7 @@ async function parallel(){
 // LANDING-CONFLICT (markers, MERGE_HEAD), resolves the file and lands +1 commit.
 async function conflictResume(){
   if(!passed.has('parallel'))throw new Error('needs parallel');
-  const tipA=revOf(C,TREF),W=path.join(C,'.worktrees','task-c'),TB='refs/heads/moe/task/task-c';
+  const tipA=revOf(C,TREF),W=wOf('c'),TB='refs/heads/moe/task/task-c';
   const c1=await launch('c',1,{writes:{'e2e/c.txt':'task c\n','e2e/shared.txt':edit(SHARED,2,'line 2: task-c')}});
   assert.ok(c1.log.includes('MOE_COMMIT_FAILED_CONFLICT'),'c1: no MOE_COMMIT_FAILED_CONFLICT line');
   assert.equal(revOf(C,TREF),tipA,'c1 moved the target');

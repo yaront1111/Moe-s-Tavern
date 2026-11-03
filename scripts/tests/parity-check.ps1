@@ -22,26 +22,36 @@ $failures = New-Object System.Collections.Generic.List[string]
 
 # 1. Dynamic symmetry: every reason-code token found in either file must be
 #    present in the other (catches a code added to one wrapper only).
+#    The worktree-mode families follow the land-on-every-exit ones. MOE_WRAPPER_
+#    is not a family: moe-agent.sh carries sh-only internal MOE_WRAPPER_* names
+#    (its hot-reload plumbing), so section 2 requires its codes by name.
 $dynamicPatterns = @(
     'MOE_COMMIT_[A-Z_]+',
     'MOE_ATTR_[A-Z_]+',
     'MOE_CHECKPOINT_[A-Z_]+',
     'MOE_ATTRIBUTION_[A-Z_]+',
     'MOE_ACCOUNT_[A-Z_]+',
-    'MOE_RESCUE_REF'
+    'MOE_RESCUE_REF',
+    'MOE_WORKTREE_[A-Z_]+',
+    'MOE_LAND_[A-Z_]+',
+    'MOE_CONTROL_[A-Z_]+',
+    'MOE_BOARD_[A-Z_]+',
+    'MOE_PUSH_[A-Z_]+',
+    'MOE_MIGRATION_[A-Z_]+'
 )
-# NOTE: the sh wrapper's internal MOE_LAND_* names (env plumbing between bash
-# and its inline python attribution) are deliberately NOT compared — they are
-# internal, not operator-facing. The MOE_ATTR_*/MOE_COMMIT_* namespaces are the
-# contract and any spill into them is flagged.
-# moe-agent.sh bridges its attribution policy to an inline python snippet via
-# process-env names that share the MOE_ATTR_/MOE_COMMIT_ prefixes but are never
-# emitted to a transcript, chat, or commit. They are exempt from the symmetry
-# rule; everything the operator can grep for still is compared.
-$internalPlumbing = @('MOE_ATTR_UNDECLARED', 'MOE_ATTR_EXCLUDE', 'MOE_ATTR_POLICY_OVERRIDE', 'MOE_COMMIT_BOARD_STATE')
+# NOTE: moe-agent.sh bridges its attribution policy to an inline python snippet
+# through process-env names it never prints. They are MOE_PY_* names, which is
+# not a compared family, so nothing needs an exemption today. $internalPlumbing
+# exempts a wrapper-internal env name that shares a compared prefix from the
+# symmetry rule: add such a name to BOTH scripts (parity-check.sh's
+# INTERNAL_PLUMBING) with a comment, and never exempt a whole family.
+# Everything the operator can grep for is compared.
+$internalPlumbing = @()
 foreach ($pat in $dynamicPatterns) {
     $inPs1 = @([regex]::Matches($ps1, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { $internalPlumbing -notcontains $_ })
     $inSh = @([regex]::Matches($sh, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { $internalPlumbing -notcontains $_ })
+    # An empty family compares nothing (a renamed prefix would pass silently).
+    if ($inPs1.Count -eq 0 -and $inSh.Count -eq 0) { $failures.Add("no '$pat' tokens found in either wrapper") }
     foreach ($t in $inPs1) { if ($inSh -notcontains $t) { $failures.Add("token '$t' is in moe-agent.ps1 but not in moe-agent.sh") } }
     foreach ($t in $inSh) { if ($inPs1 -notcontains $t) { $failures.Add("token '$t' is in moe-agent.sh but not in moe-agent.ps1") } }
 }
@@ -55,7 +65,8 @@ $required = [ordered]@{
         'MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY',
         'MOE_ATTR_EXCLUDED', 'MOE_ATTR_CONTESTED', 'MOE_ATTR_PEER_DECLARED', 'MOE_ATTR_PREEXISTING', 'MOE_ATTR_MISSING', 'MOE_ATTR_CONCURRENT',
         'MOE_ATTR_ASSERTED_FOREIGN',
-        'MOE_CHECKPOINT_RECOVERED', 'MOE_RESCUE_REF', 'MOE_ATTRIBUTION_UNRESOLVED'
+        'MOE_CHECKPOINT_RECOVERED', 'MOE_RESCUE_REF', 'MOE_ATTRIBUTION_UNRESOLVED',
+        'MOE_WRAPPER_IN_WORKTREE'
     )
     # The gate-failure line's marker (the status-lookup line carries none in
     # either), spelled by code point: this file has no BOM for PS 5.1 to go by.
