@@ -26,20 +26,28 @@
     {
       "stepId": "step-2",
       "description": "Verification (once, fresh, from the task worktree root). Run executionContract.checkRefs [0] and then [1], joined with ' && '. Submit that exact text, its exit code and the output tail as complete_task's verification.\n\n[0] is DoD 1 to DoD 3's mechanical check. It prints DOC_OK only when all of these hold:\n- `grep -nE -- '(^|[^-])-p\\b|MOE_LOG_LEVEL|\\(required\\)'` finds nothing in the README;\n- the LOG_LEVEL line carries `Default: \\`info\\``;\n- the --project line names MOE_PROJECT_PATH and the current directory;\n- every `--flag` in the README is an `indexOf('--flag')` in packages/moe-daemon/src/index.ts;\n- every flag index.ts parses appears in the README.\n\n[1] is the scope check: only packages/moe-daemon/README.md may differ, plus .moe/.\n\nError handling for a red check:\n- [0] prints the offending README line, or the flag that is unparsed or missing. Fix the README text, never the check.\n- [1] names the stray path. Revert it.\n\nThe architect's dry run printed DOC_OK on the proposed text. The base README failed [0], and two mutants failed it too: an unparsed `--frobnicate` and a missing `--host`.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T17:56:11.082Z"
+      "note": "checkRefs [0]+[1] printed DOC_OK, exit 0",
+      "startedAt": "2026-11-03T17:56:11.082Z",
+      "completedAt": "2026-11-03T17:56:21.166Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of the README diff. Load the adversarial-self-review skill first.\nChecklist:\n- Does every statement match the code it cites (index.ts parseArgs :58-72, the bindHost write at :876, util/logger.ts:7) and agree with docs/CONFIGURATION.md and the root CLAUDE.md \"Run\" section?\n- Is the precedence right: --host over MOE_BIND_HOST, and --project over MOE_PROJECT_PATH over the cwd?\n- Are the default port and the 50-port scan claims unchanged?\n- Is there no Markdown breakage (list items, backticks balanced)?\n- Does `git diff` touch only the README?\nIf you find something, fix it in the README and re-run step 2's command before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/README.md"
+      ],
+      "note": "Self-review: precedence matches parseArgs; diff touches README only.",
+      "startedAt": "2026-11-03T17:56:21.908Z",
+      "completedAt": "2026-11-03T17:56:29.896Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -51,12 +59,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:33:52.760Z",
-  "updatedAt": "2026-11-03T17:56:11.082Z",
+  "updatedAt": "2026-11-03T17:56:31.857Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:52:15.117Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -68,7 +76,9 @@
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:54:04.779Z",
@@ -119,5 +129,17 @@
   },
   "planApprovedAt": "2026-11-03T17:54:04.806Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T17:55:57.272Z"
+  "workStartedAt": "2026-11-03T17:55:57.272Z",
+  "reviewStartedAt": "2026-11-03T17:56:31.855Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && checkRefs[0] (DOC_OK flag/grep check) && checkRefs[1] (scope check)",
+    "exitCode": 0,
+    "outputTail": "DOC_OK\nexit=0",
+    "reportedAt": "2026-11-03T17:56:31.855Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/README.md"
+  ],
+  "completionSummary": "README now documents exactly the parsed flags (--project with MOE_PROJECT_PATH then cwd fallback, --port, --host with MOE_BIND_HOST/wsl/bindHost, --name for init), drops -p and \"(required)\", and names LOG_LEVEL (default info) instead of MOE_LOG_LEVEL."
 }
