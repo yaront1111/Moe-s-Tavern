@@ -82,7 +82,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,16 +102,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:46:19.358Z",
-  "updatedAt": "2026-11-03T23:23:28.251Z",
+  "updatedAt": "2026-11-03T23:26:59.226Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:46:37.166Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T23:26:36.498Z",
+    "wallClockMs": 2399332
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -198,10 +201,11 @@
   "planApprovedAt": "2026-11-03T23:08:49.738Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T23:09:32Z",
-    "at": "2026-11-03T23:23:28.251Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:24:40Z",
+    "at": "2026-11-03T23:26:59.226Z"
   },
   "workStartedAt": "2026-11-03T23:10:45.169Z",
   "reviewStartedAt": "2026-11-03T23:12:22.429Z",
@@ -240,5 +244,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T23:26:36.498Z",
+  "reviewCompletedAt": "2026-11-03T23:26:36.498Z",
+  "reviewSummary": "Reviewed completion d5431577 (on moe/work-2026-10-24, pushed): 5 files, +162/-4 = 158 net LOC (under the 400 cap), no existing test touched. Read the diff and both handlers. claimNextTask.ts/releaseTask.ts gain only a comment + `blocking: true`. claim reaches its runExclusive with no prior await and after it only recomputes the signature + builds the reply; release before its runExclusive only validates, does the sync workerHasRole force check, clamps and captures. Ownership/currency gates, the fresh getTask re-read and every updateTask/updateWorker/closeOpenAttempts stay inside the callback, so dropping the dispatch wrap loses no lost-update protection. `.blocking` has one production reader (McpAdapter.ts:326). McpAdapter change is the dispatch comment only; CLAUDE.md bullet names claim_next_task, release_task, submit_plan, get_execution_readiness. docs/MCP_SERVER.md untouched, as planned.\nRe-ran GREEN checkRef in a /tmp snapshot: tsc --noEmit + tt.json clean, Test Files 34 passed (34), Tests 1643 passed (1643), EXIT=0 (new diskStateDispatch.test.ts, claimNextTask*, releaseTask.test.ts unchanged, McpAdapter, daemonGitDocs, delivery, __acceptance__, workstreamComposition, dependencyUnblock, submitPlan). Re-ran RED checkRef (base 09529122 + only the new test): (d1) and (d2) both FAIL with `expected [ true ] to deeply equal [ false ]`, `Tests 2 failed (2)`, RED-AT-BASE printed. Test asserts mutex free during capture, bystander list_tasks answers before capture ends, all writes under the mutex, stored signature and staleHandoffDiskState reply. DoD 1-3 each evidenced. Residual accepted (same as /ws RELEASE_TASK): release force role check runs before the lock. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
