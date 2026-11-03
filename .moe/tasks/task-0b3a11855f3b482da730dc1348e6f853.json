@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "Tests first (DoD 1-3; load test-driven-development). Create packages/moe-daemon/src/state/accountStore.readRetry.test.ts with your Write tool.\n\nSetup\n- Reuse the setup of /mnt/d/moe-scratch/hunt-cc441586/A/accountCache.hunt.test.ts (read-only reference): newState(), the MOE_ACCOUNTS_FILE save/restore, twoSignedIn().\n- Make the scratch dir with fs.mkdtempSync(path.join(os.tmpdir(), ...)), as accountStore.test.ts does, never inside src/.\n- Inject read failures with vi.spyOn(fs, 'readFileSync'). This works because accountStore.ts and accounts/registry.ts both `import fs from 'fs'`, as StateManager.test.ts already spies on unlinkSync. The spy throws `Object.assign(new Error('<CODE>: injected, open <path>'), { code: '<CODE>' })` only for the target path, and passes every other path to the original captured before spying.\n- Count the spy's calls per path to prove what is cached.\n\nCases\n(a) Account list, it.each EACCES / EBUSY / EMFILE.\n- While failing: leaseAccount gives rotation:false, with a reason containing MOE_ACCOUNT_REGISTRY_INVALID and 'cannot read it', and accountRotationView(state).error is set.\n- After mockRestore, with no write in between: leaseAccount rotates (rotation:true, acct-1), and the view's error is null.\n\n(b) The DoD's literal chmod scenario: chmod 000, lease, chmod 600, lease rotates. Use it.skipIf(process.platform === 'win32' || process.getuid?.() === 0), because chmod blocks nothing there.\n\n(c) Content errors are reported AND still cached.\n- An invalid-JSON list, and a list failing validation (e.g. switchAtPercent 150 or an unknown key).\n- Two leases both give rotation:false with MOE_ACCOUNT_REGISTRY_INVALID ('not valid JSON' / the validation detail).\n- readFileSync is called once for the list across both leases. Under (a), each lease re-reads.\n\n(d) Usage last-good value.\n- acct-1's usage file at 95% is read once: lease gives acct-2, and the view shows acct-1 at peak 95.\n- Another daemon then rewrites it (new bytes, e.g. 10%, a new window), and reads of it fail. Lease still avoids acct-1, and the view keeps 95.\n- After restore, the view shows 10: it was read again.\n- Also the repro's case: the first-ever read fails, so there is no last good value and it fails open as today. After restore, the 95% file is read and the next lease moves to acct-2.\n\n(e) Report path.\n- With a stored acct-1 usage file (a window plus a future refusedUntil), recordAccountReport while the file is unreadable leaves its bytes unchanged: no overwrite from an empty base.\n- After restore, the next report merges and writes as today.\n\nRED at HEAD: (a), (b), the (d) last-good and after-restore assertions, and (e). Error handling in the test: restore every spy and chmod in afterEach, so one failed case cannot leak into the next.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/accountStore.readRetry.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T22:53:35.596Z"
     },
     {
       "stepId": "step-2",
@@ -55,14 +56,15 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:46:35.853Z",
-  "updatedAt": "2026-11-03T22:52:16.400Z",
+  "updatedAt": "2026-11-03T22:53:35.596Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:48:01.332Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-d6c1cb7a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -133,5 +135,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T22:52:15.615Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:53:35.596Z"
 }

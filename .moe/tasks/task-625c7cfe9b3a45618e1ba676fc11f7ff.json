@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -88,16 +88,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:22.068Z",
-  "updatedAt": "2026-11-03T22:52:18.618Z",
+  "updatedAt": "2026-11-03T22:55:09.865Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:34:31.384Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:54:47.126Z",
+    "wallClockMs": 1215742
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -208,9 +211,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T22:43:26Z",
-    "at": "2026-11-03T22:52:18.618Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:52:36Z",
+    "at": "2026-11-03T22:55:09.865Z"
+  },
+  "completedAt": "2026-11-03T22:54:47.126Z",
+  "reviewCompletedAt": "2026-11-03T22:54:47.126Z",
+  "reviewSummary": "Reviewed completion 09529122 (git show; on moe/work-2026-10-24, kind=completion, pushed). +183/-6 over 4 files (~50 non-test LOC; updateEpic.ts, WebSocketServer.ts UPDATE_EPIC case only, new updateEpic.archive.test.ts, docs/MCP_SERVER.md update_epic section only, a governor/filer-sanctioned sync). Under the 400 cap.\n\nRe-ran in a whole-tree git-archive snapshot of the exact commit under /tmp (not the live checkout; deleted after): npm ci rc0; tsc --noEmit rc0; full `vitest run` rc0 = 269 files, 7348 passed | 24 skipped. RED checkRef (f8b8d60c sources + new test) = exactly 7 failed | 2 passed (9), RED-AT-BASE. Quality gate: parity-check.sh PASS, npm run lint OK.\n\nDoD1: applyEpicUpdate delegates non-ARCHIVED→ARCHIVED to archiveEpicTool; in-flight, held-BLOCKED holder and finalizing gates run before any write, and companion fields are validated first. (m1) x3 statuses and (w1) assert NOT_ALLOWED / the /ws ERROR frame, byte-identical files, no TASK_ARCHIVED. DoD2: (m2)/(w2) assert epic + every task ARCHIVED, one TASK_ARCHIVED per newly archived task, companion fields applied. (m3) holder rule, (m5) bad companion field refused pre-write. DoD3: new test drives both the MCP handler and a real /ws UPDATE_EPIC; existing updateEpic/archiveEpic/WebSocketServer tests green.\n\nAdversarial: only two production callers, both under the reentrant state mutex; non-object updates, missing epic, already-ARCHIVED, un-archive and other status moves take the unchanged plain path; reply shapes unchanged; enum change additive.\n\nNon-blocking: companion-field archive emits two EPIC_UPDATED events (accepted in contract); a disk failure mid-archive can partially write as archive_epic always could; /ws finalTaskId companion gets shape-only validation, unchanged. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
