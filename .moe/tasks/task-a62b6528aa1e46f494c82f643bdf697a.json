@@ -1,0 +1,28 @@
+{
+  "id": "task-a62b6528aa1e46f494c82f643bdf697a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: two overlapping wait_for_resource calls for one worker both park, because the existing-waiter check runs before an awaited runExclusive and the registration after it, and the first call's cleanup deletes the second call's registry entry, so disconnect cleanup and re-entry lose the live waiter",
+  "description": "Found by defect hunt #13 (task-cc441586). Line numbers are at HEAD f159784e.\n\nPROBLEM (packages/moe-daemon/src/tools/waitForResource.ts)\n- The \"cancel the existing waiter\" check (activeResourceWaiters.get, :74) runs BEFORE `await state.runExclusive(... acquireResource ...)` (:84). The registration (activeResourceWaiters.set) runs AFTER it (:175).\n- A second call for the same worker that arrives inside that window sees no waiter yet. Its set at :175 then overwrites the first entry without cancelling the first call, so both RPCs stay parked.\n- The first call's cleanup() later deletes the map entry unconditionally (:125), which removes the second, still-live waiter's entry.\n- After that, the disconnect cleanup in server/WebSocketServer.ts (activeResourceWaiters.get(workerId)) and any re-entry can no longer find the parked second waiter. Its RPC and subscription live until its own timeout, at most 10 min.\n- Siblings don't race:\n  - wait_for_task has no await in that window.\n  - chat_wait deletes only its own entry (tools/chatWait.ts:131, `...?.timer === this.timer`).\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-cc441586/B/resourceWaiterReentry.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a `git archive f159784e` snapshot.\n- Command: `npx vitest run src/__hunt__/resourceWaiterReentry.test.ts`. Result: 1 failed. Verbatim:\n```\nt=300ms  registered: [ 'call1:worker-waiter', 'call2:worker-waiter' ] | first: \"still parked\" | second: \"still parked\"\nt=1300ms first: {\"granted\":false,\"timedOut\":true,\"resourceId\":\"box\",\"position\":1,...} | second: \"still parked\" | registry has worker-waiter: false\nAssertionError: expected { Object (granted, timedOut, ...) } to deeply equal { granted: false, cancelled: true }\n```\n- Exposure: a guard gap, not a live incident. It needs two near-simultaneous waits for one worker id, for example an agent's parallel tool calls on two resources.\n\nFIX DIRECTION\n- Re-check for an existing waiter, and cancel it, right before activeResourceWaiters.set (:175), with no await in between.\n- Make cleanup() delete the entry only while it is still this call's own, the chatWait identity guard.\n- Don't touch server/WebSocketServer.ts: it is held at filing time, and the fix does not need it.\n\nFILES: packages/moe-daemon/src/tools/waitForResource.ts, plus a new vitest file.",
+  "definitionOfDone": [
+    "With two overlapping wait_for_resource calls for one worker, the earlier one resolves {granted:false, cancelled:true} once the later one registers, and activeResourceWaiters still holds the later waiter after the earlier call's cleanup runs.",
+    "A waiter's cleanup removes the registry entry only while that entry is still its own, so a disconnect cleanup finds and cancels the live waiter, in a new vitest file.",
+    "`npx vitest run` of the new file plus the existing waitForResource tests passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 450.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:46:48.919Z",
+  "updatedAt": "2026-11-03T22:46:48.919Z"
+}

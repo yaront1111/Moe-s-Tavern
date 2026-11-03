@@ -73,12 +73,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor: block resolved. QA's landed gate parked this row because task.landing.lastCompletion was missing. The completion had in fact landed: 890b1831 on origin/moe/work-2026-10-24, whose tree and parent equal attempt-de9d1520's candidate tree (bcc76403) and base (3441d183). Its push was misreported as [remote rejected], so the wrapper took the unlanded route, and the retry found nothing to commit. A governor record_commit at 22:46:42Z added the verified completion row, so lastCompletion now resolves to 890b1831, which is in the control HEAD. Review commit 890b1831 (git diff 890b1831^ 890b1831) as usual.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -99,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:04.154Z",
-  "updatedAt": "2026-11-03T22:44:34.762Z",
+  "updatedAt": "2026-11-03T22:46:55.971Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:33:47.343Z",
     "plannedStepCount": 4,
@@ -110,7 +110,8 @@
     "architect-1dd28c7c",
     "worker-c9368191",
     "worker-33f67e5b",
-    "qa-7328a40d"
+    "qa-7328a40d",
+    "governor-e6b40560"
   ],
   "tier": "standard",
   "effort": "high",
@@ -218,20 +219,39 @@
       "status": "REVIEW",
       "pushed": false,
       "message": "MOE_RESCUE_REF task=task-7cef08612fef4c79a53654ab37755f3f ref=refs/moe/rescue/task-7cef08612fef4c79a53654ab37755f3f/20261103T224148Z sha=9dfdb6c475b3de405611f2844c24703ca8fa9180 reason=remote"
+    },
+    {
+      "sha": "890b183162ad6e2e20c6a60485e1dee2d8c22088",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T22:36:51Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/deleteEpic.ts",
+        "packages/moe-daemon/src/tools/deleteTask.roleGate.test.ts",
+        "packages/moe-daemon/src/tools/deleteTask.ts"
+      ],
+      "recordedBy": "governor-e6b40560",
+      "recordedAt": "2026-11-03T22:46:42.889Z",
+      "treeId": "bcc764036cc344d926fee862069f4b3840f22dca",
+      "status": "REVIEW",
+      "pushed": true,
+      "message": "Governor ledger repair (governor-e6b40560). worker-c9368191's completion push at 22:41:38Z DID land: origin/moe/work-2026-10-24 holds 890b1831, whose tree equals attempt-de9d1520's candidate tree bcc76403 and whose parent equals the candidate base 3441d183, with trailers Moe-Task task-7cef0861, Moe-Kind completion and Moe-Session worker-c9368191@2026-11-03T22:36:51Z. The wrapper still read a `![remote rejected]` porcelain line, recorded MOE_PUSH_FAILED and took the unlanded route. The retry (worker-33f67e5b) then found nothing to commit, so no completion row existed and QA's landed gate parked the row. This row records the verified landing; no bytes were moved."
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "completion",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-33f67e5b@2026-11-03T22:41:52Z",
-    "at": "2026-11-03T22:43:55.834Z"
+    "sessionId": "worker-c9368191@2026-11-03T22:36:51Z",
+    "at": "2026-11-03T22:46:42.889Z"
   },
   "landingRetry": null,
-  "blockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-7cef08612fef4c79a53654ab37755f3f: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only",
+  "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-03T22:44:34.762Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-7cef08612fef4c79a53654ab37755f3f: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only"
 }

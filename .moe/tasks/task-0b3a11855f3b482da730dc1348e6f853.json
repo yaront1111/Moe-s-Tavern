@@ -1,0 +1,28 @@
+{
+  "id": "task-0b3a11855f3b482da730dc1348e6f853",
+  "epicId": "epic-be924fb8",
+  "title": "bug: accountStore caches a failed read of the Claude account list or a usage file under a stat key the cleared error never changes, so one transient non-ENOENT read error (EACCES, EBUSY, EMFILE, EIO) turns rotation off, or counts a spent account as unused, until the file is rewritten or the daemon restarts",
+  "description": "Found by defect hunt #13 (task-cc441586). Line numbers are at HEAD f159784e.\n\nPROBLEM (packages/moe-daemon/src/state/accountStore.ts)\n- The cache key is statKey (:146-153), `ino:mtimeMs:size`. Clearing a read error (a chmod, a released lock, freed fds) changes none of those.\n- Account list: loadRegistry (:155-167) takes the key before reading. For ANY read failure it caches `{ registry: null, error }` under that key.\n  - readRegistry (accounts/registry.ts:146) turns every non-ENOENT read error into `MOE_ACCOUNT_REGISTRY_INVALID ... cannot read it (...)` (:152).\n  - So until the list is rewritten or the daemon restarts:\n    - every lease_account returns rotation:false (:315-318), and claude seats launch on the operator's own login;\n    - recordAccountReport (:379-382) drops every usage report;\n    - accountSwitchFor (:430-435) never switches anyone;\n    - the Accounts tab keeps showing the stale error.\n- Usage file: readUsage (:169-175) turns every error, I/O included, into null, and loadUsage (:177-185) caches that null. The spent account then counts as unused: it is leased, and no switch comes due until its usage file is rewritten.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-cc441586/A/accountCache.hunt.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a `git archive f159784e` snapshot. It uses a scratch MOE_ACCOUNTS_FILE and never touches the machine's list.\n- Each case makes the file unreadable (chmod 000), leases, restores it (chmod 600, no write), and leases again.\n- Command: `npx vitest run src/__hunt__/accountCache.hunt.test.ts`. Result: `Tests 2 failed | 1 passed (3)`. Verbatim, paths shortened:\n```\nduring : {\"rotation\":false,\"reason\":\"the Claude account list cannot be used (MOE_ACCOUNT_REGISTRY_INVALID: .../claude-accounts.json: cannot read it (EACCES: permission denied, ...))\"}\nafter  : {\"rotation\":false,\"reason\":\"... cannot read it (EACCES: permission denied, ...)\"}\n× registry: once the list is readable again, the next lease rotates (no file write in between)\n× usage: once acct-1's usage file is readable again, its 95% keeps it out of rotation   (- \"accountId\": \"acct-2\"  + \"accountId\": \"acct-1\")\n```\n- The third case passes. It documents the by-design reset behaviour, so don't file that part.\n- Exposure: a guard gap, not a live incident. It needs a non-ENOENT error on an unchanged file: EACCES later fixed by chmod, EMFILE, EIO on a /mnt path, or an antivirus or backup lock on Windows. The list and the usage files are machine-level and shared by every daemon on the host. When it hits the list, rotation goes off silently on that daemon.\n\nFIX DIRECTION\n- Cache only a successful read or a content error (bad JSON, failed validation). An I/O error is never cached, so the next call reads the file again.\n- readRegistry may need to tell an I/O failure from a content failure, so loadRegistry can decide.\n- For a usage file that cannot be read, keep the last good value rather than counting the account unused.\n- A content error must still report MOE_ACCOUNT_REGISTRY_INVALID as it does today.\n- docs/MCP_SERVER.md and docs/CONFIGURATION.md are held at filing time: sync them only if lanes show them free at planning time.\n\nFILES: packages/moe-daemon/src/state/accountStore.ts (loadRegistry, readUsage, loadUsage), maybe src/accounts/registry.ts (readRegistry), plus a new vitest file.",
+  "definitionOfDone": [
+    "After a non-ENOENT read error on the account list clears with no write in between (chmod 000, lease, chmod 600), the next lease_account rotates normally, and accountRotationView's error is cleared.",
+    "An account whose usage file is briefly unreadable is not leased as unused when its last readable sample was at or above the switch percent, and the file is read again on the next call.",
+    "A malformed or invalid account list still reports MOE_ACCOUNT_REGISTRY_INVALID as today; one new vitest file covers all three cases and passes in a snapshot outside the shared checkout, with existing accountStore tests unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 449.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:46:35.853Z",
+  "updatedAt": "2026-11-03T22:46:35.853Z"
+}

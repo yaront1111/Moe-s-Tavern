@@ -1,0 +1,28 @@
+{
+  "id": "task-301cf76071264d9f9d07b8848bcafed4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a non-numeric, zero or negative MOE_RATE_LIMIT_MAX_REQUESTS throttles every MCP request the daemon serves to 1 per second, because McpAdapter parses it with a bare parseInt and RateLimiter's fallback is 1 rather than the default 100, while MOE_MCP_MAX_BATCH_SIZE in the same file falls back to its default",
+  "description": "Found by defect hunt #13 (task-cc441586). Line numbers are at HEAD f159784e.\n\nPROBLEM (packages/moe-daemon/src/server/McpAdapter.ts)\n- :15-16 read MOE_RATE_LIMIT_MAX_REQUESTS and MOE_RATE_LIMIT_WINDOW_MS with a bare parseInt, so `abc` becomes NaN.\n- The RateLimiter constructor (:46-47) replaces any non-finite or non-positive maxRequests with **1**, not the documented default 100. It then warns \"Invalid rate limiter configuration; using safe defaults\" (:54).\n- The sibling MOE_MCP_MAX_BATCH_SIZE in the same file goes through parsePositiveIntegerEnv (:19-29), which falls back to its default.\n- One McpAdapter instance (src/index.ts:779) serves every MCP client, so a single typo throttles the whole fleet to 1 request per second, under a misleading \"safe defaults\" line.\n- docs/CONFIGURATION.md:26 lists the variable with no invalid-value rule.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-cc441586/B/rateLimitEnvFallback.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a `git archive f159784e` snapshot.\n- Command: `npx vitest run src/__hunt__/rateLimitEnvFallback.test.ts`. Result: 2 failed. Verbatim:\n```\nMOE_RATE_LIMIT_MAX_REQUESTS=abc: 4/5 pings refused; {\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Rate limit exceeded: 1 requests per 1000ms\"}}\nMOE_RATE_LIMIT_MAX_REQUESTS=0: 4/5 pings refused; {\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Rate limit exceeded: 1 requests per 1000ms\"}}\n```\n- Exposure: a guard gap, not a live incident. Only a misconfigured environment hits it, but then the effect is fleet-wide.\n\nFIX DIRECTION\n- Parse both variables with parsePositiveIntegerEnv (defaults 100 and 1000), or make RateLimiter fall back to those defaults.\n- The warning names the variable and the value actually used.\n- MOE_RATE_LIMIT_ENABLED=false keeps disabling the limiter as today.\n\nFILES and hunk ownership:\n- packages/moe-daemon/src/server/McpAdapter.ts: this row owns only the env parsing (~:15-16) and the RateLimiter constructor fallback (~:36-56).\n- The sibling hunt row task-5158e85b owns only the dispatch comment hunk (~:301-303). The two hunks are distinct, so worktree merge-tree lands both and no dependency is needed.\n- Plus a new vitest file.\n- docs/CONFIGURATION.md is held at filing time: sync it only if lanes show it free at planning time.",
+  "definitionOfDone": [
+    "A non-numeric, zero or negative MOE_RATE_LIMIT_MAX_REQUESTS or MOE_RATE_LIMIT_WINDOW_MS falls back to its default (100 requests, 1000 ms), and the warning names the variable and the value used.",
+    "A valid override still applies (for example MOE_RATE_LIMIT_MAX_REQUESTS=5: the 6th request in one window is refused), and MOE_RATE_LIMIT_ENABLED=false still disables the limiter.",
+    "One new vitest file covers both cases (fresh module import per env) and passes with the existing McpAdapter tests, in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 451.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:47:03.896Z",
+  "updatedAt": "2026-11-03T22:47:03.896Z"
+}

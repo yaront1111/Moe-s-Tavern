@@ -1,0 +1,34 @@
+{
+  "id": "task-5158e85b08394056bb02210527da2a3b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: claim_next_task and release_task run their disk-state git status (up to 3 s) under the global state mutex: neither is marked blocking, so McpAdapter wraps the whole handler and every tool fleet-wide stalls behind the subprocess that diskState.ts says must run outside the lock",
+  "description": "Found by defect hunt #13 (task-cc441586). Line numbers are at HEAD f159784e.\n\nPROBLEM\n- util/diskState.ts:19-22 states the rule (invariant 2): \"Callers MUST invoke this OUTSIDE the state mutex. It spawns a git subprocess that can take up to the 3s timeout; ... running it under the lock would freeze every tool fleet-wide\".\n- Both callers were written to follow it:\n  - tools/releaseTask.ts:178-191 captures the handoff fingerprint in a \"pre-mutex region ... never inside runExclusive\" (computeDiskStateSignature at :186). Its own state.runExclusive starts at :194.\n  - tools/claimNextTask.ts:422-424 says the recompute \"must never run under the global state mutex\". Its runExclusive is at :429, and the post-mutex recompute is at :1008-1019 (\"The mutex is released — safe to shell out to git\").\n- Neither tool sets `blocking: true`. So server/McpAdapter.ts:309 (`tool.blocking ? await invoke() : await this.state.runExclusive(invoke)`) wraps the WHOLE handler. The mutex is reentrant, so it stays held through the git call.\n- `blocking` is read only at McpAdapter.ts:309. The dispatch comment at :301-303 still calls claim_next_task \"safe to wrap\".\n- The transports disagree: /ws RELEASE_TASK (server/WebSocketServer.ts:723-740) calls the same handler with no wrapper, so the capture runs unlocked there as intended.\n- Precedent: submit_plan opts out the same way for its bounded cached-Git lookup (tools/submitPlan.ts:198 `blocking: true`; packages/moe-daemon/CLAUDE.md:5).\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-cc441586/B/diskStateUnderMutex.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a `git archive f159784e` snapshot.\n- It mocks computeDiskStateSignature with a 600 ms git stand-in, records state.mutex.isHeld() during it, and times a bystander moe.list_tasks.\n- Command: `npx vitest run src/__hunt__/diskStateUnderMutex.test.ts`. Result: 2 failed. Verbatim:\n```\nrelease_task: mutex held during git = [ true ] ; bystander list_tasks waited 567 ms\nclaim_next_task: mutex held during git = [ true ] ; bystander list_tasks waited 571 ms\n× release_task with a handoffNote: git runs outside the mutex and does not stall other tools\n× claim_next_task of a task whose newest handoff carries a diskState: git runs outside the mutex\nAssertionError: expected [ true ] to deeply equal [ false ]\n```\n- Exposure:\n  - Every MCP release_task that carries a handoffNote stalls all tool dispatch and /ws mutations for as long as git runs, up to the 3 s kill.\n  - The board holds 18 handoff notes and none carries a diskState, so every capture so far failed or timed out.\n  - `git --no-optional-locks status --porcelain=v2 --branch` took 4.35 s from WSL over /mnt/d. The live daemon runs on Windows, so that timing is indicative only.\n  - The claim-side stall stays dormant until a stored diskState exists.\n\nFIX DIRECTION\n- Mark moe.claim_next_task and moe.release_task `blocking: true`, the submit_plan precedent. Both already do every state read-modify-write inside their own state.runExclusive:\n  - claim_next_task's handler (:421) has no await before :429 and writes nothing after it;\n  - release_task does only validation and the capture before :194.\n- Update the McpAdapter dispatch comment (:301-303) and the blocking-tools list in packages/moe-daemon/CLAUDE.md:5.\n- Never move the capture into the mutex.\n- docs/MCP_SERVER.md is held at filing time: sync it only if lanes show it free at planning time.\n\nFILES: packages/moe-daemon/src/tools/{claimNextTask,releaseTask}.ts, src/server/McpAdapter.ts (dispatch comment hunk only, ~:301-303; sibling hunt row on the rate limiter owns the env/RateLimiter hunks at ~:15-56), packages/moe-daemon/CLAUDE.md, plus a new vitest file.",
+  "definitionOfDone": [
+    "Through MCP dispatch, release_task's handoff disk-state capture and claim_next_task's post-claim recompute run with state.mutex.isHeld() false, and a bystander moe.list_tasks sent during a slow (mocked) capture returns before the capture ends, in a new vitest file.",
+    "Every claim and release mutation still runs inside the tool's own state.runExclusive (the existing claimNextTask and releaseTask tests pass unchanged), and the McpAdapter dispatch comment and packages/moe-daemon/CLAUDE.md's blocking-tools list name both tools.",
+    "`npx vitest run` of the new file plus src/tools/claimNextTask.test.ts and src/tools/releaseTask.test.ts passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-74d9e1c7",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 448.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:46:19.358Z",
+  "updatedAt": "2026-11-03T22:46:56.924Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:46:37.166Z"
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ]
+}
