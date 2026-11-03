@@ -300,6 +300,7 @@ cleanup_temp() {
     if [ "$(type -t live_marker_remove)" = "function" ]; then
         live_marker_remove "${PREFLIGHT_TASK_ID:-}" || true
     fi
+    if [ "$(type -t seat_vm_stop)" = function ]; then seat_vm_stop; fi
     # Gracefully release any task this worker still holds so the next agent can
     # claim it immediately. This is best-effort and never blocks exit. There is
     # NO idle-timeout fallback for hard crashes where this trap never runs: the
@@ -7878,7 +7879,12 @@ land_worktree_completion() {
     MOE_UNLANDED_PATHS="$(create_secure_temp)/wt-unlanded-$$.z"; LAND_B=""
     : > "$MOE_UNLANDED_PATHS"
     no_git_remote && LAND_WT_PUB=local
-    LAND_WT_INTERNAL=true; land_worktree_checkpoint "$w" "$branch" || true; LAND_WT_INTERNAL=""
+    if [ "${VM_ROUTE:-false}" = true ]; then
+        # The VM candidate helper alone owns this route's task-branch writes.
+        LAND_OUTCOME=nothing; LAND_MESSAGE=""
+    else
+        LAND_WT_INTERNAL=true; land_worktree_checkpoint "$w" "$branch" || true; LAND_WT_INTERNAL=""
+    fi
     [ "$LAND_OUTCOME" != refused ] || return 0
     l2="$LAND_OUTCOME"; l2msg="${LAND_MESSAGE:-}"
     case "$st" in *'?'*|*'['*) st=main ;; esac
@@ -8208,7 +8214,7 @@ worktree_postflight() {
             # Only once the landing is settled (L12 done, or nothing left to land). L13 (WT-13
             # §6.2): the control checkout follows the target; a refusal is a warning only.
             case "$LAND_OUTCOME" in committed|nothing) board_snapshot "$PREFLIGHT_TASK_ID" "$status"; follow_control_checkout ;; esac
-        else
+        elif [ "${VM_ROUTE:-false}" != true ]; then
             land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
         fi
     else
@@ -9430,6 +9436,112 @@ account_after_exit() {
     ACCOUNT_RELAUNCH=true
 }
 
+# --- Verified-local seat VM (CQ-M07m3) ---------------------------------------
+AGENT_SEAT_CLI="$SCRIPT_DIR/local-runner/agent-seat.mjs"
+if [ -n "${MOE_AGENT_SEAT_PATH:-}" ]; then
+    if [ "$RUNTIME_PROTECTED" = 1 ]; then
+        echo '[WARN] MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED: MOE_AGENT_SEAT_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/agent-seat.mjs runs.' >&2
+    else AGENT_SEAT_CLI="$MOE_AGENT_SEAT_PATH"; fi
+fi
+SEAT_VM_INSTANCE=""
+seat_cli() (
+    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_API_KEY
+    exec "$NODE_CMD" "$AGENT_SEAT_CLI" "$@"
+)
+# Only fixed codes cross the diagnostic boundary; never echo arbitrary child text.
+seat_result_code() {
+    $PYTHON_CMD -c 'import json,re,sys
+try: c=json.load(sys.stdin).get("code", "")
+except Exception: c=""
+print(c if isinstance(c,str) and re.fullmatch("[A-Z][A-Z0-9_]{0,63}",c) else "exit "+sys.argv[1])' "$1"
+}
+seat_vm_start() {
+    local reply rc=0 instance=""
+    wt_defer_signals
+    reply=$(seat_cli seat-start --project "$PROJECT" --worker "$WORKER_ID" --runner "$MOE_PROCESS_STARTED_AT" --host "$MOE_HOST") || rc=$?
+    if [ "$rc" = 0 ]; then
+        instance=$($PYTHON_CMD -c 'import json,re,sys
+d=json.load(sys.stdin); i=d.get("instance")
+if d.get("ok") is True and isinstance(i,str) and re.fullmatch("moe-vm-[0-9a-f]{20}",i): print(i)' 2>/dev/null <<< "$reply") || instance=""
+    fi
+    SEAT_VM_INSTANCE="$instance"
+    SEAT_START_CODE=$(seat_result_code "$rc" <<< "$reply") || SEAT_START_CODE="exit $rc"
+    wt_release_signals
+    if [ -n "$instance" ]; then echo "[seat] started $instance"; return 0; fi
+    [ "$rc" != 0 ] || rc=1
+    return "$rc"
+}
+seat_vm_stop() {
+    [ -n "${SEAT_VM_INSTANCE:-}" ] || return 0
+    local instance="$SEAT_VM_INSTANCE" out="$SECURE_TEMP_DIR/seat-stop.json" pid n=0 rc=0 reply code
+    SEAT_VM_INSTANCE=""
+    seat_cli seat-stop --project "$PROJECT" --worker "$WORKER_ID" --runner "$MOE_PROCESS_STARTED_AT" --host "$MOE_HOST" --instance "$instance" > "$out" &
+    pid=$!
+    while heartbeat_sidecar_running "$pid"; do
+        if [ "$n" -ge 120 ]; then echo "[WARN] MOE_SEAT_STOP_TIMEOUT: instance=$instance" >&2; return 0; fi
+        sleep 1; n=$((n + 1))
+    done
+    wait "$pid" || rc=$?
+    reply=$(cat "$out" 2>/dev/null) || reply=""; rm -f "$out"
+    if [ "$rc" = 0 ] && $PYTHON_CMD -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ok") is True else 1)' 2>/dev/null <<< "$reply"; then
+        echo "[seat] stopped $instance"
+    else
+        code=$(seat_result_code "$rc" <<< "$reply") || code="exit $rc"
+        echo "[WARN] MOE_SEAT_STOP_FAILED: $code instance=$instance" >&2
+    fi
+    return 0
+}
+seat_credential_json() {
+    $PYTHON_CMD -c 'import json,sys; v=sys.stdin.read(); sys.exit(3) if not v else print(json.dumps({"name":sys.argv[1],"value":v}))' "$1"
+}
+seat_job_outcome() {
+    $PYTHON_CMD -c 'import json,re,sys
+d=json.load(sys.stdin)
+if not (type(d.get("seatJob")) is int and d["seatJob"]==1 and d.get("ok") is True and d.get("role")==sys.argv[1] and d.get("commit")==sys.argv[2]): sys.exit(1)
+bt,t=d.get("baseTree"),d.get("tree")
+if not all(isinstance(v,str) and re.fullmatch("[0-9a-f]{40}([0-9a-f]{24})?",v) for v in (bt,t)): sys.exit(1)
+c=d.get("exitCode"); print(c if type(c) is int and 0<=c<=255 else 1,bt,t)' "$ROLE" "$1" 2>/dev/null
+}
+run_vm_job() {
+    local checkout commit out="$SECURE_TEMP_DIR/seat-job.out" reply parsed code bt tree vm_rc=0
+    local pipe_rc=()
+    [ -n "$ACCOUNT_LEASED_ID" ] && "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" >/dev/null 2>&1 \
+        || verified_local_refuse MOE_VM_CREDENTIAL_UNAVAILABLE "account ${ACCOUNT_LEASED_ID:-none} has no VM token; mint one with 'accounts vm-token <id>' (Accounts tab)."
+    [ -n "$MOE_ATTEMPT_ID" ] && [ -n "$MOE_ATTEMPT_GENERATION" ] \
+        || verified_local_refuse MOE_SEAT_JOB_INPUT_MISSING 'attempt identity'
+    if [ "$ROLE" = worker ]; then
+        checkout="$MOE_WT_PATH"
+        commit=$(git -C "$checkout" rev-parse --verify 'HEAD^{commit}' 2>/dev/null) || commit=""
+        code='worktree HEAD'
+    else
+        checkout="$PROJECT"; code='landed completion commit'
+        commit=$($PYTHON_CMD -c 'import json,sys; print(json.load(sys.stdin)["task"]["landing"]["lastCompletion"]["sha"])' 2>/dev/null <<< "$PREFLIGHT_CONTEXT") || commit=""
+    fi
+    [[ $commit =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || verified_local_refuse MOE_SEAT_JOB_INPUT_MISSING "$code"
+    echo "[seat] job role=$ROLE task=$PREFLIGHT_TASK_ID instance=$SEAT_VM_INSTANCE commit=$commit"
+    set +e
+    "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" 2>/dev/null | seat_credential_json CLAUDE_CODE_OAUTH_TOKEN \
+        | seat_cli seat-job --project "$PROJECT" --worker "$WORKER_ID" --runner "$MOE_PROCESS_STARTED_AT" --host "$MOE_HOST" \
+            --instance "$SEAT_VM_INSTANCE" --role "$ROLE" --task "$PREFLIGHT_TASK_ID" --attempt "$MOE_ATTEMPT_ID" --generation "$MOE_ATTEMPT_GENERATION" \
+            --checkout "$checkout" --commit "$commit" --cli claude | tee "$out"
+    pipe_rc=("${PIPESTATUS[@]}")
+    set -e
+    reply=$(tail -n 1 "$out" 2>/dev/null) || reply=""; rm -f "$out"
+    [ "${pipe_rc[0]}" = 0 ] && [ "${pipe_rc[1]}" = 0 ] || verified_local_refuse MOE_VM_CREDENTIAL_UNAVAILABLE 'VM token pipe failed.'
+    parsed=$(seat_job_outcome "$commit" <<< "$reply") || parsed=""
+    if [ "${pipe_rc[2]}" != 0 ] || [ "${pipe_rc[3]}" != 0 ] || [ -z "$parsed" ]; then
+        code=$(seat_result_code "${pipe_rc[2]}" <<< "$reply") || code="exit ${pipe_rc[2]}"
+        verified_local_refuse MOE_SEAT_JOB_FAILED "$code"
+    fi
+    read -r CLI_EXIT_CODE bt tree <<< "$parsed"
+    if [ "$ROLE" = worker ]; then
+        LAND_TASK_ID="$PREFLIGHT_TASK_ID"; LAND_TITLE="$PREFLIGHT_TASK_TITLE"; LAND_STATUS=WORKING; LAND_CLI_EXIT="$CLI_EXIT_CODE"
+        land_vm_candidate "$commit" "$bt" "$tree" || vm_rc=$?
+        [ "$vm_rc" = 0 ] || exit 1
+    fi
+    return 0
+}
+
 # --- Self-restart when this script's own bytes change on disk -----------------
 # The shell reads this file incrementally, so an edit to a running script can
 # even corrupt the current execution; either way a long-lived loop keeps serving
@@ -9594,8 +9706,14 @@ sys.stdout.write("\x1f".join([p, "true" if r else "false", ", ".join(clean(x) fo
     if [ "$ready" != true ]; then
         verified_local_refuse MOE_VERIFIED_LOCAL_NOT_READY "this project runs verified-local, which is not ready; missing: ${missing:-(none named)}; refusing to start this seat."
     fi
-    # Fail-closed placeholder: CQ-M07m3 replaces it with the seat VM route.
-    verified_local_refuse MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE "this project runs verified-local and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat."
+    [ "$AUTO_CLAIM" = true ] || verified_local_refuse MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM "a --no-auto-claim seat cannot run under verified-local; the VM route needs the wrapper's marked claim."
+    [ "$CLI_TYPE" != codex ] || verified_local_refuse MOE_VM_CREDENTIAL_UNAVAILABLE 'codex VM credentials are not wired yet; refusing to run codex on the host.'
+    CLAIM_ITER_JSON=$($PYTHON_CMD -c 'import json,sys; d=json.load(sys.stdin); d["executionRoute"]="vm"; print(json.dumps(d))' 2>/dev/null <<< "$CLAIM_RPC_JSON") \
+        || verified_local_refuse MOE_VERIFIED_LOCAL_CLAIM_UNBUILDABLE 'cannot build a marked VM claim.'
+    VM_ROUTE=true
+    if [ -z "$SEAT_VM_INSTANCE" ]; then
+        seat_vm_start || { echo "[ERROR] MOE_SEAT_START_FAILED: $SEAT_START_CODE" >&2; exit 1; }
+    fi
 }
 
 # Bash reads scripts incrementally from a saved file offset. An in-place save
@@ -9660,7 +9778,7 @@ while [ "$LOOP_RUNNING" = true ]; do
             else
                 echo "wrapper source changed on disk; restarting to load it"
                 # `exec` replaces this process WITHOUT running the EXIT trap, so
-                # do its two must-haves by hand (ps1 parity): stop the sidecar and
+                # do its must-haves by hand: stop the sidecar and seat VM, then
                 # deregister -- the re-exec'd wrapper registers afresh and any
                 # held task is released for it (or a peer) to re-claim. The
                 # previous post-flight already ran, so nothing is left to land.
@@ -9670,6 +9788,7 @@ while [ "$LOOP_RUNNING" = true ]; do
                     wrapper_pin_drop
                     continue
                 fi
+                seat_vm_stop
                 if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
                     bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
                         "{\"workerId\":\"$WORKER_ID\",\"reason\":\"wrapper_restart\"}" \
@@ -9716,6 +9835,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # stays exported through a plain assignment; unset drops it (CQ-V07).
     unset PINNED_ATTEMPT_PROFILE PINNED_ATTEMPT_PLAN_REVISION
     MOE_RUNNER_ID=$($PYTHON_CMD -c 'import uuid;print("runner-"+uuid.uuid4().hex)')
+    VM_ROUTE=false; CLAIM_ITER_JSON="$CLAIM_RPC_JSON"
     PREFLIGHT_TASK_ID=""
     PREFLIGHT_HELD_TASK_ID=""
     PREFLIGHT_TASK_TITLE=""
@@ -9841,7 +9961,7 @@ except Exception:
                 echo -e "${YELLOW}[launch-outage]${NC} Launch outage (streak $LAUNCH_FAIL_STREAK): this seat holds no task, so it calls no claim_next_task until a launch probe succeeds."
                 CLAIM_RESULT='{"hasNext":false}'
             else
-                CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
+                CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_ITER_JSON" 2>/dev/null || echo "")
             fi
             # A teamless seat is refused with code NO_TEAM_MEMBERSHIP, which is not an
             # empty queue: say so, or the [no-task] banner below reads as "no work".
@@ -9954,7 +10074,7 @@ except Exception:
                     idle_wait "$MOE_TASKLESS_POLL_SEC"
                     TASKLESS_WAITED=$((TASKLESS_WAITED + MOE_TASKLESS_POLL_SEC))
                     [ "$TEAM_JOINED" = true ] || retry_team_join || true
-                    CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
+                    CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_ITER_JSON" 2>/dev/null || echo "")
                     if claim_refused_no_team "$CLAIM_RESULT"; then TEAM_JOINED=false; fi
                     if [ -z "$CLAIM_RESULT" ]; then
                         # Unreachable daemon/proxy. Falling through to a launch
@@ -10774,6 +10894,10 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # Before the pre-flight landing, so a refusal leaves no fresh baseline; not
     # gated on autoCommit. Provisions W or stops the seat (provision_worktree).
     if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$ROLE" = worker ]; then provision_worktree; fi
+    # REVIEW claims are always shared: QA relies on the pre-claim settings gate.
+    if [ "$VM_ROUTE" = true ] && [ "$ROLE" = worker ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "${MOE_WT_MODE:-}" != worktree ]; then
+        verified_local_refuse MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED "the claim for $PREFLIGHT_TASK_ID is in shared mode; the VM route runs only in worktree mode, so no job runs."
+    fi
     # WT-13 (§6.4): a QA claim in a worktree-mode control checkout reviews what landed.
     if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$ROLE" = qa ] && control_worktree_mode; then
         qa_control_preflight
@@ -10811,7 +10935,7 @@ $MOE_PREFLIGHT_NOTICE
 </system-reminder>"
         fi
     fi
-    if [ "${MOE_WT_MODE:-}" = worktree ]; then prepare_worktree_launch; fi
+    if [ "${MOE_WT_MODE:-}" = worktree ] && [ "$VM_ROUTE" != true ]; then prepare_worktree_launch; fi
 
     # Compose final PROMPT = DYNAMIC_CONTEXT (per-iteration) + PROMPT_BODY (role).
     # Order: dynamic context first (sets the per-task scene), role body last (latest user instruction).
@@ -10852,6 +10976,10 @@ $PROMPT_BODY"
         fi
     fi
 
+    if [ "$VM_ROUTE" = true ] && [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$PREFLIGHT_OK" != true ] || [ -z "$PREFLIGHT_TASK_ID" ]; }; then
+        MOE_SKIP_LAUNCH=true; LAUNCH_PROBE=false
+        echo "MOE_TASKLESS_NO_LAUNCH reason=vm-route role=$ROLE worker=$WORKER_ID - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job."
+    fi
     if [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$CLI_TYPE" = claude ] || [ "$CLI_TYPE" = codex ]; }; then
         # Settings can change between tasks in a long-lived wrapper.
         "$NODE_CMD" "$PROMPT_CACHE_HELPER" check "$CLI_TYPE" "$PROJECT" "${COMMAND_ARGV[@]}" || exit 1
@@ -10881,6 +11009,8 @@ $PROMPT_BODY"
             echo "MOE_TASKLESS_NO_LAUNCH reason=idle role=$ROLE worker=$WORKER_ID - no claimable task and nothing to answer."
         fi
         CLI_EXIT_CODE=0
+    elif [ "$VM_ROUTE" = true ]; then
+        run_vm_job
     elif [ "$CLI_TYPE" = "codex" ]; then
         # Check codex is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
@@ -11721,7 +11851,8 @@ PYEOF
     CLI_ELAPSED_SEC=-1
     if [ -n "$CLI_LAUNCHED_AT" ]; then CLI_ELAPSED_SEC=$(( $(date +%s) - CLI_LAUNCHED_AT )); fi
     CLI_EXIT_FOR_LAUNCH="${CLI_EXIT_CODE:-0}"
-    account_after_exit "$CLI_EXIT_FOR_LAUNCH"
+    # A failed VM job must not invoke the host CLI's signin-state probe.
+    if [ "$VM_ROUTE" != true ]; then account_after_exit "$CLI_EXIT_FOR_LAUNCH"; fi
     if [ "$MOE_SKIP_LAUNCH" = true ]; then
         # No CLI ran (MOE_TASKLESS_NO_LAUNCH above set CLI_EXIT_CODE=0): neither
         # a launch that ran nor a launch failure. Read as a success it zeroed the

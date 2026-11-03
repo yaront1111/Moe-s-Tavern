@@ -46,6 +46,7 @@ chmod +x "$SHIM/node"
 # (no key), gate (no key, a non-blank qualityGate) or a raw JSON value. A set
 # VMR_CMD replaces the absolute fake CLI path for this one run (P1's bare name).
 VMR_CMD=""
+VMR_ARGS=(--no-loop --poll-interval 0)
 vmr_run() {
   local row="$1" role="$2" cli="$3" readiness="$4" wt="$5" seam="$6" settings='"autoCommit":false'; shift 6
   case "$wt" in -) ;; gate) settings="$settings,\"qualityGate\":\"true\"" ;; on|off) settings="$settings,\"worktreeMode\":\"$wt\"" ;; *) settings="$settings,\"worktreeMode\":$wt" ;; esac
@@ -54,6 +55,7 @@ vmr_run() {
   printf '{"id":"proj-vmr","name":"postflight-vm-route","settings":{%s}}\n' "$settings" > "$PROJECT/.moe/project.json"
   : > "$PROJECT/.moe/messages/chan-general.jsonl"
   printf '{"port":9876,"projectPath":"%s"}\n' "$PROJECT" > "$PROJECT/.moe/daemon.json"
+  if [ -n "${VMR_SETUP:-}" ]; then "$VMR_SETUP"; fi
   VMR_ROW="$row"
   set +e
   (
@@ -63,7 +65,7 @@ vmr_run() {
     env PATH="$BIN:$SHIM:$PATH" HOME="$TMP_DIR/home" TMPDIR="$RUN_TMP" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CALL_LOG="$CALLS" \
       MOE_DISABLE_HEARTBEAT=1 MOE_TASKLESS_WAIT_SEC=5 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" \
       --project "$PROJECT" --worker-id "$role-vmr" --role "$role" --team Smoke --no-start-daemon \
-      --command "${VMR_CMD:-$BIN/$cli}" --no-loop --poll-interval 0
+      --command "${VMR_CMD:-$BIN/$cli}" "${VMR_ARGS[@]}"
   ) >"$OUT" 2>&1
   VMR_CODE=$?
   VMR_CMD=""
@@ -80,6 +82,7 @@ vmr_launched() {
   [ "$VMR_CODE" -eq 0 ] || vmr_fail "$1" "exit $VMR_CODE, expected 0"
   ! grep -q MOE_VERIFIED_LOCAL_ "$OUT" || vmr_fail "$1" "today's path printed a MOE_VERIFIED_LOCAL_ line"
   [ -f "$REC" ] || vmr_fail "$1" "the CLI never ran"
+  "$NODE" -e 'for(const l of require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n")){const r=JSON.parse(l);if(r.tool==="claim_next_task"&&"executionRoute" in r.args)process.exit(1)}' "$CALLS" || vmr_fail "$1" 'legacy claim was marked'
   calls=" $(vmr_calls | tr '\n' ' ')"
   [[ "$calls" == *" claim_next_task "* && "${calls%%" claim_next_task "*} " == *" get_execution_readiness "* ]] \
     || vmr_fail "$1" "no get_execution_readiness before the claim:$calls"
@@ -170,7 +173,7 @@ case "$DEFAULTS" in
   *) vmr_fail S3 "resolveWorktreeMode's unset default is no longer \"gate ? 'on' : 'off'\" ($DEFAULTS); re-mirror vm_route_worktree_mode" ;;
 esac
 
-echo "[vm route] verified-local refusals, in order: WSL, CLI, worktree mode, not ready, no VM route"
+echo "[vm route] verified-local refusals, in order: WSL, CLI, worktree mode, not ready"
 REFUSAL_ROWS=(
   "W1|worker|gemini|$VL_FALSE|off|1|MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED|$VL, whose worker and QA seats run natively on Windows (moe-agent.ps1), never inside WSL; refusing to start this seat."
   "C1|worker|gemini|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs gemini; refusing to start this seat."
@@ -180,15 +183,13 @@ REFUSAL_ROWS=(
   "$S3_ROW" "$S4_ROW"
   "N1|worker|codex|{\"profile\":\"verified-local\",\"ready\":false,\"missingCapabilities\":[\"revision-bound-local-delivery\",\"isolated-check-vm\",\"authenticated-runner-evidence\"]}|on|0|MOE_VERIFIED_LOCAL_NOT_READY|$NOT_READY revision-bound-local-delivery, isolated-check-vm, authenticated-runner-evidence; refusing to start this seat."
   "N2|worker|claude|{\"profile\":\"verified-local\",\"ready\":false,\"missingCapabilities\":[]}|on|0|MOE_VERIFIED_LOCAL_NOT_READY|$NOT_READY (none named); refusing to start this seat."
-  "R1|worker|claude|$VL_TRUE|on|0|MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE|$VL and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat."
-  "R2|qa|codex|$VL_TRUE|on|0|MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE|$VL and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat."
 )
 for r in "${REFUSAL_ROWS[@]}"; do
   IFS='|' read -r row role cli readiness wt seam code detail <<< "$r"
   vmr_run "$row" "$role" "$cli" "$readiness" "$wt" "$seam"
   vmr_refused "$row" "$code" "$detail"
 done
-echo "[vm route] ok refusals (W1, C1, C2, S1-S4, N1, N2, R1, R2)"
+echo "[vm route] ok refusals (W1, C1, C2, S1-S4, N1, N2; R1/R2 in the seat-job block)"
 
 echo "[vm route] architect and governor seats never read readiness"
 for r in A1:architect G1:governor; do
@@ -209,11 +210,11 @@ if grep -qEi '(microsoft|wsl)' /proc/version 2>/dev/null; then
   P1_SEAM=0; P1_CODE=MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED
   P1_DETAIL="$VL, whose worker and QA seats run natively on Windows (moe-agent.ps1), never inside WSL; refusing to start this seat."
 else
-  P1_SEAM=1; P1_CODE=MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE
-  P1_DETAIL="$VL and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat."
+  P1_SEAM=1; P1_CODE=MOE_VERIFIED_LOCAL_NOT_READY
+  P1_DETAIL="$NOT_READY isolated-check-vm; refusing to start this seat."
 fi
 VMR_CMD=claude
-vmr_run P1 worker claude "$VL_TRUE" on "$P1_SEAM" MOE_RUNTIME_PROTECTED=1 MOE_DAEMON_PATH="$TMP_DIR/fake-daemon.js"
+vmr_run P1 worker claude "$VL_FALSE" on "$P1_SEAM" MOE_RUNTIME_PROTECTED=1 MOE_DAEMON_PATH="$TMP_DIR/fake-daemon.js"
 vmr_refused P1 "$P1_CODE" "$P1_DETAIL"
 [ ! -e "$TMP_DIR/daemon-ran" ] || vmr_fail P1 "the protected daemon path ran"
 # Static: the seam is read only inside vm_route_is_wsl(); is_wsl() never sees it.
@@ -224,6 +225,142 @@ IS_WSL_BODY="$(sed -n '/^is_wsl() {$/,/^}$/p' "$WRAPPER")"
 [[ "$IS_WSL_BODY" == *'/proc/version'* && "$IS_WSL_BODY" != *MOE_POSTFLIGHT_WSL* ]] \
   || vmr_fail P1 "is_wsl() no longer reads /proc/version alone"
 echo "[vm route] ok protected seam (P1 seam=$P1_SEAM) and static seam scope"
+
+# --- [seat job] CQ-M07m3: real wrapper, fake VM, real vm-credential and Git. ----
+(
+VMR_SETUP=vmj_fixture
+READY='{"profile":"verified-local","ready":true,"missingCapabilities":[]}'
+TOKEN=sk-ant-oat01-vmCanaryMustNeverEscapePipes0123456789
+VMJ_WORKSPACE=worktree; VMJ_QA=false
+export MOE_AGENT_SEAT_PATH="$ROOT_DIR/scripts/tests/postflight-fake-agent-seat.js"
+export MOE_ACCOUNT_ROTATION=on MOE_ACCOUNTS_FILE="$TMP_DIR/accounts/claude-accounts.json" FAKE_ACCOUNT_HOME="$TMP_DIR/accounts"
+export GIT_AUTHOR_NAME=vmj GIT_AUTHOR_EMAIL=vmj@example.invalid GIT_COMMITTER_NAME=vmj GIT_COMMITTER_EMAIL=vmj@example.invalid
+export ANTHROPIC_API_KEY=outer-a ANTHROPIC_AUTH_TOKEN=outer-b CLAUDE_CODE_OAUTH_TOKEN=outer-c OPENAI_API_KEY=outer-d CODEX_API_KEY=outer-e
+vmj_fixture() {
+  mkdir -p "$TMP_DIR/accounts/claude-vm-tokens" "$TMP_DIR/accounts/acct-1"
+  printf %s "$TOKEN" > "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"
+  printf '.moe/\n.worktrees/\n.mcp.json\n' > "$PROJECT/.gitignore"
+  printf 'seed\n' > "$PROJECT/seed.txt"
+  git -C "$PROJECT" init -q -b main
+  git -C "$PROJECT" add .gitignore seed.txt; git -C "$PROJECT" commit -qm seed
+  git -C "$PROJECT" checkout -qb moe/control
+  "$NODE" -e 'const fs=require("fs"),p=process.argv[1],d=JSON.parse(fs.readFileSync(p));Object.assign(d.settings,{autoCommit:true,checkpointPush:false,commitBoardState:false});fs.writeFileSync(p,JSON.stringify(d))' "$PROJECT/.moe/project.json"
+  VMJ_BASE=$(git -C "$PROJECT" rev-parse HEAD)
+  printf %s "$VMJ_BASE" > "$TMP_DIR/vmj-base"
+  export FAKE_CLAIM_WORKSPACE="{\"mode\":\"$VMJ_WORKSPACE\",\"target\":\"main\"}"
+  export FAKE_CTX_LANDING="{\"lastCompletion\":{\"sha\":\"$VMJ_BASE\"}}"
+  if [ "$VMJ_QA" = true ]; then export FAKE_TASK_STATUS=REVIEW; else unset FAKE_TASK_STATUS; fi
+}
+vmj_rows() {
+  "$NODE" - "$PROJECT" "$OUT" "$REC" "$TOKEN" "$1" <<'JS'
+const fs=require('node:fs'),assert=require('node:assert/strict'),cp=require('node:child_process'),crypto=require('node:crypto');
+const [p,out,rec,token,mode]=process.argv.slice(2),file=p+'/.moe/evidence-rpcs.jsonl';
+const raw=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'', output=fs.readFileSync(out,'utf8');
+const rows=raw.trim().split('\n').filter(Boolean).map(JSON.parse), seats=rows.filter(r=>r.tool==='agent-seat');
+assert.equal(fs.existsSync(rec),false,'host CLI ran'); assert.ok(!raw.includes(token)&&!output.includes(token),'token leaked');
+const job=seats.find(r=>r.args.cmd==='seat-job');
+assert.deepEqual(seats.map(r=>r.args.cmd),mode==='shared'?['seat-start','seat-stop']:mode==='none'?[]:['seat-start','seat-job','seat-stop']);
+for(const r of seats) for(const k of ['ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY']) assert.ok(!(k in r.args.env),k);
+const claims=rows.filter(r=>r.tool==='claim_next_task');
+if(mode==='none') { assert.equal(claims.length,0); process.exit(0); }
+assert.ok(claims.length>0); for(const r of claims) assert.equal(r.args.executionRoute,'vm');
+assert.ok(rows.indexOf(seats[0])<rows.indexOf(claims[0]));
+assert.ok(rows.indexOf(seats.at(-1))<rows.findIndex(r=>r.tool==='deregister_worker'));
+if(!job) process.exit(0);
+const git=(...args)=>cp.execFileSync('git',['-C',p,...args],{encoding:'utf8'}).trim();
+const base=fs.readFileSync(p+'/../vmj-base','utf8'),role=mode==='qa'?'qa':'worker';
+const w=role==='qa'?p:p+'/.worktrees/task-postflight', identity=claims[0].args;
+assert.deepEqual(job.args.argv,['seat-job','--project',p,'--worker',role+'-vmr','--runner',identity.processStartedAt,'--host',identity.host,
+  '--instance',seats[0].args.instance,'--role',role,'--task','task-postflight','--attempt','attempt-postflight','--generation','7','--checkout',w,'--commit',base,'--cli','claude']);
+assert.ok(output.includes('Runner identity: processStartedAt='+identity.processStartedAt+' host='+identity.host));
+assert.equal(job.args.stdinName,'CLAUDE_CODE_OAUTH_TOKEN'); assert.equal(job.args.stdinSha256,crypto.createHash('sha256').update(token).digest('hex'));
+if(role==='worker') assert.equal(job.args.clean,true,'host tooling dirtied W');
+if(mode==='happy'||mode==='nonzero') {
+  const tip=git('rev-parse','moe/task/task-postflight'); assert.equal(git('rev-parse',tip+'^'),base); assert.equal(git('rev-parse',tip+'^{tree}'),job.args.tree);
+  assert.ok(git('log','-1','--format=%B',tip).includes('cli-exit='+(mode==='nonzero'?17:0)));
+  assert.equal(rows.filter(r=>r.tool==='record_commit'&&r.args.outcome==='committed').length,1); assert.ok(output.includes('guest stdout')&&output.includes('guest stderr'));
+  assert.equal((output.match(/MOE_VM_CANDIDATE_COMMITTED/g)||[]).length,1); assert.ok(!output.includes('Committed checkpoint'));
+} else if(mode==='qa') assert.equal(cp.spawnSync('git',['-C',p,'rev-parse','--verify','moe/task/task-postflight']).status,128);
+JS
+}
+vmj_wait() {
+  local n=0
+  until "$NODE" -e 'const fs=require("fs");try{const r=fs.readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse);process.exit(r.filter(x=>x.tool==="agent-seat"&&x.args.cmd===process.argv[2]).length>=Number(process.argv[3])?0:1)}catch{process.exit(1)}' "$PROJECT/.moe/evidence-rpcs.jsonl" "$1" "${2:-1}"; do
+    n=$((n+1)); [ "$n" -lt "$POSTFLIGHT_TIMEOUT_SEC" ] || vmr_fail wait "$1 never arrived"; sleep 1
+  done
+}
+vmj_background() {
+  rm -f "$TMP_DIR/bg.code"
+  set -m
+  (vmr_run "$@"; echo "$VMR_CODE" > "$TMP_DIR/bg.code") & VMJ_PID=$!
+  set +m
+}
+vmj_wrapper_pid() { "$NODE" -e 'const r=require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse).find(r=>r.tool==="agent-seat"); const a=r.args.argv; console.log(a[a.indexOf("--runner")+1].split("@")[0])' "$PROJECT/.moe/evidence-rpcs.jsonl"; }
+
+echo '[seat job] VR-happy (replaces R1), credential confinement and candidate landing'
+{ echo 'PYTHON_CMD=python3 ROLE=worker'; sed -n '/^seat_job_outcome() {$/,/^}$/p' "$WRAPPER"; echo 'seat_job_outcome "$1"'; } > "$TMP_DIR/outcome.sh"
+"$NODE" - "$TMP_DIR/outcome.sh" <<'JS'
+const a=require('node:assert/strict'),cp=require('node:child_process'),commit='a'.repeat(40);
+const good={seatJob:1,ok:true,role:'worker',commit,baseTree:'b'.repeat(40),tree:'c'.repeat(40),exitCode:0};
+for(const patch of [{},{seatJob:true},{seatJob:0},{ok:false},{role:'qa'},{commit:'d'.repeat(40)},{tree:'bad'}]){
+  const r=cp.spawnSync('bash',[process.argv[2],commit],{input:JSON.stringify({...good,...patch}),encoding:'utf8',env:{...process.env,PYTHONOPTIMIZE:'1'}});
+  a.equal(r.status===0,Object.keys(patch).length===0,JSON.stringify(patch));
+}
+for(const exitCode of [null,-1,256,true]){const r=cp.spawnSync('bash',[process.argv[2],commit],{input:JSON.stringify({...good,exitCode}),encoding:'utf8'});a.equal(r.status,0);a.equal(r.stdout.split(' ')[0],'1');}
+JS
+vmr_run VR-happy worker claude "$READY" on 0
+[ "$VMR_CODE" = 0 ] || vmr_fail VR-happy "exit $VMR_CODE"; vmj_rows happy
+echo '[seat job] nonzero guest exit still never invokes a host signin-state probe'
+vmr_run VR-nonzero worker claude "$READY" on 0 FAKE_SEAT_EXIT_CODE=17
+vmj_rows nonzero
+echo '[seat job] R2 codex, no-auto-claim, QA settings guard, protected override'
+vmr_run R2 qa codex "$READY" on 0
+[ "$VMR_CODE" = 1 ] && grep -q MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" || vmr_fail R2 'not refused'; vmj_rows none
+VMR_ARGS+=(--no-auto-claim)
+vmr_run VR-noclaim worker claude "$READY" on 0
+[ "$VMR_CODE" = 1 ] && [ "$(grep -c MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM "$OUT")" = 1 ] || vmr_fail VR-noclaim 'not refused'; vmj_rows none
+VMR_ARGS=(--no-loop --poll-interval 0)
+vmr_run VR-qa-shared qa claude "$READY" off 0
+[ "$VMR_CODE" = 1 ] && grep -q MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED "$OUT" || vmr_fail VR-qa-shared 'not refused'; vmj_rows none
+VMR_CMD=claude
+vmr_run VR-protected worker claude '{"profile":"verified-local","ready":false,"missingCapabilities":[]}' on 0 MOE_RUNTIME_PROTECTED=1 MOE_DAEMON_PATH="$TMP_DIR/fake-daemon.js"
+[ "$VMR_CODE" = 1 ] && [ "$(grep -c MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED "$OUT")" = 1 ] || vmr_fail VR-protected 'override not ignored'
+! grep -Fq "$MOE_AGENT_SEAT_PATH" "$OUT" || vmr_fail VR-protected 'override value printed'; vmj_rows none
+echo '[seat job] VR-shared worker backstop and VR-qa landed commit'
+VMJ_WORKSPACE=shared
+vmr_run VR-shared worker claude "$READY" on 0
+[ "$VMR_CODE" = 1 ] && [ "$(grep -c MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED "$OUT")" = 1 ] || vmr_fail VR-shared 'not refused'; vmj_rows shared
+VMJ_QA=true
+vmr_run VR-qa qa claude "$READY" on 0
+[ "$VMR_CODE" = 0 ] || vmr_fail VR-qa "exit $VMR_CODE"; vmj_rows qa
+VMJ_WORKSPACE=worktree; VMJ_QA=false
+echo '[seat job] VR-sigint stops its VM before deregister'
+vmj_background VR-sigint worker claude "$READY" on 0 FAKE_SEAT_JOB_SLEEP=3
+vmj_wait seat-job; pid=$(vmj_wrapper_pid)
+(sleep "$POSTFLIGHT_TIMEOUT_SEC"; kill -9 "$pid" 2>/dev/null || true) & watchdog=$!
+kill -INT "$pid"
+wait "$VMJ_PID"
+kill "$watchdog" 2>/dev/null || true; wait "$watchdog" 2>/dev/null || true
+[ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail VR-sigint 'INT did not exit 0'; vmj_rows sigint
+echo '[seat job] VR-reload: taskless mentions never launch, both instances stopped'
+COPY="$TMP_DIR/reload"; mkdir -p "$COPY"; cp -R "$ROOT_DIR/scripts" "$COPY/"
+git -C "$COPY" init -q -b main; git -C "$COPY" add scripts; git -C "$COPY" commit -qm wrapper
+VMR_ARGS=(--loop --poll-interval 1)
+WRAPPER="$COPY/scripts/moe-agent.sh" vmj_background VR-reload worker claude "$READY" on 0 FAKE_CLAIM_MODE=idle FAKE_MENTION=1
+vmj_wait seat-start; pid=$(vmj_wrapper_pid)
+printf '\n# committed reload test\n' >> "$COPY/scripts/moe-agent.sh"
+git -C "$COPY" add scripts/moe-agent.sh; git -C "$COPY" commit -qm reload
+vmj_wait seat-start 2; kill -TERM "$pid"; wait "$VMJ_PID"
+[ "$(cat "$TMP_DIR/bg.code")" = 0 ] && grep -q 'MOE_TASKLESS_NO_LAUNCH reason=vm-route' "$OUT" && [ ! -e "$REC" ] || vmr_fail VR-reload 'taskless host launch or no reload'
+"$NODE" - "$PROJECT/.moe/evidence-rpcs.jsonl" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),r=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(JSON.parse);
+const s=r.filter(x=>x.tool==='agent-seat'); a.deepEqual(s.map(x=>x.args.cmd),['seat-start','seat-stop','seat-start','seat-stop']);
+const d=r.filter(x=>x.tool==='deregister_worker'); a.equal(d[0].args.reason,'wrapper_restart'); a.equal(d.length,2);
+for(let i=0;i<2;i++){a.ok(r.indexOf(s[i*2+1])<r.indexOf(d[i])); const v=s[i*2+1].args.argv; a.equal(v[v.indexOf('--instance')+1],s[i*2].args.instance);}
+a.notEqual(s[0].args.instance,s[2].args.instance);
+JS
+echo '[seat job] PASS VR-happy, nonzero, R2, noclaim, qa-shared, protected, shared, qa, sigint, reload'
+)
 
 # --- [vm candidate] CQ-M07m2: land_vm_candidate turns a VM job's admitted tree
 # into ONE checkpoint commit on moe/task/<id>. The helper, with the wrapper's own
