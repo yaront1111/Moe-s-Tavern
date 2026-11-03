@@ -9,10 +9,59 @@
     "A new daemon test asserts both items above with exact strings and fails on HEAD 946358a8. The verification command in the description passes in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first: create packages/moe-daemon/src/tools/taskMoveActor.test.ts, modeled on tools/reviewLoopActor.test.ts (mem:gotcha-review-loop-actor-regression). A prototype is ready at /mnt/d/moe-scratch/2e3012b9-plan/taskMoveActor.test.ts (152 lines). It was dry-run during planning: RED at base, GREEN with the fix, and each of the 6 drop-one-argument mutants plus an assignee-guessing mutant fails. Read it, then Write it into your worktree with the Write tool. Never cp it: under the global rail a shell write leaves no TOOL witness and the path is HELD at landing.\n\nFixture: one row per write under test, plain StateManager on a mkdtemp .moe like reviewLoopActor:\n- task-blk WORKING/worker-a: report_blocked's seat-freeing flip (reportBlocked.ts:342-352).\n- task-fix WORKING/worker-d: a workerId-less park keeps the hold, then worker-d's corrected re-report takes the correction write (:359-364).\n- task-grant WORKING/worker-e: the flip, then a re-report with a corrected reason and resourceId 'bench-box'. The resource is free, so the grant-correction write (:144) runs.\n- task-rpl WORKING/worker-b: request_replan.\n- task-arc PLANNING/architect-c: archive_task by its holder.\n- task-crit AWAITING_APPROVAL, unassigned: submit_plan_critique block verdict by governor-g. The role comes from the governor- id prefix, so no worker record is needed.\n- task-anon BACKLOG, unassigned: archive_task with no workerId.\n\nEvery call is a HARD `await expect(handler).resolves.toMatchObject(...)` on the arm it must take: seatFreed true/false; alreadyBlocked plus reasonUpdated; granted:true; flipped:true; status PLANNING/ARCHIVED. Fixture drift then cannot silently skip a branch.\n\nThen, after flushActivityLog, SOFT assertions (expect.soft, so each mutant shows its own failure):\n(a) Over TASK_BLOCKED/TASK_UPDATED/TASK_REOPENED/TASK_ARCHIVED on the 7 rows, each `${taskId} ${event}` key occurs exactly once (9 keys).\n(b) The actor map, `event.workerId ?? null`, equals: {task-blk TASK_BLOCKED: worker-a, task-fix TASK_BLOCKED: null, task-fix TASK_UPDATED: worker-d, task-grant TASK_BLOCKED: worker-e, task-grant TASK_UPDATED: worker-e, task-rpl TASK_REOPENED: worker-b, task-arc TASK_ARCHIVED: architect-c, task-crit TASK_UPDATED: governor-g, task-anon TASK_ARCHIVED: null}. The nulls pin appendActivity's no-guess rule for workerId-less calls.\n(c) get_activity_log { workerId } for worker-a, worker-d, worker-e, worker-b, architect-c and governor-g returns exactly that seat's keys.\n(d) The sorted #general 'Task moved to' lines from messages/<general>.jsonl equal exactly:\n'task-anon: Task moved to ARCHIVED by unknown',\n'task-arc: Task moved to ARCHIVED by architect-c',\n'task-blk: Task moved to BLOCKED by worker-a',\n'task-crit: Task moved to PLANNING by governor-g',\n'task-fix: Task moved to BLOCKED by worker-d',\n'task-grant: Task moved to BLOCKED by worker-e',\n'task-rpl: Task moved to PLANNING by worker-b'.\nThe task-fix and task-anon lines are DoD 2's assignee and 'unknown' fallbacks. Sorting keeps the test free of post order.\n\nProve RED before touching any source: run step 3's checkRef now. The expected tail at base (daemon src is byte-identical at 946358a8, 6cca2104 and dc37ea2b) is 'Test Files  1 failed | 6 passed (7)' and 'Tests  1 failed | 111 passed (112)', exit 1, with taskMoveActor the only FAIL. Paste that tail into this step's completion note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/taskMoveActor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/taskMoveActor.test.ts"
+      ],
+      "note": "Wrote taskMoveActor.test.ts. RED at base: \"Test Files  1 failed | 6 passed (7)\", \"Tests  1 failed | 111 passed (112)\", exit 1, only taskMoveActor FAIL.",
+      "startedAt": "2026-11-03T15:58:34.461Z",
+      "completedAt": "2026-11-03T15:59:16.581Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make the fix: pass params.workerId as updateTask's 4th (actor) argument at all six call sites. This is exactly the one-argument change 3ba2bddd made in completeTask.ts, qaApprove.ts and qaReject.ts. Match on the call text, not on line numbers, in case a peer lands first. Use Edit, not sed.\n(1) reportBlocked.ts:144, the grant-correction write: `if (grantCorrects) await state.updateTask(task.id, { blockedReason: params.reason }, undefined, params.workerId);`\n(2) reportBlocked.ts:342-352, the BLOCKED flip: the closing `}, 'TASK_BLOCKED');` becomes `}, 'TASK_BLOCKED', params.workerId);`\n(3) reportBlocked.ts:359-364, the already-BLOCKED correction: its closing `});` becomes `}, undefined, params.workerId);`\n(4) requestReplan.ts:68-78: `'TASK_REOPENED'` becomes `'TASK_REOPENED',` followed by a new line `params.workerId`. Indent it like 3ba2bddd did.\n(5) archiveTask.ts:79: `archiveUpdates(task), 'TASK_ARCHIVED', params.workerId);`\n(6) submitPlanCritique.ts:138: `await state.updateTask(task.id, updates, 'TASK_UPDATED', params.workerId);`\n\nPass `undefined`, never 'TASK_UPDATED', as the event in (1) and (3). updateTask already records an omitted event as TASK_UPDATED (taskStore.ts:646-650), so the event type stays byte-identical.\n\nPass params.workerId bare. NEVER write `params.workerId || task.assignedWorkerId`: appendActivity deliberately records no guessed actor (activityLog.ts:74-83), and the test's null keys catch that mutant. taskStore.ts:657 already falls back to the assignee, else 'unknown', for the #general line when the caller passed nothing.\n\nError handling is unchanged, and must stay that way. The new argument is a plain optional string that adds no failure path. updateTask's existing throws (unknown task, a finalizing-attempt guard on ARCHIVED, the readiness gate) still propagate to the caller exactly as before. The tools' best-effort chat posts and touchWorker calls keep their try/catch. Do not wrap the updateTask calls in a new try/catch: a failed move must still fail the tool.\n\nNo other edits: no comments needed beyond what fits on the line, no docs (docs/MCP_SERVER.md is out of scope and no contract changes), and no taskStore change. Expected diff: 4 files, +7/-6 (prototype: /mnt/d/moe-scratch/2e3012b9-plan/expected-fix.diff).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/submitPlanCritique.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/submitPlanCritique.ts"
+      ],
+      "note": "Six call sites now pass params.workerId as the actor.",
+      "startedAt": "2026-11-03T15:59:17.691Z",
+      "completedAt": "2026-11-03T15:59:34.808Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run ONCE. Its fresh output is moe.complete_task's verification evidence. Run the executionContract checkRef exactly, from anywhere inside your worktree. It does the following:\n- archives the worktree HEAD into a mktemp snapshot outside the repo;\n- overlays your 5 owned paths (uncommitted edits included);\n- runs `npm ci` under `env -i` with Linux node v24;\n- type-checks the package (tsc --noEmit) and the new test file (tt.json, because the package tsconfig excludes tests);\n- runs the task's 7 vitest files.\n\nPer the global rail, never run vitest, npm ci or npm test in the shared checkout or in your worktree. A `TMPDIR=<your scratch dir>` prefix on the OUTER command is fine. Never pass TMPDIR into the env -i (mem:convention-daemon-full-suite-gate-checkref: a long temp root breaks tsx IPC pipes).\n\nExpected tail: 'Test Files  7 passed (7)' and 'Tests  112 passed (112)', exit 0. That was dry-run at both 6cca2104 and dc37ea2b in about 10 s with a warm npm cache.\n\nPlanning also ran the full daemon suite on the fixed snapshot (238 files, 7061 passed, 24 skipped). The other callers of these tools were green too: attemptHandback, dependencyUnblock, dependencyReadiness.strict, claimNextTask, activityActor, StateManager and chatSystemFeed, 411 passed. No other test asserts 'by unknown' or an absent actor for these four tools, so the narrow gate is the right size for this mid-epic row.\n\nIf a file other than taskMoveActor fails, read it before touching anything: the fix only adds an actor.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T15:59:35.640Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your own diff (the one review step), then complete_task with step 3's evidence.\n(1) Scope: `git status --short` and `git diff --stat` against your worktree base show exactly the 4 tool files (+7/-6) plus the new test, and nothing else. No docs, no taskStore, no shell-written tracked file.\n(2) Each of the six calls passes params.workerId bare: no assignee fallback, no `?? 'unknown'`. The event argument is unchanged: TASK_BLOCKED, TASK_REOPENED, TASK_ARCHIVED and TASK_UPDATED as before, with `undefined` for the two report_blocked corrections. Error handling is unchanged: no new try/catch, and updateTask failures still fail the tool.\n(3) A workerId-less call (human, plugin or IDE) still writes no actor, and its notice still falls back to the assignee or 'unknown'. The test's task-fix and task-anon rows pin this.\n(4) Concurrency and repeats: an identical report_blocked repeat writes nothing (unchanged arm), so it cannot double-attribute. A third-party caller on an assigned row is still refused by assertWorkerOwns before any write, so it can never be recorded as the actor of someone else's row.\n(5) Mutation spot-check, at least the flip and grant sites (both land on worker-e's row):\n   - Make a scratch snapshot of the BASE with only the new test overlaid.\n   - Run `node /mnt/d/moe-scratch/2e3012b9-plan/patch.cjs <snapshot>/packages/moe-daemon <site>`. It applies every fix except <site>; sites are grant, flip, correction, replan, archive and critique.\n   - Run the new test in that snapshot. It must fail on <site>'s own actor-map key.\n   Never mutate the worktree itself.\n(6) Response shapes are unchanged, so there is no MCP contract change and no docs/MCP_SERVER.md edit.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-c9368191",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +73,96 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:42:23.585Z",
-  "updatedAt": "2026-11-03T15:42:46.748Z",
+  "updatedAt": "2026-11-03T15:59:35.640Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T15:42:33.338Z"
+    "firstClaimAt": "2026-11-03T15:42:33.338Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-c9368191"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T15:57:22.004Z",
+  "executionContract": {
+    "intendedBehavior": "report_blocked (all three updateTask writes: the BLOCKED flip, the already-BLOCKED correction and the correction that rides a free resource grant), request_replan, archive_task and submit_plan_critique pass params.workerId as updateTask's 4th (actor) argument, exactly as 3ba2bddd did for complete_task/qa_approve/qa_reject. Their TASK_BLOCKED, TASK_UPDATED, TASK_REOPENED and TASK_ARCHIVED events then carry the calling seat's workerId, get_activity_log { workerId } returns them for that seat, and #general reads 'Task moved to BLOCKED/PLANNING/ARCHIVED by <caller>'. A call with no workerId is unchanged: the event records no actor (no assignee guess) and the notice falls back to the assignee, else 'unknown'. Error handling is unchanged: updateTask failures still propagate.",
+    "acceptanceCriteria": [
+      "taskMoveActor.test.ts's actor map: task-blk TASK_BLOCKED worker-a; task-fix TASK_UPDATED worker-d; task-grant TASK_BLOCKED and TASK_UPDATED worker-e; task-rpl TASK_REOPENED worker-b; task-arc TASK_ARCHIVED architect-c; task-crit TASK_UPDATED governor-g. The two workerId-less writes (task-fix TASK_BLOCKED, task-anon TASK_ARCHIVED) record null, and each of the 9 keys occurs exactly once.",
+      "get_activity_log { workerId } returns exactly each seat's keys for worker-a, worker-d, worker-e, worker-b, architect-c and governor-g.",
+      "The sorted #general move lines are exactly the seven strings in step 1, including 'task-fix: Task moved to BLOCKED by worker-d' (assignee fallback) and 'task-anon: Task moved to ARCHIVED by unknown' (no caller, no assignee).",
+      "The checkRef exits 1 at the base with only taskMoveActor failing (Tests 1 failed | 111 passed), and exits 0 after the fix (7 files, 112 tests).",
+      "Dropping any one of the six actor arguments fails the new test on that site's own actor-map key and seat query. The flip, replan, archive and critique mutants also fail the #general list."
+    ],
+    "invariants": [
+      "appendActivity never guesses an actor from task.assignedWorkerId (activityLog.ts:74-83). The tools pass the caller only.",
+      "Nothing else in these tools changes: seat freeing, paging, resource leases, the dependency logic, error handling, response shapes.",
+      "Out of scope: add_comment, amend_plan_step and release_task (sibling task-e977c32b, disjoint files); submit_plan's PLAN_AUTO_APPROVED (an approval-mode move); docs/MCP_SERVER.md."
+    ],
+    "compatibility": [
+      "No MCP contract, schema or response change. ActivityEvent.workerId is already optional; an event gains a workerId only where the caller passed one.",
+      "A call without workerId (human, plugin, IDE) keeps today's behavior: no actor on the event, and the #general notice falls back to the assignee or 'unknown' (taskStore.ts:657).",
+      "submit_plan_critique's pass verdict writes TASK_UPDATED through the same call, so it now records the governor too. That is correct: the governor wrote planCritiqueResult.",
+      "Event types are unchanged: the two report_blocked correction writes pass `undefined` as the event, which updateTask records as TASK_UPDATED exactly as now (taskStore.ts:646-650)."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/tools/reportBlocked.ts: the updateTask calls at :144 (grant correction, add `undefined, params.workerId`), :342-352 (flip, add `params.workerId` after 'TASK_BLOCKED') and :359-364 (correction, add `undefined, params.workerId`).",
+      "packages/moe-daemon/src/tools/requestReplan.ts:68-78: add `params.workerId` after 'TASK_REOPENED'.",
+      "packages/moe-daemon/src/tools/archiveTask.ts:79: add `params.workerId` after 'TASK_ARCHIVED'.",
+      "packages/moe-daemon/src/tools/submitPlanCritique.ts:138: add `params.workerId` after 'TASK_UPDATED'.",
+      "New file packages/moe-daemon/src/tools/taskMoveActor.test.ts."
+    ],
+    "reuse": [
+      "The fix is the same one-argument change as 3ba2bddd in completeTask.ts, qaApprove.ts and qaReject.ts.",
+      "The test is modeled on tools/reviewLoopActor.test.ts. The dry-run prototype, mutant generator and expected diff are in /mnt/d/moe-scratch/2e3012b9-plan/: taskMoveActor.test.ts, patch.cjs and expected-fix.diff."
+    ],
+    "sourceAssumptions": [
+      "StateManager.updateTask(taskId, updates, event?, actorWorkerId?) at StateManager.ts:671 forwards to taskStore.updateTask (taskStore.ts:427-428). actorWorkerId has no other use there than appendActivity (:646-650) and the #general actor `actorWorkerId || updated.assignedWorkerId || 'unknown'` (:657).",
+      "getActivityLog.ts:131-132 filters on e.workerId only.",
+      "assertWorkerOwns (util/enforcement.ts:43) lets a workerId-less call through on an assigned row and any caller through on an unassigned row. submit_plan_critique refuses a non-governor workerId (workerHasRole, governor- prefix), so its actor is always a governor.",
+      "sendMessage appends to messages/<channel>.jsonl synchronously inside the per-channel mutex with no prior await (chatStore.ts), so #general lines are on disk once the test's awaits drain, as in reviewLoopActor.test.ts.",
+      "Daemon src is byte-identical at 946358a8, 6cca2104 and dc37ea2b (git diff --stat empty), so the new test is RED at any of them."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && P=packages/moe-daemon/src/tools && cp --parents $P/reportBlocked.ts $P/requestReplan.ts $P/archiveTask.ts $P/submitPlanCritique.ts $P/taskMoveActor.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/taskMoveActor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/taskMoveActor.test.ts src/tools/reviewLoopActor.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/lifecycleFixes.test.ts src/tools/governanceFeatures.test.ts src/tools/echoedReasonNotices.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Fall back to the prior assignee inside taskStore/appendActivity. Rejected: appendActivity deliberately never guesses (a governor moving someone's row would be misattributed), and these moves have already cleared the assignee. The tool knows its caller, so the tool passes it, exactly like 3ba2bddd. (2) Spy on state.postSystemMessage instead of reading #general's jsonl. Rejected: reading the file checks what a human actually sees, as reviewLoopActor does. sendMessage appends synchronously inside the channel mutex, so it is deterministic once the test's awaits drain. Lines are compared sorted, so post order does not matter. (3) Extend reviewLoopActor.test.ts. Rejected: the task names a new file, and d981e0b0's test stays untouched.",
+    "codebaseInsights": "updateTask(taskId, updates, event?, actorWorkerId?): an omitted event is recorded as TASK_UPDATED (taskStore.ts:646-650). The #general status line names `actorWorkerId || updated.assignedWorkerId || 'unknown'` (:657). Every move here except the third-party park clears the assignee, which is why it read 'by unknown'. report_blocked has three writes with distinct reachability:\n- the flip (:342);\n- the already-BLOCKED correction (:359), reached by a re-report with a new reason, or by the assignee acknowledging a third-party hold;\n- the grant correction (:144), reached by a re-report on a BLOCKED row whose resourceId is free.\nThe test reaches each one with its own row. The daemon floors this 4-step, 5-file plan at tier standard (planSizeFloor: light needs <=3 steps and <=2 files).",
+    "risks": "Line numbers drift if a peer lands in these files first: match the call text. Global rails:\n- Never run vitest, npm ci or npm test in the shared checkout or the worktree; the checkRef builds its own snapshot.\n- Write the test with the Write tool, never cp or a heredoc, or the path is HELD at landing.\n- Never pattern-kill processes.\nTMPDIR trap: a long TMPDIR passed INTO env -i breaks tsx pipes in other suites (mem:convention-daemon-full-suite-gate-checkref). The gate's 7 files do not use them, but do not do it anyway. An assignee-guessing 'fix' (params.workerId || task.assignedWorkerId) would pass a naive test, and the null keys for task-fix TASK_BLOCKED and task-anon TASK_ARCHIVED exist to catch it. The target moved twice while this plan was drafted (6cca2104, then dc37ea2b, docs plus initFiles only); the gate is green at both.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/requestReplan.ts",
+      "packages/moe-daemon/src/tools/archiveTask.ts",
+      "packages/moe-daemon/src/tools/submitPlanCritique.ts",
+      "packages/moe-daemon/src/tools/reviewLoopActor.test.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/state/activityLog.ts",
+      "/mnt/d/moe-scratch/2e3012b9-plan/taskMoveActor.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "dc37ea2b1ba7668843668d2a5bb7070a05b777db",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T15:57:22.046Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T15:58:34.461Z"
 }
