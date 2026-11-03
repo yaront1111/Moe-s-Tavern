@@ -58,14 +58,16 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (the one review step), then complete_task with step 3's evidence.\n(1) Scope: `git status --short` and `git diff --stat` show exactly the 5 planned files. Nothing in MoeBundle.properties, moe-vscode or MoeJsonTest's import block, and no untracked file in the worktree.\n(2) Leniency and error handling: the decoy test's legacy-only note and the `{}` and legacy rows in TaskTimingPresentationTest prove a note missing the daemon keys parses to nulls and renders \"#N\" without throwing. getStringOrNull and the non-object skip are unchanged.\n(3) Mutation check. Make a scratch archive copy, never touching the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy):\n   - `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/ac587df5-mut/repo`, then copy your 5 edited files over it (a scratch dir, so cp is fine there).\n   - Under the jetbrains-gradle lease, run ONE mutant at a time with `.\\gradlew.bat test --tests <Class> --rerun`. The --tests value is unquoted.\n   - Required mutants:\n     - M2: drop the reason append in handoffBlocks. com.moe.toolwindow.TaskTimingPresentationTest must fail.\n     - M3: re-add `val from: String? = null` to HandoffNote and `from = h.getStringOrNull(\"from\")` to parseHandoffs. com.moe.util.MoeJsonTest must fail on the new decoy test.\n   - Optional M1: source releasedBy from \"from\" in parseHandoffs. MoeJsonTest must fail.\n   - Restore each mutant and delete the scratch copy afterwards.\n(4) Concurrency: the edits are pure parse and presentation with no shared state. If task-37e03b91 or task-40813cc1 lands first, landing is a merge-tree squash and these hunks are disjoint from theirs. Only if landing reports a conflict: rebase on the target tip and re-run the gate.\n(5) Would I be embarrassed? The header must never show 'null' or a dangling ' released by ' or ' ()'. Each fragment is guarded by isNullOrBlank.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T16:11:20.917Z"
+      "note": "Adversarial review passed: exactly 5 planned files (+56/-20), no bundle/import/VS Code/untracked changes; pure parsing/presentation, no shared mutable state or new resource exits, existing lenient helper and non-object skip preserved, independently guarded blank/null fragments avoid dangling text. Required scratch mutants both killed under individual jetbrains-gradle leases: M2 drop reason -> TaskTimingPresentationTest 22 tests, 2 assertion failures (full and reason-only header); M3 parsed from field -> MoeJsonTest 34 tests, new decoy case fails. Mutants restored byte-identical across all 5 files; scratch repo deleted. Real-tree exact gate remains green: 633 tests, 6 skipped, failures=0/errors=0. Root parity/lint gate passed.",
+      "startedAt": "2026-11-03T16:11:20.917Z",
+      "completedAt": "2026-11-03T16:12:48.938Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -77,12 +79,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:47:05.199Z",
-  "updatedAt": "2026-11-03T16:11:20.917Z",
+  "updatedAt": "2026-11-03T16:12:49.022Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:57:50.997Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -95,7 +97,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T16:06:02.367Z",
@@ -166,5 +169,21 @@
   },
   "planApprovedAt": "2026-11-03T16:06:02.397Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T16:07:27.065Z"
+  "workStartedAt": "2026-11-03T16:07:27.065Z",
+  "reviewStartedAt": "2026-11-03T16:12:49.020Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)/moe-jetbrains\" && L=$(mktemp) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && .\\gradlew.bat test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' build/test-results/test/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; exit $r",
+    "exitCode": 0,
+    "outputTail": "BUILD SUCCESSFUL in 28s\nxml tests=633 skipped=6 failures=0 errors=0",
+    "reportedAt": "2026-11-03T16:12:49.020Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+  ],
+  "completionSummary": "Fixed JetBrains prior-handoff model/parser/header to use daemon releasedBy/releasedAt/reason. Updated daemon-shaped fixtures and added decoy equality regression through both parser paths; headers covered for full/partial/empty/legacy-only notes. Only 5 planned files changed (+56/-20); VS Code untouched. Full Gradle gate: 633 tests, 6 skipped, 0 failures/errors (627 passed). Root parity/lint gate passed. Required scratch M2/M3 mutants killed (2 header assertion failures; decoy parser assertion failure), restored and removed. Initial fixture epicId omission corrected; unrelated connection-test timeout cleared on full retry. All leases released; handoff memory saved."
 }

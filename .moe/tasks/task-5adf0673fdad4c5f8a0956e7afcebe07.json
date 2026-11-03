@@ -97,15 +97,22 @@
     {
       "stepId": "step-6",
       "description": "Verification (DoD 1 and 6). Run it ONCE, on the final bytes, in place in the shared checkout: the global rail allows that for scripts/tests launcher harnesses. No npm anywhere.\n\nThe command, from /mnt/d/projexts/moes:\nenv -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight-vm-route.sh && bash scripts/tests/postflight.sh'\n\nLaunch it with job control so SIGINT is not ignored (scenario W; mem:gotcha-qa-session-env-and-signals-leak-into-harness):\n`( set -m; nohup <command>; echo EXIT=$? ) > <scratch log> 2>&1 &`, with the whole subshell in the background. Poll with a foreground `timeout 590 bash -c 'until grep -q ^EXIT= <log>; do sleep 15; done'`, repeated as needed. The whole run takes about 15-20 minutes.\n\nIt passes when all of these hold:\n- EXIT=0;\n- the log shows 'PASS parity-check.sh', 'PASS postflight-vm-route.sh' twice (alone and inside postflight.sh) and 'PASS postflight.sh';\n- `grep -E '^SKIP' <log>` finds nothing (CI's postflight-safe.mjs fails on a SKIP line).\n\ncomplete_task verification: command = the env -i string above, exitCode 0, outputTail = the log's last lines.\n\nIf a pre-existing row fails, A/B it against HEAD before blaming this change. Never edit an existing row or its timeout.\n\nSize: measure `git diff --numstat -- scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh` plus `wc -l scripts/tests/postflight-vm-route.sh`. If the net is over 400 changed lines, file the EPIC ADD_RAIL waiver with moe.propose_rail BEFORE complete_task, using the CQ-M07k rail template with the exact per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Never trim rows to fit.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T15:31:07.403Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "I ran the full gate fresh on the final bytes from the task worktree (cwd .worktrees/task-5adf0673…, job-control launch, SigIgn 0x5): env -i … bash -n && parity-check && postflight-vm-route && postflight.sh → EXIT=0.\n- Passes: 'PASS parity-check.sh', 'PASS postflight-vm-route.sh' twice (standalone, then inside postflight.sh), 'PASS postflight.sh'. 0 lines start with SKIP.\n- The sha256 of all 4 files matched before and after the run.\n- Size: moe-agent.sh +88; fake-proxy +21/-1; postflight.sh +1; new postflight-vm-route.sh 228 lines. Net ≈339, under 400, so no waiver is needed.\n- moe-agent.sh fix: the Edit tool had decoded my \\uXXXX escapes in the JS-trim whitespace set into raw invisible characters. I replaced that line with ASCII \"\".join(map(chr, (…))) via Serena replace_content. The file's non-ASCII count is back to HEAD's 199, and Python matches Node trim() on blank, \\x1c, \\x85 and \u200b.\n- postflight-vm-route.sh: vmr_refused now also asserts that no chat_*, get_pending_questions or claim_next_task call precedes the readiness read. This was mutant e's escape; see step 7.",
+      "startedAt": "2026-11-03T15:31:07.403Z",
+      "completedAt": "2026-11-03T16:12:27.859Z"
     },
     {
       "stepId": "step-7",
       "description": "Adversarial self-review of this task's own diff (load adversarial-self-review), then mutants.\n\nChecklist:\n1. set -e: can ANY command on today's path end a legacy seat? Try an empty PYTHON_CMD, a reply containing \\x1f or newlines, a 1 MB reply and a non-UTF-8 reply.\n2. Can a well-formed verified-local reply ever reach claim_next_task, chat_read or the host CLI? Check --no-auto-claim, the launch-outage probe, the resume path and --loop.\n3. Is anything printed or exported on today's path?\n4. Do an id or a worktreeMode value with control characters break the one-line output?\n5. Is the seam honored only when unprotected, and is is_wsl() untouched?\n6. With FAKE_READINESS and FAKE_CALL_LOG unset, does the fake proxy answer every existing knob as before?\n7. Is the wrapper code valid bash 3.2?\n\nMutants, never in the shared checkout:\n- Copy scripts/ and packages/moe-daemon/src/state/validators.ts into a scratch tree outside the checkout. Shell writes are allowed only there.\n- Apply each mutant there with sed, then run that copy's postflight-vm-route.sh (about 2 min each).\n- Each mutant must make it FAIL:\n  a. drop the worker|qa role guard (A1/G1);\n  b. swap the WSL and CLI checks (W1);\n  c. accept ready \"true\" (the malformed T run);\n  d. honor the seam under protection (P1);\n  e. move the gate after the chat reads (the call-log assertions);\n  f. sort the missing ids (N1);\n  g. accept any truthy worktreeMode (S2).\n- Report which were killed and which survived in complete_step.\n\nIf you change any byte, re-run the step-6 command fresh: the complete_task evidence must come from the final bytes.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T16:12:31.947Z"
     }
   ],
   "planRevision": 1,
@@ -128,12 +135,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:21:49.720Z",
-  "updatedAt": "2026-11-03T15:31:07.403Z",
+  "updatedAt": "2026-11-03T16:12:31.948Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T14:27:03.726Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -193,7 +200,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:48:31.668Z",

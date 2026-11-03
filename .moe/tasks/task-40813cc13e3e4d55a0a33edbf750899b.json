@@ -99,8 +99,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -112,7 +112,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:46:49.581Z",
-  "updatedAt": "2026-11-03T16:11:46.577Z",
+  "updatedAt": "2026-11-03T16:13:21.727Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:55:39.579Z",
     "plannedStepCount": 6,
@@ -169,5 +169,56 @@
   },
   "planApprovedAt": "2026-11-03T15:59:57.433Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T16:02:08.419Z"
+  "workStartedAt": "2026-11-03T16:02:08.419Z",
+  "reviewStartedAt": "2026-11-03T16:12:22.817Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\.worktrees\\task-40813cc13e3e4d55a0a33edbf750899b\\moe-jetbrains && gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 28s\n11 actionable tasks: 2 executed, 9 up-to-date\n[TEST-*.xml totals, 40 classes] tests=633 skipped=6 failures=0 errors=0; timestamps 2026-11-03T16:10:05Z-16:10:29Z (run started 16:10:04Z); TEST-com.moe.util.MoeJsonTest.xml, TEST-com.moe.toolwindow.SettingsPolicyCorpusTest.xml and TEST-com.moe.toolwindow.MoeSettingsDialogTest.xml present.\n[VS Code gate, Linux snapshot of HEAD plus the 9 changed files] env -i HOME PATH=~/.nvm/versions/node/v24.21.0/bin:... sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npm test && npm run compile' -> exit 0; tests 695, pass 685, fail 0, skipped 10; settings-policy-corpus C1-C5 pass (P01-P15); tsc -p ./ clean.",
+    "reportedAt": "2026-11-03T16:12:22.817Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/resources/client-settings-policy.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+    "moe-vscode/src/panels/SettingsPanel.ts",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "The JetBrains settings dialog now resolves worktreeMode the way the daemon does (validators.ts resolveWorktreeMode/resolveWorktreeTarget), and the VS Code SettingsPanel twin does the same.\n- Mode on (explicit 'on', or unset with a non-blank gate):\n  - a \"Worktree mode\" row before Landing branch: \"On\", or \"On (unset; a qualityGate is set)\";\n  - Landing branch is the literal consolidationBranch, else main (a glob reads main);\n  - Commit board state reads \"Landings carry no .moe/ path\" plus whether there is a refs/moe/board snapshot;\n  - Quality gate scope reads \"Every completion (worktree mode)\".\n- Mode off (explicit 'off', or unset with no gate): every row is byte-identical, and P01-P10's expect arrays are untouched.\n- A malformed stored mode (number, null, unknown string) reads as unset and never throws.\nFiles:\n- Models.kt: ProjectSettings gets a last defaulted worktreeMode plus computed worktreeModeOn, worktreeModeFromDefault and worktreeTarget.\n- MoeJson.parseProjectSettings: strict read of worktreeMode.\n- MoeSettingsDialog.kt: worktree rows. The file is 300 lines.\n- SettingsPanel.ts: the twin.\n- client-settings-policy.json: P04 gets an explicit \"off\"; new rows P11-P15 cover explicit on, unset plus gate, explicit off plus gate, explicit on with no gate plus a glob plus board off, and a malformed mode.\n- MoeJsonTest: one method covering every resolve and target branch.\n- CONFIGURATION.md: the intro now lists worktreeMode, and its row carries the \"Dialog: Worktree mode\" label.\n- Two forced one-line test edits outside the plan: SettingsPolicyCorpusTest.POLICY_SHAPE gains worktreeMode, and MoeSettingsDialogTest's populated fixture gains worktreeMode=\"off\", since a gate alone now means worktree mode.\nUPDATE_SETTINGS is unchanged and still sends 4 keys.\nGates:\n- JetBrains gradlew test --rerun: 633 tests, 0 failures.\n- VS Code npm ci && npm test && npm run compile: 695 tests, 0 fail.\n- Project qualityGate (parity-check plus lint): exit 0.\n- RED was shown first: a MoeJson",
+  "commits": [
+    {
+      "sha": "a000b81795f784e5eff299b6d1ea1e8da80ee111",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T16:00:07Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/test/resources/client-settings-policy.json",
+        "moe-vscode/src/panels/SettingsPanel.ts"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T16:13:21.727Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T16:00:07Z",
+    "at": "2026-11-03T16:13:21.727Z"
+  }
 }
