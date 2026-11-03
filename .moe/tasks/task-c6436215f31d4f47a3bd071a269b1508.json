@@ -79,8 +79,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:57.048Z",
-  "updatedAt": "2026-11-03T13:04:59.968Z",
+  "updatedAt": "2026-11-03T14:35:44.058Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:32:52.349Z",
@@ -109,7 +109,9 @@
     "firstClaimAt": "2026-11-03T08:34:35.147Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T14:35:01.483Z",
+    "wallClockMs": 21626336
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -225,10 +227,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T12:39:45Z",
-    "at": "2026-11-03T13:04:38.621Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T13:04:43Z",
+    "at": "2026-11-03T14:35:44.058Z"
   },
   "reviewStartedAt": "2026-11-03T13:03:43.264Z",
   "verification": {
@@ -238,5 +241,9 @@
     "reportedAt": "2026-11-03T13:03:43.264Z",
     "source": "agent-reported"
   },
-  "completionSummary": "This is a test-only change: +41/-1 in scripts/tests/postflight-worktree.cjs. scripts/moe-agent.{sh,ps1} and postflight-fake-proxy.js are byte-identical to the target. It adds two cases, placed right after wtResume and registered right after 'wt-resume'.\n(a) wt-resume-unmerged: a gate-routed unlanded completion stores retry paths ['gate', []] (asserted). Main then changes src/a.txt. The resume's merge conflicts outside landingRetry.paths, and the completion that keeps the markers is checked for: the LANDING-CONFLICT: src/a.txt prompt, main unmoved, MERGE_HEAD==B, markers kept, [WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT, unlanded/conflict/['src/a.txt'], stored paths ['src/a.txt'], and no gate run.\n(b) wt-resume-retry-path: the conflict resume's merge is committed by hand. Before the completion the case asserts: no MERGE_HEAD, markers kept, `ls-files -u` empty, retry paths ['src/a.txt'], and B an ancestor of W HEAD. The completion is then checked for: the LANDING-RETRY: conflict prompt, main unmoved, no MERGE_HEAD, MOE_WORKTREE_UNRESOLVED_CONFLICT, unlanded/conflict, and no landed finalize.\nRED runs, on scratch copies of scripts/ with one swap each and the BOM kept:\n- M1 (sh, drop --diff-filter=U) and P1 (ps1) failed wt-resume-unmerged: `AssertionError: wt-resume-unmerged-2: ...`.\n- M2 (drop the retry-paths half), M3 (MERGE_HEAD-only trigger), P2 and P3 failed wt-resume-retry-path: `AssertionError: wt-resume-retry-path-3: ...`.\n- In each kill a 'landed' finalize replaced 'unlanded', so the markers reached main.\n- The unmutated controls gave 3 ok, 0 failed on both sh and PS 5.1.\nGate: the plan's exact command, run once against the unchanged HEAD 09b5c80e (clean tree), 11:32:04Z to 13:02:40Z, EXIT=0. A prior session of this seat started it; this session waited for it to finish and confirmed the tree was unchanged. Log: D:\\moe-scratch\\c6436215-gate\\log. Results:\n- PASS parity-check.sh;\n- sh [worktree] 4 ok, 0 failed;\n- ps1 (PS 5.1) [worktree] 3 ok, 0 failed;\n- postflight-saf"
+  "completionSummary": "This is a test-only change: +41/-1 in scripts/tests/postflight-worktree.cjs. scripts/moe-agent.{sh,ps1} and postflight-fake-proxy.js are byte-identical to the target. It adds two cases, placed right after wtResume and registered right after 'wt-resume'.\n(a) wt-resume-unmerged: a gate-routed unlanded completion stores retry paths ['gate', []] (asserted). Main then changes src/a.txt. The resume's merge conflicts outside landingRetry.paths, and the completion that keeps the markers is checked for: the LANDING-CONFLICT: src/a.txt prompt, main unmoved, MERGE_HEAD==B, markers kept, [WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT, unlanded/conflict/['src/a.txt'], stored paths ['src/a.txt'], and no gate run.\n(b) wt-resume-retry-path: the conflict resume's merge is committed by hand. Before the completion the case asserts: no MERGE_HEAD, markers kept, `ls-files -u` empty, retry paths ['src/a.txt'], and B an ancestor of W HEAD. The completion is then checked for: the LANDING-RETRY: conflict prompt, main unmoved, no MERGE_HEAD, MOE_WORKTREE_UNRESOLVED_CONFLICT, unlanded/conflict, and no landed finalize.\nRED runs, on scratch copies of scripts/ with one swap each and the BOM kept:\n- M1 (sh, drop --diff-filter=U) and P1 (ps1) failed wt-resume-unmerged: `AssertionError: wt-resume-unmerged-2: ...`.\n- M2 (drop the retry-paths half), M3 (MERGE_HEAD-only trigger), P2 and P3 failed wt-resume-retry-path: `AssertionError: wt-resume-retry-path-3: ...`.\n- In each kill a 'landed' finalize replaced 'unlanded', so the markers reached main.\n- The unmutated controls gave 3 ok, 0 failed on both sh and PS 5.1.\nGate: the plan's exact command, run once against the unchanged HEAD 09b5c80e (clean tree), 11:32:04Z to 13:02:40Z, EXIT=0. A prior session of this seat started it; this session waited for it to finish and confirmed the tree was unchanged. Log: D:\\moe-scratch\\c6436215-gate\\log. Results:\n- PASS parity-check.sh;\n- sh [worktree] 4 ok, 0 failed;\n- ps1 (PS 5.1) [worktree] 3 ok, 0 failed;\n- postflight-saf",
+  "completedAt": "2026-11-03T14:35:01.483Z",
+  "reviewCompletedAt": "2026-11-03T14:35:01.483Z",
+  "reviewSummary": "Approved landed completion 99cae90a (on moe/work-2026-10-24 and origin; tree 32e6e73b = candidate). The worker gated checkpoint 09b5c80e on an older target, so I re-ran everything on a clone snapshot of 99cae90a.\n\nDiff: +41/-1 in scripts/tests/postflight-worktree.cjs only: wtResumeUnmerged and wtResumeRetryPath after wtResume, table entries after 'wt-resume'. No existing case, helper or assertion changed; moe-agent.{sh,ps1} and fake-proxy unchanged (DoD 5).\n\nGate, the plan's exact command, 13:08-14:34Z, EXIT=0: PASS parity-check; sh targeted 4 ok, 0 failed; ps1 PS 5.1 3 ok, 0 failed; postflight-safe bash and powershell exit 0, NONE. postflight.{sh,ps1} run the full worktree suite, so the new cases ran on both engines (DoD 4). Recorded: check-qa-af7be174-c6436215-gate-1.\n\nMy mutant RED runs on the landed wrapper (whole scripts/ copy, needle count 1, BOM kept) (DoD 3): M1 and P1 fail wt-resume-unmerged-2; M2, M3, P2 and P3 fail wt-resume-retry-path-3. Each is an AssertionError with the other case ok, where main moved and the finalize became 'landed'. The unmutated sh and PS 5.1 controls were each 2 ok.\n\nCases (DoD 1-2): (a) proves its premise (gate retry paths [], 1 gate run), then the LANDING-CONFLICT prompt, main unmoved, MERGE_HEAD, markers, the UNRESOLVED_CONFLICT warning, unlanded/conflict/['src/a.txt'], and no gate before L2. (b) proves no MERGE_HEAD, ls-files -u empty, markers kept, retry paths and B in W, then LANDING-RETRY: conflict and the same refusal with no landed finalize. Cross-platform helpers only. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
