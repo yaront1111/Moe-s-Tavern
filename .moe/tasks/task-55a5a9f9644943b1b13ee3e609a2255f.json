@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -84,11 +84,17 @@
       "author": "governor-e6b40560",
       "content": "Governor ruling, 20:51Z: task-0adea941 is DONE, so docs/MCP_SERVER.md is free. Include this row's one-line MCP_SERVER.md sync (request_replan's Returns block, about :2880-2892) in that tool's own section. Do it even if lanes.js shows task-a024ac57 holding the file: a024ac57 edits only the claim_next_task and wait_for_task sections, and worktree-mode merge-tree lands distinct sections cleanly. Don't defer the sync.",
       "timestamp": "2026-11-03T20:50:37.696Z"
+    },
+    {
+      "id": "comment-bba442bd20e24adba89387dca71eede2",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-03T21:28:20.254Z",
+      "content": "Landing unlanded (contention) 1 time(s) in a row; attempt attempt-559c4ae2a17b444585ef56d5e6f84b22 (generation 2); paths: (none reported); rescue ref: refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z; target tip: unknown; task WORKING."
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:41:48.670Z",
-  "updatedAt": "2026-11-03T20:57:16.186Z",
+  "updatedAt": "2026-11-03T21:28:20.254Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:45:25.436Z",
     "plannedStepCount": 4,
@@ -190,5 +196,36 @@
     "packages/moe-daemon/src/tools/requestReplan.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "request_replan no longer returns a nextAction (the moe.wait_for_task hint). It returns sessionHandoff { action: 'END_SESSION', taskId, workerId, reason } for the prior assignee, or for a non-governor caller when the row had no assignee. The reason text is copied verbatim from report_blocked. No handoff goes to a governor (resolveWorkerRole: team role, then id prefix), and none goes when the seat's record already names another currentTaskId. The touchWorker is now guarded the same way report_blocked guards it, so a dangling seat's pointer and status are left alone. The PLANNING status, null assignee, priorAttempt, closed attempt, TASK_REOPENED event with the caller as actor, and the #general and #architects posts are unchanged. New requestReplan.test.ts has 5 cases. Negative control at the merge-base with only the new test file: \"Tests  5 failed (5)\" and RED-AT-BASE. I also synced the request_replan section of docs/MCP_SERVER.md, as the governor's 20:50Z comment directed. Nothing in scripts, moe-jetbrains/src/main or moe-vscode/src references request_replan."
+  "completionSummary": "request_replan no longer returns a nextAction (the moe.wait_for_task hint). It returns sessionHandoff { action: 'END_SESSION', taskId, workerId, reason } for the prior assignee, or for a non-governor caller when the row had no assignee. The reason text is copied verbatim from report_blocked. No handoff goes to a governor (resolveWorkerRole: team role, then id prefix), and none goes when the seat's record already names another currentTaskId. The touchWorker is now guarded the same way report_blocked guards it, so a dangling seat's pointer and status are left alone. The PLANNING status, null assignee, priorAttempt, closed attempt, TASK_REOPENED event with the caller as actor, and the #general and #architects posts are unchanged. New requestReplan.test.ts has 5 cases. Negative control at the merge-base with only the new test file: \"Tests  5 failed (5)\" and RED-AT-BASE. I also synced the request_replan section of docs/MCP_SERVER.md, as the governor's 20:50Z comment directed. Nothing in scripts, moe-jetbrains/src/main or moe-vscode/src references request_replan.",
+  "commits": [
+    {
+      "sha": "3f533ff4d020ce2229ebdcd61c5358fe573c4496",
+      "ref": "refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T20:52:57Z",
+      "paths": [],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T21:28:18.947Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-55a5a9f9644943b1b13ee3e609a2255f ref=refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z sha=3f533ff4d020ce2229ebdcd61c5358fe573c4496 reason=contention"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "failed",
+    "kind": "completion",
+    "code": "MOE_COMMIT_FAILED_LAND_LEASE",
+    "sessionId": "worker-8cf0816c@2026-11-03T20:52:57Z",
+    "at": "2026-11-03T21:28:19.606Z"
+  },
+  "landingRetry": {
+    "reason": "contention",
+    "rescueRef": "refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z",
+    "targetTip": null,
+    "paths": [],
+    "count": 1,
+    "at": "2026-11-03T21:28:20.254Z"
+  }
 }
