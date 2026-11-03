@@ -100,6 +100,308 @@ function Get-VmrNormalized {
     return ($normalized -join "`n")
 }
 
+# --- [vm candidate] CQ-M07n2: Invoke-MoeVmCandidateLanding turns a VM job's
+# admitted tree into ONE checkpoint commit on moe/task/<id>; [strong intent] is
+# Test-MoeWorktreeStrongIntent. Twins of postflight-vm-route.sh's two sections,
+# rows R1-R9 and G1-G8 one for one (G6d is ps1-only). The wrapper's functions are
+# imported through the PowerShell parser (postflight.sh's WT_PS1 approach) into
+# Invoke-VmcSections' scope and run in process against a temp repo whose W is a
+# real sparse linked worktree; Send-MoeRecordCommit and Send-MoeGeneralChat only
+# log. Every row also proves the control checkout's HEAD, index file and status
+# and refs/heads/main never move. Git runs on a private global config with the
+# system config (autocrlf) off.
+function Invoke-VmcGit([string]$Top, [string[]]$A, [string]$Index = '', [switch]$NoThrow) {
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $enc = [Console]::OutputEncoding; $prevIdx = $env:GIT_INDEX_FILE; $raw = @(); $rc = 255
+    try {
+        [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+        if ($Index) { $env:GIT_INDEX_FILE = $Index }
+        $raw = & git -C $Top @A 2>$null; $rc = $LASTEXITCODE
+    } finally {
+        if ($Index) { $env:GIT_INDEX_FILE = $prevIdx }
+        [Console]::OutputEncoding = $enc; $ErrorActionPreference = $prev
+    }
+    if ($rc -ne 0 -and -not $NoThrow) { throw "harness: git $($A -join ' ') exited $rc" }
+    return ((@($raw | ForEach-Object { "$_" }) -join "`n").TrimEnd("`n"))
+}
+function Stop-Vmc([hashtable]$V, [string]$Why) {
+    Write-Host (@($V.Out) -join "`n")
+    foreach ($x in @($script:vmcLog)) { Write-Host (ConvertTo-VmcJson $x) }
+    throw "VM ROUTE FAILED ($($V.Section) $($V.Row)): $Why"
+}
+function ConvertTo-VmcJson($H) {
+    $o = [ordered]@{}; foreach ($k in @($H.Keys | Sort-Object)) { $o[$k] = $H[$k] }
+    return (ConvertTo-Json $o -Compress -Depth 4)
+}
+function Get-VmcControl([hashtable]$V) {
+    return (@((Invoke-VmcGit $V.R @('symbolic-ref', '-q', 'HEAD')), (Invoke-VmcGit $V.R @('rev-parse', 'HEAD', 'refs/heads/main')),
+        (Get-FileHash -LiteralPath (Join-Path $V.R '.git\index') -Algorithm SHA256).Hash,
+        (Invoke-VmcGit $V.R @('--no-optional-locks', 'status', '--porcelain', '-uall', '-z'))) -join "`n")
+}
+function Get-VmcRefs([hashtable]$V) { return (Invoke-VmcGit $V.R @('for-each-ref', '--format=%(refname) %(objectname)')) }
+function Get-VmcOthers([hashtable]$V) {
+    return (@((Get-VmcRefs $V) -split "`n" | Where-Object {
+        -not $_.StartsWith("refs/heads/$($V.B) ", [StringComparison]::Ordinal) -and -not $_.StartsWith('refs/moe/rescue/', [StringComparison]::Ordinal) }) -join "`n")
+}
+function Get-VmcWFiles([hashtable]$V) {
+    $base = (Resolve-Path -LiteralPath $V.W).ProviderPath.TrimEnd('\') + '\'
+    $files = @(Get-ChildItem -LiteralPath $V.W -Recurse -File -Force | Where-Object { $_.FullName -cne ($base + '.git') } | Sort-Object -Property FullName |
+        ForEach-Object { $_.FullName.Substring($base.Length) + ' ' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash })
+    return ((@((Invoke-VmcGit $V.W @('symbolic-ref', '-q', 'HEAD') -NoThrow), (Invoke-VmcGit $V.W @('ls-files', '-s', '-t'))) + $files) -join "`n")
+}
+function Get-VmcWIndex([hashtable]$V) {
+    return (Get-FileHash -LiteralPath (Join-Path (Invoke-VmcGit $V.W @('rev-parse', '--absolute-git-dir')) 'index') -Algorithm SHA256).Hash
+}
+# New-VmcTree V BASE PATH CONTENT... -- BASE plus each PATH's blob (CONTENT '-'
+# deletes it) through a private index, as admission.mjs writeTree builds an
+# admitted tree. No stdin: 5.1 pipes ASCII.
+function New-VmcTree([hashtable]$V, [string]$Base, [string[]]$Pairs) {
+    $idx = Join-Path $V.Dir 'tree.idx'; $blob = Join-Path $V.Dir 'blob.txt'
+    Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
+    Invoke-VmcGit $V.R @('read-tree', $Base) $idx | Out-Null
+    for ($i = 0; $i + 1 -lt $Pairs.Count; $i += 2) {
+        if ($Pairs[$i + 1] -ceq '-') { Invoke-VmcGit $V.R @('update-index', '--force-remove', '--', $Pairs[$i]) $idx | Out-Null; continue }
+        [IO.File]::WriteAllText($blob, $Pairs[$i + 1] + "`n")
+        $sha = Invoke-VmcGit $V.R @('hash-object', '-w', '--no-filters', '--', $blob)
+        Invoke-VmcGit $V.R @('update-index', '--add', '--cacheinfo', "100644,$sha,$($Pairs[$i])") $idx | Out-Null
+    }
+    return (Invoke-VmcGit $V.R @('write-tree') $idx)
+}
+# New-VmcFixture: a control checkout R on main and W on moe/task/<id>, sparse
+# '/*' '!/.moe/' like Initialize-MoeWorktree; C/BT the job's base, T base +
+# src/a.txt=a2.
+function New-VmcFixture([hashtable]$V) {
+    Remove-Item -LiteralPath $V.R, $V.SeamRan -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($d in @('src', 'lib', '.moe\tasks')) { New-Item -ItemType Directory -Force -Path (Join-Path $V.R $d) | Out-Null }
+    [IO.File]::WriteAllText((Join-Path $V.R 'src\a.txt'), "a`n"); [IO.File]::WriteAllText((Join-Path $V.R 'lib\keep.txt'), "keep`n")
+    [IO.File]::WriteAllText((Join-Path $V.R ".moe\tasks\$($V.Tid).json"), "{}`n"); [IO.File]::WriteAllText((Join-Path $V.R '.gitignore'), ".worktrees/`n")
+    Invoke-VmcGit $V.R @('init', '-q', '-b', 'main') | Out-Null
+    Invoke-VmcGit $V.R @('add', '-A') | Out-Null; Invoke-VmcGit $V.R @('commit', '-qm', 'base') | Out-Null
+    $V.W = Join-Path $V.R ".worktrees\$($V.Tid)"
+    Invoke-VmcGit $V.R @('worktree', 'add', '-q', '--no-checkout', '-b', $V.B, $V.W, 'main') | Out-Null
+    Invoke-VmcGit $V.W @('sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/') | Out-Null
+    Invoke-VmcGit $V.W @('read-tree', '-mu', 'HEAD') | Out-Null
+    $V.C = Invoke-VmcGit $V.R @('rev-parse', 'main'); $V.BT = Invoke-VmcGit $V.R @('rev-parse', 'main^{tree}')
+    $V.T = New-VmcTree $V $V.BT @('src/a.txt', 'a2')
+}
+# Invoke-VmcRow V ROW [SET] -- the function as W's worker seat on C BT T (SET
+# overrides Mode, Path, Branch, C, BT, T, Protected, Hook); the control checkout
+# and main must be byte-identical afterwards, and exactly one result returned.
+function Invoke-VmcRow([hashtable]$V, [string]$Row, [hashtable]$Set = @{}) {
+    $V.Row = $Row; $ctl = Get-VmcControl $V
+    $V.Refs0 = Get-VmcRefs $V; $V.Others0 = Get-VmcOthers $V; $V.W0 = Get-VmcWFiles $V; $V.I0 = Get-VmcWIndex $V
+    $a = @{ Mode = 'worktree'; Path = $V.W; Branch = $V.B; C = $V.C; BT = $V.BT; T = $V.T; Protected = $false; Hook = $null }
+    foreach ($k in @($Set.Keys)) { $a[$k] = $Set[$k] }
+    $script:vmcLog.Clear(); $script:vmcChat.Clear()
+    $script:MoeWtMode = $a.Mode; $script:MoeWtPath = $a.Path; $script:MoeWtBranch = $a.Branch; $script:MoeRuntimeProtected = $a.Protected
+    $m = @{ TaskId = $V.Tid; Title = 'vm candidate'; Status = 'WORKING'; ReopenCount = 0; CliExit = 0; Sid = $V.Sid }
+    $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF = $a.Hook
+    try { $items = @(Invoke-MoeVmCandidateLanding $a.C $a.BT $a.T $m 6>&1) }
+    finally { $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF = $null }
+    $V.Out = @($items | Where-Object { $_ -isnot [hashtable] } | ForEach-Object { "$_" })
+    $res = @($items | Where-Object { $_ -is [hashtable] })
+    if ($res.Count -ne 1 -or $V.Out.Count + 1 -ne $items.Count) { Stop-Vmc $V "the function returned $($res.Count) results and $($items.Count) items" }
+    $V.Res = $res[0]
+    if ((Get-VmcControl $V) -cne $ctl) { Stop-Vmc $V "the control checkout's HEAD, index, status or refs/heads/main moved" }
+}
+function Assert-VmcUntouched([hashtable]$V) {
+    if ((Get-VmcRefs $V) -cne $V.Refs0) { Stop-Vmc $V 'a ref moved' }
+    if ((Get-VmcWFiles $V) -cne $V.W0 -or (Get-VmcWIndex $V) -cne $V.I0) { Stop-Vmc $V "W's HEAD, index file, entries or files changed" }
+    if ($script:vmcLog.Count -or $script:vmcChat.Count) { Stop-Vmc $V 'a ledger row or rpc was sent' }
+}
+# Assert-VmcCommitted V N PATHS: Rc 0, the branch at ONE new commit (parent C,
+# tree T) that W's index and files match, one committed checkpoint row, no rescue.
+function Assert-VmcCommitted([hashtable]$V, [int]$N, [string[]]$Paths) {
+    $ref = "refs/heads/$($V.B)"; $new = Invoke-VmcGit $V.R @('rev-parse', $ref); $V.New = $new; $r = $V.Res
+    if ($r.Rc -ne 0 -or $r.Outcome -cne 'committed' -or $r.Code -cne '' -or $r.Sha -cne $new -or $r.Ref -cne $ref -or $r.PathCount -ne $N -or $r.RescueRef) {
+        Stop-Vmc $V "result $(ConvertTo-VmcJson $r), expected committed $new"
+    }
+    if ((Invoke-VmcGit $V.R @('rev-list', '--parents', '-n', '1', $new)) -cne "$new $($V.C)" -or (Invoke-VmcGit $V.R @('rev-parse', "$new^{tree}")) -cne $V.T) {
+        Stop-Vmc $V "$($V.B) is not one commit with parent C and tree T"
+    }
+    if ((Invoke-VmcGit $V.W @('--no-optional-locks', 'status', '--porcelain', '-uall')) -or (Test-Path -LiteralPath (Join-Path $V.W '.moe'))) {
+        Stop-Vmc $V 'W does not match the new commit, or holds .moe'
+    }
+    $want = @{ taskId = $V.Tid; outcome = 'committed'; kind = 'checkpoint'; role = 'worker'; sessionId = $V.Sid; workerId = 'worker-vmc'; sha = $new
+        ref = $ref; status = 'WORKING'; treeId = $V.T; pushed = $false; cliExitCode = 0; paths = $Paths; inferredPaths = @() }
+    if ($script:vmcLog.Count -ne 1 -or (ConvertTo-VmcJson $script:vmcLog[0]) -cne (ConvertTo-VmcJson $want) -or $script:vmcChat.Count) { Stop-Vmc $V 'not one committed checkpoint row' }
+    if (@($V.Out | Where-Object { $_ -ceq "[OK] MOE_VM_CANDIDATE_COMMITTED task=$($V.Tid) sha=$new paths=$N branch=$($V.B)" }).Count -ne 1) { Stop-Vmc $V 'no COMMITTED line' }
+    if ((Invoke-VmcGit $V.R @('for-each-ref', 'refs/moe/rescue')) -or (Get-VmcOthers $V) -cne $V.Others0) { Stop-Vmc $V 'another ref moved' }
+}
+# Assert-VmcParked V CODE REASON: Rc 2 with CODE, the commit (parent C, tree T) on
+# exactly one rescue ref and in the only ledger row, W's entries and files as before.
+function Assert-VmcParked([hashtable]$V, [string]$Code, [string]$Reason) {
+    $rs = @((Invoke-VmcGit $V.R @('for-each-ref', '--format=%(refname)', "refs/moe/rescue/$($V.Tid)/")) -split "`n" | Where-Object { $_ })
+    if ($rs.Count -ne 1) { Stop-Vmc $V "not one rescue ref: $($rs -join ' ')" }
+    $new = Invoke-VmcGit $V.R @('rev-parse', $rs[0]); $r = $V.Res
+    if ($r.Rc -ne 2 -or $r.Outcome -cne 'failed' -or $r.Code -cne "MOE_VM_CANDIDATE_$Code" -or $r.RescueRef -cne $rs[0] -or $r.RescueSha -cne $new -or $r.Sha) {
+        Stop-Vmc $V "result $(ConvertTo-VmcJson $r), expected 2 with $Code"
+    }
+    $warn = @($V.Out | Where-Object { $_.StartsWith("[WARN] MOE_VM_CANDIDATE_${Code}: task $($V.Tid) -- ", [StringComparison]::Ordinal) })
+    if ($warn.Count -ne 1 -or -not $warn[0].EndsWith("; the admitted commit $new is kept on $($rs[0]).", [StringComparison]::Ordinal)) { Stop-Vmc $V "no $Code line naming the rescue ref" }
+    if ((Invoke-VmcGit $V.R @('rev-list', '--parents', '-n', '1', $new)) -cne "$new $($V.C)" -or (Invoke-VmcGit $V.R @('rev-parse', "$new^{tree}")) -cne $V.T) {
+        Stop-Vmc $V 'the rescue ref is not the admitted commit'
+    }
+    if ((Get-VmcWFiles $V) -cne $V.W0) { Stop-Vmc $V "W's entries or files are not as before" }
+    $l = $script:vmcLog
+    if ($l.Count -ne 1 -or $l[0].outcome -cne 'committed' -or $l[0].kind -cne 'rescue' -or $l[0].sha -cne $new -or $l[0].ref -cne $rs[0] -or
+        $l[0].code -cne $Reason -or (@($l[0].paths) -join '|') -cne 'src/a.txt' -or $script:vmcChat.Count -ne 1 -or
+        $script:vmcChat[0] -cne "MOE_RESCUE_REF task=$($V.Tid) ref=$($rs[0]) sha=$new reason=$Reason") { Stop-Vmc $V 'the only row is not the rescue row' }
+    if ((Get-VmcOthers $V) -cne $V.Others0) { Stop-Vmc $V 'another ref moved' }
+}
+function Invoke-VmcRows([hashtable]$V) {
+    $V.Section = 'vm candidate'
+    Write-Host '[vm candidate] R1: one changed file becomes one checkpoint commit, hooks never run'
+    New-VmcFixture $V; Invoke-VmcGit $V.R @('config', 'core.hooksPath', $V.Hooks) | Out-Null
+    Invoke-VmcRow $V R1
+    Assert-VmcCommitted $V 1 @('src/a.txt')
+    if ([IO.File]::ReadAllText((Join-Path $V.W 'src\a.txt')) -cne "a2`n") { Stop-Vmc $V "W's file does not hold the admitted bytes" }
+    $msg = "wip($($V.Tid)): vm candidate [status=WORKING role=worker cli-exit=0]`n`nCheckpoint via Moe worker session; not a completion.`n`n" +
+        "Moe-Task: $($V.Tid)`nMoe-Kind: checkpoint`nMoe-Session: $($V.Sid)`nMoe-Status: WORKING`nMoe-Paths: 1`nMoe-Inferred: 0"
+    if ((Invoke-VmcGit $V.R @('log', '-1', '--format=%B', $V.New)) -cne $msg) { Stop-Vmc $V "the message is not WT-07's checkpoint message" }
+    Write-Host '[vm candidate] R1u: a deletion and a new path with a space and Unicode'
+    $nw = 'lib/n ' + [char]0xE9 + ' w.txt'
+    New-VmcFixture $V; $V.T = New-VmcTree $V $V.BT @($nw, 'new', 'lib/keep.txt', '-')
+    Invoke-VmcRow $V R1u
+    Assert-VmcCommitted $V 2 @('lib/keep.txt', $nw)
+    if ([IO.File]::ReadAllText((Join-Path $V.W $nw)) -cne "new`n" -or (Test-Path -LiteralPath (Join-Path $V.W 'lib\keep.txt'))) { Stop-Vmc $V 'W does not hold the admitted change' }
+    Write-Host '[vm candidate] R2-R5: refusals write nothing'
+    foreach ($r in @('R2a:NOT_WORKTREE', 'R2b:NOT_WORKTREE', 'R2c:NOT_WORKTREE', 'R3a:HEAD_MOVED', 'R3b:BASE_MISMATCH', 'R4a:DIRTY', 'R4b:DIRTY', 'R5a:TREE_INVALID', 'R5b:TREE_INVALID')) {
+        $row, $code = $r -split ':'
+        New-VmcFixture $V; $set = @{}
+        switch -CaseSensitive ($row) {
+            'R2a' { $set = @{ Mode = 'shared'; Path = '' } }
+            'R2b' { $set = @{ Path = $V.R } }
+            'R2c' { $set = @{ Branch = 'moe/task/task-other' } }
+            'R3a' { Invoke-VmcGit $V.W @('update-ref', "refs/heads/$($V.B)", (Invoke-VmcGit $V.W @('commit-tree', $V.BT, '-p', $V.C, '-m', 'next'))) | Out-Null }
+            'R3b' { $set = @{ BT = $V.T } }
+            'R4a' { [IO.File]::AppendAllText((Join-Path $V.W 'src\a.txt'), "edit`n") }
+            'R4b' { [IO.File]::WriteAllText((Join-Path $V.W 'untracked.txt'), "new`n") }
+            'R5a' { $set = @{ T = '0123456789abcdef0123456789abcdef01234567' } }
+            'R5b' { $set = @{ T = (Invoke-VmcGit $V.R @('rev-parse', 'main:src/a.txt')) } }
+        }
+        Invoke-VmcRow $V $row $set
+        $lines = @($V.Out | Where-Object { $_.Contains('MOE_VM_CANDIDATE_') })
+        if ($V.Res.Rc -ne 1 -or $V.Res.Outcome -cne 'refused' -or $V.Res.Code -cne "MOE_VM_CANDIDATE_$code" -or $lines.Count -ne 1 -or
+            $lines[0] -cnotmatch "^\[WARN\] MOE_VM_CANDIDATE_${code}: task $($V.Tid) -- .*; nothing written\.\z") {
+            Stop-Vmc $V "result $(ConvertTo-VmcJson $V.Res), expected 1 and one MOE_VM_CANDIDATE_$code line"
+        }
+        Assert-VmcUntouched $V
+    }
+    Write-Host '[vm candidate] R6: a lost CAS parks the commit and restores W'
+    New-VmcFixture $V; $other = Invoke-VmcGit $V.R @('commit-tree', $V.BT, '-p', $V.C, '-m', 'other')
+    Invoke-VmcRow $V R6 @{ Hook = "git update-ref refs/heads/$($V.B) $other" }
+    Assert-VmcParked $V REF_CONTENTION vm-ref-contention
+    if ((Invoke-VmcGit $V.R @('rev-parse', "refs/heads/$($V.B)")) -cne $other) { Stop-Vmc $V 'the branch is not where the race left it' }
+    Write-Host '[vm candidate] R7: a failed W update parks the commit; the branch stays'
+    New-VmcFixture $V; $lock = Join-Path (Invoke-VmcGit $V.W @('rev-parse', '--absolute-git-dir')) 'index.lock'
+    [IO.File]::WriteAllText($lock, '')
+    try { Invoke-VmcRow $V R7 } finally { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+    Assert-VmcParked $V SYNC_FAILED vm-sync-failed
+    if ((Invoke-VmcGit $V.R @('rev-parse', "refs/heads/$($V.B)")) -cne $V.C -or (Get-VmcWIndex $V) -cne $V.I0) { Stop-Vmc $V "the branch or W's index moved" }
+    Write-Host '[vm candidate] R8: an empty candidate writes nothing'
+    New-VmcFixture $V; Invoke-VmcRow $V R8 @{ T = $V.BT }
+    $empty = "[info] MOE_VM_CANDIDATE_EMPTY: task $($V.Tid) -- the admitted tree equals $($V.C)'s; nothing committed."
+    if ($V.Res.Rc -ne 0 -or $V.Res.Outcome -cne 'nothing' -or $V.Res.Code -cne 'MOE_VM_CANDIDATE_EMPTY' -or $V.Res.Sha -or @($V.Out | Where-Object { $_ -ceq $empty }).Count -ne 1) {
+        Stop-Vmc $V "result $(ConvertTo-VmcJson $V.Res), expected 0 with MOE_VM_CANDIDATE_EMPTY"
+    }
+    Assert-VmcUntouched $V
+    Write-Host '[vm candidate] R9: the test seam never runs under MOE_RUNTIME_PROTECTED'
+    New-VmcFixture $V; $other = Invoke-VmcGit $V.R @('commit-tree', $V.BT, '-p', $V.C, '-m', 'other')
+    Invoke-VmcRow $V R9 @{ Protected = $true; Hook = "type nul>..\..\..\seam-ran& git update-ref refs/heads/$($V.B) $other" }
+    Assert-VmcCommitted $V 1 @('src/a.txt')
+    if (Test-Path -LiteralPath $V.SeamRan) { Stop-Vmc $V 'the seam ran' }
+    Write-Host '[vm candidate] ok R1, R1u, R2a-R5b, R6-R9'
+}
+# [strong intent] Test-MoeWorktreeStrongIntent M B FROZEN GITDIR RES L on a
+# scratch projectPath and git dir. G6d (ps1-only): a matching $script:MoeFrozen
+# left by an earlier landing never stands in for this round's own candidate.
+function Invoke-GsiRows([hashtable]$V, $Ast) {
+    $V.Section = 'strong intent'; $V.Out = @()
+    Write-Host '[strong intent] a no-op for legacy; the strong profile needs the frozen candidate of exactly M on B'
+    $gsi = Join-Path $tempRoot 'gsi'; $projectPath = Join-Path $gsi 'project'; $gd = Join-Path $gsi 'gitdir'; $att = Join-Path $projectPath '.moe\attempts'
+    New-Item -ItemType Directory -Force -Path $att, $gd | Out-Null
+    $gm = 'a' * 40; $gb = 'b' * 40
+    $no = "False refused MOE_COMMIT_REFUSED_INTENT_INCOMPLETE the strong profile lands only the frozen candidate of the merged tree $gm on $gb, with a pinned attempt and plan revision"
+    $rows = @(
+        @{ Row = 'G1'; Ok = $true }
+        @{ Row = 'G1b'; Ok = $true; Pin = $true; Tid = '' }
+        @{ Row = 'G2'; Pin = $true }
+        @{ Row = 'G3'; Attempts = $true }
+        @{ Row = 'G4'; Pin = $true; Full = $true; Tree = $gb }
+        @{ Row = 'G5'; Pin = $true; Full = $true; Base = $gm }
+        @{ Row = 'G6a'; Pin = $true; Full = $true; AttemptId = '' }
+        @{ Row = 'G6b'; Pin = $true; Full = $true; PlanRev = $null }
+        @{ Row = 'G6c'; Pin = $true; Full = $true; CandidateId = '' }
+        @{ Row = 'G6d'; Pin = $true; Full = $true; Stale = $true }
+        @{ Row = 'G7'; Ok = $true; Pin = $true; Full = $true }
+    )
+    foreach ($r in $rows) {
+        $V.Row = $r.Row
+        Get-ChildItem -LiteralPath $att -Filter '*.json' | Remove-Item -Force
+        if ($r.Attempts) {
+            [IO.File]::WriteAllText((Join-Path $att 'a1.json'), '{"taskId":"task-g","generation":1,"executionPolicySnapshot":{"profile":"legacy"}}')
+            [IO.File]::WriteAllText((Join-Path $att 'a2.json'), '{"taskId":"task-g","generation":2,"executionPolicySnapshot":{"profile":"verified-local"}}')
+        }
+        $preflightTaskId = if ($r.ContainsKey('Tid')) { $r.Tid } else { 'task-g' }
+        $script:PinnedAttemptProfile = if ($r.Pin) { 'verified-local' } else { '' }
+        $f = $null; $script:MoeAttemptId = ''; $script:PinnedAttemptPlanRevision = $null; $script:MoeFrozen = $null
+        if ($r.Full) { $f = @{ CandidateId = 'cand-1'; Tree = $gm; Base = $gb }; $script:MoeAttemptId = 'attempt-1'; $script:PinnedAttemptPlanRevision = 1 }
+        foreach ($k in @('Tree', 'Base', 'CandidateId')) { if ($r.ContainsKey($k)) { $f[$k] = $r[$k] } }
+        if ($r.ContainsKey('AttemptId')) { $script:MoeAttemptId = $r.AttemptId }
+        if ($r.ContainsKey('PlanRev')) { $script:PinnedAttemptPlanRevision = $r.PlanRev }
+        if ($r.Stale) { $script:MoeFrozen = $f; $f = $null }
+        $res = @{ Outcome = 'untouched'; Code = 'untouched' }; $l = @{ Msg = 'untouched' }
+        $got = @(Test-MoeWorktreeStrongIntent $gm $gb $f $gd $res $l)
+        $line = "$($got -join ',') $($res.Outcome) $($res.Code) $($l.Msg)"
+        $want = if ($r.Ok) { 'True untouched untouched untouched' } else { $no }
+        if ($got.Count -ne 1 -or $got[0] -isnot [bool] -or $line -cne $want) { Stop-Vmc $V "got '$line', expected '$want'" }
+    }
+    # G8: Invoke-MoeWorktreeRounds calls it once per round, after the L6 gate, before L7-L9.
+    $V.Row = 'G8'
+    $fn = $Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Invoke-MoeWorktreeRounds' }, $false)
+    $calls = @(if ($fn) { $fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Test-MoeWorktreeStrongIntent' }, $true) })
+    $loop = if ($fn) { $fn.Body.Find({ param($n) $n -is [System.Management.Automation.Language.ForStatementAst] -and $n.Initializer.Extent.Text -ceq '$round = 1' }, $true) }
+    $call = 'if (-not (Test-MoeWorktreeStrongIntent $m $b $(if ($Settings.configuredGate) { $frozen } else { $null }) $Git.GitDir $Res $L)) { return $false }'
+    $body = if ($loop) { $loop.Body.Extent.Text } else { '' }; $at = $body.IndexOf($call, [StringComparison]::Ordinal)
+    if ($calls.Count -ne 1 -or $at -lt 0) { Stop-Vmc $V "Invoke-MoeWorktreeRounds does not run '$call' exactly once inside its round loop" }
+    foreach ($k in @('Invoke-MoeFrozenGate', 'MOE_COMMIT_FAILED_GATE')) {
+        $i = $body.IndexOf($k, [StringComparison]::Ordinal); if ($i -lt 0 -or $i -gt $at) { Stop-Vmc $V "the call is not after '$k'" }
+    }
+    foreach ($k in @("'diff-tree', '-r'", "'commit-tree'", 'Write-MoeWorktreeJournal', "'update-ref'", 'Publish-MoeWorktreeLanding')) {
+        $i = $body.IndexOf($k, [StringComparison]::Ordinal); if ($i -lt $at) { Stop-Vmc $V "the call is not before the first $k" }
+    }
+    Write-Host '[strong intent] ok G1-G7, G6d and G8'
+}
+function Invoke-VmcSections {
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile("$wrapper", [ref]$null, [ref]$errors)
+    if ($errors.Count) { throw ('moe-agent.ps1 parse errors: ' + ($errors -join '; ')) }
+    foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) { . ([ScriptBlock]::Create($fn.Extent.Text)) }
+    function Send-MoeRecordCommit([hashtable]$Record) { [void]$script:vmcLog.Add($Record); return @{ ok = $true } }
+    function Send-MoeGeneralChat([string]$Content) { [void]$script:vmcChat.Add($Content) }
+    function Invoke-MoeRpc { throw 'the vm candidate rows send no other RPC' }
+    $Role = 'worker'; $WorkerId = 'worker-vmc'; $myPid = $PID; $preflightTaskId = ''; $projectPath = Join-Path $tempRoot 'vmc-project'
+    $script:vmcLog = New-Object System.Collections.ArrayList; $script:vmcChat = New-Object System.Collections.ArrayList
+    $dir = Join-Path $tempRoot 'vmc'; $hooks = Join-Path $dir 'hooks'; $gcfg = Join-Path $dir 'gitconfig'
+    New-Item -ItemType Directory -Force -Path $hooks | Out-Null
+    [IO.File]::WriteAllText($gcfg, "[user]`n`tname = vmc`n`temail = vmc@example.invalid`n[core]`n`tautocrlf = false`n")
+    foreach ($h in @('pre-commit', 'commit-msg')) { [IO.File]::WriteAllText((Join-Path $hooks $h), "#!/bin/sh`nexit 1`n") }
+    $saved = @{}
+    foreach ($e in @(Get-ChildItem Env: | Where-Object { $_.Name -like 'GIT_*' })) { $saved[$e.Name] = $e.Value; Remove-Item -LiteralPath "Env:\$($e.Name)" }
+    $env:GIT_CONFIG_GLOBAL = $gcfg; $env:GIT_CONFIG_NOSYSTEM = '1'
+    try {
+        $V = @{ Dir = $dir; Hooks = $hooks; R = (Join-Path $dir 'repo'); Tid = 'task-vmc'; B = 'moe/task/task-vmc'; SeamRan = (Join-Path $dir 'seam-ran')
+            Sid = 'worker-vmc@2026-11-03T00:00:00Z'; Out = @(); Section = ''; Row = '' }
+        Invoke-VmcRows $V
+        Invoke-GsiRows $V $ast
+    } finally {
+        foreach ($n in @('GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF')) { Remove-Item -LiteralPath "Env:\$n" -ErrorAction SilentlyContinue }
+        foreach ($n in $saved.Keys) { Set-Item -LiteralPath "Env:\$n" -Value $saved[$n] }
+        $script:MoeRuntimeProtected = $false; $script:MoeFrozen = $null; $script:PinnedAttemptProfile = ''; $script:MoeAttemptId = ''; $script:PinnedAttemptPlanRevision = $null
+    }
+}
+
 $exitCode = 2
 try {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is not available' }
@@ -135,6 +437,7 @@ if (cli !== 'normalize') {
     }
     $bytes = [IO.File]::ReadAllBytes($wrapper)
     if ($bytes[0] -ne 239 -or $bytes[1] -ne 187 -or $bytes[2] -ne 191) { throw 'wrapper lost its UTF-8 BOM' }
+    Invoke-VmcSections
     $legacy = '{"profile":"legacy","ready":true,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
     $r = Invoke-VmrRow T-legacy worker claude $legacy '-'; Assert-VmrLaunched $r
     $raw = Get-Content -Raw -LiteralPath $rec | ConvertFrom-Json

@@ -6828,6 +6828,121 @@ function Invoke-MoeWorktreeCheckpoint {
     }
 }
 
+# ---- VM candidate (CQ-M07n2) --------------------------------------------------
+# Invoke-MoeVmCandidateLanding COMMIT BASE_TREE TREE M -- a verified-local VM
+# job's admitted TREE (CQ-M07j: the job ran on COMMIT, whose tree is BASE_TREE)
+# becomes ONE checkpoint commit on moe/task/<id> in this claim's worktree W,
+# through the wrapper's commit plumbing: commit-tree (no hooks), W's two-tree
+# read-tree, then the CAS update-ref of the branch from COMMIT. Refusals write
+# nothing (Rc 1): NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY (W or a pending
+# merge), TREE_INVALID, in that order. TREE == BASE_TREE is EMPTY (Rc 0,
+# nothing). A failed W update or a lost CAS parks the commit on a rescue ref
+# (Rc 2) and leaves W at COMMIT; an interrupt before the CAS leaves the bytes as
+# dirt in W, which the next pre-flight's recovery checkpoint lands. The control
+# checkout, the target branch and every remote stay untouched. $M has
+# Invoke-MoeWorktreeCommit's shape (TaskId, Title, Status, ReopenCount, CliExit,
+# Sid). Returns @{ Rc; Outcome; Code; Msg; Sha; Ref; RescueRef; RescueSha;
+# PathCount }. Unwired until CQ-M07n3. Twin: land_vm_candidate.
+# Stop-MoeVmCandidate R OUTCOME CODE DETAIL M [GIT SHA REASON PATHS] -- Rc 1,
+# nothing written; with SHA, that commit is parked on a rescue ref and Rc 2.
+# Twin: vm_candidate_stop.
+function Stop-MoeVmCandidate([hashtable]$R, [string]$Outcome, [string]$Code, [string]$Detail, [hashtable]$M, [hashtable]$Git = $null, [string]$Sha = '', [string]$Reason = '', [string[]]$Paths = @()) {
+    $R.Outcome = $Outcome; $R.Code = "MOE_VM_CANDIDATE_$Code"; $R.Msg = $Detail; $R.Rc = 1
+    $tid = if ($M.TaskId) { "$($M.TaskId)" } else { '?' }
+    if (-not $Sha) {
+        Write-Host "[WARN] $($R.Code): task $tid -- $Detail; nothing written." -ForegroundColor Yellow
+        return $R
+    }
+    $R.Rc = 2
+    $sid = if ($M.Sid) { "$($M.Sid)" } else { "$WorkerId@unknown" }
+    $attr = @{ Candidates = @($Paths | ForEach-Object { @{ Path = $_; Inferred = $false } }); Skipped = @(); Contested = @() }
+    $rescue = $null
+    try { $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $tid -Reason $Reason -Title "$($M.Title)" -Status "$($M.Status)" -Sid $sid -Attr $attr -Sha $Sha } catch {}
+    if ($rescue) { $R.RescueRef = $rescue.Ref; $R.RescueSha = $rescue.Sha }
+    $kept = if ($R.RescueRef) { $R.RescueRef } else { 'no ref (the rescue ref failed)' }
+    Write-Host "[WARN] $($R.Code): task $tid -- $Detail; the admitted commit $Sha is kept on $kept." -ForegroundColor Yellow
+    return $R
+}
+function Invoke-MoeVmCandidateLanding([string]$Commit, [string]$BaseTree, [string]$Tree, [hashtable]$M) {
+    $r = @{ Rc = 1; Outcome = 'failed'; Code = ''; Msg = ''; Sha = ''; Ref = ''; RescueRef = ''; RescueSha = ''; PathCount = 0 }
+    $w = "$script:MoeWtPath"; $br = "$script:MoeWtBranch"; $tid = "$($M.TaskId)"; $hex = '^[0-9a-f]{40}\z'
+    $g = @{ Top = $w; GitDir = ''; Rel = '' }; $new = ''; $paths = @(); $msgFile = ''
+    $one = { param([string[]]$A) $o = Invoke-MoeGit -Top $w -GitArgs $A; if ($o.Rc -eq 0) { ($o.Out -join "`n").Trim() } else { '' } }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $cgd = ''
+        if ($script:MoeWtMode -ceq 'worktree' -and $w -and $tid -and $br -ceq "moe/task/$tid") {
+            $g.GitDir = & $one @('rev-parse', '--absolute-git-dir'); $cgd = & $one @('rev-parse', '--path-format=absolute', '--git-common-dir')
+        }
+        if (-not $g.GitDir -or -not $cgd -or $g.GitDir -ceq $cgd) {
+            return (Stop-MoeVmCandidate $r 'refused' 'NOT_WORKTREE' "the claim is not in worktree mode, or $(if ($w) { $w } else { 'its worktree' }) is not the linked worktree of moe/task/$(if ($tid) { $tid } else { '?' })" $M)
+        }
+        if ($Commit -cnotmatch $hex -or (& $one @('symbolic-ref', '-q', 'HEAD')) -cne "refs/heads/$br" -or (& $one @('rev-parse', '-q', '--verify', "refs/heads/$br^{commit}")) -cne $Commit) {
+            return (Stop-MoeVmCandidate $r 'refused' 'HEAD_MOVED' "$w's HEAD is not refs/heads/$br at the job's base commit" $M)
+        }
+        $ct = & $one @('rev-parse', '-q', '--verify', "$Commit^{tree}")
+        if (-not $ct -or $BaseTree -cne $ct) {
+            return (Stop-MoeVmCandidate $r 'refused' 'BASE_MISMATCH' "the job's base tree is not $Commit's tree $(if ($ct) { $ct } else { '(none)' })" $M)
+        }
+        $st = Invoke-MoeGit -Top $w -GitArgs @('--no-optional-locks', 'status', '--porcelain', '--untracked-files=all')
+        if ($st.Rc -ne 0 -or ($st.Out -join '') -or (Invoke-MoeGit -Top $w -GitArgs @('rev-parse', '-q', '--verify', 'MERGE_HEAD')).Rc -eq 0) {
+            return (Stop-MoeVmCandidate $r 'refused' 'DIRTY' "$w has uncommitted changes, untracked files or a pending merge" $M)
+        }
+        if ($Tree -cnotmatch $hex -or (& $one @('cat-file', '-t', $Tree)) -cne 'tree') {
+            return (Stop-MoeVmCandidate $r 'refused' 'TREE_INVALID' 'the admitted tree is not a tree object in this repository' $M)
+        }
+        if ($Tree -ceq $BaseTree) {
+            $r.Rc = 0; $r.Outcome = 'nothing'; $r.Code = 'MOE_VM_CANDIDATE_EMPTY'
+            Write-Host "[info] MOE_VM_CANDIDATE_EMPTY: task $tid -- the admitted tree equals $Commit's; nothing committed." -ForegroundColor Cyan
+            return $r
+        }
+        $dt = Invoke-MoeGit -Top $w -GitArgs @('diff-tree', '-r', '-z', '--name-only', '--no-renames', $BaseTree, $Tree)
+        if ($dt.Rc -eq 0) {
+            $paths = @(($dt.Out -join "`n").Split([char]0) | Where-Object { $_ })
+            $msg = New-MoeCommitMessage -Kind 'checkpoint' -TaskId $tid -Title "$($M.Title)" -Status "$($M.Status)" -ReopenCount ([int]$M.ReopenCount) -Role $Role -Sid "$($M.Sid)" -CliExit ([int]$M.CliExit) -Recovered $false -PathCount $paths.Count -InferredCount 0 -Contested @() -Reason ''
+            $msgFile = Write-MoeMessageFile $g.GitDir $tid $msg
+            $made = Invoke-MoeGit -Top $w -GitArgs @('commit-tree', $Tree, '-p', $Commit, '-F', $msgFile)
+            if ($made.Rc -eq 0) { $new = ($made.Out -join '').Trim() }
+        }
+        if ($new -cnotmatch $hex) {
+            $new = ''
+            return (Stop-MoeVmCandidate $r 'failed' 'COMMIT_FAILED' "git commit-tree of the admitted tree on $Commit failed (identity? gpg?)" $M)
+        }
+        if ((Invoke-MoeGit -Top $w -GitArgs @('read-tree', '-m', '-u', $Commit, $new)).Rc -ne 0) {
+            return (Stop-MoeVmCandidate $r 'failed' 'SYNC_FAILED' "$w could not take the admitted commit; refs/heads/$br stays at $Commit" $M $g $new 'vm-sync-failed' $paths)
+        }
+        if (-not $script:MoeRuntimeProtected -and $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
+            $hook = $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF; $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF = $null   # test seam, once
+            Push-Location -LiteralPath $w
+            try { & $env:ComSpec /d /s /c $hook 2>&1 | Out-Null } catch {} finally { Pop-Location }
+        }
+        if ((Invoke-MoeGit -Top $w -GitArgs @('update-ref', '-m', "moe: vm candidate $tid", "refs/heads/$br", $new, $Commit)).Rc -ne 0) {
+            if ((Invoke-MoeGit -Top $w -GitArgs @('read-tree', '-m', '-u', $new, $Commit)).Rc -ne 0) {
+                Write-Host "[WARN] $w could not be rolled back to $Commit; it holds the admitted bytes as uncommitted changes." -ForegroundColor Yellow
+            }
+            return (Stop-MoeVmCandidate $r 'failed' 'REF_CONTENTION' "refs/heads/$br moved off $Commit before the CAS" $M $g $new 'vm-ref-contention' $paths)
+        }
+        $r.Rc = 0; $r.Outcome = 'committed'; $r.Sha = $new; $r.Ref = "refs/heads/$br"; $r.PathCount = $paths.Count
+        $sid = if ($M.Sid) { "$($M.Sid)" } else { "$WorkerId@unknown" }
+        Send-MoeRecordCommit @{ taskId = $tid; outcome = 'committed'; kind = 'checkpoint'; role = $Role; sessionId = $sid; workerId = $WorkerId
+            sha = $new; ref = $r.Ref; status = "$($M.Status)"; treeId = $Tree; pushed = $false; cliExitCode = [int]$M.CliExit
+            paths = @($paths | Select-Object -First 500); inferredPaths = @() } | Out-Null
+        Write-Host "[OK] MOE_VM_CANDIDATE_COMMITTED task=$tid sha=$new paths=$($paths.Count) branch=$br" -ForegroundColor Green
+        return $r
+    } catch {
+        # PowerShell only (bash has no throw): before the commit nothing is written;
+        # after it, the commit is parked like a failed W update.
+        if ($r.Outcome -ceq 'committed') { return $r }
+        $why = "the landing threw: $($_.Exception.Message)"
+        if (-not $new) { return (Stop-MoeVmCandidate $r 'failed' 'COMMIT_FAILED' $why $M) }
+        return (Stop-MoeVmCandidate $r 'failed' 'SYNC_FAILED' "$why; refs/heads/$br stays at $Commit" $M $g $new 'vm-sync-failed' $paths)
+    } finally {
+        if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
+        $ErrorActionPreference = $prev
+    }
+}
+
 # ---- worktree completion (WT-08; design §2.2 L4-L12, §2.3, §2.7, §2.9) -------
 # 0 when refs/heads/<Target> is checked out in any worktree (the control
 # checkout included), 1 when not, 2 when git cannot tell. Twin: wt_target_checked_out.
@@ -7034,10 +7149,27 @@ function Set-MoeCtrlCDeferred([bool]$On) {
     if ($hit) { Write-Host ''; Write-Host 'Agent stopped.'; exit 0 }
 }
 
+# Test-MoeWorktreeStrongIntent M B FROZEN GITDIR RES L -- CQ-V07's intent rule
+# for one worktree completion round (CQ-M07n2). Under the strong profile
+# (verified-local) the target moves only for the frozen candidate of exactly M
+# on B, with the attempt and plan revision pinned; anything else is refused
+# before L7 (no commit, journal, ref or rescue ref): $false with $Res.Outcome,
+# $Res.Code and $L.Msg set. $true, touching nothing, for legacy, observe and a
+# task-less landing. FROZEN is this round's own candidate, never a
+# $script:MoeFrozen an earlier landing left behind. Twin: wt_strong_intent.
+function Test-MoeWorktreeStrongIntent([string]$M, [string]$B, [hashtable]$Frozen, [string]$GitDir, [hashtable]$Res, [hashtable]$L) {
+    if (-not $preflightTaskId -or -not (Test-MoeStrongLandingTask $preflightTaskId $GitDir)) { return $true }
+    if ($Frozen -and $Frozen.CandidateId -and $M -and $Frozen.Tree -ceq $M -and $B -and $Frozen.Base -ceq $B -and
+        $script:MoeAttemptId -and $script:PinnedAttemptPlanRevision) { return $true }
+    $Res.Outcome = 'refused'; $Res.Code = 'MOE_COMMIT_REFUSED_INTENT_INCOMPLETE'
+    $L.Msg = "the strong profile lands only the frozen candidate of the merged tree $M on $B, with a pinned attempt and plan revision"
+    return $false
+}
+
 # L4-L9 onto $Ref from the task tip $L.T, at most three rounds, two with a
 # qualityGate (§2.3): B read fresh each round, merge-tree, the .moe guard, the
-# gate on exactly M with parent B (L6), C, the strict journal, the S1
-# test hook, ONE CAS. $true with $Res.Outcome committed (this C, or a journaled
+# gate on exactly M with parent B (L6), the strong intent rule, C, the strict
+# journal, the S1 test hook, ONE CAS. $true with $Res.Outcome committed (this C, or a journaled
 # C the target holds while T adds nothing, §2.9; Ctrl+C stays deferred) or
 # nothing; $false with $Res.Code and $L.Msg set and no ref moved by this
 # session. Twin: wt_land_rounds.
@@ -7102,6 +7234,7 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
                 $Res.Code = 'MOE_COMMIT_FAILED_GATE'; $L.Msg = "the merged tree $m on $b was not frozen, recorded and passed by the qualityGate"; return $false
             }
         }
+        if (-not (Test-MoeWorktreeStrongIntent $m $b $(if ($Settings.configuredGate) { $frozen } else { $null }) $Git.GitDir $Res $L)) { return $false }
         $dt = Invoke-MoeGit -Top $top -GitArgs @('diff-tree', '-r', '-z', '--name-only', '--no-renames', $bt, $m)
         if ($dt.Rc -ne 0) { $L.Msg = 'git diff-tree failed'; return $false }
         $paths = @(($dt.Out -join "`n").Split([char]0) | Where-Object { $_ })
