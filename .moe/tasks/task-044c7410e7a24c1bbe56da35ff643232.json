@@ -62,14 +62,20 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's diff (adversarial-self-review skill), once, as the last step. Then call moe.complete_task with step 4's evidence and step 3's audit table in the summary.\n\n(1) Scope. `git status --short` and `git diff --numstat` against your base show exactly two files:\n- scripts/moe-agent.ps1, +10/-1 (the FIX_NEW block only);\n- scripts/tests/postflight-vm-route.ps1, +1 (the row).\nNothing else: no edit to n1's gate, no other caller, no .moe/ path, no sh file. `head -c3 scripts/moe-agent.ps1 | od -An -tx1` prints `ef bb bf`, and the added lines are ASCII (`git diff | grep -P '[^\\x00-\\x7F]'` prints nothing).\n\n(2) Mutation check, on a scratch COPY only. From your worktree run `bash /mnt/d/moe-scratch/plan-044c/mutants.sh` with run_in_background; it takes about 15 minutes. It reads your worktree, copies HEAD's scripts/, docs/roles and validators.ts plus your two changed files into /mnt/d/moe-scratch/044c-mut.*, and mutates only that copy. Each mutant must fail the copy's postflight-vm-route.ps1 at its row:\n- M1 (today's return line) on 5.1: T-malformed-array;\n- M3 (no comma) on 5.1: T-malformed-array;\n- M2 (no pwsh 7 branch) on 7: T-malformed-array;\n- M4 (every value wrapped in an array) on 5.1: C1, the first refusal row.\nExpected: four `killed` lines and `mutants exit=0`. The architect's dry run killed 4 of 4 (/mnt/d/moe-scratch/plan-044c/mutants.output.txt). A `NOT APPLIED` line means your text differs from FIX_NEW: match it. Never mutate the tracked file.\n\n(3) Edge cases, confirmed by reading, not by new code:\n- objects, scalars, null and raw text are unchanged (probe);\n- an array of 2+ items is unchanged; one-element and empty arrays now come back as arrays;\n- the pass-throughs keep the shape;\n- pwsh 6 keeps today's behaviour;\n- concurrency is unchanged: one proxy process per call, and no shared state is added.\n\n(4) If any tracked byte changed in this step, rerun step 4.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T19:25:52.300Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Self-review done. Scope: moe-agent.ps1 +10/-1, postflight-vm-route.ps1 +1, nothing else; BOM ef bb bf kept, added lines ASCII, no CR. Mutants (scratch copy, /mnt/d/moe-scratch/044c-mutants-run.log): M1 5.1 killed at T-malformed-array, M2 pwsh7 killed at T-malformed-array, M3 5.1 killed at T-malformed-array, M4 5.1 killed at C1; mutants exit=0. No tracked byte changed after step 4's gate. Reconciliation with 701e0828 account-lease lines: no overlap, my hunk is inside Invoke-MoeRpc only.",
+      "startedAt": "2026-11-03T19:25:52.300Z",
+      "completedAt": "2026-11-03T19:28:20.269Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -106,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:44.109Z",
-  "updatedAt": "2026-11-03T19:25:52.300Z",
+  "updatedAt": "2026-11-03T19:28:35.077Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T16:31:41.317Z",
@@ -116,7 +122,7 @@
     "firstClaimAt": "2026-11-03T16:40:15.880Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -131,7 +137,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:07:05.765Z",
@@ -220,8 +227,8 @@
     }
   ],
   "filesModified": [
-    "scripts/moe-agent.ps1",
-    "scripts/tests/postflight-vm-route.ps1"
+    "scripts/tests/postflight-vm-route.ps1",
+    "scripts/moe-agent.ps1"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -229,5 +236,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-d6c1cb7a@2026-11-03T17:27:03Z",
     "at": "2026-11-03T19:24:08.004Z"
-  }
+  },
+  "reviewStartedAt": "2026-11-03T19:28:35.075Z",
+  "verification": {
+    "command": "( R=$(git rev-parse --show-toplevel) && F=\"$(wslpath -w \"$R\")\\scripts\\tests\" && cd /mnt/d/moe-scratch && L=$(mktemp /mnt/d/moe-scratch/044c-gate.XXXX) && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight.ps1\" && bash \"$2/scripts/tests/parity-check.sh\"' _ \"$F\" \"$R\" > \"$L\" 2>&1; r=$?; echo \"log=$L exit=$r\"; tr -d '\\0\\r' < \"$L\" | grep -axE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c; exit $r )",
+    "exitCode": 0,
+    "outputTail": "log=/mnt/d/moe-scratch/044c-gate.LNFe exit=0\n      1 PASS parity-check.sh\n      3 PASS postflight-vm-route.ps1\n      1 PASS postflight.ps1\n(tail: [vm route] ok today path (legacy x2, observe, unreadable, refuse, unknown, fail, malformed, case trap); ok refusals (C1/C2, S1-S6, N1-N4, R1/R2); ok architect and governor). Run was against the committed bytes (HEAD e3b17914); no tracked byte changed afterwards (git status clean). Mutants M1/M3 (5.1) and M2 (pwsh7) killed at T-malformed-array, M4 (5.1) killed at C1, mutants exit=0.",
+    "reportedAt": "2026-11-03T19:28:35.075Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Invoke-MoeRpc (scripts/moe-agent.ps1) now keeps a reply's wire shape: top-level JSON arrays (1-element, empty) return as ONE array via -NoEnumerate on pwsh>=7 / whole-array on 5.1 plus `return ,$value`; objects, scalars, null, raw text, 2+ arrays unchanged; failure paths untouched. New row 'malformed-array' in postflight-vm-route.ps1 ($tRows) takes today's host path like the sh twin. Gate (checkRef): exit 0; 3x PASS postflight-vm-route.ps1 (5.1, pwsh7, nested), PASS postflight.ps1 (5.1), PASS parity-check.sh (BOM kept). Mutants: M1,M3 killed at T-malformed-array (5.1), M2 at T-malformed-array (pwsh7), M4 at C1 (5.1). Diff: moe-agent.ps1 +10/-1, postflight-vm-route.ps1 +1; ASCII, LF, BOM ok. AUDIT of Invoke-MoeRpc callers (~50 sites, no code change): every daemon tool the wrapper calls returns a JSON object, so no real reply is a top-level array; no caller pipes/enumerates/@()-wraps the result. (1) Discarded/Out-Null: deregister_worker 686; chat_send 5324/8804/9594/9616/10345/11053/11060/11177/11317; add_comment 6147; chat_join 9385 - no change. (2) Null-checked only: chat_send 2838, report_blocked 3117, record_commit 5313, add_comment 7563, release_task 8769, report_account_usage 9073/11007, enter_governance 9397 - no change (only a malformed [] differs: $null->@()). (3) Object-field readers via Get-MoeProp/PSObject.Properties/.field: reattach_attempt 2079; Send-MoeEvidence 2110 (record_candidate/record_check_run/record_delivery_receipt/finalize_attempt); get_commit_scope 4216; Invoke-MoeLandLeaseRpc 7258-7312 (acquire/wait/release_resource); get_context 7988/9653/11107/11287; chat_channels 8044/9374; chat_read 9387/9662; get_pending_questions 9389; claim_next_task 9420/9506; chat_wait 9445; list_tasks 11149 (reads .tasks of an object); lease_account 8877 - unchanged on objects; on a malformed array they see no field and take their failure branch. (4) get_execution_readiness 3181 (n1 gate) -isnot PSCustomObject -> today's path: the purpose of this fix. (5) Pass-thro"
 }

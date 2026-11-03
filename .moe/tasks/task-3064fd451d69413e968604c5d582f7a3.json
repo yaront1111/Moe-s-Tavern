@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,16 +92,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:10:35.780Z",
-  "updatedAt": "2026-11-03T19:26:36.119Z",
+  "updatedAt": "2026-11-03T19:29:17.173Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:10:46.661Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T19:28:39.997Z",
+    "wallClockMs": 1073336
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -224,9 +227,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T19:22:42Z",
-    "at": "2026-11-03T19:26:36.119Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T19:27:01Z",
+    "at": "2026-11-03T19:29:17.173Z"
+  },
+  "completedAt": "2026-11-03T19:28:39.997Z",
+  "reviewCompletedAt": "2026-11-03T19:28:39.997Z",
+  "reviewSummary": "Reviewed completion 23afe7da (on moe/work-2026-10-24, in control HEAD): +137/-7 in 3 files (chatPin.ts, chatUnpin.ts, new chatPin.test.ts), under the 400 LOC cap, no scope creep, no forbidden patterns.\n\nRe-ran in a git-archive snapshot outside the shared checkout:\n- task.verification (tsc --noEmit + vitest on chatPin.test.ts, tools/chat*, registry, StateManager, WebSocketServer): exit 0, 10 files / 373 tests passed, tsc clean.\n- RED-at-base (b5f40fee + only the new test): \"Tests 6 failed | 1 passed (7)\" + RED-AT-BASE; p3 is the only green guard case.\n\nDoD: (1) p1 'system' -> NOT_ALLOWED -32003, p2 unregistered id -> INVALID_INPUT 'Unknown sender', neither stores a pin (getPins==[], no pins file); p3 'human', registered seat and disk-only seat still pin. (2) p4/p5 pin+unpin by '#general'/'general' under the canonical id; p6/p7 missing channel -> NOT_FOUND -32001 with {entity:'Channel',id}, refused unpin keeps the pin. (3) StateManager and WebSocketServer suites green; the /ws path and the other files are untouched.\n\nCode: sender rule mirrors chat_send/chat_decision ('system' checked before the lookup, 'human' skips it, getWorker + tryLoadWorkerFromDisk); channel via state.resolveChannelRef, store gets channel.id; all refusals are coded errors thrown before pinMessage/unpinMessage; response shapes unchanged, chat_unpin gains no workerId. Assertions are mutation-resistant (code/codeName/context, exact pin arrays). Out of scope per architect comment: PIN_REMOVED actor and docs/MCP_SERVER.md follow-ups.",
+  "requiredCheckAtDone": null
 }

@@ -41,29 +41,47 @@
     {
       "stepId": "step-3",
       "description": "Regenerate the vendored copies and apply their hunks (see mem:gotcha-moe-doc-generated-artifacts).\n\nWhat changes:\n- packages/moe-daemon/src/generated/initFiles.ts vendors both edited role docs: architect.md and qa.reference.md. Each entry's body changes, and so does its sha-stamped marker. Each doc's shipped-body sha list gains one sha, kept sorted.\n- packages/moe-daemon/src/generated/skillFiles.ts vendors moe-qa-loop/SKILL.md: its embedded body changes and so does its frontmatter marker sha.\n\nGenerate them outside the shared checkout, in a clone that has history. A git-archive snapshot writes truncated sha lists. Run from your worktree:\n`S=$(mktemp -d) && git clone -q --shared \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q $(git rev-parse HEAD) && cp --parents docs/roles/{architect.md,qa.reference.md} docs/skills/moe-qa-loop/SKILL.md $S/r`\nThen, in `$S/r/packages/moe-daemon`, under the step 4 env -i PATH, run:\n`npm ci --no-audit && npm run -s generate-init-files && npm run -s generate-skill-files`\nBoth must print a `Generated …` line. A 'skipping' line means the docs were missing: stop and fix the clone.\n\nThen `diff -u` each regenerated file against your worktree's copy, and apply every hunk with your editor (Edit or apply_patch). Do not cp it over: the global rail requires a TOOL witness. Expect a few small hunks per entry; recent rows show about 6 changed lines per role doc.\n\nNever run npm build, ci or clean in the shared checkout (global rail).\n\nError handling: if a hunk will not match, re-run the diff against your current file and apply that hunk again. The step 4 gate proves the result byte for byte with its regenerate-and-checksum compare.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/generated/initFiles.ts",
         "packages/moe-daemon/src/generated/skillFiles.ts"
       ],
-      "startedAt": "2026-11-03T19:25:56.766Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "startedAt": "2026-11-03T19:25:56.766Z",
+      "completedAt": "2026-11-03T19:26:59.469Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification: run this one command, exactly, from the task worktree. It is the complete_task evidence, and the same command is checkRefs[0].\n\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git clone -q --shared \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q $(git rev-parse HEAD) && cp --parents docs/roles/{architect.md,qa.reference.md} docs/skills/moe-qa-loop/SKILL.md packages/moe-daemon/src/generated/{initFiles,skillFiles}.ts $S/r && cd $S/r && ! grep -rq 'data\\.nextAction' docs/roles docs/skills packages/moe-daemon/src/generated && grep -q 500 docs/roles/qa.reference.md && grep -q 500 docs/skills/moe-qa-loop/SKILL.md && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -o pipefail; npm run -s lint && cd packages/moe-daemon && npm ci --no-audit >/dev/null 2>&1 && sha1sum src/generated/*.ts > ../g.sha && npm run -s generate-init-files | grep Generated && npm run -s generate-skill-files | grep Generated && sha1sum -c --quiet ../g.sha && npx vitest run src/util/{initFiles,skillFiles,qaCommitPolicy}.test.ts | grep -aE \"Test Files|Tests |FAIL\"'`\n\nWhat it checks, in order:\n- DoD 1 and DoD 2: the content greps, then the role-doc lint (40-line cap).\n- DoD 3: regenerating from the edited docs must leave both vendored files byte-identical to yours.\n- Then the three guard test files.\n\nExpected: OK lint lines, two Generated lines, `Test Files  3 passed (3)`, exit 0.\n\nMeasured while planning:\n- On HEAD f8b8d60c it exits 1 at the data.nextAction grep (architect.md:30 and initFiles.ts:55).\n- With the content greps removed, the rest passed on HEAD: 3 files, 44 tests, about 42 s.\n\nError handling for a red run:\n- A sha1sum 'FAILED' line means your hand-applied hunks differ from the generator's output. Redo step 3's diff.\n- A qaCommitPolicy failure names the sentinel phrase you dropped.\n- Re-run the whole command; never submit a subset as evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate command exit 0: lint OK (architect 39 lines), both Generated, checksum compare clean, 3 files/44 tests passed.",
+      "startedAt": "2026-11-03T19:27:00.209Z",
+      "completedAt": "2026-11-03T19:27:49.432Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's own diff. Load adversarial-self-review, then check:\n1. architect.md is still at or under 40 lines (lint OK), and its rule no longer promises any error field the daemon never sends.\n2. The new QA text does not contradict qa.md:16 or the 'A second landing gap is not rejected again' rule in SKILL.md:61, which stays as it is.\n3. Every qaCommitPolicy sentinel is still present in both the docs and their vendored copies.\n4. The vendored copies were not hand-written: the gate's checksum compare is the proof.\n5. `git status --short` in the worktree lists only the 5 files.\n6. No added line contains any string from the project.json globalRails.forbiddenPatterns list.\nFix anything this finds, then re-run the step 4 command before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/roles/architect.md",
+        "docs/roles/qa.reference.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "note": "Self-review: git status lists only the 5 files; no forbidden patterns in added lines; sentinels guarded by qaCommitPolicy test (passed); second-landing-gap rule untouched.",
+      "startedAt": "2026-11-03T19:27:50.175Z",
+      "completedAt": "2026-11-03T19:27:59.229Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,12 +93,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:11:45.670Z",
-  "updatedAt": "2026-11-03T19:25:56.766Z",
+  "updatedAt": "2026-11-03T19:28:04.157Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:20:21.764Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -92,7 +110,10 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:24:13.821Z",
@@ -153,5 +174,21 @@
   },
   "planApprovedAt": "2026-11-03T19:24:13.856Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T19:25:32.389Z"
+  "workStartedAt": "2026-11-03T19:25:32.389Z",
+  "reviewStartedAt": "2026-11-03T19:28:04.155Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git clone -q --shared \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q $(git rev-parse HEAD) && cp --parents docs/roles/{architect.md,qa.reference.md} docs/skills/moe-qa-loop/SKILL.md packages/moe-daemon/src/generated/{initFiles,skillFiles}.ts $S/r && cd $S/r && ! grep -rq 'data\\.nextAction' docs/roles docs/skills packages/moe-daemon/src/generated && grep -q 500 docs/roles/qa.reference.md && grep -q 500 docs/skills/moe-qa-loop/SKILL.md && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -o pipefail; npm run -s lint && cd packages/moe-daemon && npm ci --no-audit >/dev/null 2>&1 && sha1sum src/generated/*.ts > ../g.sha && npm run -s generate-init-files | grep Generated && npm run -s generate-skill-files | grep Generated && sha1sum -c --quiet ../g.sha && npx vitest run src/util/{initFiles,skillFiles,qaCommitPolicy}.test.ts | grep -aE \"Test Files|Tests |FAIL\"'",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nGenerated .../initFiles.ts (8 role docs + 3 subagents, sha-stamped)\nGenerated .../skillFiles.ts (65 skill files across 17 skills)\n Test Files  3 passed (3)\n      Tests  44 passed (44)",
+    "reportedAt": "2026-11-03T19:28:04.155Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/roles/architect.md",
+    "docs/roles/qa.reference.md",
+    "docs/skills/moe-qa-loop/SKILL.md",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    "packages/moe-daemon/src/generated/skillFiles.ts"
+  ],
+  "completionSummary": "architect.md MoeError rule now says to key on error.data.codeName and follow the call error.message names (error.data is exactly { tool, codeName }). qa.reference.md and moe-qa-loop SKILL.md state qa_reject's 500-char issue-description cap and route held-path remedy text to reason (max 2000) or a task comment. initFiles.ts and skillFiles.ts updated from the generators' output (hunks applied with Edit); gate regenerate-and-checksum compare is byte-identical."
 }
