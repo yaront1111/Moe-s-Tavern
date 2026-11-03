@@ -51,7 +51,9 @@ DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
 if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then RUNTIME_PROTECTED=1; else RUNTIME_PROTECTED=0; fi
 # cmd.exe, which runs an npm .cmd shim such as claude.cmd, looks a bare name up in
 # the current directory (the project) before PATH unless this is set; every child
-# inherits it. Node's own spawn of a bare name ignores it. Same line in moe-agent.ps1.
+# inherits it. Node 22+ (libuv 1.48+) honours it too, read from its own environment;
+# older Node does not, and no lookup skips a '.', relative or in-project PATH entry.
+# Same line in moe-agent.ps1.
 if [ "$RUNTIME_PROTECTED" = 1 ]; then export NoDefaultCurrentDirectoryInExePath=1; fi
 PROTECTED_INTERPRETERS_PINNED=0
 # moe-call.sh resolves its own proxy and falls back past a missing MOE_PROXY_PATH,
@@ -8650,19 +8652,23 @@ get_account_lease() {
 }
 
 # The guard program runs from a function, not inside $( ): macOS /bin/bash 3.2 cannot parse a quoted heredoc inside $( ).
-agent_git_guard_node() {
-    "$NODE_CMD" - "$PROJECT" "$SECURE_TEMP_DIR" <<'MOE_GIT_GUARD_JS'
+agent_git_guard_node() { # $1 = the git the program runs
+    "$NODE_CMD" - "$PROJECT" "$SECURE_TEMP_DIR" "$1" <<'MOE_GIT_GUARD_JS'
 const fs = require('fs'), path = require('path'), cp = require('child_process');
-const [project, temp] = process.argv.slice(-2), win = process.platform === 'win32';
+const [project, temp, gitCmd] = process.argv.slice(-3), win = process.platform === 'win32';
 const native = p => win ? p.replaceAll('\\', '/') : p;
 const env = { ...process.env, LC_ALL: 'C' };
-const git = (cwd, args, e = env) => cp.spawnSync('git', ['-C', cwd, ...args], { env: e, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 });
+// Under MOE_RUNTIME_PROTECTED=1 nothing runs by bare name: Node can look one up in the current directory or through a
+// '.', relative or in-project PATH entry, so the wrapper passes git's absolute path (task-52555102).
+const strict = process.env.MOE_RUNTIME_PROTECTED === '1';
+const git = (cwd, args, e = env) => cp.spawnSync(gitCmd, ['-C', cwd, ...args], { env: e, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 });
 const value = r => { if (r.status !== 0) throw Error('git'); return r.stdout.replace(/\n$/, ''); };
 const shell = s => "'" + s.replaceAll("'", "'\\''") + "'";
 let root;
 try {
     const count = process.env.GIT_CONFIG_COUNT || '', n = Number(count);
     if (!/^\d*$/.test(count) || !Number.isSafeInteger(n) || n > 2147483646) throw Error('config');
+    if (strict && !path.isAbsolute(gitCmd)) throw Error('path');
     const identity = git(project, ['rev-parse', '--absolute-git-dir']);
     if (identity.status === 128 && /^fatal: not a git repository\b/.test(identity.stderr || '')) {
         // A broken/redirected repository is not an ordinary non-Git project.
@@ -8682,11 +8688,13 @@ try {
     root = fs.mkdtempSync(path.join(temp, 'moe-git-guard-'));
     fs.chmodSync(root, 0o700);
     if (win) {
+        const powershell = strict ? path.join(process.env.SystemRoot || '', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : 'powershell.exe';
+        if (strict && !path.isAbsolute(powershell)) throw Error('path');
         const acl = "$ErrorActionPreference='Stop'; $p='" + root.replaceAll("'", "''") + "'; $a=Get-Acl -LiteralPath $p; $a.SetAccessRuleProtection($true,$false); " +
             "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,'FullControl','ContainerInherit,ObjectInherit','None','Allow')); Set-Acl -LiteralPath $p -AclObject $a";
         // pwsh 7 lists its own modules first in PSModulePath, and a Windows PowerShell 5.1 child that inherits it cannot load Get-Acl.
         const psenv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PSMODULEPATH'));
-        value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { env: psenv, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));
+        value(cp.spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { env: psenv, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));
     }
     const hooks = native(path.join(root, 'hooks')), config = native(path.join(root, 'config'));
     fs.mkdirSync(hooks, { mode: 0o700 });
@@ -8715,8 +8723,13 @@ MOE_GIT_GUARD_JS
 
 # Process-scoped Git hooks: the wrapper and its sidecars never inherit this overlay.
 prepare_agent_git_guard() {
-    local entry
-    AGENT_GIT_GUARD_ROOT=$(agent_git_guard_node) || return 1
+    local entry guard_git=git
+    # Under MOE_RUNTIME_PROTECTED=1 the program gets git's absolute path, from an absolute PATH entry outside the
+    # project (task-52555102).
+    if [ "$RUNTIME_PROTECTED" = 1 ]; then
+        guard_git=$(protected_path_lookup git "$(normalize_path "$PROJECT")" .exe) || return 1
+    fi
+    AGENT_GIT_GUARD_ROOT=$(agent_git_guard_node "$guard_git") || return 1
     AGENT_GIT_GUARD_ENV=()
     [ -n "$AGENT_GIT_GUARD_ROOT" ] || return 0
     while IFS= read -r -d '' entry; do AGENT_GIT_GUARD_ENV+=("$entry"); done < "$AGENT_GIT_GUARD_ROOT/env"
