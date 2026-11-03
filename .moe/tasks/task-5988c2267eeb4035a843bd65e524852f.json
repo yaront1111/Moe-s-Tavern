@@ -118,7 +118,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -144,7 +144,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:52.279Z",
-  "updatedAt": "2026-11-03T01:10:33.016Z",
+  "updatedAt": "2026-11-03T01:15:45.468Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:25.066Z",
@@ -154,11 +154,14 @@
     "firstClaimAt": "2026-11-02T22:17:19.136Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T01:15:18.804Z",
+    "wallClockMs": 10679668
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -276,7 +279,11 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-24611a0a@2026-11-02T22:17:16Z",
-    "at": "2026-11-02T23:51:01.218Z"
-  }
+    "sessionId": "qa-93f9625e@2026-11-03T01:13:07Z",
+    "at": "2026-11-03T01:15:45.467Z"
+  },
+  "completedAt": "2026-11-03T01:15:18.804Z",
+  "reviewCompletedAt": "2026-11-03T01:15:18.804Z",
+  "reviewSummary": "Reviewed completion 603b46bb (in HEAD 12d7bb62, moe/control) via git show: 5 files under packages/moe-daemon/src/tools, +84/-16, no docs edit.\nDoD1: archiveUpdates(task) exported from archiveTask.ts (old clear block moved verbatim); archive_task and archive_epic both call it. BLOCKED rows keep priorBlockedReason and null the five block fields. IN_FLIGHT, refusal and finalizing-attempt pre-pass untouched.\nDoD2: report_blocked unions stored ids only when task.status==='BLOCKED' (post-await read). Fresh flip always writes recorded ids or null. Repeat arm, response shape, schema unchanged.\nDoD3: RED re-run by me (pre-commit archiveEpic.ts/reportBlocked.ts in snapshot): 3 failed | 65 passed, only the new cases. Quotes: 'expected { id: task-bk, …(25) } to match object', 'expected false not to be false', 'expected [ …(2) ] to deeply equal [ Array(1) ]'. Literal blocked:true read per planner note and governor 01:11Z note (no blocked key on the Blocked answer; prop-58381650 still PENDING).\nDoD4: git-archive snapshot of 603b46bb, npm ci, env -i, Node 24.21.0: the 4-file vitest gate gives 4 files, 94/94 passed; tsc --noEmit exit 0; also src/tools + src/state: 112 files, 3244/3244. Nothing run in place.\nDoD5: scope is exactly the five declared files.\nResiduals (out of scope per plan): release_task refusal cascade and un-archive can still leave block fields on non-BLOCKED rows; dependencyEdges and get_context may read them. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

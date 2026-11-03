@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "Tests first, RED (test-driven-development). File: scripts/tests/protected-agent-command.test.mjs, edited in the task worktree with the Edit tool. A prototype that passed against the step-2 code on Linux and through Windows node.exe is at /mnt/d/moe-scratch/52555102-plan/protected-agent-command.test.mjs.proto.diff; port it.\nRead mem:gotcha-protected-agent-command-reaching-the-cli and mem:gotcha-windows-libuv-spawn-searches-cwd-first first. Re-measured on 2026-11-03: Node 22+ (libuv 1.48+) honours NoDefaultCurrentDirectoryInExePath when it is set in the SPAWNING process's own environment, and the marker already exports it. So on HEAD a project-root git.exe reached only through the current directory is already skipped. What still reaches it is a '.', relative or in-project PATH entry (any libuv), or Node 20 and older.\n(a) At the end of the file add G1, for the ps1 engines only. Skip it off Windows or without GIT_DIR, like C2.\n- Setup:\n  - `git init -q` the fixture project with GIT_DIR's git.exe, so the guard reaches its powershell.exe ACL step.\n  - Copy process.execPath to <project>\\git.exe and to <project>\\powershell.exe.\n  - Pass NODE_OPTIONS=`--require \"<logger, with / separators>\"`. The logger appends JSON {pid, ppid, exe: process.execPath, args: process.argv.slice(1)}.\n- The guard is the logged entry with args[0] === '-' and args[1] = the project (case-insensitive path compare). Assert it ran at least once.\n- The result is the deduped, lowercased basenames of planted entries (dirname = the project) whose ppid is a guard pid. A '.' entry also reaches the launcher's own PowerShell `& git` (task-3acf7f79), so never assert on the whole log.\n- Three runs, role governor, with a trusted claude.cmd stub and PATH [nodeBin, trusted, ...TAIL, GIT_DIR]:\n  - marker '1' with '.' first on PATH: result [].\n  - marker '1' without '.': result [].\n  - legacy (marker null): result ['git.exe']. This proves the plant is reachable.\n  - Both marker runs also assert exit 0 and a 'trusted claude' line in ran.log.\n(b) Add G2 for bash (the `sh` engine).\n- Plant <project>/git as a /bin/sh script that appends `ps -o args= -p \"$PPID\"` to a log and then execs realpath('/usr/bin')/git with \"$@\".\n- PATH is [fx.project, nodeBin, trusted, ...TAIL], role governor.\n- Each log line's first token basename names the parent. `ps -o comm=` prints MainThread for Node 24, so do not use it.\n- marker '1' must have no 'node' parent; legacy must have one. Both runs exit 0.\n(c) In the C1/C2 header comment, replace \"(Node's own spawn of a bare name does not)\" with an accurate clause: Node 22+ honours the variable too, which G1 covers.\nRED proof, against the unchanged wrappers:\n- G1 through Windows node.exe: the '.' run fails with actual ['git.exe'].\n- G2 on Linux fails with parents 'bash,node'.\n- Run both from a scratch copy, `git archive HEAD scripts docs package.json` plus your test file. Put the copy under /mnt/c/Users/<u>/AppData/Local/Temp for the Windows rows, and run Windows node.exe from a normal WSL shell, not env -i. Paste both RED test tails into the step notes.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/protected-agent-command.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T01:13:00.786Z"
     },
     {
       "stepId": "step-2",
@@ -62,7 +63,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:35:47.158Z",
-  "updatedAt": "2026-11-03T01:12:11.375Z",
+  "updatedAt": "2026-11-03T01:13:00.786Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:12.733Z",
@@ -148,5 +149,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T00:43:51.108Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T01:13:00.786Z"
 }
