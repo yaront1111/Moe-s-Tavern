@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-af7be174",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:10.941Z",
-  "updatedAt": "2026-11-03T08:46:15.168Z",
+  "updatedAt": "2026-11-03T08:48:09.574Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:35:19.081Z",
     "plannedStepCount": 5,
@@ -183,5 +183,44 @@
   },
   "planApprovedAt": "2026-11-03T08:39:14.372Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T08:41:58.939Z"
+  "workStartedAt": "2026-11-03T08:41:58.939Z",
+  "reviewStartedAt": "2026-11-03T08:46:34.193Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && D='packages docs scripts moe-jetbrains moe-vscode' && X=$(git diff --name-only \"$B\" -- $D | grep -vxF -e packages/moe-daemon/src/tools/claimNextTask.ts -e packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts -e docs/MCP_SERVER.md || true) && N=$(git ls-files --others --exclude-standard -- $D | grep -vxF packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts || true) && { [ -z \"$X$N\" ] || { echo \"FAIL: out of scope vs $B: $X $N\"; exit 1; }; } && echo 'C0 OK' && H=$(git rev-parse HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && for f in packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts docs/MCP_SERVER.md; do cp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npx vitest run src/tools/claimNextTask.controlSeatNotice.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts src/tools/governanceFeatures.test.ts src/tools/chatSystemFeed.test.ts && npx tsc --noEmit' && echo 'C1 OK'",
+    "exitCode": 0,
+    "outputTail": "C0 OK\n ✓ src/tools/claimNextTask.controlSeatNotice.test.ts (6 tests) 482ms\n ✓ src/tools/chatSystemFeed.test.ts (16 tests) 1184ms\n ✓ src/tools/governanceFeatures.test.ts (28 tests) 2034ms\n ✓ src/tools/claimNextTask.contract.test.ts (49 tests) 2364ms\n ✓ src/tools/claimNextTask.test.ts (81 tests) 5791ms\n Test Files  5 passed (5)\n      Tests  180 passed (180)\nnpm notice run 'tsc' --noEmit\nC1 OK",
+    "reportedAt": "2026-11-03T08:46:34.193Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "claim_next_task no longer posts the #workers file-collision heads-up on a REVIEW or PLANNING claim while settings.worktreeMode is 'on' (those seats work in the control checkout and land nothing, and the mention-less line paged every busy seat). New helper controlSeatClaim in claimNextTask.ts gates the post alongside worktreeOnlyCollision; an invalid worktreeMode is caught, logged, and keeps today's heads-up; the response's fileCollision is unchanged; WORKING claims and worktreeMode off behave as before. The '<workerId> claimed task: <title>' notice is posted with { parseMentions: false } (text byte-identical), so an at-token in a title records mentions [] and routes to no seat. New test file claimNextTask.controlSeatNotice.test.ts (6 cases: REVIEW both peer-attempt modes, PLANNING, mode off, invalid mode, at-token title; at-sign built at runtime). RED before the fix: (a)x2, (b), (e) failed, (c)/(d) passed. docs/MCP_SERVER.md: one sentence of the fileCollision bullet. Verification: checkRefs scope check OK, snapshot vitest 5 files 180/180 (174 existing unedited + 6 new), tsc --noEmit clean. 4 mutants (drop gate, drop parseMentions:false, helper ignores setting, resolver throw escapes) each killed by the expected cases.",
+  "commits": [
+    {
+      "sha": "66f435857bec88def397c88a8af901401cb82d8f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T08:39:30Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T08:48:03.640Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T08:39:30Z",
+    "at": "2026-11-03T08:48:04.038Z"
+  }
 }

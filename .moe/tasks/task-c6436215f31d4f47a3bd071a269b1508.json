@@ -15,19 +15,25 @@
     {
       "stepId": "step-1",
       "description": "Case (a), the unmerged half of the L2 union. Edit scripts/tests/postflight-worktree.cjs only, with the Edit tool.\n\nPlacement (governor comment-943c6629: task-e3e81c45 adds cases to this file too): put the new function directly after `async function wtResume(){...}` (it ends just before the markerScan comment block, about :1149). Register it in the case table right after `'wt-resume':wtResume,` on the existing line (:1550), never at the end of the file or of the table.\n\n`async function wtResumeUnmerged()`. Head it with a 2-line comment: a non-conflict unlanded route stores no paths, so the resume's conflict is outside landingRetry.paths, and only the `--diff-filter=U` half of the scan can catch its markers.\n- p = repo('wt-resume-unmerged', {settings: {...LANDS, qualityGate: gateCmd()}}). log = path.join(root, 'wt-resume-unmerged-gate.jsonl').\n- landRun(p, 'wt-resume-unmerged-0', {'src/a.txt': 'task a\\n'}): a checkpoint T.\n- landRun(p, 'wt-resume-unmerged-1', {}, {...REVIEW, WT_GATE_LOG: log, WT_GATE_EXIT: '3'}): MOE_COMMIT_FAILED_GATE, routed unlanded. Assert retryOf(p).reason === 'gate' and deepEqual(retryOf(p).paths, []), so the case is non-vacuous.\n- b = commitOn(p, 'refs/heads/main', {'src/a.txt': 'main a\\n'}). gateRuns = rows(log).length.\n- r = landRun(p, 'wt-resume-unmerged-2', {}, {...REVIEW, WT_GATE_LOG: log, WT_CLI_RECORD: rec}, {type: 'claude'}). The typed CLI forwards the prompt (mem:gotcha-postflight-worktree-clishim-drops-argv). Pre-flight merges main and conflicts on src/a.txt, the CLI writes nothing, and the completion keeps the markers.\n- One assert.deepEqual with tail(r.log). It expects:\n  - promptOf(rec) === 'LANDING-CONFLICT: src/a.txt';\n  - mainOf(p) === b;\n  - revOf(p.W, 'MERGE_HEAD') === b;\n  - the markers are still in W/src/a.txt;\n  - r.log includes '[WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT';\n  - the last unlanded(p) entry is [outcome, unlandedReason, conflictPaths] = ['unlanded', 'conflict', ['src/a.txt']];\n  - retryOf(p).paths deep-equals ['src/a.txt'];\n  - rows(log).length === gateRuns, because the refusal happens at L2, before the gate.\n\nError handling: on failure each assertion message names its run, and the case leaves no extra fixture state. Reuse the existing helpers (repo, landRun, commitOn, gateCmd, retryOf, unlanded, promptOf, rows, tail, REVIEW, LANDS); add no new helper unless both cases need it.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-03T08:43:32.581Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Added wtResumeUnmerged directly after wtResume and registered 'wt-resume-unmerged' right after 'wt-resume' in the case table. A gate-routed unlanded completion (retry paths [], 1 gate run) is the premise check. The resume then conflicts on src/a.txt against main B. The completion asserts: LANDING-CONFLICT prompt, main==B, MERGE_HEAD==B, markers in W, the [WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT line, one unlanded/conflict/['src/a.txt'] finalize, stored retry paths ['src/a.txt'], and no new gate run. sh run on the unmodified wrapper: `[worktree] wt-resume-unmerged ok` (1 ok, 0 failed, 1m22s).",
+      "startedAt": "2026-11-03T08:43:32.581Z",
+      "completedAt": "2026-11-03T08:47:40.579Z"
     },
     {
       "stepId": "step-2",
       "description": "Case (b): the landingRetry.paths half and the retry-only trigger. Same file, Edit tool. Place `async function wtResumeRetryPath()` right after wtResumeUnmerged, and register it right after 'wt-resume-unmerged' in the case table.\n\nHead comment (2-3 lines): markers stay in a retry path after the pending merge was committed by hand, so MERGE_HEAD is gone, nothing is unmerged and the resume's merge is a no-op. Only the retry paths, scanned because landingRetry is set, can catch them.\n\nSteps:\n- p = repo('wt-resume-retry-path', {settings: LANDS}). mh = () => revOf(p.W, 'MERGE_HEAD').\n- landRun(p, 'wt-resume-retry-path-0', {'src/a.txt': 'task a\\n'}).\n- b = commitOn(p, 'refs/heads/main', {'src/a.txt': 'main a\\n'}).\n- landRun(p, 'wt-resume-retry-path-1', {}, REVIEW): merge-tree conflict, unlanded 'conflict' with paths ['src/a.txt'].\n- landRun(p, 'wt-resume-retry-path-2', {}): the resume (WORKING) merges main, leaving markers and MERGE_HEAD; its checkpoint keeps both (see the wt-resume chain).\n- Commit that merge outside the wrapper: git(p.W, 'add', '--', 'src/a.txt'); git(p.W, 'commit', '-q', '--no-verify', '--no-edit'). This stands in for any tip that carries markers with no pending merge, such as a human commit or an older wrapper.\n- Assert, so the case is non-vacuous: mh() === null; the markers are in W/src/a.txt; git(p.W, 'ls-files', '-u') === ''; deepEqual(retryOf(p).paths, ['src/a.txt']); W's HEAD has b as an ancestor (`git merge-base --is-ancestor`).\n- main0 = mainOf(p) (=== b).\n- r = landRun(p, 'wt-resume-retry-path-3', {}, {...REVIEW, WT_CLI_RECORD: rec}, {type: 'claude'}).\n- One assert.deepEqual with tail(r.log). It expects:\n  - promptOf(rec) === 'LANDING-RETRY: conflict', which proves no merge was pending and nothing was unmerged at the completion;\n  - mainOf(p) === main0;\n  - mh() === null;\n  - r.log includes '[WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT';\n  - the last unlanded(p) entry is ['unlanded', 'conflict', ['src/a.txt']];\n  - no new 'landed' entry in finals(p).\n\nBoth new cases must run unchanged under the sh engine (postflight.sh) and the ps1 engines (postflight.ps1): use only the suite's git and fs helpers, never a shell-specific command. Do not touch any existing case or assertion. scripts/moe-agent.{sh,ps1} stay unchanged.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T08:47:41.398Z"
     },
     {
       "stepId": "step-3",
@@ -73,7 +79,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:57.048Z",
-  "updatedAt": "2026-11-03T08:43:32.581Z",
+  "updatedAt": "2026-11-03T08:47:41.398Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:32:52.349Z",
@@ -82,7 +88,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T08:34:35.147Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -93,7 +100,9 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:40:32.867Z",
   "executionContract": {
