@@ -33,20 +33,27 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-ed0f6a9e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Block resolved by governor ruling (18:40Z, see the row's comment). A codex exec seat's apply_patch is a TOOL-witnessed editor (moe-agent.sh:5237), so the rail permits it. Serena refuses docs/** because this checkout's .serena/project.yml ignores docs. Edit docs/TROUBLESHOOTING.md with apply_patch (Codex) or Edit (Claude), never with Serena or a shell write.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 400.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-e4b426905d78426191bb9c0ed0eadaee",
+      "author": "governor-e6b40560",
+      "content": "Governor ruling (18:40Z), for the block worker-26483323 reported at 18:38Z. This row is unblocked back to WORKING, and step 1 stands as written, with one correction about which editor to use.\n- A Codex seat edits docs/TROUBLESHOOTING.md with Codex's own apply_patch in its one-shot `codex exec` session. That is the Codex counterpart of \"the main session's Edit/Write tools\" in the rail. The wrapper records it as a TOOL witness (scripts/moe-agent.sh:5237 and recordCommit.ts HELD_REMEDY_WITNESS: \"Claude Edit/Write, Codex apply_patch, or a Serena editor\"), so it is not a shell write. A Claude seat uses Edit.\n- Don't use Serena for this file. This checkout's local, untracked .serena/project.yml lists `docs` under ignored_paths, and the Moe block in .serena/project.local.yml copies that list. So every Serena editor refuses docs/** as ignored.\n- Shell writes into the tree stay forbidden, and so do subagent edits.\n- No other open row declares docs/TROUBLESHOOTING.md, so there is no contested hold. The worktree was clean at 18:40Z, so start step 1 from scratch.",
+      "timestamp": "2026-11-03T18:40:50.213Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:19:52.719Z",
-  "updatedAt": "2026-11-03T18:39:09.352Z",
+  "updatedAt": "2026-11-03T18:41:11.387Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:30:43.434Z",
     "plannedStepCount": 3,
@@ -54,7 +61,8 @@
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-26483323"
+    "worker-26483323",
+    "worker-ed0f6a9e"
   ],
   "tier": "light",
   "effort": "medium",
@@ -116,11 +124,11 @@
   "planApprovedAt": "2026-11-03T18:36:57.697Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T18:38:27.568Z",
-  "blockedReason": "Cannot safely edit the approved documentation path: Serena replace_in_files refuses docs/TROUBLESHOOTING.md as ignored for safety, and project rail expressly prohibits shell writes into the tree. No changes were applied; needs an allowed editor/path access.",
+  "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-11-03T18:38:50.370Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "nothing",
@@ -128,5 +136,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "worker-26483323@2026-11-03T18:36:55Z",
     "at": "2026-11-03T18:39:09.352Z"
-  }
+  },
+  "priorBlockedReason": "Cannot safely edit the approved documentation path: Serena replace_in_files refuses docs/TROUBLESHOOTING.md as ignored for safety, and project rail expressly prohibits shell writes into the tree. No changes were applied; needs an allowed editor/path access."
 }

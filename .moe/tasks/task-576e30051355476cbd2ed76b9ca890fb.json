@@ -83,8 +83,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -106,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:34:17.207Z",
-  "updatedAt": "2026-11-03T18:39:52.205Z",
+  "updatedAt": "2026-11-03T18:41:53.219Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T18:15:41.175Z",
@@ -116,11 +116,14 @@
     "firstClaimAt": "2026-11-03T18:16:17.812Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T18:41:23.842Z",
+    "wallClockMs": 1506030
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-ed0f6a9e"
+    "worker-ed0f6a9e",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -206,10 +209,11 @@
   "planApprovedAt": "2026-11-03T18:33:15.088Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T18:33:19Z",
-    "at": "2026-11-03T18:38:34.738Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T18:39:49Z",
+    "at": "2026-11-03T18:41:53.219Z"
   },
   "workStartedAt": "2026-11-03T18:34:39.698Z",
   "reviewStartedAt": "2026-11-03T18:37:22.626Z",
@@ -246,5 +250,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T18:41:23.842Z",
+  "reviewCompletedAt": "2026-11-03T18:41:23.842Z",
+  "reviewSummary": "Reviewed completion cc84c88a (on moe/control and moe/work-2026-10-24; 4 files, +235/-76, net 159 LOC) via git show. Re-ran task.verification verbatim in a /tmp git-archive snapshot: tsc clean (package + new test), Test Files 3 passed, Tests 147 passed | 1 skipped, 'B rows passed: 9/9', exit 0. Re-ran RED on a 6d6bdc51 archive + new test: 6 failed | 3 passed (B1x2, B2, B4, B5x2 fail; B3x3 pass), matches the task's RED comment. doctor.test.ts is byte-identical to 6d6bdc51. DoD1: doctor.ts resolves healthProbeAddress(recordedProbeHost({bindHost})), dials it for probeHealth and probeTcp, defaults to 127.0.0.1 without bindHost, names the dialed address in every message (IPv6 bracketed). A null or non-local address is a [FAIL] '... not dialed' returned before any dial (B4/B5 assert http.request is never called). DoD2: B1-B5 (9 tests) cover ::1 literal and name, TCP fallback on ::1, wildcard/wsl, off-machine address, unresolvable name, non-string. DoD3: no-bindHost dial and messages unchanged. The move is pure: index.ts only loses the five definitions and the dns import and gains one import; probeHost.ts keeps the bodies, the default os/dns/net imports (the d6ebe4ab spies still pass) and widens recordedProbeHost to Pick<DaemonInfo,'bindHost'>. No test deleted or weakened. Adversarial pass: timer cleared in finally and unref'd, shown bindHost JSON-escaped and capped at 120 chars, zoned literals fail as in the daemon. Complexity pass: nothing to cut. Note: B1/B2 skip without IPv6 loopback and the gate then reads 6/9 by design; 9/9 here.",
+  "requiredCheckAtDone": null
 }
