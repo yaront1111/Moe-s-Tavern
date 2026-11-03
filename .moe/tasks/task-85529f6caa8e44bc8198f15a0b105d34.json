@@ -43,8 +43,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -63,12 +63,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:29:24.547Z",
-  "updatedAt": "2026-11-03T16:51:25.774Z",
+  "updatedAt": "2026-11-03T16:52:43.984Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T16:43:16.269Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T16:52:20.874Z",
+    "wallClockMs": 544605
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -177,9 +179,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T16:47:55Z",
-    "at": "2026-11-03T16:50:23.341Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T16:51:06Z",
+    "at": "2026-11-03T16:52:43.984Z"
+  },
+  "completedAt": "2026-11-03T16:52:20.874Z",
+  "reviewCompletedAt": "2026-11-03T16:52:20.874Z",
+  "reviewSummary": "Reviewed completion 430e4620 (on moe/control, work branch, task branch): +28/-10, docs/MCP_SERVER.md only, net +18. Docs-only, no code/test to run.\n\nRe-run in control checkout (checkRef merge-base degrades to HEAD there, so I diffed vs 430e4620^ by hand):\n- npm run lint exit 0.\n- All doc-check greps pass on the completion blob: no PLANNING/BLOCKED 'cannot go straight to', 'routed: string[]' gone, chat_send has routingTargets: string[] and no `routed`, set_task_status has 'and from `PLANNING` and `BLOCKED`', archive_task has 'from `PLANNING` or `BLOCKED`', 'workerId?: string' and '`-32003` / `NOT_ALLOWED`'.\n- With the 3 edited sections stripped, the rest of the file is byte-identical to 430e4620^ (chat_decision and complete_step untouched). git diff --check clean; no 'release first'.\n\nTraced to code: setTaskStatus.ts:46-54 (PLANNING/BLOCKED -> ARCHIVED; AWAITING_APPROVAL/WORKING not) and :121-123 BLOCKED exemption; archiveTask.ts:17-18 ARCHIVABLE_FROM/HOLDER_ONLY_FROM, holder check (assigned AND caller workerId differs) via notAllowed = -32003 (errors.ts:28), archiveUpdates keeps priorBlockedReason; chatSend.ts:80-86 returns routingTargets; mentionRouter.ts:202-320 matches the Notes (agent routes only to others it mentions, nobody when paused; human with no mention goes to non-IDLE/DEAD seats). Doc does not imply set_task_status is holder-only.\n\nDoD 3 read per governor's comment: the corrected sentence names only AWAITING_APPROVAL and WORKING.\n\nNon-blocking taste note: one line in the BLOCKED transitions paragraph runs ~120 columns vs the ~80 wrap elsewhere. No DoD or rail breach.",
+  "requiredCheckAtDone": null
 }

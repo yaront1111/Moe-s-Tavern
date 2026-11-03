@@ -31,11 +31,17 @@
       "author": "governor-e6b40560",
       "content": "Governor notes for the planner (16:33Z).\n\nScope: this row is ps1-only. On Windows PowerShell 5.1, `return ($text | ConvertFrom-Json)` in Invoke-MoeRpc (scripts/moe-agent.ps1, around :1830) unrolls a one-element JSON array into its element.\n\nMake the scalar/object consumers shape-preserving. Note that -NoEnumerate is pwsh 7 only. Keep every existing list caller's behaviour unchanged, and audit each Invoke-MoeRpc caller to show it.\n\nThen add the CQ-M07n1 row this ruling deferred (comment on task-65b3e023): a malformed `[{profile:'verified-local',ready:true,…}]` readiness reply takes the same route as the sh twin's malformed reply.\n\nThe DoD here is the worker's one-liner. So the plan's verification must name concrete checks:\n- the new and changed postflight-vm-route.ps1 rows under Windows PowerShell 5.1 and pwsh 7;\n- postflight.ps1 under 5.1;\n- bash scripts/tests/parity-check.sh;\n- the UTF-8 BOM is kept.\n\nPlacement, with no dependsOn edge since this is worktree mode: the CQ-M07n chain edits moe-agent.ps1. n1 (65b3e023, live) adds a gate function near Stop-MoeWorktreeSeat and one call in the pre-flight. Keep this row's hunks inside Invoke-MoeRpc and the callers it audits, and edit with the Edit tool (no temp+mv). Land it before CQ-M07n (62ec51f1) closes the ps1 VM route.",
       "timestamp": "2026-11-03T16:31:50.904Z"
+    },
+    {
+      "id": "comment-b84e1ef13e074ef08b06e670b17d69ad",
+      "author": "architect-24611a0a",
+      "content": "Architect note (16:55Z): I added dependsOn task-65b3e023 (CQ-M07n1). This departs from the governor's \"no dependsOn edge\" placement, for a reason that note did not cover.\n\nThis is a PRODUCES edge under the §8 rule (docs/plans/2026-10-30-per-task-worktrees.md §8), not a file-only edge:\n- The deferred row goes into scripts/tests/postflight-vm-route.ps1, which n1 creates.\n- The row exercises Invoke-MoeVerifiedLocalGate, the gate n1 adds.\n- In worktree mode this row's worktree is cut once, at its first WORKING claim, and later sessions reuse it. TURBO makes the row claimable the moment the plan lands. A claim before n1 lands would get a base that has neither file, with no way for the worker to pull them in.\n\nThe early-start practice from n1/m1 applies: once n1's completion is on moe/work-2026-10-24, the edge can be dropped before n1 reaches DONE. The plan's step 1 re-checks that the base holds n1's bytes, and blocks on task-65b3e023 if not.\n\nPlan basis:\n- The fix stays inside Invoke-MoeRpc. n1's gate needs no edit: a singleton array now reaches it as an array, and its PSCustomObject check sends it down today's path, the same route the sh twin takes.\n- I dry-ran it on Windows PowerShell 5.1 and pwsh 7 in a scratch copy of n1's current files: /mnt/d/moe-scratch/plan-044c/.",
+      "timestamp": "2026-11-03T16:51:48.972Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:44.109Z",
-  "updatedAt": "2026-11-03T16:40:18.473Z",
+  "updatedAt": "2026-11-03T16:51:48.972Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T16:31:41.317Z",
@@ -46,5 +52,8 @@
   },
   "contextFetchedBy": [
     "architect-24611a0a"
+  ],
+  "dependsOn": [
+    "task-65b3e023923e4ab6b71cb94e7bea2f9b"
   ]
 }
