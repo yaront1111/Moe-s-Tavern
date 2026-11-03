@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:18:14.949Z",
-  "updatedAt": "2026-11-03T18:01:30.310Z",
+  "updatedAt": "2026-11-03T18:02:44.871Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:27:41.811Z",
     "plannedStepCount": 6,
@@ -226,5 +226,33 @@
     "scripts/moe-agent.ps1",
     "scripts/CLAUDE.md"
   ],
-  "completionSummary": "Both launchers now re-verify the attempt pinned at pre-flight after an account lease that WAITED: the MOE_ACCOUNT_WAIT branch, and the MOE_ACCOUNT_UNTRUSTED branch. If the pin is closed, superseded, missing, or not running/finalizing, the launcher prints `[account] MOE_ACCOUNT_WAIT_STALE_ATTEMPT task=.. attempt=.. generation=.. (<reason>) - ...`, which is identical in both twins. It launches nothing and drops only its own live-session marker. It also clears the local lease, gives one resume attempt back, sets the account-relaunch flag, and re-runs pre-flight at once, which also keeps a --no-loop / -NoLoop run going. A lease that did not wait, or a seat with no pin, launches exactly as before.\n\nChanges (+279/-2, inserts only):\n- scripts/moe-agent.sh: get_account_lease gets an ACCOUNT_LEASE_WAITED reset and two sets; new account_wait_recheck; `account_wait_recheck || continue`.\n- scripts/moe-agent.ps1: the $script:AccountLeaseWaited equivalent; new Test-MoeAccountWaitAttempt; `if (-not (Test-MoeAccountWaitAttempt)) { continue }`.\n- New scripts/tests/account-wait-attempt.test.mjs: 4 rows per engine.\n- The +2 idle_wait cut in moe-account-lease.test.mjs fixes its bash rows 3 and 4, which fail at HEAD (since d94c095f).\n- One CI line, and one scripts/CLAUDE.md sentence plus a test-list entry.\n\nRED (comment-f5a1969d): run against the 19d5e67a and 195b656a wrappers, WSL fails 2/4 and Windows 6/12. The stale rows print `LAUNCH task=task-wait attempt=attempt-a`.\n\nGREEN: the checkRef exits 0. ParseFile OK; parity-check PASS; WSL tests 45 (pass 44, skip 1); Windows tests 67 (pass 65, skip 2). npm run lint exits 0.\n\nMutants M1-M8, run outside W, each fail rows.\n\nTheoretical notes for QA:\n(a) For failures other than `identity`, the reason text comes from each twin's existing reader, so the wording differs: sh 'phase' vs ps1 'phase or id'.\n(b) A launch-failure backoff left from the previous iteration is still slept once before the re-run pre-flight, because the stale path does not "
+  "completionSummary": "Both launchers now re-verify the attempt pinned at pre-flight after an account lease that WAITED: the MOE_ACCOUNT_WAIT branch, and the MOE_ACCOUNT_UNTRUSTED branch. If the pin is closed, superseded, missing, or not running/finalizing, the launcher prints `[account] MOE_ACCOUNT_WAIT_STALE_ATTEMPT task=.. attempt=.. generation=.. (<reason>) - ...`, which is identical in both twins. It launches nothing and drops only its own live-session marker. It also clears the local lease, gives one resume attempt back, sets the account-relaunch flag, and re-runs pre-flight at once, which also keeps a --no-loop / -NoLoop run going. A lease that did not wait, or a seat with no pin, launches exactly as before.\n\nChanges (+279/-2, inserts only):\n- scripts/moe-agent.sh: get_account_lease gets an ACCOUNT_LEASE_WAITED reset and two sets; new account_wait_recheck; `account_wait_recheck || continue`.\n- scripts/moe-agent.ps1: the $script:AccountLeaseWaited equivalent; new Test-MoeAccountWaitAttempt; `if (-not (Test-MoeAccountWaitAttempt)) { continue }`.\n- New scripts/tests/account-wait-attempt.test.mjs: 4 rows per engine.\n- The +2 idle_wait cut in moe-account-lease.test.mjs fixes its bash rows 3 and 4, which fail at HEAD (since d94c095f).\n- One CI line, and one scripts/CLAUDE.md sentence plus a test-list entry.\n\nRED (comment-f5a1969d): run against the 19d5e67a and 195b656a wrappers, WSL fails 2/4 and Windows 6/12. The stale rows print `LAUNCH task=task-wait attempt=attempt-a`.\n\nGREEN: the checkRef exits 0. ParseFile OK; parity-check PASS; WSL tests 45 (pass 44, skip 1); Windows tests 67 (pass 65, skip 2). npm run lint exits 0.\n\nMutants M1-M8, run outside W, each fail rows.\n\nTheoretical notes for QA:\n(a) For failures other than `identity`, the reason text comes from each twin's existing reader, so the wording differs: sh 'phase' vs ps1 'phase or id'.\n(b) A launch-failure backoff left from the previous iteration is still slept once before the re-run pre-flight, because the stale path does not ",
+  "commits": [
+    {
+      "sha": "701e082807047d36397cd3d2e7e52c1c3b9f85e5",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T17:51:00Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/account-wait-attempt.test.mjs",
+        "scripts/tests/moe-account-lease.test.mjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T18:02:44.871Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T17:51:00Z",
+    "at": "2026-11-03T18:02:44.871Z"
+  }
 }
