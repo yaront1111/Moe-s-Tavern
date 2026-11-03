@@ -59,7 +59,7 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once (DoD 3). This follows task-69c02444's proven recipe on this host. Run this ONE command fresh from the task worktree root. It takes about 35-40 minutes (postflight.ps1 alone is about 25), so run it in the background, with the PID recorded or the tool's run_in_background, and wait. Its output tail, ending 'PASS postflight.ps1' plus lint, is the complete_task evidence:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-ecf78687.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\" && cd \"$R\" && npm run lint\n\n- Both logs must show '[scenario AB3] ok' and the bumped 'commit-scope scenarios run: N' (45 on this host, which cannot make symlinks), with scenarios AA, AB and AB2 still ok.\n- Grep the ps1 log for 'PASS postflight.ps1', and count its 'ok' lines. A ps1 leg that never ran can still exit 0 (mem:gotcha-pwsh7-reachable-from-wsl).\n- CI runs postflight.ps1 under PowerShell 7 too; the local gate uses 5.1, as 69c02444's did.\n- Declare the five files as modifiedFiles.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
@@ -67,7 +67,16 @@
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
       ],
-      "startedAt": "2026-11-03T00:32:36.584Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "I ran the step-4 command verbatim from the worktree root, detached (runner pid 1569531, log /mnt/d/moe-scratch/v-ecf78687.log), from 02:31 to 03:43 IST. Result: EXIT=0. The snapshot /mnt/d/moe-scratch/v-ecf78687.bxphTX is HEAD 1b754809 plus the five overlaid files; cmp against the worktree still matched afterwards.\n- PASS parity-check.sh.\n- postflight.sh: [scenario AA/AB/AB2/AB3] ok; 'commit-scope scenarios run: 46' (WSL ext can make symlinks, so expected = 46); PASS postflight.sh.\n- postflight.ps1 under PS 5.1.26100.9711 (child=powershell): [scenario AA/AB/AB2/AB3] ok; 'commit-scope scenarios run: 45' (no symlinks on this Windows host, so expected = 45); '[worktree] 66 ok, 0 failed'; 146 ' ok' lines after the host line; PASS postflight.ps1.\n- npm run lint: OK on architect.md (39), worker.md (30) and qa.md (36).\nThe settings.qualityGate (parity-check.sh && npm run lint) is covered by the same run. CI's pwsh 7 leg was not run locally, as the plan states.",
+      "startedAt": "2026-11-03T00:32:36.584Z",
+      "completedAt": "2026-11-03T01:43:31.393Z"
     },
     {
       "stepId": "step-5",
@@ -105,7 +114,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:23:35.850Z",
-  "updatedAt": "2026-11-03T00:35:17.207Z",
+  "updatedAt": "2026-11-03T01:43:31.393Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:11.284Z",
@@ -115,7 +124,7 @@
     "firstClaimAt": "2026-11-02T23:43:38.052Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -128,7 +137,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T23:49:49.774Z",
