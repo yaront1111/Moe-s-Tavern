@@ -151,6 +151,7 @@ if (cli !== 'normalize') {
         'malformed-number|{"profile":"verified-local","ready":1,"missingCapabilities":[]}',
         'malformed-missing|{"profile":"verified-local","ready":false,"missingCapabilities":"x"}',
         'malformed-id|{"profile":"verified-local","ready":false,"missingCapabilities":[null]}',
+        'malformed-array|[{"profile":"verified-local","ready":true,"missingCapabilities":[]}]',
         'Verified-Local|{"profile":"Verified-Local","ready":true,"missingCapabilities":[]}'
     )
     foreach ($t in $tRows) {
