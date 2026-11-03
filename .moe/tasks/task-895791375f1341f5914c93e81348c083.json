@@ -71,8 +71,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -97,7 +97,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:35:38.591Z",
-  "updatedAt": "2026-11-03T03:53:20.235Z",
+  "updatedAt": "2026-11-03T04:00:56.069Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:14.066Z",
@@ -111,7 +111,9 @@
     "firstClaimAt": "2026-11-03T03:11:13.891Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T04:00:25.807Z",
+    "wallClockMs": 2951916
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -225,9 +227,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T03:38:07Z",
-    "at": "2026-11-03T03:52:41.208Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T03:53:09Z",
+    "at": "2026-11-03T04:00:56.069Z"
+  },
+  "completedAt": "2026-11-03T04:00:25.807Z",
+  "reviewCompletedAt": "2026-11-03T04:00:25.807Z",
+  "reviewSummary": "Completion b4cfae12 (pushed, on moe/work-2026-10-24). Diff +123/-12, net 111, in only the 2 approvedScope files. scripts/ was clean at HEAD, so in-place runs tested the commit bytes.\n\ntask.verification re-run (joined checkRefs), 03:58Z: exit 0.\n- Linux leg 201/171/0/30.\n- Windows leg 306/255/0/51.\n- ParseFile OK, parity PASS, lint OK.\n\nDoD1:\n- I1/I2 alone, TAP, Windows node.exe: 4/4 on PS 5.1 and PS 7.\n- All 7 forms ran with no 'not reachable': 8.3, \\\\?\\+8.3, subst of root/project/project\\bin (Z:, Y:, X:\\), \\\\?\\, \\\\localhost\\C$.\n- The subst control resolves. I2 refuses with MOE_PROTECTED_AGENT_CLI_NOT_FOUND.\n- RED (scratch archive, b4cfae12^ ps1): 4/4 fail. A per-form variant shows every form RED except plain 8.3, as planned. No subst mapping left behind.\n\nDoD2:\n- All 3 Find-MoeProtectedFile calls (:610, :618, :8815) sit under the -ceq '1' marker, so legacy never compiles the type.\n- POSIX pwsh is unchanged. Suites are green on both legs.\n\nInvariants: Get-MoeSha256Hex moved byte-identical; BOM kept; 0 CR; no new MOE_ code; the WARN line has no MOE_PROTECTED_ token and returns before the loop; handle disposed; null/UNC final path fails closed; no test removed or weakened.\n\nNon-blocking:\n(1) The share/unreadable-project WARN path has no row. It is not in the acceptance criteria.\n(2) Pre-existing, outside the DoD: a volume mounted inside the project whose own drive letter is on PATH still counts as outside. That mount needs admin, and JetBrains has the same limit.\n(3) Ponytail: nothing to cut.\n\nHandoff facts are already folded into gotcha-windows-subst-ancestor-walk and gotcha-windows-final-path-canonicalization.",
+  "requiredCheckAtDone": null
 }
