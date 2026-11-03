@@ -7262,6 +7262,88 @@ land_worktree_checkpoint() {
     return "$rc"
 }
 
+# ---- VM candidate (CQ-M07m2) --------------------------------------------------
+# land_vm_candidate COMMIT BASE_TREE TREE -- a verified-local VM job's admitted
+# TREE (CQ-M07j: the job ran on COMMIT, whose tree is BASE_TREE) becomes ONE
+# checkpoint commit on moe/task/<id> in this claim's worktree W, through the
+# wrapper's commit plumbing: commit-tree (no hooks), W's two-tree read-tree, then
+# the CAS update-ref of the branch from COMMIT. Refusals write nothing (rc 1):
+# NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY (W or a pending merge),
+# TREE_INVALID, in that order. TREE == BASE_TREE is EMPTY (rc 0, nothing). A
+# failed W update or a lost CAS parks the commit on a rescue ref (rc 2) and
+# leaves W at COMMIT; an interrupt before the CAS leaves the bytes as dirt in W,
+# which the next pre-flight's recovery checkpoint lands. The control checkout,
+# the target branch and every remote stay untouched. Callers (CQ-M07m3) set
+# LAND_TASK_ID/TITLE/STATUS/CLI_EXIT. Twin: CQ-M07n2.
+# vm_candidate_stop OUTCOME CODE DETAIL [SHA REASON] -- rc 1, nothing written;
+# with SHA, that commit is parked on a rescue ref and rc 2.
+vm_candidate_stop() {
+    LAND_OUTCOME="$1"; LAND_CODE="MOE_VM_CANDIDATE_$2"; LAND_MESSAGE="$3"
+    if [ -z "${4:-}" ]; then
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task ${LAND_TASK_ID:-?} -- $3; nothing written."
+        return 1
+    fi
+    rescue_ref_from_commit "$4" "$5" || true
+    echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $3; the admitted commit $4 is kept on ${LAND_RESCUE_REF:-no ref (the rescue ref failed)}."
+    return 2
+}
+land_vm_candidate() {
+    local c="$1" bt="$2" t="$3" w="${MOE_WT_PATH:-}" br="${MOE_WT_BRANCH:-}" cgd="" head="" ct="" dirt="" work new="" n=0 p hook
+    local MOE_TOP="${MOE_WT_PATH:-}" MOE_GITDIR="" LAND_RECOVERED=false
+    LAND_OUTCOME=failed; LAND_CODE=""; LAND_MESSAGE=""; LAND_SHA=""; LAND_RESCUE_REF=""; LAND_RESCUE_SHA=""
+    if [ "${MOE_WT_MODE:-}" = worktree ] && [ -n "$w" ] && [ -n "${LAND_TASK_ID:-}" ] && [ "$br" = "moe/task/$LAND_TASK_ID" ]; then
+        MOE_GITDIR=$(git -C "$w" rev-parse --absolute-git-dir 2>/dev/null) || MOE_GITDIR=""
+        cgd=$(git -C "$w" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || cgd=""
+    fi
+    if [ -z "$MOE_GITDIR" ] || [ -z "$cgd" ] || [ "$MOE_GITDIR" = "$cgd" ]; then
+        vm_candidate_stop refused NOT_WORKTREE "the claim is not in worktree mode, or ${w:-its worktree} is not the linked worktree of moe/task/${LAND_TASK_ID:-?}" || return $?
+    fi
+    head=$(git -C "$w" symbolic-ref -q HEAD 2>/dev/null) || head=""
+    if ! [[ $c =~ ^[0-9a-f]{40}$ ]] || [ "$head" != "refs/heads/$br" ] || [ "$(git -C "$w" rev-parse -q --verify "refs/heads/$br^{commit}" 2>/dev/null)" != "$c" ]; then
+        vm_candidate_stop refused HEAD_MOVED "$w's HEAD is not refs/heads/$br at the job's base commit" || return $?
+    fi
+    ct=$(git -C "$w" rev-parse -q --verify "$c^{tree}" 2>/dev/null) || ct=""
+    [ -n "$ct" ] && [ "$bt" = "$ct" ] || { vm_candidate_stop refused BASE_MISMATCH "the job's base tree is not $c's tree ${ct:-(none)}" || return $?; }
+    if ! dirt=$(git -C "$w" --no-optional-locks status --porcelain --untracked-files=all 2>/dev/null) || [ -n "$dirt" ] \
+        || git -C "$w" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+        vm_candidate_stop refused DIRTY "$w has uncommitted changes, untracked files or a pending merge" || return $?
+    fi
+    if ! [[ $t =~ ^[0-9a-f]{40}$ ]] || [ "$(git -C "$w" cat-file -t "$t" 2>/dev/null)" != tree ]; then
+        vm_candidate_stop refused TREE_INVALID "the admitted tree is not a tree object in this repository" || return $?
+    fi
+    if [ "$t" = "$bt" ]; then
+        LAND_OUTCOME=nothing; LAND_CODE=MOE_VM_CANDIDATE_EMPTY
+        echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- the admitted tree equals $c's; nothing committed."
+        return 0
+    fi
+    create_secure_temp >/dev/null || true
+    work="${SECURE_TEMP_DIR:-}/vm-candidate-$$"; ATTR_DIR="$work"; LAND_TREE="$t"; LAND_TOOL_FILE_EFFECTIVE=""
+    if [ -n "${SECURE_TEMP_DIR:-}" ] && rm -rf "$work" && mkdir -p "$work" && : > "$work/contested" \
+        && git -C "$w" diff-tree -r -z --name-only --no-renames "$bt" "$t" > "$work/diff.z" 2>/dev/null; then
+        while IFS= read -r -d '' p; do printf 'WORKTREE\t-\t%s\0' "$p"; n=$((n + 1)); done < "$work/diff.z" > "$work/staged.z" \
+            && write_commit_message checkpoint "$work/msg.txt" "$n" 0 \
+            && new=$(git -C "$w" commit-tree "$t" -p "$c" -F "$work/msg.txt" 2>/dev/null) || new=""
+    fi
+    [ -n "$new" ] || { vm_candidate_stop failed COMMIT_FAILED "git commit-tree of the admitted tree on $c failed (identity? gpg?)" || return $?; }
+    RESCUE_STAGED_FILE="$work/staged.z"
+    git -C "$w" read-tree -m -u "$c" "$new" >/dev/null 2>&1 \
+        || { vm_candidate_stop failed SYNC_FAILED "$w could not take the admitted commit; refs/heads/$br stays at $c" "$new" vm-sync-failed || return $?; }
+    if [ "${RUNTIME_PROTECTED:-0}" != 1 ] && [ -n "${MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF:-}" ]; then
+        hook="$MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF"; unset MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF   # test seam, once
+        (cd "$w" && bash -c "$hook") >/dev/null 2>&1 || true
+    fi
+    if ! git -C "$w" update-ref -m "moe: vm candidate $LAND_TASK_ID" "refs/heads/$br" "$new" "$c" >/dev/null 2>&1; then
+        git -C "$w" read-tree -m -u "$new" "$c" >/dev/null 2>&1 \
+            || echo -e "${YELLOW}[WARN]${NC} $w could not be rolled back to $c; it holds the admitted bytes as uncommitted changes."
+        vm_candidate_stop failed REF_CONTENTION "refs/heads/$br moved off $c before the CAS" "$new" vm-ref-contention || return $?
+    fi
+    LAND_KIND=checkpoint; LAND_BRANCH="$br"; LAND_SHA="$new"; LAND_N_PATHS="$n"; LAND_N_INFERRED=0; LAND_STAGED_FILE="$work/staged.z"
+    LAND_DROPPED_FILE=""; LAND_PUSHED=false; LAND_OUTCOME=committed; LAND_CODE=""
+    record_commit_rpc committed checkpoint "$new" "refs/heads/$br" "" "" false "$work/staged.z" || true
+    LAND_RECORDED=true
+    echo -e "${GREEN}[OK]${NC} MOE_VM_CANDIDATE_COMMITTED task=$LAND_TASK_ID sha=$new paths=$n branch=$br"
+}
+
 # ---- worktree completion (WT-08; design §2.2 L4-L12, §2.3, §2.7, §2.9) -------
 # wt_target_checked_out TARGET -- 0 when refs/heads/TARGET is checked out in any
 # worktree (the control checkout included), 1 when not, 2 when git cannot tell.
@@ -7443,10 +7525,26 @@ wt_release_signals() {
     [ -z "${MOE_WT_SIGNALED:-}" ] || { echo ""; echo "Agent stopped."; exit 0; }
 }
 
+# wt_strong_intent M B -- CQ-V07's intent rule for one worktree completion round
+# (CQ-M07m2). Under the strong profile (verified-local) the target moves only for
+# the frozen candidate of exactly M on B, with the attempt and plan revision
+# pinned; anything else is refused before L7 (no commit, journal, ref or rescue
+# ref). A no-op for legacy, observe and a task-less landing. Twin: CQ-M07n2.
+wt_strong_intent() {
+    [ -n "${LAND_TASK_ID:-}" ] && strong_landing_task "$LAND_TASK_ID" || return 0
+    if [ -n "${FROZEN_CANDIDATE_ID:-}" ] && [ -n "$1" ] && [ "${FROZEN_TREE:-}" = "$1" ] && [ -n "$2" ] && [ "${FROZEN_BASE:-}" = "$2" ] \
+        && [ -n "${MOE_ATTEMPT_ID:-}" ] && [ -n "${PINNED_ATTEMPT_PLAN_REVISION:-}" ]; then
+        return 0
+    fi
+    LAND_OUTCOME=refused; LAND_CODE=MOE_COMMIT_REFUSED_INTENT_INCOMPLETE
+    LAND_MESSAGE="the strong profile lands only the frozen candidate of the merged tree $1 on $2, with a pinned attempt and plan revision"
+    return 1
+}
+
 # wt_land_rounds JOURNAL WORK -- L4-L9 onto refs/heads/$LAND_BRANCH from the task
 # tip LAND_WT_T, at most three rounds, two with a qualityGate (§2.3): B read fresh
 # each round, merge-tree, the .moe guard, the gate on exactly M with parent B (L6),
-# C, the strict journal, the S1 test hook, ONE CAS.
+# the strong intent rule, C, the strict journal, the S1 test hook, ONE CAS.
 # 0 with LAND_OUTCOME committed (this C, or a journaled C the target holds while
 # T adds nothing, §2.9; signals stay deferred) or nothing; 1 with LAND_CODE and
 # LAND_MESSAGE set and no ref moved by this session.
@@ -7489,6 +7587,7 @@ wt_land_rounds() {
         if [ -n "${QUALITY_GATE:-}" ] && ! { freeze_candidate "$b" "$m" && run_frozen_gate worktree; }; then
             LAND_CODE=MOE_COMMIT_FAILED_GATE; LAND_MESSAGE="the merged tree $m on $b was not frozen, recorded and passed by the qualityGate"; return 1
         fi
+        wt_strong_intent "$m" "$b" || return 1
         LAND_N_PATHS=0
         git -C "$MOE_TOP" diff-tree -r -z --name-only --no-renames "$bt" "$m" > "$work/diff.z" 2>/dev/null || { LAND_MESSAGE="git diff-tree failed"; return 1; }
         while IFS= read -r -d '' p; do printf 'WORKTREE\t-\t%s\0' "$p"; LAND_N_PATHS=$((LAND_N_PATHS + 1)); done < "$work/diff.z" > "$LAND_STAGED_FILE"
