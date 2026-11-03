@@ -75,8 +75,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,12 +88,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:27:25.325Z",
-  "updatedAt": "2026-11-03T17:57:38.477Z",
+  "updatedAt": "2026-11-03T17:59:42.211Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:42:52.615Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T17:59:13.167Z",
+    "wallClockMs": 980552
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -219,9 +221,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T17:51:21Z",
-    "at": "2026-11-03T17:57:14.770Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T17:57:18Z",
+    "at": "2026-11-03T17:59:42.211Z"
+  },
+  "completedAt": "2026-11-03T17:59:13.167Z",
+  "reviewCompletedAt": "2026-11-03T17:59:13.167Z",
+  "reviewSummary": "Reviewed completion 7a08e3d9 (on moe/work-2026-10-24, in control HEAD): exactly the 4 planned moe-vscode paths, +363/-28 (net 335, under the 400 cap; 297 is the new test). DoD1: board.js has no `confirm(` (grep rc=1); Delete and archiveDone post only intent; data-count removed from the 3 clear markups; visibility rule unchanged. BoardViewProvider confirmDelete/confirmArchiveDone use showWarningMessage(..., {modal:true}, 'Delete'|'Archive'), send DELETE_TASK/ARCHIVE_DONE_TASKS only for the matching button on a non-disposed provider; dismissal sends nothing; errors go to showErrorMessage. DoD2: archiveDoneCount equals the daemon ARCHIVE_DONE_TASKS filter (WebSocketServer.ts:908-912), counted from currentState at click time, never the search-filtered column; 0 in scope = no modal, no frame. Modal strings match MoeBundle moe.message.deleteTask/archiveDone verbatim. DoD3: board-confirmations.test.cjs is byte-identical to the planner reference (sha d6a93a58), 10 rows W1-W3/H1-H6/E1, production board.js under node:vm with confirm/prompt stubbed false/null, provider+client transpiled, exact deepEqual on frames/modal text/options. Re-ran with MOE_LAND_TARGET=7a08e3d9^ in /tmp snapshots outside the repo: checkref-gate exit 0 (npm ci, npm test, npm run compile: 756 tests, 746 pass, 0 fail, 10 skipped; 10 board-confirm rows); checkref-red exit 0 (merge-base files: 10 failing, 0 ok); checkref-scope with QA_TIP=7a08e3d9 exit 0 (4 paths, no confirm(, no forbidden pattern). Quality gate parity-check.sh && npm run lint exit 0. git diff --check clean; no added non-ASCII. navTask, reopenTask, approvals, drag/drop untouched; CHANGELOG bullet at top of [Unreleased] Fixed. Snapshots removed. Non-blocking: the modal-while-disposed guard has no test row (not required by DoD); ponytail pass found nothing to cut.",
+  "requiredCheckAtDone": null
 }
