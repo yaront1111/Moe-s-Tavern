@@ -508,6 +508,7 @@ compiler or runtime validity, resolve computed imports, or replace the project q
 
 - Auto-approves plans after configurable delay
 - The auto-approval is bound to the revision the plan submission committed: if the plan, DoD or contract changes first, it withholds and a human approves the current revision
+- Switching `approvalMode` to `CONTROL` cancels pending SPEED auto-approvals; switching to `SPEED` arms every plan already awaiting approval, as a daemon restart does
 - Allows time to review and reject if needed
 - Good for trusted agents on non-critical work
 

@@ -19,6 +19,7 @@ import { currentAttempt } from './attemptStore.js';
 import { readExecutionPolicySnapshot, resolveExecutionProfile } from '../delivery/executionProfile.js';
 import { heldReadiness } from '../delivery/readinessHolder.js';
 import { decodeClientHello } from '../server/clientCapabilities.js';
+import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from '../tools/submitPlan.js';
 import { atomicWriteJsonAsync } from '../util/atomicWrite.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 
@@ -161,6 +162,18 @@ export async function updateProjectSettings(state: StateManager, input: Partial<
   const updated: Project = { ...project, settings, updatedAt: new Date().toISOString() };
   await atomicWriteJsonAsync(path.join(state.moePath, 'project.json'), updated);
   state.project = updated;
+
+  // An approvalMode switch reaches the in-memory SPEED timers. Leaving for CONTROL
+  // cancels every armed timer: it re-checks only the task status, never the mode.
+  // Entering SPEED arms the pending rows by the daemon-start rule (bound revision,
+  // remaining delay from planSubmittedAt, armed rows skipped). TURBO keeps armed
+  // timers, since it approves anyway. It runs after the write, so a refusal never gets here.
+  const fromMode = project.settings.approvalMode ?? 'CONTROL';
+  const toMode = settings.approvalMode ?? 'CONTROL';
+  if (toMode !== fromMode) {
+    if (toMode === 'CONTROL') clearAllSpeedModeTimeouts();
+    else if (toMode === 'SPEED') rearmSpeedModeApprovals(state);
+  }
 
   const to = resolveExecutionProfile(settings);
   const transition = input.executionProfile === undefined ? null : classifyProfileTransition(from, to);
