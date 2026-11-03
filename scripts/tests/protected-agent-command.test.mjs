@@ -43,6 +43,8 @@ const TAIL = windows
   ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32'), process.env.SystemRoot || 'C:\\Windows', path.dirname(process.execPath)]
   : ['/usr/bin', '/bin'];
 const CLI_FILES = (name) => (windows ? ['.exe', '.cmd', '.bat', '.com'].map((x) => name + x) : [name]);
+// Every CLI launch first runs the agent Git guard, which needs git; a Windows TAIL has none.
+const GIT_DIR = windows ? (() => { const r = spawnSync('where.exe', ['git'], { encoding: 'utf8' }); const f = r.status === 0 ? r.stdout.split(/\r?\n/)[0].trim() : ''; return f ? path.dirname(f) : null; })() : null;
 const tailHas = (name) => TAIL.some((d) => CLI_FILES(name).some((f) => existsSync(path.join(d, f))));
 
 // A fixture root with: home, tmp, a project (.moe, ./<cli>, bin/<cli>), a trusted
@@ -84,8 +86,8 @@ function killTree(child) {
 }
 // Runs one launcher; stops its process tree at `stopOn` or at the cap. A null
 // marker leaves MOE_RUNTIME_PROTECTED unset.
-function run(engine, fx, { command, commandArgs = [], marker = '1', pathEntries, stopOn, env: overrides = {}, nodeDir = true, wrapperArgs = [] }) {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(MOE_|CLAUDE|FAKE_)/i.test(k)));
+function run(engine, fx, { command, commandArgs = [], marker = '1', pathEntries, stopOn, env: overrides = {}, nodeDir = true, wrapperArgs = [], role = 'worker' }) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(MOE_|CLAUDE|FAKE_|NoDefaultCurrentDirectoryInExePath$)/i.test(k)));
   Object.assign(env, { HOME: fx.home, USERPROFILE: fx.home, TMPDIR: fx.tmp, TEMP: fx.tmp, TMP: fx.tmp, PATH: [...pathEntries, ...(!windows && nodeDir ? [path.dirname(fx.node)] : [])].join(SEP),
     MOE_NODE_COMMAND: fx.node, MOE_PROXY_PATH: fx.runtime, MOE_DAEMON_PATH: fx.runtime, MOE_DISABLE_HEARTBEAT: '1' });
   env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // the filter above drops MOE_*: WT-13's guard refuses SH/PS1 when this suite runs from a task worktree (task-86431c31)
@@ -94,7 +96,7 @@ function run(engine, fx, { command, commandArgs = [], marker = '1', pathEntries,
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete env[key]; else env[key] = value;
   }
-  const common = { role: 'worker', id: 'worker-protected-cmd' };
+  const common = { role, id: `${role}-protected-cmd` };
   let exe = engine.exe;
   let argv;
   if (engine.kind === 'sh') {
@@ -380,4 +382,43 @@ for (const engine of ENGINES) {
       }
     });
   }
+}
+
+// cmd.exe runs an npm .cmd shim (claude.cmd runs node by bare name) and looks a
+// bare name up in the current directory, the project, before PATH. Under the
+// marker both launchers export NoDefaultCurrentDirectoryInExePath=1, which every
+// cmd.exe in the seat honours (Node's own spawn of a bare name does not). A
+// governor seat launches its CLI without a claimed task, so the inert runtime
+// is enough to reach the CLI; a worker row stops at MOE_TASKLESS_NO_LAUNCH.
+test('bash: C1 only the marker gives the CLI NoDefaultCurrentDirectoryInExePath=1', { skip: sh.skip }, async (t) => {
+  const fx = fixture(t);
+  const file = path.join(fx.trusted, 'claude');
+  writeFileSync(file, `#!/bin/sh\necho "env [\${NoDefaultCurrentDirectoryInExePath-unset}]" >> '${fx.ran}'\n`);
+  chmodSync(file, 0o755);
+  for (const [marker, want] of [['1', 'env [1]'], [null, 'env [unset]'], ['01', 'env [unset]']]) {
+    rmSync(fx.ran, { force: true });
+    const r = await run(sh, fx, { command: 'claude', marker, role: 'governor', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL], env: { MOE_NODE_COMMAND: undefined } });
+    assert.equal(r.code, 0, show(r));
+    assert.equal(existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8') : '', `${want}\n`, show(r));
+  }
+});
+for (const engine of ENGINES.filter((e) => e.kind === 'ps1')) {
+  const skip = engine.skip || (!windows && 'cmd.exe lookup order is Windows-only') || (!GIT_DIR && 'git is not on PATH, and the agent Git guard needs it');
+  test(`${engine.name}: C2 a node.exe or .cmd helper planted at the project root never runs through the CLI's .cmd shim`, { skip }, async (t) => {
+    const fx = fixture(t);
+    copyFileSync(process.execPath, path.join(fx.project, 'node.exe'));
+    cliStub(fx, fx.project, 'moehelper', 'project'); cliStub(fx, fx.trusted, 'moehelper', 'trusted');
+    const js = path.join(fx.root, 'which-node.js');
+    writeFileSync(js, `require('fs').appendFileSync(process.argv[2], 'node ' + process.execPath + '\\n');\n`);
+    // npm's shim shape: node by bare name when no node.exe sits beside the shim.
+    writeFileSync(path.join(fx.trusted, 'claude.cmd'), `@echo env [%NoDefaultCurrentDirectoryInExePath%]>>"${fx.ran}"\r\n@node "${js}" "${fx.ran}"\r\n@call moehelper\r\n`);
+    // Legacy keeps cmd.exe's order, which also proves the planted files are reachable.
+    for (const [marker, want] of [['1', ['env [1]', `node ${pinnedNode(fx)}`, 'trusted moehelper']], [null, ['env []', `node ${path.join(fx.project, 'node.exe')}`, 'project moehelper']]]) {
+      rmSync(fx.ran, { force: true });
+      const r = await run(engine, fx, { command: 'claude', marker, role: 'governor', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL, GIT_DIR], env: { MOE_NODE_COMMAND: undefined } });
+      assert.equal(r.code, 0, show(r));
+      const got = (existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8') : '').split(/\r?\n/).filter(Boolean);
+      assert.deepEqual(got.map((l) => l.toLowerCase()), want.map((l) => l.toLowerCase()), show(r));
+    }
+  });
 }

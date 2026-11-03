@@ -49,6 +49,10 @@ DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
 # CQ-R13c2: the JetBrains launcher sets MOE_RUNTIME_PROTECTED=1 beside both paths.
 # Only exactly '1' protects: run exactly those files or refuse, never a fallback.
 if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then RUNTIME_PROTECTED=1; else RUNTIME_PROTECTED=0; fi
+# cmd.exe, which runs an npm .cmd shim such as claude.cmd, looks a bare name up in
+# the current directory (the project) before PATH unless this is set; every child
+# inherits it. Node's own spawn of a bare name ignores it. Same line in moe-agent.ps1.
+if [ "$RUNTIME_PROTECTED" = 1 ]; then export NoDefaultCurrentDirectoryInExePath=1; fi
 PROTECTED_INTERPRETERS_PINNED=0
 # moe-call.sh resolves its own proxy and falls back past a missing MOE_PROXY_PATH,
 # so a protected seat calls it only while that exact file exists and node is

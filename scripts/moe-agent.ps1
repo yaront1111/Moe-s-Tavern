@@ -467,6 +467,10 @@ $env:GIT_TERMINAL_PROMPT = '0'
 # CQ-R13c2: the JetBrains launcher sets MOE_RUNTIME_PROTECTED=1 beside both paths.
 # Only exactly '1' protects: run exactly those files or refuse, never a fallback.
 $script:MoeRuntimeProtected = ($env:MOE_RUNTIME_PROTECTED -ceq '1')
+# cmd.exe, which runs an npm .cmd shim such as claude.cmd, looks a bare name up in
+# the current directory (the project) before PATH unless this is set; every child
+# inherits it. Node's own spawn of a bare name ignores it. Same line in moe-agent.sh.
+if ($script:MoeRuntimeProtected) { $env:NoDefaultCurrentDirectoryInExePath = '1' }
 # Protected agent command: under MOE_RUNTIME_PROTECTED=1 the command can come
 # from repository content (settings.agentCommand), so only claude, codex, gemini
 # or grok runs, by bare name and with no -CommandArgs, resolved by

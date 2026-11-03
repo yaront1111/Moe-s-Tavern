@@ -418,6 +418,9 @@ and `verified-local` stays refused until certification and the client gates pass
   run exactly `MOE_DAEMON_PATH` and `MOE_PROXY_PATH` or refuse. They also start only `claude`, `codex`, `gemini` or
   `grok`, by name, and take that CLI and node (sh also python3) only from an absolute PATH entry outside the project
   (`MOE_PROTECTED_AGENT_COMMAND_REFUSED`, `MOE_PROTECTED_AGENT_CLI_NOT_FOUND`, `MOE_PROTECTED_INTERPRETER_NOT_FOUND`).
+  Both export `NoDefaultCurrentDirectoryInExePath=1`, so on Windows cmd.exe (an npm `.cmd` CLI shim, or any cmd.exe
+  in the seat) never looks a bare name up in the current directory, the project; Node's own `spawn` of a bare name
+  still does, because libuv ignores that variable.
   VS Code (`services/MoeDaemonClient.ts`, `util/AgentLauncher.ts`) selects the same way from
   `<extensionPath>/bundled`. Candidate source becomes Git objects only
   (`admission.mjs`); branch writes stay in the wrappers' landing. A guest gets no daemon address: the host session
