@@ -1,0 +1,34 @@
+{
+  "id": "task-677099658e994948b982fb52aeeca588",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_team's name+role idempotency looks up the untrimmed name but stores the trimmed one, so a space-padded --team value mints a new same-named team on every seat launch instead of returning the existing team",
+  "description": "Filed by defect hunt #9 (task-66961b32), lane: daemon team tool family. All paths are under packages/moe-daemon/ unless noted.\n\nPROBLEM\n- The contract, src/tools/createTeam.ts:11: \"Create a team or return existing team with same name+role (idempotent)\".\n- The lookup uses the raw name: createTeam.ts:57-58 calls state.getTeamByNameAndRole(params.name, ...).\n- The store saves the trimmed name: state.createTeam calls validateTeamName (src/state/validators.ts:651-655, trim: true).\n- So \"Coders \" never matches the \"Coders\" team it created, and every call creates another team with the same name and role.\n- Who calls it: the wrappers, on every seat launch and before each claim while the seat is unjoined. They pass --team verbatim: scripts/moe-agent.sh:408-409 sets TEAM=\"$2\", and :2110-2115 sends json.dumps({'name': TEAM}). TOOL_AUDIENCE is [] (src/tools/index.ts:227), so only wrappers and governors call it.\n- Impact: with a padded value, each launch creates and joins its own \"Coders\" team. The fleet splits into one-seat teams and claim_next_task's team sharing is lost; per scripts/moe-agent.sh:2141-2144, a seat without a shared team skips every epic a live worker holds.\n\nEVIDENCE (HEAD 39bec237, run in a git-archive snapshot outside the shared checkout)\n- Repro: /mnt/d/moe-scratch/hunt-66961b32/A/zzHuntA_createTeamTrim.test.ts, with its output in .out.txt beside it. The architect re-ran it in /tmp/hunt-6696-snap (verify-architect.txt). Tests 2 failed (2):\n  - two create_team {name:'Coders '} calls: received sameId false, secondCreated true, teams [\"Coders|null\",\"Coders|null\"];\n  - create_team {name:' Gov', role:'governor'} after {name:'Gov', role:'governor'}: received created true, sameId false.\n\nFIX DIRECTION\n- Normalize the name once before the lookup, e.g. `const name = validateTeamName(params.name)`, and use that value for both getTeamByNameAndRole and state.createTeam.\n- Keep missingRequired for an absent name, and keep the existing INVALID_INPUT for a bad type or a name that is blank after trim.\n\nFILES\n- src/tools/createTeam.ts\n- src/tools/createTeam.test.ts",
+  "definitionOfDone": [
+    "In src/tools/createTeam.test.ts, two create_team {name:'Coders '} calls return the same team id. The second returns created: false, state.teams.size is 1, and the stored name is 'Coders'.",
+    "In src/tools/createTeam.test.ts, create_team {name:' Gov', role:'governor'} after {name:'Gov', role:'governor'} returns created: false and the first team's id, while a roleless create with the same trimmed name still creates a separate team.",
+    "`cd packages/moe-daemon && npx vitest run src/tools/createTeam.test.ts src/tools/joinTeam.deadMembers.test.ts` passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 415.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:58:54.137Z",
+  "updatedAt": "2026-11-03T20:00:12.206Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T20:00:08.205Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}

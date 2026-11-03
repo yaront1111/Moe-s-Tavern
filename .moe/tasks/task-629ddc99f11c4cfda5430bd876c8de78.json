@@ -1,0 +1,41 @@
+{
+  "id": "task-629ddc99f11c4cfda5430bd876c8de78",
+  "epicId": "epic-be924fb8",
+  "title": "bug: set_task_status has no role gate, unlike its restricted siblings set_task_priority, set_task_dependencies and amend_plan_step (workerHasRole + notAllowed), so a worker or QA seat can move its REVIEW row to DONE without qa_approve, strip a live peer mid-step, or archive a held row that archive_task refuses",
+  "description": "Filed by defect hunt #9 (task-66961b32), lane: role gates of the plan and governance tools. All paths are under packages/moe-daemon/ unless noted.\n\nPROBLEM\n- The documented audience is architects, governors and humans:\n  - src/tools/index.ts:213 has `'moe.set_task_status': [A]` (architects; governors see every tool).\n  - src/tools/archiveTask.ts:75 refuses with: \"only that worker (or a human / governor via set_task_status) may archive it\".\n  - docs/roles/governor.md:6 and :68 make it the governor's re-plan lever, and docs/MCP_SERVER.md:1432 says \"a human or governor uses set_task_status\".\n- TOOL_AUDIENCE only filters the listing. src/server/McpAdapter.ts:270 says \"Listing filter, not a permission check: tools/call below serves every tool\", and toolsForRole (src/tools/index.ts:276) gives a seat with no resolvable role every tool. That is why every restricted sibling gates in its handler with workerHasRole + notAllowed:\n  - set_task_priority (src/tools/setTaskPriority.ts:47, governor);\n  - set_task_dependencies (src/tools/setTaskDependencies.ts:69, architect/governor);\n  - amend_plan_step (src/tools/amendPlanStep.ts:62, architect/governor: \"otherwise any worker could rewrite its own instructions\");\n  - submit_plan_critique (src/tools/submitPlanCritique.ts:58).\n- The member that skips the gate: the src/tools/setTaskStatus.ts handler never resolves the caller. It uses params.workerId only as the activity actor (setTaskStatus.ts:262, the 4th argument of updateTask). Its only refusals are transition legality, the CONTROL approval guard and the WIP limits.\n\nEVIDENCE (HEAD 39bec237, run in a git-archive snapshot outside the shared checkout)\n- Repro: /mnt/d/moe-scratch/hunt-66961b32/B/zzHuntB_setTaskStatusRoleGate.test.ts, with its output in .vitest.txt beside it. The architect re-ran it in /tmp/hunt-6696-snap; see /mnt/d/moe-scratch/hunt-66961b32/verify-architect.txt.\n- Result: Tests 3 failed | 2 passed (5). Each failure reads \"promise resolved { success: true, ... } instead of rejecting\":\n  - worker-1 moves its own REVIEW row to DONE, so qa_approve is skipped;\n  - a qa seat moves a peer's WORKING row with an IN_PROGRESS step to BACKLOG, which clears the peer's assignee;\n  - worker-1 archives a held PLANNING row, although archive_task refuses the same caller with NOT_ALLOWED.\n- The two passing controls: a governor-prefixed seat and a workerId-less call still move rows.\n\nFIX DIRECTION\n- In setTaskStatus.ts, before the transition checks: when params.workerId is present and !workerHasRole(state, params.workerId, 'architect', 'governor'), throw notAllowed('set_task_status', 'architect or governor role required (...)') and write nothing.\n- Keep a workerId-less call allowed: it is the human path, the same carve-out archive_task's holder check makes. Callers on that path include moe-call.sh, scripts/tests/onboarding.mjs:200, scripts/tests/wave1-pilot.mjs:490, and every existing daemon test except src/state/activityActor.test.ts:57, which uses governor-z.\n- Name the audience in the tool's description, e.g. \"Architect/governor/human: ...\".\n- Out of scope: docs/MCP_SERVER.md, and the board's /ws UPDATE_TASK (a human path with its own handler).\n\nFILES\n- src/tools/setTaskStatus.ts\n- new src/tools/setTaskStatus.roleGate.test.ts",
+  "definitionOfDone": [
+    "`cd packages/moe-daemon && npx vitest run src/tools/setTaskStatus.roleGate.test.ts` passes in a snapshot outside the shared checkout. It asserts that a worker-prefixed caller moving its own REVIEW row to DONE, and a qa-prefixed caller moving a peer-held WORKING row with an IN_PROGRESS step to BACKLOG, each reject with codeName NOT_ALLOWED, with the row's status and assignedWorkerId unchanged.",
+    "The same file asserts that a governor-prefixed seat, an architect-team seat and a workerId-less call still succeed (REVIEW to DONE, PLANNING to ARCHIVED), and `grep -n \"workerHasRole\" packages/moe-daemon/src/tools/setTaskStatus.ts` prints at least one line.",
+    "`npx vitest run src/tools/setTaskStatus.test.ts src/state/activityActor.test.ts src/state/attemptHandback.test.ts src/tools/governancePlaneV2.integration.test.ts` stays green in the same snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-74d9e1c7",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 414.7,
+  "comments": [
+    {
+      "id": "comment-ac7e08326963453eaacbf57b60dc97f3",
+      "author": "governor-e6b40560",
+      "content": "Governor note (20:03Z), for the planner and QA. This row changes fleet permissions, so I checked whether any live flow depends on a worker or QA seat calling set_task_status. None does.\n- Activity logs since 2026-11-02 (activity.log plus .1.gz and .2.gz): every TASK_UPDATED that sets a status with a seat actor came from a governor (32× → PLANNING) or had no workerId. The 3 worker-attributed WORKING flips (faa4d9ef, 3ad573a7, befdddf7) carry `landingRetry`. They come from finalize_attempt's unlanded route, not set_task_status, so the gate does not touch them.\n- moe-agent.sh and moe-agent.ps1 mention set_task_status only in the governor's pre-flight prompt text. docs/roles/{worker,qa}*.md and the moe-qa-loop skill never tell a seat to call it. The claude-plugin's moe-status command forbids it. JetBrains moves rows through /ws UPDATE_TASK, which is out of scope.\n- The governor's own uses stay allowed: waiver parks, re-plan flips to PLANNING, promotions out of BACKLOG.\n- Keep the workerId-less human path, as the row says.\n- Name the refusal in the tool description, so a seat that is refused knows to ask a governor.",
+      "timestamp": "2026-11-03T20:00:03.850Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:58:44.818Z",
+  "updatedAt": "2026-11-03T20:00:03.850Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:59:23.737Z"
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ]
+}

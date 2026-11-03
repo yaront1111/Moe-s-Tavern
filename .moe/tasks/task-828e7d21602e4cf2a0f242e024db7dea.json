@@ -80,7 +80,7 @@
     {
       "stepId": "step-4",
       "description": "Verification gate, run ONCE (DoD 6), plus the DoD audit across the M07m chain.\n\n1. Run `bash -n scripts/moe-agent.sh` and `bash scripts/tests/parity-check.sh`. The new codes use MOE_SEAT_, MOE_VM_ and MOE_VERIFIED_LOCAL_, which parity-check.sh does not compare; CQ-M07n adds them with the ps1 twin.\n2. Run the full harness in place, as the global rail allows for launcher harnesses: `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`. It runs postflight-vm-route.sh through CQ-M07m1's one-line hook.\n   - It takes about 15-20 min, past the Bash tool's 10-minute foreground cap.\n   - Launch it with job control, per mem:gotcha-qa-session-env-and-signals-leak-into-harness: `( set -m; MOE_POSTFLIGHT_TIMEOUT_SEC=360 nohup bash -c 'bash scripts/tests/postflight.sh > <log> 2>&1; echo EXIT=$? >> <log>' >/dev/null 2>&1 & )`, then poll for EXIT=.\n   - A plain background job ignores SIGINT and fails scenario W.\n   - It must end EXIT=0 and print PASS postflight.sh. A row that also fails on HEAD's bytes is pre-existing: report it, don't fix it here.\n3. DoD audit. The completion summary must map each DoD item to its row names:\n   - DoD 1: CQ-M07m1's byte-identity row, plus every existing postflight.sh row.\n   - DoD 2: CQ-M07m3's order row.\n   - DoD 3: CQ-M07m1's refusal rows.\n   - DoD 4: CQ-M07m3's claude canary row and this row's codex canary.\n   - DoD 5: CQ-M07m3's normal-exit and Ctrl+C rows, and this row's failed-job rows.\n   - DoD 6: this run.\n4. Size: `git diff --numstat HEAD` for the changed files. QA counts additions plus deletions against 400. If over, merge rows that share setup; if still over, file an EPIC ADD_RAIL size exception (moe.propose_rail) with the exact numstat before complete_task.\n\nThe fresh harness output tail is the complete_task verification evidence. Its command is `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/postflight-fake-proxy.js"
@@ -88,23 +88,36 @@
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-03T19:19:54.904Z"
+      "note": "Fresh full gate completed EXIT=0, PASS postflight-vm-route.sh and PASS postflight.sh (/tmp/moe-m-gate.log). Exact harness command MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh, clean env + Node24, job control SigIgn=0x5; preceding bash -n, parity, npm run lint green. No source edits since gate started. Existing frozen106/owner16/migration12, legacy/worktree/signal/hot-reload rows passed plus 17 new VM error/credential/wait/rescue rows. DoD mapping: 1 T-* byte-identity + existing harness; 2 VR-happy marked claim/start-job-stop order; 3 W1/C1/C2/S1-S4/N1/N2/P1; 4 VR-happy Claude + VE-OPENAI_API_KEY/VE-CODEX_API_KEY; 5 VR-happy/VR-sigint + VE-failed/missing/false/stop-failed/streak and wait Ctrl+C; 6 this full run. Separate helper suite 41 pass/1 Windows-only skip; independent dual-key precedence probe PASS. Size 260 additions+deletions across 6 files, no waiver needed. Fresh Moe context confirms m3 DONE at unchanged approved af8ca2bb. QA hand-forward outage bug fixed; pre-existing duplicate taskless diagnostic filed as task-1ccae85c01d145d5b3167c0a3f1371d6 per out-of-scope rule.",
+      "startedAt": "2026-11-03T19:19:54.904Z",
+      "completedAt": "2026-11-03T19:58:37.789Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Can any path, under verified-local, run the host agent CLI: a capacity wait, a missing credential, a failed job, a set -e abort or a resume?\n2. Can a credential value reach an argv, an env, a file, a log, a chat line or an error? Check codex and claude, including the escalation text.\n3. Does every failed job run seat-stop and forget the instance? Does a later iteration always re-provision before claiming?\n4. Can the capacity wait claim anything? Does Ctrl+C in each wait still reach the EXIT trap's seat-stop?\n5. Do the launch-failure and resume budgets still bound a seat whose jobs keep failing? There must be no tight loop, and exactly one escalation at the cap.\n6. Do legacy, observe and unreadable iterations behave byte-identically, with every pre-existing postflight.sh row unchanged?\n7. Did any new code use a compared parity family (MOE_COMMIT_, MOE_ATTR_, MOE_CHECKPOINT_, MOE_ATTRIBUTION_, MOE_ACCOUNT_, MOE_WORKTREE_, MOE_LAND_ ...)?\nIf any byte changes, re-run step 4's exact harness command and submit that fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-account-lease.mjs",
+        "scripts/tests/moe-account-lease.test.mjs",
+        "scripts/tests/postflight-fake-agent-seat.js",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Adversarial self-review of all six touched paths complete; no bytes changed after full green gate. Checked trust-boundary outcomes/PIPESTATUS indexing, no host CLI on VM branches, stdin credential delivery + scrubbed seat env/safe account-only escalation, stale-attempt recheck after credential waits, capacity ordering/INT, failed stop forget/reprovision, fast-failure backoff and one escalation, slow resume cap, helper-refusal rescue parent/tree/unchanged W and no duplicate rc2 rescue. Legacy byte-identity and outage rows passed unchanged. Residual concurrent ownership relies on existing daemon/seat contracts; rescue failure reports identifiers for manual recovery, never success. Duplicate taskless diagnostic tracked separately as task-1ccae85c01d145d5b3167c0a3f1371d6. Full harness EXIT=0/PASS, quality gate green, helper suite 41 pass/1 Windows-only skip; all changed paths reiterated for attribution. Final handoff and reusable gotcha saved via Serena.",
+      "startedAt": "2026-11-03T19:58:37.824Z",
+      "completedAt": "2026-11-03T19:59:59.165Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -161,7 +174,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-03T19:49:18.949Z",
+  "updatedAt": "2026-11-03T20:01:50.004Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",
@@ -171,7 +184,7 @@
     "firstClaimAt": "2026-11-01T12:25:21.951Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -185,7 +198,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T14:25:25.910Z",
@@ -242,5 +257,50 @@
   },
   "planApprovedAt": "2026-11-01T14:25:25.934Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T19:08:47.765Z"
+  "workStartedAt": "2026-11-03T19:08:47.765Z",
+  "reviewStartedAt": "2026-11-03T20:00:29.963Z",
+  "verification": {
+    "command": "MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh",
+    "exitCode": 0,
+    "outputTail": "[seat failures] successful job with DIRTY helper refusal retains admitted tree on rescue ref\n[seat waits] Ctrl+C during capacity and missing credentials; resume cap stays bounded\n[seat job] VR-happy (replaces R1), credential confinement and candidate landing\n[seat job] nonzero guest exit still never invokes a host signin-state probe\n[seat job] R2 codex, no-auto-claim, QA settings guard, protected override\n[seat job] VR-shared worker backstop and VR-qa landed commit\n[seat job] VR-sigint stops its VM before deregister\n[seat job] VR-reload: taskless mentions never launch, both instances stopped\n[seat job] PASS VR-happy, nonzero, R2, noclaim, qa-shared, protected, shared, qa, sigint, reload\n[vm candidate] R1: one changed file becomes one checkpoint commit, hooks never run\n[vm candidate] R1u: a deletion and a new path with a space and Unicode\n[vm candidate] R2-R5: refusals write nothing\n[vm candidate] R6: a lost CAS parks the commit and restores W\n[vm candidate] R7: a failed W update parks the commit; the branch stays\n[vm candidate] R8: an empty candidate writes nothing\n[vm candidate] R9: the test seam never runs under MOE_RUNTIME_PROTECTED\n[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] a no-op for legacy; the strong profile needs the frozen candidate of exactly M on B\n[strong intent] ok G1-G7 and G8\nPASS postflight-vm-route.sh\nPASS postflight.sh\nEXIT=0",
+    "reportedAt": "2026-11-03T20:00:29.963Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/tests/postflight-fake-agent-seat.js",
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/moe-account-lease.mjs",
+    "scripts/tests/moe-account-lease.test.mjs"
+  ],
+  "completionSummary": "Implemented VM-route error handling: capacity FULL/LOCK_BUSY waits before claims; codex stdin-only credentials and preclaim missing-key refusal; Claude missing-token wait/escalation/re-lease with stale-attempt checks; failed jobs stop/forget VM and resume held task using existing budgets. VM routes avoid the host taskless-probe outage deadlock. Valid admitted trees refused by the landing helper are retained on rescue refs without altering W.\nDoD audit: (1) T-* masked CLI byte-identity + entire legacy harness; (2) VR-happy start/job/stop order and executionRoute=vm; (3) W1/C1/C2/S1-S4/N1/N2/P1 refusals; (4) VR-happy Claude + VE-OPENAI_API_KEY/VE-CODEX_API_KEY canaries; (5) VR-happy/VR-sigint, VE-failed/missing/false/stop-failed/streak and interrupted waits/resume cap; (6) fresh full postflight.sh EXIT=0.\n17 new VM rows; full frozen106/owner16/migration12 and legacy/worktree/signal suites passed. Helper suite 41 pass, 1 Windows-only skip; dual-key precedence probe passed. bash -n, parity, lint, JS syntax, diff check passed. Gate log /tmp/moe-m-gate.log; clean env/Node24/job control. No changes after gate.\n260 changed lines in six files. Scope addition: tiny shared helper retry-sec accessor + test reuses existing retry policy without weakening parity or touching PS. m3 final af8ca2bb and m2 c89e4c59 verified; both approved. Pre-existing duplicate taskless diagnostic filed as task-1ccae85c01d145d5b3167c0a3f1371d6. Final adversarial review and Serena handoff complete. No real VM/isolation/profile activation claimed.",
+  "commits": [
+    {
+      "sha": "5592bcc0fb660da933ffbc8b96269e7657d5f5a1",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T19:07:13Z",
+      "paths": [
+        "scripts/moe-account-lease.mjs",
+        "scripts/moe-agent.sh",
+        "scripts/tests/moe-account-lease.test.mjs",
+        "scripts/tests/postflight-fake-agent-seat.js",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T20:01:50.004Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T19:07:13Z",
+    "at": "2026-11-03T20:01:50.004Z"
+  }
 }

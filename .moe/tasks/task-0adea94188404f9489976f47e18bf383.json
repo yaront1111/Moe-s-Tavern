@@ -1,0 +1,28 @@
+{
+  "id": "task-0adea94188404f9489976f47e18bf383",
+  "epicId": "epic-be924fb8",
+  "title": "bug: release_task's and release_resource's force, documented as a governor/human crash-recovery override, is honoured from any worker or QA seat, and release_task's own refusals tell the refused seat to retry with force:true, so a seat can strip a live peer mid-step or drop every lease",
+  "description": "Filed by governor-e6b40560 from defect hunt #9's held-back item (a) (task-66961b32, architect-24611a0a, #governors msg-bb61da0b). The hunt passed it up as a design call. GOVERNOR RULING: force follows its documented audience, governor or human. This is the same reasoning as task-629ddc99 (the set_task_status role gate), and the human can veto by dragging this row to BACKLOG.\n\nPROBLEM (moe/work-2026-10-24 at 39bec237 / a028ec65)\n- release_task's force parameter is documented as \"Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS\" (src/tools/releaseTask.ts:104-107). release_resource's force says \"Release regardless of ownership (governor/human intervention)\", and without taskId it releases ALL leases and queue entries (src/tools/releaseResource.ts:22).\n- Neither handler resolves the caller's role. src/util/claimGuards.ts assertNoLiveLease and assertReleaseCaller return early on `if (force) return;`. TOOL_AUDIENCE does not protect them either: it filters only the listing (McpAdapter.ts:270, \"not a permission check\").\n- The refusals themselves point a refused seat at the override. STEP_LEASE_HELD says \"pass force:true to override a confirmed-dead holder\", and RELEASE_NOT_ASSIGNEE says \"pass force:true to release a row you do not hold\" (claimGuards.ts, assertNoLiveLease and assertReleaseCaller).\n- Siblings that gate in the handler: set_task_priority (governor), set_task_dependencies and amend_plan_step (architect/governor), and set_task_status once 629ddc99 lands. All use workerHasRole + notAllowed.\n\nEVIDENCE\n/mnt/d/moe-scratch/hunt-66961b32/B/zzHuntB_releaseTaskForceGate.test.ts, with its output in .vitest.txt beside it, on HEAD 39bec237 in a snapshot. Result: \"Tests 2 failed | 3 passed\".\n- \"refuses force:true from a worker seat on a live peer mid-step\" and the same for a qa seat: each \"promise resolved { success: true … } instead of rejecting\".\n- Controls pass: without force the same worker is refused RELEASE_NOT_ASSIGNEE, and a governor seat and a workerId-less call may force.\n\nWHO USES FORCE TODAY\nNo seat flow does:\n- scripts/moe-agent.sh:9045 and :9063 say \"never with force\" / \"Never force\".\n- No role doc or skill tells a worker or QA seat to pass force.\n- The governor's crash-recovery release (governor.md escalation step 5) and the human/board path keep it.\n\nFIX DIRECTION (the architect decides)\n- When force is true and params.workerId is present, refuse unless workerHasRole(state, workerId, 'governor'), with notAllowed and no write. A workerId-less call stays allowed (the human/board path), the same carve-out 629ddc99 makes.\n- Apply this to release_task and release_resource.\n- Reword the two claimGuards refusals for a non-governor caller, e.g. \"ask a governor (moe.release_task force is governor/human only)\", instead of \"pass force:true\".\n- Name the audience in both force descriptions.\n\nGate: narrow, per the epic-be924fb8 ruling msg-bbf4f109. Run the ported repro plus the releaseTask, releaseResource and claimGuards test files.",
+  "definitionOfDone": [
+    "release_task with force:true from a worker- or qa- seat on a peer-held row (with or without an IN_PROGRESS step) is refused NOT_ALLOWED and writes nothing (assignee, step and lease unchanged); a governor seat and a workerId-less call can still force, and the ported hunt repro passes in a snapshot outside the shared checkout.",
+    "release_resource with force:true from a worker- or qa- seat is refused NOT_ALLOWED and releases nothing; a governor seat and a workerId-less call can still force; a seat releasing its own lease without force behaves as before.",
+    "The RELEASE_NOT_ASSIGNEE and STEP_LEASE_HELD refusals no longer tell a non-governor caller to pass force:true, and the existing releaseTask, releaseResource and claimGuards test files stay green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 417.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:01:05.255Z",
+  "updatedAt": "2026-11-03T20:01:05.255Z"
+}

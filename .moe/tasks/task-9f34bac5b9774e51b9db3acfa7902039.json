@@ -1,0 +1,34 @@
+{
+  "id": "task-9f34bac5b9774e51b9db3acfa7902039",
+  "epicId": "epic-be924fb8",
+  "title": "bug: acquire_resource and wait_for_resource lease a resource to a BACKLOG, AWAITING_APPROVAL, DONE or ARCHIVED task, a status report_blocked refuses and grantNextLeases and the reaper skip, so live waiters queue behind a lease no other grant path would issue until the 5-minute reaper sweep",
+  "description": "Filed by defect hunt #9 (task-66961b32), lane: daemon resource tool family. All paths are under packages/moe-daemon/ unless noted.\n\nPROBLEM\n- Three grant-side siblings apply one eligibility rule: the task must be PLANNING, WORKING, REVIEW or BLOCKED (RESOURCE_ELIGIBLE_STATUSES and isResourceTaskEligible, src/state/resourceStore.ts:57-67).\n  - report_blocked refuses a non-blockable status BEFORE its resource arm (src/tools/reportBlocked.ts:104-113: \"a queued lease on such a row would hand a grant to a status the grant path cannot restore\").\n  - grantNextLeases filters the queue (resourceStore.ts:468-470: \"Every grant path must recheck eligibility, not just the periodic reaper.\").\n  - reapResources revokes an ineligible task's lease and queue entry (resourceStore.ts:626 and :635), but only from runBlockedTimeoutSweep (src/state/sweeps.ts:559), which runs every 300000 ms (sweeps.ts:58).\n- The direct grant skips the rule. acquire_resource (src/tools/acquireResource.ts:42-44) and wait_for_resource (src/tools/waitForResource.ts:65-67) check only that the task exists, plus assertWorkerOwns, which is a no-op on an unassigned row (src/util/enforcement.ts:44). Every human-gated row is unassigned. state.acquireResource then grants on capacity and dependencies alone (resourceStore.ts:245), and it renews an existing lease on such a row (resourceStore.ts:229-243).\n- Result: a lease is held by a row the daemon itself treats as orphaned. A live WORKING task that acquires next gets granted:false, position 1, nextTool moe.report_blocked, and parks until the next sweep.\n- Audience: TOOL_AUDIENCE [W, Q] (src/tools/index.ts:256 and :259).\n- Trigger: a session that is still running after a human or governor moved its row to BACKLOG or DONE, acquiring a capacity-1 resource such as git-land-moe-work-2026-10-24 or jetbrains-gradle.\n\nEVIDENCE (HEAD 39bec237, run in a git-archive snapshot outside the shared checkout)\n- Repro: /mnt/d/moe-scratch/hunt-66961b32/A/zzHuntA_acquireIneligible.test.ts, with its output beside it (.out.txt). The architect re-ran it in /tmp/hunt-6696-snap; see /mnt/d/moe-scratch/hunt-66961b32/verify-architect.txt.\n- `npx vitest run src/tools/zzHuntA_acquireIneligible.test.ts` gives Tests 5 failed | 1 passed (6):\n  - acquire_resource on a DONE task: expected { granted: undefined, holders: [] }, received granted: true, holders [\"task-done:DONE\"]. BACKLOG and AWAITING_APPROVAL fail the same way.\n  - wait_for_resource on a DONE task: granted true, holders [\"task-done:DONE\"].\n  - a WORKING task acquiring afterwards: received { granted: false, position: 1, nextTool: \"moe.report_blocked\" }.\n  - The passing control: reapResources() drops the DONE lease (reaped 1).\n\nFIX DIRECTION\n- Refuse at the tool level, mirroring reportBlocked.ts:104-113.\n  - Export the eligibility predicate (or the status set) from resourceStore.ts.\n  - In both tools, after the notFound check and before assertWorkerOwns, throw invalidState(`Task <id>`, status, 'PLANNING/WORKING/REVIEW/BLOCKED to lease a resource ...').\n  - Write nothing on that path: no lease, no queue entry, no waiter and no touchWorker.\n- Do not move the check into resourceStore.acquireResource, because resourceStore.test.ts:229-245 seeds DONE and ARCHIVED leases through the store to test the reaper.\n- REVIEW stays eligible, so the wrapper's git-land acquire after complete_task is unaffected.\n\nFILES\n- src/tools/acquireResource.ts\n- src/tools/waitForResource.ts\n- src/state/resourceStore.ts (export only)\n- new src/tools/acquireResource.ineligible.test.ts\n\nOut of scope: docs/MCP_SERVER.md.",
+  "definitionOfDone": [
+    "`cd packages/moe-daemon && npx vitest run src/tools/acquireResource.ineligible.test.ts` passes in a snapshot outside the shared checkout. It asserts that acquire_resource on a BACKLOG, an AWAITING_APPROVAL, a DONE and an ARCHIVED task each rejects with codeName INVALID_STATE and a message naming the status, and that state.getResource(<id>) then has no holder and no queue entry for that task.",
+    "The same file asserts that wait_for_resource on a DONE task rejects the same way and leaves no activeResourceWaiters entry for the caller, and that a WORKING task's acquire_resource on the same resource afterwards returns granted: true.",
+    "`npx vitest run src/tools/acquireResource.test.ts src/tools/waitForResource.test.ts src/state/resourceStore.test.ts src/tools/reportBlocked.test.ts` stays green in the same snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 413.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:58:30.918Z",
+  "updatedAt": "2026-11-03T19:58:48.949Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:58:34.751Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

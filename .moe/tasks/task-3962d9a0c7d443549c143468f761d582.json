@@ -1,0 +1,28 @@
+{
+  "id": "task-3962d9a0c7d443549c143468f761d582",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a join_team refused because the team is full still auto-registers the caller (a new IDLE worker record and WORKER_CREATED), breaking addTeamMember's \"refuse a full team BEFORE any write\", and that refusal is an uncoded Error while the handler's other refusals are coded",
+  "description": "Filed by defect hunt #9 (task-66961b32), lane: daemon team tool family. All paths are under packages/moe-daemon/ unless noted.\n\nPROBLEM\n- src/state/teamStore.ts:183-189 says \"Order matters: refuse a full team BEFORE any write\", then runs `throw new Error(\\`Team ${existing.name} is full (max ${existing.maxSize} members)\\`)`.\n- src/tools/joinTeam.ts:71-80 auto-registers an unknown caller (state.createWorker, status IDLE) BEFORE addTeamMember (joinTeam.ts:82) refuses the full team. A refused join therefore writes a worker record and emits WORKER_CREATED.\n- The existing test \"still caps the live members at maxSize, and a refused join writes nothing\" (src/tools/joinTeam.deadMembers.test.ts:66-74) checks only the team record.\n- The refusal is a plain Error (teamStore.ts:189), while the same handler's sibling refusals are coded MoeErrors: missingRequired (joinTeam.ts:64-65) and notFound('Team') (joinTeam.ts:68). McpAdapter turns the plain Error into -32000 with no codeName and logs it at error level with a stack (\"Tool failed\", src/server/McpAdapter.ts:325-329).\n- Impact is low. TOOL_AUDIENCE is [] (src/tools/index.ts:228). The wrappers join at pre-flight and retry before every claim while the team is full, matching on the message text only (scripts/moe-agent.sh:2140-2168). A refused probe, or a seat that never claims, leaves a stray IDLE record on the board and in list_workers until the stale prune, and every retry logs an error stack.\n\nEVIDENCE (HEAD 39bec237, run in a git-archive snapshot outside the shared checkout)\n- Repro: /mnt/d/moe-scratch/hunt-66961b32/A/zzHuntA_joinFullWrites.test.ts, with its output in .out.txt beside it. The architect re-ran it in /tmp/hunt-6696-snap (verify-architect.txt). Tests 2 failed (2):\n  - \"a refused join leaves no new worker record and emits no WORKER_CREATED\": received events [\"WORKER_CREATED\"] and record { id: \"w-new\", ... }.\n  - \"the full-team refusal is a coded MoeError like its sibling refusals\": received { coded: false, codeName: null }.\n\nFIX DIRECTION\n- Make the full-team refusal a coded MoeError, e.g. invalidState or a MoeError with a TEAM_FULL codeName.\n- Keep the message text \"Team <name> is full (max N members)\". The wrapper matches on it, and so do joinTeam.deadMembers.test.ts:73/94/149, joinTeam.notification.test.ts, workerType.test.ts and src/util/teamMembershipHeal.test.ts.\n- Refuse before auto-registering. Either create the worker record only after addTeamMember succeeds, giving it the teamId, or run the same live-member check (DEAD members do not count) before createWorker.\n\nFILES\n- src/tools/joinTeam.ts\n- src/state/teamStore.ts\n- src/tools/joinTeam.deadMembers.test.ts",
+  "definitionOfDone": [
+    "In src/tools/joinTeam.deadMembers.test.ts, a join_team by an unregistered workerId into a team whose live members fill it rejects. Afterwards state.getWorker(<id>) is null and no WORKER_CREATED event was emitted for that id.",
+    "The same file asserts that the refusal is a MoeError whose codeName is set and is not INTERNAL_ERROR, and that its message still contains \"is full (max\".",
+    "`cd packages/moe-daemon && npx vitest run src/tools/joinTeam.deadMembers.test.ts src/tools/joinTeam.notification.test.ts src/util/teamMembershipHeal.test.ts src/tools/workerType.test.ts` passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 416.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:59:04.924Z",
+  "updatedAt": "2026-11-03T19:59:04.924Z"
+}
