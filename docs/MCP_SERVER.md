@@ -1793,14 +1793,15 @@ A caller whose `workerId` names another worker is also refused `-32003` /
 `NOT_ALLOWED`, before any write, when a `BLOCKED` task of the epic is held by
 that other worker. This is the same holder-only rule as `moe.archive_task`: the
 holder itself, or a caller with no `workerId` (a human), may archive it. Each
-`TASK_ARCHIVED` records the caller's `workerId` as its actor.
+`TASK_ARCHIVED`, and the epic's own `EPIC_UPDATED` (status `ARCHIVED`), records
+the caller's `workerId` as its actor; a call without one records none.
 Idempotent.
 
 **Parameters:**
 ```typescript
 {
   epicId: string,
-  workerId?: string   // Caller (auto-injected by moe-proxy); a BLOCKED task held by another worker refuses the archive
+  workerId?: string   // Caller (auto-injected by moe-proxy); recorded as the actor of each TASK_ARCHIVED and of the epic's EPIC_UPDATED; a BLOCKED task held by another worker refuses the archive
 }
 ```
 

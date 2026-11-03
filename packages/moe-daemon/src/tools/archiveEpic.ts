@@ -38,7 +38,7 @@ export function archiveEpicTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         epicId: { type: 'string', description: 'The ID of the epic to archive' },
-        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as the actor of each TASK_ARCHIVED, and a BLOCKED row held by another worker may only be archived by its holder' }
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as the actor of each TASK_ARCHIVED and of the epic\'s EPIC_UPDATED, and a BLOCKED row held by another worker may only be archived by its holder' }
       },
       required: ['epicId'],
       additionalProperties: false
@@ -89,7 +89,8 @@ export function archiveEpicTool(_state: StateManager): ToolDefinition {
       }
 
       const epicWasArchived = epic.status === 'ARCHIVED';
-      const updatedEpic = epicWasArchived ? epic : await state.updateEpic(params.epicId, { status: 'ARCHIVED' });
+      // The caller is also the actor of the epic's own EPIC_UPDATED; an idempotent re-archive writes nothing.
+      const updatedEpic = epicWasArchived ? epic : await state.updateEpic(params.epicId, { status: 'ARCHIVED' }, params.workerId);
 
       return {
         success: true,

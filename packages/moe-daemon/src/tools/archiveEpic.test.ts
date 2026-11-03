@@ -4,6 +4,7 @@ import path from 'path';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { flushActivityLog } from '../state/activityLog.js';
 import { archiveEpicTool } from './archiveEpic.js';
+import { getActivityLogTool } from './getActivityLog.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import type { ActivityEvent } from '../types/schema.js';
 
@@ -101,6 +102,50 @@ describe('moe.archive_epic', () => {
       'task-hu: Task moved to ARCHIVED by unknown',
       'task-un: Task moved to ARCHIVED by architect-c',
     ]);
+  });
+
+  it('(e1) records the caller on the epic\'s EPIC_UPDATED as on each TASK_ARCHIVED; a caller-less archive and an idempotent re-archive record none', async () => {
+    h.createEpic({ id: 'epic-ac', order: 2 });
+    h.createEpic({ id: 'epic-nc', order: 3 });
+    h.createTask({ id: 'task-ac1', epicId: 'epic-ac', status: 'DONE' });
+    h.createTask({ id: 'task-ac2', epicId: 'epic-ac', status: 'BACKLOG', order: 2 });
+    h.createTask({ id: 'task-nc', epicId: 'epic-nc', status: 'DONE' });
+    await h.state.load();
+
+    const tool = archiveEpicTool(h.state);
+    await tool.handler({ epicId: 'epic-ac', workerId: 'architect-c' }, h.state);
+    await tool.handler({ epicId: 'epic-nc' }, h.state); // a human: no workerId
+    // Already ARCHIVED: nothing is written, so nothing is attributed to this caller.
+    expect(await tool.handler({ epicId: 'epic-ac', workerId: 'worker-z' }, h.state)).toEqual({
+      success: true, epicId: 'epic-ac', epicStatus: 'ARCHIVED', archivedTaskCount: 0, totalTasks: 2,
+    });
+    await flushActivityLog(h.state);
+
+    const kinds = ['EPIC_UPDATED', 'TASK_ARCHIVED'];
+    const key = (e: ActivityEvent) => `${e.event}:${e.taskId ?? e.epicId}`;
+    // get_activity_log { workerId } filters on the event's top-level workerId alone.
+    const seats: Record<string, string[]> = {};
+    for (const workerId of ['architect-c', 'worker-z', 'unknown', 'agent']) {
+      const { events } = await getActivityLogTool(h.state).handler({ workerId, limit: 100 }, h.state) as { events: ActivityEvent[] };
+      seats[workerId] = events.filter((e) => kinds.includes(e.event)).map(key).sort();
+    }
+    expect.soft(seats).toEqual({
+      'architect-c': ['EPIC_UPDATED:epic-ac', 'TASK_ARCHIVED:task-ac1', 'TASK_ARCHIVED:task-ac2'],
+      'worker-z': [], unknown: [], agent: [],
+    });
+
+    // Every archive event of both epics, once each: the bare caller, or null for a caller-less call (never a placeholder).
+    const events = h.state.getActivityLog(200)
+      .filter((e: ActivityEvent) => kinds.includes(e.event) && ['epic-ac', 'epic-nc'].includes(e.epicId ?? ''));
+    expect.soft(events.map((e) => [key(e), e.workerId ?? null]).sort()).toEqual([
+      ['EPIC_UPDATED:epic-ac', 'architect-c'], ['EPIC_UPDATED:epic-nc', null],
+      ['TASK_ARCHIVED:task-ac1', 'architect-c'], ['TASK_ARCHIVED:task-ac2', 'architect-c'], ['TASK_ARCHIVED:task-nc', null],
+    ]);
+    // Both EPIC_UPDATED events are the status -> ARCHIVED write, payload unchanged.
+    expect.soft(Object.fromEntries(events.filter((e) => e.event === 'EPIC_UPDATED').map((e) => [e.epicId, e.payload]))).toEqual({
+      'epic-ac': { epicId: 'epic-ac', changedFields: ['status'], status: 'ARCHIVED' },
+      'epic-nc': { epicId: 'epic-nc', changedFields: ['status'], status: 'ARCHIVED' },
+    });
   });
 
   it('refuses when the epic has an in-flight ticket', async () => {
