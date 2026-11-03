@@ -9,10 +9,46 @@
     "`cd packages/moe-daemon && npx vitest run src/index.test.ts` passes, with the existing acquireLock and stale-lock cases unchanged."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED) in packages/moe-daemon/src/index.test.ts, written with the Edit tool (no cp or heredoc into the tree). The worktree has no node_modules: every run happens in the /tmp snapshot the step-3 checkRefs build, never npm ci or npm test in the shared checkout (project rail). Widen two imports: `import { fileURLToPath, pathToFileURL } from 'url';` and add `spawnSync` to the child_process import. Append after the last describe ('daemon.json size cap') a `describe('no-moe start', ...)` with exactly these five row-name prefixes, which both checkRefs grep: `N1: _run on a directory without .moe/ exits 1 naming the missing .moe/, with no lock race and nothing created`, `N2: _run on a path that does not exist exits 1 and does not create it`, `N3: start on a directory without .moe/ exits 1 within 10 s, spawning no daemon and no restart`, `N4: _run whose lock wait ends with no daemon running exits 1`, `N5: acquireLock throws a create error other than EEXIST instead of reporting contention`. Harness (read the design, do not copy the file: /mnt/d/moe-scratch/plan-88673297/index.test.ts.ref sha256 87458399ee352a0f..., diff test.diff 3495541308c83812...): tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href, as the existing 'native aliases of --project' block does (:473); entry = fileURLToPath(new URL('./index.ts', import.meta.url)); beforeEach mkdtemp a scratch holding project/ and home/, afterEach rmSync recursive+force; a freePort() helper (listen 0 on 127.0.0.1, then close); daemon(...args) = spawnSync(process.execPath, ['--import', tsx, entry, ...args, '--port', port], { env, encoding: 'utf-8', timeout: 30_000, windowsHide: true }) with a scrubbed env that carries no seat MOE_* variable: PATH; HOME and USERPROFILE = the scratch home (a started _run writes ~/.moe/config.json); NODE_ENV=production (pino logs JSON lines); MOE_LOCK_RETRY_DELAY_MS=100 (read at index.ts:48); NODE_OPTIONS=`--import ${tsx}` (superviseDaemon's spawnChild runs _run with process.execPath alone, so without it N3's child dies on the .ts import, the wrong failure); SystemRoot/TEMP/TMP on win32. Keep the `msg` of every JSON line of stdout+stderr and match by prefix. Assert whole objects with toEqual so one diff shows every field: N1 {status:1, missing ('.moe/ missing at '), race:false ('Another process is starting the daemon')} and readdirSync(project) is []; N2 a nonexistent path gives {status:1, missing:true, exists:false}; N3 `start` gives {status:1, fast: ms < 10_000, missing:true, spawned:false ('Supervisor spawned daemon process'), restarted:false ('Restarting daemon after backoff')}; N4 mkdir .moe/ and write daemon.lock {pid: process.pid, createdAt: now} (live and fresh, never stale), then {status:1, waited ('Another process is starting the daemon, waiting...'), failed ('Failed to acquire lock and daemon not running')}; N5 in-process: acquireLock(project) with no .moe/ throws code 'ENOENT'. Spawn rows take a 60_000 ms test timeout. Do not touch any existing row (DoD 3). All five fail against the current index.ts; the RED checkRef in step 3 re-proves that at the merge base.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "startedAt": "2026-11-03T18:09:15.755Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix in packages/moe-daemon/src/index.ts with the Edit tool. Reference: /mnt/d/moe-scratch/plan-88673297/fix.diff (sha256 e00e03522d2eb6c4..., 90 lines). Its base ce5ff130 is byte-identical to the current moe/work-2026-10-24 tip for this file. (a) acquireLock (:253): in its catch keep the EEXIST branch byte-for-byte, and change the trailing `return false;` to `throw err;`, so ENOENT/EACCES/ENOTDIR are never reported as contention. Add a doc comment: false means a held non-stale lock, or our own failed write (cleaned up); any other create error throws. (b) Add the module-private `function missingMoeDirBlocksStart(projectPath: string): boolean` right before existingDaemonBlocksStart's doc comment (:646). Inside try/catch: `fs.statSync(path.join(projectPath, '.moe')).isDirectory()`. Any stat error, or a .moe that is not a directory, refuses. On refusal: `logger.error({ projectPath, moeDir }, `.moe/ missing at ${projectPath}; run moe-daemon init --project ${projectPath}`)`, then `process.exitCode = 1`, then return true. Otherwise return false. It creates nothing. (c) startDaemon: (1) call `if (missingMoeDirBlocksStart(projectPath)) return;` before `if (await existingDaemonBlocksStart(projectPath)) return;` (:692). (2) Wrap acquireLock in try/catch: `logger.error({ error, lockPath: lockFilePath(projectPath) }, 'Could not create the daemon lock'); process.exitCode = 1; return;`. (3) In the lock-wait failure branch, add `process.exitCode = 1;` after 'Failed to acquire lock and daemon not running' (:706). (d) superviseDaemon (:992): make the same gate its first line, before existingDaemonBlocksStart, so `start` exits 1 without spawning `_run`. `init` never trips the gate, because initProject creates .moe/ first (:1302-1304). The supervisor gate is what keeps DoD 2's no-restart: the supervisor's exit handler treats every non-zero child exit as a crash. Error handling: every refusal logs exactly one error line that names the path, sets process.exitCode = 1 and returns. This follows the existingDaemonBlocksStart precedent (:646-668), and it never calls process.exit(), so pino flushes. acquireLock's write-failure cleanup (unlink, 'Failed to write daemon lock; removed it', return false) and its EEXIST/stale-lock handling stay unchanged. No new export. Do not touch src/tools/** or doctor.ts (out of scope).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate. Run it once after steps 1-2, from the task worktree root, with MOE_LAND_TARGET unset (it defaults to moe/work-2026-10-24). checkRef 1 (GREEN) is the completion evidence. It git-archives HEAD's packages/moe-daemon into a /tmp snapshot and overlays the working-tree index.ts and index.test.ts. It then runs npm ci, `npx tsc --noEmit`, `npx tsc -p tt.json --noEmit` (typechecks the test file, which tsconfig excludes), `npx vitest run src/index.test.ts --reporter=verbose` and `npx vitest run src/util/atomicWrite.test.ts`. The index.test.ts run covers DoD 3: 74 rows, 73 passed + 1 skipped, with the existing acquireLock and stale-lock rows unchanged. atomicWrite.test.ts is the only other acquireLock caller (18 passed). It also requires exactly 5 `✓ src/index.test.ts > no-moe start > N[1-5]: ` rows. Pass it to moe.complete_task as verification {command: checkRef 1 verbatim, exitCode, outputTail}. checkRef 2 (RED) puts the merge-base index.ts into a second snapshot with the new tests. It must end with exactly N1-N5 failing (5 failed, 68 passed), which proves the tests detect the bug. The architect dry-ran both from a stand-in at ce5ff130 (outputs in /mnt/d/moe-scratch/plan-88673297/dry-run-gate.out and dry-run-red.out). If either check fails, fix the code or the test, never the checkRef, and rerun both.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff (adversarial-self-review skill), then run checkRef 3. It checks scope: exactly packages/moe-daemon/src/index.test.ts and packages/moe-daemon/src/index.ts changed against the merge base, and no forbidden pattern added. Checklist: (1) the '.moe/ missing' gate runs before existingDaemonBlocksStart in both startDaemon and superviseDaemon, and creates nothing (N1, N2). (2) 'Another process is starting the daemon' is logged only after a non-stale EEXIST (N1, N4). (3) Error handling: every refusal sets exitCode 1 and returns, with no process.exit(). (4) A .moe that is a regular file or a dangling symlink refuses at the gate. A .moe/ the daemon cannot write (EACCES) passes the gate and refuses at acquireLock ('Could not create the daemon lock', exit 1). (5) A genuine lock race: the losing `start`'s _run now exits 1, so its supervisor runs its bounded crash-restart (1 s, 2 s, 4 s..., at most 5 in 60 s). It exits 0 once the winner answers 'Moe daemon already running', else 1 'Too many restarts'. That is intended (the task's FIX DIRECTION), not a regression. (6) A .moe/ removed after the supervisor started is caught by _run's own gate: exit 1, bounded restarts. That is acceptable; add no supervisor recheck. (7) Tests: the scrubbed env leaks no MOE_* variable; scratch dirs are removed in afterEach; freePort avoids port collisions; nothing relies on the 2000 ms default wait. Kill only PIDs your own session started, never by pattern (project rail).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-c9368191",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +60,87 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:32:30.999Z",
-  "updatedAt": "2026-11-03T17:51:36.408Z",
+  "updatedAt": "2026-11-03T18:09:15.755Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T17:51:32.076Z"
+    "firstClaimAt": "2026-11-03T17:51:32.076Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-c9368191"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T18:07:55.202Z",
+  "executionContract": {
+    "intendedBehavior": "`moe-daemon start|init|_run --project <dir>` where <dir>/.moe is not a directory (a missing path, a plain dir, or a file named .moe) logs one error, `.moe/ missing at <dir>; run moe-daemon init --project <dir>`, and exits 1 before any lock, spawn or restart. `init` is unaffected because it creates .moe/ first. acquireLock throws every create error other than EEXIST; startDaemon logs 'Could not create the daemon lock' and exits 1. A lock wait that ends with no daemon running exits 1. EEXIST and stale-lock handling, the write-failure cleanup, and every successful start are unchanged.",
+    "acceptanceCriteria": [
+      "N1: `_run` on a tmp dir without .moe/ under a scrubbed env and scratch HOME exits 1, logs '.moe/ missing at ', never logs 'Another process is starting the daemon', and leaves the dir empty (DoD 1)",
+      "N2: `_run` on a nonexistent path exits 1 naming the missing .moe/ and does not create the path",
+      "N3: `start` on a dir without .moe/ exits 1 in under 10 s, with no 'Supervisor spawned daemon process' and no 'Restarting daemon after backoff' (DoD 2)",
+      "N4: `_run` facing a live, fresh daemon.lock logs the wait and 'Failed to acquire lock and daemon not running', then exits 1",
+      "N5: acquireLock on a project without .moe/ throws an error with code ENOENT",
+      "`npx vitest run src/index.test.ts` passes with every existing row unchanged (DoD 3), and src/util/atomicWrite.test.ts still passes"
+    ],
+    "invariants": [
+      "'Another process is starting the daemon, waiting...' is logged only after an EEXIST whose lock is not stale",
+      "Every refused start sets process.exitCode = 1 and returns (no process.exit), so pino flushes",
+      "The .moe/ gate runs before existingDaemonBlocksStart in both entry points and creates no file or directory",
+      "No MCP tool, .moe/ state file shape or exported signature changes (epic rails)"
+    ],
+    "compatibility": [
+      "acquireLock keeps its export, its signature and its EEXIST, stale-lock and write-failure behaviour; the existing index.test.ts and atomicWrite.test.ts rows stay unchanged and green",
+      "init is unaffected: initProject creates .moe/ before superviseDaemon (index.ts:1302-1304)",
+      "Launchers and IDE plugins spawn `start` in the background and poll daemon.json; none treats its exit code as success (MoeDaemonSupervisor.kt:696, MoeDaemonClient.ts:721, moe-agent.ps1:1029). Docker's CMD runs start with restart: unless-stopped, which restarts on either exit code",
+      "A `start` that loses a genuine lock race now has its _run exit 1, so the supervisor does its bounded crash-restart and exits 0 once the winner's daemon answers ('Moe daemon already running'), else 1 'Too many restarts'. Before, it exited 0 at once even when no daemon came up"
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/index.ts: the new module-private missingMoeDirBlocksStart(projectPath); acquireLock's non-EEXIST catch branch and doc comment; startDaemon's gate call, its acquireLock try/catch and its lock-wait exitCode; superviseDaemon's gate call",
+      "packages/moe-daemon/src/index.test.ts: two import widenings (fileURLToPath, spawnSync) and the appended describe('no-moe start') rows N1-N5"
+    ],
+    "reuse": [
+      "The refusal shape of existingDaemonBlocksStart (index.ts:646-668): log, process.exitCode = 1, return true",
+      "lockFilePath(projectPath) (index.ts:121) for the lock error log",
+      "The tsx resolution already used by the 'native aliases of --project' tests (index.test.ts:473)"
+    ],
+    "sourceAssumptions": [
+      "Line refs are at ce5ff130, which is byte-identical for index.ts to the moe/work-2026-10-24 tip 701e0828: acquireLock :253 (catch :274-286), existingDaemonBlocksStart doc :646 / fn :656, startDaemon :680 (gate :692, 'Another process is starting the daemon, waiting...' :696, 'Failed to acquire lock and daemon not running' :706), superviseDaemon :992, 'Daemon exited cleanly' :1037, main dispatch start :1289 / _run :1292 / init :1302-1304, exports :1330",
+      "LOCK_RETRY_DELAY_MS = parseInt(process.env.MOE_LOCK_RETRY_DELAY_MS || '2000', 10) at index.ts:48",
+      "The only acquireLock callers are startDaemon (index.ts:695), index.test.ts and src/util/atomicWrite.test.ts:285; the last creates .moe/ first"
+    ],
+    "checkRefs": [
+      "( set -o pipefail; R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/m8867.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && cp \"$R\"/packages/moe-daemon/src/index{,.test}.ts src/ && echo '{\"extends\":\"./tsconfig.json\",\"include\":[\"src/index.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json --noEmit && npx vitest run src/index.test.ts --reporter=verbose > ../v.log 2>&1 && npx vitest run src/util/atomicWrite.test.ts > ../a.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log ../a.log; G=$(grep -ac '✓ src/index.test.ts > no-moe start > N[1-5]: ' ../v.log); echo \"no-moe rows passed: $G\"; [ $E = 0 ] && [ \"$G\" = 5 ] || { echo \"FAIL $S\"; tail -30 ../v.log ../a.log; exit 1; } )",
+      "( R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && S=$(mktemp -d /tmp/m8867r.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && cp \"$R\"/packages/moe-daemon/src/index.test.ts src/ && git -C \"$R\" show \"$B:packages/moe-daemon/src/index.ts\" > src/index.ts && ! cmp -s src/index.ts \"$R\"/packages/moe-daemon/src/index.ts && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1; npx vitest run src/index.test.ts --reporter=verbose > ../red.log 2>&1'; grep -aE '^ +Tests ' ../red.log; N=$(grep -a ' × ' ../red.log); echo \"$N\"; echo \"RED rows: $(grep -c . <<<\"$N\") ($S)\"; [ $(grep -c . <<<\"$N\") = 5 ] && ! grep -v '> no-moe start > N[1-5]: ' <<<\"$N\" )",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && G=$({ git diff --name-only \"$B\" ${QA_TIP:-}; [ -n \"$QA_TIP\" ] || git ls-files -o --exclude-standard; } | LC_ALL=C sort -u) && echo \"$G\" && [ \"$G\" = \"$(printf 'packages/moe-daemon/src/%s\\n' index.test.ts index.ts)\" ] && git diff --stat \"$B\" ${QA_TIP:-} && ! git diff \"$B\" ${QA_TIP:-} | grep '^+' | grep -qiE 'ev''al\\(|inner''html|__pro''to__'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Return a reason enum from acquireLock instead of throwing: rejected. It churns every call site, and index.test.ts (:186-223, :401, :558, :646) and atomicWrite.test.ts:285 assert its boolean. Throwing keeps the boolean contract for EEXIST and makes every other create error loud. Folding the .moe/ check into existingDaemonBlocksStart: rejected. That function's contract is daemon.json; a sibling gate called first in both entry points keeps each readable. Creating .moe/ on start: rejected. init owns scaffolding, and a typo'd --project must not grow a .moe/ (N2).",
+    "codebaseInsights": "superviseDaemon's exit handler treats every non-zero child exit as a crash and restarts with backoff (1 s, 2 s, 4 s..., at most 5 in 60 s). Only code 0 means 'Daemon exited cleanly' (:1036-1040). So a final refusal must happen in the supervisor itself before spawn, not only in _run. Under NODE_ENV=production, pino logs one JSON object per line, which the tests parse for msg. LOCK_RETRY_DELAY_MS reads MOE_LOCK_RETRY_DELAY_MS at module load (:48). The 'native aliases of --project' tests already resolve tsx with createRequire (:473). Launchers and IDE plugins spawn `start` in the background and poll daemon.json, never trusting its exit code (MoeDaemonSupervisor.kt:696, MoeDaemonClient.ts:721, moe-agent.ps1:1029). Docker runs `start --project /project` with restart: unless-stopped, which restarts on any exit code.",
+    "risks": "N3 at the base needs NODE_OPTIONS=--import <tsx>, or its child fails on the .ts import (the wrong failure). spawnSync blocks the vitest worker for up to 30 s per row; rows normally take 0.3-1 s. On Windows, HOME and USERPROFILE both point at the scratch home, and SystemRoot/TEMP/TMP are passed through. Do not edit existing rows. Write tracked files only with Edit/Write. A lost genuine lock race now goes through the bounded supervisor restart instead of exiting 0 at once (see step 4, item 5).",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/index.test.ts",
+      "packages/moe-daemon/src/util/atomicWrite.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "223488560880cf46d18538a5250d00fc6bbb737a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T18:07:55.235Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T18:09:15.755Z"
 }

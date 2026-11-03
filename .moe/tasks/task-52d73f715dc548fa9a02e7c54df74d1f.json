@@ -46,7 +46,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -59,16 +59,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:33:52.760Z",
-  "updatedAt": "2026-11-03T18:07:36.395Z",
+  "updatedAt": "2026-11-03T18:09:23.601Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:52:15.117Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T18:08:59.429Z",
+    "wallClockMs": 1004312
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-ed0f6a9e"
+    "worker-ed0f6a9e",
+    "qa-af7be174"
   ],
   "tier": "light",
   "effort": "medium",
@@ -160,9 +163,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T17:54:35Z",
-    "at": "2026-11-03T18:07:36.395Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T18:07:52Z",
+    "at": "2026-11-03T18:09:23.601Z"
+  },
+  "completedAt": "2026-11-03T18:08:59.429Z",
+  "reviewCompletedAt": "2026-11-03T18:08:59.429Z",
+  "reviewSummary": "Reviewed completion 223488560880cf46d18538a5250d00fc6bbb737a (on moe/work-2026-10-24; the diff touches only packages/moe-daemon/README.md, +5/-2). I re-ran checkRefs[0] on a git-archive snapshot of that commit outside the repo and it printed DOC_OK with rc=0: no `-p`, MOE_LOG_LEVEL or \"(required)\"; the LOG_LEVEL line carries `Default: \\`info\\``; the --project line names MOE_PROJECT_PATH and the current directory; every README --flag is an indexOf('--flag') in src/index.ts; every parsed flag (--project, --port, --name, --host) appears in the README. checkRefs[1] scope check: `git diff --name-only <sha>^ <sha>` excluding .moe lists only packages/moe-daemon/README.md. Facts checked against code. parseArgs (index.ts:58-72) falls back from --project to MOE_PROJECT_PATH to cwd, and from --host to MOE_BIND_HOST. bindHost is recorded in daemon.json when host !== 127.0.0.1 (index.ts:871-875). util/logger.ts:7 reads LOG_LEVEL with default info. init calls superviseDaemon with the same port and host (index.ts:1304), so \"init takes the same options, plus --name\" holds. The --host text matches docs/CONFIGURATION.md:16 and :30. Docs-only, no tests required by the task. The stale daemon.json comment (README ~:71) was left out of scope, as the plan said. Diff is 7 changed LOC, far under the size cap.",
+  "requiredCheckAtDone": null
 }
