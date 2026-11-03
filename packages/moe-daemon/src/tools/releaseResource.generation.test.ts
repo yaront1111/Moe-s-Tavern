@@ -132,9 +132,10 @@ describe('moe.release_resource generation preconditions', () => {
     expect(peer.granted).toBe(true);
     expect(h.state.getResource('pool')!.holders).toHaveLength(2);
 
-    // worker-1 asserts only its OWN holding, but force+no-taskId would strip both.
+    // The caller asserts only worker-1's holding, but force+no-taskId would strip both.
+    // Since task-0adea941 only a governor or a human may force, so the caller is governor-1.
     await expect(release.handler(
-      { resourceId: 'pool', workerId: 'worker-1', force: true, ifHolderWorkerId: 'worker-1' },
+      { resourceId: 'pool', workerId: 'governor-1', force: true, ifHolderWorkerId: 'worker-1' },
       h.state
     )).rejects.toThrow(/worker-2/);
 

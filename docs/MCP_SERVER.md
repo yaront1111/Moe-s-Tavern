@@ -2040,7 +2040,8 @@ Release a task from its assigned worker (clears `assignedWorkerId` and keeps the
     pitfalls?: string,            // ≤4000 chars
     openQuestions?: string        // ≤4000 chars
   },
-  workerId?: string               // Caller worker ID (auto-injected by proxy)
+  workerId?: string,              // Caller worker ID (auto-injected by proxy)
+  force?: boolean                 // Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. A caller whose workerId resolves to no governor role is refused NOT_ALLOWED; a human or the board omits workerId.
 }
 ```
 
@@ -2991,10 +2992,11 @@ Release your lease on a shared resource (and/or leave its queue). The freed capa
 ```typescript
 {
   resourceId: string,
-  workerId: string,
+  workerId?: string, // required, except on a human's force:true call, which omits it
   taskId?: string,   // Limit the release to this task's lease/queue entry. Default: everything held by workerId
   force?: boolean    // Governor/human override: release regardless of ownership.
-                     // With taskId: that lease; without: ALL leases and queue entries
+                     // With taskId: that lease; without: ALL leases and queue entries.
+                     // A seat whose workerId resolves to no governor role is refused NOT_ALLOWED
 }
 ```
 
@@ -3014,7 +3016,7 @@ Release your lease on a shared resource (and/or leave its queue). The freed capa
 - **Idempotent:** releasing a resource you neither hold nor queue on is a no-op, not an error — release paths run from exit traps.
 - **Ownership is task-keyed like the lease itself:** the caller matches a lease/queue entry when its `workerId` equals the recorded one **or** when the caller is the **current assignee of the entry's task** — so a successor wrapper session (fresh `workerId` after a daemon-restart worker purge) that re-claimed the task can release the predecessor's lease.
 - The grant runs inline: the next waiter(s) in grant order get leases, and each granted task that is `BLOCKED` on this resource is flipped back to its `blockedFromStatus` (auto-unblock) with a `🟢` post to the task channel and `#general`.
-- `force: true` is the governor/human lever for a stuck lease (crashed holder that never released). Without `taskId` it clears **all** leases and queue entries on the resource — scope it with `taskId` unless you mean that.
+- `force: true` is the governor/human lever for a stuck lease (crashed holder that never released). It is enforced: only governor seats and workerId-less human calls may pass it; any other seat is refused `NOT_ALLOWED` and nothing is released. Without `taskId` it clears **all** leases and queue entries on the resource — scope it with `taskId` unless you mean that.
 - Activity events: `RESOURCE_RELEASED` per released lease (with `forced` flag), then `RESOURCE_GRANTED` per grant.
 
 ---

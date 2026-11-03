@@ -1,7 +1,8 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { HandoffNote } from '../types/schema.js';
-import { invalidInput, missingRequired, notFound } from '../util/errors.js';
+import { invalidInput, missingRequired, notAllowed, notFound } from '../util/errors.js';
+import { workerHasRole } from '../util/workerRole.js';
 import {
   assertNoLiveLease,
   assertReleaseCaller,
@@ -103,7 +104,7 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
         force: {
           type: 'boolean',
-          description: 'Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. Both parties are named in the banner and the result, so the strip is auditable. Without it, a release by a non-assignee is refused (RELEASE_NOT_ASSIGNEE) and a live step lease is refused (STEP_LEASE_HELD).'
+          description: 'Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. Both parties are named in the banner and the result, so the strip is auditable. Without it, a release by a non-assignee is refused (RELEASE_NOT_ASSIGNEE) and a live step lease is refused (STEP_LEASE_HELD). A caller whose workerId resolves to no governor role (team role, else the id prefix) is refused NOT_ALLOWED; a human or the board omits workerId.'
         },
         attemptId: {
           type: 'string',
@@ -138,6 +139,15 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         throw missingRequired('taskId');
       }
       const force = params.force === true;
+      // force follows its documented audience (governor or human). Refused
+      // before any read or write; a workerId-less call is the /ws board or a
+      // human, and keeps it. The assignee never needs force for its own row.
+      if (force && params.workerId && !workerHasRole(state, params.workerId, 'governor')) {
+        throw notAllowed(
+          'release_task',
+          `force is the governor/human crash-recovery override (worker ${params.workerId} is not a governor)`
+        );
+      }
       // Bounded before use: an ATTEMPT_SUPERSEDED refusal echoes the presented id.
       if (typeof params.attemptId === 'string' && params.attemptId.length > MAX_ATTEMPT_ID_LEN) {
         throw invalidInput('attemptId', `must be at most ${MAX_ATTEMPT_ID_LEN} characters`);
