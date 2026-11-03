@@ -56,4 +56,22 @@ class BoardMovesTest {
             }
         }
     }
+
+    @Test fun nextFollowsTheWorkflowOrder() {
+        assertEquals("PLANNING", BoardMoves.next("BACKLOG"))
+        assertEquals("AWAITING_APPROVAL", BoardMoves.next("PLANNING"))
+        assertEquals("WORKING", BoardMoves.next("AWAITING_APPROVAL"))
+        assertEquals("REVIEW", BoardMoves.next("WORKING"))
+        assertEquals("DONE", BoardMoves.next("REVIEW"))
+    }
+
+    @Test fun doneBlockedArchivedAndUnknownHaveNoNext() {
+        for (s in listOf("DONE", "BLOCKED", "ARCHIVED", "", "NOT_A_STATUS")) {
+            assertNull("status '$s'", BoardMoves.next(s))
+            assertFalse("status '$s'", BoardMoves.hasNext(s))
+        }
+        for (s in listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW")) {
+            assertTrue("status '$s'", BoardMoves.hasNext(s))
+        }
+    }
 }

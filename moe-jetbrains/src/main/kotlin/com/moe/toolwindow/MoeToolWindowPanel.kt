@@ -529,14 +529,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 lastState?.let { updateBoard(it) }
             }
 
-            val workflowOrder = listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW", "DONE")
-            fun getNextStatus(current: String): String? {
-                val idx = workflowOrder.indexOf(current)
-                return if (idx >= 0 && idx < workflowOrder.size - 1) workflowOrder[idx + 1] else null
-            }
-
             fun handleNext(task: Task) {
-                val nextStatus = getNextStatus(task.status) ?: return
+                val nextStatus = BoardMoves.next(task.status) ?: return
                 if (task.status == "AWAITING_APPROVAL") {
                     BoardApproval.approveRendered(project, service, task)
                 } else {
@@ -623,7 +617,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         if (task.status == "AWAITING_APPROVAL") {
                             PlanReviewDialog(project, task, service).show()
                         } else {
-                            val nextCb = if (getNextStatus(task.status) != null) { t: Task -> handleNext(t) } else null
+                            val nextCb = if (BoardMoves.hasNext(task.status)) { t: Task -> handleNext(t) } else null
                             val prevCb = if (BoardMoves.hasPrevious(task.status)) { t: Task -> handlePrevious(t) } else null
                             TaskDetailDialog(project, task, service, onNext = nextCb, onPrevious = prevCb).show()
                         }
