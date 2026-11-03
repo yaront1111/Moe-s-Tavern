@@ -75,7 +75,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:52:48.048Z",
-  "updatedAt": "2026-11-02T22:27:44.921Z",
+  "updatedAt": "2026-11-03T01:07:31.205Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:53:50.978Z",
@@ -109,11 +109,14 @@
     "firstClaimAt": "2026-11-02T18:16:35.407Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T01:07:03.316Z",
+    "wallClockMs": 24627909
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -229,9 +232,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-02T22:22:16Z",
-    "at": "2026-11-02T22:27:44.921Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T01:04:42Z",
+    "at": "2026-11-03T01:07:31.205Z"
+  },
+  "completedAt": "2026-11-03T01:07:03.316Z",
+  "reviewCompletedAt": "2026-11-03T01:07:03.316Z",
+  "reviewSummary": "Approved. Reviewed completion 26e10e3d (in HEAD 12d7bb62): 2 paths, +289/-19 = 270 net LOC, under the 400 cap. Read the full diff; git diff --check clean; no forbiddenPatterns string added.\n\nRe-ran in a fresh git-archive snapshot of 26e10e3d outside the repo (daemon and proxy npm ci --prefer-offline and build first):\n- DoD 5 gate rc 0: vscode ci, lint, compile, test, package. 592 tests: 588 pass, 4 platform skips, 0 fail. Vsix 64,365,721 bytes before to 3,560,036 after.\n- DoD 3 RED: new test vs the 30d483e9 script gives B1-B5 all not ok (5 tests, 0 pass, 5 fail). Rows only run or import a temp copy in a fixture repo.\n- DoD 1 sets: daemon 31 true true, proxy 1 true true, vs the lockfiles and the JetBrains zip /mnt/d/moe-scratch/864103f3/after.zip (landed 30d483e9). No typescript, vitest, tsx, @types, .bin, .package-lock or .vite ships.\n- DoD 4, read as bundled/daemon/index.js (no dist level, per the planner comment): doctor on an empty dir prints the checklist (expected rc 1), 0 ERR_MODULE_NOT_FOUND. onboarding.mjs against the unpacked bundle: PASS.\n- Quality gate parity-check.sh and npm run lint: rc 0.\n\nDoD 2 by code reading plus tests: productionPackages throws naming the lockfile for missing, unparseable, no-packages-map, non-object entry, bad key and non-dev link (B3). bundleProblems names a missing production entry, optional included (B4), and an unshipped dist import as '<spec>' (<rel>:<line>), tests excluded (B2). Both assets are checked before any copy; no whole-tree fallback. Import bundles nothing (B5). Manifest, stale-dist and layout code are unchanged.\n\nNon-blocking: a lockfile problem throws ahead of the aggregated report, which the DoD allows. isBuiltin replaces Gradle's static list on purpose. The existing rm of bundled/ in main is unchanged.",
+  "requiredCheckAtDone": null
 }
