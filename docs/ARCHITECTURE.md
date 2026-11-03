@@ -177,7 +177,7 @@ trusted runner dispatches (see **The verified-local path** below). The gate is u
 by default, and the wrapper runs it only on a worker's completion landing in a
 git repository, when the command is non-blank, `autoCommit` is on,
 `qualityGateScope` is `everyTask` or the task is epic-final, and
-`MOE_DISABLE_QUALITY_GATE` is not `1`. Two invariants hold the path together:
+`MOE_DISABLE_QUALITY_GATE` is not `1` (shared mode; see **Worktree mode** below). Two invariants hold the path together:
 
 - **The daemon is state-only.** It never writes git state, lands, pushes or
   runs a gate. Its Git calls are read-only:
@@ -283,6 +283,58 @@ clone that wrote it:
 - `receipts/`: crash recovery for this clone's ref move, paired with
   `<gitdir>/moe/receipt/<taskId>.json`, which never leaves the clone; the
   landing itself travels as the commit.
+
+### Worktree mode
+
+`settings.worktreeMode` is `'off'` by default (`resolveWorktreeMode`). While it
+is `'on'`, `claim_next_task` pins `workspaceMode: 'worktree'` on the attempt a
+WORKING claim opens (every other claim pins `'shared'`), and both
+`claim_next_task` and `get_context` expose that attempt's
+`workspace: { mode, path, branch, target }` (`resolveAttemptWorkspace`). The
+target is a literal `settings.consolidationBranch`, else `main`, and
+`complete_task` on a worktree attempt expects branch `moe/task/<taskId>`.
+
+A worker's bytes live in its task worktree `.worktrees/<taskId>` on
+`moe/task/<taskId>`, a sparse checkout with no `.moe/`, and its checkpoints land
+on that branch only. End-to-end steps 3 and 4 change: a completion lands the
+task's net change on the target as ONE squash commit. The wrapper builds the
+`git merge-tree` of the target tip and the task branch; while a `qualityGate`
+is set, EVERY completion gates exactly that merged tree (`qualityGateScope` is
+ignored, and `MOE_DISABLE_QUALITY_GATE=1` fails the landing instead of skipping
+it) in a `.moe`-free gate worktree, recording its Candidate and CheckRun as
+above. It then writes the receipt journal `<gitdir>/moe/receipt/<taskId>.json`
+on every completion before anything is published (a gate-less one has no
+Candidate). With no remote, a CAS `update-ref` publishes; in remote mode a
+non-forced push to origin is the only publication and the local target is a
+mirror. No DeliveryReceipt is sent: the `task.commits` row and the `landed`
+finalize are the landing evidence. A push whose outcome is unknown records no
+row and sends no finalize, so the attempt stays `finalizing`, its journal kept,
+until a later pre-flight fetches and settles it.
+
+A landing that publishes nothing (a conflict or a marker left in the worktree,
+a failed gate, a diverged target or failed fetch, a refused push, an ungranted
+land lease, exhausted rounds) puts the task-branch tip on a rescue ref, records
+a failed row and closes the attempt `unlanded`; when that rescue ref or row
+cannot be written it finalizes nothing and the attempt stays `finalizing`. The
+daemon sets `Task.landingRetry` and routes the row from REVIEW back to WORKING,
+unassigned, or to BLOCKED for `diverged` or a 3rd consecutive unlanded
+landing. The next worker resolves it in its worktree, and the next `landed` or
+`nothing-to-commit` finalize clears `landingRetry`. Any other failure (the
+target checked out in a worktree, a merged tree that changes `.moe/`) also
+publishes nothing: a plain failed row, the attempt closed `failed` (`rescued`
+when the bytes went on a rescue ref), the bytes kept on the task branch.
+
+No worktree landing carries `.moe/`: board history goes to `refs/moe/board`,
+and the tracked `.moe/tasks` records on the target stay frozen from the switch
+on. The control checkout sits on `moe/control` and only fast-forwards to the
+target, and QA reviews only commits landed there.
+
+Worktree mode adds daemon state (`workspaceMode`, `workspace`, `landingRetry`
+and the `unlanded` outcome) but no daemon git write: provisioning, landing,
+rescue refs, board snapshots and the control follow are all the wrapper's.
+Shared mode is unchanged. Operator detail: **Land on every exit, worktree
+mode** in `scripts/CLAUDE.md` and **Worktree Mode** in
+`docs/TROUBLESHOOTING.md`.
 
 ### The verified-local path
 
