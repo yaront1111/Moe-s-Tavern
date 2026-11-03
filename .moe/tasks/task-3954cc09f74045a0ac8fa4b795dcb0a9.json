@@ -20,18 +20,25 @@
     {
       "stepId": "step-1",
       "description": "Seat runner plumbing in scripts/moe-agent.sh: above the main loop, plus both exit funnels.\n\nREAD FIRST:\n- the landed CQ-M07m1 gate (grep MOE_VERIFIED_LOCAL_ in the wrapper) and the CQ-M07m2 helper (grep MOE_VM_CANDIDATE_);\n- their handoffs, when present: mem:task-task-5adf0673fdad4c5f8a0956e7afcebe07-handoff and mem:task-task-91ee455a601b411f97d5d951cc5f241c-handoff;\n- the seat-start, seat-stop and seat-job header of scripts/local-runner/agent-seat.mjs (CQ-M07i and CQ-M07j; mem:task-task-18809c69885f4af6bff87d7e764f269b-handoff, mem:task-task-1dc49ae27e22494a95e15ada3e9c1fe9-handoff);\n- mem:gotcha-bash-hot-reload-incremental-parse.\nEdit only with the Edit tool: it is rename-safe for running seats and leaves the TOOL witness. Run `bash -n scripts/moe-agent.sh` after each edit. Keep bash 3.2 syntax: no associative arrays, no mapfile, no ${v,,}.\n\nAdd a 'Verified-local seat VM (CQ-M07m3)' block right after the Claude account rotation block, which provides ACCOUNT_HELPER (NODE_CMD, SECURE_TEMP_DIR and RUNTIME_PROTECTED are set at startup). It defines:\n- AGENT_SEAT_CLI=\"$SCRIPT_DIR/local-runner/agent-seat.mjs\". This is the bundled path in both the repo and the plugin layout.\n  - MOE_AGENT_SEAT_PATH replaces it only when RUNTIME_PROTECTED != 1.\n  - When protected and MOE_AGENT_SEAT_PATH is set, print once at startup: `[WARN] MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED: MOE_AGENT_SEAT_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/agent-seat.mjs runs.` Never print the value.\n- SEAT_VM_INSTANCE=\"\": the one VM this wrapper process holds, kept across iterations and tasks.\n- seat_cli: a subshell that unsets ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY and CODEX_API_KEY, then execs \"$NODE_CMD\" \"$AGENT_SEAT_CLI\" \"$@\". The task names four of these; ANTHROPIC_AUTH_TOKEN is the fifth credential that apply_account_env already strips. Every seat-* call goes through seat_cli.\n- seat_vm_start: runs `seat_cli seat-start --project \"$PROJECT\" --worker \"$WORKER_ID\" --runner \"$MOE_PROCESS_STARTED_AT\" --host \"$MOE_HOST\"`.\n  - Keep the flags in that fixed order. The runner token may hold spaces, so pass it as ONE quoted argument.\n  - Capture stdout (one JSON line), let stderr pass through, and keep the exit code.\n  - Wrap the capture and the instance assignment in wt_defer_signals/wt_release_signals, so a signal between a successful start and recording the instance cannot orphan the VM. The release exits through the EXIT trap, which stops the VM.\n  - ok means exit 0, ok:true, and an instance matching ^moe-vm-[0-9a-f]{20}$ (lifecycle.mjs isOwnedInstanceName). Set SEAT_VM_INSTANCE, print `[seat] started <instance>`, return 0.\n  - Otherwise set SEAT_START_CODE to the line's fixed code when it matches ^[A-Z][A-Z0-9_]{0,63}$, else to `exit <n>`; never stderr text. Return the CLI's exit code, or 1 when it exited 0 but was not ok. CQ-M07m will branch on 75 at the call site, so keep this split.\n- seat_vm_stop: a no-op when SEAT_VM_INSTANCE is empty.\n  - Copy the instance, then clear SEAT_VM_INSTANCE (forget it) before the call.\n  - Run `seat_cli seat-stop --project ... --worker ... --runner ... --host ... --instance <inst>` in the background, with stdout going to a private file in SECURE_TEMP_DIR.\n  - Poll THIS shell's job table (heartbeat_sidecar_running) once a second for at most 120 s; never wait unconditionally on a live job.\n  - On an ok line, print `[seat] stopped <inst>`.\n  - On a failure, print `[WARN] MOE_SEAT_STOP_FAILED: <code or exit n> instance=<inst>`. The owned ledger keeps the record for CQ-M07g cleanup.\n  - Past the bound, print `[WARN] MOE_SEAT_STOP_TIMEOUT: instance=<inst>` and return without signalling the job.\n  - It always returns 0 and must be safe under set +e, since the EXIT trap runs it.\n\nWire it into both exit funnels:\n- cleanup_temp: call seat_vm_stop, guarded by `type -t` like its siblings, right before the deregister_worker block. Normal exit, INT/TERM (which end in exit 0) and set -e aborts all pass through here.\n- The hot-reload branch at the loop top: exec skips the EXIT trap, so call seat_vm_stop there too. Put it after the MOE_HEARTBEAT_STOP_TIMEOUT `continue` and before the wrapper_restart deregister, and update the comment that lists the by-hand must-haves. Without it, the re-exec'd wrapper (same PID, same runner identity) starts a second VM and leaks the first until the process exits.\n\nLegacy: every addition is a no-op unless a VM is held, or MOE_AGENT_SEAT_PATH is set under protection.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Required base c89e4c59 is ancestor (exit 0). Implemented seat path resolution, sanitized seat_cli, deferred-signal start, bounded stop, EXIT/reload funnels. Used Codex apply_patch in assigned task worktree per governor comment-499a89b3; no shell edits. Helpers reused wt signals/job table. bash -n exit 0; extracted plumbing test PASS (space-bearing runner argv, all 5 credential env vars removed, start/stop instance lifetime, diagnostic filtering). Full retained lifecycle rows come in steps 4/5 as planned. m1/i/j handoff memories missing; consumed landed source and sibling contracts instead.",
+      "startedAt": "2026-11-03T18:17:28.017Z",
+      "completedAt": "2026-11-03T18:18:27.515Z"
     },
     {
       "stepId": "step-2",
       "description": "The VM route in the main loop of scripts/moe-agent.sh: seat-start before the claim, the marked claim, the post-claim backstop, and no taskless host launch.\n\nPer-iteration state. Reset it in the pre-flight reset block, with the other per-task variables:\n- a route flag (reuse CQ-M07m1's if it has one, else VM_ROUTE=false);\n- CLAIM_ITER_JSON=\"$CLAIM_RPC_JSON\".\nBoth claim_next_task calls (the pre-flight claim and the single-shot wait loop) send \"$CLAIM_ITER_JSON\", which is byte-identical on every non-VM iteration. The wrapper never calls wait_for_task itself, so no other call needs the marker.\n\nReplace CQ-M07m1's placeholder refusal MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE with the route. The placeholder is reached only when the profile is verified-local and ready and every m1 check has passed, before the claim. After this task neither the wrapper nor the harness contains that code. In order:\n1. CLI_TYPE codex: print `[ERROR] MOE_VM_CREDENTIAL_UNAVAILABLE: codex VM credentials are not wired yet; refusing to run codex on the host.` and exit 1, before seat-start and the claim. CQ-M07m replaces this with its key check. gemini and grok are refused by m1's CLI check.\n2. Build CLAIM_ITER_JSON = CLAIM_RPC_JSON plus \"executionRoute\":\"vm\", using $PYTHON_CMD json, never string splicing. If it cannot be built, print `[ERROR] MOE_VERIFIED_LOCAL_CLAIM_UNBUILDABLE` and exit 1: never send an unmarked claim on this route. The marker only refuses; it never grants readiness (CQ-M07q).\n3. Set the route flag.\n4. If no VM is held: `seat_vm_start || { echo \"[ERROR] MOE_SEAT_START_FAILED: $SEAT_START_CODE\" >&2; exit 1; }`. In this slice anything but ok fails closed, exit 75 included; CQ-M07m turns 75 into a capacity wait. A held VM is reused, so later tasks run no seat-start.\n\nPost-claim backstop. Put it right after the worker's provision_worktree call, before worktree_preflight and the pre-flight landing.\n- Condition: the route is on, ROLE=worker, PREFLIGHT_OK, a task is bound, and MOE_WT_MODE != worktree.\n- Action: print `[ERROR] MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED: the claim for <task> is in shared mode; the VM route runs only in worktree mode, so no job runs.` and exit 1, before any baseline or job.\n- It is WORKER-ONLY on purpose; say why in a comment. claimNextTask.ts openClaimAttempt (about :156) derives workspaceMode 'worktree' only for a WORKING task, so a QA claim of a REVIEW row always reads shared. m1's pre-claim settings.worktreeMode check covers QA, and a QA job writes nothing.\n\nLaunch decision. Add this after the existing MOE_SKIP_LAUNCH block.\n- Condition: the route is on, no task is bound (PREFLIGHT_OK != true, or no PREFLIGHT_TASK_ID), and the existing logic would still launch: a chat-only session for routed mentions, or a launch-outage probe.\n- Action: set MOE_SKIP_LAUNCH=true and LAUNCH_PROBE=false, and print `MOE_TASKLESS_NO_LAUNCH reason=vm-route role=<r> worker=<w> - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job.`\n- Rail: never run the host CLI under verified-local. The existing skip reasons stay byte-identical.\n\nNew codes use only MOE_SEAT_, MOE_VM_ and MOE_VERIFIED_LOCAL_, plus a new reason on the existing MOE_TASKLESS_NO_LAUNCH line. parity-check.sh compares MOE_COMMIT_, MOE_ATTR_, MOE_CHECKPOINT_, MOE_ATTRIBUTION_ and MOE_ACCOUNT_ (and WT-19's MOE_WORKTREE_ and MOE_LAND_ families once they land); never add a code in one of those families here.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "startedAt": "2026-11-03T18:18:27.543Z"
     },
     {
       "stepId": "step-3",
@@ -151,11 +158,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:38.207Z",
-  "updatedAt": "2026-11-03T18:15:17.803Z",
+  "updatedAt": "2026-11-03T18:18:27.543Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:21.699Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-98c94b4c",
@@ -165,7 +173,9 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T19:01:56.761Z",
   "executionContract": {
@@ -260,5 +270,6 @@
     "kind": "checkpoint",
     "sessionId": "architect-98c94b4c@2026-11-01T18:26:18Z",
     "at": "2026-11-01T19:03:22.632Z"
-  }
+  },
+  "workStartedAt": "2026-11-03T18:17:28.017Z"
 }
