@@ -10,10 +10,31 @@
     "The diff against the merge base touches only packages/moe-proxy/README.md, and only lines inside its \"## Environment Variables\" section"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Edit packages/moe-proxy/README.md with the Edit tool, and only inside '## Environment Variables' (lines 47-57 at 6029cee3). The full target section is saved as /mnt/d/moe-scratch/plan-56f77335/env-section.md (sha256 b5b7b72b13711b6f3c050f62daa421251ab60ee7fe982b97b7637176a74725a3) and the diff as readme.diff (sha256 75139e3d1e381f488ccaf57cc6fae955f99e6fef8d325c1a37104cefd0012b3f; git apply --check passes at 6029cee3). Copy from them; never git apply (rail: tracked files only via Edit/Write).\n(a) Line 49 becomes: - `MOE_PROJECT_PATH` - Project path, where the proxy reads `.moe/daemon.json` (default: the current directory)\n  Source: src/utils.ts:162, `path.resolve(process.env.MOE_PROJECT_PATH || process.cwd())`.\n(b) Delete line 51 (MOE_DAEMON_PORT). Do not implement the override. The port comes only from daemon.json `info.port`, gated by the /health identity probe (src/index.ts:501-554).\n(c) After the MOE_DAEMON_HOST line add these two lines:\n- `MOE_WORKER_ID` - Launcher-set. The seat's worker id, added as `workerId` to every `tools/call` that omits one, and to `tools/list` so the daemon lists only the tools for the seat's role. `moe.get_activity_log` never gets it, because its `workerId` is a filter. A blank value counts as unset\n  Source: src/index.ts:731 injectWorkerId, src/utils.ts:180-245 including WORKER_ID_IS_A_FILTER.\n- `MOE_RUNNER_PROCESS_STARTED_AT` and `MOE_RUNNER_HOST` - Launcher-set, for architect, QA and governor seats only. The runner identity, added as `processStartedAt` and `host` to a `moe.claim_next_task` that names neither key, so a task claimed inside the session can be reattached after a daemon restart. Both must be non-blank, or neither is sent\n  Source: src/index.ts:732 injectRunnerIdentity, src/utils.ts:250-286.\n(d) After the MOE_BLOCKING_TIMEOUT_MS line add these two lines:\n- `MOE_MESSAGE_TIMEOUT_MS` - The per-request deadline of every other request; when it passes, the proxy answers that request with a `Request timed out` error (default: 30000)\n  Source: src/index.ts:40 and :273-283, and the error text at :343.\n- `MOE_TOOL_NAME_STYLE` - Launcher-set for grok. `underscore` exposes each `moe.<name>` tool as `moe_<name>` in `tools/list` and maps the alias back on `tools/call`, for clients that drop dotted tool names. Any other value, or none, keeps the daemon's names\n  Source: src/index.ts:83, src/utils.ts:455-470 (trimmed, case-insensitive 'underscore', else dot).\n(e) After the MOE_PROXY_ONESHOT_DEADLINE_MS line add one blank line, then: The daemon port always comes from `.moe/daemon.json`; no environment variable overrides it.\nKeep the MOE_DAEMON_HOST, MOE_SESSION_ID, MOE_ATTEMPT_*, MOE_WORKER_TYPE, MOE_BLOCKING_TIMEOUT_MS and MOE_PROXY_ONESHOT_DEADLINE_MS lines byte-identical. The section may name no MOE_* variable beyond the 13 the proxy's non-test sources mention. That excludes MOE_DAEMON_PORT even in prose, which both DoD greps would catch. Every other README section, and every other file, stays untouched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/README.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification. From the worktree root, run the executionContract checkRef verbatim (also saved as /mnt/d/moe-scratch/plan-56f77335/checkref.txt, sha256 ac05c0d8ea87b141b58d7292f9694501c000725d0f6b0241fcc1b9481b7097fb, 808 chars). It is the DoD in one command:\n- DoD 1: a working-tree `git grep -n MOE_DAEMON_PORT` over packages, docs, scripts, moe-jetbrains and moe-vscode prints nothing. It is the uncommitted form of the DoD's `git grep ... HEAD`, which QA runs after landing.\n- DoD 2: the DoD's exact names diff prints nothing.\n- DoD 3: the MOE_PROJECT_PATH line names the current directory and no longer says 'required'; the MOE_MESSAGE_TIMEOUT_MS line has 30000.\n- DoD 4: the README with the section bodies stripped (headers kept) equals the merge-base copy, and `git diff --name-only` against the merge base lists only packages/moe-proxy/README.md.\nPlanner dry run on a scratch copy of 6029cee3: exit 0, printing the two matched lines and ` packages/moe-proxy/README.md | 9 +++++++--` (7 insertions, 2 deletions). The unchanged README exits 1. So do 10 negative controls: port line kept, a name missing, '(required; ...)', 'Required.', no 30000, no 'current directory', an edit outside the section, a second file changed, MOE_DAEMON_PORT in prose.\nIts fresh output is the complete_task verification evidence. No npm command is needed: no test or build reads this README, and the landing qualityGate (parity-check + role-doc lint) does not touch it.\nError handling for a red run: the failing link prints its own evidence (a git grep hit, a diff line, or a missing match). Fix the README text and rerun; never edit the command.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-3",
+      "description": "Self-review (load the adversarial-self-review skill), scoped to this one-file docs diff. Re-read each new line against the source it cites in step 1:\n- MOE_WORKER_ID: tools/call injection only when args has no workerId key; tools/list gets it too; the get_activity_log filter exception; blank means unset.\n- Runner pair: injected only when neither key is present; both values non-blank or neither is sent; set for architect, QA and governor seats only.\n- MOE_MESSAGE_TIMEOUT_MS: every request with an id that is not one of the three blocking long-polls; default 30000 (an invalid or non-positive value keeps it).\n- MOE_TOOL_NAME_STYLE: 'underscore' (trimmed, any case) or else dot.\nConfirm that no line overclaims: for example, the proxy never reads MOE_WORKER_ID from anywhere but the env. Confirm the Markdown list still renders as one list. Confirm no added text contains a project.json globalRails.forbiddenPatterns string.\nFor QA: re-run the checkRef at the control checkout with MOE_LAND_TARGET=<completion>^ and QA_TIP=<completion>. Without QA_TIP, the daemon's uncommitted .moe/ diffs there trip the name-only check. Then also run the DoD's literal `git grep -n MOE_DAEMON_PORT HEAD -- packages docs scripts moe-jetbrains moe-vscode`.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -25,5 +46,77 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:01:58.605Z",
-  "updatedAt": "2026-11-03T17:01:58.605Z"
+  "updatedAt": "2026-11-03T17:07:45.036Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:03:46.655Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:07:43.982Z",
+  "executionContract": {
+    "intendedBehavior": "The moe-proxy README's '## Environment Variables' list names exactly the 13 MOE_* variables the proxy's non-test sources read, and describes each one from the code. MOE_DAEMON_PORT, which nothing reads, is gone. MOE_PROJECT_PATH says it defaults to the current directory. The five missing variables (MOE_WORKER_ID, the MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST pair, MOE_MESSAGE_TIMEOUT_MS with its 30000 default, MOE_TOOL_NAME_STYLE) are documented, marked launcher-set where the launchers set them.",
+    "acceptanceCriteria": [
+      "`git grep -n MOE_DAEMON_PORT HEAD -- packages docs scripts moe-jetbrains moe-vscode` prints nothing after landing (the working-tree form prints nothing before).",
+      "The DoD's names diff between the non-test proxy sources and the README section prints nothing and exits 0.",
+      "The MOE_PROJECT_PATH line states the current-directory default and does not say required. The MOE_MESSAGE_TIMEOUT_MS line states 30000.",
+      "Only packages/moe-proxy/README.md changes, and only inside the '## Environment Variables' section."
+    ],
+    "invariants": [
+      "The existing MOE_DAEMON_HOST, MOE_SESSION_ID, MOE_ATTEMPT_*, MOE_WORKER_TYPE, MOE_BLOCKING_TIMEOUT_MS and MOE_PROXY_ONESHOT_DEADLINE_MS lines stay byte-identical.",
+      "The section names no MOE_* variable outside the set the non-test proxy sources mention."
+    ],
+    "compatibility": [
+      "Docs only: no src, no docs/CONFIGURATION.md, no docs/MCP_SERVER.md change, and no other README section changes."
+    ],
+    "approvedScope": [
+      "packages/moe-proxy/README.md '## Environment Variables' section body only (lines 47-57 at 6029cee3)"
+    ],
+    "reuse": [
+      "The wording follows docs/CONFIGURATION.md's Proxy Configuration table (lines 33-45), which already documents these variables correctly. The 'Launcher-set' marking follows the existing 'Wrapper-only' line."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-proxy/src/utils.ts:162 getProjectPath: `path.resolve(process.env.MOE_PROJECT_PATH || process.cwd())`.",
+      "packages/moe-proxy/src/index.ts:501-554: the port comes only from readDaemonInfoResult(projectPath).info.port; the proxy never reads MOE_DAEMON_PORT (git grep shows only README.md:51).",
+      "packages/moe-proxy/src/index.ts:40 MESSAGE_TIMEOUT_MS = parsePositiveIntEnv(MOE_MESSAGE_TIMEOUT_MS, 30000); :273-283 blocking long-polls get BLOCKING_TIMEOUT_MS, every other request gets MESSAGE_TIMEOUT_MS; :343 'Request timed out after Nms'.",
+      "packages/moe-proxy/src/index.ts:731-732 and src/utils.ts:200-286: injectWorkerId (tools/call without workerId, tools/list, never get_activity_log, blank = unset) and injectRunnerIdentity (claim_next_task naming neither key, both non-blank).",
+      "packages/moe-proxy/src/index.ts:83 and src/utils.ts:455-470: toolNameStyleFromEnv returns 'underscore' only for a trimmed, case-insensitive 'underscore', else 'dot'; the launchers pin it for grok (scripts/moe-agent.sh:1652, scripts/moe-agent.ps1:1622)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && F=packages/moe-proxy/README.md && S='/^## Environment Variables/,/^## One-shot/' && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && ! git grep -n MOE_DAEMON_PORT -- packages docs scripts moe-jetbrains moe-vscode && diff <(grep -rhoE 'MOE_[A-Z_]+' packages/moe-proxy/src --include=*.ts --exclude=*.test.ts | sort -u) <(sed -n \"${S}p\" $F | grep -oE 'MOE_[A-Z_]+' | sort -u) && E=$(sed -n \"${S}p\" $F) && grep -E '^- `MOE_PROJECT_PATH` .*current directory' <<<\"$E\" && ! grep -iE '^- `MOE_PROJECT_PATH` .*required' <<<\"$E\" && grep -E '^- `MOE_MESSAGE_TIMEOUT_MS` .*30000' <<<\"$E\" && diff <(git show \"$B:$F\" | sed \"${S}{/^## /!d}\") <(sed \"${S}{/^## /!d}\" $F) && [ \"$(git diff --name-only \"$B\" ${QA_TIP:-})\" = \"$F\" ] && git diff --stat \"$B\" ${QA_TIP:-}"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Implement a MOE_DAEMON_PORT override. Rejected by the row: the connection is keyed on daemon.json plus the /health identity probe, so an override needs its own design. (b) Add the new variables to the Execution identity or Worker type sections. Rejected: DoD 4 limits the edit to the Environment Variables section. (c) Mark every launcher-exported variable (MOE_SESSION_ID, MOE_ATTEMPT_*, MOE_WORKER_TYPE) as Launcher-set too. Rejected: those lines must stay byte-identical, and their own sections already say who sets them.",
+    "codebaseInsights": "docs/CONFIGURATION.md:33-45 already documents every one of these variables correctly; only this README drifted. The DoD's names diff counts every MOE_ token in non-test sources, comments included. At 6029cee3 that is 13 names, so the section must name exactly those 13. The section's sed range ends at the '## One-shot calls' header, so the header must keep its exact text.",
+    "risks": "1) Do not mention MOE_DAEMON_PORT anywhere, even to say it does not exist: both DoD 1 and the names diff fail on it. 2) Do not rename or move the '## Environment Variables' and '## One-shot calls' headers, which the checks key on. 3) QA must pass QA_TIP=<completion> (and MOE_LAND_TARGET=<completion>^) at the control checkout. 4) If a peer lands a new MOE_* read in packages/moe-proxy/src before this lands, the names diff turns red: document that variable too only if it is really read, else report it.",
+    "keyFiles": [
+      "packages/moe-proxy/README.md",
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/src/utils.ts",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6029cee35ba66e727ad56cbece567614c8793adf",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:07:44.010Z",
+  "approvedPlanRevision": 1
 }

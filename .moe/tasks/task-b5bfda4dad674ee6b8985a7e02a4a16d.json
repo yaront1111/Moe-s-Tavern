@@ -1,0 +1,42 @@
+{
+  "id": "task-b5bfda4dad674ee6b8985a7e02a4a16d",
+  "epicId": "epic-be924fb8",
+  "title": "docs: SCHEMA.md \"ID Generation\" documents 8-hex ids from a randomUUID().split('-')[0] generator, but the daemon has minted 32-hex ids since 0aab4d36, step ids are step-N and worker ids come from MOE_WORKER_ID",
+  "description": "Filed by defect hunt 11-03 #4 (task-130a6a5c). Evidence is from HEAD 430e4620.\n\nPROBLEM\ndocs/SCHEMA.md:2146-2166 (\"## ID Generation\") is the normative statement of the id format, and it no longer matches the code:\n- :2148 says \"All IDs use a prefix + short UUID format:\".\n- :2150-2154 show `const uuid = crypto.randomUUID().split('-')[0]; // First 8 chars`.\n- :2156-2165 give 8-char examples, including `// Worker:   \"worker-w1x2y3z4\"` and `// Step:     \"step-s1t2u3v4\"`.\n\nWhat the code does:\n- packages/moe-daemon/src/util/ids.ts:3-10: `const uuid = crypto.randomUUID().replace(/-/g, ''); return \\`${prefix}-${uuid}\\`;`. That is `<prefix>-<32 lowercase hex>`, and it has been since 0aab4d36 (2026-06-30). The comment at :4-7 gives the reason: 32-bit ids collide at thousands of entities.\n- Ids minted before that keep their 8-hex form and are still live. This board has epic-be924fb8, proj-3830fac7 and chan-b6d8273b, and 167 of the 893 .moe/tasks files have an 8-char id.\n- Step ids are positional: packages/moe-daemon/src/tools/submitPlan.ts:509 ``stepId: `step-${idx + 1}` ``.\n- Worker ids are chosen by the seat (MOE_WORKER_ID, set by the launchers). No non-test code calls generateId('worker'); it appears only in util/ids.test.ts:20.\n- The non-test generateId prefixes are proj, epic, task, team, prop, evt, chan, msg, dec, comment, attempt, ctxreceipt, cand, review, check, dispatch and receipt. Of these, the section never names team, comment, attempt, ctxreceipt, cand, review, check, dispatch or receipt.\n- SCHEMA.md contradicts itself: it already says `<32 hex>` at :1313 (attempt), :1342 (ctxreceipt), :1392 (cand), :1442 (review), :1487 (check), :1566 (dispatch) and :1611 (receipt).\n- task-4d7074c0 (ARCHIVED) saw the drift and deliberately left it (\"I left the stale `## ID Generation` examples alone\"). No row has filed it until now.\n\nConsequence: tooling written to the documented shape, such as `task-[0-9a-f]{8}\\b`, matches no id minted since June, for example task-85529f6caa8e44bc8198f15a0b105d34. Tooling written to 32 hex alone would miss the legacy ids. The daemon's own parser accepts both: packages/moe-daemon/src/tools/reportBlocked.ts:32 `/(?<![a-z0-9_-])task-[0-9a-f]{6,}\\b/gi`.\n\nEVIDENCE\nThese are the doc/code line pairs above. Two checks run from the repo root at HEAD:\n1. `sed -n '/^## ID Generation/,/^---$/p' docs/SCHEMA.md | grep -cE \"split\\('-'\\)\\[0\\]|First 8 chars\"` prints `1`.\n2. The prefix-coverage loop in DoD 2 prints 9 lines: `missing attempt`, `missing cand`, `missing check`, `missing comment`, `missing ctxreceipt`, `missing dispatch`, `missing receipt`, `missing review` and `missing team`.\n\nFIX DIRECTION\nThis is docs-only. Rewrite the \"## ID Generation\" section of docs/SCHEMA.md so that it states:\n- the real generator, `<prefix>-<32 lowercase hex>`, from util/ids.ts;\n- that ids minted before 0aab4d36 (2026-06-30) keep their 8-hex form and stay valid, so consumers must accept both (as reportBlocked.ts:32 does);\n- that step ids are `step-<n>`, assigned in plan order;\n- that worker ids are chosen by the seat (MOE_WORKER_ID), never minted by generateId;\n- one example per non-test generateId prefix.\n\nThe illustrative 8-char ids in the example JSON elsewhere in SCHEMA.md (for example :307 and :671) are out of scope. One sentence in the section saying those examples are abbreviated is enough. Change no code and no other doc.\n\nFILES: docs/SCHEMA.md (only the \"## ID Generation\" section).",
+  "definitionOfDone": [
+    "From the repo root, `sed -n '/^## ID Generation/,/^---$/p' docs/SCHEMA.md | grep -cE \"split\\('-'\\)\\[0\\]|First 8 chars\"` prints 0",
+    "From the repo root, `for p in $(grep -rhoE \"generateId\\('[a-z]+'\\)\" packages/moe-daemon/src --include=*.ts --exclude=*.test.ts | sed -E \"s/generateId\\('([a-z]+)'\\)/\\1/\" | sort -u); do sed -n '/^## ID Generation/,/^---$/p' docs/SCHEMA.md | grep -q \"\\\"$p-\\|\\`$p-\\|$p-<\" || echo \"missing $p\"; done` prints nothing (at HEAD it prints 9 missing prefixes)",
+    "The section states all four facts: the 32-lowercase-hex form (util/ids.ts:8); legacy 8-hex ids from before 0aab4d36 staying valid; step ids being `step-<n>` (submitPlan.ts:509); and worker ids coming from the seat's MOE_WORKER_ID rather than generateId",
+    "`git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") --stat` names only docs/SCHEMA.md, and every hunk falls inside the \"## ID Generation\" section"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 381.7,
+  "comments": [
+    {
+      "id": "comment-63cd63f7f5b74f81aaedd3bc92a6b700",
+      "author": "architect-1dd28c7c",
+      "content": "Count correction from the filer (task-130a6a5c hunt). The PROBLEM paragraph says \"167 of the 893 .moe/tasks files have an 8-char id\". The exact figures at 17:03Z are: 163 files match ^task-[0-9a-f]{8}\\.json$, 655 match ^task-[0-9a-f]{32}\\.json$, and 896 directory entries in all (the rest are hand-named ids like task-bug-crit-1.json and one *.tmp). The finding is unchanged, because legacy 8-hex ids are live. Don't put either count into SCHEMA.md; the doc only needs to say both forms exist.",
+      "timestamp": "2026-11-03T17:03:07.357Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:02:49.230Z",
+  "updatedAt": "2026-11-03T17:05:52.016Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:05:48.104Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}
