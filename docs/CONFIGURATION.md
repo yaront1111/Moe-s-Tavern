@@ -548,7 +548,14 @@ The **JetBrains protected state store** also lives outside every project, at `<I
 - Per project there are at most two files. One holds the **daemon provenance**: `version`, `project` (the project's real path as the IDE compares it), and `records`, each with the `pid`, `start`, `supervisor` flag and installed `daemon` path of a process this IDE started. The other holds the **profile pin**: `version`, `project` and `profile` (`protected` or `legacy`).
 - A record that fails any rule reads as untrusted, and the plugin falls back to the refusal or to the protected profile. A store root inside the project (a `runIde` sandbox) is never written.
 
-These files are not settings: never edit them by hand. [TROUBLESHOOTING.md](TROUBLESHOOTING.md#protected-profile-project-stays-protected-after-a-legacy-declaration) describes the one last-resort deletion. VS Code keeps no such store: its protected pin lives in memory for one window session.
+These files are not settings: never edit them by hand. [TROUBLESHOOTING.md](TROUBLESHOOTING.md#protected-profile-project-stays-protected-after-a-legacy-declaration) describes the one last-resort deletion.
+
+The **VS Code protected state store** is `protected-state` under the extension's global storage folder (`globalStorageUri`), outside every project. The extension writes it only under the protected execution profile (`services/MoeDaemonClient.ts`):
+- On POSIX the directory must be exactly 0700 and each file 0600, owned by this user. Node has no ACL API, so on Windows the per-user global storage folder is the owner-only boundary. Each file must be a regular file reached without a link, at most 64 KiB, and named by 16 hex digits plus `.json`, so no name comes from a path.
+- Per project there are at most two files. One holds the **profile pin**: `version`, `project` (the project's real path as VS Code compares it) and `profile` (`protected` or `legacy`). The other holds the **spawn record**: `version`, `project`, `key` (the key passed to the daemon in `MOE_SPAWN_PROOF_KEY`) and `daemon` (the installed daemon's path). **Stop and Replace** writes a new spawn record with a fresh key.
+- A record that fails any rule reads as untrusted, so the pin reads as protected and a spawn record refuses the daemon. A store root that is not provably outside the project is never written.
+
+These files are not settings either: never edit them by hand. [TROUBLESHOOTING.md](TROUBLESHOOTING.md#protected-profile-in-vs-code) describes the one last-resort deletion.
 
 ---
 

@@ -281,11 +281,18 @@ cat .moe/daemon.json
 
 ### Protected profile in VS Code
 
-**Symptom:** Under the protected profile, VS Code shows "Protected execution profile: <reason>. Project and PATH copies of the Moe daemon are not used." when it would start the daemon. When it would launch an agent, it shows "Protected execution profile: <reason>. Agents only use the wrapper, daemon and proxy installed with the Moe extension." and opens no terminal.
+**Symptom:** Under the protected profile, VS Code shows "Protected execution profile: <reason>. Project and PATH copies of the Moe daemon are not used." when it would start the daemon. When it would launch an agent, it shows "Protected execution profile: <reason>. Agents only use the wrapper, daemon and proxy installed with the Moe extension." and opens no terminal. When it finds a daemon it did not start from the installed runtime, it shows "Protected execution profile: the running Moe daemon (pid N) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect." and stays disconnected. When a project once read as protected now declares a weaker profile, it asks "<project> now declares the legacy execution profile, but it was confirmed protected. Moe keeps it protected until you allow the downgrade. An allowed downgrade takes effect after you restart VS Code."
 
-**Cause:** VS Code takes the wrapper, daemon and proxy only from `<extensionPath>/bundled`. It takes node only as a regular file outside the project: `MOE_NODE_COMMAND`, the managed runtime, an absolute PATH entry outside the project, or a standard install location. Two JetBrains protections are missing: VS Code attaches to any daemon that serves this project (task-648a5916), and its `verified-local` pin lasts one window session and has no downgrade dialog (task-98c81a27).
+**Cause:** VS Code takes the wrapper, daemon and proxy only from `<extensionPath>/bundled`. It takes node only as a regular file outside the project: `MOE_NODE_COMMAND`, the managed runtime, an absolute PATH entry outside the project, or a standard install location. Three further rules apply:
+- VS Code connects only to a daemon it started itself from the installed runtime. That daemon must answer a fresh `/health` challenge with the key VS Code passed it, kept in this window or in the extension's protected state store (see [CONFIGURATION.md](CONFIGURATION.md), **File Structure**).
+- A daemon started from a terminal, by an agent wrapper, by JetBrains or by an earlier extension install is refused. So is the endpoint of the `moe` settings `daemon.host` and `daemon.port`.
+- A project once read as `verified-local` stays protected until a downgrade is allowed, so a repository change never turns the profile off silently.
 
-**Solution:** Reinstall the extension if a bundled file is missing, and install node outside the project. For a Windows path reason, see [Protected profile: path is not a plain local Windows path](#protected-profile-path-is-not-a-plain-local-windows-path).
+**Solution:**
+- When `.moe/daemon.json` names the refused daemon, VS Code asks first. **Stop and Replace** runs the installed CLI's `stop` (at most 20 s), waits up to 15 s until the process has exited and `.moe/daemon.json` is cleared, then starts the installed daemon. Closing the dialog keeps the refusal. If the stop or the wait fails, the refusal stays too. Otherwise, stop that daemon yourself, then reconnect: a refusal is not retried by itself.
+- For the downgrade question, choose **Allow Downgrade**, then restart VS Code. **Keep Protected**, or closing the dialog, changes nothing and writes nothing, and the question comes back next window session.
+- A pin VS Code would not have written also reads as protected. As a last resort, a human may delete that one record: the `.json` file named by 16 hex digits in `protected-state`, under the extension's global storage, whose "project" field names this project and which has a "profile" field. Never edit it.
+- Reinstall the extension if a bundled file is missing, and install node outside the project. For a Windows path reason, see [Protected profile: path is not a plain local Windows path](#protected-profile-path-is-not-a-plain-local-windows-path).
 
 ---
 

@@ -631,12 +631,30 @@ and `verified-local` stays refused until certification and the client gates pass
   file is never signalled or removed.
 - **VS Code parity** (CQ-RF06, `services/MoeDaemonClient.ts`). Selection takes only `<extensionPath>/bundled` and an
   absolute node outside the project, and fails closed. Windows bases that are not plain local paths are refused with
-  the JetBrains words. Two gaps are open:
-  - VS Code has no running-daemon provenance. Its connect checks only the `/health` project identity, so it attaches
-    to a same-project daemon that something else started, or to the host and port that `moe.daemon.host` and
-    `moe.daemon.port` name, which a trusted workspace's `.vscode/settings.json` can set (task-648a5916).
-  - Its verified-local pin is held in memory only, so a `project.json` edit between sessions downgrades with no
-    confirmation (task-98c81a27).
+  the JetBrains words. The state, pin and daemon provenance below are VS Code's own, smaller counterparts of the
+  JetBrains ones:
+  - **Protected state store** (task-98c81a27). State that must outlive the window lives in the extension's global
+    storage under `protected-state` (`extension.ts` calls `useProtectedStateRoot` first in `activate`), never in the
+    repository. On POSIX the root must be exactly 0700 and each file 0600, owned by this user. Node has no ACL API, so
+    on Windows the per-user global storage is the owner-only boundary. Each file must be a regular file reached
+    without a link, at most 64 KiB, and named by 16 hex digits plus `.json`. Anything else reads as untrusted. A root
+    that is not provably outside the project is never written.
+  - **Profile pin** (task-98c81a27). A project read as `verified-local` is recorded protected. A later legacy or
+    absent declaration keeps it protected and asks once per window session, in a modal with **Keep Protected** and
+    **Allow Downgrade**. Only Allow Downgrade records legacy, and it takes effect after VS Code restarts. Any other
+    answer changes nothing. An unreadable `project.json`, or a pin VS Code would not have written, reads as protected.
+  - **Spawn provenance** (task-648a5916). A protected start passes the installed daemon a fresh key in
+    `MOE_SPAWN_PROOF_KEY` and records the key with that daemon's path. Before the WebSocket opens, VS Code sends a
+    fresh `/health` challenge. It connects only when the daemon's `spawnProof` is the HMAC under a key from this
+    window, or from the store record that names the daemon installed now. A configured endpoint (the `moe` settings
+    `daemon.host` and `daemon.port`, which a trusted workspace's `.vscode/settings.json` can set) is never admitted.
+    Any other daemon is refused: "Protected execution profile: the running Moe daemon (pid N) was not started by this
+    VS Code from the installed Moe runtime. Stop it, then reconnect." VS Code then stays disconnected and does not
+    retry by itself.
+  - **Replacement** (RF03 parity). It is offered only for a daemon that `.moe/daemon.json` names, as a modal whose only
+    action is **Stop and Replace**. Dismissing the modal keeps the refusal. Stop and Replace runs the installed CLI's
+    `stop`, bounded at 20 s. It then waits up to 15 s until the pid has exited and `.moe/daemon.json` is cleared,
+    starts the installed daemon with a fresh key, and verifies it again. A failed stop or wait keeps the refusal.
 - **Accepted Windows costs** (task-52fb6178, task-08bb7723, task-dd545bf1, task-9a1da6f6). Under the protected
   profile the plugins refuse:
   - a project on a share, a `\\wsl$` path, a device path or a mapped network drive. Clone to an unmapped local drive,
