@@ -1133,6 +1133,10 @@ interface Worker {
   // Claude account rotation: the account the seat's current claude launch runs under.
   // Set by every moe.lease_account; null when the lease gave no account. See Claude Accounts.
   accountId?: string | null;
+
+  // ISO deadline of a wrapper_restart reload hold (settings.reloadHoldMs); absent or null = no hold.
+  // Cleared by the seat's next claim_next_task or by any full deregister.
+  reloadHoldUntil?: string | null;
 }
 
 type WorkerType =

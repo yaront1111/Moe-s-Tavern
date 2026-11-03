@@ -1876,10 +1876,12 @@ printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":
 printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
 # c = claim_next_task, r = a wrapper_restart deregister, x = any other deregister
 # (the postflight.ps1 twin maps the same). A line still mid-append is skipped.
+# An optional workerId (argv[3]) counts only that worker's rows.
 cat > "$TMP_DIR/reload-sequence.cjs" <<'JS'
-const fs=require('fs'),file=process.argv[2];
+const fs=require('fs'),file=process.argv[2],worker=process.argv[3];
 const text=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
-const rows=text.split('\n').flatMap(l=>{try{return [JSON.parse(l)];}catch(e){return [];}});
+const rows=text.split('\n').flatMap(l=>{try{return [JSON.parse(l)];}catch(e){return [];}})
+  .filter(r=>worker===undefined||(r.args&&r.args.workerId===worker));
 process.stdout.write(rows.map(r=>r.tool==='claim_next_task'?'c':r.tool!=='deregister_worker'?'':
   r.args&&r.args.reason==='wrapper_restart'?'r':'x').join(''));
 JS
@@ -1943,6 +1945,142 @@ reload_want='^c+rc{2,}rc{2,}$'
 grep -Fq 'restarting to load it (edit 1 loaded)' "$TMP_DIR/wrapper-reload.out" \
   || reload_fail "the second restart did not run the edited bytes"
 echo "[hot reload] ok: 2 restarts, each re-registered, none without an edit"
+
+# --- Hot reload hold (task-f81c85ac; twin in postflight.ps1). The reload's
+# wrapper_restart deregister no longer releases the seat's task: the daemon
+# holds it for the relaunch (task-4ddbfb31), and FAKE_CLAIM_MODE=reload-hold
+# models that hold for two seats sharing one fake. worker-reload claims
+# task-postflight, then reloads on one committed edit. Its re-exec'd process
+# must get the same task back (alreadyAssigned) and resume it with a fresh
+# resume counter. worker-peer polls the same fake from an unedited copy, so it
+# never reloads; it must never be handed the task, and nothing is released. A
+# fake that releases on wrapper_restart fails at (b) or (c). Only the two
+# recorded wrapper PIDs are ever killed. ---
+echo "[hot reload hold] a reloading seat keeps its task and resumes it; a polling peer never gets it"
+RELOAD_DIR="$TMP_DIR/reload-hold"
+RELOAD_PROJECT="$RELOAD_DIR/project"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+HOLD_PEER_WRAPPER="$TMP_DIR/reload-hold-peer/scripts/moe-agent.sh"
+HOLD_PEER_OUT="$TMP_DIR/wrapper-reload-peer.out"
+HOLD_ANSWERS="$RELOAD_PROJECT/.moe/claim-answers.jsonl"
+HOLD_LAUNCHES="$TMP_DIR/reload-hold-launches.txt"
+HOLD_CLI="$TMP_DIR/reload-hold-cli"
+mkdir -p "$RELOAD_PROJECT/.moe/messages" "$TMP_DIR/reload-hold-peer"
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+cp -R "$ROOT_DIR/scripts" "$TMP_DIR/reload-hold-peer/"
+chmod +x "$RELOAD_WRAPPER" "$HOLD_PEER_WRAPPER"
+reload_repo
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+: > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+write_task_record "$RELOAD_PROJECT" '[]' WORKING
+cat > "$HOLD_CLI" <<EOF
+#!/usr/bin/env bash
+{ printf '%s\n' "\$@"; printf -- '--- launch ---\n'; } >> "$HOLD_LAUNCHES"
+exit 0
+EOF
+chmod +x "$HOLD_CLI"
+# One worker's claim answers from claim-answers.jsonl, space-separated.
+cat > "$TMP_DIR/reload-hold-answers.cjs" <<'JS'
+const fs=require('fs'),[file,worker]=process.argv.slice(2);
+const text=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
+const rows=text.split('\n').flatMap(l=>{try{return [JSON.parse(l)];}catch(e){return [];}});
+process.stdout.write(rows.filter(r=>r.workerId===worker).map(r=>r.answer).join(' '));
+JS
+hold_seq() { "$NODE_FOR_TEST" "$TMP_DIR/reload-sequence.cjs" "$RELOAD_PROJECT/.moe/evidence-rpcs.jsonl" "$1" 2>/dev/null || true; }
+hold_answers() { "$NODE_FOR_TEST" "$TMP_DIR/reload-hold-answers.cjs" "$HOLD_ANSWERS" "$1" 2>/dev/null || true; }
+hold_launches() { if [ -f "$HOLD_LAUNCHES" ]; then grep -c -- '^--- launch ---$' "$HOLD_LAUNCHES" || true; else echo 0; fi; }
+hold_peer_pid=""
+hold_fail() {
+  [ -z "$hold_peer_pid" ] || kill -KILL "$hold_peer_pid" 2>/dev/null || true
+  cat "$HOLD_PEER_OUT" >&2 2>/dev/null || true
+  cat "$HOLD_ANSWERS" >&2 2>/dev/null || true
+  reload_fail "[hot reload hold] $1 (worker-reload '$(hold_seq worker-reload)', worker-peer '$(hold_seq worker-peer)')"
+}
+# (b) and (c) on every poll, so a wrong answer fails at once and by name.
+hold_check_answers() {
+  local mine peer
+  mine="$(hold_answers worker-reload)"; peer="$(hold_answers worker-peer)"
+  [ -z "$mine" ] || [[ $mine =~ ^claimed( resumed)*$ ]] \
+    || hold_fail "(b) worker-reload's answers must be claimed, then only resumed: '$mine'"
+  [ -z "$peer" ] || [[ $peer =~ ^none( none)*$ ]] \
+    || hold_fail "(c) worker-peer was handed the held task: '$peer'"
+}
+# hold_until WHAT CHECK -- poll the CHECK function, bounded; a dead seat fails.
+hold_until() {
+  local deadline=$((SECONDS + POSTFLIGHT_TIMEOUT_SEC))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    hold_check_answers
+    if "$2"; then return 0; fi
+    kill -0 "$reload_pid" 2>/dev/null || hold_fail "worker-reload exited while waiting for $1"
+    [ -z "$hold_peer_pid" ] || kill -0 "$hold_peer_pid" 2>/dev/null || hold_fail "worker-peer exited while waiting for $1"
+    sleep 0.5
+  done
+  hold_fail "timed out after ${POSTFLIGHT_TIMEOUT_SEC}s waiting for $1"
+}
+hold_claimed() { grep -Fq '{"workerId":"worker-reload","answer":"claimed"}' "$HOLD_ANSWERS" 2>/dev/null; }
+hold_resumed_once() { [ "$(hold_launches)" -ge 2 ]; }
+# The launch and peer-claim counts are marked once the restart is seen, so a
+# later count is a launch and a peer claim after the reload deregister.
+hold_launch_mark=""; hold_peer_mark=""
+hold_after_reload() {
+  local seq restarts peer
+  seq="$(hold_seq worker-reload)"
+  case "$seq" in *x*) hold_fail "(a) worker-reload deregistered with a reason other than wrapper_restart" ;; esac
+  restarts="${seq//[!r]/}"
+  [ "${#restarts}" -le 1 ] || hold_fail "(a) worker-reload restarted more than once for one edit"
+  [ -n "$restarts" ] || return 1
+  peer="$(hold_seq worker-peer)"; peer="${peer//[!c]/}"
+  if [ -z "$hold_launch_mark" ]; then hold_launch_mark="$(hold_launches)"; hold_peer_mark="${#peer}"; fi
+  [[ $seq =~ ^c+rc+$ ]] && [ "$(hold_launches)" -gt "$hold_launch_mark" ] && [ "${#peer}" -gt "$hold_peer_mark" ]
+}
+reload_live_before="$LIVE_PIDS"
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=reload-hold MOE_DISABLE_HEARTBEAT=1 \
+  MOE_RESUME_MAX_ATTEMPTS=50 "$RELOAD_WRAPPER" --project "$RELOAD_PROJECT" --worker-id worker-reload --role worker \
+  --no-start-daemon --command "$HOLD_CLI" --loop --poll-interval 1 >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+hold_until "worker-reload's first claim" hold_claimed
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=reload-hold MOE_DISABLE_HEARTBEAT=1 \
+  MOE_RESUME_MAX_ATTEMPTS=50 "$HOLD_PEER_WRAPPER" --project "$RELOAD_PROJECT" --worker-id worker-peer --role worker \
+  --no-start-daemon --command /bin/true --loop --poll-interval 1 >"$HOLD_PEER_OUT" 2>&1 &
+hold_peer_pid=$!
+LIVE_PIDS="$LIVE_PIDS $hold_peer_pid"
+# Two launches: the claim's and one resume, so the pre-reload counter is past 1.
+hold_until "two launches before the edit" hold_resumed_once
+printf '# reload hold\n' >> "$RELOAD_WRAPPER"
+reload_commit 'reload hold edit'
+hold_until "a resume after the restart and a peer claim after it" hold_after_reload
+kill -KILL "$reload_pid" "$hold_peer_pid" 2>/dev/null || true
+wait "$reload_pid" "$hold_peer_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+# A fake RPC the kill orphaned still finishes; wait (bounded) until every
+# worker-reload claim has its answer row.
+hold_settle=$((SECONDS + 10))
+while :; do
+  hold_final="$(hold_seq worker-reload)"; hold_claims="${hold_final//[!c]/}"
+  read -r -a hold_words <<< "$(hold_answers worker-reload)" || true
+  [ "${#hold_words[@]}" -ne "${#hold_claims}" ] && [ "$SECONDS" -lt "$hold_settle" ] || break
+  sleep 0.2
+done
+hold_check_answers
+[[ $hold_final =~ ^c+rc+$ ]] || hold_fail "(a) expected claims, one wrapper_restart deregister, then claims"
+[[ $(reload_seq) != *x* ]] && [ "$(reload_seq | tr -cd r)" = r ] \
+  || hold_fail "(a) the RPC log must hold exactly one deregister, worker-reload's wrapper_restart"
+[ "${#hold_words[@]}" = "${#hold_claims}" ] \
+  || hold_fail "(b) ${#hold_words[@]} claim answers for ${#hold_claims} worker-reload claims"
+hold_peer_final="$(hold_seq worker-peer)"
+[[ $hold_peer_final =~ ^c+$ ]] && [[ $(hold_answers worker-peer) =~ ^none( none)*$ ]] \
+  || hold_fail "(c) worker-peer must only claim, and every answer must be none"
+if grep -Fq '"tool":"release_task"' "$RELOAD_PROJECT/.moe/evidence-rpcs.jsonl"; then hold_fail '(c) a seat called release_task'; fi
+hold_resume_line='[resume] worker-reload already holds task-postflight (WORKING) from a previous session (attempt 1/'
+sed "s/$(printf '\033')\[[0-9;]*m//g" "$TMP_DIR/wrapper-reload.out" \
+  | awk -v want="$hold_resume_line" '/restarting to load it/{seen=1} seen && index($0, want){found=1} END{exit !found}' \
+  || hold_fail "(d) no fresh '[resume] ... (attempt 1/' line after the restart"
+awk '$0 == "--- launch ---" {last=block; block=""; next} {block=block $0 "\n"} END{printf "%s", last}' "$HOLD_LAUNCHES" \
+  | grep -Fq 'RESUME: you are workerId worker-reload and you already claimed task task-postflight' \
+  || hold_fail "(e) the last launch does not carry the RESUME prompt for task-postflight"
+echo "[hot reload hold] ok: worker-reload resumed task-postflight after its restart (sequence $hold_final), worker-peer claimed ${#hold_peer_final} times and got none"
 
 # --- Hot reload refused (twin: the refused-reload arm in postflight.ps1). Seats
 # launched from the shared checkout reload every edit of the real file, and a

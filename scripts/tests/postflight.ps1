@@ -1631,8 +1631,9 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
             foreach ($line in $lines) { try { $line | ConvertFrom-Json } catch {} }
         }
         # c = claim_next_task, r = a wrapper_restart deregister, x = any other deregister.
-        function Get-ReloadSequence {
-            -join @(Get-ReloadRows | ForEach-Object {
+        # -Worker counts only that worker's rows.
+        function Get-ReloadSequence([string]$Worker = '') {
+            -join @(Get-ReloadRows | Where-Object { -not $Worker -or ($_.args -and $_.args.workerId -eq $Worker) } | ForEach-Object {
                 if ($_.tool -eq 'claim_next_task') { 'c' }
                 elseif ($_.tool -eq 'deregister_worker') { if ($_.args.reason -eq 'wrapper_restart') { 'r' } else { 'x' } }
             })
@@ -1695,6 +1696,152 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         if ($reloadLog -notlike '*restarting to load it (edit 1 loaded)*') { $reloadProblems += 'the second reload did not run the edited bytes' }
         if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FAILED: ' + ($reloadProblems -join ' | ')) }
         Write-Host '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity'
+
+        # --- Hot reload hold (task-f81c85ac; twin in postflight.sh). The
+        # reload's wrapper_restart deregister no longer releases the seat's task:
+        # the daemon holds it for the relaunch (task-4ddbfb31), and
+        # FAKE_CLAIM_MODE=reload-hold models that hold for two seats sharing one
+        # fake. worker-reload claims task-postflight, then reloads in-process on
+        # one committed edit, and must get the same task back (alreadyAssigned)
+        # and resume it with a fresh resume counter. worker-peer polls the same
+        # fake from an unedited copy, so it never reloads; it must never be
+        # handed the task, and nothing is released. Only the two Start-Process
+        # PIDs are ever killed. ---
+        Write-Host '[hot reload hold] a reloading seat keeps its task and resumes it; a polling peer never gets it'
+        $reloadWrapper = Join-Path $tempRoot 'reload-hold\scripts\moe-agent.ps1'
+        $reloadProject = Join-Path $tempRoot 'reload-hold\project'
+        $holdPeerWrapper = Join-Path $tempRoot 'reload-hold-peer\scripts\moe-agent.ps1'
+        foreach ($holdCopy in @($reloadWrapper, $holdPeerWrapper)) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $holdCopy) | Out-Null
+            Copy-Item -LiteralPath $wrapper -Destination $holdCopy
+            Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter '*.mjs' | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $holdCopy)
+            }
+        }
+        New-Item -ItemType Directory -Force -Path @((Join-Path $reloadProject '.moe\messages'), (Join-Path $reloadProject '.moe\tasks')) | Out-Null
+        Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+        Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+        # Literal JSON: Write-TaskRecord is defined further down.
+        Set-Content -Path (Join-Path $reloadProject '.moe\tasks\task-postflight.json') -Value '{"id":"task-postflight","title":"Postflight smoke","status":"WORKING","filesModified":[]}' -Encoding UTF8
+        $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
+        $reloadOut = Join-Path $tempRoot 'wrapper-reload-hold.out'
+        $holdPeerOut = Join-Path $tempRoot 'wrapper-reload-hold-peer.out'
+        $holdAnswers = Join-Path $reloadProject '.moe\claim-answers.jsonl'
+        # The launch counter: cmd mangles a prompt with quotes, so it records no argv.
+        $holdLaunches = Join-Path $reloadProject 'reload-hold-launches.txt'
+        $holdCmd = Join-Path $tempRoot 'reload-hold-cli.cmd'
+        Set-Content -Path $holdCmd -Encoding ASCII -Value "@echo off`r`n>>`"$holdLaunches`" echo --- launch ---`r`nexit /b 0`r`n"
+        Initialize-ReloadRepo
+        # One worker's answers: C claimed, R resumed, N none.
+        function Get-ReloadHoldAnswers([string]$Worker) {
+            $lines = @(); try { $lines = @(Get-Content -LiteralPath $holdAnswers -Encoding UTF8 -ErrorAction Stop) } catch {}
+            $codes = @{ claimed = 'C'; resumed = 'R'; none = 'N' }
+            -join @($lines | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} } | Where-Object { $_.workerId -eq $Worker } |
+                ForEach-Object { if ($codes.ContainsKey([string]$_.answer)) { $codes[[string]$_.answer] } else { '?' } })
+        }
+        function Get-ReloadHoldLaunches { @(Get-Content -LiteralPath $holdLaunches -ErrorAction SilentlyContinue | Where-Object { $_ -match '^--- launch ---' }).Count }
+        function Get-ReloadHoldLog([string]$Path) {
+            [string](Get-Content -Raw -LiteralPath $Path -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$Path.err" -ErrorAction SilentlyContinue)
+        }
+        function Assert-ReloadHold([bool]$Ok, [string]$Why) {
+            if ($Ok) { return }
+            throw ("HOT RELOAD HOLD FAILED: $Why (worker-reload '$(Get-ReloadSequence 'worker-reload')' answers '$(Get-ReloadHoldAnswers 'worker-reload')'; " +
+                "worker-peer '$(Get-ReloadSequence 'worker-peer')' answers '$(Get-ReloadHoldAnswers 'worker-peer')')`n--- worker-reload ---`n" +
+                (Get-ReloadHoldLog $reloadOut) + "`n--- worker-peer ---`n" + (Get-ReloadHoldLog $holdPeerOut))
+        }
+        # (b) and (c) on every poll, so a wrong answer fails at once and by name.
+        function Assert-ReloadHoldAnswers {
+            $mine = Get-ReloadHoldAnswers 'worker-reload'
+            $peer = Get-ReloadHoldAnswers 'worker-peer'
+            Assert-ReloadHold (-not $mine -or $mine -cmatch '^CR*$') "(b) worker-reload's answers must be claimed, then only resumed"
+            Assert-ReloadHold (-not $peer -or $peer -cmatch '^N+$') '(c) worker-peer was handed the held task'
+        }
+        # Wait-ReloadHold WHAT CHECK -- poll the CHECK scriptblock, bounded; a dead seat fails.
+        function Wait-ReloadHold([string]$What, [scriptblock]$Check) {
+            $deadline = (Get-Date).AddSeconds($wrapperTimeoutSec)
+            while ((Get-Date) -lt $deadline) {
+                Assert-ReloadHoldAnswers
+                if (& $Check) { return }
+                Assert-ReloadHold (-not $reloadProc.HasExited) "worker-reload exited while waiting for $What"
+                Assert-ReloadHold (-not $holdPeerProc -or -not $holdPeerProc.HasExited) "worker-peer exited while waiting for $What"
+                Start-Sleep -Milliseconds 500
+            }
+            Assert-ReloadHold $false "timed out after ${wrapperTimeoutSec}s waiting for $What"
+        }
+        # The launch and peer-claim counts are marked once the restart is seen, so
+        # a later count is a launch and a peer claim after the reload deregister.
+        $script:holdLaunchMark = $null
+        $script:holdPeerMark = $null
+        function Test-ReloadHoldResumed {
+            $seq = Get-ReloadSequence 'worker-reload'
+            Assert-ReloadHold ($seq -notmatch 'x') '(a) worker-reload deregistered with a reason other than wrapper_restart'
+            $restarts = ($seq -replace '[^r]', '').Length
+            Assert-ReloadHold ($restarts -le 1) '(a) worker-reload restarted more than once for one edit'
+            if ($restarts -eq 0) { return $false }
+            $peerClaims = ((Get-ReloadSequence 'worker-peer') -replace '[^c]', '').Length
+            if ($null -eq $script:holdLaunchMark) { $script:holdLaunchMark = Get-ReloadHoldLaunches; $script:holdPeerMark = $peerClaims }
+            return ($seq -match '^c+rc+$' -and (Get-ReloadHoldLaunches) -gt $script:holdLaunchMark -and $peerClaims -gt $script:holdPeerMark)
+        }
+        function Start-ReloadHoldSeat([string]$SeatWrapper, [string]$Worker, [string]$Cli, [string]$Out) {
+            $seatArgs = @('-NoProfile', '-File', $SeatWrapper, '-Project', $reloadProject, '-WorkerId', $Worker, '-Role', 'worker', '-NoStartDaemon', '-Command', $Cli, '-Loop', '-PollInterval', '1') |
+                ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+            $seat = Start-Process -FilePath $psExe -ArgumentList $seatArgs -RedirectStandardOutput $Out -RedirectStandardError "$Out.err" -PassThru -NoNewWindow
+            $null = $seat.Handle
+            $seat
+        }
+        function Add-ReloadHoldText([string]$Text) {
+            for ($i = 1; ; $i++) {
+                try { [IO.File]::AppendAllText($reloadWrapper, $Text, (New-Object System.Text.UTF8Encoding($false))); return }
+                catch { if ($i -ge 20) { throw }; Start-Sleep -Milliseconds 100 }
+            }
+        }
+        $reloadProc = $null
+        $holdPeerProc = $null
+        $holdEnvKeys = @('FAKE_CLAIM_MODE', 'MOE_DISABLE_HEARTBEAT', 'MOE_RESUME_MAX_ATTEMPTS')
+        $holdSaved = @{}
+        foreach ($k in $holdEnvKeys) { $holdSaved[$k] = [Environment]::GetEnvironmentVariable($k) }
+        try {
+            $env:FAKE_CLAIM_MODE = 'reload-hold'
+            $env:MOE_DISABLE_HEARTBEAT = '1'
+            $env:MOE_RESUME_MAX_ATTEMPTS = '50'
+            $reloadProc = Start-ReloadHoldSeat $reloadWrapper 'worker-reload' $holdCmd $reloadOut
+            Wait-ReloadHold "worker-reload's first claim" { (Get-ReloadHoldAnswers 'worker-reload') -cmatch '^C' }
+            $holdPeerProc = Start-ReloadHoldSeat $holdPeerWrapper 'worker-peer' $trueCmd $holdPeerOut
+            # Two launches: the claim's and one resume, so the pre-reload counter is past 1.
+            Wait-ReloadHold 'two launches before the edit' { (Get-ReloadHoldLaunches) -ge 2 }
+            Add-ReloadHoldText "# reload hold`n"
+            Invoke-ReloadCommit 'reload hold edit'
+            Wait-ReloadHold 'a resume after the restart and a peer claim after it' { Test-ReloadHoldResumed }
+        } finally {
+            foreach ($k in $holdEnvKeys) { [Environment]::SetEnvironmentVariable($k, $holdSaved[$k]) }
+            foreach ($holdProc in @($reloadProc, $holdPeerProc)) {
+                if ($holdProc -and -not $holdProc.HasExited) { & taskkill /T /F /PID $holdProc.Id 2>&1 | Out-Null; $holdProc.WaitForExit(5000) | Out-Null }
+            }
+        }
+        # Bounded: every worker-reload claim gets its answer row.
+        $holdSettle = (Get-Date).AddSeconds(5)
+        do {
+            $holdSeq = Get-ReloadSequence 'worker-reload'
+            $holdMine = Get-ReloadHoldAnswers 'worker-reload'
+            $holdClaims = ($holdSeq -replace '[^c]', '').Length
+            if ($holdMine.Length -eq $holdClaims) { break }
+            Start-Sleep -Milliseconds 200
+        } while ((Get-Date) -lt $holdSettle)
+        Assert-ReloadHoldAnswers
+        Assert-ReloadHold ($holdSeq -match '^c+rc+$') '(a) expected claims, one wrapper_restart deregister, then claims'
+        $holdAll = Get-ReloadSequence
+        Assert-ReloadHold ($holdAll -notmatch 'x' -and ($holdAll -replace '[^r]', '') -eq 'r') "(a) the RPC log must hold exactly one deregister, worker-reload's wrapper_restart"
+        Assert-ReloadHold ($holdMine.Length -eq $holdClaims) "(b) $($holdMine.Length) claim answers for $holdClaims worker-reload claims"
+        $holdPeerSeq = Get-ReloadSequence 'worker-peer'
+        Assert-ReloadHold ($holdPeerSeq -match '^c+$' -and (Get-ReloadHoldAnswers 'worker-peer') -cmatch '^N+$') '(c) worker-peer must only claim, and every answer must be none'
+        Assert-ReloadHold (@(Get-ReloadRows | Where-Object { $_.tool -eq 'release_task' }).Count -eq 0) '(c) a seat called release_task'
+        # The ASCII prefix only: the redirected out file is in the OEM code page and
+        # the line goes on with an em dash. Unwrapped: a console host can wrap it.
+        $holdLog = (Get-ReloadHoldLog $reloadOut) -replace '\x1b\[[0-9;]*m', '' -replace '\r?\n', ''
+        $holdRestartAt = $holdLog.IndexOf('restarting to load it', [StringComparison]::Ordinal)
+        $holdResumeAt = if ($holdRestartAt -ge 0) { $holdLog.IndexOf('[resume] worker-reload already holds task-postflight (WORKING) from a previous session (attempt 1/', $holdRestartAt, [StringComparison]::Ordinal) } else { -1 }
+        Assert-ReloadHold ($holdResumeAt -ge 0) "(d) no fresh '[resume] ... (attempt 1/' line after the restart"
+        Write-Host "[hot reload hold] ok: worker-reload resumed task-postflight after its restart (sequence $holdSeq), worker-peer claimed $($holdPeerSeq.Length) times and got none"
 
         # --- Hot reload refused (twin: the refused-reload arm in postflight.sh).
         # Seats launched from the shared checkout reload every edit of the real
