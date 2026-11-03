@@ -44,26 +44,39 @@
     {
       "stepId": "step-3",
       "description": "release_resource gate.\n\nIn packages/moe-daemon/src/tools/releaseResource.ts:\n- Import notAllowed and workerHasRole.\n- Schema `required` becomes ['resourceId']. A human's force call may omit workerId, which gives DoD 2's workerId-less force path. The proxy always injects a seat's MOE_WORKER_ID, so seats are always gated.\n- Replace the missingRequired('workerId') check with `if (!params.workerId && params.force !== true) throw missingRequired('workerId')`.\n- After the RESOURCE_ID_RE check: if params.force === true && params.workerId && !workerHasRole(state, params.workerId, 'governor'), throw notAllowed('release_resource', `force is the governor/human override (worker ${params.workerId} is not a governor)`).\n- Then `if (params.workerId) await state.touchWorker(params.workerId)`.\n- Pass `workerId: params.workerId ?? ''` to state.releaseResource. Under force, the store's matchesCaller (resourceStore.ts:319-323) matches by taskId or by every holder and never reads the caller id. Say so in a comment.\n- Give the two `params.taskId ?? params.workerId` message fallbacks a final `?? 'every holder'`.\n- Update the descriptions: the tool description says force is 'governor or human only'; the force description says a caller whose workerId resolves to no governor role is refused NOT_ALLOWED; the workerId description says 'required unless force:true from a human, who omits it'.\n\nError handling: both refusals are thrown before touchWorker, the precondition reads and the store write, so nothing is released and no lease or queue entry changes.\n\nIn packages/moe-daemon/src/tools/releaseResource.generation.test.ts, case 'checks PEER leases too under force with no taskId' (line 137) forces as worker-1, which is now refused before its precondition. Switch that caller to 'governor-1'. Keep ifHolderWorkerId 'worker-1', the /worker-2/ rejection and the holders assertion. Add a one-line comment: since task-0adea941 only a governor or a human may force.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/releaseResource.ts",
         "packages/moe-daemon/src/tools/releaseResource.generation.test.ts"
       ],
-      "startedAt": "2026-11-03T20:16:48.705Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseResource.ts",
+        "packages/moe-daemon/src/tools/releaseResource.generation.test.ts"
+      ],
+      "note": "release_resource changes:\n- required is now ['resourceId']; workerId is required unless force:true.\n- A non-governor force is refused NOT_ALLOWED before touchWorker, the precondition reads and the store write.\n- touchWorker runs only when a workerId is present, and the store gets workerId ?? '', with a comment that the store never reads it under force.\n- Both message fallbacks end with ?? 'every holder', and the three descriptions are updated.\nThe generation.test peer-lease case now forces as governor-1 and carries a comment.\nSnapshot run of 23 files (release*, claimNextTask*, resourceStore, WebSocketServer*, reportBlocked, deregisterWorker*, taskEventActor, acquireResource*, waitForResource*): Tests 531 passed (531).",
+      "startedAt": "2026-11-03T20:16:48.705Z",
+      "completedAt": "2026-11-03T20:17:54.580Z"
     },
     {
       "stepId": "step-4",
       "description": "Document the contract in docs/MCP_SERVER.md. Use the seat's own editor (Edit on Claude, apply_patch on codex exec), never Serena (it ignores docs/) or a shell write. No open row held docs/MCP_SERVER.md at plan time; if lanes.js shows it held at claim time, edit only these hunks.\n- moe.release_task Parameters block (about line 2043, after `workerId?: string`): add `force?: boolean  // Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. A caller whose workerId resolves to no governor role is refused NOT_ALLOWED; a human or the board omits workerId.`\n- moe.release_resource Parameters block (about line 2994): `workerId: string,` becomes `workerId?: string, // required, except on a human's force:true call, which omits it`. Append to the force comment: a seat whose workerId resolves to no governor role is refused NOT_ALLOWED.\n- The `force: true` bullet (about line 3017): add one clause saying it is enforced (governor seats and workerId-less human calls only; any other seat is refused NOT_ALLOWED and nothing is released).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md edits:\n- release_task Parameters: added `force?: boolean` with the governor/human audience and the NOT_ALLOWED rule.\n- release_resource Parameters: `workerId?: string` is required except on a human's force call, and the force comment now carries the NOT_ALLOWED clause.\n- The `force: true` note now says the rule is enforced.\nThe file is not vendored into src/generated, so no regeneration is needed. Out of scope and left as is: the release_task intro still says 'Anyone can call — no ownership check'. That has been stale since assertReleaseCaller landed, before this row.",
+      "startedAt": "2026-11-03T20:17:55.347Z",
+      "completedAt": "2026-11-03T20:18:24.473Z"
     },
     {
       "stepId": "step-5",
       "description": "Verify once, then do one adversarial self-review. The gate is narrow, per the epic-be924fb8 ruling msg-bbf4f109 that this row's description cites.\n\nRun this exact command from the task worktree. It also works verbatim in the control checkout after landing.\n\ncd \"$(git rev-parse --show-toplevel)\" && d=packages/moe-daemon/src && ! grep -q \"pass force:true\" $d/util/claimGuards.ts && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $d/tools/{releaseTask,releaseResource}.ts $d/util/claimGuards.ts $d/tools/{releaseResource.generation,releaseForceGate}.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/release*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/release src/tools/claimNextTask.race src/state/resourceStore > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'\n\nExpect exit 0 and no FAIL line. The architect's dry-run of this exact command on a scratch tree holding the draft fix printed 'Test Files 10 passed (10)' and 'Tests 156 passed (156)'. On the unfixed checkout it exits 1. The architect also ran src/server/WebSocketServer*, reportBlocked.test.ts and deregisterWorker* green on the draft fix (213 tests). Never run npm in the shared checkout, and never pass TMPDIR inside the env -i (`mem:convention-daemon-full-suite-gate-checkref`).\n\nError handling for a red run: fix only the owned files and re-run the same command.\n\nSelf-review:\n- Can any non-governor seat still reach force? The proxy injects MOE_WORKER_ID, so a seat cannot go workerId-less by accident.\n- Does a refusal write anything? (p2)-(p4) and (r1) pin that it does not.\n- Does /ws RELEASE_TASK still force? It sends no workerId; releaseTask.test.ts arm 4 pins it.\n- Is any message still telling the caller to pass force? The grep in the gate checks.\n- Does the store ever read the '' caller under force?\n- The diff is the 6 planned files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T20:18:25.204Z"
     }
   ],
   "planRevision": 1,
@@ -80,12 +93,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:01:05.255Z",
-  "updatedAt": "2026-11-03T20:16:48.705Z",
+  "updatedAt": "2026-11-03T20:18:25.204Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:03:54.143Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -100,7 +113,9 @@
   ],
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T20:13:17.111Z",

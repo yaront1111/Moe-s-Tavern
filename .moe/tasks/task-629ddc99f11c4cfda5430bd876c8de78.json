@@ -31,22 +31,31 @@
     {
       "stepId": "step-2",
       "description": "Verification, once, before complete_task. From the worktree root run executionContract checkRef #1 exactly as written. It archives HEAD into a mktemp snapshot outside the checkout, overlays the two owned files with cp --parents, runs npm ci under env -i with node v24.21.0, type-checks the sources (tsc --noEmit) and the new test (tsc -p tt.json, because tsconfig excludes tests), then makes one vitest run over the new file, the four DoD-3 files (setTaskStatus, activityActor, attemptHandback, governancePlaneV2.integration) and the other direct set_task_status test callers. Exit 0 and its printed 'Test Files' / 'Tests' lines are the complete_task verification (architect dry-run: 13 files, 249 passed, about 13 s). Then run checkRef #2 (the DoD-2 grep) and quote its lines in the completion summary.\nError handling for a red run: if a file other than the new one fails, rerun that file alone in a fresh snapshot to rule out a host-load flake (mem:gotcha-daemon-linux-snapshot-gate). A real failure there can only come from a call that passes a workerId to set_task_status: fix the gate, not that test, unless the test asserts that a worker or QA seat may move rows; then stop and report_blocked with the test name. Never run npm or vitest in the shared checkout (project rail).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T20:17:29.288Z"
+      "note": "checkRef #1 exit 0: Test Files 13 passed, Tests 249 passed. grep: setTaskStatus.ts:8 import, :107 gate.",
+      "startedAt": "2026-11-03T20:17:29.288Z",
+      "completedAt": "2026-11-03T20:17:52.841Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of your own diff (load the adversarial-self-review skill). git diff in the worktree must show exactly the two paths. Check:\n(a) the gate sits before state.getTask and before every transition, approval and WIP check, and nothing above it writes;\n(b) an absent key is allowed; '', null, a non-string and an unregistered unprefixed id are refused; the team role wins over the id prefix (workerHasRole and resolveWorkerRole are unchanged), so a governor-prefixed id on a worker team is refused, as in the sibling gates;\n(c) concurrency: the handler runs under the global state mutex and the gate only reads team membership, so no write can slip past it between two calls;\n(d) every in-repo caller still works: the only test caller passing a workerId is activityActor.test.ts (governor-z, allowed); scripts/tests/onboarding.mjs:200 and wave1-pilot.mjs:490 strip MOE_* before they spawn the proxy; src/benchmarks/baselineRun.ts calls through scripts/moe-call.sh outside a seat; the governor prompts in moe-agent.{sh,ps1} keep working for governor seats;\n(e) no added line contains a project.json globalRails.forbiddenPatterns string;\n(f) the refusal and the description point only at a route a refused seat can use: chat_send is open to every role (TOOL_AUDIENCE ALL; mem:gotcha-role-aware-refusals-tools-list).\nFix anything found in the same two files, then rerun checkRef #1 and use that fresh run as the complete_task verification.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/setTaskStatus.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.roleGate.test.ts"
+      ],
+      "note": "Self-review: diff is exactly two paths. Gate precedes getTask and every write; absent key allowed; ''/null/non-string/unregistered refused (non-string normalised to '' so no startsWith TypeError); handler runs under the state mutex and the gate only reads team membership; no forbidden patterns; refusal route chat_send is open to all roles. No changes needed after review, so the step-2 run is the fresh verification.",
+      "startedAt": "2026-11-03T20:17:53.943Z",
+      "completedAt": "2026-11-03T20:18:05.416Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8cf0816c",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -65,12 +74,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:58:44.818Z",
-  "updatedAt": "2026-11-03T20:17:29.288Z",
+  "updatedAt": "2026-11-03T20:19:39.110Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:59:23.737Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -81,7 +90,9 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T20:15:47.468Z",
@@ -151,11 +162,41 @@
   "planApprovedAt": "2026-11-03T20:15:47.511Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T19:59:22Z",
-    "at": "2026-11-03T20:16:40.593Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-03T20:15:48Z",
+    "at": "2026-11-03T20:19:39.110Z"
   },
-  "workStartedAt": "2026-11-03T20:16:56.069Z"
+  "workStartedAt": "2026-11-03T20:16:56.069Z",
+  "reviewStartedAt": "2026-11-03T20:18:11.664Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/setTaskStatus{.ts,.roleGate.test.ts} \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/setTaskStatus.roleGate.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{setTaskStatus.roleGate,setTaskStatus,governancePlaneV2.integration,lifecycleLimits,lifecycleFixes,reportBlocked,archiveEpic}.test.ts src/state/{activityActor,attemptHandback,dependencyUnblock}.test.ts src/server/WebSocketServer.transitions.test.ts src/__e2e__/{lifecycle.e2e,defensiveBatch}.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": " Test Files  13 passed (13)\n      Tests  249 passed (249)\nEXIT=0",
+    "reportedAt": "2026-11-03T20:18:11.664Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/setTaskStatus.ts",
+    "packages/moe-daemon/src/tools/setTaskStatus.roleGate.test.ts"
+  ],
+  "completionSummary": "set_task_status now refuses with NOT_ALLOWED any call whose workerId key is present but doesn't resolve (workerHasRole) to architect or governor ('', null, non-string, worker/qa/unregistered ids). An absent workerId key (human path) and architect/governor seats are unchanged. The gate runs after the status validation and before state.getTask, so nothing is written on refusal. Description now names the audience and the 'ask a governor in #governors' route. New setTaskStatus.roleGate.test.ts covers r1-r8, d1, a1-a3 (9 red before the fix, all green after). grep workerHasRole: setTaskStatus.ts:8 (import), :107 (gate).",
+  "commits": [
+    {
+      "sha": "14126ecdb36dfea0c97803da9e167e29b8e09516",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T20:15:48Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/setTaskStatus.roleGate.test.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T20:19:39.110Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
