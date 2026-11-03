@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TeamRole } from '../types/schema.js';
 import { missingRequired, invalidInput } from '../util/errors.js';
+import { validateTeamName } from '../state/validators.js';
 
 const VALID_ROLES: TeamRole[] = ['architect', 'worker', 'qa', 'governor'];
 
@@ -47,6 +48,11 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
         }
       }
 
+      // The store trims the name, so the lookup must compare the same normalized
+      // value; otherwise 'Coders ' never matches the 'Coders' team it created and
+      // every wrapper launch mints a duplicate.
+      const name = validateTeamName(params.name);
+
       // Idempotent: return existing team if name+role matches.
       // A null-role create means "the roleless shared team for this name"
       // (architect/worker/qa all join it). It must NOT adopt a role-bound
@@ -54,14 +60,14 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
       // claim_next_task routes every governor-team member to enter_governance
       // and they can never claim a task. Match role explicitly (null === null).
       const existing = role === null
-        ? state.getTeamByNameAndRole(params.name, null)
-        : state.getTeamByNameAndRole(params.name, role);
+        ? state.getTeamByNameAndRole(name, null)
+        : state.getTeamByNameAndRole(name, role);
       if (existing) {
         return { team: existing, created: false };
       }
 
       const team = await state.createTeam({
-        name: params.name,
+        name,
         role,
         maxSize: params.maxSize
       });

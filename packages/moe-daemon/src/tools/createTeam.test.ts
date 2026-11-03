@@ -64,3 +64,60 @@ describe('moe.create_team', () => {
   });
 });
 
+describe('create_team trims the name before its idempotency lookup', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    await h.state.load();
+  });
+
+  type Res = { team: { id: string; name: string; role: string | null }; created: boolean };
+
+  it('(t1) a space-padded name returns the existing team', async () => {
+    const tool = createTeamTool(h.state);
+    const a = await tool.handler({ name: 'Coders ' }, h.state) as Res;
+    const b = await tool.handler({ name: 'Coders ' }, h.state) as Res;
+    const c = await tool.handler({ name: '  Coders' }, h.state) as Res;
+
+    expect({
+      created: [a.created, b.created, c.created],
+      sameIds: [b.team.id === a.team.id, c.team.id === a.team.id],
+      name: a.team.name,
+      size: h.state.teams.size
+    }).toEqual({
+      created: [true, false, false],
+      sameIds: [true, true],
+      name: 'Coders',
+      size: 1
+    });
+  });
+
+  it('(t2) a padded role-bound name matches, a roleless create stays separate', async () => {
+    const tool = createTeamTool(h.state);
+    const first = await tool.handler({ name: 'Gov', role: 'governor' }, h.state) as Res;
+    const second = await tool.handler({ name: ' Gov', role: 'governor' }, h.state) as Res;
+    const roleless = await tool.handler({ name: ' Gov ' }, h.state) as Res;
+
+    expect(second.created).toBe(false);
+    expect(second.team.id).toBe(first.team.id);
+    expect(roleless.created).toBe(true);
+    expect(roleless.team.id).not.toBe(first.team.id);
+    expect(roleless.team.role).toBeNull();
+    expect(roleless.team.name).toBe('Gov');
+    expect(h.state.teams.size).toBe(2);
+  });
+
+  it('(t3) refusals keep their codes and write nothing', async () => {
+    const tool = createTeamTool(h.state);
+
+    await expect(tool.handler({ name: '   ' }, h.state)).rejects.toMatchObject({ codeName: 'INVALID_INPUT' });
+    await expect(tool.handler({ name: 42 }, h.state)).rejects.toMatchObject({ codeName: 'INVALID_INPUT' });
+    await expect(tool.handler({ name: '' }, h.state)).rejects.toMatchObject({ codeName: 'MISSING_REQUIRED' });
+
+    expect(h.state.teams.size).toBe(0);
+  });
+});
+
