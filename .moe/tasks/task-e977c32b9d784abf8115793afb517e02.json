@@ -1,0 +1,34 @@
+{
+  "id": "task-e977c32b9d784abf8115793afb517e02",
+  "epicId": "epic-be924fb8",
+  "title": "bug: add_comment, amend_plan_step and release_task record no actor, so get_activity_log by workerId misses every comment, plan amendment and release, and a release routed to REVIEW reads \"Task moved to REVIEW by unknown\"",
+  "description": "Filed by the 11-03 #2 defect hunt (task-2597ac6f). This is the sibling of task-2e3012b9: same defect class, disjoint files.\n\nPROBLEM\nAt HEAD 946358a8, three more tools call updateTask without the 4th (actor) argument that task-d981e0b0 (3ba2bddd) added to the review loop:\n- tools/addComment.ts:121 `updateTask(..., 'TASK_COMMENT_ADDED')`. The author is recorded only inside the comments payload.\n- tools/amendPlanStep.ts:115 `updateTask(..., 'TASK_UPDATED')`. amendedBy is recorded only inside the step payload.\n- tools/releaseTask.ts:332 `updateTask(..., 'WORKER_RELEASED')`. Its routing (state/workerLifecycle.ts:109-112) moves an all-steps-done WORKING row to REVIEW, and the refusal cascade moves rows to BACKLOG. That move clears the assignee, so #general reads \"by unknown\".\n\ntools/getActivityLog.ts:131-132 filters only on the event's top-level workerId. So an audit by a seat or a governor (get_activity_log { workerId }) never sees these events. state/taskStore.ts:643-657 has the details.\n\nEVIDENCE\n(a) Repros on HEAD 946358a8, run in a git-archive snapshot under /tmp with Linux node_modules, never in the shared checkout:\n- `cd packages/moe-daemon && npx vitest run src/tools/zzHuntActor2.test.ts` fails 1 test with:\n  - \"WORKER_RELEASED actor: expected [ null ] to deeply equal [ 'worker-r' ]\"\n  - \"amend TASK_UPDATED actor: expected [ null ] to deeply equal [ 'architect-z' ]\"\n  - #general received \"task-rel: Task moved to REVIEW by unknown\"; expected \"... by worker-r\".\n- `npx vitest run src/tools/zzHuntActor.test.ts`: the TASK_COMMENT_ADDED actor is null, and get_activity_log { workerId: worker-a } has no TASK_COMMENT_ADDED.\n- Files and output:\n  - /mnt/d/moe-scratch/hunt-2597/zzHuntActor2.test.ts\n  - /mnt/d/moe-scratch/hunt-2597/repro-output-actor2.txt\n  - /mnt/d/moe-scratch/hunt-2597/zzHuntActor.test.ts\n  - /mnt/d/moe-scratch/hunt-2597/repro-output-actor.txt\n\n(b) Today's logs (.moe/activity.log plus activity.log.1.gz) come from the live daemon edc27e14; this code is unchanged at 946358a8. All 59 of today's TASK_COMMENT_ADDED events carry no workerId. Neither do the five amend_plan_step TASK_UPDATED writes, whose payload is implementationPlan only, for example at 2026-11-03T00:35:17.210Z on task-ecf78687.\n\nFIX DIRECTION\nPass params.workerId as updateTask's 4th argument at the three call sites.\n- In release_task, pass params.workerId, NOT actors.actor. releaseActors (util/claimGuards.ts:329-343) returns UNIDENTIFIED_RELEASER = 'unknown' (:246) for a release with no caller id, and that string must not land in an event's workerId.\n- No schema or MCP contract change.\n\nFILES\n- packages/moe-daemon/src/tools/addComment.ts\n- packages/moe-daemon/src/tools/amendPlanStep.ts\n- packages/moe-daemon/src/tools/releaseTask.ts\n- new test: packages/moe-daemon/src/tools/taskEventActor.test.ts. Model it on tools/reviewLoopActor.test.ts.\n\nOut of scope:\n- the status-move tools: task-2e3012b9.\n- get_context's contextFetchedBy write. It is a read-side bookkeeping write that already names the reader.\n- docs/MCP_SERVER.md. It is held by task-347dde85, and no doc change is needed.\n\nVERIFICATION\nRun in a snapshot outside the shared checkout, per the global rail:\n`cd packages/moe-daemon && npx vitest run src/tools/taskEventActor.test.ts src/tools/addComment.test.ts src/tools/amendPlanStep.test.ts src/tools/releaseTask.test.ts`",
+  "definitionOfDone": [
+    "TASK_COMMENT_ADDED, amend_plan_step's TASK_UPDATED and WORKER_RELEASED all carry the calling seat's workerId, and get_activity_log { workerId } returns them for that seat. A release with no caller id records no workerId, never the string 'unknown'.",
+    "When the holder calls release_task and it routes WORKING to REVIEW, it posts \"Task moved to REVIEW by <releaser>\". Calls with no workerId keep today's fallback.",
+    "A new daemon test asserts both items above with exact values and fails on HEAD 946358a8. The verification command in the description passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-74d9e1c7",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 366.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:42:40.727Z",
+  "updatedAt": "2026-11-03T15:43:33.632Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T15:43:19.555Z"
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ]
+}

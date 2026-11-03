@@ -1,0 +1,34 @@
+{
+  "id": "task-2e3012b9149543b0b1b6eed50adc7b63",
+  "epicId": "epic-be924fb8",
+  "title": "bug: report_blocked, request_replan, archive_task and submit_plan_critique move a row without recording the caller, so #general reads \"Task moved to BLOCKED/PLANNING/ARCHIVED by unknown\" and get_activity_log by workerId misses the move (d981e0b0 fixed only the review loop)",
+  "description": "Filed by the 11-03 #2 defect hunt (task-2597ac6f).\n\nPROBLEM\ntask-d981e0b0 (commit 3ba2bddd) made complete_task, qa_approve and qa_reject pass params.workerId as updateTask's 4th (actor) argument. At HEAD 946358a8, four other status moves driven by a calling seat still leave it out:\n- tools/reportBlocked.ts:342. The flip to BLOCKED (TASK_BLOCKED). The same file also omits it on the correction write at :359 and the grant-correction write at :144.\n- tools/requestReplan.ts:68. WORKING to PLANNING (TASK_REOPENED).\n- tools/archiveTask.ts:79. To ARCHIVED (TASK_ARCHIVED).\n- tools/submitPlanCritique.ts:138. A governor's block verdict flips AWAITING_APPROVAL or WORKING to PLANNING (TASK_UPDATED).\n\nstate/taskStore.ts:643-650 takes the event's workerId only from actorWorkerId. :657 names the #general line with `actorWorkerId || updated.assignedWorkerId || 'unknown'`. Each of these moves clears the assignee (report_blocked's seat-freeing arm, any move to PLANNING, any move to ARCHIVED), so the line reads \"by unknown\". tools/getActivityLog.ts:131-132 filters on e.workerId only, so get_activity_log { workerId } never returns the event for the caller.\n\nEVIDENCE\n(a) Repros on HEAD 946358a8, run in a git-archive snapshot under /tmp with Linux node_modules, never in the shared checkout:\n- `cd packages/moe-daemon && npx vitest run src/tools/zzHuntActor.test.ts`: 1 failed.\n  - Event actors received: { TASK_ARCHIVED: null, TASK_BLOCKED: null, TASK_COMMENT_ADDED: null, TASK_REOPENED: null }.\n  - get_activity_log { workerId: worker-a } expected [TASK_BLOCKED, TASK_COMMENT_ADDED] and received [].\n  - #general lines received: \"task-blk: Task moved to BLOCKED by unknown\", \"task-rpl: Task moved to PLANNING by unknown\", \"task-arc: Task moved to ARCHIVED by unknown\". Expected \"... by worker-a\", \"... by worker-b\", \"... by architect-c\".\n- `npx vitest run src/tools/zzHuntActorSiblings.test.ts`: 2 failed.\n  - A governor-g1 block verdict received \"task-c: Task moved to PLANNING by unknown\".\n  - The holder's archive received \"task-a: Task moved to ARCHIVED by unknown\".\n- Tests and full output: /mnt/d/moe-scratch/hunt-2597/zzHuntActor.test.ts, /mnt/d/moe-scratch/hunt-2597/repro-output-actor.txt, /mnt/d/moe-scratch/hunt-2597/A/zzHuntActorSiblings.test.ts and /mnt/d/moe-scratch/hunt-2597/A/zzHuntActorSiblings.output.txt.\n\n(b) Today's logs. They come from the live daemon edc27e14, and this code path is unchanged at 946358a8. In .moe/activity.log plus activity.log.1.gz, all of today's TASK_BLOCKED (5/5), TASK_REOPENED (1/1) and TASK_ARCHIVED (1/1) events lack a workerId:\n- 2026-11-03T06:46:41.461Z TASK_BLOCKED task-648a5916, and 09:12:33.920Z TASK_BLOCKED task-c6a24053. #general: \"Task moved to BLOCKED by unknown\".\n- 12:47:19.824Z TASK_REOPENED task-55710898. #general: \"Task moved to PLANNING by unknown\".\n- 13:39:03.856Z TASK_ARCHIVED task-8f18d6fa. #general: \"Task moved to ARCHIVED by unknown\".\n\nFIX DIRECTION\nPass params.workerId as updateTask's 4th argument at every call site above. It is the same one-line change 3ba2bddd made. There is no schema or MCP contract change: an event's workerId is already optional, and a caller with no workerId (a human or IDE move) still falls back to the assignee or \"unknown\".\n\nFILES\n- packages/moe-daemon/src/tools/reportBlocked.ts, requestReplan.ts, archiveTask.ts and submitPlanCritique.ts.\n- A new test, packages/moe-daemon/src/tools/taskMoveActor.test.ts. Model it on tools/reviewLoopActor.test.ts; the hunt repros above are ready starting points.\n\nOut of scope:\n- add_comment, amend_plan_step and release_task. They are the sibling row filed right after this one, which has disjoint files.\n- submit_plan's PLAN_AUTO_APPROVED. That is an approval-mode move, not a seat's.\n- docs/MCP_SERVER.md. It is held by task-347dde85, and no doc change is needed.\n\nVERIFICATION\nRun this in a snapshot outside the shared checkout, per the global rail:\n`cd packages/moe-daemon && npx vitest run src/tools/taskMoveActor.test.ts src/tools/reviewLoopActor.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/lifecycleFixes.test.ts src/tools/governanceFeatures.test.ts src/tools/echoedReasonNotices.test.ts`",
+  "definitionOfDone": [
+    "report_blocked (all three updateTask writes), request_replan, archive_task and submit_plan_critique pass params.workerId to updateTask. TASK_BLOCKED, TASK_REOPENED, TASK_ARCHIVED and the critique's TASK_UPDATED then carry the calling seat's workerId, and get_activity_log { workerId } returns them for that seat.",
+    "When the caller passes a workerId, #general reads \"Task moved to BLOCKED by <reporter>\", \"Task moved to PLANNING by <requester or governor>\" and \"Task moved to ARCHIVED by <archiver>\". A call with no workerId still falls back to the assignee or \"unknown\".",
+    "A new daemon test asserts both items above with exact strings and fails on HEAD 946358a8. The verification command in the description passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 365.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:42:23.585Z",
+  "updatedAt": "2026-11-03T15:42:46.748Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T15:42:33.338Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}

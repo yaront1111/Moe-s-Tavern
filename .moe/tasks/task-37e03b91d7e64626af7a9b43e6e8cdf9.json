@@ -1,0 +1,34 @@
+{
+  "id": "task-37e03b91d7e64626af7a9b43e6e8cdf9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains Plan Review and Task Detail show a step's original description instead of its active amendment, yet Approve binds to the amended planRevision, so a human approves step text they never saw",
+  "description": "Filed by the 11-03 #2 defect hunt (task-2597ac6f). This is a client-wire mismatch between amend_plan_step and the CQ-F04 approval binding (task-6b978f9e, task-247fdf29). task-f56df322, which added amend_plan_step, left \"amendment approval flows\" out of scope.\n\nPROBLEM\nDaemon side, HEAD 946358a8:\n- packages/moe-daemon/src/tools/amendPlanStep.ts allows an amendment on an AWAITING_APPROVAL task. :71 refuses only DONE and ARCHIVED, and :80 refuses only a COMPLETED step.\n- At :109 the tool appends to step.amendments and sets activeAmendmentId. step.description is left untouched.\n- state/taskStore.ts:132-139 (approvalPlanSurface) puts effectiveDescription = effectiveStepDescription(step), plus newFiles, into the approval surface. The amendment therefore bumps planRevision (derivePlanRevision, :172-182).\n\nJetBrains side, same HEAD, under moe-jetbrains/src/main/kotlin/com/moe:\n- The plugin never reads an amendment. util/MoeJson.kt:594-605 parseImplementationStep reads description, status, affectedFiles, modifiedFiles, note, startedAt and completedAt. It skips amendments, activeAmendmentId and newFiles.\n- model/Models.kt:92-101 ImplementationStep has no field for them.\n- toolwindow/PlanReviewDialog.kt:392 renders JTextArea(step.description).\n- :79 captures approval.onRendered(snapshotOf(task)), and :157-161 takes the revision from that task's current planRevision.\n- So a Plan Review opened after an amendment shows the ORIGINAL step text, and Approve sends the AMENDED revision. The daemon's compare-and-swap accepts it. That is exactly what the CQ-F04 revision binding exists to prevent.\n- BoardTaskFingerprint.kt:11-14 already keys on planRevision. The board re-renders after the amendment and hands the dialog the fresh task, so the stale text is not a cache artifact.\n- toolwindow/TaskDetailDialog.kt:452 (JBLabel(\"$stepNumber. ${step.description}\")) shows the same original text for WORKING tasks. There, amendments are the common case: today's activity log has five amend_plan_step writes.\n\nEVIDENCE\n(a) Daemon-side repro on HEAD 946358a8, run in a git-archive snapshot under /tmp, never in the shared checkout:\n`cd packages/moe-daemon && npx vitest run src/zzHunt2597B.wire.test.ts -t F1` prints\n  [F1] wire step = {\"stepId\":\"step-1\",\"description\":\"ORIGINAL: delete nothing\",\"status\":\"PENDING\",\"affectedFiles\":[\"src/a.ts\"],\"amendments\":[{\"amendmentId\":\"amend-1\",\"description\":\"AMENDED: delete src/a.ts\",\"reason\":\"r\",\"amendedBy\":\"architect-1\",...}],\"activeAmendmentId\":\"amend-1\"}\n  [F1] status = AWAITING_APPROVAL planRevision 0 -> 1\n  [F1] approved status = WORKING approvedPlanRevision 1\nThe step's description on the wire is still the original text, and approveTask with the amended revision succeeds. The test and its output are at /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.wire.test.ts and /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.wire.out.txt.\n(b) The client lines cited above, at 946358a8.\n\nFIX DIRECTION\nJetBrains only; the daemon stays unchanged.\n- Parse amendments and activeAmendmentId in parseImplementationStep, and newFiles while there.\n- Expose the effective description on the model: the active amendment's description when activeAmendmentId names one, else description. That mirrors packages/moe-daemon/src/util/planAmendments.ts effectiveStepDescription.\n- Render the effective description in PlanReviewDialog and TaskDetailDialog, with a visible \"amended\" marker. The original text can stay reachable, e.g. in a tooltip.\n- Put the effective-text rule in one place, the parser or a small helper, so both dialogs and the test use the same code.\n- VS Code has its own twin of this gap. It is out of scope here.\n\nFILES\n- moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt\n- moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt\n- test: moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt\nRun Gradle only under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease, mem:gotcha-gradle-jetbrains-shared-box).\n\nTwo more JetBrains findings from this hunt share MoeJson.kt and Models.kt with this row, so they were held back and reported to the governor instead of filed:\n- The Settings dialog ignores worktreeMode.\n- The handoff header reads from/to/createdAt.\n\nVERIFICATION\n`cd moe-jetbrains && ./gradlew test` (gradlew.bat on Windows), under the jetbrains-gradle lease.",
+  "definitionOfDone": [
+    "MoeJson.parseImplementationStep parses amendments and activeAmendmentId, and the model exposes the effective description: the active amendment's description when activeAmendmentId names one, else description. A MoeJsonTest case built from the F1 wire step asserts the effective text \"AMENDED: delete src/a.ts\" and keeps the original text.",
+    "PlanReviewDialog and TaskDetailDialog render the effective description with an amended marker, both through the same parser/helper rule. A Plan Review of an amended AWAITING_APPROVAL step therefore shows the amendment's text alongside the revision it approves.",
+    "`cd moe-jetbrains && ./gradlew test` exits 0 under the jetbrains-gradle lease, and the new test fails on HEAD 946358a8."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 367.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:43:02.522Z",
+  "updatedAt": "2026-11-03T15:44:44.195Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T15:44:38.033Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

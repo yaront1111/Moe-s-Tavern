@@ -78,20 +78,28 @@
     {
       "stepId": "step-5",
       "description": "Remaining rows (DoD 5) and the hookup (DoD 6), in scripts/tests/postflight-vm-route.sh and scripts/tests/postflight.sh.\n- A1 (--role architect) and G1 (--role governor): claude, worktreeMode off, seam 1, and a verified-local ready-false payload, one that would refuse any worker. Expect exit 0, the fake CLI ran, no MOE_VERIFIED_LOCAL_ text, and no get_execution_readiness in the call log.\n- P1, the protected seam: MOE_RUNTIME_PROTECTED=1, using the [protected runtime] fixture as landed by 64809b19 and run the way P9 runs: absolute MOE_PROXY_PATH and MOE_DAEMON_PATH files, `--command claude` resolved by bare name from a trusted PATH dir outside the project, its pinned node and python3, a live daemon.json and --no-start-daemon. Verified-local with ready true, worktreeMode on.\n  - Set the seam to the OPPOSITE of the host. When `grep -qEi '(microsoft|wsl)' /proc/version` holds, use seam 0 and expect MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED; otherwise use seam 1 and expect MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE.\n  - This is a host-independent proof that the seam is ignored under protection. The unprotected W1 and R1 already prove it is honored otherwise.\n- Static row: MOE_POSTFLIGHT_WSL appears in scripts/moe-agent.sh only inside vm_route_is_wsl(), and is_wsl()'s body does not mention it. So the other is_wsl callers keep reading /proc/version.\n- Print one '[vm route] ok ...' line per group, and end with `echo \"PASS postflight-vm-route.sh\"`.\n- scripts/tests/postflight.sh: add ONE line, `bash \"$ROOT_DIR/scripts/tests/postflight-vm-route.sh\"`, directly before `echo \"PASS postflight.sh\"`. set -euo pipefail propagates a failure. Change no other byte, so every existing row runs unchanged.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh"
       ],
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-03T15:28:45.703Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight.sh",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Rows added to postflight-vm-route.sh:\n- A1/G1 (architect, governor; claude, worktreeMode off, seam 1, verified-local ready false): exit 0, the CLI ran, no MOE_VERIFIED_LOCAL_ line, and zero get_execution_readiness calls.\n- P1: MOE_RUNTIME_PROTECTED=1 with absolute proxy and daemon files (via VMR_CMD), claude by bare name from $BIN, a live daemon.json and --no-start-daemon. The seam is set opposite to /proc/version: on WSL, seam 0 expects WSL_UNSUPPORTED; elsewhere, seam 1 expects VM_ROUTE_UNAVAILABLE. Also asserts the daemon file never ran.\n- Static: every MOE_POSTFLIGHT_WSL occurrence in moe-agent.sh is inside vm_route_is_wsl(), and is_wsl()'s body reads /proc/version and not the seam.\n\nScope grew by one wrapper comment move: the seam's comment now sits inside vm_route_is_wsl() so the static row holds; there is no behavior change.\n\nThe pipelines use grep -c rather than `! a | grep -q`, which is pipefail-safe. The python check mirrors postflight.sh's (python3 or python 3.x), so no SKIP fires inside postflight.sh.\n\npostflight.sh: exactly one added line, `bash \"$ROOT_DIR/scripts/tests/postflight-vm-route.sh\"`, before `echo \"PASS postflight.sh\"`.\n\nThe harness is green standalone under env -i (31 s). Size so far: wrapper +87, fake proxy +21/-1, postflight.sh +1, new harness ~225 lines; net about 333.",
+      "startedAt": "2026-11-03T15:28:45.703Z",
+      "completedAt": "2026-11-03T15:31:06.440Z"
     },
     {
       "stepId": "step-6",
       "description": "Verification (DoD 1 and 6). Run it ONCE, on the final bytes, in place in the shared checkout: the global rail allows that for scripts/tests launcher harnesses. No npm anywhere.\n\nThe command, from /mnt/d/projexts/moes:\nenv -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight-vm-route.sh && bash scripts/tests/postflight.sh'\n\nLaunch it with job control so SIGINT is not ignored (scenario W; mem:gotcha-qa-session-env-and-signals-leak-into-harness):\n`( set -m; nohup <command>; echo EXIT=$? ) > <scratch log> 2>&1 &`, with the whole subshell in the background. Poll with a foreground `timeout 590 bash -c 'until grep -q ^EXIT= <log>; do sleep 15; done'`, repeated as needed. The whole run takes about 15-20 minutes.\n\nIt passes when all of these hold:\n- EXIT=0;\n- the log shows 'PASS parity-check.sh', 'PASS postflight-vm-route.sh' twice (alone and inside postflight.sh) and 'PASS postflight.sh';\n- `grep -E '^SKIP' <log>` finds nothing (CI's postflight-safe.mjs fails on a SKIP line).\n\ncomplete_task verification: command = the env -i string above, exitCode 0, outputTail = the log's last lines.\n\nIf a pre-existing row fails, A/B it against HEAD before blaming this change. Never edit an existing row or its timeout.\n\nSize: measure `git diff --numstat -- scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh` plus `wc -l scripts/tests/postflight-vm-route.sh`. If the net is over 400 changed lines, file the EPIC ADD_RAIL waiver with moe.propose_rail BEFORE complete_task, using the CQ-M07k rail template with the exact per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Never trim rows to fit.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T15:31:07.403Z"
     },
     {
       "stepId": "step-7",
@@ -120,12 +128,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:21:49.720Z",
-  "updatedAt": "2026-11-03T15:28:45.703Z",
+  "updatedAt": "2026-11-03T15:31:07.403Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T14:27:03.726Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -184,7 +192,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:48:31.668Z",

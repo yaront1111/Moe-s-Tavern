@@ -1,0 +1,28 @@
+{
+  "id": "task-e44a8daf484c48a4aea68da7063328c4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains board's previous-arrow on a WORKING card, and Previous in its detail dialog, ask the daemon for WORKING to AWAITING_APPROVAL, which /ws always refuses, so the card never moves and the typed reason is lost",
+  "description": "Filed by the 11-03 #2 defect hunt (task-2597ac6f). This is a client-wire mismatch: the plugin sends a status move that the daemon's transition table has never allowed.\n\nPROBLEM\nIn moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt at HEAD 946358a8:\n- :532 sets workflowOrder = listOf(\"BACKLOG\", \"PLANNING\", \"AWAITING_APPROVAL\", \"WORKING\", \"REVIEW\", \"DONE\").\n- getPreviousStatus at :537-540 therefore returns \"AWAITING_APPROVAL\" for \"WORKING\".\n- handlePrevious at :564-577 first prompts for a reason. For any status except DONE or REVIEW it then calls service.updateTaskStatus(task.id, \"AWAITING_APPROVAL\", order), and nothing sends the reason.\n- That callback is wired to every card outside Backlog (:675) and to TaskDetailDialog's Previous button (:635-637). Every WORKING card shows the arrow, and it fails every time.\n\nOn the daemon side, the /ws UPDATE_TASK guard at packages/moe-daemon/src/server/WebSocketServer.ts:498-513 rejects the move. Its VALID_TRANSITIONS entry is WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED'], and the guard throws \"Cannot move task from WORKING to AWAITING_APPROVAL. Allowed: REVIEW, PLANNING, BACKLOG, BLOCKED\". The plugin surfaces that only as a generic error notification (MoeMessageDispatcher.kt:198-206), so the card stays put.\n\nAWAITING_APPROVAL is display-mapped into the Planning column, so \"one column left\" from Working means PLANNING. The daemon allows WORKING to PLANNING.\n\nEVIDENCE\n(a) Daemon-side repro on HEAD 946358a8, run in a git-archive snapshot under /tmp, never in the shared checkout:\n`cd packages/moe-daemon && npx vitest run src/server/zzHunt2597B.prevArrow.test.ts` sends the exact UPDATE_TASK frame the plugin's MoeCommandSender builds for a WORKING task. The reply is:\n  [PREV] reply = {\"type\":\"ERROR\",\"message\":\"Cannot move task from WORKING to AWAITING_APPROVAL. Allowed: REVIEW, PLANNING, BACKLOG, BLOCKED\",\"operation\":\"UPDATE_TASK\",\"context\":{\"taskId\":\"task-1\"}}\nand the task stays WORKING. Test and key lines: /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.prevArrow.test.ts and /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.prevArrow.key-lines.txt.\n(b) The client lines cited above, at 946358a8.\n\nFIX DIRECTION\nJetBrains only; leave the daemon unchanged.\n- Move the previous-target rule into a small pure helper, e.g. toolwindow/BoardMoves.kt (the name is free), that returns only daemon-legal back-moves:\n  - WORKING goes to PLANNING.\n  - AWAITING_APPROVAL goes to PLANNING.\n  - PLANNING goes to BACKLOG.\n  - REVIEW and DONE keep using REOPEN_TASK, as today.\n  - BLOCKED, BACKLOG and unknown statuses return null: no arrow and no reason prompt.\n- Use the helper for both the card arrow and the detail dialog's Previous button.\n- The reason prompt for WORKING to PLANNING must either reach the daemon or be dropped:\n  - Reaching the daemon means, for example, sending reopenReason in the UPDATE_TASK updates. First check it is not on WebSocketServer.ts UPDATE_TASK_DENYLIST (:61 onwards).\n  - Otherwise, do not prompt for that move.\n- VS Code may have its own twin of this bug. It is out of scope here.\n\nFILES\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt\n- a new moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt\n- test: moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt\nThese files are disjoint from the other rows filed by this hunt. Run Gradle only under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease, mem:gotcha-gradle-jetbrains-shared-box).\n\nVERIFICATION\n`cd moe-jetbrains && ./gradlew test` (gradlew.bat on Windows), under the jetbrains-gradle lease.",
+  "definitionOfDone": [
+    "The helper's previous target for WORKING is PLANNING. For every status it returns only a move that the daemon's /ws VALID_TRANSITIONS allows at 946358a8, or reopen for REVIEW/DONE, or null for BLOCKED/BACKLOG/unknown. A JUnit test asserts each status.",
+    "MoeToolWindowPanel's card arrow and TaskDetailDialog's Previous button both get their target from the helper. A status with no legal previous move shows no arrow and no reason prompt. A typed reason is either sent to the daemon or never asked for.",
+    "`cd moe-jetbrains && ./gradlew test` exits 0 under the jetbrains-gradle lease, and the new test fails on HEAD 946358a8, where WORKING maps to AWAITING_APPROVAL."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 368.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:43:28.073Z",
+  "updatedAt": "2026-11-03T15:43:28.073Z"
+}

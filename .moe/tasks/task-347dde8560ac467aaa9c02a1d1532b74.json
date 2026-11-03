@@ -9,10 +9,85 @@
     "packages/moe-daemon/src/generated/initFiles.ts matches the edited worker.reference.md (generate-init-files run in a snapshot), and npm run lint passes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first, then three contract-doc edits, Edit tool only (global rail 3: no sed, python, heredoc or cp writes to tracked files). Work in your task worktree; never edit /mnt/d/projexts/moes.\n\nRED: from the worktree root, run checkRefs[0], [1] and [2] on the UNEDITED tree. Byte-identical copies are /mnt/d/moe-scratch/347dde85-plan/c0.sh, c1.sh and c2.sh; run each as bash -c \"$(tr -d '\\n' < c0.sh)\". Each must exit 1 with a FAIL line:\n- c0: 'FAIL: stale default: docs/ARCHITECTURE.md:289 ... docs/SCHEMA.md:213 ...'\n- c1: 'FAIL: a mode condition does not say resolves to 'on''\n- c2: 'FAIL: step 3 lacks: With `worktreeMode` unset, ...'\nQuote the three FAIL lines in the step note. If one passes, the base moved: re-read the passage before you edit.\n\nCanonical wording, which you do NOT edit:\n- docs/CONFIGURATION.md's worktreeMode row: '**Unset** resolves (`resolveWorktreeMode`) to `'on'` when `qualityGate` is non-blank after trim, else `'off'`, so the default never lands a gate-less project ungated.'\n- packages/moe-daemon/src/types/schema.ts:264-271.\nThe code is packages/moe-daemon/src/state/validators.ts:301-306. Line numbers below are at target 6cca2104 (the same at 946358a8).\n\n(a) docs/ARCHITECTURE.md, '### Worktree mode', first paragraph (line 289). Replace these 3 lines:\n`settings.worktreeMode` is `'off'` by default (`resolveWorktreeMode`). While it\nis `'on'`, `claim_next_task` pins `workspaceMode: 'worktree'` on the attempt a\nWORKING claim opens (every other claim pins `'shared'`), and both\nwith these 5:\nAn unset `settings.worktreeMode` resolves (`resolveWorktreeMode`) to `'on'` when\n`qualityGate` is non-blank after trim, else `'off'`, so the default never lands\na gate-less project ungated. While it resolves to `'on'`, `claim_next_task` pins\n`workspaceMode: 'worktree'` on the attempt a WORKING claim opens (every other\nclaim pins `'shared'`), and both\nThe paragraph keeps its 80-column wrap. The next line ('`claim_next_task` and `get_context` expose that attempt's') and the rest stay byte-identical.\n\n(b) docs/SCHEMA.md, the ProjectSettings worktreeMode comment (lines 213-214, inside the typescript fence). Replace:\n  // claim time and pinned on the attempt's workspaceMode. Absent means 'off'\n  // (resolveWorktreeMode, state/validators.ts); any other value is refused.\nwith:\n  // claim time and pinned on the attempt's workspaceMode. Absent resolves\n  // (resolveWorktreeMode, state/validators.ts) to 'on' when qualityGate is\n  // non-blank after trim, else 'off', so the default never lands a gate-less\n  // project ungated; any other value is refused.\n\n(c) docs/MCP_SERVER.md line 1468 (claim_next_task, 'Workspace (WT-01)'), in place on its one line. Replace\nOnly a `WORKING` claim made while `settings.worktreeMode` is `'on'` records `mode: 'worktree'`:\nwith\nOnly a `WORKING` claim made while `settings.worktreeMode` resolves to `'on'` (`resolveWorktreeMode`: unset resolves to `'on'` when `qualityGate` is non-blank after trim, else `'off'`) records `mode: 'worktree'`:\n\n(d) docs/MCP_SERVER.md line 1525 (the fileCollision bullet). Same file, same defect: controlSeatClaim (claimNextTask.ts:370-379) tests resolveWorktreeMode(settings) === 'on'. Replace\na REVIEW or PLANNING claim posts none while `settings.worktreeMode` is `on` (that seat\nwith\na REVIEW or PLANNING claim posts none while `settings.worktreeMode` resolves to `'on'` (that seat\nBoth MCP_SERVER.md lines stay single lines, and everything else on them is byte-identical.\n\nFor error handling: every Edit old_string must match exactly once. On no match or several, re-read the file around the cited line and compare it with /mnt/d/moe-scratch/347dde85-plan/expected-docs.diff. Never widen the match into neighbouring text. The docs use plain ASCII quotes and backticks. c0 and c1 keep failing until steps 2 and 3 are done; that is expected.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "RED on the unedited tree (base 6cca2104), scratch copies verified by SHA256SUMS:\n- c0: \"FAIL: stale default: docs/ARCHITECTURE.md:289:`settings.worktreeMode` is `'off'` by default ... docs/SCHEMA.md:213: ... Absent means 'off'\" rc=1\n- c1: \"FAIL: a mode condition does not say resolves to 'on'\" rc=1\n- c2: \"FAIL: step 3 lacks: With `worktreeMode` unset, that gate already resolves the mode to `'on'` at the next WORKING claim\" rc=1\nEdits (Edit tool, exactly-once matches): ARCHITECTURE 289-291 -> 5 lines (gate-aware rule, 'While it resolves to 'on''); SCHEMA 213-214 -> 4 comment lines; MCP_SERVER 1468 and 1525 'resolves to 'on'' in place. git diff of these 3 files is byte-identical (incl. blob ids) to the first 58 lines of /mnt/d/moe-scratch/347dde85-plan/expected-docs.diff. Stat: +11/-7.",
+      "startedAt": "2026-11-03T15:38:51.193Z",
+      "completedAt": "2026-11-03T15:39:50.649Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/TROUBLESHOOTING.md, section '### Worktree mode: flip on / roll back' only: two Edit-tool edits (DoD 2).\n\n(a) The intro, lines 1226-1228. Replace:\nWith `settings.worktreeMode: 'on'`, every WORKING claim runs in its own `.worktrees/task-<id>` on branch\n`moe/task/<id>`, and the wrapper lands it on the **target**: the literal `consolidationBranch`, else `main`. Both\nswitches below are stop-the-world and human-run (design: `docs/plans/2026-10-30-per-task-worktrees.md` §7.3, §7.4).\nwith these 4 lines, which carry CONFIGURATION.md:230's exact parenthetical reflowed to the section's ~118-column wrap:\nWith `settings.worktreeMode: 'on'` (unset means `'on'` when a non-blank `qualityGate` is set, else `'off'`), every\nWORKING claim runs in its own `.worktrees/task-<id>` on branch `moe/task/<id>`, and the wrapper lands it on the\n**target**: the literal `consolidationBranch`, else `main`. Both switches below are stop-the-world and human-run\n(design: `docs/plans/2026-10-30-per-task-worktrees.md` §7.3, §7.4).\nThe two lines after it ('No Moe seat ever merges...' and 'Change settings through the daemon...') stay byte-identical.\n\n(b) Flip on, step 3 (line 1251, the only line that starts with '3. **Settings.**'). Keep it ONE line. Replace\n3. **Settings.** Set a `qualityGate` if none is set, fast enough to run on every landing. Declare the land lease:\nwith\n3. **Settings.** Set a `qualityGate` if none is set, fast enough to run on every landing. With `worktreeMode` unset, that gate already resolves the mode to `'on'` at the next WORKING claim, so keep the seats drained until step 6; set `worktreeMode: 'off'` first to add the gate without switching. Declare the land lease:\nThe two indented continuation lines (the resources JSON and the lease-id rule) stay byte-identical. Do not touch the Readiness table, steps 1-2 and 4-6, 'A branch target instead of main', or Roll back. Roll back's step 2 already sets 'off' explicitly, which stays right under the new default.\n\nWhy the note: since WT-19, an unset worktreeMode with a non-blank qualityGate resolves to 'on' at claim time (claimNextTask.ts:157-158). A seat relaunched between step 3 and step 6 would cut a task worktree before the migration landing (step 4) and the moe/control switch (step 5).\n\nTest: checkRefs[2] (c2.sh) must pass now. It still fails if you drop any of its five fragments. For error handling, use step 1's exactly-once Edit rule. The old intro text contains the section sign (U+00A7): copy it from the file, never retype it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "TROUBLESHOOTING '### Worktree mode: flip on / roll back': the intro is now 4 lines carrying CONFIGURATION.md:230's parenthetical (\"(unset means 'on' when a non-blank qualityGate is set, else 'off')\"), with § copied from the file. Flip-on step 3 is still one line and adds the unset-gate warning plus the \"set 'off' first\" option. The continuation lines and the rest of the section are untouched. c2.sh (checkRefs[2]) passes now: \"C2 OK: runbook step 3\" rc=0. git diff of this file is byte-identical to the prototype's TROUBLESHOOTING hunk in expected-docs.diff.",
+      "startedAt": "2026-11-03T15:39:51.779Z",
+      "completedAt": "2026-11-03T15:40:11.073Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/roles/worker.reference.md, then its vendored copy in packages/moe-daemon/src/generated/initFiles.ts (DoD 1 for this doc, and DoD 3). Read mem:convention-role-doc-edits-regenerate-initfiles (its WORKTREE MODE section) and mem:gotcha-moe-doc-generated-artifacts first.\n\n(a) Edit tool, line 78 only (the '**Worktree mode:**' paragraph). Replace\n**Worktree mode:** on a WORKING claim while `settings.worktreeMode` is `'on'`, the wrapper starts\nwith\n**Worktree mode:** on a WORKING claim while `settings.worktreeMode` resolves to `'on'` (unset resolves to `'on'` when `qualityGate` is non-blank after trim, else `'off'`), the wrapper starts\nThe rest of the line stays byte-identical. The sentinels that targetedContextGuidance, qaCommitPolicy and blockedSeatGuidance guard sit elsewhere in the file; leave them alone.\n\n(b) Regenerate in a clone at the generator base. Never do it in the shared checkout (global rail 1), and never at HEAD.\n1. From the worktree root, use the same expression as checkRefs[4] and [5]: B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD). Then S=$(mktemp -d); git clone -q --shared --no-checkout . \"$S/repo\"; git -C \"$S/repo\" checkout -q --detach \"$B\"; cp docs/roles/worker.reference.md \"$S/repo/docs/roles/\".\n2. In \"$S/repo/packages/moe-daemon\", under env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\", run npm ci --no-audit --no-fund -q && npm run generate-init-files. Expect 'Generated ... (8 role docs + 3 subagents, sha-stamped)'. A 'skipping' line or a 'no git history' warning means the clone is broken: fix the clone, and never use that output.\nWhy B: a worktree completion lands as ONE squash commit, so a wip checkpoint that held a draft of the doc never reaches the target. A clone at HEAD would list the draft's body sha in SHIPPED_ROLE_BODY_SHAS, and QA's re-run on the landed commit would fail the cmp. The prototype confirmed it: B passes with a wip draft on the branch.\n3. Run diff -U0 packages/moe-daemon/src/generated/initFiles.ts \"$S/repo/packages/moe-daemon/src/generated/initFiles.ts\". Expect exactly 3 hunks, all in the worker.reference.md entry:\n- the ROLE_DOCS marker line 594, where sha=9a727a066966 becomes the new body sha (a2e203c12ef7 for the exact text in (a));\n- the body line 673, where backticks appear escaped as \\`;\n- line 750, the 'worker.reference.md' SHIPPED_ROLE_BODY_SHAS list, which gains the new sha in sorted order (a2e203c12ef7 goes right after '9a727a066966').\nA hunk anywhere else means a stale base or a foreign doc change: stop and find out which row caused it. The prototype's diff is /mnt/d/moe-scratch/347dde85-plan/expected-initFiles.diff.\n4. Apply the 3 hunks with the Edit tool on the worktree's initFiles.ts (about 117 KB). Never Write or cp the whole file. The Edit tool trims a trailing space in new_string, so end each substring on a non-space character.\n5. cmp the edited file against the clone's output. It must be identical; checkRefs[5] re-proves this from scratch.\n\nFor error handling: if npm ci fails on the network, retry once. If checkRefs[5] later says 'base initFiles.ts is stale', a landed row left the target's initFiles.ts behind its docs/roles. Do not fold another doc's entry into this row: report_blocked, naming that row and the stale entry.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "modifiedFiles": [
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "I edited worker.reference.md line 78 with the Edit tool; it now reads \"resolves to 'on' (unset resolves to 'on' when qualityGate is non-blank after trim, else 'off')\", and the rest of the line is byte-identical.\nTo regenerate, I made a shared clone at B=6cca2104 (HEAD; it has no wip/sync commits yet) in /tmp/tmp.8edYbqP3nl, copied in the edited doc, and ran npm ci plus npm run generate-init-files under env -i with nvm node v24.21.0. It printed \"Generated .../initFiles.ts (8 role docs + 3 subagents, sha-stamped)\", with no skip or no-history warning.\ndiff -U0 found exactly 3 hunks, all in the worker.reference.md entry (594 marker sha 9a727a066966->a2e203c12ef7, 673 body line, 750 SHIPPED_ROLE_BODY_SHAS gaining 'a2e203c12ef7' after '9a727a066966'), and their content is identical to the prototype's expected-initFiles.diff. I applied the 3 hunks with the Edit tool. cmp of the edited file against the clone's output is identical. Task diff: 6 files, +20/-15.",
+      "startedAt": "2026-11-03T15:40:12.154Z",
+      "completedAt": "2026-11-03T15:41:21.194Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run it ONCE, fresh, from the task worktree root, as ONE command: checkRefs[0] && checkRefs[1] && checkRefs[2] && checkRefs[3] && checkRefs[4] && checkRefs[5], each exactly as stored in the executionContract. A byte-identical joined copy is /mnt/d/moe-scratch/347dde85-plan/joined.sh (4474 chars; sha256 in SHA256SUMS). Run it from the worktree root as bash -c \"$(cat /mnt/d/moe-scratch/347dde85-plan/joined.sh)\". Submit that command, its exit code and the output tail to complete_task.\n\nWhat each proves:\n- [0] DoD 1. The DoD's grep finds nothing outside docs/plans. CONFIGURATION, ARCHITECTURE, SCHEMA, MCP_SERVER and worker.reference all carry \"to 'on' when qualityGate is non-blank after trim, else 'off'\" (with lines joined, and backticks and // stripped). No docs line says worktreeMode` is `'on'` or `on`.\n- [1] DoD 1. ARCHITECTURE, MCP_SERVER (1468 and 1525) and worker.reference say 'resolves to 'on''. TROUBLESHOOTING's intro carries CONFIGURATION.md:230's exact parenthetical.\n- [2] DoD 2. Flip-on step 3 is one line holding all five fragments.\n- [3] parity-check.sh (epic rail 2), npm run lint (DoD 3), and node --test scripts/tests/account-trust-docs.test.mjs, which reads ARCHITECTURE, SCHEMA and TROUBLESHOOTING.\n- [4] Scope against the generator base B. Under docs, packages, scripts and CLAUDE.md only the 6 files differ, nothing is untracked, and the docs numstat is at most +30/-20.\n- [5] DoD 3. A shared clone at B runs npm ci. The generator reproduces B's own initFiles.ts, which proves the base is fresh. With your docs/ copied in, it reproduces your initFiles.ts byte for byte (cmp). Then 7 doc-guard test files run: initFiles, targetedContextGuidance, qaCommitPolicy, blockedSeatGuidance, daemonGitDocs, executionContractDocs and taskTimeBudgetDocs.\n\nPrototype runs on 946358a8 and 6cca2104 (/mnt/d/moe-scratch/347dde85-plan/README.txt): exit 0 in about 80 s, 'C4 OK: scope, docs +17/-12', 'Test Files 7 passed (7)', 'Tests 78 passed (78)', and account-trust-docs 'pass 5'.\n\nError handling for a red run: the FAIL line names the broken check. Fix the doc or initFiles.ts with the Edit tool, then re-run the WHOLE joined command fresh. Never submit a partial or older run. checkRefs[5] needs Linux node at $HOME/.nvm/versions/node/v24.21.0, which WSL seats have; on any other seat, run the joined command from a WSL shell in the same worktree. Never run npm in /mnt/d/projexts/moes (global rail 1). QA notes: mem:decision-doc-row-checkrefs-worktree-mode.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I checked joined.sh against the stored task record first: it is byte-for-byte executionContract.checkRefs.join(' && '), 6 refs, 4474 chars. Then I ran it once, fresh, from the worktree root as bash -c \"$(cat /mnt/d/moe-scratch/347dde85-plan/joined.sh)\". EXIT=0.\n- C0 OK: no stale default; the gate-aware rule is in 5 docs.\n- C1 OK: resolves-to conditions and the runbook intro.\n- C2 OK: runbook step 3.\n- C3: PASS parity-check.sh; lint OK (architect 39, worker 30, qa 36 lines); account-trust-docs pass 5, fail 0.\n- C4 OK: scope; docs +17/-12 vs B=6cca2104.\n- C5 OK: initFiles.ts equals the generator output (the base was fresh first). vitest: 7 test files, 78 tests passed.\nNo files changed in this step.",
+      "startedAt": "2026-11-03T15:41:22.259Z",
+      "completedAt": "2026-11-03T15:42:52.102Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of the whole diff against B (as in checkRefs[4]), then complete_task.\n(a) git diff -U0 \"$B\" -- docs shows only the 7 passages: ARCHITECTURE 289-291, SCHEMA 213-214, MCP_SERVER 1468 and 1525, TROUBLESHOOTING's intro and step 3, and worker.reference 78. Each new sentence matches resolveWorktreeMode (validators.ts:301-306):\n- an explicit 'on' or 'off' is honored;\n- unset is 'on' only when qualityGate is a string that is non-blank after trim, else 'off';\n- any other value is refused.\nNo new sentence says an unset mode is 'off', and none says a gate overrides an explicit 'off'.\n(b) These stay unchanged:\n- docs/CONFIGURATION.md, the canonical text;\n- docs/plans/**, the historical design;\n- .moe/roles/**, which the daemon owns and upgrades from initFiles.ts;\n- root CLAUDE.md and scripts/CLAUDE.md. Their '(settings.worktreeMode: 'on')' glosses name the explicit value this repo sets and state no default, and they are outside the DoD's docs/ scope (see planningNotes).\n(c) initFiles.ts has exactly the 3 hunks in the worker.reference.md entry. The sha list is sorted, with no duplicate, and no other doc's entry moved.\n(d) Every path was written with the Edit tool and is listed in complete_step.modifiedFiles. No tracked file was written by a shell command. No added line contains a project.json globalRails.forbiddenPatterns string.\n(e) Step 3's runbook note is operationally right. A seat that claims between step 3 and step 6 would get a worktree before moe/control exists, which is why the seats stay drained. Setting 'off' first and then step 6's 'on' still flips cleanly.\nIf anything changes, re-run step 4's joined command fresh and submit THAT output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Adversarial self-review against B=6cca2104. Nothing changed, so the step-4 run stands.\n(a) git diff -U0 B -- docs shows exactly the 7 passages: ARCHITECTURE 289-291, SCHEMA 213-214, MCP_SERVER 1468 and 1525, the TROUBLESHOOTING intro, TROUBLESHOOTING step 3, and worker.reference 78. Each one agrees with resolveWorktreeMode (validators.ts:301-306): a stored on/off is honored; unset is 'on' iff qualityGate is a string that is non-blank after trim, else 'off'; any other value is INVALID_INPUT. No sentence says unset means 'off', and none says a gate overrides an explicit 'off'. In MCP 1525, \"an invalid value keeps the heads-up\" still holds, because controlSeatClaim keeps it when the resolver throws.\n(b) git diff --quiet B -- docs/CONFIGURATION.md docs/plans CLAUDE.md scripts/CLAUDE.md is clean. .moe/roles is not touched; it is not in the worktree.\n(c) initFiles.ts has exactly 3 hunks, all in the worker.reference.md entry. The SHIPPED_ROLE_BODY_SHAS list is sorted (sort -c), 19 entries, 19 unique.\n(d) Every tracked path was written with the Edit tool and is listed in modifiedFiles of steps 1-3. No added line contains eval(, innerHTML, dangerouslySetInnerHTML or __proto__.\n(e) Runbook step 6 sets worktreeMode 'on' explicitly, then runs doctor, then relaunches the seats. So \"keep the seats drained until step 6\" and \"set 'off' first\" both stay consistent: an explicit 'off' is honored until step 6 flips it.\nConcurrency, input and exit-path checks do not apply, because this is a docs-only change plus a vendored copy.",
+      "startedAt": "2026-11-03T15:42:53.187Z",
+      "completedAt": "2026-11-03T15:43:32.265Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -27,16 +102,155 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:05:45.996Z",
-  "updatedAt": "2026-11-03T15:10:54.345Z",
+  "updatedAt": "2026-11-03T15:45:09.135Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T15:10:18.243Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T15:10:43.493Z"
+    "firstClaimAt": "2026-11-03T15:10:43.493Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
-  ]
+    "architect-74d9e1c7",
+    "worker-d6c1cb7a"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T15:37:38.733Z",
+  "executionContract": {
+    "intendedBehavior": "Docs outside docs/plans state worktreeMode's default the way resolveWorktreeMode (packages/moe-daemon/src/state/validators.ts) computes it since WT-19: an unset worktreeMode resolves to 'on' when qualityGate is non-blank after trim, else 'off', and an explicit 'on' or 'off' is honored. Statements of when worktree mode applies say that the mode resolves to 'on'. TROUBLESHOOTING's flip runbook warns that a gate set while worktreeMode is unset already switches the mode at the next WORKING claim. The daemon's vendored worker.reference.md (initFiles.ts) matches the edited doc. Docs only; no code changes.",
+    "acceptanceCriteria": [
+      "The DoD grep (grep -rn for the stale default phrases in docs) finds nothing outside docs/plans (checkRefs[0]).",
+      "ARCHITECTURE.md, SCHEMA.md, MCP_SERVER.md and worker.reference.md carry CONFIGURATION.md's phrase \"to 'on' when qualityGate is non-blank after trim, else 'off'\", and no docs line gives the mode condition as worktreeMode is 'on' (checkRefs[0], [1]).",
+      "TROUBLESHOOTING.md flip-on step 3 states that an unset worktreeMode switches at the next WORKING claim once the gate is set, that the seats stay drained until step 6, and that setting 'off' first adds the gate without switching. Its section intro carries CONFIGURATION.md:230's parenthetical (checkRefs[1], [2]).",
+      "initFiles.ts equals the generate-init-files output at the generator base with the edited docs, and npm run lint passes (checkRefs[3], [5])."
+    ],
+    "invariants": [
+      "Only the 6 named files change, and nothing untracked is added (checkRefs[4]).",
+      "Role-doc line caps hold (npm run lint), and wrapper parity holds (parity-check.sh).",
+      "No docs line matches daemonGitDocs.test.ts's forbidden git phrases."
+    ],
+    "compatibility": [
+      "No daemon, wrapper or plugin code changes; resolveWorktreeMode, claimNextTask and doctorWorktree are untouched.",
+      "docs/CONFIGURATION.md stays byte-identical. It is the canonical text; f9874361 edited only its code table.",
+      "docs/plans/** (the historical design) and .moe/roles/** (daemon-owned) stay unchanged.",
+      "Other role docs' ROLE_DOCS entries and SHIPPED_ROLE_BODY_SHAS lists are unchanged."
+    ],
+    "approvedScope": [
+      "docs/ARCHITECTURE.md: '### Worktree mode', first paragraph (lines 289-291)",
+      "docs/SCHEMA.md: the ProjectSettings worktreeMode comment (lines 213-214)",
+      "docs/MCP_SERVER.md: the claim_next_task 'Workspace (WT-01)' line 1468 and the fileCollision bullet line 1525",
+      "docs/TROUBLESHOOTING.md: the 'Worktree mode: flip on / roll back' intro (1226-1228) and flip-on step 3 (1251)",
+      "docs/roles/worker.reference.md: the '**Worktree mode:**' line 78",
+      "packages/moe-daemon/src/generated/initFiles.ts: the worker.reference.md entry only (ROLE_DOCS marker and body line, and its SHIPPED_ROLE_BODY_SHAS list)"
+    ],
+    "reuse": [
+      "Wording reused verbatim from docs/CONFIGURATION.md's worktreeMode row and line 230, and from types/schema.ts's worktreeMode JSDoc.",
+      "The generator-base recipe and checkRef shape of task-ee85bfb1 (mem:convention-role-doc-edits-regenerate-initfiles, its WORKTREE MODE section)."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/validators.ts:301-306 resolveWorktreeMode: an explicit value is validated against WORKTREE_MODES; unset is 'on' iff qualityGate is a string that is non-blank after trim, else 'off'.",
+      "packages/moe-daemon/src/tools/claimNextTask.ts:157-158 pins workspaceMode 'worktree' only for a WORKING claim with resolveWorktreeMode(settings) === 'on'. controlSeatClaim (:370-379) uses the same predicate, and on a throw it keeps the heads-up.",
+      "packages/moe-daemon/src/types/schema.ts:264-271: the worktreeMode JSDoc already states the gate-aware rule.",
+      "packages/moe-daemon/scripts/generate-init-files.ts shippedBodyShas: the git log of docs/roles/<f> plus the working copy, sorted. It needs git history, so a shared clone, not git archive.",
+      "The target's initFiles.ts is fresh at 946358a8 and at 6cca2104: the generator reproduces it (prototype)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && n() { tr '\\n' ' ' < \"$1\" | tr -d '`' | sed 's#//##g' | tr -s ' '; } && X=$(grep -rn \"'off'\\` by default\\|Absent means 'off'\" docs | grep -v '^docs/plans/' || true) && { [ -z \"$X\" ] || { echo \"FAIL: stale default: $X\"; exit 1; }; } && for f in docs/CONFIGURATION.md docs/ARCHITECTURE.md docs/SCHEMA.md docs/MCP_SERVER.md docs/roles/worker.reference.md; do n \"$f\" | grep -qF -- \"to 'on' when qualityGate is non-blank after trim, else 'off'\" || { echo \"FAIL: $f lacks the gate-aware rule\"; exit 1; }; done && Y=$(grep -rnE \"worktreeMode\\` is \\`'?on'?\\`\" docs | grep -v '^docs/plans/' || true) && { [ -z \"$Y\" ] || { echo \"FAIL: literal 'on' condition: $Y\"; exit 1; }; } && echo \"C0 OK: no stale default, gate-aware rule in 5 docs\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && n() { tr '\\n' ' ' < \"$1\" | tr -d '`' | tr -s ' '; } && { n docs/ARCHITECTURE.md | grep -qF -- \"While it resolves to 'on', claim_next_task pins\" && grep -qF -- \"made while \\`settings.worktreeMode\\` resolves to \\`'on'\\`\" docs/MCP_SERVER.md && grep -qF -- \"posts none while \\`settings.worktreeMode\\` resolves to \\`'on'\\`\" docs/MCP_SERVER.md && grep -qF -- \"claim while \\`settings.worktreeMode\\` resolves to \\`'on'\\`\" docs/roles/worker.reference.md || { echo \"FAIL: a mode condition does not say resolves to 'on'\"; exit 1; }; } && P=\"With \\`settings.worktreeMode: 'on'\\` (unset means \\`'on'\\` when a non-blank \\`qualityGate\\` is set, else \\`'off'\\`)\" && { grep -qF -- \"$P\" docs/CONFIGURATION.md && n docs/TROUBLESHOOTING.md | grep -qF -- \"$(printf '%s' \"$P\" | tr -d '`')\" || { echo \"FAIL: TROUBLESHOOTING intro lacks CONFIGURATION's unset rule\"; exit 1; }; } && echo \"C1 OK: resolves-to conditions, runbook intro\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && { L=$(grep -E '^3\\. \\*\\*Settings\\.\\*\\*' docs/TROUBLESHOOTING.md) && [ \"$(printf '%s\\n' \"$L\" | wc -l)\" -eq 1 ] || { echo \"FAIL: no single step-3 line\"; exit 1; }; } && for s in 'Set a `qualityGate` if none is set' \"With \\`worktreeMode\\` unset, that gate already resolves the mode to \\`'on'\\` at the next WORKING claim\" 'keep the seats drained until step 6' \"set \\`worktreeMode: 'off'\\` first to add the gate without switching\" 'Declare the land lease:'; do printf '%s\\n' \"$L\" | grep -qF -- \"$s\" || { echo \"FAIL: step 3 lacks: $s\"; exit 1; }; done && echo \"C2 OK: runbook step 3\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && node --test scripts/tests/account-trust-docs.test.mjs && echo \"C3 OK: parity, lint, account-trust-docs\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && git rev-parse -q --verify \"$B^{commit}\" >/dev/null && X=$(git diff --name-only \"$B\" -- docs packages scripts CLAUDE.md | grep -vxF -e docs/ARCHITECTURE.md -e docs/SCHEMA.md -e docs/MCP_SERVER.md -e docs/TROUBLESHOOTING.md -e docs/roles/worker.reference.md -e packages/moe-daemon/src/generated/initFiles.ts || true) && { [ -z \"$X\" ] || { echo \"FAIL: out-of-scope change vs $B: $X\"; exit 1; }; } && U=$(git ls-files --others --exclude-standard -- docs packages scripts CLAUDE.md) && { [ -z \"$U\" ] || { echo \"FAIL: untracked: $U\"; exit 1; }; } && git diff --numstat \"$B\" -- docs | awk -v B=\"$B\" '{a+=$1; d+=$2} END {if (a > 30 || d > 20) {print \"FAIL: docs diff +\" a \"/-\" d \" vs \" B \" is over +30/-20\"; exit 1}; print \"C4 OK: scope, docs +\" a+0 \"/-\" d+0 \" vs \" B}'",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$B\" && tar -cf \"$S/d.tar\" docs && cp packages/moe-daemon/src/generated/initFiles.ts \"$S/c.ts\" && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 S=\"$S\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund -q && npm run generate-init-files && { git diff --quiet -- src/generated/initFiles.ts || { echo \"FAIL: base initFiles.ts is stale\"; exit 1; }; } && tar -xf \"$S/d.tar\" -C ../.. && npm run generate-init-files && cmp src/generated/initFiles.ts \"$S/c.ts\" && echo \"C5 OK: initFiles.ts = generator output\" && npx vitest run src/util/{initFiles,targetedContextGuidance,qaCommitPolicy,blockedSeatGuidance,daemonGitDocs,executionContractDocs,taskTimeBudgetDocs}.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Edit only the DoD-named lines. That would leave MCP_SERVER.md:1525 ('a REVIEW or PLANNING claim posts none while settings.worktreeMode is on') stale. It is the same resolveWorktreeMode predicate (controlSeatClaim) in the same file, so it is included. The TROUBLESHOOTING intro gets CONFIGURATION.md:230's own parenthetical for the same reason.\n(2) Also edit root CLAUDE.md:87 and scripts/CLAUDE.md:13. Rejected: their '(settings.worktreeMode: 'on')' glosses name the explicit value this repo sets and state no default. They sit outside the DoD's docs/ scope, and including them would mean 8 files.\n(3) TROUBLESHOOTING's readiness-table row ('worktreeMode is 'off' or 'on'') and Roll back step 2 state no default and stay right, so they are left alone.\n(4) Split the 6 files into two rows. Rejected: this is one deliverable of about +20/-15 lines, and a split costs another plan and QA cycle with no risk reduction. The daemon warns past 5 files and floors this row to heavy.\n(5) Regenerate initFiles.ts at HEAD instead of at B. Rejected: a wip draft would leak its body sha (the task-ee85bfb1 precedent).",
+    "codebaseInsights": "resolveWorktreeMode (state/validators.ts:301-306) is the single place the default lives. claimNextTask.ts:157-158 pins workspaceMode when a WORKING claim opens its attempt. controlSeatClaim (:370-379) and doctorWorktree.ts resolveMode use the same predicate.\nWT-19's wording already appears in types/schema.ts:264-271 (JSDoc) and in CONFIGURATION.md: the worktreeMode row (206), the qualityGate row (199) and line 230.\nThe generators vendor only docs/roles, docs/agents and docs/skills. ARCHITECTURE, SCHEMA, MCP_SERVER and TROUBLESHOOTING are not vendored, so only worker.reference.md needs regeneration. packages/moe-daemon/scripts/generate-init-files.ts builds SHIPPED_ROLE_BODY_SHAS from git log plus the working copy, so it needs a clone that carries history.\nDoc guards that read the edited docs: daemonGitDocs, executionContractDocs and taskTimeBudgetDocs (vitest), and scripts/tests/account-trust-docs.test.mjs (node:test). All of them run in checkRefs[3] and [5].",
+    "risks": "- Base B, not HEAD, for the generator clone (step 3).\n- The Edit tool trims a trailing space in new_string.\n- f9874361 (landed 6cca2104) edited docs/CONFIGURATION.md's code table, away from the canonical lines 199, 206 and 230. checkRefs[4] forbids this row from touching CONFIGURATION.md. A sync merge moves B along with the target, so [4] stays clean.\n- At 15:30Z no other open row planned these 6 files.\n- QA re-run: on the landed target, B resolves to HEAD, so checkRefs[4] is vacuous (docs +0/-0). Review the scope with git show <completion> --stat: 6 files, about +20/-15. Before citing [5], check that git status --porcelain -- docs is clean in the control checkout, because [5] tars the working-tree docs/. This QA re-run was prototyped (qa-emulation.log).\n- A prototype that copied ALL of docs/ from an older base reverted a peer's CONFIGURATION.md rows, and [4] caught it. So apply only the six files.\n- checkRefs[5] needs the nvm node v24.21.0 path, which the WSL seats have.",
+    "keyFiles": [
+      "docs/CONFIGURATION.md",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "/mnt/d/moe-scratch/347dde85-plan/README.txt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6cca2104b00faca1405dff2dce4645e327235fb3",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T15:37:38.768Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T15:37:46Z",
+    "at": "2026-11-03T15:45:09.135Z"
+  },
+  "workStartedAt": "2026-11-03T15:38:51.193Z",
+  "reviewStartedAt": "2026-11-03T15:44:14.727Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && n() { tr '\\n' ' ' < \"$1\" | tr -d '`' | sed 's#//##g' | tr -s ' '; } && X=$(grep -rn \"'off'\\` by default\\|Absent means 'off'\" docs | grep -v '^docs/plans/' || true) && { [ -z \"$X\" ] || { echo \"FAIL: stale default: $X\"; exit 1; }; } && for f in docs/CONFIGURATION.md docs/ARCHITECTURE.md docs/SCHEMA.md docs/MCP_SERVER.md docs/roles/worker.reference.md; do n \"$f\" | grep -qF -- \"to 'on' when qualityGate is non-blank after trim, else 'off'\" || { echo \"FAIL: $f lacks the gate-aware rule\"; exit 1; }; done && Y=$(grep -rnE \"worktreeMode\\` is \\`'?on'?\\`\" docs | grep -v '^docs/plans/' || true) && { [ -z \"$Y\" ] || { echo \"FAIL: literal 'on' condition: $Y\"; exit 1; }; } && echo \"C0 OK: no stale default, gate-aware rule in 5 docs\" && cd \"$(git rev-parse --show-toplevel)\" && n() { tr '\\n' ' ' < \"$1\" | tr -d '`' | tr -s ' '; } && { n docs/ARCHITECTURE.md | grep -qF -- \"While it resolves to 'on', claim_next_task pins\" && grep -qF -- \"made while \\`settings.worktreeMode\\` resolves to \\`'on'\\`\" docs/MCP_SERVER.md && grep -qF -- \"posts none while \\`settings.worktreeMode\\` resolves to \\`'on'\\`\" docs/MCP_SERVER.md && grep -qF -- \"claim while \\`settings.worktreeMode\\` resolves to \\`'on'\\`\" docs/roles/worker.reference.md || { echo \"FAIL: a mode condition does not say resolves to 'on'\"; exit 1; }; } && P=\"With \\`settings.worktreeMode: 'on'\\` (unset means \\`'on'\\` when a non-blank \\`qualityGate\\` is set, else \\`'off'\\`)\" && { grep -qF -- \"$P\" docs/CONFIGURATION.md && n docs/TROUBLESHOOTING.md | grep -qF -- \"$(printf '%s' \"$P\" | tr -d '`')\" || { echo \"FAIL: TROUBLESHOOTING intro lacks CONFIGURATION's unset rule\"; exit 1; }; } && echo \"C1 OK: resolves-to conditions, runbook intro\" && cd \"$(git rev-parse --show-toplevel)\" && { L=$(grep -E '^3\\. \\*\\*Settings\\.\\*\\*' docs/TROUBLESHOOTING.md) && [ \"$(printf '%s\\n' \"$L\" | wc -l)\" -eq 1 ] || { echo \"FAIL: no single step-3 line\"; exit 1; }; } && for s in 'Set a `qualityGate` if none is set' \"With \\`worktreeMode\\` unset, that gate already resolves the mode to \\`'on'\\` at the next WORKING claim\" 'keep the seats drained until step 6' \"set \\`worktreeMode: 'off'\\` first to add the gate without switching\" 'Declare the land lease:'; do printf '%s\\n' \"$L\" | grep -qF -- \"$s\" || { echo \"FAIL: step 3 lacks: $s\"; exit 1; }; done && echo \"C2 OK: runbook step 3\" && cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && node --test scripts/tests/account-trust-docs.test.mjs && echo \"C3 OK: parity, lint, account-trust-docs\" && cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && git rev-parse -q --verify \"$B^{commit}\" >/dev/null && X=$(git diff --name-only \"$B\" -- docs packages scripts CLAUDE.md | grep -vxF -e docs/ARCHITECTURE.md -e docs/SCHEMA.md -e docs/MCP_SERVER.md -e docs/TROUBLESHOOTING.md -e docs/roles/worker.reference.md -e packages/moe-daemon/src/generated/initFiles.ts || true) && { [ -z \"$X\" ] || { echo \"FAIL: out-of-scope change vs $B: $X\"; exit 1; }; } && U=$(git ls-files --others --exclude-standard -- docs packages scripts CLAUDE.md) && { [ -z \"$U\" ] || { echo \"FAIL: untracked: $U\"; exit 1; }; } && git diff --numstat \"$B\" -- docs | awk -v B=\"$B\" '{a+=$1; d+=$2} END {if (a > 30 || d > 20) {print \"FAIL: docs diff +\" a \"/-\" d \" vs \" B \" is over +30/-20\"; exit 1}; print \"C4 OK: scope, docs +\" a+0 \"/-\" d+0 \" vs \" B}' && cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$B\" && tar -cf \"$S/d.tar\" docs && cp packages/moe-daemon/src/generated/initFiles.ts \"$S/c.ts\" && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 S=\"$S\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund -q && npm run generate-init-files && { git diff --quiet -- src/generated/initFiles.ts || { echo \"FAIL: base initFiles.ts is stale\"; exit 1; }; } && tar -xf \"$S/d.tar\" -C ../.. && npm run generate-init-files && cmp src/generated/initFiles.ts \"$S/c.ts\" && echo \"C5 OK: initFiles.ts = generator output\" && npx vitest run src/util/{initFiles,targetedContextGuidance,qaCommitPolicy,blockedSeatGuidance,daemonGitDocs,executionContractDocs,taskTimeBudgetDocs}.test.ts'",
+    "exitCode": 0,
+    "outputTail": "C0 OK: no stale default, gate-aware rule in 5 docs\nC1 OK: resolves-to conditions, runbook intro\nC2 OK: runbook step 3\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nℹ pass 5\nℹ fail 0\nC3 OK: parity, lint, account-trust-docs\nC4 OK: scope, docs +17/-12 vs 6cca2104b00faca1405dff2dce4645e327235fb3\nGenerated /tmp/tmp.WSEMplKH6J/repo/packages/moe-daemon/src/generated/initFiles.ts (8 role docs + 3 subagents, sha-stamped)\nGenerated /tmp/tmp.WSEMplKH6J/repo/packages/moe-daemon/src/generated/initFiles.ts (8 role docs + 3 subagents, sha-stamped)\nC5 OK: initFiles.ts = generator output\n ✓ src/util/blockedSeatGuidance.test.ts (1 test) 2ms\n ✓ src/util/targetedContextGuidance.test.ts (6 tests) 5ms\n ✓ src/util/qaCommitPolicy.test.ts (10 tests) 8ms\n ✓ src/util/executionContractDocs.test.ts (17 tests) 19ms\n ✓ src/util/initFiles.test.ts (23 tests) 733ms\n ✓ src/util/taskTimeBudgetDocs.test.ts (17 tests) 34ms\n ✓ src/util/daemonGitDocs.test.ts (4 tests) 56ms\n\n Test Files  7 passed (7)\n      Tests  78 passed (78)\n   Start at  17:42:43\n   Duration  1.36s (transform 68%, tests 19%, import 12%, worker 1%)\n\nEXIT=0",
+    "reportedAt": "2026-11-03T15:44:14.727Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/ARCHITECTURE.md",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md",
+    "docs/TROUBLESHOOTING.md",
+    "docs/roles/worker.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts"
+  ],
+  "completionSummary": "Docs now state worktreeMode's WT-19 default: unset resolves (resolveWorktreeMode) to 'on' when qualityGate is non-blank after trim, else 'off'. Edit tool only. 6 files, +20/-15 (docs +17/-12) vs B=6cca2104.\n- ARCHITECTURE '### Worktree mode' para 1: gate-aware rule; \"While it resolves to 'on'\".\n- SCHEMA worktreeMode comment: \"Absent resolves ... to 'on' when qualityGate is non-blank after trim, else 'off' ...\".\n- MCP_SERVER 1468 (Workspace WT-01) and 1525 (fileCollision): \"resolves to 'on'\"; 1468 carries the rule inline.\n- TROUBLESHOOTING flip on / roll back: the intro carries CONFIGURATION.md:230's parenthetical. Step 3 (still one line) now warns that with worktreeMode unset the new gate switches the mode at the next WORKING claim, so seats stay drained until step 6, and that setting 'off' first adds the gate without switching.\n- worker.reference.md:78 plus initFiles.ts, regenerated in a shared clone at B (env -i, nvm node 24.21.0, \"Generated ... (8 role docs + 3 subagents, sha-stamped)\"). 3 hunks, all in the worker.reference.md entry: marker sha 9a727a066966->a2e203c12ef7, the body line, and a2e203c12ef7 added to SHIPPED_ROLE_BODY_SHAS in sorted order (19 unique). cmp against the generator output is identical. The hunks match the planned expected-initFiles.diff.\nRED before editing: c0, c1 and c2 each exited 1 with the planned FAIL lines.\nVerification is the 6 executionContract.checkRefs joined with ' && ' (checked byte-equal to the stored contract), run fresh from the worktree root, EXIT 0: C0-C2 OK; C3 parity-check PASS, lint OK, account-trust-docs pass 5; C4 scope OK, docs +17/-12; C5 base fresh, initFiles.ts = generator output, vitest 7 files / 78 tests passed.\nUnchanged: CONFIGURATION.md, docs/plans, root CLAUDE.md, scripts/CLAUDE.md.\nQA: on the landed target B resolves to HEAD, so [4] is vacuous there; check scope with git show <sha> --stat (6 files). [5] tars working-tree docs/, so run it from a clean checkout.",
+  "commits": [
+    {
+      "sha": "dc37ea2b1ba7668843668d2a5bb7070a05b777db",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T15:37:46Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T15:45:09.135Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
