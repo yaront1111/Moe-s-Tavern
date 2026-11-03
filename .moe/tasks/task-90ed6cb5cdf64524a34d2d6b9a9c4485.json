@@ -13,42 +13,67 @@
     {
       "stepId": "step-1",
       "description": "Edit packages/moe-daemon/Dockerfile from ~:46 to the end. Reference: /mnt/d/moe-scratch/plan-90ed6cb5/ref/packages/moe-daemon/Dockerfile (all five references are diffed in reference-fix.diff).\n- Keep `ENV MOE_PROJECT_PATH=/project` as the default, so a run without MOE_PROJECT_PATH still serves /project as today. Reword its comment: mount the project at the absolute path it has on the host and set MOE_PROJECT_PATH to that path, because the daemon reports it in .moe/daemon.json and on /health, and moe-proxy and the IDE plugins refuse a daemon that reports another project's path.\n- Add the exact line `ENV MOE_BIND_HOST=0.0.0.0`; checkRef static greps it with -x. Its comment: a published port (-p) reaches the container's network interface, never its loopback; publish on host loopback only, because /mcp has no auth.\n- HEALTHCHECK: probe `http://127.0.0.1:9876/health` instead of localhost, and keep the timings. Observed in node:24-alpine: busybox wget tries localhost as [::1] first and gets 'Connection refused' from a 0.0.0.0 bind, so the fixed container would report unhealthy.\n- Set `CMD [\"start\"]`, so MOE_PROJECT_PATH names the project (index.ts parseArgs) instead of a hard-coded --project. Afterwards `grep -c -- '\"--project\", \"/project\"' packages/moe-daemon/Dockerfile` prints 0.\n- Leave the build stage, USER, EXPOSE, the /project mkdir and ENTRYPOINT unchanged. No daemon source changes.\n\nError handling: the daemon's own refusals are unchanged. A start without MOE_PROJECT_PATH falls back to /project, and `docker run <image> --version` still works because ENTRYPOINT is unchanged.\n\nEdit with the session's own editing tool (Edit on a Claude seat, apply_patch on a codex exec seat). Never use a shell write or a subagent.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/Dockerfile"
       ],
-      "startedAt": "2026-11-03T19:38:22.691Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/Dockerfile"
+      ],
+      "note": "Dockerfile: ENV MOE_BIND_HOST=0.0.0.0, HEALTHCHECK on 127.0.0.1, CMD [\"start\"], MOE_PROJECT_PATH=/project default kept with reworded comment. Byte-identical to the reference; grep -c '\"--project\", \"/project\"' prints 0.",
+      "startedAt": "2026-11-03T19:38:22.691Z",
+      "completedAt": "2026-11-03T19:38:41.618Z"
     },
     {
       "stepId": "step-2",
       "description": "Edit docker-compose.yml. Reference: /mnt/d/moe-scratch/plan-90ed6cb5/ref/docker-compose.yml.\n- Add `user: \"${MOE_UID:-1001}:${MOE_GID:-1001}\"`. Its comment: run as the project's owner so the daemon can write .moe/ (on Linux, MOE_UID=$(id -u) MOE_GID=$(id -g)). The default is the image's own uid, 1001, so an existing setup behaves as before.\n- ports: `\"127.0.0.1:9876:9876\"`. Comment: host loopback only, because /mcp has no authentication and a port without an address is published on every host interface.\n- volumes: `${PWD}:${PWD}:rw`. environment: `MOE_PROJECT_PATH=${PWD}`. Comment: the project at its own absolute path, because moe-proxy and the IDE plugins refuse a daemon that reports another project's path.\n- healthcheck test: `http://127.0.0.1:9876/health`, for the same reason as step 1.\n- Replace the trailing `docker-compose run -v …` example with two lines:\n  - Run it from the project's root, because ${PWD} is mounted at its own absolute path.\n  - For another project: `cd /path/to/your/project && MOE_UID=$(id -u) MOE_GID=$(id -g) docker-compose -f <moe checkout>/docker-compose.yml up -d`.\n- Nowhere in the file, comments included, may a bare `9876:9876` (without the 127.0.0.1: prefix) or `:/project` remain: the DoD grep reads comments too.\n\nError handling: `docker compose config` must still resolve. checkRef static runs it with PWD=/srv/p and prints user 1001:1001, host_ip 127.0.0.1 and source/target /srv/p.\n\nEdit with the session's own editing tool, never a shell write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docker-compose.yml"
-      ]
+      ],
+      "modifiedFiles": [
+        "docker-compose.yml"
+      ],
+      "note": "docker-compose.yml: user ${MOE_UID:-1001}:${MOE_GID:-1001}, ports 127.0.0.1:9876:9876, ${PWD}:${PWD}:rw mount, MOE_PROJECT_PATH=${PWD}, healthcheck on 127.0.0.1, trailing usage comment replaced. Byte-identical to the reference; the DoD grep prints nothing; PWD=/srv/p docker compose config resolves (user 1001:1001, host_ip 127.0.0.1, source/target /srv/p).",
+      "startedAt": "2026-11-03T19:38:42.722Z",
+      "completedAt": "2026-11-03T19:38:59.200Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs: edit docs/DEVELOPMENT.md (## Docker (Optional - Advanced), ~:439-465) and docs/CONFIGURATION.md (### Docker (Optional), ~:128-138). References: /mnt/d/moe-scratch/plan-90ed6cb5/ref/docs/DEVELOPMENT.md and CONFIGURATION.md.\n\nEvery docker run in both docs:\n- runs from the project's root;\n- passes `--user \"$(id -u):$(id -g)\"`, `-p 127.0.0.1:9876:9876`, `-v \"$PWD\":\"$PWD\"` and `-e MOE_PROJECT_PATH=\"$PWD\"`;\n- in DEVELOPMENT.md, also passes `-d --name moe-daemon`;\n- in CONFIGURATION.md, keeps `-e LOG_MAX_SIZE_MB=5`.\n\nIn DEVELOPMENT.md, add a 'Why each flag is needed' list, with these three entries:\n1. Loopback publish. `/mcp` has no authentication, and a port published without an address is reachable on every host interface. Keep 9876 on both sides, because host clients take the port from the .moe/daemon.json the container writes. The image sets MOE_BIND_HOST=0.0.0.0, because a published port never reaches the container's loopback.\n2. Same-path mount. The daemon reports the path in .moe/daemon.json and on /health, and moe-proxy and the IDE plugins refuse a daemon that reports another project's path. On a Windows host, mount D:\\x at /mnt/d/x with MOE_PROJECT_PATH=/mnt/d/x; those clients treat it as the same project.\n3. --user. The daemon writes the project's .moe/, and the image's own user is uid 1001.\nThen the compose block says to run from the project's root with `MOE_UID=$(id -u) MOE_GID=$(id -g) docker-compose up -d`.\n\nIn CONFIGURATION.md, add one paragraph after the block, giving the same three reasons and pointing to DEVELOPMENT.md's Docker section.\n\nThe gate's text checks:\n- Each doc must contain, verbatim, '`/mcp` has no authentication' and 'refuse a daemon that reports another project'. checkRef static joins wrapped lines before matching (mem:gotcha-docs-dod-grep-wrapped-phrase).\n- A bare 9876:9876 or :/project must not appear anywhere, prose included.\n\nScope: touch nothing outside those two sections, and never docs/MCP_SERVER.md (another row holds it).\n\nError handling: none at runtime. The gate refuses any doc that misses one of these points.\n\nEdit with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat. Never use Serena (it ignores docs/), and never a shell write (mem:plan-docs-edit-step-wording).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/DEVELOPMENT.md",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/DEVELOPMENT.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "DEVELOPMENT.md Docker section: loopback-publish, same-path mount and --user flags with a 'Why each flag is needed' list, compose block run from the project root. CONFIGURATION.md Docker block: same three flags plus one explanatory paragraph pointing at DEVELOPMENT.md. Both byte-identical to the reference; the DoD grep prints nothing; docs/MCP_SERVER.md untouched.",
+      "startedAt": "2026-11-03T19:39:00.198Z",
+      "completedAt": "2026-11-03T19:39:18.781Z"
     },
     {
       "stepId": "step-4",
       "description": "Edit .github/workflows/docker.yml, in the PR-only step 'Test Docker image'. Keep its name, its `if`, and the existing build and --version check. Then append the block from /mnt/d/moe-scratch/plan-90ed6cb5/ref/.github/workflows/docker.yml. It is the regression test for this row:\n- Cleanup, set up first: `name=\"moe-daemon-health-${GITHUB_RUN_ID:-local}-$$\"` (keep both dollar signs), then a `cleanup` function trapped on EXIT. The function:\n  - saves `rc=$?`;\n  - prints `docker logs \"$name\" 2>&1 | tail -n 40` only when rc is not 0;\n  - runs `docker rm -f \"$name\" >/dev/null 2>&1 || true`;\n  - ends with `exit \"$rc\"`.\n  So the container is removed on every exit path, and the step's status is kept.\n- Start: `docker run -d --name \"$name\" --user \"$(id -u):$(id -g)\" -p 127.0.0.1::9876 -v \"$PWD\":\"$PWD\" -e MOE_PROJECT_PATH=\"$PWD\" moe-daemon-test`.\n  - $PWD is the checkout, and its .moe/project.json is tracked.\n  - Docker picks a free host port on 127.0.0.1. Read it with `docker port \"$name\" 9876/tcp | head -n 1`, then `${port##*:}`.\n  - Without --user, a checkout owned by a uid other than the image's 1001 crash-loops on EACCES at .moe/daemon.lock (observed on this host).\n- Poll `curl -fsS -m 2 \"http://127.0.0.1:$port/health\"` up to 30 times, 1 s apart. Put the curl inside an `if`, so `bash -e` does not abort the loop.\n- Check the answer with `node -e`, passing HEALTH and EXPECTED in env.\n  - JSON.parse runs inside try/catch.\n  - It fails unless status is \"healthy\" and projectPath === $PWD. The failure prints `Expected a healthy daemon serving <path> on 127.0.0.1, got: <body or no answer>`.\n  - Success prints `healthy: <projectPath>`.\n  - checkRef red greps the failure line, and green greps both.\n- Run the image's own HEALTHCHECK inside the container: `docker exec \"$name\" sh -c \"$(docker inspect --format '{{index .Config.Healthcheck.Test 1}}' moe-daemon-test)\"`, then `echo \"image HEALTHCHECK passed\"`. This is the regression test for step 1's 127.0.0.1 probe.\n\nError handling: every failure path exits non-zero through the trap, which shows the logs and removes the container. A crashed container leaves `docker port` empty, so curl fails and the logs say why.\n\nEdit with the session's own editing tool, never a shell write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".github/workflows/docker.yml"
-      ]
+      ],
+      "modifiedFiles": [
+        ".github/workflows/docker.yml"
+      ],
+      "note": "docker.yml 'Test Docker image': appended the health regression block after the --version check (trap cleanup on EXIT with rc kept and logs on failure, named container, docker run -d --user -p 127.0.0.1::9876 -v $PWD:$PWD -e MOE_PROJECT_PATH, docker port, 30x curl poll inside an if, node -e check of status and projectPath, docker exec of the image's own HEALTHCHECK). Byte-identical to the reference; YAML parses, the step's if is still github.event_name == 'pull_request', one $$ present. Not run yet: step 5 runs it.",
+      "startedAt": "2026-11-03T19:39:19.779Z",
+      "completedAt": "2026-11-03T19:39:39.748Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification gate, run once after steps 1-4 from the task worktree root. Run each checkRef exactly as written, one at a time: they share the moe-daemon-test tag, and port 19876 must be free.\n1. `green`. It is the complete_task verification.command, and its printed lines are the outputTail.\n   - It snapshots HEAD's packages/moe-daemon and .moe, and overlays the working-tree Dockerfile and docker.yml.\n   - It extracts the 'Test Docker image' run script with PyYAML, asserting the step is still PR-only.\n   - It runs that script with `bash -e` from the snapshot root. That builds the real image and starts it with the snapshot mounted at its own path.\n   - Expected: 'healthy: <snapshot path>', 'image HEALTHCHECK passed', and exit 0.\n2. `static`, for DoD 1 and 2. It checks:\n   - the ENV line, and a count of 0 for `\"--project\", \"/project\"`;\n   - the 127.0.0.1 HEALTHCHECK;\n   - that the DoD grep prints nothing;\n   - that every docker run in both docs carries the three flags;\n   - that both phrases are in each doc;\n   - that `docker compose config` resolves.\n   Expected: the compose lines, then STATIC-OK.\n3. `red`, for DoD 3's 'HEAD's image fails that curl'. It runs the same step script against the Dockerfile pinned at af8ca2bb. Expected: 'Expected a healthy daemon serving … got: no answer', then RED-ON-HEAD-IMAGE.\n4. `repro`, for DoD 1's runtime half. It runs the hunt's docker-cmd-repro.sh on a snapshot of the fix with MOE_BIND_HOST=0.0.0.0. Expected: a `LISTEN … 0.0.0.0:19876` line, two `-> exit=0 {` lines (loopback and eth0), then DOD1-BIND-OK.\nAfter the four runs, `docker ps -a --filter name=moe-daemon-health` must list nothing. Quote the output of 2-4 in the completion summary.\n\nThe gate is narrow per the epic ruling msg-bbf4f109. These files have no vitest suite, so the four legs are the whole gate; the landing qualityGate still runs.\n\nNever run npm in the shared checkout; repro builds dist only in its mktemp snapshot. Never pattern-kill anything: the step removes only its own named container, and the repro script kills only PIDs it recorded.\n\nError handling for a red run: on a non-zero exit, read step.log or d.log in the printed mktemp snapshot, fix the owned files, and rerun the whole command. Never cite a partial or edited command.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T19:39:40.637Z"
     },
     {
       "stepId": "step-6",
@@ -71,11 +96,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:11:21.835Z",
-  "updatedAt": "2026-11-03T19:38:22.691Z",
+  "updatedAt": "2026-11-03T19:39:40.637Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:15:40.612Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -85,7 +111,12 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:36:40.142Z",
   "executionContract": {

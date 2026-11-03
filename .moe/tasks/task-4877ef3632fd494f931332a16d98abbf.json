@@ -91,8 +91,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -111,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:10:57.784Z",
-  "updatedAt": "2026-11-03T19:38:03.273Z",
+  "updatedAt": "2026-11-03T19:38:40.295Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:12:59.296Z",
     "plannedStepCount": 6,
@@ -202,5 +202,21 @@
   },
   "planApprovedAt": "2026-11-03T19:20:08.763Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T19:34:15.646Z"
+  "workStartedAt": "2026-11-03T19:34:15.646Z",
+  "reviewStartedAt": "2026-11-03T19:38:40.293Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/{chatWho,chatJoin,chatResync}.ts packages/moe-daemon/src/tools/{chatChannelRef,chatBudgets}.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatChannelRef.test.ts\",\"src/tools/chatBudgets.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{chatChannelRef,chatBudgets,chatRead.cursor,chatSystemFeed,chatDecision,workerType,registry}.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "npm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\n Test Files  7 passed (7)\n      Tests  137 passed (137)\nEXIT=0",
+    "reportedAt": "2026-11-03T19:38:40.293Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatWho.ts",
+    "packages/moe-daemon/src/tools/chatJoin.ts",
+    "packages/moe-daemon/src/tools/chatResync.ts",
+    "packages/moe-daemon/src/tools/chatChannelRef.test.ts",
+    "packages/moe-daemon/src/tools/chatBudgets.test.ts"
+  ],
+  "completionSummary": "chat_who, chat_join and chat_resync now resolve the channel reference through state.resolveChannelRef (id, bare name or \"#name\") before any read or write. A non-string channel is INVALID_INPUT and an unresolvable or ambiguous one is -32001 NOT_FOUND. chat_who keys its cursor and waiter lookups on channel.id, and an omitted or empty channel still lists every online seat. chat_join keys the idempotency scan, the join post and the reply on channel.id, and its join-line text is unchanged. chat_resync resolves before its first updateWorker, so a refusal clears no cursor, and keys its cursor delete and fetch on channel.id. It also caps the window to MAX_CHAT_RESPONSE_CHARS with capChatMessagesToResponseBudget on the reversed list (newest kept, in both the single- and all-channel branches, before cursors are derived). The three inputSchema channel descriptions now use chat_send's wording; no property was added or removed. Tests: chatChannelRef.test.ts gains chat_who, chat_join and chat_resync blocks, and its Worker fixture is fixed (epicId '' and teamId null, which cleared two TS errors in the tt.json typecheck). chatBudgets.test.ts gains the single-channel and all-channel resync budget cases. With HEAD's three tool files swapped into the snapshot, 12 of the 14 new cases fail. The other two pass there: the omitted-channel invariant and chat_join's NOT_FOUND on an unknown channel. Gate: 7 files and 137 tests passed (123 before). Diff is the 5 files in FILES. Not tested: a single message larger than the whole budget, since sendMessage caps a message at 10,240 bytes, and ambiguous-name refusal per tool (the resolver's ambiguity case is tested via chat_wait)."
 }
