@@ -72,9 +72,16 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")`.\n\n(a) Mutation check in a scratch copy of the step-4 snapshot. Each mutant must fail:\n- drop the controlSeatClaim condition: (a) and (b) fail;\n- drop { parseMentions: false }: (e) fails;\n- make the helper ignore the setting: (c) fails;\n- let the resolver's throw escape: (d) fails.\nRestore the code and confirm the suite is green. Quote all four runs.\n(b) The WORKING-claim path is unchanged: governanceFeatures (h)-(k) still pass, unedited.\n(c) fileCollision in the response is identical in every case, so the claimer's advisory and the tool contract are intact.\n(d) No new await sits between the claim's assignment and the post that could fail the claim. A post or resolver failure is swallowed as before.\n(e) The claim notice text is byte-identical; only its mention parsing changes. A PLANNING claim without a plan computes no collision, so it posts nothing, as before.\n\nRecord the review in complete_step.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T08:45:03.219Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.controlSeatNotice.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial self-review of the task diff, plus 4 mutants run in the scratch snapshot (/tmp/moe-df34-pjvlNX, never the checkout). (a) Mutants, each run on the new file: M1 drop `|| controlSeatClaim(...)`: 3 failed | 3 passed, killing (a) x2 and (b). M2 drop `{ parseMentions: false }`: 1 failed | 5 passed, killing (e). M3 helper `return true` (ignores the setting): 2 failed | 4 passed, killing (c) and (d). M4 resolver throw escapes (`throw error` in the catch): 1 failed | 5 passed, killing (d). The throw is swallowed by the existing outer `catch { /* never block tool */ }`, so the claim still succeeds but the heads-up is lost, which (d) detects. Restored: file identical to the worktree copy, 6/6 green. (b) WORKING path unchanged: governanceFeatures (h)-(k) and every existing collision test pass unedited (180/180 across 5 files = 174 existing + 6 new). (c) fileCollision is computed before the gate and never touched; every new case asserts it equals the same entries. (d) No new await was added between assignment and post; controlSeatClaim is synchronous and sits inside the existing try/catch that swallows post and resolver failures. (e) Claim notice text is byte-identical (only the options arg is new); a PLANNING row with no plan computes no collision and posts nothing, as before. Inputs: an invalid worktreeMode returns false with one warn line, so a page is never suppressed on an unreadable mode; task.status is read after updateTask, which does not change status. Test source contains no literal at-sign (built with String.fromCharCode(64)). Residual, accepted: controlSeatClaim reads the live setting, so a project flipping worktreeMode mid-claim could skew one notice either way; this is advisory chat only.",
+      "startedAt": "2026-11-03T08:45:03.219Z",
+      "completedAt": "2026-11-03T08:46:15.168Z"
     }
   ],
   "planRevision": 1,
@@ -92,12 +99,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:10.941Z",
-  "updatedAt": "2026-11-03T08:45:03.219Z",
+  "updatedAt": "2026-11-03T08:46:15.168Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:35:19.081Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -111,7 +118,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:39:14.331Z",
