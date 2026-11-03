@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,7 +94,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:41:48.670Z",
-  "updatedAt": "2026-11-03T21:28:20.254Z",
+  "updatedAt": "2026-11-03T21:31:56.344Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:45:25.436Z",
     "plannedStepCount": 4,
@@ -103,7 +103,8 @@
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-8cf0816c"
+    "worker-8cf0816c",
+    "worker-26483323"
   ],
   "tier": "standard",
   "effort": "high",
@@ -183,12 +184,12 @@
   "planApprovedAt": "2026-11-03T20:52:58.369Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T20:55:41.943Z",
-  "reviewStartedAt": "2026-11-03T20:57:16.184Z",
+  "reviewStartedAt": "2026-11-03T21:30:50.017Z",
   "verification": {
-    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/requestReplan.ts packages/moe-daemon/src/tools/requestReplan.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/requestReplan.test.ts src/tools/reportBlocked.test.ts src/tools/taskMoveActor.test.ts src/tools/echoedReasonNotices.test.ts",
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git ls-files -z packages/moe-daemon | tar --null -T - -cf - | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/requestReplan.ts packages/moe-daemon/src/tools/requestReplan.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/requestReplan.test.ts src/tools/reportBlocked.test.ts src/tools/taskMoveActor.test.ts src/tools/echoedReasonNotices.test.ts",
     "exitCode": 0,
-    "outputTail": " Test Files  4 passed (4)\n      Tests  74 passed (74)\n   Start at  22:56:35\n   Duration  5.26s (tests 66%, transform 30%, import 4%)",
-    "reportedAt": "2026-11-03T20:57:16.184Z",
+    "outputTail": "Snapshot built from tracked files of merged worktree using git ls-files -z packages/moe-daemon | tar --null -T - -cf - | tar -x -C \"$S\" instead of git archive HEAD per LANDING-RETRY rule; all other plan command stages unchanged.\nnpx tsc --noEmit: exit 0\n Test Files  4 passed (4)\n      Tests  74 passed (74)\n   Start at  23:30:20\n   Duration  4.46s (tests 64%, transform 31%, import 5%)\nQuality gate: bash scripts/tests/parity-check.sh && npm run lint, exit 0\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)",
+    "reportedAt": "2026-11-03T21:30:50.017Z",
     "source": "agent-reported"
   },
   "filesModified": [
@@ -196,7 +197,7 @@
     "packages/moe-daemon/src/tools/requestReplan.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "request_replan no longer returns a nextAction (the moe.wait_for_task hint). It returns sessionHandoff { action: 'END_SESSION', taskId, workerId, reason } for the prior assignee, or for a non-governor caller when the row had no assignee. The reason text is copied verbatim from report_blocked. No handoff goes to a governor (resolveWorkerRole: team role, then id prefix), and none goes when the seat's record already names another currentTaskId. The touchWorker is now guarded the same way report_blocked guards it, so a dangling seat's pointer and status are left alone. The PLANNING status, null assignee, priorAttempt, closed attempt, TASK_REOPENED event with the caller as actor, and the #general and #architects posts are unchanged. New requestReplan.test.ts has 5 cases. Negative control at the merge-base with only the new test file: \"Tests  5 failed (5)\" and RED-AT-BASE. I also synced the request_replan section of docs/MCP_SERVER.md, as the governor's 20:50Z comment directed. Nothing in scripts, moe-jetbrains/src/main or moe-vscode/src references request_replan.",
+  "completionSummary": "Landing-retry (contention): no additional edits or git writes required. Existing request_replan END_SESSION/no-nextAction fix, dangling-seat guard, five regression cases, and governor-authorized MCP_SERVER.md sync intact. Fresh verification on merged worktree tracked-file snapshot (git ls-files/tar, not HEAD archive, because target is a pending merge): tsc clean; 4 files / 74 tests passed. Fresh quality gate passed: parity-check.sh and npm run lint. Original completed-step negative control evidence: \"Tests  5 failed (5)\" and RED-AT-BASE. Adversarial review found no new issues; pending merge left to wrapper.",
   "commits": [
     {
       "sha": "3f533ff4d020ce2229ebdcd61c5358fe573c4496",
@@ -210,22 +211,30 @@
       "status": "REVIEW",
       "pushed": false,
       "message": "MOE_RESCUE_REF task=task-55a5a9f9644943b1b13ee3e609a2255f ref=refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z sha=3f533ff4d020ce2229ebdcd61c5358fe573c4496 reason=contention"
+    },
+    {
+      "sha": "6272d30824decee4ca25fb96d2f9908a757570af",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T21:28:58Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/requestReplan.test.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T21:31:55.771Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "failed",
+    "outcome": "committed",
     "kind": "completion",
-    "code": "MOE_COMMIT_FAILED_LAND_LEASE",
-    "sessionId": "worker-8cf0816c@2026-11-03T20:52:57Z",
-    "at": "2026-11-03T21:28:19.606Z"
+    "sessionId": "worker-26483323@2026-11-03T21:28:58Z",
+    "at": "2026-11-03T21:31:55.771Z"
   },
-  "landingRetry": {
-    "reason": "contention",
-    "rescueRef": "refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z",
-    "targetTip": null,
-    "paths": [],
-    "count": 1,
-    "at": "2026-11-03T21:28:20.254Z"
-  }
+  "landingRetry": null
 }
