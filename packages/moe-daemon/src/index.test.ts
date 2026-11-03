@@ -6,8 +6,8 @@ import http from 'http';
 import net from 'net';
 import dns from 'dns';
 import { createRequire } from 'module';
-import { pathToFileURL } from 'url';
-import { execSync, spawn, type ChildProcess } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { execSync, spawn, spawnSync, type ChildProcess } from 'child_process';
 import type { DaemonInfo } from './types/schema.js';
 import { logger } from './util/logger.js';
 import {
@@ -941,5 +941,97 @@ describe('daemon.json size cap', () => {
     expect(killSpy).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(testDir, '.moe', 'daemon.stop'))).toBe(true);
     expect(fs.existsSync(daemonJson)).toBe(true);
+  });
+});
+
+// A start over a project with no .moe/ is refused before any lock or spawn, and a
+// lock wait that ends with no daemon running exits non-zero (task-88673297). The
+// children run this source through tsx with a scrubbed env: no seat MOE_* variable,
+// a scratch HOME (a started _run writes ~/.moe/config.json) and a 100 ms lock wait.
+describe('no-moe start', () => {
+  const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
+  const entry = fileURLToPath(new URL('./index.ts', import.meta.url));
+  let scratch: string;
+  let project: string;
+
+  beforeEach(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-no-moe-start-'));
+    project = path.join(scratch, 'project');
+    fs.mkdirSync(project);
+    fs.mkdirSync(path.join(scratch, 'home'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  async function freePort(): Promise<number> {
+    const server = net.createServer();
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as net.AddressInfo).port;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    return port;
+  }
+
+  /** Run the CLI; returns its exit status, the msg of every JSON log line, and the wall time. */
+  async function daemon(...args: string[]): Promise<{ status: number | null; msgs: string[]; ms: number }> {
+    const home = path.join(scratch, 'home');
+    // NODE_OPTIONS hands tsx to the _run child that `start`'s supervisor spawns with
+    // process.execPath alone; without it that child dies on the .ts import, not on the bug.
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH, HOME: home, USERPROFILE: home, NODE_ENV: 'production', MOE_LOCK_RETRY_DELAY_MS: '100',
+      NODE_OPTIONS: `--import ${tsx}`,
+      ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP } : {}),
+    };
+    const port = String(await freePort());
+    const started = Date.now();
+    const result = spawnSync(process.execPath, ['--import', tsx, entry, ...args, '--port', port], {
+      env, encoding: 'utf-8', timeout: 30_000, windowsHide: true,
+    });
+    const msgs = `${result.stdout}${result.stderr}`.split('\n').flatMap((line) => {
+      try { return [String((JSON.parse(line) as { msg?: unknown }).msg)]; } catch { return []; }
+    });
+    return { status: result.status, msgs, ms: Date.now() - started };
+  }
+
+  const names = (msgs: string[], text: string) => msgs.some(msg => msg.startsWith(text));
+
+  it('N1: _run on a directory without .moe/ exits 1 naming the missing .moe/, with no lock race and nothing created', async () => {
+    const run = await daemon('_run', '--project', project);
+    expect({ status: run.status, missing: names(run.msgs, '.moe/ missing at '), race: names(run.msgs, 'Another process is starting the daemon') })
+      .toEqual({ status: 1, missing: true, race: false });
+    expect(fs.readdirSync(project)).toEqual([]);
+  }, 60_000);
+
+  it('N2: _run on a path that does not exist exits 1 and does not create it', async () => {
+    const typo = path.join(scratch, 'typo');
+    const run = await daemon('_run', '--project', typo);
+    expect({ status: run.status, missing: names(run.msgs, '.moe/ missing at '), exists: fs.existsSync(typo) })
+      .toEqual({ status: 1, missing: true, exists: false });
+  }, 60_000);
+
+  it('N3: start on a directory without .moe/ exits 1 within 10 s, spawning no daemon and no restart', async () => {
+    const run = await daemon('start', '--project', project);
+    expect({
+      status: run.status, fast: run.ms < 10_000, missing: names(run.msgs, '.moe/ missing at '),
+      spawned: names(run.msgs, 'Supervisor spawned daemon process'), restarted: names(run.msgs, 'Restarting daemon after backoff'),
+    }).toEqual({ status: 1, fast: true, missing: true, spawned: false, restarted: false });
+  }, 60_000);
+
+  it('N4: _run whose lock wait ends with no daemon running exits 1', async () => {
+    fs.mkdirSync(path.join(project, '.moe'));
+    // A live, fresh lock held by this test process: contention, never stale.
+    fs.writeFileSync(path.join(project, '.moe', 'daemon.lock'), JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+    const run = await daemon('_run', '--project', project);
+    expect({
+      status: run.status, waited: names(run.msgs, 'Another process is starting the daemon, waiting...'),
+      failed: names(run.msgs, 'Failed to acquire lock and daemon not running'),
+    }).toEqual({ status: 1, waited: true, failed: true });
+  }, 60_000);
+
+  it('N5: acquireLock throws a create error other than EEXIST instead of reporting contention', () => {
+    let code: unknown = 'returned without throwing';
+    try { acquireLock(project); } catch (error) { code = (error as NodeJS.ErrnoException).code; }
+    expect(code).toBe('ENOENT');
   });
 });

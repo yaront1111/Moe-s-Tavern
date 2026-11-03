@@ -250,6 +250,12 @@ function removeStaleLock(projectPath: string, context: string): boolean {
   }
 }
 
+/**
+ * Take .moe/daemon.lock. False means another starter holds it (EEXIST that is
+ * not stale) or our own write failed and was cleaned up. Any other create error
+ * (ENOENT, EACCES, ENOTDIR...) is thrown, so a caller never reports it as a
+ * lock race.
+ */
 function acquireLock(projectPath: string): boolean {
   const lockPath = lockFilePath(projectPath);
   const MAX_ATTEMPTS = 3;
@@ -279,7 +285,7 @@ function acquireLock(projectPath: string): boolean {
         }
         continue;
       }
-      return false;
+      throw err;
     }
   }
   return false;
@@ -647,6 +653,26 @@ function writeGlobalConfig(): void {
 }
 
 /**
+ * Runs before every other start check in `start`/`init` (supervisor) and `_run`:
+ * true when the project has no .moe/ directory, reported with exit code 1. No
+ * lock, spawn or crash-restart can follow, because a missing .moe/ is final.
+ * `init` creates .moe/ before it starts, so it never trips this.
+ */
+function missingMoeDirBlocksStart(projectPath: string): boolean {
+  const moeDir = path.join(projectPath, '.moe');
+  let isDirectory = false;
+  try {
+    isDirectory = fs.statSync(moeDir).isDirectory();
+  } catch {
+    // Missing, or not reachable: both refuse the start below.
+  }
+  if (isDirectory) return false;
+  logger.error({ projectPath, moeDir }, `.moe/ missing at ${projectPath}; run moe-daemon init --project ${projectPath}`);
+  process.exitCode = 1;
+  return true;
+}
+
+/**
  * Shared first gate of `start`/`init` (supervisor) and `_run`: true when an
  * existing daemon.json must stop this start. A live daemon, native or on the
  * other side of the WSL boundary, blocks it; so does a foreign daemon.json that
@@ -689,10 +715,19 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       hosts = [DEFAULT_BIND_HOST];
     }
   }
+  if (missingMoeDirBlocksStart(projectPath)) return;
   if (await existingDaemonBlocksStart(projectPath)) return;
 
   // Acquire lock to prevent race conditions
-  if (!acquireLock(projectPath)) {
+  let locked: boolean;
+  try {
+    locked = acquireLock(projectPath);
+  } catch (error) {
+    logger.error({ error, lockPath: lockFilePath(projectPath) }, 'Could not create the daemon lock');
+    process.exitCode = 1;
+    return;
+  }
+  if (!locked) {
     logger.info('Another process is starting the daemon, waiting...');
     // Wait a bit and check if daemon is now running
     await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
@@ -704,6 +739,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     }
     if (info && !validation.foreign) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info after lock wait');
     logger.error('Failed to acquire lock and daemon not running');
+    process.exitCode = 1;
     return;
   }
 
@@ -990,6 +1026,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 }
 
 async function superviseDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
+  if (missingMoeDirBlocksStart(projectPath)) return;
   if (await existingDaemonBlocksStart(projectPath)) return;
 
   // Clean up stale stop sentinel from previous runs
