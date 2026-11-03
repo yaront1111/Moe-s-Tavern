@@ -33,17 +33,24 @@
       "author": "architect-24611a0a",
       "content": "Architect note for this row's planner: it now dependsOn task-2f22237b (WORKING), and here is why.\n\ntask-2f22237b adds, right after the marker is read:\n- `if [ \"$RUNTIME_PROTECTED\" = 1 ]; then export NoDefaultCurrentDirectoryInExePath=1; fi` at moe-agent.sh:51;\n- `if ($script:MoeRuntimeProtected) { $env:NoDefaultCurrentDirectoryInExePath = '1' }` at moe-agent.ps1:469;\n- rows C1 and C2 at the end of scripts/tests/protected-agent-command.test.mjs, plus run() changes: a `role` option and a widened env filter.\n\nYour early PATH rewrite would sit on the same lines, so rebase conflicts were likely. Plan on top of its landed bytes.\n\nUseful for your RED rows: a worker-role run in that fixture never launches the CLI (MOE_TASKLESS_NO_LAUNCH reason=claim-failed). Use `run(..., { role: 'governor' })`, which launches it with the inert runtime, and on Windows add git's folder to PATH for the agent Git guard. See Serena mem gotcha-protected-agent-command-reaching-the-cli.",
       "timestamp": "2026-11-02T23:40:07.459Z"
+    },
+    {
+      "id": "comment-1e7fc7b67b824e3d952a67a5d483034c",
+      "author": "architect-24611a0a",
+      "content": "Planner note from architect-24611a0a, written while planning task-52555102 (2026-11-03).\n\nThis row now dependsOn task-52555102. Both rows touch the same three places:\n- scripts/moe-agent.sh: 52555102 changes prepare_agent_git_guard / agent_git_guard_node and corrects the NoDefaultCurrentDirectoryInExePath comment at :52-54.\n- scripts/tests/protected-agent-command.test.mjs: 52555102 appends rows G1 and G2 at the end.\n- docs/ARCHITECTURE.md: the Protected control plane bullet.\n\nA re-measured fact to plan with (mem:gotcha-windows-libuv-spawn-searches-cwd-first): libuv 1.48+ (Node 22+) honours NoDefaultCurrentDirectoryInExePath when it is in the spawning process's own environment. The old \"libuv ignores it\" note set the variable only in the child's env. What still reaches project copies is '.', relative and in-project PATH entries, and that is this row.\n\n52555102's G2 row puts the project itself on PATH and counts only the guard's node as the parent. The launcher's own bash `git` runs through that entry belong to this row, so G2 keeps passing after your PATH rewrite.\n\nOrdering:\n- task-89579137 also waits on 52555102 and appends rows to the same test file. Order the two with a dependsOn when you plan.\n- The ps1 twin of this row is filed as task-3acf7f79 (BACKLOG). It dependsOn this row so it can mirror your design.",
+      "timestamp": "2026-11-03T00:41:38.540Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:31.431Z",
-  "updatedAt": "2026-11-02T23:40:07.459Z",
+  "updatedAt": "2026-11-03T00:41:38.541Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:17.160Z",
     "seq": 1
   },
   "dependsOn": [
-    "task-2f22237b0e30499c907ffe9ff5048c37"
+    "task-2f22237b0e30499c907ffe9ff5048c37",
+    "task-525551023b9d4931a1cf983ce02a6cfb"
   ]
 }

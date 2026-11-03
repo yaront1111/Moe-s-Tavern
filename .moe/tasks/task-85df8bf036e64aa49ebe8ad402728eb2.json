@@ -1,0 +1,28 @@
+{
+  "id": "task-85df8bf036e64aa49ebe8ad402728eb2",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the daemon's \"Step N completed: <step text>\" system notice parses mentions out of the echoed plan text, so a plan that spells the all-hands tag wakes every seat on each step completion",
+  "description": "Observed 2026-11-03 00:31Z. When task-ecf78687's step 1 completed, the #general system notice (msg-ee54f9ed) echoed the step text. That text spells the all-hands tag literally twice, as fixture prose (\"tags itself, [at]all and its role group\"), so the message carried mentions [\"all\"]. Within 30 s, 4 idle seats each spent a notification-only session replying that nothing was asked of them: worker-c9368191, worker-ed0f6a9e, worker-fdb2af60 and worker-d6c1cb7a (msg-a5b22a68, msg-f31cfcf8, msg-5643588d, msg-a97ad107). The governor respelled the same tag in step 5 as a stopgap (amend-1).\n\nCode path:\n- packages/moe-daemon/src/tools/completeStep.ts:140 calls `state.postSystemMessage(task.id, `Step ${stepNum} completed: ${completedDescription}`)`;\n- chatStore.ts postSystemMessage → postToGeneral → state.sendMessage({sender: 'system', content});\n- sendMessage parses mentions from content (util/mentionRouter.ts parseMentions; only fenced and inline code spans are treated as quoted).\nSo any agent-authored text that a system notice echoes is routed as if the system addressed those seats. Plans that describe chat routing (fixtures, mention filters) spell tags routinely.\n\nKeep deliberate system mentions working: the collision heads-up's live-assignee tags, and relayed comment mentions.",
+  "definitionOfDone": [
+    "A completed step whose description contains literal role-group, all-hands or worker-id tags produces a 'Step N completed' system notice that routes to no seat (no routing targets, no mentions recorded), while its text stays readable; a new daemon test asserts this.",
+    "System notices that intentionally mention seats (the file-collision heads-up's live-assignee tags, comment mention relays) still route exactly as today; the existing tests for them pass unchanged.",
+    "The daemon test suite passes on a git-archive snapshot of the landed tree (never npm build/test in the shared checkout), with the exact command and its pass/fail counts in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 349.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T00:35:53.599Z",
+  "updatedAt": "2026-11-03T00:35:53.599Z"
+}

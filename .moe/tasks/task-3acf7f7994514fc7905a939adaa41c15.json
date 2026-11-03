@@ -1,0 +1,32 @@
+{
+  "id": "task-3acf7f7994514fc7905a939adaa41c15",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: under MOE_RUNTIME_PROTECTED=1 the ps1 wrapper keeps '.', relative and in-project PATH entries, so its own bare `& git` and its worktree-launch and board-snapshot Node programs can run a project git.exe (ps1 twin of task-0b2ea570)",
+  "description": "Found while planning task-52555102 (prototype and logs in /mnt/d/moe-scratch/52555102-plan).\n\nMeasured on 2026-11-03 on this Windows host, with PS 5.1 and PS 7:\n- With MOE_RUNTIME_PROTECTED=1 and a '.' entry first on PATH, a protected governor launch of moe-agent.ps1 runs a <project>\\git.exe planted at the project root. The wrapper's own PowerShell `& git` calls run it, not the agent Git guard.\n- PowerShell walks '.', relative and in-project PATH entries. Find-MoeProtectedFile skips them only for node and the agent CLI, and $env:PATH is left as inherited.\n\nTwo more wrapper Node programs spawn git by bare name with no cwd option:\n- Initialize-MoeWorktreeLaunch's `git` helper: scripts/moe-agent.ps1 ~:3260, sh twin prepare_worktree_launch ~:3394.\n- Invoke-MoeBoardSnapshot: ~:7345, sh twin board_snapshot ~:7858.\n\nOn Node 22+ (libuv 1.48+), the NoDefaultCurrentDirectoryInExePath=1 that task-2f22237b exports already stops the implicit current-directory lookup (mem:gotcha-windows-libuv-spawn-searches-cwd-first, re-measured 2026-11-03). Two gaps remain:\n- libuv still walks '.', relative and in-project PATH entries.\n- Node 20 and older ignore the variable.\ntask-0b2ea570 covers the sh wrapper's PATH and moe-call.sh; this row is the ps1 twin.\n\nFix direction:\n- Under the marker, rewrite $env:PATH once, early (right after the marker is read and before any bare-name call), to the absolute entries outside the project that Find-MoeProtectedFile accepts.\n- And/or pass task-52555102's trusted git path to the worktree-launch and board-snapshot programs. Keep both wrappers' program texts identical, as their twin tests require.\n- Mirror whatever design task-0b2ea570 lands for sh.",
+  "definitionOfDone": [
+    "Under MOE_RUNTIME_PROTECTED=1 on Windows, a git.exe planted at the project root and reachable through a '.', relative or in-project PATH entry never runs during a protected governor launch of moe-agent.ps1. The check is the whole exe log, not only the agent Git guard's children. A protected-agent-command row run through Windows node.exe proves it for PS 5.1 and PS 7.",
+    "Under the marker, the worktree-launch and board-snapshot Node programs never spawn git by bare name, in either twin. A test row or a mutant-checked assertion pins this.",
+    "Legacy seats are unchanged. parity-check.sh, the protected-agent-command and agent-git-guard suites, and the launcher suites exit 0 on Linux and through Windows node.exe."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-525551023b9d4931a1cf983ce02a6cfb",
+    "task-0b2ea5709415489ea9b6fef528bef5df"
+  ],
+  "priority": "LOW",
+  "order": 326.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T00:41:12.507Z",
+  "updatedAt": "2026-11-03T00:41:12.507Z"
+}

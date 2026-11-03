@@ -78,10 +78,20 @@
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) Parity: all four sites skip the sender. sh `==` / `!=` and ps1 `-ceq` agree on a missing sender (not skipped) and on a case-only difference (not skipped).\n  - Prove the sh half with a two-line python check of the probe expression: a sender of None, 'worker-x' and 'WORKER-X' against worker_id 'worker-x'.\n  - Prove the ps1 half with a `powershell.exe -NoProfile -Command` probe of `[string]$null -ceq 'worker-x'` and `'WORKER-X' -ceq 'worker-x'`.\n(b) RED already proves both arms kill the unfixed wrappers. Name which assertion fired in each.\n(c) The FAKE_MENTION=1 message is byte-identical to before, and AA, AB and AB2 still pass.\n(d) The contrast run (group) proves another sender's [at]all or role-group tag still launches.\n(e) Out of scope, note only: a peer's message that only quotes [at]all is still a mention by design, and the daemon decides routing.\n(f) Process safety: background runs are killed only by their recorded PID, never by name or pattern.",
+          "reason": "Governor, 00:37Z, a spelling change only: the two literal all-hands tags in (d) and (e) become \"[at]all\". The daemon's \"Step N completed\" system notice echoes the step text and parses mentions out of it. When step 1 completed at 00:31Z, its literal tag broadcast to the whole fleet and woke 4+ idle seats into notification-only sessions (msg-ee54f9ed). Nothing else in the step changes: same checks, same order, same meaning.",
+          "amendedBy": "governor-e6b40560",
+          "amendedAt": "2026-11-03T00:35:17.207Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
   "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
@@ -95,7 +105,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:23:35.850Z",
-  "updatedAt": "2026-11-03T00:32:36.584Z",
+  "updatedAt": "2026-11-03T00:35:17.207Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:11.284Z",
