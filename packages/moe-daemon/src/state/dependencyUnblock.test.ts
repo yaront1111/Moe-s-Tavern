@@ -535,6 +535,8 @@ describe('dependencyUnblock — delivery evidence on a DONE prerequisite', () =>
     autoCommit: true,
     qualityGate: GATE,
     qualityGateScope: 'everyTask',
+    // The shared-mode path; with a gate, unset now means 'on' (WT-19).
+    worktreeMode: 'off',
   };
   const STRICT_SETTINGS = { ...DEFAULT_POLICY_SETTINGS, deliveryPolicy: 'local-branch' };
 

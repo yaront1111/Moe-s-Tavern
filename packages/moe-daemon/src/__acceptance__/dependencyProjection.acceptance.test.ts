@@ -59,8 +59,9 @@ const snapshotOf = (kind: Kind) => (kind === 'strict' ? STRICT : LEGACY);
 beforeEach(async () => {
   h.init(); h.setupMoeFolder(); h.createEpic(); h.createEpic({ id: 'epic-2' }); seq = 0;
   await h.state.load();
+  // worktreeMode 'off': the shared-mode path; with a gate, unset now means 'on' (WT-19).
   h.state.project!.settings = { ...h.state.project!.settings, approvalMode: 'TURBO', deliveryPolicy: 'legacy', qualityGate: GATE,
-    qualityGateScope: 'everyTask', checkEnvironments: [ENV] };
+    qualityGateScope: 'everyTask', checkEnvironments: [ENV], worktreeMode: 'off' };
   const adapter = new McpAdapter(h.state);
   call = createMcpCaller(h.state, adapter).call;
   // Reuse the harness's runner options with an identity authenticated over a temporary host key.

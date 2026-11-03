@@ -185,7 +185,9 @@ function writeProject() {
     globalRails: { techStack: [], forbiddenPatterns: [], requiredPatterns: [], formatting: '', testing: '', customRules: [] },
     settings: { approvalMode: 'CONTROL', speedModeDelayMs: 2000, agentCommand: 'codex', autoCreateBranch: false,
       branchPattern: 'moe/{epicId}/{taskId}', commitPattern: 'feat({epicId}): {taskTitle}', deliveryPolicy: 'local-branch',
-      autoCommit: true, consolidationBranch: 'wave1-pilot', qualityGate: opts.gate, qualityGateScope: 'everyTask', checkpointPush: false } });
+      autoCommit: true, consolidationBranch: 'wave1-pilot', qualityGate: opts.gate, qualityGateScope: 'everyTask', checkpointPush: false,
+      // The shared-mode delivery path; with a gate, an unset worktreeMode now means 'on' (WT-19).
+      worktreeMode: 'off' } });
   json('epics/epic-pilot.json', { id: 'epic-pilot', projectId: 'proj-wave1-pilot', title: 'Wave 1 pilot', description: '',
     architectureNotes: '', epicRails: [], status: 'ACTIVE', order: 1, createdAt: now, updatedAt: now });
   const task = (id, order, extra) => ({ id, epicId: 'epic-pilot', title: `Wave 1 pilot ${id}`, description: 'Pilot fixture',

@@ -66,6 +66,33 @@ describe('moe.claim_next_task — worktree workspace', () => {
     expect(result.workspace).toEqual(sharedWorkspace());
   });
 
+  // WT-19: the claim passes the WHOLE settings object, so the gate-aware default reaches it.
+  it.each([['npm test', 'worktree'], ['   ', 'shared'], [undefined, 'shared']] as const)(
+    'turns an unset mode with qualityGate %j into a %s WORKING claim', async (qualityGate, mode) => {
+      await setup();
+      if (qualityGate !== undefined) (h.state.project!.settings as Record<string, unknown>).qualityGate = qualityGate;
+      expect(h.state.project!.settings.worktreeMode).toEqual(undefined);
+      const result = await claim();
+      const workspace = path.join(h.state.projectPath, '.worktrees', 'task-1');
+      if (mode === 'worktree') {
+        expectRecorded(result, 'worktree', workspace);
+        expect(result.workspace).toEqual({ mode: 'worktree', path: workspace, branch: 'moe/task/task-1', target: 'main' });
+      } else {
+        expectRecorded(result, 'shared', h.state.projectPath);
+        expect(result.workspace).toEqual(sharedWorkspace());
+      }
+    });
+
+  it.each(['PLANNING', 'REVIEW'] as const)('keeps a %s claim shared under the gate-aware default', async (status) => {
+    await setup(status);
+    await h.state.updateSettings({ qualityGate: 'npm test' });
+    expect(h.state.project!.settings).toMatchObject({ qualityGate: 'npm test' });
+    expect(h.state.project!.settings.worktreeMode).toEqual(undefined);
+    const result = await claim({ statuses: [status] });
+    expectRecorded(result, 'shared', h.state.projectPath);
+    expect(result.workspace).toEqual(sharedWorkspace());
+  });
+
   it.each([['moe/work-2026-10-24', 'moe/work-2026-10-24'], ['moe/work-*', 'main']])(
     'wires consolidation target %s to %s', async (consolidationBranch, target) => {
       await setup('WORKING', 'on');

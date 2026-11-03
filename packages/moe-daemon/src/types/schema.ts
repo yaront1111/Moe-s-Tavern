@@ -264,8 +264,10 @@ export interface ProjectSettings {
   /**
    * 'on' runs each new WORKING claim in <projectPath>/.worktrees/<taskId>
    * on moe/task/<taskId>. Read once at claim time, pinned on the attempt's
-   * workspaceMode. Absent means 'off' only in resolveWorktreeMode (WT-19
-   * flips that default); any other value is refused.
+   * workspaceMode. Absent resolves (resolveWorktreeMode, the one default)
+   * to 'on' when qualityGate is non-blank after trim, else 'off', so the
+   * default never lands a gate-less project ungated; any other value is
+   * refused.
    */
   worktreeMode?: WorktreeMode;
   /**

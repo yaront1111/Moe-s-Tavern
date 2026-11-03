@@ -35,7 +35,8 @@ const ROOT = 'packages/moe-daemon/src/__acceptance__';
 const sha = (c: string) => c.repeat(40);
 const BASE = { approvalMode: 'TURBO', speedModeDelayMs: 2000, autoCreateBranch: false, branchPattern: '', commitPattern: '',
   agentCommand: 'claude', enableAgentTeams: false };
-const STRICT = { deliveryPolicy: 'local-branch', qualityGate: GATE, qualityGateScope: 'everyTask' };
+// worktreeMode 'off': the shared-mode path; with a gate, unset now means 'on' (WT-19).
+const STRICT = { deliveryPolicy: 'local-branch', qualityGate: GATE, qualityGateScope: 'everyTask', worktreeMode: 'off' };
 
 async function boot(extra: Record<string, unknown> = {}): Promise<void> {
   h.init(); h.setupMoeFolder({ settings: { ...BASE, ...extra } as never }); h.createEpic(); h.createTask({ status: 'PLANNING' });

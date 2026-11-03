@@ -48,6 +48,25 @@ describe('worktree mode', () => {
     expect(resolveWorktreeMode(settings)).toEqual('off');
   });
 
+  // WT-19 gate-aware default (dec-eb7b8337 (b)): unset is 'on' only with a non-blank gate.
+  it.each([
+    [undefined, 'off'], ['', 'off'], ['   ', 'off'], ['\t\n', 'off'], [7, 'off'], [null, 'off'], [['npm test'], 'off'],
+    [{}, 'off'], ['npm test', 'on'], ['  npm test  ', 'on'],
+  ] as const)('resolves an unset mode with qualityGate %j to %s', (qualityGate, expected) => {
+    expect(resolveWorktreeMode({ qualityGate })).toEqual(expected);
+  });
+
+  it.each([
+    ['off', 'npm test', 'off'], ['off', undefined, 'off'], ['on', undefined, 'on'], ['on', '   ', 'on'], ['on', 'npm test', 'on'],
+  ] as const)('honors explicit mode %s with qualityGate %j', (worktreeMode, qualityGate, expected) => {
+    expect(resolveWorktreeMode({ worktreeMode, qualityGate })).toEqual(expected);
+  });
+
+  it.each([null, 'ON', 1])('refuses invalid mode %j even with a gate', (worktreeMode) => {
+    expect(() => resolveWorktreeMode({ worktreeMode, qualityGate: 'npm test' }))
+      .toThrow(expect.objectContaining({ code: MoeErrorCode.INVALID_INPUT, message: expect.stringContaining('worktreeMode') }));
+  });
+
   it.each([
     ['main', 'main'], ['moe/work-2026-10-24', 'moe/work-2026-10-24'], ['  release/v2  ', 'release/v2'],
     ['moe/work-*', 'main'], ['rel?ase', 'main'], ['feat[0-9]', 'main'], ['', 'main'], ['   ', 'main'],
