@@ -116,8 +116,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -174,7 +174,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-03T20:02:29.780Z",
+  "updatedAt": "2026-11-03T20:44:10.294Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",
@@ -184,7 +184,9 @@
     "firstClaimAt": "2026-11-01T12:25:21.951Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T20:43:17.411Z",
+    "wallClockMs": 202675460
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -299,9 +301,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T19:07:13Z",
-    "at": "2026-11-03T20:01:50.004Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T20:02:11Z",
+    "at": "2026-11-03T20:44:10.294Z"
+  },
+  "completedAt": "2026-11-03T20:43:17.411Z",
+  "reviewCompletedAt": "2026-11-03T20:43:17.411Z",
+  "reviewSummary": "Reviewed completion 5592bcc0 (on moe/work-2026-10-24 + origin). 260 changed lines (+243/-17) across 6 declared paths, under 400.\n\nFresh gate on a git-archive snapshot of 5592bcc0 (clean env -i, Node 24, SigIgn 0x5):\n- bash -n = 0; parity-check PASS\n- MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh: PASS postflight-vm-route.sh, PASS postflight.sh, EXIT=0 (31 min, /tmp/qa828e/gate.log)\n- npm run lint OK; moe-account-lease.test.mjs 41 pass / 1 skip; node --check; diff --check clean\n\nDoD:\n(1) The [vm route] today's-path row and every legacy row are green. Edits are gated on VM_ROUTE or verified-local.\n(2) VR-happy covers order and executionRoute=vm.\n(3) W1/C1/C2/S1-S4/N1/N2/P1.\n(4) VE-OPENAI/CODEX_API_KEY: the stdin sha matches, the canary is absent from logs and output, and the stub envs are scrubbed.\n(5) VR-happy, VR-sigint, VE-failed/missing/false/stop-failed/streak and VE-wait-capacity/credential/cap.\n(6) The run above.\n\nCode read: PIPESTATUS re-index is correct. A failed job runs seat_vm_stop and lands nothing. The capacity wait triggers only on rc 75. The credential wait sits before CLI_LAUNCHED_AT and rechecks the attempt. The outage exemption is VM-only. The rc1 rescue never touches W (planner comment-e98f63a).\n\nNon-blocking:\n- Codex keys stay in the operator's own wrapper env, so non-seat children inherit them as under legacy.\n- seat_wait_credential spawns node twice per launch.\n- The capacity-wait text says 'no task is claimed' even on a post-failure re-provision; this is commented.\n- The duplicate taskless line is tracked in task-1ccae85c.\n- No real VM or activation is claimed.",
+  "requiredCheckAtDone": null
 }

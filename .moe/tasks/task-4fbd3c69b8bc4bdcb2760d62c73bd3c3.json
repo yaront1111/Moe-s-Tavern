@@ -1,0 +1,28 @@
+{
+  "id": "task-4fbd3c69b8bc4bdcb2760d62c73bd3c3",
+  "epicId": "epic-be924fb8",
+  "title": "bug: wait_for_task never checks the caller's own finalizing attempt, which claim_next_task refuses with ATTEMPT_FINALIZING, so a worker that waits after complete_task is woken for a row its claim then refuses: the wake-claim-refuse spin claimEligibility.ts exists to prevent",
+  "description": "Filed by hunt task-afe61cc0 (2026-11-03 #11, lane 1: claim-eligibility entry points).\n\nPROBLEM\n- claim_next_task refuses a worker whose own attempt is finalizing. claimNextTask.ts:534-544 looks for an attempt with `a.workerId === params.workerId && a.phase === 'finalizing'` and throws attemptFinalizingRefusal: ATTEMPT_FINALIZING, retryable, \"Close the boundary with moe.finalize_attempt, then retry\" (util/claimGuards.ts:109-124).\n- wait_for_task's matcher never checks that hold. findMatchingTask in packages/moe-daemon/src/tools/waitForTask.ts consults only blockingHold (:169). So the immediate answer (:310-321) returns hasNext:true with nextAction moe.claim_next_task, the claim is refused, and the seat waits again.\n- The code says this must not happen. util/claimEligibility.ts:14-20 and :38-40 give claim_next_task and wait_for_task one definition of \"this worker is encumbered\", which the two MUST share, because a disagreement is the wake-claim-refuse spin. waitForTask.ts:171-174 repeats it: \"Eligibility here must be at least as strict as claim_next_task's ranked pool\".\n- A worker's attempt stays finalizing from complete_task until its wrapper calls moe.finalize_attempt, and the wrapper does that only after the CLI exits. A session that waits in that window cannot get out. The wrapper's own AUTO_CLAIM fallback prompt (scripts/moe-agent.sh:10928-10930, used when pre-flight claimed nothing) sends sessions there: \"Before calling moe.wait_for_task, use Serena write_memory to record a task-<id>-handoff note ... Keep waiting until you get a task.\" So does an interactive worker TUI that keeps going after complete_task.\n\nEVIDENCE\nRepro on HEAD 31492ac5, run in a git-archive snapshot outside the shared checkout: /mnt/d/moe-scratch/hunt-afe61cc0/A/zzHuntA_waitFinalizingSeat.test.ts, verbatim output in zzHuntA_waitFinalizingSeat.output.txt.\n  task-W attempts after complete_task: [[1,\"worker-1\",\"finalizing\"]]\n  task-W row: {\"status\":\"REVIEW\",\"assignedWorkerId\":null}\n  wait_for_task answered: {\"hasNext\":true,\"task\":{\"id\":\"task-next\",...,\"status\":\"WORKING\",...},\"nextAction\":{\"tool\":\"moe.claim_next_task\",\"args\":{\"statuses\":[\"WORKING\"],\"workerId\":\"worker-1\"},...}}\n  claim_next_task (following the wake) answered: {\"thrown\":{\"codeName\":\"ATTEMPT_FINALIZING\",\"code\":-32002,\"retryable\":true}}\n  AssertionError: expected true to be false\n\nFIX DIRECTION\n- Move the own-finalizing predicate into util/claimEligibility.ts (e.g. ownFinalizingAttempt(state, workerId)), next to blockingHold.\n- Use it in both tools. claimNextTask.ts:534-544 keeps its refusal through the helper. waitForTask.ts findMatchingTask returns NO_MATCH while it is set, right after the blockingHold check.\n- The parked waiter then wakes on the TASK_UPDATED that finalize_attempt publishes through announceAttemptClosed (src/tools/finalizeAttempt.ts:291, src/state/attemptStore.ts:755-758). No finalize change is needed.\n- The matcher runs for every waiter on every task event, so keep the lookup cheap: one pass over attempts per match at most, as the existing finalizing index does.\n\nFILES\n- packages/moe-daemon/src/util/claimEligibility.ts\n- packages/moe-daemon/src/tools/waitForTask.ts\n- packages/moe-daemon/src/tools/claimNextTask.ts (only switch :534-544 to the shared helper)\n- new packages/moe-daemon/src/tools/waitForTask.ownFinalizing.test.ts\nDo not edit util/claimGuards.ts (task-0adea941 holds it) or tools/finalizeAttempt.ts (hunt #10's lane).",
+  "definitionOfDone": [
+    "waitForTask.ownFinalizing.test.ts: worker-1's complete_task leaves its attempt finalizing while another WORKING row is claimable. moe.wait_for_task {statuses:['WORKING'], workerId:'worker-1', timeoutMs:1000} then answers hasNext:false with no task. This fails against HEAD 31492ac5's waitForTask.ts.",
+    "The same file: a waiter parked that way wakes with hasNext:true once moe.finalize_attempt closes worker-1's attempt, and the moe.claim_next_task that follows assigns the row to worker-1.",
+    "`cd packages/moe-daemon && npx vitest run src/tools/waitForTask.ownFinalizing.test.ts src/tools/waitForTask.test.ts src/tools/claimNextTask.test.ts` passes in a snapshot outside the shared checkout, including claimNextTask.test.ts's 'refuses a coding claim while that worker has an attempt finalizing'."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 428.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:43:54.639Z",
+  "updatedAt": "2026-11-03T20:43:54.639Z"
+}

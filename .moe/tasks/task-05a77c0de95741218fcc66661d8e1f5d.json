@@ -1,0 +1,34 @@
+{
+  "id": "task-05a77c0de95741218fcc66661d8e1f5d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: get_activity_log reads only the live activity.log, so after each 10 MB rotation every older event drops out of filtered and unfiltered queries (and the IDE Activity panel) while search.complete reports true, against MCP_SERVER.md's 5000-recent-line scan",
+  "description": "Filed by hunt task-afe61cc0 (2026-11-03 #11, lane 2: daemon read/query tools).\n\nPROBLEM\n- getActivityLogWindow (packages/moe-daemon/src/state/activityLog.ts:204-216) reads only .moe/activity.log, through readLastLinesWithMetadata. Nothing reads the rotated generations.\n- LogRotator.rotate (src/util/LogRotator.ts:82-113) gzips the whole live log into activity.log.1.gz and truncates it once it passes LOG_MAX_SIZE_MB (default 10), keeping LOG_RETENTION_COUNT (default 5) generations.\n- So right after every rotation, get_activity_log answers only from the events appended since. queryActivityLog (src/tools/getActivityLog.ts:117-122) fetches 5000 lines for a filtered query and offset+limit+1 for an unfiltered one, and both stop at the live file.\n- getActivityLog.ts:174 reports `search.complete: !scanned.hasMoreOlderLines`, which is true whenever the live file is shorter than the fetch. A caller is told the search was complete, and unfiltered paging reports hasMore:false at the rotation boundary.\n- This contradicts docs/MCP_SERVER.md's moe.get_activity_log note (\"Filtered queries scan at most 5000 recent lines; older matches are not returned\") and the comment at getActivityLog.ts:140-144 (\"Truncation is still surfaced via search.complete/scanLimit\").\n- The IDE Activity panel takes the same path: /ws GET_ACTIVITY_LOG calls queryActivityLog (src/server/WebSocketServer.ts:436-443).\n\nEVIDENCE\n1. Repro on HEAD 31492ac5, run in a git-archive snapshot outside the shared checkout: /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_activityRotation.test.ts, verbatim output in zzHuntB_activityRotation.output.txt. It logs a task-a event, rotates with `new LogRotator(logPath, { maxSizeMB: 0.0001 }).rotateIfNeeded()`, logs a task-b event and queries {taskId:'task-a'}:\n   {\"rotated\":true,\"files\":[\"activity.log\",\"activity.log.1.gz\"],\"liveLines\":2,\"filteredByTaskA\":{\"returned\":0,\"hasMore\":false,\"search\":{\"scannedEvents\":2,\"scannedLines\":2,\"scanLimit\":5000,\"matchingEventsWithinScan\":0,\"complete\":true}},\"unfiltered\":{\"returned\":2,\"hasMore\":false,\"complete\":true}}\n2. Live .moe, 2026-11-03: the log rotated at 09:13Z and 19:12Z. At 20:40Z:\n   - the live activity.log held 896 lines, the first stamped 2026-11-03T19:12:21.618Z;\n   - activity.log.1.gz held 4,036 lines (09:13:53Z to 19:12:18Z);\n   - activity.log.2.gz held 4,441 lines (2026-11-02T21:41Z to 2026-11-03T09:13Z).\n   So a governor or QA query for anything earlier today (a claim, a plan approval, a QA verdict) returns nothing with complete:true, though it lies well inside a 5000-line scan.\n\nFIX DIRECTION\n- When the live file yields fewer lines than the fetch, continue newest-first into activity.log.1.gz, .2.gz and so on (zlib gunzip, up to LOG_RETENTION_COUNT) until the fetch is met.\n- Set hasMoreOlderLines whenever a line or a generation is left unread, so search.complete and unfiltered hasMore stay honest.\n- Keep the 5000-line budget, the newest-first order and the response shape.\n- Skip an unreadable or corrupt .gz with a logged warning, report complete:false for it, and never throw from the query.\n- Stop decompressing once the fetch is met. At about 4,000 lines a generation, a full filtered scan reads the live file plus one or two generations.\n- No StateManager.ts edit is needed (task-34e42a0a may hold it).\n- Do not edit docs/MCP_SERVER.md (task-0adea941 holds it): the fix makes its note true.\n\nFILES\n- packages/moe-daemon/src/state/activityLog.ts\n- packages/moe-daemon/src/util/reverseReader.ts, only if a shared line reader helps\n- new packages/moe-daemon/src/state/activityLog.rotation.test.ts",
+  "definitionOfDone": [
+    "activityLog.rotation.test.ts logs a task-a event, rotates (LogRotator with a tiny maxSizeMB) and logs a task-b event. moe.get_activity_log {taskId:'task-a'} then returns the task-a event, and the unfiltered {limit:1} answer has hasMore:true while {offset:1, limit:1} returns the rotated event. Each assertion fails against HEAD 31492ac5's activityLog.ts.",
+    "The same file: when the 5000-line filtered scan ends before an older generation is read (e.g. a synthetic activity.log.1.gz of 5000 lines and the target event in activity.log.2.gz), search.complete is false; when every line was read, it is true.",
+    "`cd packages/moe-daemon && npx vitest run src/state/activityLog.rotation.test.ts src/tools/getActivityLog.test.ts src/util/reverseReader.test.ts` passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 426.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:43:27.452Z",
+  "updatedAt": "2026-11-03T20:43:39.033Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T20:43:35.791Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

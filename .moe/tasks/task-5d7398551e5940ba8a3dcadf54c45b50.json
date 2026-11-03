@@ -1,0 +1,28 @@
+{
+  "id": "task-5d7398551e5940ba8a3dcadf54c45b50",
+  "epicId": "epic-be924fb8",
+  "title": "bug: list_metrics sinceIso keys an in-flight task on metrics.firstClaimAt, its oldest lifecycle stamp, so a WORKING, REVIEW or BLOCKED row first claimed before the cutoff but touched after it is dropped, where the schema and MCP_SERVER.md promise the most recent timestamp",
+  "description": "Filed by hunt task-afe61cc0 (2026-11-03 #11, lane 2: daemon read/query tools).\n\nPROBLEM\n- filterTasksForMetrics (packages/moe-daemon/src/util/metrics.ts:111-131) keys the sinceIso cutoff on `t.metrics?.doneAt ?? t.metrics?.firstClaimAt ?? t.updatedAt ?? t.createdAt` (:122-125).\n- For a claimed task that is not done, firstClaimAt is its OLDEST lifecycle stamp. So a WORKING, REVIEW or BLOCKED row first claimed before the cutoff is dropped, however recently it was touched.\n- The contract says the opposite, in three places:\n  - the list_metrics schema (src/tools/listMetrics.ts:21): \"only tasks last touched at/after this time are included\";\n  - docs/MCP_SERVER.md's moe.list_metrics notes: \"sinceIso uses the most recent lifecycle timestamp available on each task, so in-flight tasks aren't excluded just because they haven't reached DONE\";\n  - the code's own comment (metrics.ts:120-121): \"Use the most recent lifecycle timestamp available\".\n- The IDE metrics range calls the same function (/ws GET_METRICS, src/server/WebSocketServer.ts:993).\n\nEVIDENCE\n1. Repro on HEAD 31492ac5, run in a git-archive snapshot outside the shared checkout: /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_metricsSince.test.ts, verbatim output in zzHuntB_metricsSince.output.txt. A WORKING row first claimed 48 h ago and updated 1 h ago, queried with a 24 h sinceIso:\n   stored updatedAt 2026-11-03T19:34:54.621Z firstClaimAt 2026-11-01T20:34:54.621Z sinceIso 2026-11-02T20:34:54.621Z => totalMatched 0\n   AssertionError: expected +0 to be 1\n2. Live board at 2026-11-03T20:40Z: 4 of the 9 in-flight rows fall out of a 24 h window, although each was updated within the last 2 hours:\n   - 23c803d2 WORKING (firstClaimAt 2026-11-01T18:55Z, updatedAt 2026-11-03T19:29Z);\n   - 62ec51f1 WORKING (11-01T14:15Z / 11-03T19:19Z);\n   - 828e7d21 REVIEW (11-01T12:25Z / 11-03T20:02Z);\n   - d861f3de BLOCKED (11-01T18:54Z / 11-03T19:07Z).\n\nFIX DIRECTION\n- Key the cutoff on `metrics.doneAt ?? updatedAt ?? metrics.firstClaimAt ?? createdAt`.\n- doneAt stays first, so a DONE row whose updatedAt is bumped later (a comment, a board edit, an archive) is not pulled back into the window. Every other row uses updatedAt, which is never older than firstClaimAt.\n- Leave the per-task sort order alone: MCP_SERVER.md documents doneAt → firstClaimAt → updatedAt → createdAt for sorting.\n- Do not edit docs/MCP_SERVER.md (task-0adea941 holds it): the fix makes its note true.\n\nFILES\n- packages/moe-daemon/src/util/metrics.ts\n- packages/moe-daemon/src/util/metrics.test.ts",
+  "definitionOfDone": [
+    "metrics.test.ts: filterTasksForMetrics with a 24 h sinceIso keeps a WORKING task whose metrics.firstClaimAt is 48 h old and updatedAt 1 h old. This fails against HEAD 31492ac5's metrics.ts.",
+    "The same file: a DONE task with metrics.doneAt 48 h old and updatedAt 1 h old stays out of the 24 h window, and a task whose every stamp is 48 h old stays out.",
+    "`cd packages/moe-daemon && npx vitest run src/util/metrics.test.ts` passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 429.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:44:05.533Z",
+  "updatedAt": "2026-11-03T20:44:05.533Z"
+}

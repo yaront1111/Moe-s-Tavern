@@ -1,0 +1,28 @@
+{
+  "id": "task-1cb559b7501d4304be47e822fc539dd8",
+  "epicId": "epic-be924fb8",
+  "title": "bug: complete_step stores modifiedFiles without the normalizeAffectedFiles check declare_files and submit_plan apply, so an absolute, traversing or non-string entry returns success but silently drops out of the ASSERTED tier, and a non-array value also drops the affectedFiles fallback its own warning reports",
+  "description": "Found by defect hunt #10 (task-49a2c07f, architect-1dd28c7c) on 2026-11-03. The holder re-ran the repro and re-derived the lines below at HEAD 677d051a. This is the residual of task-e3d41183, which added only the count cap.\n\nPROBLEM\n- complete_step checks only the number of modifiedFiles entries (completeStep.ts:93, the e3d41183 cap) and stores the raw value (:115).\n- Its siblings that feed the same ASSERTED tier normalize paths and refuse bad ones:\n  - declare_files (declareFiles.ts:48-50) runs normalizeAffectedFiles, under the comment \"an absolute or traversing path is a caller mistake to fix, not something to store\";\n  - submit_plan does the same for affectedFiles and newFiles (submitPlan.ts:404, :410).\n- The read side silently drops what it cannot normalize:\n  - tolerantNormalizePath (util/attributionTiers.ts:39-45) returns null for such an entry, so it never reaches get_commit_scope's asserted list;\n  - completedStepFiles (:102-105) reads `s.modifiedFiles || s.affectedFiles`, so a stored non-empty junk list also suppresses the step's planned affectedFiles fallback.\n- A non-array value is stored, and the plan sanitizer then turns it into [] (state/validators.ts:790). An empty array is truthy, so the fallback is lost there too, while complete_step's own warning (completeStep.ts:158-160) says it \"fell back to the step's affectedFiles\".\n- An absolute path draws no warning at all, because the list is non-empty.\n- Claude Code's Edit and Write tools take absolute paths, so `<projectRoot>/src/x.ts` is a natural spelling for a worker to report.\n- Consequences in shared mode, with another worker live:\n  - an edit that neither the plan nor a TOOL-tier harvest covers becomes MOE_ATTRIBUTION_UNRESOLVED;\n  - planned files drop from the ASSERTED tier to PLANNED.\n- None of the 2979 stored steps on this board has a malformed entry. This is a guard gap, not a live incident.\n\nEVIDENCE: repro at HEAD 677d051a, run in a git-archive snapshot outside the checkout\n- Files: /mnt/d/moe-scratch/hunt-49a2c07f/B/zzHuntB_modifiedFilesShape.test.ts, output in A_modifiedFilesShape.out.txt.\n- Command: `cd packages/moe-daemon && NO_COLOR=1 npx vitest run src/tools/zzHuntB_modifiedFilesShape.test.ts`\n- An absolute path, and separately '../x.ts': `promise resolved \"{ success: true, …(7) }\" instead of rejecting`.\n- An accepted absolute path is lost from asserted: `+ \"lost\": [ \"/tmp/moe-tools-test-…/src/new-helper.ts\" ]`.\n- A string instead of an array: `expected { stored: [], asserted: [] } to deeply equal { stored: undefined, …(1) }`. The expected asserted list holds \"src/planned.ts\".\n- Control (passes): declare_files refuses an absolute path, a '../' path and an object entry with INVALID_INPUT.\n- Result: Tests 4 failed | 1 passed (5).\n- normalizeAffectedFiles itself already does the right thing:\n  - ['./src/a.ts','src\\\\b.ts','src/a.ts'] becomes ['src/a.ts','src/b.ts'];\n  - 'C:\\\\x.ts', '../x.ts', '/abs/x.ts', {path} and a bare string each throw MoeError -32602.\n\nFIX DIRECTION\n- In completeStep.ts, run `normalizeAffectedFiles(params.modifiedFiles, 'modifiedFiles')`:\n  - after the e3d41183 count cap, so its message does not change;\n  - before any write, including the strict recordStepCompletion.\n- Store the normalized, deduplicated list. That refuses, with INVALID_INPUT, a non-array value, a non-string or blank entry, an over-long entry, and an absolute, drive-letter or traversing path, exactly as declare_files does.\n- An omitted or empty modifiedFiles keeps today's warning and fallback.\n\nFILES\n- packages/moe-daemon/src/tools/completeStep.ts\n- packages/moe-daemon/src/tools/completeStep.pathShape.test.ts (new)\n- Neither file is held at filing time.\n\nVERIFICATION\nRun vitest in a snapshot or the task worktree, never in the shared checkout: `npx vitest run src/tools/completeStep.test.ts src/tools/completeStep.modifiedFiles.test.ts src/tools/completeStep.pathShape.test.ts`.",
+  "definitionOfDone": [
+    "In the new completeStep.pathShape.test.ts, complete_step rejects with INVALID_INPUT (-32602) each of these modifiedFiles values: [<projectRoot>/src/x.ts], ['../x.ts'], ['C:\\\\x.ts'], [{path:'a.ts'}] and the bare string 'src/a.ts'. For each one the task file stays byte-identical: the step is still IN_PROGRESS, with no stepsCompleted change and no note.",
+    "In the same file, ['./src/a.ts','src\\\\b.ts','src/a.ts'] is stored as ['src/a.ts','src/b.ts'], and get_commit_scope's asserted list contains both paths.",
+    "`npx vitest run src/tools/completeStep.test.ts src/tools/completeStep.modifiedFiles.test.ts src/tools/completeStep.pathShape.test.ts` passes, and the first two files are unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 425.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:42:26.509Z",
+  "updatedAt": "2026-11-03T20:42:26.509Z"
+}

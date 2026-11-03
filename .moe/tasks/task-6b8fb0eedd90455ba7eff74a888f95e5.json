@@ -9,10 +9,40 @@
     "bash -n scripts/moe-agent.sh, the ParseFile check on scripts/moe-agent.ps1 and scripts/tests/parity-check.sh pass, and the wrapper diff stays inside the two match branches (the fixture is the only other file)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: repair and harden the fixture, then watch the gone row go RED. Make three edits in scripts/tests/seat-registration.test.mjs with your Edit tool, never a shell write. Read mem:gotcha-wrapper-slice-tests-execute-text first.\n(a) Line 91, SEGMENTS.ps1.funcs: change the end anchor '\\nif ($Team) {' to '\\nif ($Team -and -not $moeMigration) {'. d6cbb405 (WT-10M, 2026-11-02) rewrote that line (now scripts/moe-agent.ps1:1774), so between() throws 'missing boundaries' at module load. TODAY THE WHOLE SUITE FAILS on every engine, and so does CI's build-all-platforms step that lists it. Use the exact new line and do not loosen the anchor: slice anchors stay exact, so a moved line fails loudly.\n(b) Line 56, FAKE_PROXY join_team 'gone' outcome: answer with the daemon's real coded refusal instead of refuse(): `if (outcome === 'gone') return reply({ error: { code: -32001, message: '[NOT_FOUND] Team not found: ' + args.teamId, data: { tool: 'moe.join_team', codeName: 'NOT_FOUND' } } });`. MoeErrorCode.NOT_FOUND is -32001, and McpAdapter.ts:318-323 sends data { tool, codeName }. Leave every other outcome as it is, 'error' included.\n(c) Assertions. In the row 'a seat whose team was deleted re-creates it by name on the next pre-flight' (about :271), add two lines.\n- After its tools(run, 1) assertion: `assert.match(run.out, /MOE_SEAT_UNREGISTERED worker=worker-fixture team=Workers - moe\\.join_team: \\[NOT_FOUND\\] Team not found: team-fixture;/);`. It pins that the coded message reaches the seat, so the fixture cannot silently go back to unprefixed.\n- After its tools(run, 2) assertion: `assert.deepEqual(run.rpcs.find((r) => r.iter === 2 && r.tool === 'create_team').args, { name: 'Workers' });`.\nIn the refused re-join loop (about :251-260), after its tools(run, 1) assertion, add `assert.ok(!tools(run).includes('create_team'), 'only a deleted team drops its id');`. It guards against a match that fires on every refusal.\nRED: from the task worktree root run `node --test scripts/tests/seat-registration.test.mjs`. Expect 58 tests: 19 pass, 1 fail ('bash: a seat whose team was deleted ...', at the tools(run, 2) assertion, where actual starts with 'join_team') and 38 PowerShell skips. The architect's scratch run reproduced exactly this.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/seat-registration.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix both match branches and nothing else. Edit in place in the task worktree with your Edit tool, which leaves a TOOL witness. Never use a temp file plus mv, and never sed -i.\n- scripts/moe-agent.sh:2571 (retry_team_join): change `case \"$failure\" in \"Team not found: \"*) TEAM_ID=\"\" ;; esac` to `case \"$failure\" in *\"Team not found: \"*) TEAM_ID=\"\" ;; esac`.\n- scripts/moe-agent.ps1:2006 (Invoke-MoeTeamJoinRetry): change `if ($failure.StartsWith('Team not found: ')) { $script:teamId = '' }` to `if ($failure.Contains('Team not found: ')) { $script:teamId = '' }`. Contains is ordinal and case-sensitive, like the bash glob.\n- In both files, directly below the existing comment `# A team deleted under the seat: drop its id so the next retry re-creates it by name.`, add the same one line: `# The daemon's refusal reads \"[NOT_FOUND] Team not found: <id>\", so match inside it, not at its start.`\nError handling contract (unchanged apart from the match):\n- This branch is the join retry's refusal path. Only a refusal whose message contains 'Team not found: ' drops the cached id.\n- Every other failure keeps the id and is retried as before: a full team, isError, a malformed, foreign or unlisted answer, 'no answer', or a create_team failure.\n- The MOE_SEAT_UNREGISTERED / TEAMLESS warning still prints once per changed refusal.\n- $failure is never null in ps1 ([string] cast, '' initially), so .Contains cannot throw.\nWhy a substring match rather than error.data.codeName:\n- bash's python reader inside retry_team_join (about :2538-2559) keeps only error.message, so using codeName would widen the diff past the branch, which DoD 3 forbids.\n- NOT_FOUND is not specific to teams.\n- The codeName would become TEAM_NOT_FOUND if errors.ts SPECIFIC_NOT_FOUND_CODE_NAMES ever lists it, while notFound('Team', id)'s text stays 'Team not found: <id>'.\nKeep moe-agent.ps1's UTF-8 BOM (first bytes ef bb bf). Then run `bash -n scripts/moe-agent.sh`. The CQ-M07 lane edits these files far below this point (ps1 3195+, sh 9497+), so merge-tree takes both. Touch nothing else.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once. See mem:gotcha-launcher-ps1-rows-from-wsl. From the task worktree root, in a normal shell, run the gate below. Do not use env -i: node.exe needs the Windows PATH for python and Git Bash, and WSL MOE_* variables don't reach it.\n`bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/seat-registration.test.mjs)\" && bash scripts/tests/parity-check.sh`\nExpected results:\n- WSL leg: 58 tests, 20 pass, 0 fail, 38 skipped.\n- Windows leg: 58 tests, 58 pass, 0 skipped. Its 'PowerShell 5.1: moe-agent.ps1 parses' and 'PowerShell 7: moe-agent.ps1 parses' rows are DoD 3's ParseFile check.\n- 'PASS parity-check.sh' (about 6 s).\nThis output, run fresh, is complete_task's verification.\nThen run the negative control on 677d051a's wrapper bytes (DoD 2). Shell writes go only to scratch outside the checkout:\n`S=$(mktemp -d /mnt/d/moe-scratch/neg-6b8f-XXXXXX) && git archive 677d051a scripts .github/workflows/ci.yml | tar -x -C \"$S\" && cp scripts/tests/seat-registration.test.mjs \"$S/scripts/tests/\" && (cd \"$S\" && node --test scripts/tests/seat-registration.test.mjs; \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/seat-registration.test.mjs)\"); rm -rf -- \"$S\"`\nExpected results:\n- WSL: 1 fail (the bash 'gone' row), 19 pass, 38 skipped.\n- Windows: 3 fail (the Git Bash, PowerShell 5.1 and PowerShell 7 'gone' rows), 55 pass.\n- Every failure is at the tools(run, 2) assertion: the old wrappers retry the dead id.\nQuote both RED summaries in complete_task's summary. The architect's scratch run at 677d051a matched every count (RED 1 and 3 fails; GREEN 20 pass with 38 skipped, and 58/58).",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your own `git diff` in the worktree. Fix any finding, re-run step 3's gate, and only then call complete_task.\n(1) Scope: exactly three files. Each wrapper hunk is the match line plus the one comment line, and the twins' comment text is identical.\n(2) Fixture: only the anchor, the 'gone' reply and the three assertions changed. 'error' still refuses with the unprefixed 'Team Workers is full (max 1 members)'. That is out of scope: the wrappers print that text and never branch on it.\n(3) False positives: the substring fires only on a message that contains 'Team not found: '. A team NAME containing that text would make a full-team refusal drop the id. The cost is one idempotent create_team by name per retry, and nothing else.\n(4) moe-agent.ps1 still starts with ef bb bf (parity-check fails otherwise).\n(5) Nothing new: no state, concurrency or IO. The variables are per seat, and moe_rpc and Invoke-MoeRpcRaw are untouched.\nWould you be embarrassed if a deleted team still left a seat teamless? Step 3's RED/GREEN pair is the proof that it does not.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +54,84 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:26:29.022Z",
-  "updatedAt": "2026-11-03T20:27:45.788Z",
+  "updatedAt": "2026-11-03T20:42:58.875Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T20:27:12.270Z"
+    "firstClaimAt": "2026-11-03T20:27:12.270Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-26483323"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T20:42:30.928Z",
+  "executionContract": {
+    "intendedBehavior": "When moe.join_team is refused because the seat's cached team id no longer exists, both launchers clear that id. The daemon's refusal message is \"[NOT_FOUND] Team not found: <id>\". On the next pre-flight the seat re-creates the team by name with moe.create_team and joins it, instead of retrying the dead id until a human relaunches it. Every other refusal keeps the id. scripts/tests/seat-registration.test.mjs loads again, because its ps1 slice anchor follows d6cbb405's team-setup line. Its fake proxy refuses 'gone' with the daemon's real coded error.",
+    "acceptanceCriteria": [
+      "bash retry_team_join drops TEAM_ID when $failure contains 'Team not found: ' anywhere: case pattern *\"Team not found: \"*.",
+      "ps1 Invoke-MoeTeamJoinRetry drops $script:teamId when $failure.Contains('Team not found: '), which is ordinal and case-sensitive like the bash glob.",
+      "The fake proxy's 'gone' outcome replies { code: -32001, message: '[NOT_FOUND] Team not found: <teamId>', data: { tool: 'moe.join_team', codeName: 'NOT_FOUND' } }.",
+      "The 'gone' row checks four things: the coded refusal appears in the MOE_SEAT_UNREGISTERED line; iteration 2 runs create_team({ name: 'Workers' }), join_team, then chat_channels; registered goes false then true. It passes on bash, Git Bash, PS 5.1 and pwsh 7, and fails on 677d051a's wrappers.",
+      "Every refused re-join row (error, isError, malformed, foreign, unlisted, silent) asserts that no create_team call happens."
+    ],
+    "invariants": [
+      "No other wrapper line changes; the message readers in moe_rpc, retry_team_join's python reader and Invoke-MoeRpcRaw stay untouched.",
+      "A refusal that does not contain 'Team not found: ' keeps TEAM_ID / $script:teamId, and the wrapper still warns once per changed refusal.",
+      "moe-agent.ps1 keeps its UTF-8 BOM, and the sh/ps1 twins pass parity-check.sh."
+    ],
+    "compatibility": [
+      "No MCP contract or daemon change.",
+      "The substring also matches the unprefixed text, which no daemon ever sent, and a future '[TEAM_NOT_FOUND] ' prefix."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh retry_team_join: the `case \"$failure\" in ...` line, plus one comment line added directly below the existing 'A team deleted under the seat' comment",
+      "scripts/moe-agent.ps1 Invoke-MoeTeamJoinRetry: the `if ($failure.StartsWith(...))` line, plus the same one comment line",
+      "scripts/tests/seat-registration.test.mjs: the SEGMENTS.ps1.funcs end anchor, FAKE_PROXY's join_team 'gone' outcome, the 'gone' row, and the refused re-join loop"
+    ],
+    "reuse": [
+      "Reuses the existing 'gone' row, the runSeat harness and the refused re-join loop: no new test file or helper."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/joinTeam.ts:68 throws notFound('Team', teamId). util/errors.ts notFound() and the MoeError constructor prefix the message with '[NOT_FOUND] ', because TEAM_NOT_FOUND is not in SPECIFIC_NOT_FOUND_CODE_NAMES. McpAdapter.ts:318-323 sends the message unchanged, with data { tool, codeName }.",
+      "scripts/moe-agent.sh: the python reader inside retry_team_join (about :2538-2559) sets $failure to error.message verbatim, and :2571 is the drop branch.",
+      "scripts/moe-agent.ps1:1987 sets $failure = [string]$joined.error.message, and :2006 is the drop branch.",
+      "scripts/tests/seat-registration.test.mjs:91 ends the ps1 funcs slice at '\\nif ($Team) {'. Since d6cbb405 that line reads 'if ($Team -and -not $moeMigration) {' (moe-agent.ps1:1774)."
+    ],
+    "checkRefs": [
+      "bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/seat-registration.test.mjs)\" && bash scripts/tests/parity-check.sh",
+      "S=$(mktemp -d /mnt/d/moe-scratch/neg-6b8f-XXXXXX) && git archive 677d051a scripts .github/workflows/ci.yml | tar -x -C \"$S\" && cp scripts/tests/seat-registration.test.mjs \"$S/scripts/tests/\" && (cd \"$S\" && node --test scripts/tests/seat-registration.test.mjs; \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/seat-registration.test.mjs)\"); rm -rf -- \"$S\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Four options were weighed.\n(1) Match error.data.codeName === 'NOT_FOUND'. The ps1 reply object has it ($joined.error.data.codeName). But bash's python reader keeps only error.message, so bash would need a reader change outside the branch, which DoD 3 forbids. NOT_FOUND is also generic, and it becomes TEAM_NOT_FOUND if errors.ts SPECIFIC_NOT_FOUND_CODE_NAMES ever lists it.\n(2) An exact prefix alternation ('[NOT_FOUND] Team not found: '* or 'Team not found: '*). It is precise, but breaks on the same codeName change.\n(3) Chosen: a substring 'Team not found: ' in both twins. That is the text notFound('Team', id) always produces. It is robust to the prefix and the same in both twins. The unprefixed form never reached the wire: MoeError already prefixed it at f75f57b6, the commit that wrote the branch.\n(4) Rejected: loosening the test's anchor to '\\nif ($Team'. Slice anchors stay exact, so a moved line fails loudly.",
+    "codebaseInsights": "The branch never worked. errors.ts already prefixed [NOT_FOUND] at f75f57b6 (task-8333866a, 10-26), the commit that wrote it.\nseat-registration.test.mjs has not loaded since d6cbb405 (WT-10M, 2026-11-02 21:42Z). Its ps1 funcs end anchor '\\nif ($Team) {' became 'if ($Team -and -not $moeMigration) {' (moe-agent.ps1:1774). between() therefore throws at import, and all 58 rows fail.\n- CI build-all-platforms runs the suite in one step with daemon-json-cap and subagent-mirror.\n- The project qualityGate (parity + lint) never runs it, which is how the break slipped through.\n- With only the anchor repaired, every other row passes on all four engines (WSL bash, Git Bash, PS 5.1, pwsh 7.6.9; architect scratch run).\nThe wrappers and the fixture are byte-identical between 677d051a and 31492ac5.\nisEpicFinal is only the order fallback on the rolling Stability & Hardening epic. The right gate is the whole suite that slices the touched code, on every engine, plus parity.",
+    "risks": "Run the Windows leg with node.exe in a normal shell, never env -i: it needs the Windows PATH for python and Git Bash.\nEach leg takes about 1-2 min.\nDon't run the suite from the shared checkout, whose wrappers carry peers' dirty edits. The task worktree is fine.\nLanding changes moe-agent.{sh,ps1}, so every seat hot-reloads once once the control checkouts fast-forward. That is expected for any wrapper row.\nKeep the ps1 BOM. Edit preserves it, and parity-check enforces it.\nIf the CQ-M07 lane (23c803d2, then d861f3de, then 62ec51f1) lands wrapper edits first, merge-tree takes them: its hunks sit 1000+ lines away.\nThe 'error' outcome still refuses unprefixed, although task-3962d9a0 made the daemon's text '[TEAM_FULL] ...'. That is out of scope: no wrapper branches on it.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/seat-registration.test.mjs",
+      "packages/moe-daemon/src/util/errors.ts",
+      "packages/moe-daemon/src/tools/joinTeam.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "8ca8d38951e5279bf01f47578550b18d6ec87088",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T20:42:30.959Z",
+  "approvedPlanRevision": 1
 }

@@ -1,0 +1,28 @@
+{
+  "id": "task-bed60fca244f424eac83eb5855c6fa28",
+  "epicId": "epic-be924fb8",
+  "title": "bug: FileWatcher.ignorePath arms an unconditional 500 ms delete per call, so a daemon write landing 380-500 ms after an earlier write to the same file loses its self-write token to the first call's timer and reloads the whole store under the state mutex as an external edit",
+  "description": "Filed by hunt task-afe61cc0 (2026-11-03 #11, lane 3: sweep and reload paths).\n\nPROBLEM\n- FileWatcher.ignorePath (packages/moe-daemon/src/state/FileWatcher.ts:50-56) adds the path to a Set and, on every call, arms `setTimeout(() => this.ignorePaths.delete(normalized), 500)`. scheduleChange (:101-105) consumes the token on the first matching event.\n- When the daemon writes one file twice, 380-500 ms apart, write 1's watcher event (about 150-200 ms later) consumes the token, write 2 re-adds it, and write 1's still-armed timer fires at t=500 ms and deletes write 2's fresh token. Write 2's event then reaches onChange.\n- index.ts:821-830 treats every onChange as an external edit: healMassDeletion's existsSync scan, a full state.load() under the global state mutex (StateManager.ts:1021; today that re-reads 936 task files (29 MB), about 2,200 attempt records and the rest), then a STATE_SNAPSHOT broadcast to every IDE client.\n- persistence.ts:15-18 states the contract this breaks: \"Registering the ignore before the write is what stops the watcher echoing the daemon's own writes back as external changes.\" sweeps.ts:174-189 already notes that self-writes leak through and made sweep arming idempotent against it; this is one root cause.\n\nEVIDENCE (HEAD 31492ac5, git-archive snapshot outside the shared checkout; files in /mnt/d/moe-scratch/hunt-afe61cc0/me/)\n1. Deterministic repro zzHuntMe_selfWriteTimer.test.ts: fake timers, driving the private scheduleChange that chokidar's handlers call. Sequence: ignorePath t=0, event t=200 (suppressed), ignorePath t=400, event t=550.\n   `AssertionError: expected [ { type: 'change', …(1) } ] to deeply equal []` and `Tests 1 failed | 2 passed (3)`. The two controls pass: a single self-write is suppressed, and an external change after the window is delivered. Output: selfWriteTimer.HEAD-31492ac5.out.\n2. Real chokidar repro zzHuntMe_selfWrite.test.ts: two ignorePath + atomicWriteJsonAsync writes to one existing tasks/ file. Gaps of 280, 320, 360, 520 and 600 ms are suppressed; 400, 440 and 480 ms each deliver one 'change' to onChange (`Tests 3 failed | 6 passed (9)`). Output: selfWrite-chokidar.HEAD-31492ac5.out.\n3. It happens in production. Today's activity log (activity.log.2.gz, .1.gz, activity.log) has 10 same-task write pairs 380-500 ms apart, mostly the wrapper's back-to-back record_commit calls:\n   - 2026-11-03T08:48:03.643Z TASK_COMMIT_RECORDED → TASK_COMMIT_RECORDED +398 ms (task-df34243e);\n   - 19:49:49.708Z, +415 ms (task-4877ef36);\n   - 18:46:07.230Z STEP_COMPLETED → STEP_STARTED +404 ms (task-b22f82b2).\n   There are 8 more pairs at 300-380 ms, which the live Windows daemon's slower watcher may also leak. Worker-file writes (heartbeats, chat cursors) are not in the activity log and add to the count.\n4. Dry-run fix (not committed): one timer per path (Map<string, Timeout>, clearTimeout on re-arm and on consume) is +7/-4 in FileWatcher.ts. Both repros then pass, and FileWatcher.test.ts plus FileWatcher.paths.test.ts stay green (4 files, 38 tests).\n\nFIX DIRECTION\n- Hold one entry and one timer per path: ignorePaths becomes Map<string, NodeJS.Timeout>.\n- ignorePath clears any prior timer for that path before arming a new 500 ms one.\n- scheduleChange clears the timer when it consumes the token.\n- stop() clears the pending timers.\n- Keep the 500 ms window and consume-on-first-match, so a later genuine external edit still reloads.\n\nFILES\n- packages/moe-daemon/src/state/FileWatcher.ts\n- new packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts",
+  "definitionOfDone": [
+    "FileWatcher.selfWrite.test.ts runs under vi.useFakeTimers and drives the watcher's event entry point (scheduleChange through a cast is fine). It asserts zero onChange calls for ignorePath t=0, event t=200, ignorePath t=400, event t=550. It fails against HEAD 31492ac5's FileWatcher.ts and passes with the fix.",
+    "The same file asserts that a single self-write is suppressed, and that a change event arriving after the 500 ms window with no new ignorePath reaches onChange exactly once.",
+    "`cd packages/moe-daemon && npx vitest run src/state/FileWatcher.selfWrite.test.ts src/state/FileWatcher.test.ts src/state/FileWatcher.paths.test.ts` passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 427.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:43:41.189Z",
+  "updatedAt": "2026-11-03T20:43:41.189Z"
+}
