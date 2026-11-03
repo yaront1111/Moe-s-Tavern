@@ -738,6 +738,36 @@ $mcpConfigObj = @{
     }
 }
 
+# Hand Serena git's own ignore sources (docs/MEMORY.md, "Serena startup ignore
+# override"). Serena 1.6's startup .gitignore walk ignores .git/info/exclude and
+# core.excludesFile, so it walked every tree they exclude (15-23 min on a big one).
+# moe-serena-ignore.mjs keeps a Moe block in <Root>/.serena/project.local.yml that
+# turns the walk off; it always exits 0 with one line and fails open, and the launch
+# never fails because of it. Opt out: MOE_SERENA_IGNORE_OVERRIDE=0. Twin: serena_ignore_override.
+function Invoke-MoeSerenaIgnoreOverride([string]$Root) {
+    $helper = Join-Path $script:MoeScriptRoot 'moe-serena-ignore.mjs'
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+        Write-Host "[WARN] MOE_SERENA_IGNORE_SKIPPED: moe-serena-ignore.mjs is missing next to this wrapper; Serena keeps its own .gitignore walk" -ForegroundColor Yellow
+        return
+    }
+    $prevEAP = $ErrorActionPreference; $prevExit = $global:LASTEXITCODE
+    $ErrorActionPreference = 'Continue'
+    $line = ''; $rc = 1
+    try {
+        # Windows PowerShell 5.1 quotes a spaced argument without escaping, so a trailing \ would eat the quote: \. names the same directory.
+        $out = @(& node $helper ($Root -replace '\\$', '\.') 2>$null)
+        $rc = $LASTEXITCODE
+        if ($out.Count) { $line = [string]$out[-1] }
+    } catch { $rc = 1; $line = '' } finally { $ErrorActionPreference = $prevEAP; $global:LASTEXITCODE = $prevExit }
+    if ($rc -ne 0 -or -not $line) {
+        Write-Host "[WARN] MOE_SERENA_IGNORE_SKIPPED: moe-serena-ignore.mjs gave no result (exit $rc); Serena keeps its own .gitignore walk" -ForegroundColor Yellow
+    } elseif ($line.StartsWith('[OK] ', [StringComparison]::Ordinal)) {
+        Write-Host $line -ForegroundColor Green
+    } else {
+        Write-Host $line
+    }
+}
+
 # Add the Serena MCP server: LSP-based symbol navigation/editing pinned to THIS
 # project, so agents get exact cross-file code intelligence (callers, defs,
 # refactors) instead of relying on whole-file reads. Resolve the binary; skip
@@ -800,6 +830,7 @@ if ($serenaPath -and (Test-Path -LiteralPath $serenaPath)) {
         )
     }
     Write-Host "[OK] Serena MCP enabled for project: $serenaProject (source: $serenaProjectSource)"
+    Invoke-MoeSerenaIgnoreOverride $serenaProject
 } else {
     Write-Host "[INFO] Serena not found; skipping Serena MCP (install: uv tool install -p 3.13 serena-agent)"
 }
@@ -3406,6 +3437,9 @@ try {
     if ($LASTEXITCODE -ne 0) { Stop-MoeWorktreeSeat -Code MOE_WORKTREE_CREATE_FAILED -Detail "cannot prepare Serena, the shared links and the dependency check in $($script:cliRoot): $(@($out)[-1])" }
     if ($out.Count -gt 1) { $out[0..($out.Count - 2)] | ForEach-Object { Write-Host "[WARN] $_" -ForegroundColor Yellow } }
     $serenaProject = switch -CaseSensitive ($out[-1]) { 'W' { $script:cliRoot } 'KEEP' { $serenaProject } default { '' } }
+    # W's own ignore override, after the node program wrote W/.serena/project.yml (KEEP's root
+    # had its override at the pre-flight).
+    if ($out[-1] -ceq 'W' -and $serenaPath -and (Test-Path -LiteralPath $serenaPath)) { Invoke-MoeSerenaIgnoreOverride $script:cliRoot }
     if (-not $serenaProject) {
         # No Serena (the writers below see this local $serenaPath), so no memory names to read through it.
         $serenaPath = $null

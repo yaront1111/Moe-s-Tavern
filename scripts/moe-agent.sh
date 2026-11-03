@@ -949,6 +949,30 @@ if [ "$RUNTIME_PROTECTED" = 1 ]; then
     protected_resolve_cli "$COMMAND"
 fi
 
+# serena_ignore_override ROOT -- hand Serena git's own ignore sources (docs/MEMORY.md,
+# "Serena startup ignore override"). Serena 1.6's startup .gitignore walk ignores
+# .git/info/exclude and core.excludesFile, so it walked every tree they exclude (15-23 min
+# on a big one). moe-serena-ignore.mjs keeps a Moe block in ROOT/.serena/project.local.yml
+# that turns the walk off; it always exits 0 with one line and fails open, and the launch
+# never fails because of it. Opt out: MOE_SERENA_IGNORE_OVERRIDE=0. Twin: Invoke-MoeSerenaIgnoreOverride.
+serena_ignore_override() { # $1 = Serena's project root
+    local helper="$SCRIPT_DIR/moe-serena-ignore.mjs" line="" rc=0
+    if [ ! -f "$helper" ]; then
+        printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "MOE_SERENA_IGNORE_SKIPPED: moe-serena-ignore.mjs is missing next to this wrapper; Serena keeps its own .gitignore walk"
+        return 0
+    fi
+    line=$("$NODE_CMD" "$helper" "$1" 2>/dev/null) || rc=$?
+    line=${line##*$'\n'}
+    if [ "$rc" -ne 0 ] || [ -z "$line" ]; then
+        printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "MOE_SERENA_IGNORE_SKIPPED: moe-serena-ignore.mjs gave no result (exit $rc); Serena keeps its own .gitignore walk"
+    elif [ "${line#\[OK\] }" != "$line" ]; then
+        printf '%b[OK]%b %s\n' "$GREEN" "$NC" "${line#\[OK\] }"
+    else
+        printf '%s\n' "$line"
+    fi
+    return 0
+}
+
 # Ensure MCP config for Claude Code
 ensure_mcp_config() {
     local config_dir="$HOME/.config/claude"
@@ -1043,6 +1067,7 @@ except Exception:
     export SERENA_PROJECT
     if [ -n "$SERENA_CMD" ]; then
         echo -e "${GREEN}[OK]${NC} Serena MCP project: $SERENA_PROJECT (source: $SERENA_PROJECT_SOURCE)"
+        serena_ignore_override "$SERENA_PROJECT"
     fi
 
     # Create or update config
@@ -3533,6 +3558,9 @@ prepare_worktree_launch() {
     mode=${out##*$'\n'}
     [ "$out" = "$mode" ] || while IFS= read -r line; do printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$line"; done <<< "${out%$'\n'*}"
     case "$mode" in W) serena="$CLI_ROOT" ;; KEEP) serena="$SERENA_PROJECT" ;; *) serena="" ;; esac
+    # W's own ignore override, after the tooling program wrote W/.serena/project.yml (KEEP's root
+    # had its override at the pre-flight).
+    if [ "$mode" = W ] && [ -n "$SERENA_CMD" ]; then serena_ignore_override "$CLI_ROOT"; fi
     if [ -z "$serena" ]; then
         # No Serena, so no memory names to read through it (a literal replace: a glob over this text is quadratic).
         re=$'\nmemory_total=[^\n]*\nmemory_this_task=[^\n]*\nmemory_recent=[^\n]*'

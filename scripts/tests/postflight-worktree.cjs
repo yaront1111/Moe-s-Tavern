@@ -1531,9 +1531,103 @@ async function wtQaGate(){
   assert.ok(r.code===0&&r.cliRan&&!/MOE_CONTROL_/.test(r.log)&&!r.prompt.includes('Review commit '),'shared mode QA changed'+tail(r.log));
 }
 
-// DoD: both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_/MOE_MIGRATION_ codes.
+// task-e3e81c45: each Serena launch runs scripts/moe-serena-ignore.mjs on Serena's root, which hands
+// Serena git's own ignore sources with its startup .gitignore walk off. UnAI's shape: big/ (many nested
+// .gitignore files) and .serena/ are excluded only in .git/info/exclude, which Serena's walk never reads.
+const SERENA_USER="# my own local settings\nread_only: false\n";
+// '/.git', project.yml's own ignored_paths, info/exclude, the root .gitignore; then each tree's, breadth-first.
+const SERENA_PATS=['/.git','keep-me/','big/','.serena/','.worktrees/','.mcp.json','logs/'];
+const serenaBlock=pats=>["# >>> moe serena-ignore (managed by Moe's scripts/moe-serena-ignore.mjs; edits inside are overwritten) >>>",
+  "# Serena's own .gitignore walk ignores .git/info/exclude and core.excludesFile, and walks every",
+  "# directory they exclude. Moe turns that walk off and lists the same patterns, plus git's, below.",
+  '# To opt out, set MOE_SERENA_IGNORE_OVERRIDE=0, or set ignore_all_files_in_gitignore or ignored_paths',
+  '# yourself outside this block; Moe then removes this block.','ignore_all_files_in_gitignore: false','ignored_paths:',
+  ...pats.map(x=>`  - "${x}"`),'# <<< moe serena-ignore <<<',''].join('\n');
+// No real ~/.config/git/ignore or global config reaches the fixture's git (HOME is already the fixture's).
+const SERENA_KNOBS={XDG_CONFIG_HOME:path.join(root,'xdg'),GIT_CONFIG_GLOBAL:null};
+// Returns the control's .serena/project.local.yml. src/.gitignore is tracked on main and moe/control.
+function serenaFixture(p){
+  for(let i=0;i<30;i++)write(path.join(p.dir,'big','t'+String(i).padStart(2,'0'),'.gitignore'),`n${i}\n`);
+  write(path.join(p.top,'.git','info','exclude'),'# excluded here only\nbig/\n.serena/\n');
+  write(path.join(p.dir,'src','.gitignore'),'*.tmp\n');
+  git(p.top,'add','--','src/.gitignore');git(p.top,'commit','-qm','src ignore');git(p.top,'update-ref','refs/heads/main','HEAD');
+  write(path.join(p.dir,'.serena','project.yml'),"project_name: 'fixture'\nignored_paths:\n  - keep-me/\n");
+  const f=path.join(p.dir,'.serena','project.local.yml');write(f,SERENA_USER);
+  return f;
+}
+// The wrapper's MOE_SERENA_IGNORE_* lines, each written or up-to-date file as its comparable path.
+const serenaSaid=log=>[...log.matchAll(/^\[(\w+)\] MOE_SERENA_IGNORE_(\w+): (.*?)\r?$/gm)].map(([,tag,code,rest])=>{
+  const m=/^(?:wrote (.+) \((\d+) patterns; Serena's \.gitignore walk is off\)|(.+) is up to date \((\d+) patterns\))$/.exec(rest);
+  return `${tag} ${code}: `+(m?`${m[1]?'wrote':'up to date'} ${norm(m[1]||m[3])} ${m[2]||m[4]}`:rest);
+});
+const inode=f=>fs.statSync(f,{bigint:true}).ino;
+async function serenaIgnore(){
+  const p=repo('serena-ignore'),f=serenaFixture(p),want=SERENA_USER+serenaBlock([...SERENA_PATS,'src/**/*.tmp']);
+  const run=async n=>{
+    const r=await launch(p,'serena-ignore-'+n,{...SERENA_KNOBS,FAKE_CLAIM_WORKSPACE:null,MOE_SERENA_PATH:process.execPath},{type:'claude'});
+    assert.ok(r.cliRan&&r.code===0&&r.blocked.length===0,`run ${n}: exit code ${r.code}, CLI ran: ${r.cliRan}`+tail(r.log));
+    return r;
+  };
+  let r=await run(1);
+  assert.equal(readOr(f),want,'run 1: .serena/project.local.yml');
+  assert.deepEqual(serenaSaid(r.log),[`OK OVERRIDE: wrote ${norm(f)} 8`],'run 1: the MOE_SERENA_IGNORE_ lines'+tail(r.log));
+  const ino=inode(f);
+  r=await run(2);
+  assert.deepEqual([readOr(f),inode(f)],[want,ino],'run 2 rewrote .serena/project.local.yml');
+  assert.deepEqual(serenaSaid(r.log),[`info OVERRIDE: up to date ${norm(f)} 8`],'run 2: the MOE_SERENA_IGNORE_ lines'+tail(r.log));
+}
+// Fail-open: no Serena, the opt-out, a Serena root outside any repository and one whose .git names a
+// missing gitdir each change nothing, and the CLI runs as today.
+async function serenaIgnoreOff(){
+  const p=repo('serena-ignore-off'),f=serenaFixture(p),record=path.join(root,'serena-ignore-off.jsonl'),cfg=path.join(p.dir,'.moe-agent.json');
+  const run=async(n,k)=>{
+    const r=await launch(p,'serena-ignore-off-'+n,{...SERENA_KNOBS,FAKE_CLAIM_WORKSPACE:null,WT_CLI_RECORD:record,MOE_SERENA_PATH:process.execPath,...k},{type:'claude'});
+    assert.ok(r.cliRan&&r.code===0&&r.blocked.length===0,`${n}: exit code ${r.code}, CLI ran: ${r.cliRan}`+tail(r.log));
+    assert.equal(readOr(f),SERENA_USER,`${n}: .serena/project.local.yml changed`);
+    return r;
+  };
+  const exe=['serena','serena.exe','serena.cmd','serena.bat','serena.ps1'];
+  const noSerena=String(inherited[pathKey]||'').split(path.delimiter).filter(d=>!d||!exe.some(x=>present(path.join(d,x)))).join(path.delimiter);
+  let r=await run('none',{MOE_SERENA_PATH:null,[pathKey]:noSerena});
+  const rec=rows(record).pop();
+  assert.equal(serenaOf(win?rec.mcpConfig.replace(/^﻿/,''):cfgText(path.join(p.dir,'.mcp.json'))),null,'none: Serena is still configured');
+  assert.deepEqual(serenaSaid(r.log),[],'none: a MOE_SERENA_IGNORE_ line without Serena'+tail(r.log));
+  r=await run('opt-out',{MOE_SERENA_IGNORE_OVERRIDE:'0'});
+  assert.deepEqual(serenaSaid(r.log),['info SKIPPED: MOE_SERENA_IGNORE_OVERRIDE=0; Serena keeps its own .gitignore walk'],'opt-out: the MOE_SERENA_IGNORE_ lines'+tail(r.log));
+  const out=fs.mkdtempSync(path.join(os.tmpdir(),'moe-serena-off-'));
+  const files=d=>fs.readdirSync(d,{recursive:true}).map(x=>String(x).replace(/\\/g,'/')).sort();
+  try{
+    for(const [n,dot] of [['plain',null],['broken','gitdir: '+path.join(root,'no such gitdir')+'\n']]){
+      const d=path.join(out,n+' serena');write(path.join(d,'.serena','project.yml'),'project_name: x\n');
+      if(dot)write(path.join(d,'.git'),dot);
+      write(cfg,JSON.stringify({serenaProject:d}));
+      const before=files(d);r=await run(n,{});
+      assert.deepEqual(files(d),before,`${n}: the Serena root changed`);
+      const said=serenaSaid(r.log);
+      assert.ok(said.length===1&&/^info SKIPPED: .+ is not (a git work tree|the top level of its git work tree)\b.*; Serena keeps its own \.gitignore walk$/.test(said[0]),
+        `${n}: the MOE_SERENA_IGNORE_ lines ${JSON.stringify(said)}`+tail(r.log));
+    }
+  }finally{fs.rmSync(cfg,{force:true});fs.rmSync(out,{recursive:true,force:true});}
+}
+// Worktree mode: W gets its own block (the control's extra/ is not in W), after WT-06's project.yml copy.
+async function serenaIgnoreWt(){
+  const c=wtCase('serena-ignore-wt','claude'),{p}=c,f=serenaFixture(p),wf=path.join(p.W,'.serena','project.local.yml');
+  write(path.join(p.dir,'extra','.gitignore'),'*.log\n');
+  try{
+    const r=await c.run(SERENA_KNOBS),rec=rows(c.record).pop();
+    assert.ok(r.code===0&&rec,`exit code ${r.code}, CLI launched: ${!!rec}`+tail(r.log));
+    assert.ok(same(serenaOf(claudeCfg(p,rec)),p.W),'Serena is not rooted at W');
+    assert.equal(readOr(f),SERENA_USER+serenaBlock([...SERENA_PATS,'extra/**/*.log','src/**/*.tmp']),"the control's .serena/project.local.yml");
+    assert.equal(readOr(wf),serenaBlock([...SERENA_PATS,'src/**/*.tmp']),'W/.serena/project.local.yml');
+    assert.equal(readOr(path.join(p.W,'.serena','project.yml')),"project_name: 'fixture@task-postflight'\nignored_paths:\n  - keep-me/\n",
+      "W/.serena/project.yml lost WT-06's project_name rewrite");
+    assert.deepEqual(serenaSaid(r.log),[`OK OVERRIDE: wrote ${norm(f)} 9`,`OK OVERRIDE: wrote ${norm(wf)} 8`],'the MOE_SERENA_IGNORE_ lines'+tail(r.log));
+  }finally{for(const l of LINKS)unlinkOnly(path.join(p.W,l));}
+}
+
+// DoD: both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_/MOE_MIGRATION_/MOE_SERENA_IGNORE_ codes.
 function codes(){
-  const set=f=>[...new Set(read(path.join(path.dirname(wrapper),f)).match(/MOE_(?:WORKTREE|LAND|CONTROL|BOARD|MIGRATION)_[A-Z0-9_]+/g))].sort();
+  const set=f=>[...new Set(read(path.join(path.dirname(wrapper),f)).match(/MOE_(?:WORKTREE|LAND|CONTROL|BOARD|MIGRATION|SERENA_IGNORE)_[A-Z0-9_]+/g))].sort();
   assert.deepEqual(set('moe-agent.sh'),set('moe-agent.ps1'),'the wrappers carry different worktree code families');
 }
 
@@ -1545,7 +1639,7 @@ for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchA
 Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
-  'wt-serena-yml':wtSerenaYml,
+  'wt-serena-yml':wtSerenaYml,'serena-ignore':serenaIgnore,'serena-ignore-off':serenaIgnoreOff,'serena-ignore-wt':serenaIgnoreWt,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
   'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
   'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});

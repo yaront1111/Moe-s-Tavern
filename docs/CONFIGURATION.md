@@ -55,6 +55,7 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_WORKER_TYPE` | Exported on every launch from the CLI the wrapper detects in its command (`codex` → `CODEX`, `gemini` → `GEMINI`, `grok` → `GROK`, anything else → `CLAUDE`), never from the role or model, replacing an inherited value. The next `claim_next_task` or `join_team` records it, so a seat relaunched under another CLI shows its new type in `list_workers` and `chat_who`. Codex gets it in the per-seat `mcp_servers.moe` override (a value persisted in `.codex/config.toml` is dropped); grok's config carries the literal `${MOE_WORKER_TYPE:-}`. Display metadata only: it does not prove the seat can produce a TOOL witness and authorizes nothing | Set per launch | `GROK` |
 | `MOE_SERENA_PATH` | Serena binary for the injected MCP server | `~/.local/bin/serena` | `/opt/serena/serena` |
 | `MOE_SERENA_PROJECT` | Serena project root override (multi-repo workspaces) | Moe project root | `/repo/backend` |
+| `MOE_SERENA_IGNORE_OVERRIDE` | `0` turns off the launchers' Serena ignore override (`scripts/moe-serena-ignore.mjs`; see "Serena startup ignore override" in `docs/MEMORY.md`) and removes a block it wrote earlier | On | `0` |
 | `MOE_NODE_COMMAND` | Node.js executable (JetBrains plugin daemon spawn) | `node` | `/usr/local/bin/node` |
 | `MOE_DAEMON_COMMAND` | Daemon start command override (JetBrains plugin) | Auto-detected | `npx moe-daemon` |
 | `MOE_DAEMON_HOST` | Daemon connect-host override for agents + spawned MCP servers (WSL mode) | Loopback | `172.29.32.1` |
