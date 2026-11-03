@@ -51,14 +51,16 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the new test.\n\nChecklist:\n(a) The normalization runs before recordStepCompletion. Under verified-local, a refused call must record no step evidence on the attempt. Read :97-106 to confirm the order.\n(b) The count cap still fires first, with its message unchanged; completeStep.modifiedFiles.test.ts pins it. Note that 51 duplicates are refused even though they normalize to 1 path; that is deliberate and keeps the cap's meaning.\n(c) An omitted, null or [] modifiedFiles behaves exactly as before: same warning text, no modifiedFiles key stored.\n(d) No caller in the repo passes a path the normalizer refuses. The daemon tests that call complete_step pass plain relative paths, and the stored './src/a.ts' fixtures in getCommitScope.test.ts and attributionTiers.test.ts are task data, not calls.\n(e) `git diff --name-only` lists only the two planned files.\n(f) No added line contains a project.json globalRails.forbiddenPatterns string.\n\nRecord the findings, with both legs' printed Tests lines, in the complete_task summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T21:18:17.625Z"
+      "note": "Adversarial review of task diff plus new test: no findings. Normalization follows unchanged raw-count cap (51 duplicates still refused), precedes strict attempt evidence and all task/activity/chat writes. Authorization before it is read-only. Null/undefined/[] normalize to [] and store no modifiedFiles key; warning text unchanged. Non-string/blank/overlong/absolute/traversing shapes fail through existing helper. No new shared-state mutation, resource lifetime, or concurrency path; existing serialized dispatch unchanged. Audited actual complete_step callsites: relative paths or omission except deliberate new negative tests. Only completeStep.ts and new pathShape test touched; compatibility suites unchanged; no forbidden added patterns; diff whitespace clean. Fresh verification: Test Files 11 passed (11), Tests 234 passed (234); red-at-base Tests 6 failed | 2 passed (8), RED-AT-BASE. Landing parity/lint gate exit 0.",
+      "startedAt": "2026-11-03T21:18:17.625Z",
+      "completedAt": "2026-11-03T21:18:58.514Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -70,12 +72,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:42:26.509Z",
-  "updatedAt": "2026-11-03T21:18:17.625Z",
+  "updatedAt": "2026-11-03T21:19:14.451Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:03:10.634Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -88,7 +90,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:08:40.946Z",
@@ -155,5 +158,18 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "worker-26483323@2026-11-03T21:08:40Z",
     "at": "2026-11-03T21:12:25.236Z"
-  }
+  },
+  "reviewStartedAt": "2026-11-03T21:19:14.449Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/completeStep{.ts,.pathShape.test.ts} \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/completeStep.pathShape.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{completeStep,getCommitScope,declareFiles,completionAuthorization,enforcement.integration,lifecycleFixes,taskTimestamps,governanceFeatures} src/util/attributionTiers > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }' ) && ( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp $P/completeStep.pathShape.test.ts \"$S/$P/\" && git show ac3ea38fe92a7df25ced9df044dfa591322a7864:$P/completeStep.ts > \"$S/$P/completeStep.ts\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1; npx vitest run src/tools/completeStep.pathShape.test.ts > ../l 2>&1; r=$?; grep -aE \"^ +Tests |^ FAIL \" ../l; [ $r = 1 ] || exit 1; for k in c1 c2; do ! grep -aqF \"> ($k) \" ../l || exit 1; done; for k in p1 p2 p3 p4 p5 n1; do grep -aqF \"> ($k) \" ../l || exit 1; done; echo RED-AT-BASE' )",
+    "exitCode": 0,
+    "outputTail": "npm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\n Test Files  11 passed (11)\n      Tests  234 passed (234)\nPinned-base expected failures: (p1), (p2), (p3), (p4), (p5), (n1)\n      Tests  6 failed | 2 passed (8)\nRED-AT-BASE\nCombined checkRefs exit code: 0\nAdditional mandatory worktree landing gate: bash scripts/tests/parity-check.sh && npm run lint\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nLanding gate exit code: 0",
+    "reportedAt": "2026-11-03T21:19:14.449Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/completeStep.pathShape.test.ts",
+    "packages/moe-daemon/src/tools/completeStep.ts"
+  ],
+  "completionSummary": "complete_step now uses normalizeAffectedFiles after the unchanged raw-count cap and before strict attempt evidence or task writes; stores normalized/deduplicated paths and preserves omitted/null/[] warning/fallback. Added 8 regression cases covering malformed input with byte-identical task state, normalization and asserted scope, plus compatibility controls. Existing completeStep.test.ts and completeStep.modifiedFiles.test.ts unchanged. Fresh combined checkRefs exited 0: both tsc checks clean; Test Files 11 passed (11), Tests 234 passed (234). Pinned-base leg: Tests 6 failed | 2 passed (8), exactly p1-p5/n1, RED-AT-BASE. Mandatory parity/lint gate passed. Adversarial review found no issues: cap first, normalization before all writes, existing authorization read-only, relative/omitted callers compatible; only planned two files touched, no forbidden additions, diff whitespace clean. Serena handoff recorded. Wrapper owns landing."
 }
