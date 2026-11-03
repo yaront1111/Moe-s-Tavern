@@ -70,7 +70,7 @@
     {
       "stepId": "step-4",
       "description": "Flip the default with the approved (b) (DoD 1). Before editing, read WT-01's landed code and Serena decision-worktree-attempt-workspace-contract.\n\npackages/moe-daemon/src/state/validators.ts, resolveWorktreeMode, the ONE place the default lives:\n- Widen the parameter type to `{ worktreeMode?: unknown; qualityGate?: unknown } | null`.\n- A defined key is validated exactly as today: 'on' and 'off' as written; every other value, null included, is INVALID_INPUT.\n- An undefined key returns 'on' iff `typeof qualityGate === 'string' && qualityGate.trim() !== ''`, else 'off'. Never throw on an odd qualityGate type; that just means no gate.\n- Update the doc comment with the rule and the reason: rail 1, landings only with a gate.\n\npackages/moe-daemon/src/types/schema.ts: rewrite ProjectSettings.worktreeMode's comment (\"Absent means 'off' only in resolveWorktreeMode (WT-19 flips that default)\") to state the new rule. Comment only.\n\nTests (mutation-resistant, exact values):\n- validators.test.ts covers DoD 1's unset/on/off rows:\n  - unset + no gate → 'off'; unset + 'npm test' → 'on'; unset + '   ' → 'off'; unset + gate 7 → 'off';\n  - 'off' + gate → 'off'; 'on' + no gate → 'on';\n  - null, 'ON' and 1 → INVALID_INPUT.\n- packages/moe-daemon/src/tools/claimNextTask.test.ts proves the claim passes the whole settings object:\n  - a WORKING claim with settings {qualityGate:'npm test'} and no worktreeMode records workspace.mode 'worktree' at <project>/.worktrees/<taskId>;\n  - the same claim without a gate records 'shared' at the project path;\n  - an architect or QA claim stays 'shared' either way.\n\nTests that encode the old default:\n- Run the full daemon suite.\n- A fixture that sets a non-blank qualityGate and omits worktreeMode now gets worktree mode for WORKING claims. Where that test's intent is shared mode, pin `worktreeMode: 'off'` in its settings fixture, and never change its assertions.\n- List each such file in complete_step.modifiedFiles and in the summary. Expect few, since most fixtures set no gate.\n\ndocs/CONFIGURATION.md, the worktreeMode row WT-17 wrote:\n- The default is 'on' when a non-blank qualityGate is set, else 'off'.\n- Add the §7.4 rollback note:\n  - 'off' restores shared mode for NEW attempts; an open attempt keeps its pinned mode;\n  - the control checkout goes back to a moe/work-<date> branch cut from main, and consolidationBranch is unset;\n  - rollback never moves main.\n- Add one warning: adding a qualityGate while worktreeMode is unset turns worktree mode on at the next WORKING claim. Set 'off' first to add a gate without it.\n\nError handling: an invalid stored value keeps failing loudly with INVALID_INPUT and is never read as the default.\n\nTest: `cd packages/moe-daemon && npx vitest run src/state/validators.test.ts src/tools/claimNextTask.test.ts`. On WSL, see step 6's environment notes.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/validators.ts",
         "packages/moe-daemon/src/state/validators.test.ts",
@@ -78,13 +78,29 @@
         "packages/moe-daemon/src/types/schema.ts",
         "docs/CONFIGURATION.md"
       ],
-      "startedAt": "2026-11-03T07:55:29.516Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/__acceptance__/producerConsumer.acceptance.test.ts",
+        "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "scripts/tests/wave1-pilot.mjs",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Implemented the approved (b) default. resolveWorktreeMode (validators.ts) is still the only place the default lives: a stored 'off' or 'on' is honored as written, any other stored value (null included) is INVALID_INPUT, and an unset key gives 'on' only when qualityGate is a string that is non-blank after trim, else 'off'. Both callers pass the whole settings object (claimNextTask.ts:158, doctorWorktree.ts:43), so neither needed a change. The schema.ts change is comment-only.\n\nTDD: RED (old code) 3 failed / 171 passed out of 174 (the two 'npm test'→on validator cases and the claim worktree case). GREEN 174/174, re-run fresh just now: `npx vitest run src/state/validators.test.ts src/tools/claimNextTask.test.ts` gives 2 files, 174 passed. `tsc --noEmit` exits 0. The full daemon suite after the pins: 230 files, 6997 passed, 20 skipped (7017).\n\nThe new tests:\n- validators: an unset mode with gates undefined, '', '   ', '\\t\\n', 7, null, ['npm test'] or {} → off; 'npm test' or '  npm test  ' → on. An explicit off or on wins with or without a gate. null, 'ON' or 1 is refused even with a gate.\n- claim: an unset mode with gate 'npm test' gives a worktree WORKING claim; '   ' or no gate stays shared. PLANNING and REVIEW claims stay shared under a gate.\n\nFixtures pinned to worktreeMode 'off' because they encode shared-mode delivery with a qualityGate set (their assertions are unchanged):\n- delivery/acceptance.test.ts was really failing: the real wrapper entered worktree mode and never called record_delivery_receipt.\n- producerConsumer, deliveryBypass, dependencyProjection and dependencyUnblock were pinned for the same config.\n- A snapshot probe confirmed that worktree claims now come only from explicit-'on' tests.\n\nScope note: scripts/tests/wave1-pilot.mjs is the manual opt-in pilot (CI never runs it). It uses the same gate-set shared-mode config as the acceptance pilot and would break the same way, so I pinned 'off' there too. `node --check` passes.\n\ndocs/CONFIGURATION.md:\n- the worktreeMode row now gives the unset rule, a warning that adding a gate while the mode is unset flips mode at the next WORKING claim, and the 'off' rollback (new attempts only; the control checkout goes back to moe/work-<date>; main never moves);\n- the qualityGate row cross-references it;\n- the Worktree mode subsection no longer says the default is 'off'.\n\nStale-default text in other docs (ARCHITECTURE.md:289, SCHEMA.md:212-215, MCP_SERVER.md:1468, worker.reference.md:78 plus its generated copy, and a drain note for TROUBLESHOOTING runbook step 3) is out of scope, filed as task-347dde8560ac467aaa9c02a1d1532b74 (BACKLOG, dependsOn this task).",
+      "startedAt": "2026-11-03T07:55:29.516Z",
+      "completedAt": "2026-11-03T08:09:01.625Z"
     },
     {
       "stepId": "step-5",
       "description": "File-only dependency sweep list (DoD 3, design §8), then the flip runbook post (DoD 6, second half).\n\nWorkers cannot call moe.set_task_dependencies, which is architect/governor-only. Dropping a file-only edge is also safe only once this project runs in worktree mode. So this step classifies every candidate and hands the drops to governors; it makes no dependency edits.\n\nCandidates:\n- §8's audit list: V07←01f37ac6, V04c←V08b, RF04←90664db1, RF07←465ee875, RF07←80930ce6, R13←R11e, R13←2cf1c6be, 724e31fa←e7f4026a, 01f37ac6←e7f4026a.\n- The governor's WT/CQ wrapper-lane interleave edges, pinned in #general as msg-6c3c0ede. The governor declared them file-only (13:45Z, 2026-10-30).\n- Every dependsOn edge A←B of every task not DONE or ARCHIVED. Read them with moe.list_tasks and the task records.\n\nClassify each edge:\n- 'moot': either end is DONE or ARCHIVED.\n- 'kept (produces)': A's description, DoD or plan names something B produces, such as a symbol, tool, setting, field, code or a file B creates. Name it.\n- 'drop-after-runbook': the only overlap is a shared existing file.\n- Leave the WT chain's own edges alone; they are producer edges.\n\nPost to #general (chan-b6d8273b) with moe.chat_send, and check routingTargets. If they come back [], re-send the post to #governors. The post contains:\n- A link to, or a quote of, WT-16's TROUBLESHOOTING 'Worktree mode' runbook: §7.3 steps 1-6, including WT-10M's migration landing `--land-branch moe/work-2026-10-24`, and the §7.4 rollback.\n- The effect of the APPROVED (b), in plain words. For the recommended answer:\n  - once the daemon or plugin runs this build, a project with a qualityGate and no worktreeMode switches at its next worker claim;\n  - its worker seats then stop with MOE_CONTROL_NOT_FOLLOWING and report their task BLOCKED until the control checkout is on moe/control (runbook step 5);\n  - this project has no qualityGate, so nothing changes here until runbook step 3;\n  - set worktreeMode 'off' explicitly first to add a gate, or to rebuild, without switching.\n- The drop-after-runbook list. A governor applies it with set_task_dependencies removeDependsOn once the project runs in worktree mode: a WORKING claim's get_context shows workspace.mode 'worktree', or settings resolve to 'on' AND the control checkout's HEAD is refs/heads/moe/control.\n\nError handling: a task record you can't read is classified 'unknown' with the error, never guessed. Keep the full list for the complete_task summary.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T08:09:05.128Z"
     },
     {
       "stepId": "step-6",
@@ -231,7 +247,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-11-03T07:55:29.516Z",
+  "updatedAt": "2026-11-03T08:09:05.129Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",
@@ -241,7 +257,7 @@
     "firstClaimAt": "2026-10-30T13:36:47.832Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -258,7 +274,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:46:16.161Z",

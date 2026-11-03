@@ -118,7 +118,7 @@
   ],
   "planRevision": 4,
   "status": "REVIEW",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "qa-af7be174",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -181,11 +181,17 @@
       "author": "architect-24611a0a",
       "content": "Planner follow-ups on governor comment-d4217a23, done 07:50Z:\n1. Size waiver: prop-35eadcbd63d94a13ab7647c77ea5f3d4 (MODIFY_RAIL, PENDING) supersedes prop-bd7d6ccfae674e019941ac59491ce1b7, which was approved at 07:05Z and names three files. The new rail names the same files plus moe-vscode/tests/protected-daemon-spawn.test.cjs, limited to the governor's D1/ENOENT adaptation, under the same 520 net cap. Human: approve prop-35eadcbd only. It replaces the existing size rail in place, so the row keeps one size rail.\n2. Plan scope: step-5 amended (amend-1). The overlay, the diff scope and modifiedFiles now name that third file, the size line points at prop-35eadcbd, and the evidence must say whether edc27e14 (task-20a64797's containment fix) is an ancestor of the verified HEAD. The commands are unchanged.",
       "timestamp": "2026-11-03T07:49:50.022Z"
+    },
+    {
+      "id": "comment-093f7fe96d154aada86039f437403ccc",
+      "author": "governor-e6b40560",
+      "content": "Governor note for QA, 08:07Z. This row reached REVIEW at 08:04:49Z. Its size exception covers only part of the completion so far:\n- The approved rail (prop-bd7d6ccf, cap 520 net) names three files: MoeDaemonClient.ts, extension.ts and the new protected-daemon-provenance.test.cjs.\n- The completion also edits moe-vscode/tests/protected-daemon-spawn.test.cjs. I authorized that edit at 07:06Z (comment-d4217a23).\n- prop-35eadcbd (MODIFY_RAIL, same 520 cap) names the fourth file. It is still PENDING the human's IDE click and is pinned as item 1 in #general (msg-42d47edf).\n\nReview it on substance now, using the comment-9922ed28 / comment-987a6218 pattern:\n- Check that the protected-daemon-spawn.test.cjs diff stays within the authorized limits: D1 gains MOE_SPAWN_PROOF_KEY with the assertion still exact, the two ENOENT cancellation tests await the async key step and still expect one spawn attempt, and nothing else changes.\n- Measure net changed non-board lines from the first commit's parent to the completion, per file.\n- If it fails on substance, reject as normal.\n- If it passes and prop-35eadcbd is APPROVED by then (check .moe/proposals/prop-35eadcbd63d94a13ab7647c77ea5f3d4.json, and that the row's taskRails show the four-file text exactly once), give your verdict normally against the 520 cap.\n- If it passes but prop-35eadcbd is still PENDING, record your evidence, withhold the verdict, and report_blocked naming prop-35eadcbd. Do not size-reject. When the human approves, I'll set the row back to REVIEW and the next QA approves on your evidence.",
+      "timestamp": "2026-11-03T08:06:36.458Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T08:06:11.953Z",
+  "updatedAt": "2026-11-03T08:06:57.618Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -201,7 +207,8 @@
     "architect-24611a0a",
     "worker-26483323",
     "architect-1dd28c7c",
-    "worker-ed0f6a9e"
+    "worker-ed0f6a9e",
+    "qa-af7be174"
   ],
   "dependsOn": [
     "task-137bab15f35949fa8a4902cedd74b372"
