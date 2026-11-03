@@ -14,11 +14,12 @@
     {
       "stepId": "step-1",
       "description": "RED tests first (load test-driven-development). Create packages/moe-daemon/src/tools/echoedReasonNotices.test.ts. Do NOT edit qaReject.test.ts, releaseTask.test.ts or any other existing test.\n\nHarness: ToolTestHarness (init, setupMoeFolder, createEpic, createTask, createWorker), in the shape of completeStep.test.ts block 'moe.complete_step chat notice' (:516-600):\n- load state, map channel names to ids with h.state.getChannels(), and push every MESSAGE_CREATED event as { message, routingTargets } via h.state.subscribe; unsubscribe in afterEach;\n- mock '../util/diskState.js' exactly as releaseTask.test.ts:21 does (release_task's handoff fingerprint spawns git);\n- before every load, register the busy seat worker-busy (status CODING). It is the seat today's routing pages, so it is what makes each case fail without the fix.\n\nFree text: build the at-sign at runtime with String.fromCharCode(64). Never spell it in code, comments or test titles (checkRef [0] greps the file for it). Each free-text value holds:\n- the known busy seat id worker-busy, mid-prose;\n- code-shaped tokens no seat owns: JvmOverloads and types/node;\n- a second line that opens with the all-hands tag and the workers role tag (group tags address only at line start).\n\nOne helper asserts: exactly one message in the named channel with exactly the expected content, its mentions are [], and its event routingTargets are [].\n\nCases:\n(a) qa_reject. task-1 is REVIEW, assigned to qa-a, with contextFetchedBy ['qa-a']. Call qaRejectTool with { taskId: 'task-1', reason, workerId: 'qa-a' }. #general carries exactly `task-1: QA rejected: <reason>` (postSystemMessage prefixes the id), unaddressed, and worker-busy has 0 unread in #general.\n(b) request_replan. task-1 is WORKING, assigned to worker-a (worker record CODING, currentTaskId task-1), with one IN_PROGRESS step step-1. Call with { taskId, stepId: 'step-1', reason, workerId: 'worker-a' }, reason under 200 chars. #general carries exactly `task-1: Replan requested (broke at step step-1): <reason>`, unaddressed.\n(c) release_task, assigned path. task-1 is WORKING, assigned to worker-a, and its title holds an at-token. Call with { taskId, workerId: 'worker-a', reason, handoffNote: { whatIsDone, whatRemains } }, each under 140 chars. The expected line is `🔓 worker-a released task: <title> (<reason>)` followed by `\\n  done: <whatIsDone>\\n  remains: <whatRemains>`. It is unaddressed in #general and in #workers. The #governors copy has the same text and still records its mentions (they contain worker-busy): it is the governor's page and stays out of scope.\n(d) release_task, auto-route path. task-1 is WORKING, unassigned, with one COMPLETED step. Call with { taskId, reason }. The line `🔧 task task-1 was unassigned but stuck in WORKING; auto-routed to REVIEW` is unaddressed in #general and in #workers. It names no one, so the #general copy is feed with or without the option: also spy (call-through) on h.state.postToGeneral and assert it was called with (line, { parseMentions: false }).\n(e) The helper stays opt-in. h.state.postToRoleChannel('workers', content), with content naming worker-busy, records ['worker-busy'] and routes to ['worker-busy']. The same call with { parseMentions: false } records [] and routes to [].\n\nKeep the file small: the architect's dry run of these five cases was 129 lines.\n\nRED: run only the new file in a snapshot (step 4's checkRef [1] recipe, overlaying only this file, vitest only). tsconfig excludes *.test.ts, so tsc does not see this file. Against the unchanged code all five cases must fail: (a), (b) and (c) on recorded mentions, (d) on the #workers copy routing to worker-busy, (e) on the ignored option. Quote the failures in complete_step.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/echoedReasonNotices.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T08:58:33.008Z"
     },
     {
       "stepId": "step-2",
@@ -66,7 +67,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:23.746Z",
-  "updatedAt": "2026-11-03T08:56:05.788Z",
+  "updatedAt": "2026-11-03T08:58:33.008Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:38:33.924Z",
     "plannedStepCount": 5,
@@ -156,5 +157,13 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T08:55:10.420Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-24611a0a@2026-11-03T08:38:29Z",
+    "at": "2026-11-03T08:57:35.044Z"
+  },
+  "workStartedAt": "2026-11-03T08:58:33.008Z"
 }

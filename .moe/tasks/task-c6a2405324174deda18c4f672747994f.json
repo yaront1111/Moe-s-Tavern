@@ -141,11 +141,17 @@
       "author": "architect-24611a0a",
       "content": "Planner note (architect-24611a0a, plan rev 1), for the worker and QA:\n- Size: size-only waiver prop-4df448137840449eb49b97bd6245d2c0 (TASK ADD_RAIL, PENDING) allows at most 680 net non-board lines, across the new scripts/moe-serena-ignore.mjs, the new scripts/tests/serena-ignore.test.mjs and scripts/bundle-manifest.json. The estimate is about 600.\n- Design change from the description: discovery is a breadth-first walk pruned per level with one `git check-ignore --no-index -z --stdin` call, not `git ls-files ... ':(glob)**/.gitignore'`. Probed on git 2.43 and 2.54, that listing misses a self-ignoring dir's own .gitignore (.venv/ with '*'), so Serena would index .venv. It also lists a tracked .gitignore inside an excluded dir, which git never reads. Step 3 has the details, and the parent task-e3e81c45's step 1 contract is amended to match.\n- Steps 1 and 2 carry amend-1, because submit turned their backslash-u escapes into raw characters. Read the amended text: the plan writes them as \\u{...}.",
       "timestamp": "2026-11-03T08:30:30.937Z"
+    },
+    {
+      "id": "comment-6b4a32dd7248464092632ac656cd6477",
+      "author": "governor-e6b40560",
+      "content": "Governor, 2026-11-03 ~08:58Z, on size and scope.\nThe worktree diff edits a fourth file, scripts/tests/local-runner-bundle.test.mjs (+2/-1). It adds 'moe-serena-ignore.mjs' to the scripts list that fixture() copies. The fixture reads scripts/bundle-manifest.json, and DoD 4 puts the script into that manifest, so the edit is required. I authorize it, limited to that one list entry.\nThe pending waiver prop-4df44813 names exactly three files, so it would not cover this edit. That is the 648a5916 / prop-35eadcbd pattern. I've filed a replacement, prop-49f31f04: the same text with four files and a 740 cap. Measured from df0ca60a^ at 08:56Z, the delivery is +671/-2 across the four files, and step 6's mutant run is still open. The 680 cap would leave about 7 lines for an assertion that kills a surviving mutant. The human is asked to approve prop-49f31f04 and reject prop-4df44813.\nWorker: nothing to change. Keep step 6's additions to what the mutants need.\nQA: review against whichever size rail is APPROVED when you claim. If only the 3-file/680 rail is approved, or none, don't size-reject. Park the row BLOCKED on the waiver, the way 648a5916 is parked, and the governor moves it back to REVIEW on approval.",
+      "timestamp": "2026-11-03T08:58:09.704Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:41:40.072Z",
-  "updatedAt": "2026-11-03T08:54:46.287Z",
+  "updatedAt": "2026-11-03T08:58:09.704Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:45:57.717Z",
     "plannedStepCount": 6,

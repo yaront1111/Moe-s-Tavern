@@ -53,8 +53,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -66,16 +66,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:33.829Z",
-  "updatedAt": "2026-11-03T08:56:57.542Z",
+  "updatedAt": "2026-11-03T08:59:11.445Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:40:44.142Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T08:58:41.752Z",
+    "wallClockMs": 1077610
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-af7be174"
   ],
   "tier": "light",
   "effort": "medium",
@@ -137,10 +140,11 @@
   "planApprovedAt": "2026-11-03T08:51:04.082Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T08:51:24Z",
-    "at": "2026-11-03T08:56:55.709Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T08:56:53Z",
+    "at": "2026-11-03T08:59:11.445Z"
   },
   "workStartedAt": "2026-11-03T08:53:50.059Z",
   "reviewStartedAt": "2026-11-03T08:54:59.732Z",
@@ -171,5 +175,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T08:58:41.752Z",
+  "reviewCompletedAt": "2026-11-03T08:58:41.752Z",
+  "reviewSummary": "Reviewed completion 620ca6715f72 (contained in HEAD and on moe/work-2026-10-24; recorded kind=completion, pushed). Diff: +38/-1 in the single file packages/moe-daemon/src/state/massDeletionHeal.test.ts. The only changed existing line is the import (adds MASS_DELETION_FRACTION, MASS_DELETION_MIN); the rest is one appended hunk with cases (z1) and (z2) inside the board-tracking describe. The 8 existing cases, fixtures and helpers are untouched, and massDeletionHeal.ts is byte-identical. Net size is 37 LOC, so size is not an issue. Re-ran checkRef[0] verbatim in a git-archive snapshot outside the repo (/tmp): exit 0, \"Tests 10 passed (10)\". Re-ran checkRef[1] verbatim: mutant A `(isWipe(lost, entries.size))` fails only (z1) with \"Tests 1 failed | 9 passed (10)\"; mutant B `(dirGone)` fails only (z2) with the same Tests line; then MUTANTS-KILLED, exit 0. The mutation happened in the snapshot only, and the script cmp-checked the restore. DoD: (1) z1 deletes the resources and attempts dirs (each 1 entry, under MASS_DELETION_MIN, neither a combined kind), asserts the heal returns 2, the restored file JSON and the post-reload maps. z2 deletes 3 of 4 worker files with the dir kept, asserts the heal returns 3 and the restored JSON, with live-size premises (3>=MIN, 3>=4*0.2, 3<59*0.2) proving the combined rule does not trip; the vitest log shows rule \"per-kind\" with wipedKinds [resources, attempts] and [workers]. (2) Both mutants are killed individually, as above. (3) Only the one test file changed. (4) The snapshot vitest run exits 0. No forbidden patterns in the added lines; the tests use only the describe's mkdtemp dir. Not run: the full daemon suite and the repo qualityGate, which are out of scope for a test-only, one-file row whose gate is the file's own vitest run.",
+  "requiredCheckAtDone": null
 }

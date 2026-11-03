@@ -43,17 +43,23 @@
     {
       "stepId": "step-3",
       "description": "Mutant RED proofs (DoD 3, run in scratch only, per mem:gotcha-postflight-worktree-mutant-copy). For each run, copy this worktree's whole scripts/ tree (it holds the new uncommitted cases) into its own dir under /mnt/d/moe-scratch/c6436215-mut/<name>/. Put a private copy of postflight-fake-proxy.js in <dir>/tmp. Apply one fixed-string swap with a needle count of exactly 1; keep the ps1 BOM by using byte-level read and write. Never edit the worktree's wrapper.\n\nFirst, an unmutated control on each engine: both new cases plus wt-resume are ok.\n- sh: `env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_ACCOUNT_ROTATION=off MOE_WORKTREE_ONLY=wt-resume-unmerged,wt-resume-retry-path node <copy>/scripts/tests/postflight-worktree.cjs sh <copy>/scripts/moe-agent.sh <dir>/tmp/fake-proxy.js <dir>/tmp $(command -v bash)`.\n- ps1: `cd /mnt/d/... && MOE_WORKTREE_ONLY=... WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" '<D:\\copy>\\scripts\\tests\\postflight-worktree.cjs' ps1 '<D:\\copy>\\scripts\\moe-agent.ps1' '<D:\\dir>\\tmp\\fake-proxy.js' '<D:\\dir>\\tmp' powershell`.\n\nsh mutants, the three the description names; each must give an AssertionError on its case:\n- M1: `cat \"${MOE_WT_RETRY_PATHS:-/dev/null}\" 2>/dev/null; git -C \"$1\" diff --name-only -z --diff-filter=U 2>/dev/null)` becomes `cat \"${MOE_WT_RETRY_PATHS:-/dev/null}\" 2>/dev/null)`. wt-resume-unmerged must fail.\n- M2: `< <(cat \"${MOE_WT_RETRY_PATHS:-/dev/null}\" 2>/dev/null; git -C \"$1\"` becomes `< <(git -C \"$1\"`. wt-resume-retry-path must fail.\n- M3: `[ -n \"$mh\" ] || [ -n \"${MOE_WT_RETRY:-}\" ] || return 0` becomes `[ -n \"$mh\" ] || return 0`. wt-resume-retry-path must fail.\n\nps1 twins, so the cases bite on both engines:\n- P1: `(@($script:MoeWtRetryPaths) + @(Get-MoeUnmergedPaths $WorktreePath))` becomes `(@($script:MoeWtRetryPaths))`.\n- P2: the same expression becomes `(@(Get-MoeUnmergedPaths $WorktreePath))`.\n- P3: `if ($Internal -and ($mh -or $script:MoeWtRetry)) {` becomes `if ($Internal -and $mh) {`.\nThe expected kills mirror M1-M3.\n\nA mutant that fails with anything other than an AssertionError on its target case (a harness TypeError, a timeout) is not a kill: fix the copy and re-run. Record each result line ('[worktree] <case> FAILED: AssertionError: ...') for the completion summary. When the review is done, delete the scratch copies you made, and only those.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-03T08:50:37.113Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Mutant RED proofs ran in scratch only (/mnt/d/moe-scratch/c6436215-mut, driver apply.py + run.sh). Each run used a whole scripts/ copy, one fixed-string swap with needle count 1, and a BOM-preserving byte write. Every needle was checked: count 1, bash -n ok, ps1 BOM ef bb bf. No tracked file changed in this step.\nControls (unmutated): sh exit 0 with wt-resume ok, wt-resume-unmerged ok, wt-resume-retry-path ok (3 ok, 0 failed). PS 5.1 gave the same: 3 ok, 0 failed.\nsh mutants:\n- M1 (drop the --diff-filter=U half): `[worktree] wt-resume-unmerged FAILED: AssertionError: wt-resume-unmerged-2: the prompt, main, MERGE_HEAD, the markers, the refusal, the finalize, the stored paths, or a gate ran before L2`; wt-resume-retry-path ok.\n- M2 (drop the retry-paths half): `[worktree] wt-resume-retry-path FAILED: AssertionError: wt-resume-retry-path-3: the prompt, main, MERGE_HEAD, the markers, the refusal, the finalize, or a landing`; wt-resume-unmerged ok.\n- M3 (MERGE_HEAD-only trigger): the same wt-resume-retry-path-3 AssertionError; wt-resume-unmerged ok.\nps1 twins:\n- P1: the wt-resume-unmerged-2 AssertionError.\n- P2: the wt-resume-retry-path-3 AssertionError.\n- P3: the wt-resume-retry-path-3 AssertionError.\nIn each kill's diff, finalize 'landed' replaces 'unlanded' (markers reached main) while the prompt premise still holds. Mutant copies deleted.",
+      "startedAt": "2026-11-03T08:50:37.113Z",
+      "completedAt": "2026-11-03T08:58:46.481Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification test gate, once, fresh, from the task worktree after the last tracked edit. Its output is the complete_task evidence. Run exactly (about 70+ min: run it as one background job, wait for its exit, then paste the tail):\ncd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && S=$(mktemp -d /mnt/d/moe-scratch/c6436215-v.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fake-proxy.js\" && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_ACCOUNT_ROTATION=off MOE_WORKTREE_ONLY=wt-resume,wt-resume-unmerged,wt-resume-retry-path,marker-scan node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fake-proxy.js\" \"$S\" \"$(command -v bash)\" && MOE_WORKTREE_ONLY=wt-resume,wt-resume-unmerged,wt-resume-retry-path WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') node scripts/tests/postflight-safe.mjs bash && \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell\n\nExpected:\n- PASS parity-check.sh.\n- The sh targeted run prints `[worktree] 4 ok, 0 failed` and the ps1 targeted run `[worktree] 3 ok, 0 failed`. These are the DoD 4 counts.\n- Both postflight-safe lines are `{\"engine\":...,\"exit\":0,...,\"failureClass\":\"NONE\",...}`.\n\nA second targeted run uses the same $S parent, so wait for the first to finish. Delete $S afterwards. Kill only PIDs you started yourself, never by pattern.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T08:58:47.298Z"
     },
     {
       "stepId": "step-5",
@@ -85,7 +91,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:57.048Z",
-  "updatedAt": "2026-11-03T08:50:37.113Z",
+  "updatedAt": "2026-11-03T08:58:47.298Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:32:52.349Z",
@@ -95,7 +101,7 @@
     "firstClaimAt": "2026-11-03T08:34:35.147Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -108,7 +114,8 @@
   "lowEffortEligible": true,
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:40:32.867Z",
