@@ -16,6 +16,7 @@ import {
   type ExecutionRoute
 } from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
+import { unansweredHumanComments } from '../util/taskPayload.js';
 import { awaitingPlanReuse } from '../context/planReuseJob.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
@@ -84,22 +85,12 @@ function findPendingQuestion(
     // filtered there spins every idle agent in a hot wait→get→wait loop with
     // zero progress. (1) Archiving does not clear hasPendingQuestion, and
     // get_pending_questions skips ARCHIVED. (2) It also only surfaces human
-    // comments AFTER the last agent comment — a flag left set after an agent
+    // comments AFTER the last answering comment (the same helper, which skips
+    // the daemon's own comments) — a flag left set after an agent
     // already answered yields an empty result there.
     if (task.status === 'ARCHIVED') continue;
     if (epicId && task.epicId !== epicId) continue;
-    const comments = task.comments || [];
-    let lastAgentIdx = -1;
-    for (let i = comments.length - 1; i >= 0; i--) {
-      if (comments[i].author !== 'human') {
-        lastAgentIdx = i;
-        break;
-      }
-    }
-    const hasUnansweredHumanComment = comments
-      .slice(lastAgentIdx + 1)
-      .some((c) => c.author === 'human');
-    if (!hasUnansweredHumanComment) continue;
+    if (unansweredHumanComments(task.comments).length === 0) continue;
     return { taskId: task.id, title: task.title, status: task.status, epicId: task.epicId };
   }
   return null;
