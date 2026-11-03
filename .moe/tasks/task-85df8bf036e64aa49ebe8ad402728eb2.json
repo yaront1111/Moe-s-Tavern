@@ -71,8 +71,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -84,12 +84,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:35:53.599Z",
-  "updatedAt": "2026-11-03T02:34:16.187Z",
+  "updatedAt": "2026-11-03T02:36:41.144Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T02:19:02.854Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T02:36:18.722Z",
+    "wallClockMs": 1035868
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -212,9 +214,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T02:23:48Z",
-    "at": "2026-11-03T02:30:59.215Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T02:34:04Z",
+    "at": "2026-11-03T02:36:41.144Z"
+  },
+  "completedAt": "2026-11-03T02:36:18.722Z",
+  "reviewCompletedAt": "2026-11-03T02:36:18.722Z",
+  "reviewSummary": "Reviewed completion 1b329836 (on moe/work-2026-10-24 and moe/control). Diff: 5 files, +147/-25 (net 122), exactly the approvedScope.\n\nRe-ran checkRefs[0] verbatim in a fresh git-archive HEAD snapshot under /tmp (5 files cmp-clean vs HEAD, node v24.21.0 under env -i, npm ci and tsc clean; nothing ran in the shared checkout). Focused: Test Files 5 passed (5), Tests 150 passed (150). Full suite: Test Files 229 passed (229), Tests 6949 passed | 20 skipped (6969). VERIFY-EXIT=0. The count is 3 above the worker's 6946 only because HEAD is a later base.\n\nDoD 1: parseMentions false gives rawMentions [] and routingTargets [], and the router is never called. Stored mentions are [] and content is verbatim. The mention-less #general line is feed, so chat_read hides it. E1 asserts the exact string, routingTargets [], mentions [], zero unread, and no chat_read return. E3 covers the workers role channel with a control send. Mutation check in a scratch snapshot: forcing addressesSeats = true fails E1 and E3 (2 failed, 23 passed) and E2 still passes.\n\nDoD 2: postToGeneral and postSystemMessage forward the option only when given, so call shapes are unchanged. E2 guards that a plain system post still routes its tag. The collision heads-up, addComment and reportBlocked tests pass unchanged, focused and in the full suite.\n\nDoD 3: command and both count lines above.\n\nRails: no MCP contract change. Test source builds tags at runtime.\n\nNon-blocking: the conditional forwarding is verbose but deliberate (it keeps spy call shapes). amendPlanStep, qaReject, requestReplan and the claim notice title can still echo agent text; the worker listed them as follow-ups.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
