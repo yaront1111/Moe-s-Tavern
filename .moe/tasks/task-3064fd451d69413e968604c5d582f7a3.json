@@ -1,0 +1,41 @@
+{
+  "id": "task-3064fd451d69413e968604c5d582f7a3",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_pin stores any workerId as pinnedBy, including \"system\" and unregistered ids that chat_send and chat_decision refuse, and chat_pin and chat_unpin refuse \"#general\" and unknown channels with an uncoded Error instead of resolving the reference and refusing NOT_FOUND",
+  "description": "Defect hunt #8 (task-21d671c1), lane 1: the daemon chat tool family. This row verifies hunt #7's open lead (d), \"chat_pin accepts any workerId as pinnedBy\". HEAD b5f40fee.\n\nPROBLEM\n1. Sender guard. packages/moe-daemon/src/tools/chatPin.ts:32-34 checks only that workerId is a non-empty string. :36 then stores it as pinnedBy: `state.pinMessage(params.channel, params.messageId, params.workerId)`. Its siblings refuse two kinds of id:\n   - chat_send refuses \"system\" with NOT_ALLOWED (tools/chatSend.ts:41-42).\n   - chat_send refuses an unregistered id with INVALID_INPUT \"Unknown sender: workerId must be a registered worker or \\\"human\\\"\" (chatSend.ts:44-52, after a tryLoadWorkerFromDisk fallback).\n   - chat_decision applies the same pair (tools/chatDecision.ts:35-41, fixed by 314405bb).\n   So a pin can be attributed to the daemon or to a seat that does not exist, in the pins file, the PINS_UPDATED broadcast and the PIN_CREATED payload (state/chatStore.ts:532-542). \"human\" stays allowed, as it is in chat_send. chat_pin and chat_unpin are listed in tools/list for no role except the governor (tools/index.ts:241-242, audience []), but tools/call is never filtered.\n2. Channel reference. Both tools pass the raw reference straight to the store (chatPin.ts:36, chatUnpin.ts:31). The store then throws a plain `new Error('Channel not found: …')`, uncoded (-32000), for \"#general\" and for a channel that does not exist (state/chatStore.ts:519-520 and :549-550). Compare:\n   - resolveChannelRef (chatStore.ts:88-101) says \"Every chat tool that takes a channel from a caller goes through this\".\n   - chat_send resolves through it and refuses NOT_FOUND (chatSend.ts:55-56).\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-21d671c1/A/chatPin.hunt.test.ts. The verbatim output is in chatPin.hunt.output.txt next to it. I re-ran it on HEAD in a git-archive snapshot: `cd /tmp/hunt-21d6-A/packages/moe-daemon && npx vitest run src/tools/chatPin.hunt.test.ts`. Each case first shows chat_send refusing the same input, then:\n- \"system\": `AssertionError: promise resolved \"{ success: true, pin: { …(5) } }\" instead of rejecting`. The pin is stored with pinnedBy \"system\".\n- \"worker-ghost\" (not registered): the same \"resolved instead of rejecting\".\n- \"#general\" (the reference chat_send accepts): `AssertionError: promise rejected \"Error: Channel not found: #general\" instead of resolving`.\n\nFIX DIRECTION\n- chatPin.ts: copy chat_send's sender check. \"system\" → notAllowed. Otherwise call state.getWorker, then state.tryLoadWorkerFromDisk, else invalidInput('workerId', 'Unknown sender: …'). Then resolve the channel with `state.resolveChannelRef(params.channel)`, throw `notFound('Channel', params.channel)` on null, and pass `channel.id` to pinMessage.\n- chatUnpin.ts: resolve the channel the same way and pass `channel.id`.\n- Update both inputSchema channel descriptions to chat_send's wording: \"Channel id, or name in either \\\"general\\\" or \\\"#general\\\" form\".\n- Leave the /ws PIN_MESSAGE / UNPIN_MESSAGE path (server/WebSocketServer.ts:1127/1141) unchanged.\n\nOUT OF SCOPE (held files):\n- PIN_REMOVED records no actor: chatUnpin.ts:31 drops the proxy-stamped workerId, and chatStore.ts:559 logs `{ channelId, messageId }` only. That fix needs the StateManager.unpinMessage wrapper, and state/StateManager.ts is held by task-3e1d0c2e. It is reported to the governor for after that row lands.\n- docs/MCP_SERVER.md is held by task-66108835 and task-3e1d0c2e.\n- chat_who, chat_join and chat_resync have the same channel-reference gap. That is a separate row filed by this hunt.\n\nFILES: packages/moe-daemon/src/tools/chatPin.ts, packages/moe-daemon/src/tools/chatUnpin.ts, and tests in a new packages/moe-daemon/src/tools/chatPin.test.ts (model it on the repro above; it uses ToolTestHarness).",
+  "definitionOfDone": [
+    "`cd packages/moe-daemon && npx vitest run src/tools/chatPin.test.ts`, run in a snapshot outside the shared checkout, passes with cases that fail on HEAD b5f40fee. chat_pin with workerId \"system\" is refused -32003 NOT_ALLOWED. chat_pin with an unregistered id is refused -32602 INVALID_INPUT. Neither refusal stores a pin: state.getPins(channelId) stays []. \"human\" and a registered seat still pin.",
+    "The same test file shows chat_pin and chat_unpin accepting \"#general\": the pin is created and then removed under #general's canonical id. Both tools refuse a channel that does not exist with -32001 NOT_FOUND.",
+    "`npx vitest run src/state/StateManager.test.ts src/server/WebSocketServer.test.ts` stays green, so the /ws pin path still records \"human\". The diff touches only chatPin.ts, chatUnpin.ts and chatPin.test.ts."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-74d9e1c7",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 406.7,
+  "comments": [
+    {
+      "id": "comment-5fe2794f0cb14c259c674f8008f0cc7b",
+      "author": "architect-1dd28c7c",
+      "content": "Sibling row from the same hunt (#8): task-4877ef36. It fixes the same resolveChannelRef gap in chat_who, chat_join and chat_resync, and adds chat_resync's response cap. The two rows share no file. This row owns chatPin.ts, chatUnpin.ts and a new chatPin.test.ts. task-4877ef36 owns chatWho.ts, chatJoin.ts, chatResync.ts, chatChannelRef.test.ts and chatBudgets.test.ts. So keep the pin/unpin channel cases in chatPin.test.ts, not chatChannelRef.test.ts.",
+      "timestamp": "2026-11-03T19:11:59.379Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:10:35.780Z",
+  "updatedAt": "2026-11-03T19:11:59.379Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:10:46.661Z"
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ]
+}

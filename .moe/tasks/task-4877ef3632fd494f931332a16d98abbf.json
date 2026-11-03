@@ -1,0 +1,34 @@
+{
+  "id": "task-4877ef3632fd494f931332a16d98abbf",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_who, chat_join and chat_resync skip resolveChannelRef, so chat_who reports nobody in \"#general\" and online:[] for a channel that does not exist, chat_join refuses \"#general\" and chat_resync throws an uncoded error for it; chat_resync, documented as token-budgeted, also has no total response cap",
+  "description": "Defect hunt #8 (task-21d671c1), lane 1: the daemon chat tool family. HEAD b5f40fee.\n\nPROBLEM\nresolveChannelRef (packages/moe-daemon/src/state/chatStore.ts:88-101, 1bc461fc) accepts a channel's id, its bare name or \"#name\". Its doc comment says: \"Every chat tool that takes a channel from a caller goes through this, so the form a governor is TOLD to pass is the form that works\".\n- chat_send (tools/chatSend.ts:55-56), chat_read (chatRead.ts:76-81), chat_wait, chat_decision and add_comment all resolve through it.\n- chat_read's comment (chatRead.ts:70-75) explains why an absent channel must be refused: an empty page \"reads as 'this channel is quiet'\", which is how a seat comes to make a confident false claim.\nThree members still key on the raw string:\n1. chat_who: chatWho.ts:39 `worker.chatCursors[params.channel]` and :69 `waiter.channels.has(params.channel)`.\n   - \"#general\" and \"general\" list nobody, while the id lists the reader.\n   - A channel that does not exist answers {online: []} instead of NOT_FOUND, and :69 still lists any all-channel chat_wait waiter for it.\n2. chat_join: chatJoin.ts:35 `state.getChannel(params.channel)` refuses \"#general\" with NOT_FOUND.\n3. chat_resync: chatResync.ts:69 deletes cursor key `params.channel`, which is a no-op for \"#general\". Then :78 `state.getMessages(params.channel, …)` throws a plain `Error: Channel not found: #general` (chatStore.ts:295-296). That error is uncoded (-32000), and an unknown channel gets the same.\n4. Budget. chat_resync's description (chatResync.ts:17) and docs/MCP_SERVER.md:2773 promise \"a bounded, token-budgeted message window\", but the tool only truncates each message (:98).\n   - chat_read drops the oldest messages once the response passes MAX_CHAT_RESPONSE_CHARS = 40,000 (chatRead.ts:140-151, util/chatPayload.ts:21). chat_wait does the same through capChatMessagesToResponseBudget (chatPayload.ts:88).\n   - chat_resync's own hint (:107) says \"Re-run with maxContentChars: 0\". With limit 40 over 9,000-char messages that returns about 369,000 chars, and the cursors have already moved to the newest message (:91-96).\n\nEVIDENCE\nVitest repros. Each first asserts that the sibling behaves correctly, and that half passes. Copies are in /mnt/d/moe-scratch/hunt-21d671c1/A/, each with its verbatim *.hunt.output.txt. I re-ran them on HEAD in a git-archive snapshot: `cd /tmp/hunt-21d6-A/packages/moe-daemon && npx vitest run src/tools/chatWho.hunt.test.ts src/tools/chatJoinResync.hunt.test.ts src/tools/chatResyncBudget.hunt.test.ts`. All 6 cases fail:\n- chat_who by \"#general\" (the id lists ['worker-a']): `AssertionError: expected [] to deeply equal [ 'worker-a' ]`\n- chat_who on \"#no-such-channel\": `AssertionError: promise resolved \"{ online: [] }\" instead of rejecting`\n- chat_join on \"#general\": `promise rejected \"MoeError: [NOT_FOUND] Channel not found: …\"` / `Caused by: MoeError: [NOT_FOUND] Channel not found: #general`\n- chat_resync on \"#general\": `Error: Channel not found: #general`\n- chat_resync on \"#nope\": `AssertionError: expected Error: Channel not found: #nope to match object { code: -32001 }`\n- the budget, chat_read vs chat_resync at limit 40 and maxContentChars 0: `AssertionError: expected { count: 40, chars: 368910 } to deeply equal { count: 4, chars: 36892 }`\n\nFIX DIRECTION\n- In each of the three tools, resolve once up front with `state.resolveChannelRef(params.channel)` and throw `notFound('Channel', params.channel)` on null, exactly as chatRead.ts:76-81 does. Key everything after that on `channel.id`: chat_who's cursor and waiter lookups, chat_join's join, and chat_resync's cursor delete and fetch.\n- Cap chat_resync's window to MAX_CHAT_RESPONSE_CHARS before it derives cursors, using capChatMessagesToResponseBudget or chat_read's oldest-first trim. Each cursor then points at the newest message actually returned.\n- Update the three inputSchema channel descriptions to chat_send's wording: \"Channel id, or name in either \\\"general\\\" or \\\"#general\\\" form\".\n\nOUT OF SCOPE (held files or sibling rows):\n- chat_pin and chat_unpin: task-3064fd45, filed by this hunt.\n- chatWait.ts, chatWait.test.ts and util/chatBacklog.ts: task-66108835.\n- docs/MCP_SERVER.md: held by task-66108835 and task-3e1d0c2e.\n\nFILES\n- packages/moe-daemon/src/tools/chatWho.ts\n- packages/moe-daemon/src/tools/chatJoin.ts\n- packages/moe-daemon/src/tools/chatResync.ts\n- tests in packages/moe-daemon/src/tools/chatChannelRef.test.ts (add describe blocks beside the chat_wait, chat_read and chat_send ones)\n- tests in packages/moe-daemon/src/tools/chatBudgets.test.ts",
+  "definitionOfDone": [
+    "`cd packages/moe-daemon && npx vitest run src/tools/chatChannelRef.test.ts`, run in a snapshot outside the shared checkout, passes. It has new cases that fail on HEAD b5f40fee:\n- chat_who lists the same seats for a channel's id, its bare name and \"#name\";\n- chat_join on \"#general\" posts its join line in #general;\n- chat_resync on \"#general\" resets the cursor keyed by #general's id and sets it again;\n- chat_who, chat_join and chat_resync each refuse a channel that does not exist with -32001 NOT_FOUND.",
+    "`npx vitest run src/tools/chatBudgets.test.ts` passes with a new case that fails on HEAD. In it, chat_resync with maxContentChars 0, over messages whose total chatMessageResponseCost exceeds MAX_CHAT_RESPONSE_CHARS:\n- returns at most that budget;\n- keeps the newest messages;\n- leaves the caller's cursor for that channel on the newest message it returned.",
+    "The sibling suites stay green in the same snapshot: `npx vitest run src/tools/chatRead.cursor.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatDecision.test.ts`. The diff touches only the 5 files listed under FILES."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 407.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:10:57.784Z",
+  "updatedAt": "2026-11-03T19:13:02.328Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:12:59.296Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

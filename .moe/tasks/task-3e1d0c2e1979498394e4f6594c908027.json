@@ -96,7 +96,7 @@
   ],
   "planRevision": 1,
   "status": "REVIEW",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "qa-7328a40d",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -108,7 +108,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:42:33.313Z",
-  "updatedAt": "2026-11-03T19:05:25.282Z",
+  "updatedAt": "2026-11-03T19:16:39.687Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:42:52.720Z",
     "plannedStepCount": 6,
@@ -208,11 +208,10 @@
   "planApprovedAt": "2026-11-03T18:59:15.861Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-24611a0a@2026-11-03T18:42:51Z",
-    "at": "2026-11-03T19:00:25.874Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T18:59:26Z",
+    "at": "2026-11-03T19:16:37.822Z"
   },
   "workStartedAt": "2026-11-03T19:00:49.746Z",
   "reviewStartedAt": "2026-11-03T19:05:25.280Z",
@@ -233,5 +232,29 @@
     "packages/moe-daemon/src/tools/deleteTask.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "create_epic, update_epic, delete_epic and delete_task now record the caller's workerId as the top-level actor on EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED and TASK_DELETED, including each TASK_DELETED a delete_epic cascade writes.\n- State layer: StateManager createEpic/updateEpic/deleteEpic, the deleteTask delegator and taskStore.deleteTask each take an optional trailing actorWorkerId, passed as appendActivity's 7th argument. EPIC_DELETED keeps the epic slot undefined, so it still has no top-level epicId and its payload stays { title }.\n- Tools: each schema gains an optional workerId, and each tool passes the bare params.workerId with no fallback. update_epic splits workerId off with `const { workerId, ...raw } = args`, so args are no longer mutated, and allowedFields and the strict-field loop are unchanged.\n- Callers left unchanged and actor-less: the board's /ws paths, archiveEpic.ts:92 and the rail-proposal updateEpic.\n- Docs: a workerId?: string line in the four Parameters blocks of docs/MCP_SERVER.md.\n- Test: tools/epicDeleteActor.test.ts, cases (a1)-(a4).\n\nGate checkRef green: tsc clean, 'Test Files 8 passed (8)', 'Tests 189 passed (189)', exit 0.\nGate checkRef red at 207fc682 printed:\n- FAIL ... > (a1) get_activity_log { workerId } returns the seat's create, update and delete events\n- FAIL ... > (a2) a delete_epic cascade records the caller on each TASK_DELETED and on EPIC_DELETED\n- 'Tests 2 failed | 2 passed (4)'\n- RED-AT-BASE\n\nResiduals (not this row):\n- archive_epic's own EPIC_UPDATED (archiveEpic.ts:92) is still actor-less; it is now a one-argument follow-up.\n- A non-string or '' workerId passes through uncoerced, the same as every sibling site."
+  "completionSummary": "create_epic, update_epic, delete_epic and delete_task now record the caller's workerId as the top-level actor on EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED and TASK_DELETED, including each TASK_DELETED a delete_epic cascade writes.\n- State layer: StateManager createEpic/updateEpic/deleteEpic, the deleteTask delegator and taskStore.deleteTask each take an optional trailing actorWorkerId, passed as appendActivity's 7th argument. EPIC_DELETED keeps the epic slot undefined, so it still has no top-level epicId and its payload stays { title }.\n- Tools: each schema gains an optional workerId, and each tool passes the bare params.workerId with no fallback. update_epic splits workerId off with `const { workerId, ...raw } = args`, so args are no longer mutated, and allowedFields and the strict-field loop are unchanged.\n- Callers left unchanged and actor-less: the board's /ws paths, archiveEpic.ts:92 and the rail-proposal updateEpic.\n- Docs: a workerId?: string line in the four Parameters blocks of docs/MCP_SERVER.md.\n- Test: tools/epicDeleteActor.test.ts, cases (a1)-(a4).\n\nGate checkRef green: tsc clean, 'Test Files 8 passed (8)', 'Tests 189 passed (189)', exit 0.\nGate checkRef red at 207fc682 printed:\n- FAIL ... > (a1) get_activity_log { workerId } returns the seat's create, update and delete events\n- FAIL ... > (a2) a delete_epic cascade records the caller on each TASK_DELETED and on EPIC_DELETED\n- 'Tests 2 failed | 2 passed (4)'\n- RED-AT-BASE\n\nResiduals (not this row):\n- archive_epic's own EPIC_UPDATED (archiveEpic.ts:92) is still actor-less; it is now a one-argument follow-up.\n- A non-string or '' workerId passes through uncoerced, the same as every sibling site.",
+  "commits": [
+    {
+      "sha": "f8b8d60cc6e836a8eea0ad2e5abbae9bed3f1f30",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T18:59:26Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/createEpic.ts",
+        "packages/moe-daemon/src/tools/deleteEpic.ts",
+        "packages/moe-daemon/src/tools/deleteTask.ts",
+        "packages/moe-daemon/src/tools/epicDeleteActor.test.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T19:16:37.822Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
