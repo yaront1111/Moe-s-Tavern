@@ -1,0 +1,35 @@
+{
+  "id": "task-ede8893929794093af803dad1aaeb477",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the claude-plugin daemon client ignores MOE_DAEMON_HOST, so in WSL agent mode its PostToolUse hook and callTool dial 127.0.0.1, which the Windows daemon never answers, and every AGENT_TOOL_EVENT is lost",
+  "description": "Filed by defect hunt 11-03 #3 (task-859eff80). This is the hunt #2 \"host vs bindHost\" item, now with evidence that it matters.\n\nPROBLEM\n- packages/moe-claude-plugin/src/daemonClient.ts:149 sets the connect host to daemon.json `host`, else '127.0.0.1'. The daemon never writes `host`. It writes `bindHost`, which is \"wsl\" in WSL agent mode. So the plugin always dials loopback. sendOnce (:237) uses that host for both callTool (/mcp) and postEvent (/ws, which the PostToolUse hook uses).\n- Nothing in packages/moe-claude-plugin/src reads MOE_DAEMON_HOST (0 grep hits). moe-proxy does: packages/moe-proxy/src/utils.ts:69-73 getDaemonHost() returns MOE_DAEMON_HOST, else '127.0.0.1'. docs/CONFIGURATION.md:44 and :61 document MOE_DAEMON_HOST as the connect-host override \"for agents + spawned MCP servers (WSL mode)\". docs/TROUBLESHOOTING.md:187 says it overrides the client's destination. The wrapper exports it for WSL seats; this seat has MOE_DAEMON_HOST=172.26.208.1.\n- Consequence: under WSL NAT networking, loopback inside WSL is not the Windows host.\n  - The hook's AGENT_TOOL_EVENT never reaches /ws, so server/WebSocketServer.ts:1016-1058 never folds toolCalls into task metrics (util/metrics.ts:22), and the IDE never sees the seat's tool activity.\n  - The failure is swallowed, because the hook fails open.\n  - README.md:75 then tells the user that CONNECT_FAILED means the daemon crashed.\n- Scope note: no seat in this fleet has the plugin installed today (0 AGENT_TOOL_EVENT in .moe/activity.log 09:13Z-16:12Z). The bug hits WSL-mode users who install the plugin.\n\nEVIDENCE\n1. Live, from a WSL seat at 2026-11-03 16:16Z, with daemon.json bindHost \"wsl\" and port 9876:\n   - `curl -s -m 3 http://127.0.0.1:9876/health` exits 7 (connection refused);\n   - `curl -s -m 3 http://172.26.208.1:9876/health` returns HTTP 200.\n2. Repro on HEAD ef5c7101 in /tmp/hunt-859e-snap (git archive with Linux node_modules). Persisted copies: /mnt/d/moe-scratch/hunt-859e/zzHunt859ePluginHost.test.ts and plugin-host.output.txt. Command: `cd packages/moe-claude-plugin && npx vitest run tests/zzHunt859ePluginHost.test.ts`. Result: 2 failed.\n   - findDaemonInfo, with MOE_DAEMON_HOST=172.26.208.1 and daemon.json {bindHost:\"wsl\"}: `expected '127.0.0.1' to be '172.26.208.1'`.\n   - callTool, against a ws server listening only on 127.0.0.2 with MOE_DAEMON_HOST=127.0.0.2: `DaemonError: Cannot reach daemon at 127.0.0.1:38559: connect ECONNREFUSED 127.0.0.1:38559` (code CONNECT_FAILED).\n3. Dry run of the fix direction (line 149 reads MOE_DAEMON_HOST first):\n   - With MOE_DAEMON_HOST unset, the repro plus tests/daemonClient.test.ts and tests/postToolUse.test.ts pass 20/20.\n   - With the seat's inherited MOE_DAEMON_HOST=172.26.208.1, three EXISTING tests then fail because they assume loopback: 'accepts a 65536-byte daemon.json', 'forwards a tools/call request and returns the result', and 'forwards moe.* tool events with the expected envelope'. So the fix must make those suites hermetic.\n\nFIX DIRECTION\n- Resolve the connect host the way the proxy does: a non-blank MOE_DAEMON_HOST first, then a legacy daemon.json `host` string, then '127.0.0.1'.\n- Never use `bindHost` as a connect address: \"wsl\" is a bind mode.\n- In the tests, clear MOE_DAEMON_HOST for the loopback suites (for example vi.stubEnv in beforeEach), so they pass on a WSL seat that exports it.\n- Add one README troubleshooting line: on WSL, CONNECT_FAILED means MOE_DAEMON_HOST is unset or wrong.\n\nFILES: packages/moe-claude-plugin/src/daemonClient.ts, tests/daemonClient.test.ts, tests/postToolUse.test.ts (the hermetic env only) and README.md. None is held by an open row (lanes.js at 16:21Z). CI runs the plugin tests on ubuntu-latest only (.github/workflows/ci.yml:81-100), so a 127.0.0.2 listener works there. Guard it with a skip where that address cannot be bound (macOS).",
+  "definitionOfDone": [
+    "With a non-blank MOE_DAEMON_HOST, findDaemonInfo returns it as `host`, ahead of daemon.json's `host`. A blank or unset value falls back to daemon.json `host`, then '127.0.0.1'. `bindHost` is never used as a connect host.",
+    "A new test starts a WebSocket server on a non-default loopback address (127.0.0.2, skipped where that address cannot be bound) and writes daemon.json with bindHost \"wsl\" and no `host`. It sets MOE_DAEMON_HOST to that address and asserts that callTool resolves and postEvent's frame reaches the server. Restoring today's daemonClient.ts:149 fails it.",
+    "The existing daemonClient and postToolUse tests pass with unchanged assertions, both with MOE_DAEMON_HOST unset and with it set to 172.26.208.1, because their env setup is now hermetic.",
+    "Verification, in a snapshot outside the shared checkout: `cd packages/moe-claude-plugin && MOE_DAEMON_HOST=172.26.208.1 npx vitest run && env -u MOE_DAEMON_HOST npx vitest run && npx tsc --noEmit` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 372.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:21:31.497Z",
+  "updatedAt": "2026-11-03T16:22:27.695Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:22:12.646Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

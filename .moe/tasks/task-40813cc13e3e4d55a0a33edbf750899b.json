@@ -99,8 +99,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -112,12 +112,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:46:49.581Z",
-  "updatedAt": "2026-11-03T16:18:54.756Z",
+  "updatedAt": "2026-11-03T16:23:14.953Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:55:39.579Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T16:23:14.951Z",
+    "wallClockMs": 1655372
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -221,5 +223,9 @@
     "kind": "completion",
     "sessionId": "worker-d6c1cb7a@2026-11-03T16:00:07Z",
     "at": "2026-11-03T16:13:21.727Z"
-  }
+  },
+  "completedAt": "2026-11-03T16:23:14.951Z",
+  "reviewCompletedAt": "2026-11-03T16:23:14.951Z",
+  "reviewSummary": "Reviewed completion a000b817 (parent 3b56ee35, on moe/work-2026-10-24 and origin), not the working tree. 9 files, +239/-24 (net 215).\nDoD1: ProjectSettings.worktreeMode/worktreeModeOn/worktreeModeFromDefault/worktreeTarget match validators.ts resolveWorktreeMode/resolveWorktreeTarget, re-read at a000b817. parseProjectSettings uses getStrictStringOrNull and never throws. The dialog adds the mode row and swaps the board, landing and scope rows only when on; the off code is the original. P01-P10 expect arrays are unchanged (only P04's settings and note gain \"off\"), and 946358a8 and a000b817^ do not differ for these files.\nDoD2: P11-P15 cover explicit on, unset plus gate, off plus gate, glob, and malformed, with no client-specific expectations. One MoeJsonTest method covers every resolve and target branch.\nDoD3: the CONFIGURATION.md intro and the worktreeMode \"Dialog:\" label are present.\nRe-runs:\n- Under the jetbrains-gradle lease, gradlew.bat test --rerun in the task worktree (tree equals a000b817, clean): BUILD SUCCESSFUL, 40 classes, 634 tests, 6 skipped, 0 failures, 0 errors. MoeJsonTest 35/0/0, SettingsPolicyCorpusTest 2/0/0, MoeSettingsDialogTest 11/0/0, fresh 16:20:59Z. 634 rather than 633 because 37e03b91's test is now on the base.\n- VS Code git-archive snapshot (npm ci && npm test && npm run compile): 695 tests, 0 fail, tsc clean; corpus C1-C5 pass.\n- Mutation: the parent's SettingsPanel.ts fails exactly P11, P12, P14 and P15.\n- qualityGate (parity-check plus lint): exit 0.\nScope: the plan's 7 files plus 2 forced one-line test edits (POLICY_SHAPE key, fixture worktreeMode \"off\"), both justified. UPDATE_SETTINGS is untouched.\nNon-blocking: SettingsPanel builds modeRow even when off.",
+  "requiredCheckAtDone": null
 }

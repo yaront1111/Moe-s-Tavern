@@ -1,0 +1,35 @@
+{
+  "id": "task-c05bf92d755a4ff586b2a169f64d11ca",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_task and record_commit's normal branch record no actor, so get_activity_log by workerId misses every row a seat files and every commit its wrapper records (record_commit's own owner-guard branch passes it)",
+  "description": "Filed by defect hunt 11-03 #3 (task-859eff80). The three actor rows d981e0b0, 2e3012b9 and e977c32b closed every other task path. These two are the remainder: mem:gotcha-task-event-actor-inventory lists neither as fixed nor as deliberately actor-less.\n\nPROBLEM\n- state/taskStore.ts:361 writes TASK_CREATED as `appendActivity('TASK_CREATED', { title: task.title }, task)`, with no actorWorkerId. create_task receives the caller's workerId (tools/createTask.ts:42, :135-137), but uses it only to resolve the createdBy ROLE. state.createTask(input) (StateManager.ts:667 -> taskStore.ts:289) has no actor parameter. createdBy is a role enum, so nothing durable records WHICH seat filed a row.\n- tools/recordCommit.ts:379 calls `state.updateTask(task.id, updates, 'TASK_COMMIT_RECORDED')` without the 4th (actor) argument. Its sibling branch at :364-370, the owner-guard refusal audit row, does pass params.workerId as the actor. The tool already records the caller as recordedBy (:296).\n- Consequence: get_activity_log { workerId } filters on the top-level workerId only (getActivityLog.ts:131-132). So it returns none of a seat's task creations and none of the commits its wrapper recorded.\n\nEVIDENCE\n1. Live log .moe/activity.log, 2026-11-03 09:13Z-16:12Z: all 21 TASK_CREATED and all 87 TASK_COMMIT_RECORDED events have no workerId. The daemon is edc27e14, and both lines are unchanged at ef5c7101.\n2. Repro on HEAD ef5c7101 in /tmp/hunt-859e-snap (git archive with Linux node_modules). Persisted copies: /mnt/d/moe-scratch/hunt-859e/zzHunt859eActor.test.ts and actor.output.txt. Command: `cd packages/moe-daemon && npx vitest run src/tools/zzHunt859eActor.test.ts`. Result: 2 failed, 1 passed.\n   - create_task {workerId:'governor-g1'}: the TASK_CREATED actors give `expected [ null ] to deeply equal [ 'governor-g1' ]`, and get_activity_log {workerId:'governor-g1'} gives `expected [] to include 'TASK_CREATED'`.\n   - record_commit, outcome committed, {workerId:'worker-1'}: `expected [ null ] to deeply equal [ 'worker-1' ]`; the per-seat query gives `expected [] to include 'TASK_COMMIT_RECORDED'`.\n   - Control: record_commit, outcome refused, code MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE, records actors ['worker-1'] and passes at HEAD.\n\nFIX DIRECTION\nThread a bare params.workerId through as the actor, the way the earlier rows did:\n- add an optional actorWorkerId parameter to taskStore.createTask and to the StateManager.createTask wrapper, and pass it from tools/createTask.ts. The board's caller (server/WebSocketServer.ts:451) stays actor-less;\n- pass the 4th updateTask argument at recordCommit.ts:379.\nNever record a placeholder: a caller-less call records no workerId, not 'unknown' and not recordedBy's UNIDENTIFIED_RELEASER. No response or contract change.\n\nFILES: packages/moe-daemon/src/state/taskStore.ts, state/StateManager.ts, tools/createTask.ts, tools/recordCommit.ts, plus one NEW test file under packages/moe-daemon/src/tools/. Test pattern: mem:gotcha-task-event-actor-inventory. None is held by an open row (lanes.js at 16:21Z).",
+  "definitionOfDone": [
+    "create_task with a workerId writes TASK_CREATED with that seat as its top-level workerId, and get_activity_log { workerId } returns it. A create_task without a workerId, and the board's /ws create, record no workerId.",
+    "record_commit's normal (non-owner-guard) branch writes TASK_COMMIT_RECORDED with the caller as its top-level workerId, as its owner-guard branch already does. A caller-less call records no workerId, never 'unknown'.",
+    "A NEW test file under packages/moe-daemon/src/tools/ covers both tools, including the caller-less rows. Restoring either call site fails it, and the existing createTask.test.ts and recordCommit.test.ts pass unchanged.",
+    "Verification, in a snapshot outside the shared checkout: `cd packages/moe-daemon && npx vitest run src/tools/<new test file> src/tools/createTask.test.ts src/tools/recordCommit.test.ts && npx tsc --noEmit` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 373.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:21:44.730Z",
+  "updatedAt": "2026-11-03T16:22:28.687Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:22:13.076Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}
