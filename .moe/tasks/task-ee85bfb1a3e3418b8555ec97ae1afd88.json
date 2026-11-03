@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,16 +78,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T01:10:19.060Z",
-  "updatedAt": "2026-11-03T03:33:06.698Z",
+  "updatedAt": "2026-11-03T03:35:44.384Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T01:27:33.216Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T03:35:24.889Z",
+    "wallClockMs": 7671673
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -200,9 +203,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T03:28:53Z",
-    "at": "2026-11-03T03:33:06.698Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T03:33:28Z",
+    "at": "2026-11-03T03:35:44.383Z"
+  },
+  "completedAt": "2026-11-03T03:35:24.889Z",
+  "reviewCompletedAt": "2026-11-03T03:35:24.889Z",
+  "reviewSummary": "Reviewed landed completion 0eaf069b (contained in moe/control HEAD and moe/work-2026-10-24; task.commits has the completion entry). Diff is +4/-4 over 2 files: docs/roles/worker.reference.md (the LANDING bullet only, one line) and packages/moe-daemon/src/generated/initFiles.ts (3 hunks, all in the worker.reference.md entry: marker sha 27bec85d5275 -> 9a727a066966, the bullet line, one new sha 9a727a066966 in SHIPPED_ROLE_BODY_SHAS). Re-ran the full task.verification (r0..r3 joined) myself from a /tmp script, exit 0: R0 OK (654-char resume_rule from moe-agent.sh is on one line, present in moe-agent.ps1, and quoted verbatim in the single LANDING bullet with all nine kept phrases); parity-check PASS; npm run lint OK (architect 39, worker 30, qa 36); 'no git command' gone and worker.md pointer intact (R1); scope check clean (R2: only the two files differ from base 0eaf069b); R3 in a mktemp git clone --shared snapshot, Linux node v24.21.0: base initFiles.ts regenerates unchanged, generator output cmp-equal to the candidate, vitest initFiles/targetedContextGuidance/qaCommitPolicy/blockedSeatGuidance/daemonGitDocs: Test Files 5 passed (5), Tests 44 passed (44). Diff read: the doc now names the read-only allowlist (status/diff/log/show/ls-files/rev-parse), forbids every git write, and tells the worker to build a HEAD-based snapshot from git ls-files of the worktree; the rest of the bullet (marker sentence, gate/contention/remote, MOE_WORKTREE_UNRESOLVED_CONFLICT, checkpoint-keeps-pending-merge, nothing auto-resolved) is byte-identical. Dependency task-b5c8fd34 landed as f7b077f7. No npm ran in the shared checkout. Not verified here: nothing deferred.",
+  "requiredCheckAtDone": null
 }
