@@ -63,8 +63,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -76,12 +76,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:44:47.676Z",
-  "updatedAt": "2026-11-03T22:05:11.168Z",
+  "updatedAt": "2026-11-03T22:06:28.109Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:08:53.337Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:06:28.106Z",
+    "wallClockMs": 3454769
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -191,5 +193,9 @@
     "kind": "completion",
     "sessionId": "worker-ed0f6a9e@2026-11-03T21:13:24Z",
     "at": "2026-11-03T21:28:37.382Z"
-  }
+  },
+  "completedAt": "2026-11-03T22:06:28.106Z",
+  "reviewCompletedAt": "2026-11-03T22:06:28.106Z",
+  "reviewSummary": "Reviewed completion ff36725b (on moe/work-2026-10-24, contained in control HEAD; +107/-3 net 104, only qaReject.ts and the new qaReject.failedDodItems.test.ts, working tree clean for both paths). Re-ran both checkRefs myself in /tmp snapshots (nvm node 24, env -i, nothing run in the shared checkout). Gate leg: npm ci, tsc --noEmit OK, tt.json typecheck of the new test OK, vitest over qaReject/qaOwnership/qaApprove/reviewLoopActor/echoedReasonNotices/governanceFeatures/taskTimestamps + delivery/reviewBinding + util/qaCommitPolicy + state/attemptHandback = Test Files 11 passed (11), Tests 284 passed | 3 skipped (287), exit 0. Red-at-base leg (qaReject.ts pinned at 6ded0c93): Tests 5 failed | 2 passed (7), only c1/c2 green, r1-r5 red, printed RED-AT-BASE. Matches the worker's evidence exactly. DoD 1: a non-string entry ([2], [null]) and a non-array (bare string) are refused with coded INVALID_INPUT naming failedDodItems[i]; the new block sits before state.getTask, assertWorkerOwns, assertContextFetched, assertReviewBinding and every write (read the handler top to bottom), and r3-r5 pin task-r.json byte-identical, status REVIEW, no reviews/ file. DoD 2: trimmed length over 1000 refused (r5 at 1001, r2 with 100k), 1000 accepted and stored as given (c2); refuse-not-truncate keeps the repeat-failure match exact; the 'too many items (max 20)' text is unchanged; null/undefined/[] skip the block; dedupe/trim and the flips untouched (qaOwnership and qaReject suites green). DoD 3: hunt repro ported as c1/r1/r2 and all pass in the gate run. Tests are mutation-resistant (exact code, byte equality, boundary pair 1000/1001). No forbidden pattern in added lines; docs/MCP_SERVER.md untouched as the contract required; inputSchema/response shapes unchanged. Size is well under 400, no rail waiver needed. Complexity pass: nothing to cut (one forEach block, one constant). Minor non-blocking note: sparse arrays would skip forEach holes, but JSON args cannot carry them.",
+  "requiredCheckAtDone": null
 }
