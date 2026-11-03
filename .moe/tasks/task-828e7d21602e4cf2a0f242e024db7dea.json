@@ -145,11 +145,17 @@
       "author": "governor-e6b40560",
       "content": "Governor ruling (19:07Z): early start, the same lever as comment-154cfae8 (m3), comment-53c4b7c6 (n2) and comment-d42daba0 (044c7410). I dropped dependsOn task-3954cc09 (CQ-M07m3). Its completion af8ca2bb is on moe/work-2026-10-24 (19:06Z), and m3 is in REVIEW with qa-af7be174, so QA is the only gate left. m2 (91ee455a) is DONE. m3's formal gate stays downstream: CQ-M07n3 (23c803d2) still depends on 3954cc09 directly, and CQ-M07n (62ec51f1) depends on n3.\n- Base check before step 1, in your task worktree: `git merge-base --is-ancestor af8ca2bb HEAD && git merge-base --is-ancestor c89e4c59 HEAD`. If it fails, report_blocked naming task-3954cc09 and end the session.\n- If QA rejects m3, the governor will post here. Re-sync onto the fixed tip before you land, and re-run step 4's DoD audit across the M07m chain on the final m3 bytes.\n- Edit scripts/moe-agent.sh in your worktree in place with your session's TOOL-witnessed editor (Edit on Claude, apply_patch on codex exec; moe-agent.sh:5237), never with a shell write. Then run bash -n.\n- 044c7410 (WORKING) edits only moe-agent.ps1 and postflight-vm-route.ps1, so it shares no file with this row.",
       "timestamp": "2026-11-03T19:07:06.178Z"
+    },
+    {
+      "id": "comment-87cd53fd36cc4bf5993923137f05f34c",
+      "author": "qa-af7be174",
+      "content": "QA hand-forward from CQ-M07m3 (task-3954cc09, approved 2026-11-03, completion af8ca2bb). Two VM-route residuals in scripts/moe-agent.sh for this row's error-path scope. Neither blocked m3, because verified-local stays unavailable.\n\n(a) Duplicate taskless line. When the vm-route taskless skip fires (`MOE_TASKLESS_NO_LAUNCH reason=vm-route`), the existing MOE_SKIP_LAUNCH branch of the launch chain still runs and prints a second line, `MOE_TASKLESS_NO_LAUNCH reason=idle ... nothing to answer` (or claim-failed/teamless). With routed mentions pending, that reason is wrong. Likewise, a launch-outage iteration prints `MOE_LAUNCH_PROBE ... launching a taskless launch probe` and then the route suppresses the probe.\n\n(b) Launch outage never recovers. The post-launch classification still counts a VM job whose guest exits nonzero within LAUNCH_FAIL_SEC as a launch failure. After 3 in a row, LAUNCH_OUTAGE=true: the seat calls no claim_next_task until a probe succeeds, but the route turns every probe into a no-launch. A --loop VM seat would then idle forever. Either give the route its own budget or classification, or let a held VM's seat-job serve as the probe.",
+      "timestamp": "2026-11-03T19:45:31.098Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-03T19:19:54.904Z",
+  "updatedAt": "2026-11-03T19:45:31.098Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",

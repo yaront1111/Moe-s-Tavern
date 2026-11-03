@@ -126,8 +126,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -194,12 +194,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:38.207Z",
-  "updatedAt": "2026-11-03T19:06:43.498Z",
+  "updatedAt": "2026-11-03T19:46:32.652Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:21.699Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-03T19:45:19.018Z",
+    "wallClockMs": 177537319
   },
   "contextFetchedBy": [
     "architect-98c94b4c",
@@ -326,10 +328,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T18:14:53Z",
-    "at": "2026-11-03T19:06:07.777Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T19:06:27Z",
+    "at": "2026-11-03T19:46:32.652Z"
   },
   "workStartedAt": "2026-11-03T18:17:28.017Z",
   "reviewStartedAt": "2026-11-03T19:05:14.379Z",
@@ -340,5 +343,9 @@
     "reportedAt": "2026-11-03T19:05:14.379Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M07m3: verified-local Claude VM route, reusable owned seat VM, marked claims, pipes-only credential delivery, strict final-line outcome validation and m2 candidate landing. EXIT/SIGINT/TERM/reload stop the VM before deregister. Worker shared claims and taskless/no-auto-claim/codex launches fail closed; QA consumes landed commit and lands nothing. VM route bypasses host tooling/checkpoint paths and the nonzero-exit host signin-state probe. Protected runner override ignored. Added reusable agent-seat stub, 10 end-to-end cases and 11 parser cases (including optimized Python); reused existing FAKE_CTX_LANDING. Exact full gate and qualityGate pass, no skips; 106 frozen, 16 owner, 12 migration plus all legacy/worktree/route suites. RED confirmed on HEAD placeholder; extra probes cover deferred startup signal, bounded stop and checkpoint exclusion. Final review clean. 3 files, 357 changed lines (<400). No VM/profile activation. Handoff: mem:task-task-3954cc09f74045a0ac8fa4b795dcb0a9-handoff. Error retries/codex/usage/outage residuals remain CQ-M07m/final scope."
+  "completionSummary": "CQ-M07m3: verified-local Claude VM route, reusable owned seat VM, marked claims, pipes-only credential delivery, strict final-line outcome validation and m2 candidate landing. EXIT/SIGINT/TERM/reload stop the VM before deregister. Worker shared claims and taskless/no-auto-claim/codex launches fail closed; QA consumes landed commit and lands nothing. VM route bypasses host tooling/checkpoint paths and the nonzero-exit host signin-state probe. Protected runner override ignored. Added reusable agent-seat stub, 10 end-to-end cases and 11 parser cases (including optimized Python); reused existing FAKE_CTX_LANDING. Exact full gate and qualityGate pass, no skips; 106 frozen, 16 owner, 12 migration plus all legacy/worktree/route suites. RED confirmed on HEAD placeholder; extra probes cover deferred startup signal, bounded stop and checkpoint exclusion. Final review clean. 3 files, 357 changed lines (<400). No VM/profile activation. Handoff: mem:task-task-3954cc09f74045a0ac8fa4b795dcb0a9-handoff. Error retries/codex/usage/outage residuals remain CQ-M07m/final scope.",
+  "completedAt": "2026-11-03T19:45:19.018Z",
+  "reviewCompletedAt": "2026-11-03T19:45:19.018Z",
+  "reviewSummary": "Reviewed af8ca2bb (tree 0a80d71c = cand-e7c03fc3, on origin/moe/work-2026-10-24). Size: wrapper +140/-9, vm-route.sh +145/-8, new stub +55 = 357 lines (<400). fake-proxy unchanged (reused FAKE_CTX_LANDING).\n\nRan the exact task.verification command on a git-archive snapshot with job control (SigIgn 0x5): GATE_EXIT=0, no SKIP. Passed: 106 frozen, 16 owner, 12 migration, WT-14 11, all vm-route rows, seat-job VR-happy/nonzero/R2/noclaim/qa-shared/protected/shared/qa/sigint/reload, vm-candidate R1-R9, strong-intent G1-G8. qualityGate QG_EXIT=0. 35.5 min at load 8-12.\n\nMutants, both killed at VR-happy: (A) seat_vm_stop dropped from cleanup_temp; (C) outcome read from the first marked line.\n\nDoD:\n1. Host CLI never ran; start, job, stop in order; every claim has executionRoute vm; legacy claims stay unmarked.\n2. The task-branch tip is the stub's tree on the base, via land_vm_candidate; one committed row.\n3. Canary absent from every argv, env, RPC and the output; stdin hash matches; all 5 credential vars stripped; pipes only.\n4. seat-stop runs before deregister on a normal exit and on INT.\n5. Shared claim refused with no job; protected override ignored and never printed.\n6. Gate green.\n\nRails: $COMMAND_BIN cannot run on the route (signin-state is gated off). Legacy edits are guarded, the m1 order is kept, the m2 helper is called with || rc, and new codes use the allowed prefixes only.\n\nNon-blocking, for CQ-M07m:\n(a) The vm-route skip is followed by a second, misleading 'MOE_TASKLESS_NO_LAUNCH reason=idle' line.\n(b) Three fast nonzero guest exits lead to launch outage, where the route suppresses probes and claims, so the seat idles.\n(c) VR-protected shows the warning only.\nNo VM was started.",
+  "requiredCheckAtDone": null
 }
