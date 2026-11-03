@@ -51,9 +51,15 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the new test.\n\nChecklist:\n(a) Every new refusal fires before getTask and before every write. Read the handler top to bottom to confirm no write precedes the block. (r3)-(r5) also pin the bytes on disk.\n(b) The trimmed-length rule matches what is stored. A 1000-char entry padded with spaces is accepted and stored trimmed; 1001 non-space chars are refused. Confirm (c2) and (r5) bracket the boundary.\n(c) Valid callers are unaffected:\n  - null, undefined and [] still mean no failed items;\n  - duplicate entries are still deduped within one reject;\n  - the same-DoD-item-twice flip and the 3-reopen flip in qaOwnership.test.ts and qaReject.test.ts are unchanged.\n(d) The error text names the field index (failedDodItems[i]), so a QA seat can fix its call without MoeError.context, which is not forwarded over MCP.\n(e) `git diff --name-only` lists only the two planned files.\n(f) No added line contains a project.json globalRails.forbiddenPatterns string.\n\nRecord the findings, with both legs' printed Tests lines, in the complete_task summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T21:16:32.429Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/qaReject.failedDodItems.test.ts"
+      ],
+      "note": "Self-review: (a) the validation block is synchronous and sits before getTask, assertWorkerOwns, assertReviewBinding and every write; (r3)-(r5) pin the bytes on disk. (b) The bound uses the trimmed length, which is what is stored; (c2) at 1000 and (r5) at 1001 bracket it. (c) null/undefined/[] skip the block, and dedupe and the repeat-failure flips are untouched (qaOwnership and qaReject suites green). (d) The error text names failedDodItems[i]. (e) git status lists only the two planned files. (f) No forbidden pattern in the diff. Theoretical: an array with holes (sparse) skips forEach holes, then the later .map(trim) would hit undefined, but JSON args cannot carry sparse arrays.",
+      "startedAt": "2026-11-03T21:16:32.429Z",
+      "completedAt": "2026-11-03T21:16:59.285Z"
     }
   ],
   "planRevision": 1,
@@ -70,12 +76,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:44:47.676Z",
-  "updatedAt": "2026-11-03T21:16:32.429Z",
+  "updatedAt": "2026-11-03T21:16:59.286Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:08:53.337Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -88,7 +94,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:13:18.734Z",
