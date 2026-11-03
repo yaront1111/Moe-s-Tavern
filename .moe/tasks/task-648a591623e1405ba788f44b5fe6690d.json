@@ -16,36 +16,54 @@
     {
       "stepId": "step-1",
       "description": "RED tests first (test-driven-development). Rev 2 builds on task-98c81a27's owner-only store, which this row dependsOn. Re-read MoeDaemonClient.ts in your worktree: these must exist, and you call them, never re-implement them: useProtectedStateRoot, projectStateKey, protectedStateName(kind, key), readProtectedState, writeProtectedState.\n\nCreate moe-vscode/tests/protected-daemon-provenance.test.cjs with the Write tool. Build its harness on the fixture() in tests/protected-daemon-spawn.test.cjs: transpile src/services/MoeDaemonClient.ts and run it in vm.runInNewContext with a permissive require map. Add these stubs and seams:\n- 'ws' is a StubWebSocket class that records every construction.\n- vscode.window has showErrorMessage (collect) and showWarningMessage (records its arguments and returns f.choice, default undefined).\n- child_process.spawn records [cmd, args, opts]. A daemon spawn emits 'spawn'. A spawn whose args include 'stop' emits 'exit' with f.stopCode (default 0), or never exits when f.stopHang is set, and exposes kill().\n- f.api.useProtectedStateRoot(<a temp dir OUTSIDE the project>).\n- The client is new MoeDaemonClient(extension); there is no constructor change.\n- Instance seams:\n  - client.probeSpawnProof = async (_info, _project, challenge) => HMAC of f.daemonKey, or undefined;\n  - client.isPidAlive = pid => f.alive.has(pid);\n  - client.waitForDaemonInfo = async () => {};\n  - short bounds: replaceStopTimeoutMs, replaceExitTimeoutMs, replacePollMs.\n\nCover these cases (group them as you like, but name them):\n(1) Verified in session. A protected startDaemon('start', project) passes env MOE_SPAWN_PROOF_KEY as 64 lowercase hex chars. It writes one store record under protectedStateName('spawn', key): {\"version\":1,\"project\":<key>,\"key\":<hex>,\"daemon\":<installed daemon key>}, mode 0600 on POSIX. A daemon answering that key's HMAC is admitted.\n(2) Verified after a restart. A freshly loaded module (empty session map) over the same store root admits it.\n(3) Unverified, no record. The answer is exactly 'Protected execution profile: the running Moe daemon (pid 4242) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.' Through connect(), that text is shown, no StubWebSocket is built and no 'stop' spawns.\n(4) Stale or untrusted record. Each of these refuses: a stored key whose HMAC does not match; a record naming another installed daemon path (refused without probing); malformed JSON, an extra field, a wrong version, another project's key or a non-hex key; readProtectedState throwing (on POSIX a 0644 record or a symlink; on every OS an oversize record).\n(5) The known-answer vector shared with task-137bab15: the client's HMAC helper gives 583630234f7e60ecfa2a6ae2e98ee37876e3ff6344457723cb4b42fcf77f7fc0 for key 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f and challenge 'ab' repeated 32 times.\n(6) Declined. The modal returns undefined: no 'stop' spawn, the refusal stays, no socket.\n(7) Replace succeeds. The choice is 'Stop and Replace'.\n  - The stop spawn is [installed node real path, [installed daemon real path, 'stop', '--project', project]] with the installed cwd, an env without MOE_SPAWN_PROOF_KEY, stdio 'ignore' and windowsHide.\n  - Once the captured pid is dead and daemon.json is gone, a fresh protected spawn carries a NEW key, and the store record is replaced.\n  - Admission then passes.\n(8) Replace fails. Each of these keeps the refusal and starts no new daemon: stop exits 1; stop hangs (its child.kill() is called); the pid stays alive past the bound; daemon.json names another live pid.\n(9) LEGACY is unchanged: no key in the env, no store write, no probe.\n(10) A configured endpoint (moe.daemon.port) under protected with no record is refused with no replace offer.\n(11) A store root INSIDE the project: the spawn still runs with a key kept in session only (no file written), and a fresh load then refuses.\n\nRED: run `node --test tests/protected-daemon-provenance.test.cjs` in the step-5 Linux snapshot with only this test file overlaid. The new cases must fail against the unchanged client. Quote the failures in complete_step.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/protected-daemon-provenance.test.cjs"
       ],
-      "startedAt": "2026-11-03T06:34:35.219Z"
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+      ],
+      "note": "Added 35 provenance/replacement tests using the existing owner-only store API and VM harness; covers the 11 planned groups plus cancellation, two-window fallback, invalid proofs and HTTP challenge transport. RED in /tmp/moe-648a-red.0NbquU (HEAD archive, only new test overlaid+cmp, isolated npm ci): node --test tests/protected-daemon-provenance.test.cjs exited 1: 35 tests, 1 pass (LEGACY), 34 fail. Expected failures include inherited key not matching 64-hex, protectedAdmissionRefusal/spawnProofHmac missing, connect missing rejection, and /health result lacking spawnProof. Existing D1 exact env assertion conflict reported in msg-05e892d2; no out-of-scope edits. Wrapper-provided task worktree used per current repository role/workspace mode; shared runtime untouched.",
+      "startedAt": "2026-11-03T06:34:35.219Z",
+      "completedAt": "2026-11-03T06:37:03.779Z"
     },
     {
       "stepId": "step-2",
       "description": "The spawn side (DoD 1; the rails on owner-only state). In moe-vscode/src/services/MoeDaemonClient.ts:\n- `export const SPAWN_PROOF_ENV = 'MOE_SPAWN_PROOF_KEY'`.\n- A module-level session map from projectStateKey(base) to a spawn record { version: 1, project, key, daemon }. daemon is comparablePath(realPathOrNull(daemon) ?? daemon, defaultFoldCase) of the selected installed daemon/index.js.\n- A strict parser, `parseSpawnRecord(text, projectKey)`: a JSON object with exactly those four fields, version 1, project === projectKey, a key matching /^[0-9a-f]{64}$/ and a string daemon. Anything else is no record, logged with the reason, never with the key.\n- startProtectedDaemon, after the selection and protectedDaemonEnvironment, and BEFORE the spawn:\n  - mint the key with `(await import('crypto')).randomBytes(32).toString('hex')`;\n  - set env[SPAWN_PROOF_ENV] to it, overriding anything inherited;\n  - put the record in the session map;\n  - writeProtectedState(protectedStateName('spawn', projectKey), JSON.stringify(record), projectPath). It returns false (store not provably outside the project, or a failed write) and logs 'stays in memory only'. The session record still verifies this session, and a restart refuses: fail closed.\n- The legacy startDaemon path is untouched. There is no constructor or extension.ts change: task-98c81a27 already wires useProtectedStateRoot in activate().\n\nLazy builtins: tests/accounts-wire, plan-approval-client and task-notifier load this file through a closed require map (vscode, ws, child_process, fs, path, net). So crypto comes only from `await import('crypto')` inside async functions, never a top-level import.\n\nError handling: no new path throws to callers. The key is never logged, shown or written anywhere except the owner-only store record and the spawned daemon's environment.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Implemented lazy crypto minting, session spawn records, strict non-secret-logging parser and persistence via the landed store API. Protected spawn overrides the inherited key, fences cancellation after import, and keeps an in-memory record when persistence refuses; constructor/extension/LEGACY unchanged. Added direct protected-start reentry guard for the later replacement path. RED assertions from step 1 cover these changes; combined GREEN verification awaits admission/replacement completion per step 5. Existing-test scope conflict still awaiting response.",
+      "startedAt": "2026-11-03T06:37:03.801Z",
+      "completedAt": "2026-11-03T06:37:38.189Z"
     },
     {
       "stepId": "step-3",
       "description": "The admission gate (DoD 1; task rail: no caller-minted evidence). In MoeDaemonClient.ts:\n\n(a) probeDaemonIdentity gets an optional `challenge` in its options. With it, the request path becomes `/health?challenge=<challenge>`, and the result carries `spawnProof` only when the body has a string spawnProof. Without a challenge, every existing caller and result stays byte-identical, so daemon-identity.test.cjs passes untouched.\n(b) An instance seam `probeSpawnProof(info, project, challenge)` returns that spawnProof when the identity is 'same', else undefined.\n(c) `protectedProvenanceRefusal(pid?)` builds the fixed text: 'Protected execution profile: the running Moe daemon (pid N) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.' With no pid, it omits the ' (pid N)' part.\n(d) An async `protectedAdmissionRefusal(info, project)` returns null when admitted, else the refusal text. It never throws; any exception becomes the refusal.\n  - The installed daemon key comes from protectedDaemonCommand on installedRoot(this.extensionPath). If the selection is refused, return that refusal.\n  - Candidates: the session record, plus the stored record read through readProtectedState(protectedStateName('spawn', key)) and parseSpawnRecord. A read that throws refuses (untrusted state). Dedupe by key, and keep only records whose daemon equals the installed key. With none, refuse without probing.\n  - Make a fresh challenge with `(await import('crypto')).randomBytes(32)` as hex, then probe. If connectCancelled() is set after the await, act on nothing. A proof that is absent or not 64 hex chars refuses.\n  - Each candidate's expected HMAC-SHA256 (key bytes over the challenge's ASCII text) is compared with crypto.timingSafeEqual on equal-length buffers. A match admits, and a stored record is cached into the session map.\n  - Export the HMAC helper for case (5).\n(e) connect(): only when runtimeProfile(project) === 'protected', after getVerifiedDaemonInfo() and before setConnectionState('connecting'), run the gate and then the step-4 flow. On a final refusal, show it with showErrorMessage and throw, so no WebSocket opens. Re-check connectCancelled() after every await. A configured endpoint (moe.daemon.port) is gated too: neither daemon.json nor /health can admit a daemon on its own (docs/design/protected-profile-threat-model.md). LEGACY connect is unchanged.\n\nError handling: probe timeouts and errors, untrusted store state and malformed records all end in the refusal. Never log the key or the proof.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Added opt-in /health challenge/proof transport without changing no-challenge result shapes; exported byte-key HMAC helper; installed-runtime/session+owner-only-store admission using a fresh challenge and timingSafeEqual. Gate is hooked before any socket, fences each asynchronous boundary, sanitizes failures, and refuses configured endpoints outright (review comment). Checked actual store reader: unlike its writer it has no project argument, so admission additionally excludes roots inside the project; added planted-record coverage in step 1. Malformed/untrusted records fail closed and the stored record remains a two-window fallback. Full GREEN run follows replacement implementation.",
+      "startedAt": "2026-11-03T06:37:38.215Z",
+      "completedAt": "2026-11-03T06:38:20.619Z"
     },
     {
       "stepId": "step-4",
       "description": "RF03 parity: replace an unverified daemon (DoD 2). This mirrors JetBrains MoeDaemonSupervisor.replacedUnverified, waitForReplacementExit and replacementMetadataCleared, with STOP_TIMEOUT_MS 20000, EXIT_TIMEOUT_MS 15000 and POLL_MS 250 as instance fields replaceStopTimeoutMs, replaceExitTimeoutMs and replacePollMs.\n\n- Offer replacement only when all of these hold: the refused endpoint came from daemon.json (not fromConfig); it has a positive integer pid, captured now; and protectedDaemonCommand selects the installed runtime. Otherwise show only the refusal.\n- Ask with `vscode.window.showWarningMessage(refusal, { modal: true, detail: <one sentence: Stop and Replace stops that daemon with the installed Moe CLI and starts the installed runtime> }, 'Stop and Replace')`. Anything but exactly 'Stop and Replace' keeps the refusal and stops nothing. Dismiss and Escape return undefined, and the modal's built-in Cancel is the safe default.\n- Stop through the installed CLI only: spawn(selection node, [installed daemon, 'stop', '--project', project], { cwd, env: protectedDaemonEnvironment(...) with SPAWN_PROOF_ENV deleted, stdio: 'ignore', windowsHide: true }). Await 'exit' within replaceStopTimeoutMs. On timeout, call kill() on that child handle only and fail. An 'error' or a non-zero code also fails.\n- Wait, polling every replacePollMs within one replaceExitTimeoutMs budget, until both hold:\n  - !this.isPidAlive(captured pid);\n  - daemon.json is absent, or names a pid that is not alive; unreadable or oversize counts as NOT cleared.\n  isPidAlive(pid) is process.kill(pid, 0); only ESRCH means dead, and EPERM means alive.\n- On success, call startProtectedDaemon(project), which mints a fresh key and replaces the store record. Then read getDaemonInfo(false) and run the gate again on the new endpoint. Admitted: return it so connect dials it. Otherwise refuse.\n- Every failure, decline or exception keeps the refusal: showErrorMessage, return undefined, no WebSocket.\n- Re-check connectCancelled() after each await. Runs only inside connect() (connectInProgress), and startInProgress prevents a double spawn.\n\nError handling: a stop that cannot run (ENOENT), a stop timeout and an unreadable daemon.json all refuse. Nothing is pattern-killed or signalled by pid; the installed CLI's stop is the only stopper.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T06:38:20.645Z"
     },
     {
       "stepId": "step-5",
@@ -110,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T06:34:35.219Z",
+  "updatedAt": "2026-11-03T06:38:20.645Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -119,7 +137,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T22:37:43.536Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -132,7 +151,11 @@
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:58:16.854Z",
   "executionContract": {
