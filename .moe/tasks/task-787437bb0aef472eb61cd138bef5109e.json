@@ -50,7 +50,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -70,7 +70,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T09:01:08.650Z",
-  "updatedAt": "2026-11-03T09:27:56.270Z",
+  "updatedAt": "2026-11-03T09:38:23.134Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T09:02:44.827Z",
@@ -80,11 +80,14 @@
     "firstClaimAt": "2026-11-03T09:03:23.739Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T09:37:03.325Z",
+    "wallClockMs": 2019586
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-93f9625e"
   ],
   "tier": "light",
   "effort": "high",
@@ -155,10 +158,11 @@
   "planApprovedAt": "2026-11-03T09:20:34.009Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T09:20:36Z",
-    "at": "2026-11-03T09:27:56.270Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T09:33:34Z",
+    "at": "2026-11-03T09:38:23.133Z"
   },
   "workStartedAt": "2026-11-03T09:23:05.517Z",
   "reviewStartedAt": "2026-11-03T09:26:07.881Z",
@@ -189,5 +193,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T09:37:03.325Z",
+  "reviewCompletedAt": "2026-11-03T09:37:03.325Z",
+  "reviewSummary": "Reviewed completion e21e8047 (on moe/work-2026-10-24, contained in control HEAD, pushed): `git show` = exactly 1 file, moe-vscode/tests/protected-daemon-provenance.test.cjs, +3/-1 (2-line comment + scheduler `(args[1].includes('stop') ? process.nextTick : setImmediate)(…)`); moe-vscode/src diff empty; callback body, 25 ms deadlines/2 ms poll, every row and assertion unchanged; start child 'spawn' and StubWebSocket 'open' stay on setImmediate. Size +3/-1, no size issue. Re-ran task.verification verbatim from control (all npm in fresh snapshots outside the repo, per rails): Linux /tmp/787437bb-qalinux.6149sy deferred-setImmediate provenance run tests/pass/fail/skipped 47/47/0/0, full npm test 685/676/0/9, npm run compile OK, LINUX_EXIT=0; Windows /mnt/d/moe-scratch/787437bb-qawin.VdhEpb (cmd.exe, native node) deferred 47/45/0/2 (2 POSIX-only skips), full 681/669/0/12, compile OK, WINDOWS_EXIT=0; PASS parity-check.sh; lint OK (architect 39/worker 30/qa 36). Independent RED/GREEN under the same preload (30 ms setImmediate): base fixture (e21e8047^) 47/38/9 fail, fixed fixture 47/47/0/0 — confirms the fix addresses the flake. DoD 1: successful-stop and cancel-during-stop rows now deliver the stop outcome on nextTick, which always precedes the 25 ms stop deadline; timeout/failure rows still reach refusal through their own paths (hang via stop deadline + kill; alive/new pid/unreadable/oversize via exit deadline; nonzero via exit code; ENOENT via error event) — I read stopProtectedDaemon-side reasoning in the worker's MA/MB mutant evidence (MA fails only hang 46 pass; MB fails only alive/new pid/unreadable/oversize 43 pass) and did not re-run the mutants myself. DoD 2: both full-repo snapshot legs fail 0. Not changed/unverified by me: residual StubWebSocket 'open' setImmediate vs 15 s handshake timer is explicitly out of scope. Ponytail pass: nothing to cut. Handoff memory folded into gotcha-vscode-provenance-test-deadlines (already holds the root cause/fix) and retired.",
+  "requiredCheckAtDone": null
 }

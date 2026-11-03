@@ -117,8 +117,8 @@
     }
   ],
   "planRevision": 4,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -197,7 +197,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T09:26:35.473Z",
+  "updatedAt": "2026-11-03T09:37:04.490Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -207,7 +207,9 @@
     "firstClaimAt": "2026-11-02T22:37:43.536Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T09:37:04.488Z",
+    "wallClockMs": 39560952
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -407,5 +409,9 @@
     "source": "agent-reported"
   },
   "completionSummary": "Protected VS Code now admits a daemon only if a fresh /health?challenge answer matches the HMAC of a key this extension minted. The key goes into the installed daemon's env (MOE_SPAWN_PROOF_KEY) and is kept in the session map plus the owner-only store (kind 'spawn', read only from a root outside the project). Everything else gets the fixed refusal and no WebSocket: daemon.json, /health identity, a configured endpoint, untrusted/malformed/stale records, timeouts. Replace is offered only for a daemon.json daemon with a valid pid, via a modal whose only action is Stop and Replace. It runs the installed CLI stop (20 s; only its own child is killed), waits 15 s/250 ms for the pid and metadata to clear, then does a fresh spawn and re-admission. LEGACY is unchanged.\nReview fixes this session, RED-checked:\n- pid text shown only for a positive integer (daemon.json is repo text);\n- workspace captured before the identity probe (a mid-probe switch to legacy bypassed the gate);\n- a final refusal suppresses auto-reconnect (JetBrains no-retry, so no modal re-pops);\n- record daemon key via projectStateKey.\nThird-file disclosure (comment-d4217a23, amend-1): tests/protected-daemon-spawn.test.cjs +5/-2. D1 adds a 64-hex MOE_SPAWN_PROOF_KEY to the exact env, and both ENOENT-after-cancel tests cancel at the stub spawn, still with 1 spawn. No other existing test changed. Size from b4cfae12: +454/-9, net 445 of 520 (prop-35eadcbd, pending).\nedc27e14 is NOT an ancestor of HEAD c7bc13a3. Merged check (edc27e14 + task diff, clean patch): 671/667/0/4, compile ok. Mutants (mismatched proof, dropped key, skipped confirmation) each fail their cases; restored copy 72/68/0. Residuals: same-user relay, two-window spawn race, /health slower than 1.5 s refused.",
-  "priorBlockedReason": "QA verdict withheld, waiver pending (governor comment-093f7fe9, the comment-9922ed28 pattern). The substance review PASSES; the evidence is in comment-dfa8493a. Linux and Windows npm test + compile exit 0 on 119fce99. Every DoD item and task rail is verified.\nThe completion is net 445 changed lines (over the 400 default, under the 520 cap). It also edits moe-vscode/tests/protected-daemon-spawn.test.cjs, which the approved size waiver prop-bd7d6ccf does not name; it names three files. The governor authorized that edit, and the edit stays within those limits.\nprop-35eadcbd63d94a13ab7647c77ea5f3d4 adds that file under the same 520 cap and is still PENDING at 08:16Z.\nNo size reject. Once prop-35eadcbd is APPROVED, set the row back to REVIEW. The next QA can then approve on comment-dfa8493a with candidateId cand-affe2a8fe1964c6ea5a70a197c50ac28."
+  "priorBlockedReason": "QA verdict withheld, waiver pending (governor comment-093f7fe9, the comment-9922ed28 pattern). The substance review PASSES; the evidence is in comment-dfa8493a. Linux and Windows npm test + compile exit 0 on 119fce99. Every DoD item and task rail is verified.\nThe completion is net 445 changed lines (over the 400 default, under the 520 cap). It also edits moe-vscode/tests/protected-daemon-spawn.test.cjs, which the approved size waiver prop-bd7d6ccf does not name; it names three files. The governor authorized that edit, and the edit stays within those limits.\nprop-35eadcbd63d94a13ab7647c77ea5f3d4 adds that file under the same 520 cap and is still PENDING at 08:16Z.\nNo size reject. Once prop-35eadcbd is APPROVED, set the row back to REVIEW. The next QA can then approve on comment-dfa8493a with candidateId cand-affe2a8fe1964c6ea5a70a197c50ac28.",
+  "completedAt": "2026-11-03T09:37:04.488Z",
+  "reviewCompletedAt": "2026-11-03T09:37:04.488Z",
+  "reviewSummary": "QA approve, qa-af7be174 fresh session. Candidate cand-affe2a8f unchanged: completion 119fce99 tree 30d61a16 = treeSha, parent 87609414 = baseRevision, on moe/work-2026-10-24 and origin (ls-remote tip e21e8047 contains it). prop-35eadcbd APPROVED by HUMAN 09:23:51Z; the row has one size rail. Size: own +454/-9 net 445; from first commit's parent b4cfae12 net 460 (incl. edc27e14); cap 520; 3 of the 4 named files, extension.ts untouched. Spawn-test edit +5/-2 within comment-d4217a23 (D1 exact env + 64-hex key; both ENOENT tests cancel at the stub spawn, still 1 spawn).\nRe-run, git archive 119fce99, no overlay (moe-scratch/qa-648a-verify.sh): Linux node 24.21 npm ci+test+compile+lint exit 0, 671/667 pass/0 fail/4 skip; Windows cmd.exe node 24.16 npm ci+test+compile exit 0, 667/659/0/8 skip; parity-check+lint exit 0.\nDoD1: gate on the pre-probe workspace, before 'connecting'; only an HMAC match (fresh 32-byte challenge, timingSafeEqual) against a session or owner-only record naming the installed daemon admits. Configured endpoint, bad records and timeouts refuse with no socket. DoD2: modal whose only action is Stop and Replace; installed CLI stop without the key (20 s, kills only its own child); 15 s/250 ms wait; fresh key; re-admission. DoD3: LEGACY (9); all suites green. The daemon deletes the key from its env (takeSpawnProofKey).\nMutants 18/21 killed (15 prior + 6 new). Survivors, all defence-in-depth: M1 fromConfig refusal; M12 malformed record with a session record; X2 kind==='same' in probeSpawnProof (the HTTP test's foreign check is vacuous, since spawnProof=7 is set just before it).\nPonytail: selection built 3x (L1402/1440/1752); key strip 2x (L1466/1768); remaining+deadline (L1501-1509). net: -13 lines possible. e21e8047 (task-787437bb) later fixed a 25 ms stop flake in these tests.",
+  "requiredCheckAtDone": null
 }
