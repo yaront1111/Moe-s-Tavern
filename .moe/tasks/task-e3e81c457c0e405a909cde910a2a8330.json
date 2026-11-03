@@ -14,10 +14,11 @@
     {
       "stepId": "step-1",
       "description": "Prerequisite and contract. This row is the consumer half; it dependsOn task-c6a24053, which lands scripts/moe-serena-ignore.mjs and its unit suite scripts/tests/serena-ignore.test.mjs (read that row's description and its handoff memory `mem:task-task-c6a2405324174deda18c4f672747994f-handoff` first).\n\nThe script's contract:\n- `node moe-serena-ignore.mjs <serena-root>` always exits 0 and prints exactly one line: `[OK] MOE_SERENA_IGNORE_OVERRIDE: ...`, `[info] MOE_SERENA_IGNORE_OVERRIDE: ... is up to date ...` or `[info] MOE_SERENA_IGNORE_SKIPPED: <reason>; ...`.\n- It turns Serena's startup .gitignore walk off in a Moe-managed block of <root>/.serena/project.local.yml, and lists Serena-converted patterns from project.yml, core.excludesFile, info/exclude and every .gitignore that git lists.\n- It writes only when git ignores that file, and fails open everywhere else.\n\nDo not edit the script or its suite here. If the contract does not hold, comment on task-c6a24053 and report_blocked.\n\nThen, in scripts/moe-agent.sh, add `serena_ignore_override() { # $1 = Serena's project root`.\n- It runs `\"$NODE_CMD\" \"$SCRIPT_DIR/moe-serena-ignore.mjs\" \"$1\"` and prints the one line it returns: [OK] in green; [info] and anything else plain.\n- Error handling: a missing script prints one `[WARN] MOE_SERENA_IGNORE_SKIPPED: moe-serena-ignore.mjs is missing next to this wrapper; Serena keeps its own .gitignore walk` line. A non-zero exit or no output prints a WARN with the same code. The launch always continues, and the helper is safe under `set -e` (no bare failing command).\n- Under hot reload, SCRIPT_DIR is still the checkout's scripts/, as for ACCOUNT_HELPER.\n\nCall it at two sites:\n- (a) In the MCP config function, inside the `if [ -n \"$SERENA_CMD\" ]` that prints '[OK] Serena MCP project:' (:1041), with \"$SERENA_PROJECT\".\n- (b) In prepare_worktree_launch, right after `case \"$mode\" in W) serena=\"$CLI_ROOT\" ...` (:3530), only when mode is W and SERENA_CMD is set, with \"$CLI_ROOT\". It must come after the tooling program, so W/.serena/project.yml already has WT-06's rewrite. KEEP was already handled at site (a).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
+      "startedAt": "2026-11-03T09:16:20.684Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -76,7 +77,7 @@
   ],
   "planRevision": 2,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -85,21 +86,27 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 351.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-260f6c474f364e33bf808afa8ad3fcb0",
+      "author": "governor-e6b40560",
+      "content": "Governor, ~09:14Z: I removed this row's dependsOn on task-c6a24053, so the row is claimable now.\nc6a24053's completion, 5f731334, is on moe/work-2026-10-24 and pushed. QA's review of it passed (comment-4c8cebc8). It is parked BLOCKED only until the human approves the size waiver prop-49f31f04, and a waiver changes no bytes. Your plan consumes scripts/moe-serena-ignore.mjs as it stands at the target tip, which is exactly what will be approved.\nIf c6a24053's re-review ever changes that script's contract (CLI, exit codes, stdout line), the governor will post it here.",
+      "timestamp": "2026-11-03T09:14:00.861Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:25:34.188Z",
-  "updatedAt": "2026-11-03T08:29:31.656Z",
+  "updatedAt": "2026-11-03T09:16:20.684Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:31:25.007Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-33f67e5b"
   ],
-  "dependsOn": [
-    "task-c6a2405324174deda18c4f672747994f"
-  ],
+  "dependsOn": [],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
@@ -178,5 +185,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T07:43:53.584Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T09:16:20.684Z"
 }

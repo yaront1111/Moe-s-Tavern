@@ -109,7 +109,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:23.746Z",
-  "updatedAt": "2026-11-03T09:04:53.494Z",
+  "updatedAt": "2026-11-03T09:16:18.052Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:38:33.924Z",
     "plannedStepCount": 5,
@@ -208,11 +208,10 @@
   "planApprovedAt": "2026-11-03T08:55:10.420Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-24611a0a@2026-11-03T08:38:29Z",
-    "at": "2026-11-03T08:57:35.044Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T08:55:30Z",
+    "at": "2026-11-03T09:16:18.052Z"
   },
   "workStartedAt": "2026-11-03T08:58:33.008Z",
   "reviewStartedAt": "2026-11-03T09:04:53.491Z",
@@ -231,5 +230,27 @@
     "packages/moe-daemon/src/tools/requestReplan.ts",
     "packages/moe-daemon/src/tools/releaseTask.ts"
   ],
-  "completionSummary": "qa_reject's 'QA rejected: <reason>', request_replan's 'Replan requested…: <reason>', and release_task's released line and auto-route line (#general and #workers copies) are now posted with { parseMentions: false }. An at-token in a reason, a title or a handoff summary now records mentions [] and pages no seat.\n- chatStore.postToRoleChannel takes an optional SystemPostOptions. It is forwarded to sendMessage only when parseMentions is false, so the 47 existing two-argument callers still send exactly { channel, sender, content }. The StateManager wrapper forwards opts only when given.\n- Every posted text is byte-identical. No tool response, error or nextAction changed.\n- The #governors and #architects role posts are deliberately untouched and still parse mentions: qa_reject's cross-post and escalations, request_replan's #architects line, and release_task's #governors copy and cascade post.\n- Diff: runtime +26/-11 over 5 files, plus the new src/tools/echoedReasonNotices.test.ts (126 lines, at-sign built at runtime).\n- RED on base 66f43585: 5/5 cases fail. GREEN: checkRefs [0]+[1] give C0 OK, then 154/154 tests across 6 files (echoedReasonNotices 5, chatSystemFeed 16, completeStep 25, qaReject 24, reloadHold 25, releaseTask 59). tsc --noEmit is clean, then C1 OK.\n- 10/10 planned mutants were killed in a scratch snapshot: each of the six sites dropped; helper ignores opts; wrapper drops opts; helper always off; #governors given the option.\n- Intended side effect: the #workers release and auto-route copies no longer bump busy seats' unread counts or wake unfiltered chat_wait."
+  "completionSummary": "qa_reject's 'QA rejected: <reason>', request_replan's 'Replan requested…: <reason>', and release_task's released line and auto-route line (#general and #workers copies) are now posted with { parseMentions: false }. An at-token in a reason, a title or a handoff summary now records mentions [] and pages no seat.\n- chatStore.postToRoleChannel takes an optional SystemPostOptions. It is forwarded to sendMessage only when parseMentions is false, so the 47 existing two-argument callers still send exactly { channel, sender, content }. The StateManager wrapper forwards opts only when given.\n- Every posted text is byte-identical. No tool response, error or nextAction changed.\n- The #governors and #architects role posts are deliberately untouched and still parse mentions: qa_reject's cross-post and escalations, request_replan's #architects line, and release_task's #governors copy and cascade post.\n- Diff: runtime +26/-11 over 5 files, plus the new src/tools/echoedReasonNotices.test.ts (126 lines, at-sign built at runtime).\n- RED on base 66f43585: 5/5 cases fail. GREEN: checkRefs [0]+[1] give C0 OK, then 154/154 tests across 6 files (echoedReasonNotices 5, chatSystemFeed 16, completeStep 25, qaReject 24, reloadHold 25, releaseTask 59). tsc --noEmit is clean, then C1 OK.\n- 10/10 planned mutants were killed in a scratch snapshot: each of the six sites dropped; helper ignores opts; wrapper drops opts; helper always off; #governors given the option.\n- Intended side effect: the #workers release and auto-route copies no longer bump busy seats' unread counts or wake unfiltered chat_wait.",
+  "commits": [
+    {
+      "sha": "8233f1080f51dd4dde7ddadb2372ef278da09249",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T08:55:30Z",
+      "paths": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/tools/echoedReasonNotices.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts"
+      ],
+      "recordedBy": "qa-7328a40d",
+      "recordedAt": "2026-11-03T09:16:18.052Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

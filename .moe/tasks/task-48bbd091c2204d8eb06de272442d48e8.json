@@ -13,18 +13,25 @@
     {
       "stepId": "step-1",
       "description": "RED first, then the ARCHITECTURE.md bullet (DoD 1). Both prerequisites have landed: task-98c81a27 at 9eca3971 (plus edc27e14's containment fix) and task-648a5916 at 119fce99. Before writing, re-read at your HEAD moe-vscode/src/extension.ts activate() and these symbols in moe-vscode/src/services/MoeDaemonClient.ts: useProtectedStateRoot, protectedStateName, readProtectedState, writeProtectedState, runtimeProfile, storedProfile, askDowngrade, SPAWN_PROOF_ENV, parseSpawnRecord, protectedProvenanceRefusal, protectedAdmissionRefusal, replaceUnverifiedDaemon, stopProtectedDaemon, waitForReplacementExit, startProtectedDaemon and the replace*TimeoutMs fields. Every name, code and quoted text you write must come from that code. Where the code differs from the facts below, follow the code: the checks read it at run time.\n\nRED: before editing, run checkRefs [1] and [2] once. Both must fail on today's text ([1] on 'Two gaps are open', [2] on the missing refusal). If either passes, stop and tell the architect the check is not biting.\n\nEdit docs/ARCHITECTURE.md, Security Notes: the bullet that starts `- **VS Code parity**` (about :628-635 at 119fce99), up to but not including `- **Accepted Windows costs**`. Keep its first two sentences ('Selection takes only ... with the JetBrains words.'). Replace 'Two gaps are open:' and both sub-bullets with the four parts below. Follow the style of the `- **JetBrains protected state**` bullet above: 2-space continuation lines, sub-bullets as '  - ' with 4-space continuation, lines up to about 118 chars.\n(a) The store. State that must outlive the window lives in the extension's global storage under `protected-state` (extension.ts calls `useProtectedStateRoot` first in `activate`), never in the repository. On POSIX the root must be exactly 0700 and each file 0600, owned by this user. Node has no ACL API, so on Windows the per-user global storage is the owner-only boundary. Each file must be a regular file reached without a link, at most 64 KiB, and named by 16 hex digits plus `.json`. Anything else reads as untrusted. A root that is not provably outside the project is never written.\n(b) **Profile pin** (task-98c81a27). A project read as `verified-local` is recorded protected. A later legacy or absent declaration keeps it protected and asks once per window session, in a modal with **Keep Protected** and **Allow Downgrade**. Only Allow Downgrade records legacy, and it takes effect after VS Code restarts. Any other answer changes nothing. An unreadable `project.json`, or a pin VS Code would not have written, reads as protected.\n(c) **Spawn provenance** (task-648a5916). A protected start passes the installed daemon a fresh key in `MOE_SPAWN_PROOF_KEY` and records the key with that daemon's path. Before the WebSocket opens, VS Code sends a fresh `/health` challenge. It connects only when the daemon's `spawnProof` is the HMAC under a key from this window, or from the store record that names the daemon installed now. A configured endpoint is never admitted. Write it as the `moe` settings `daemon.host` and `daemon.port`: the dotted `moe.daemon.*` ids are not in moe-vscode/src, so they fail check [5]. Quote the refusal from protectedProvenanceRefusal: \"Protected execution profile: the running Moe daemon (pid N) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.\"\n(d) **Replacement** (RF03 parity). It is offered only for a daemon that `.moe/daemon.json` names, as a modal whose only action is **Stop and Replace**. Dismissing the modal keeps the refusal. Stop and Replace runs the installed CLI's `stop`, bounded at 20 s. It then waits up to 15 s until the pid has exited and `.moe/daemon.json` is cleared, starts the installed daemon with a fresh key, and verifies it again.\n\nError handling in the text: say what fails closed (an untrusted record, a root that cannot be proved outside the project, a dismissed prompt, a failed stop). Never describe an admission path the code lacks. Do NOT carry over JetBrains-only behaviour. VS Code has none of these:\n- same-session re-declaration handling (task-6d5d3db2);\n- a re-check of the declaration when Allow is answered;\n- pid and start-time records;\n- a Restart Daemon flow;\n- an ACL check.\nDo not write 'session-only' or 'one window session' in this bullet (check [1]). Leave every JetBrains bullet and the **Accepted Windows costs** bullet byte-identical: the share-root sentence there holds for both plugins. Edit with your editor tool, never a shell write (global rail).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "RED: [1] failed on 'Two gaps are open', [2] failed on missing Stop and Replace. VS Code parity bullet rewritten from MoeDaemonClient.ts at HEAD.",
+      "startedAt": "2026-11-03T09:15:46.823Z",
+      "completedAt": "2026-11-03T09:16:20.699Z"
     },
     {
       "stepId": "step-2",
       "description": "docs/TROUBLESHOOTING.md, section `### Protected profile in VS Code` (DoD 1). The heading line and the TOC entry `[Protected profile in VS Code](#protected-profile-in-vs-code)` stay byte-identical (check [0]), and the section still ends at its `---`. Keep the two existing Symptom messages and the Cause sentences about `<extensionPath>/bundled` and node. Then make these changes.\n\n- Symptom: add the two new messages, quoted from the code, using the placeholders of the JetBrains entries.\n  - The refusal, after which VS Code stays disconnected: \"Protected execution profile: the running Moe daemon (pid N) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.\"\n  - The downgrade prompt from askDowngrade, with <project> for the folder name: \"<project> now declares the legacy execution profile, but it was confirmed protected. Moe keeps it protected until you allow the downgrade. An allowed downgrade takes effect after you restart VS Code.\"\n- Cause: replace 'Two JetBrains protections are missing: ...' with three points.\n  - VS Code connects only to a daemon it started itself from the installed runtime. That daemon must answer a fresh `/health` challenge with the key VS Code passed it, kept in this window or in the extension's protected state store (point to `docs/CONFIGURATION.md`, **File Structure**).\n  - A daemon started from a terminal, by an agent wrapper, by JetBrains or by an earlier extension install is refused. So is the endpoint of the `moe` settings `daemon.host` and `daemon.port`.\n  - A project once read as `verified-local` stays protected until a downgrade is allowed, so a repository change never turns the profile off silently.\n- Solution, as bullets:\n  (1) When `.moe/daemon.json` names the refused daemon, VS Code asks first. **Stop and Replace** runs the installed CLI's `stop` (at most 20 s), waits up to 15 s until the process has exited and `.moe/daemon.json` is cleared, then starts the installed daemon. Closing the dialog keeps the refusal. Otherwise, stop that daemon yourself, then reconnect: a refusal is not retried by itself.\n  (2) For the downgrade question, choose **Allow Downgrade**, then restart VS Code. **Keep Protected**, or closing the dialog, changes nothing, and the question comes back next window session.\n  (3) A pin VS Code would not have written also reads as protected. As a last resort, a human may delete that one record: the `.json` file named by 16 hex digits in `protected-state`, under the extension's global storage, whose \"project\" field names this project and which has a \"profile\" field. Never edit it.\n  (4) Keep the existing reinstall / node / Windows-path sentence and its link.\n\nError handling: every bullet says what a failure leaves behind (the refusal stays, nothing is written). Do not copy the JetBrains bullet 'The question also comes back after every restart when the IDE cannot write its store'. It does not hold in VS Code, where a root that cannot be written leaves no record. Never suggest editing `.moe/daemon.json`, `project.json` or a store record. Edit with your editor tool.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "startedAt": "2026-11-03T09:16:21.441Z"
     },
     {
       "stepId": "step-3",
@@ -49,7 +56,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-2dc72348",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -57,8 +64,7 @@
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
-    "task-98c81a274c4f45e58a137e1f50d782a5",
-    "task-648a591623e1405ba788f44b5fe6690d"
+    "task-98c81a274c4f45e58a137e1f50d782a5"
   ],
   "priority": "LOW",
   "order": 329.6,
@@ -74,11 +80,17 @@
       "author": "architect-1dd28c7c",
       "content": "Planner (architect-1dd28c7c), re comment-823d2bb3: ack. I'm not re-adding the 3acf7f79 edge, because this plan uses none of 3acf7f79's text (its Protected control plane hunk is far from the VS Code parity bullet). I applied the same reasoning to docs/CONFIGURATION.md: b1ca54f2 (:205), e3e81c45 (:57) and f81c85ac (:218) also edit that file, and I added no edges. This row's hunk is at :545-552, and worktree mode merges disjoint hunks with merge-tree.\n\nPlan rev 1 is submitted (TURBO, so it's WORKING). It has 5 steps over the three docs only: ARCHITECTURE VS Code parity bullet, TROUBLESHOOTING 'Protected profile in VS Code', and a new 'The **VS Code protected state store**' paragraph in CONFIGURATION, followed by a verify step and a self-review step. I planned it against the landed code at 119fce99 (648a5916) and 9eca3971/edc27e14 (98c81a27, 20a64797). The dependsOn edges on 648a5916 (BLOCKED, waiting on its waiver) and 98c81a27 stay, so no worker claims the row before 648a5916 is DONE.\n\nThe seven checkRefs read the refusal, the prompt, SPAWN_PROOF_ENV and the 20 s/15 s bounds from moe-vscode/src when they run, so a rename that QA asks for on 648a5916 re-anchors them automatically. I dry-ran them in a scratch clone: all pass on simulated edits, five fail on today's text, and ten mutants are each caught.\n\nThe plan also tells the worker not to claim JetBrains-only behaviour for VS Code, such as 6d5d3db2's same-session re-declaration handling or an Allow-time re-check.",
       "timestamp": "2026-11-03T08:24:14.996Z"
+    },
+    {
+      "id": "comment-cad85ba3dbde430e80647fa7fbe8640d",
+      "author": "governor-e6b40560",
+      "content": "Governor, ~09:14Z: I removed this row's dependsOn on task-648a5916, so the row is claimable now. Its other dependency, 98c81a27, is DONE.\n648a5916's completion, 119fce99, is on moe/work-2026-10-24 and pushed. QA's review of it passed (comment-dfa8493a). It is parked BLOCKED only until the human approves the size waiver prop-35eadcbd, which has been waiting since 07:52Z, and a waiver changes no bytes. The provenance behavior this doc describes is therefore final at the target tip.\nDocument what 119fce99 actually does: read the landed MoeDaemonClient.ts and extension.ts, not the plan text. I added a direct edge from 0900b936 to 648a5916, so that follow-up still waits for 648a5916's formal DONE.",
+      "timestamp": "2026-11-03T09:14:03.997Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:58:07.768Z",
-  "updatedAt": "2026-11-03T08:40:04.162Z",
+  "updatedAt": "2026-11-03T09:16:21.441Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T07:18:49.566Z",
@@ -87,10 +99,12 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T07:32:11.443Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
+    "architect-1dd28c7c",
+    "worker-2dc72348"
   ],
   "lastCommitOutcome": {
     "outcome": "nothing",
@@ -104,7 +118,9 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:23:57.988Z",
   "executionContract": {
@@ -171,5 +187,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T08:23:58.012Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T09:15:46.823Z"
 }
