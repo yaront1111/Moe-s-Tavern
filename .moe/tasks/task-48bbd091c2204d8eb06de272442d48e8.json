@@ -27,25 +27,35 @@
     {
       "stepId": "step-2",
       "description": "docs/TROUBLESHOOTING.md, section `### Protected profile in VS Code` (DoD 1). The heading line and the TOC entry `[Protected profile in VS Code](#protected-profile-in-vs-code)` stay byte-identical (check [0]), and the section still ends at its `---`. Keep the two existing Symptom messages and the Cause sentences about `<extensionPath>/bundled` and node. Then make these changes.\n\n- Symptom: add the two new messages, quoted from the code, using the placeholders of the JetBrains entries.\n  - The refusal, after which VS Code stays disconnected: \"Protected execution profile: the running Moe daemon (pid N) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.\"\n  - The downgrade prompt from askDowngrade, with <project> for the folder name: \"<project> now declares the legacy execution profile, but it was confirmed protected. Moe keeps it protected until you allow the downgrade. An allowed downgrade takes effect after you restart VS Code.\"\n- Cause: replace 'Two JetBrains protections are missing: ...' with three points.\n  - VS Code connects only to a daemon it started itself from the installed runtime. That daemon must answer a fresh `/health` challenge with the key VS Code passed it, kept in this window or in the extension's protected state store (point to `docs/CONFIGURATION.md`, **File Structure**).\n  - A daemon started from a terminal, by an agent wrapper, by JetBrains or by an earlier extension install is refused. So is the endpoint of the `moe` settings `daemon.host` and `daemon.port`.\n  - A project once read as `verified-local` stays protected until a downgrade is allowed, so a repository change never turns the profile off silently.\n- Solution, as bullets:\n  (1) When `.moe/daemon.json` names the refused daemon, VS Code asks first. **Stop and Replace** runs the installed CLI's `stop` (at most 20 s), waits up to 15 s until the process has exited and `.moe/daemon.json` is cleared, then starts the installed daemon. Closing the dialog keeps the refusal. Otherwise, stop that daemon yourself, then reconnect: a refusal is not retried by itself.\n  (2) For the downgrade question, choose **Allow Downgrade**, then restart VS Code. **Keep Protected**, or closing the dialog, changes nothing, and the question comes back next window session.\n  (3) A pin VS Code would not have written also reads as protected. As a last resort, a human may delete that one record: the `.json` file named by 16 hex digits in `protected-state`, under the extension's global storage, whose \"project\" field names this project and which has a \"profile\" field. Never edit it.\n  (4) Keep the existing reinstall / node / Windows-path sentence and its link.\n\nError handling: every bullet says what a failure leaves behind (the refusal stays, nothing is written). Do not copy the JetBrains bullet 'The question also comes back after every restart when the IDE cannot write its store'. It does not hold in VS Code, where a root that cannot be written leaves no record. Never suggest editing `.moe/daemon.json`, `project.json` or a store record. Edit with your editor tool.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/TROUBLESHOOTING.md"
       ],
-      "startedAt": "2026-11-03T09:16:21.441Z"
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "startedAt": "2026-11-03T09:16:21.441Z",
+      "completedAt": "2026-11-03T09:16:35.531Z"
     },
     {
       "stepId": "step-3",
       "description": "docs/CONFIGURATION.md, **File Structure** (DoD 1).\n\nFirst, find the paragraph that starts 'These files are not settings: never edit them by hand.' (about :550). Delete only its last sentence, 'VS Code keeps no such store: its protected pin lives in memory for one window session.' Keep that paragraph's JetBrains link `#protected-profile-project-stays-protected-after-a-legacy-declaration`.\n\nThen, after that paragraph and before the `---` that ends the section, add a new paragraph. Its first line must start exactly `The **VS Code protected state store**`: checks [1], [4] and [5] find it by that lead-in. Mirror the JetBrains store paragraph above it, and cover:\n- Where: `protected-state` under the extension's global storage folder (`globalStorageUri`), outside every project. It is written only under the protected execution profile (`services/MoeDaemonClient.ts`).\n- Owner-only:\n  - on POSIX, the directory is exactly 0700 and each file 0600, owned by this user;\n  - on Windows, Node has no ACL API, so the per-user global storage folder is the boundary;\n  - each file is a regular file reached without a link, at most 64 KiB, and named by 16 hex digits plus `.json`, so no name comes from a path.\n- Per project, at most two files:\n  - the profile pin, with `version`, `project` (the project's real path as VS Code compares it) and `profile` (`protected` or `legacy`);\n  - the spawn record, with `version`, `project`, `key` (the key passed to the daemon in `MOE_SPAWN_PROOF_KEY`) and `daemon` (the installed daemon's path).\n  **Stop and Replace** writes a new spawn record with a fresh key.\n- Error handling: a record that fails any rule reads as untrusted, so the pin reads as protected and a spawn record refuses the daemon. A root that is not provably outside the project is never written.\n- Close with: these files are not settings either; [TROUBLESHOOTING.md](TROUBLESHOOTING.md#protected-profile-in-vs-code) describes the one last-resort deletion.\n\nNever print or describe the key's value. Edit with your editor tool.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md"
+      ],
+      "startedAt": "2026-11-03T09:16:36.402Z",
+      "completedAt": "2026-11-03T09:16:45.538Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, run once (DoD 1-3). From your task worktree, run checkRefs [0] to [6] fresh, joined with ' && ', as ONE command. Its output tail is the complete_task verification evidence.\n\nWhat each check proves:\n- [0] `npm run lint` passes, only the three docs changed against the merge-base with MOE_LAND_TARGET (the wrapper exports it), no daemonGitDocs phrase appears, and the heading and TOC are intact.\n- [1] The stale sentences are gone, and no VS Code passage says session-only.\n- [2], [3], [4] Each passage holds the landed refusal, prompt, buttons, env name and store facts, read from moe-vscode/src at run time.\n- [5] The 20 s and 15 s bounds match replaceStopTimeoutMs and replaceExitTimeoutMs, and every backticked identifier in the three VS Code passages exists in moe-vscode/src.\n- [6] The account-trust-docs node test plus the four daemon doc-guard test files (daemonGitDocs, executionContractDocs, taskTimeBudgetDocs, qaCommitPolicy) pass in a git-clone snapshot with the three docs overlaid. npm never runs in the shared checkout (global rail).\n\nThis row's error handling for a red run: fix the doc text and re-run the whole command. Never edit a check, a test or code. If [2]-[5] report that a landed name is not in moe-vscode/src, the code changed after planning: re-read it and follow it. If the behaviour itself is gone, report to the architect instead of guessing.\n\nDeclare modifiedFiles: the three docs.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T09:16:46.343Z"
     },
     {
       "stepId": "step-5",
@@ -90,7 +100,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:58:07.768Z",
-  "updatedAt": "2026-11-03T09:16:21.441Z",
+  "updatedAt": "2026-11-03T09:16:46.343Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T07:18:49.566Z",
@@ -100,7 +110,7 @@
     "firstClaimAt": "2026-11-03T07:32:11.443Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -119,7 +129,9 @@
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:23:57.988Z",
