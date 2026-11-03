@@ -76,13 +76,21 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n\nRun the mutants in a scratch copy: `git archive HEAD scripts docs package.json` into a fresh mktemp dir under /mnt/c/Users/Yaron/AppData/Local/Temp/ for the Windows rows, or under /tmp for C1. Overlay your files with cp, mutate there, and delete the dir afterwards by its prefix. Never mutate the worktree.\n(a) Drop the ps1 line: C2 fails on both PowerShell engines.\n(b) Drop the sh line (replace it with `:`, so the file still parses): C1 fails on 'env [1]'.\n(c) Set the variable unconditionally in each twin: C1's legacy runs fail ('env [unset]'), and C2's legacy half fails (it no longer runs the project node.exe). This proves legacy stays unchanged.\n(d) Vacuity: run C2 with its legacy half removed and the ps1 fix absent. It must still fail, from the marker half alone.\n(e) Claims check: the variable closes only cmd.exe's cwd-first lookup.\n  - Relative and in-project PATH entries remain task-0b2ea570's scope; that row now dependsOn this one.\n  - Node or libuv bare-name spawns remain task-525551023b9d4931a1cf983ce02a6cfb's.\n  - 8.3, subst and UNC PATH aliases remain task-895791375f1341f5914c93e81348c083's.\n  Make no wider claim in comments or docs.\n(f) BOM/LF: `head -c3 scripts/moe-agent.ps1` is still ef bb bf. `git diff --stat` equals `git diff --ignore-cr-at-eol --stat`.\n(g) Process safety: kill nothing by name or pattern; the suite's killTree touches only its own children.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/protected-agent-command.test.mjs",
         "scripts/moe-agent.ps1",
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-02T23:58:04.085Z"
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Adversarial self-review done.\n\nSetup:\n- Mutants ran in mktemp copies (git archive HEAD scripts docs package.json, with my 4 files overlaid): /mnt/c/.../Temp/moe-2f22-mut-* for Windows and /tmp/moe-2f22-mut-* for Linux.\n- /mnt/d/moe-scratch/2f22237b-work/mutate.cjs applied each mutation and required exactly one hit per replacement.\n- Both dirs are deleted, each by a prefix-checked path. The logs are kept in /mnt/d/moe-scratch/2f22237b-work/mut-*.log.\n\nResults:\n- Control (unmutated copies): C1 passes 1/1 and C2 passes 2/2, so the scratch environment is sound.\n- (a) ps1 line dropped: C2 fails on PS 5.1 and PS 7 (0/2). It ran the project node.exe and 'project moehelper', with 'env []'.\n- (b) sh line replaced with `:`: C1 fails with `+ 'env [unset]' - 'env [1]'`.\n- (c) variable set unconditionally in both twins: C1 fails on its legacy run (`+ 'env [1]' - 'env [unset]'`). C2 fails 0/2 on its legacy half, where the trusted copy ran instead of the planted one. So legacy is pinned as unchanged.\n- (d) vacuity (legacy half removed, ps1 fix absent): C2 still fails 0/2 from the marker half alone.\n- (e) Claims: the comments and docs claim only cmd.exe's lookup, and the docs name the libuv/Node spawn residual. Nothing claims CreateProcess, PATH aliases or relative PATH entries. Those stay with task-52555102, task-89579137 and task-0b2ea570.\n- (f) BOM and line endings: ef bb bf is kept, and `git diff --stat` equals `--ignore-cr-at-eol --stat`. The diff is 4 files, +55/-3.\n- (g) Process safety: nothing was killed by name or pattern. Only the suite's own killTree acts, on the child PIDs it recorded.\n\nChecklist:\n- Concurrency: an environment export before any child starts carries no race.\n- Inputs: the export reuses the existing strict marker check (`-ceq '1'` and `= 1`). '01' and an unset marker stay legacy, which C1 pins.\n- Hot reload: sh `exec` and the ps1 supervisor keep env and re-read the marker, so the export is idempotent.\n- Legacy: never set, and an inherited value is never cleared.\n- Linux/macOS: the variable is inert.\n- Test fixture: it copies about 90 MB of node.exe per engine, inside fx.root, which t.after removes.\n\nNo real risks found.",
+      "startedAt": "2026-11-02T23:58:04.085Z",
+      "completedAt": "2026-11-03T00:00:45.314Z"
     }
   ],
   "planRevision": 1,
@@ -118,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:23.628Z",
-  "updatedAt": "2026-11-02T23:58:04.085Z",
+  "updatedAt": "2026-11-03T00:00:45.314Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:12.756Z",
@@ -128,7 +136,7 @@
     "firstClaimAt": "2026-11-02T23:13:45.650Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -143,7 +151,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T23:39:28.595Z",

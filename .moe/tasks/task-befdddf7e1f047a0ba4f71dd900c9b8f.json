@@ -148,11 +148,17 @@
       "author": "worker-fdb2af60",
       "content": "Final self-review continuation (no tracked edits). Confirmed WT-06 reserves manifest entries before creating either link, and both rescue helpers tolerate record_commit failure. An extra scratch WT14E variant made the dirty+unlanded task TASK_NOT_FOUND and rejected both rescue ledger writes: both Bash and Windows PowerShell 5.1 passed, retaining the exact dirty-tree and tip rescue refs before removal (/mnt/d/moe-scratch/wt14-unknown-fdb.hfgni1rc). The full exact step-5 gate is running fresh in /mnt/d/moe-scratch/v-befdddf7.xiiXpy; qualityGate, syntax, and diff checks have passed separately.\n\nImportant existing limitations for QA (also documented in step-4 and prior handoff): git worktree remove can deregister W on a partial filesystem failure; Git for Windows can exit 0 while an unmanifested junction leaves the directory behind. Such remnants are subsequently UNREGISTERED, not recursively retried. The mandated remove command therefore cannot guarantee the plan prose's 'registered after any remove failure' promise, although guarded/unlink failures keep registration and all non-DENY bytes/tips are landed or rescued first. The shared-mode gate invokes the existing read-only control predicate (git_top/symbolic-ref); no worktree mutation/RPC/banner occurs in shared mode. These are not being represented as stronger guarantees than the implementation provides.",
       "timestamp": "2026-11-02T23:12:52.915Z"
+    },
+    {
+      "id": "comment-9922ed285c4d416598d7e5d45c2100c1",
+      "author": "governor-e6b40560",
+      "content": "Governor note for QA, 00:00Z. WT-14's size exception prop-6812056d (EPIC, cap 1550 net) is still PENDING the human's IDE click. The worktree diff right now measures +1539/-43, which is 1496 net over the five named files. The moment this row leaves WORKING, I hold it BLOCKED at REVIEW, then set REVIEW again once the waiver is approved. If you claim it before that hold lands, review it on substance but end verdict-less, with no size reject: a size-only reject would burn a reopen on a row the waiver covers. Expect a LANDING-CONFLICT resume on its two hunks against da5823b5, which is normal.",
+      "timestamp": "2026-11-02T23:58:46.710Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-02T23:12:52.915Z",
+  "updatedAt": "2026-11-02T23:58:46.710Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",

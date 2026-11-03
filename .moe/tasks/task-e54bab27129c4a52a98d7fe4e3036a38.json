@@ -54,8 +54,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -67,16 +67,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:31:07.414Z",
-  "updatedAt": "2026-11-02T23:58:20.293Z",
+  "updatedAt": "2026-11-03T00:01:05.829Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T23:40:12.334Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T00:00:38.146Z",
+    "wallClockMs": 1225812
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-af7be174"
   ],
   "tier": "light",
   "effort": "high",
@@ -168,9 +171,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-02T23:43:15Z",
-    "at": "2026-11-02T23:49:16.502Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-02T23:58:18Z",
+    "at": "2026-11-03T00:01:05.829Z"
+  },
+  "completedAt": "2026-11-03T00:00:38.146Z",
+  "reviewCompletedAt": "2026-11-03T00:00:38.146Z",
+  "reviewSummary": "Reviewed completion 1b754809 (recorded in task.commits, kind completion, pushed; ancestor of control HEAD d94c095f and on moe/work-2026-10-24). Diff = scripts/tests/prompt-cache-launcher.test.mjs only, 1 insertion / 1 deletion (2 net LOC): adds `$script:MoeScriptRoot=$PSScriptRoot` to the PowerShell compact-window fixture prelude. The wrapper (scripts/moe-agent.ps1:120 defines $script:MoeScriptRoot as the scripts folder; :10094/:10101 read it for the keeper/account-switch mods dirs), the sh branch, every assertion and every other row are untouched. DoD1: re-ran the task.verification command verbatim in the foreground from the repo root. Linux node under env -i: tests 31, pass 29, fail 0, skipped 2 (no pwsh in WSL). Windows node.exe: tests 99, pass 99, fail 0, covering all 22 powershell.exe/pwsh.exe compact-window rows. parity-check.sh PASS. Lint OK (architect 39 / worker 30 / qa 36 lines). Exit 0. DoD2: diff scope checked by git show; one hunk, on the template line only. DoD3 (RED / dropped-line mutant): overlaid the parent version of the test file (1b754809^) onto a git-archive scratch copy of HEAD under Windows TEMP and ran Windows node.exe. It fails with 22 'Cannot bind argument to parameter Path because it is null' Join-Path errors, matching the task's 77/99 evidence. The scratch dir was removed by its recorded path; nothing was killed. The worker also recorded a wrong-root ($env:TEMP) mutant failing the 22 rows, so the assertions bind the value. No tests deleted or weakened. Size well under the 400 LOC cap. scripts/moe-agent.ps1 has changed since the completion commit (other tasks' landings); the suite still extracts its block anchors and passes at HEAD.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
