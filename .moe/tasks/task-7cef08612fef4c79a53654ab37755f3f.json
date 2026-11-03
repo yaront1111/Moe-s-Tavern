@@ -89,11 +89,17 @@
       "author": "governor-e6b40560",
       "content": "Governor ruling (22:35Z, msg-f42fec15): this row syncs its own `### moe.delete_task` and `### moe.delete_epic` sections of docs/MCP_SERVER.md in its own plan, adding the new role-gate refusal and who may call each tool (ruling msg-71db57ac). No open row edits those sections (b7203d89 is DONE; 83cf11f5 edits only list_metrics), so there is nothing to defer. While planning the gate, grep docs/roles, docs/skills, scripts/ and the daemon tests for delete_task/delete_epic callers by role, so the gate refuses no caller a role doc tells to delete. The human's board path (/ws DELETE_TASK and DELETE_EPIC) stays as it is.",
       "timestamp": "2026-11-03T22:35:25.382Z"
+    },
+    {
+      "id": "comment-d6b47c95a7844bd1aac4852f2dbf744d",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-03T22:41:49.821Z",
+      "content": "Landing unlanded (remote) 1 time(s) in a row; attempt attempt-de9d152049fc43dfb53007c0ab8d62ca (generation 2); paths: (none reported); rescue ref: refs/moe/rescue/task-7cef08612fef4c79a53654ab37755f3f/20261103T224148Z; target tip: 3441d183aa62af61126e3d1fdbafcadd9115f835; task WORKING."
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:04.154Z",
-  "updatedAt": "2026-11-03T22:40:31.615Z",
+  "updatedAt": "2026-11-03T22:43:55.834Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:33:47.343Z",
     "plannedStepCount": 4,
@@ -102,7 +108,8 @@
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-c9368191"
+    "worker-c9368191",
+    "worker-33f67e5b"
   ],
   "tier": "standard",
   "effort": "high",
@@ -182,12 +189,12 @@
   "planApprovedAt": "2026-11-03T22:36:51.848Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T22:38:26.865Z",
-  "reviewStartedAt": "2026-11-03T22:40:31.612Z",
+  "reviewStartedAt": "2026-11-03T22:43:17.291Z",
   "verification": {
-    "command": "cd \"$(git rev-parse --show-toplevel)\" && ( for t in delete_task delete_epic; do awk -v h=\"### moe.$t\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'architect or governor' || { echo \"docs: moe.$t section lacks the role gate\"; exit 1; }; done ) && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/deleteTask.ts packages/moe-daemon/src/tools/deleteEpic.ts packages/moe-daemon/src/tools/deleteTask.roleGate.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/deleteTask.roleGate.test.ts src/tools/deleteTask.test.ts src/tools/deleteEpic.test.ts src/tools/epicDeleteActor.test.ts src/tools/waitForTask.deleteWake.test.ts src/state/attemptHandback.test.ts src/state/dependencyReadiness.strict.test.ts'",
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && ( for t in delete_task delete_epic; do awk -v h=\"### moe.$t\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'architect or governor' || { echo \"docs: moe.$t section lacks the role gate\"; exit 1; }; done ) && S=$(mktemp -d) && git ls-files -z packages/moe-daemon | tar --null -T - -cf - | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/deleteTask.roleGate.test.ts src/tools/deleteTask.test.ts src/tools/deleteEpic.test.ts src/tools/epicDeleteActor.test.ts src/tools/waitForTask.deleteWake.test.ts src/state/attemptHandback.test.ts src/state/dependencyReadiness.strict.test.ts'",
     "exitCode": 0,
-    "outputTail": "Test Files  7 passed (7)\n      Tests  118 passed (118)\n(docs role-gate check passed; tsc --noEmit clean)",
-    "reportedAt": "2026-11-03T22:40:31.612Z",
+    "outputTail": "Test Files  7 passed (7)\n      Tests  118 passed (118)\n(docs role-gate check passed; tsc --noEmit clean; snapshot built from this worktree's tracked files, not git archive HEAD)",
+    "reportedAt": "2026-11-03T22:43:17.291Z",
     "source": "agent-reported"
   },
   "filesModified": [
@@ -196,5 +203,36 @@
     "packages/moe-daemon/src/tools/deleteTask.roleGate.test.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "moe.delete_task and moe.delete_epic now refuse a workerId that is not architect or governor with NOT_ALLOWED. The gate is copied from set_task_status and sits before every lookup and write. A call with no workerId key still deletes, and the /ws paths are unchanged. The new deleteTask.roleGate.test.ts has 13 cases covering the refusals (r1-r5) and the allowed callers (a1, a2). With only the two gates reverted, 9 of the 13 fail; restored, all pass. docs/MCP_SERVER.md gained a Role gate paragraph, a workerId note and a NOT_ALLOWED Errors line in each of the two sections."
+  "completionSummary": "moe.delete_task and moe.delete_epic now refuse a workerId that is not architect or governor with NOT_ALLOWED. The gate is copied from set_task_status and sits before every lookup and write. A call with no workerId key still deletes, and the /ws paths are unchanged. The new deleteTask.roleGate.test.ts has 13 cases covering the refusals (r1-r5) and the allowed callers (a1, a2). With only the two gates reverted, 9 of the 13 fail; restored, all pass. docs/MCP_SERVER.md gained a Role gate paragraph, a workerId note and a NOT_ALLOWED Errors line in each of the two sections. Landing retry: re-verified with the snapshot built from this worktree's git ls-files (target merged in) instead of git archive HEAD; 7 files, 118 tests pass, tsc clean.",
+  "commits": [
+    {
+      "sha": "9dfdb6c475b3de405611f2844c24703ca8fa9180",
+      "ref": "refs/moe/rescue/task-7cef08612fef4c79a53654ab37755f3f/20261103T224148Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T22:36:51Z",
+      "paths": [],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T22:41:48.620Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-7cef08612fef4c79a53654ab37755f3f ref=refs/moe/rescue/task-7cef08612fef4c79a53654ab37755f3f/20261103T224148Z sha=9dfdb6c475b3de405611f2844c24703ca8fa9180 reason=remote"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "completion",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "worker-33f67e5b@2026-11-03T22:41:52Z",
+    "at": "2026-11-03T22:43:55.834Z"
+  },
+  "landingRetry": {
+    "reason": "remote",
+    "rescueRef": "refs/moe/rescue/task-7cef08612fef4c79a53654ab37755f3f/20261103T224148Z",
+    "targetTip": "3441d183aa62af61126e3d1fdbafcadd9115f835",
+    "paths": [],
+    "count": 1,
+    "at": "2026-11-03T22:41:49.821Z"
+  }
 }
