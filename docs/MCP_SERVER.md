@@ -2525,7 +2525,7 @@ Read chat messages with cursor-based pagination. Auto-tracks read position per w
 {
   channel?: string,     // Channel ID (omit to read from all channels)
   workerId?: string,    // Worker ID for auto-cursor tracking
-  sinceId?: string,     // Return messages after this message ID
+  sinceId?: string,     // Return messages after this message ID; a peek that moves no cursor
   limit?: number,       // Max messages (default 10, max 200)
   maxContentChars?: number, // Max chars/message in response (default 1000, 0 = full)
   includeSystem?: boolean   // Also return the system feed (default false)
@@ -2543,7 +2543,8 @@ Read chat messages with cursor-based pagination. Auto-tracks read position per w
 
 **Notes:**
 - If `workerId` provided without `sinceId`, uses the worker's saved cursor for incremental reads
-- After reading, the worker's cursor is automatically updated only for messages returned in the response
+- After a cursor-mode read (`workerId`, no `sinceId`), the worker's cursor advances only for the messages returned in the response
+- A read with an explicit `sinceId` is a peek: it moves no stored cursor and clears no unread count, so it can neither rewind the cursor `chat_wait` drains from nor skip unread messages. In all-channel mode the id applies only to the channel that holds it; the other channels read from the caller's stored cursor (their newest window without a `workerId`). An empty `sinceId` is ignored (cursor mode)
 - When no `channel` specified, reads up to `limit` messages per channel, merges them by timestamp, and returns the newest global `limit` messages
 - In all-channel mode, per-channel cursors and unread counts advance/clear only when doing so cannot skip fetched-but-omitted messages; any channel with omitted fetched messages stays unchanged so those messages remain readable on a later call
 - Long message content is truncated by default; pass `maxContentChars: 0` only when exact full text is needed
