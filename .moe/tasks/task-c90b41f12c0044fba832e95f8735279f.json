@@ -68,8 +68,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,16 +88,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:50.949Z",
-  "updatedAt": "2026-11-03T22:49:25.741Z",
+  "updatedAt": "2026-11-03T22:51:12.543Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:40:33.066Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:50:52.064Z",
+    "wallClockMs": 618998
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -209,9 +212,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T22:42:57Z",
-    "at": "2026-11-03T22:47:07.015Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:49:25Z",
+    "at": "2026-11-03T22:51:12.543Z"
+  },
+  "completedAt": "2026-11-03T22:50:52.064Z",
+  "reviewCompletedAt": "2026-11-03T22:50:52.064Z",
+  "reviewSummary": "Reviewed completion 15728974 (on moe/work-2026-10-24, in control HEAD) via git show: 3 files, +152/-5 (net ~147 LOC, under 400): tools/createTask.ts, new createTask.shape.test.ts (19 tests), one Input refusals paragraph in docs/MCP_SERVER.md. taskStore.ts and /ws CREATE_TASK untouched, as planned.\n\nRe-ran in a fresh git-archive snapshot of 15728974 outside the repo (packages/moe-daemon + docs/roles, npm ci): doc grep OK; tsc --noEmit clean; vitest on createTask.shape, createTask, createCommitActor, epicDeleteActor, getContext plus executionPolicyLifecycle and submitPlan (the other create_task callers) = 7 files, 218 tests pass.\n\nMutant check: parent's createTask.ts in the snapshot makes 12/19 shape tests fail (every refusal case and the retry-one-row case); the fix passes 19/19. Valid-path, null-as-absent, []/[''] placeholder+warning and boundary cases pass on both, as they must.\n\nDoD: (1) non-array / non-string-entry definitionOfDone and taskRails are refused INVALID_INPUT naming the field or field[i] before state.createTask; tests assert codeName, field, unchanged task count and .moe/tasks files, no TASK_CREATED, and a retry makes one row. (2) taskRails uses validateStringArrayValue(…,100,MAX_EPIC_RAIL_CHARS,false), same as create_epic's epicRails; 10000 chars and 100 entries accepted, one more refused. (3) New vitest passes, createTask.test.ts green. dodCount reads the validated caller list so []/[''] keep the empty warning; null = absent. Out of scope as declared: /ws CREATE_TASK, order/status items.",
+  "requiredCheckAtDone": null
 }

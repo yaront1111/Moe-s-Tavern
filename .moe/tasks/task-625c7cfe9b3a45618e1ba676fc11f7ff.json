@@ -45,15 +45,20 @@
     {
       "stepId": "step-3",
       "description": "Verification, run once.\n\nRun the GREEN gate (first checkRef) verbatim; it is complete_task's verification. This is the FULL daemon suite, because update_epic's published inputSchema changed (MCP wire surface). It runs from a whole-tree `git archive HEAD` snapshot in /tmp, because many daemon suites read scripts/, docs/ and certify fixtures outside the package; a package-only archive fails them spuriously. Never run npm or vitest in the checkout (rail). It takes about 2-3 min: npm ci, then tsc, then about 46 s of vitest. Expect tsc clean and `Test Files  266 passed`, plus the counts of any files peers have added since.\n\nThe output is large, so read only the `Test Files`, `Tests` and `FAIL` lines.\n\nThen run the RED gate (second checkRef) once more. It must still print RED-AT-BASE, because it pins f8b8d60c's two source files. Quote its output in your completion summary.\n\nError handling for a red run:\n- For any failure outside the four touched areas (updateEpic, archiveEpic, WebSocketServer, the new file), re-run that file in a second whole-tree snapshot of plain HEAD.\n- If it fails there too, it is pre-existing. Report it in #general and call moe.report_blocked with both outputs; do not touch that file.\n- If it fails only with your change, fix your code, never the test.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T22:48:04.679Z"
+      "note": "Fresh GREEN first checkRef executed verbatim in whole-tree /tmp snapshot (captured via a single-quoted bash -c): npx tsc --noEmit clean; 267 files passed; 7322 passed, 24 skipped (7346), exit 0, 48.36s. RED second checkRef rerun: exactly 7 failed | 2 passed (9), RED-AT-BASE, exit 0. Supplemental new-test typecheck via scratch-only tsconfig passed. Worktree-required quality gate bash scripts/tests/parity-check.sh && npm run lint passed in separate whole-tree snapshot with current docs overlay. An initial log-wrapper attempt failed before tests (JSON shell quoting expanded $S too early); fixed command quoting, no production changes. No tracked files modified in this verification step.",
+      "startedAt": "2026-11-03T22:48:04.679Z",
+      "completedAt": "2026-11-03T22:49:54.360Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (load adversarial-self-review) of your `git diff`. Fix any finding, then re-run step 3's gates.\n\n(1) Scope: exactly 3 files.\n- updateEpic.ts: the imports, applyEpicUpdate, the handler call, the description and the enum.\n- WebSocketServer.ts: one import and the UPDATE_EPIC call plus its two comment lines.\n- The new test file.\n\n(2) Nothing is written before a refusal. Validation and archive_epic's gates all run before the first updateTask or updateEpic. The companion fields are written only after a successful archive, so a refused call leaves the epic and task files byte-identical ((m1), (m3), (m5), (w1)).\n\n(3) Twice concurrently: MCP dispatch and the /ws handler both hold the reentrant state mutex for the whole call, so gates and writes cannot interleave with another mutation. applyEpicUpdate is never called outside it; check that there is no third caller.\n\n(4) Inputs:\n- `updates` undefined, or a non-object from a malformed /ws frame, takes the plain path and its existing error.\n- A lowercase 'archived' fails validateEpicUpdates's enum on the plain path, as before.\n- A status ARCHIVED with no other fields returns the archived epic.\n- An already-ARCHIVED epic, an un-archive (ARCHIVED to ACTIVE) and other status moves are byte-for-byte today's path.\n\n(5) The contract stays additive: the update_epic reply `{ success, epic }` and the EPIC_UPDATED frame keep their shapes. A companion-field call now emits two EPIC_UPDATED activity events (the status, then the fields), plus one TASK_ARCHIVED per task. That is acceptable, so say it in the summary.\n\n(6) Follow-up, out of scope (MCP_SERVER.md was held by dd1e00f8 at planning time, and the DoD allowed the docs edit only if the file was free): the `### moe.update_epic` section should say that ARCHIVED follows moe.archive_epic. Say so in the completion summary.\n\nThen call moe.complete_task with step 3's evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Loaded adversarial-self-review and read scoped diffs (including untracked new test). No findings requiring code changes. Confirmed only two production applyEpicUpdate callers, each under the state mutex; pre-write companion validation plus archiveEpic's in-flight/holder/finalizing gates; ordinary/already-ARCHIVED/unarchive updates preserve the old path, malformed updates preserve old errors. Socket/server cleanup and unchanged reply/error shapes checked. Companion-field archive intentionally emits two EPIC_UPDATED events plus per-new-task TASK_ARCHIVED. Reviewed scope is four paths, not plan's three, solely due explicit governor/filer docs-sync ruling recorded in step 2. git diff --check clean. Step 3 GREEN (267 files, 7322 passed/24 skipped), RED-at-base (7 failed/2 passed), new-test typecheck, parity and lint all fresh/green as applicable; no changes since these checks. Serena handoff and archive gotcha recorded. No new source files modified in this review step.",
+      "startedAt": "2026-11-03T22:50:11.060Z",
+      "completedAt": "2026-11-03T22:50:59.170Z"
     }
   ],
   "planRevision": 1,
@@ -83,12 +88,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:22.068Z",
-  "updatedAt": "2026-11-03T22:48:04.679Z",
+  "updatedAt": "2026-11-03T22:50:59.170Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:34:31.384Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -100,7 +105,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:43:24.967Z",
