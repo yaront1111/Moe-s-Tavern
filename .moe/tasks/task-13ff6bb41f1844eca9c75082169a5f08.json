@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,16 +81,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:38:33.967Z",
-  "updatedAt": "2026-11-03T13:58:00.512Z",
+  "updatedAt": "2026-11-03T14:02:03.242Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T13:40:22.435Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T14:01:43.429Z",
+    "wallClockMs": 1280994
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -188,9 +191,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T13:53:47Z",
-    "at": "2026-11-03T13:58:00.512Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T13:59:44Z",
+    "at": "2026-11-03T14:02:03.242Z"
+  },
+  "completedAt": "2026-11-03T14:01:43.429Z",
+  "reviewCompletedAt": "2026-11-03T14:01:43.429Z",
+  "reviewSummary": "Reviewed completion d5f52d0e (on moe/control and moe/work-2026-10-24; +95/-4, 3 files, ~91 net LOC). Tracked files match HEAD. Re-ran task.verification in a fresh git-archive snapshot (env -i, node 24, npm ci): tsc and test typecheck clean; full daemon vitest 236 files passed, 7028 passed | 24 skipped, exit 0 (matches worker evidence). Existing chatSystemFeed, reloadHold and mentionRouter suites pass inside that run; the diff only adds cases, none edited or weakened.\nDoD 1: (h1) drives the real deregister_worker wrapper_restart path for a task-holding seat. It asserts the task stays held, both banners route to [], unread is null for busy, holder and peer, and a parked #governors chat_wait stays unsettled until a human line wakes it with only that line. chat_read hides the banner; includeSystem:true shows it.\nDoD 2: RELOAD_HOLD_BANNER is anchored ^..$ (literal wrapper_restart, ISO-ms deadline, <id>(<STATUS>) list at line end) and matches beginReloadHold in workerLifecycle.ts, which I read. (h2) has 3 accepts; (h3) 9 rejects (release, dropped-claims, appended text/release clause/line, other reason, non-ISO deadline, empty list, trailing space); (h4) totality and linear time on 50000 chars.\nDoD 3: unchanged suites green in the full run.\nIndependent checks: restoring the parent chatPayload.ts in the snapshot fails (h1) and 3x (h2) (4 failed | 26 passed), restored and cmp'd; the filer's repro zzHuntUtil3 against the fix shows hold banners routed [] and the chat_wait not woken. I did not re-run worker mutants M2-M4.\nDocs bullet in MCP_SERVER.md updated. util/ has no state import; isSystemFeedMessage unchanged so mentions still route; the reload_hold_expired 'released N task' banner is not matched and still routes. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
