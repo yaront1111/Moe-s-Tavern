@@ -20,18 +20,25 @@
     {
       "stepId": "step-1",
       "description": "Fake proxy knobs for the VM-route rows (fixtures for DoD 1-5). In scripts/tests/postflight-fake-proxy.js add two OPT-IN knobs. With neither set, every existing answer stays byte-identical: postflight.sh, postflight.ps1, worktree-landing.sh, postflight-worktree.cjs and agent-git-guard.test.mjs all share this file.\n(a) FAKE_CALL_LOG=<file>: immediately after `const moe = path.join(project, '.moe');`, before holdForInterrupt(), holdLedgerForCrash() and every early process.exit, append JSON.stringify({tool, args}) + '\\n' for EVERY call. Never log the new tool through appendRpc(): the order of evidence-rpcs.jsonl is asserted by [hot reload] reload_seq and scenario AH.\n(b) moe.get_execution_readiness, answered before the `switch` (CQ-M07d's payload {profile, ready, missingCapabilities, evaluatedAt}), from FAKE_READINESS:\n- unset: fall through to `default: ok({ success: true })`. That is a malformed reply, so every existing worker/QA row stays on today's path.\n- `unknown`: {jsonrpc:'2.0', id, error:{code:-32601, message:'Tool not found: moe.get_execution_readiness'}}, as McpAdapter.ts:294 answers for an older daemon.\n- `refuse`: {error:{code:-32000, message:'fixture readiness refused', data:{tool:'moe.get_execution_readiness', codeName:'FIXTURE_REFUSED'}}}, the MoeError shape of McpAdapter.ts:316-323. This is a fourth value beyond the description's three; it covers DoD 1's 'refused' reply.\n- `fail`: write nothing, then process.exit(1) (a transport failure).\n- anything else: ok(JSON.parse(value)), so any JSON (an object, a string or an array) is served as the tool text. Error handling: unparseable JSON throws, so the fixture fails loudly (like jsonKnob) instead of serving a half-built reply.\nDocument both knobs in the header comment. Keep the request-parsing line `const tool = String(req.params?.name || '').replace(/^moe\\./, '');` byte-identical: it is parity-check.sh's PROXY_MARKER. Edit only with the Edit tool (global rail).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "Fake proxy: FAKE_CALL_LOG appends {tool,args} right after `const moe`, before holds and early exits, and never goes through appendRpc. FAKE_READINESS is answered just before `switch (tool)`, with these values: unknown (-32601 'Tool not found: moe.get_execution_readiness'), refuse (-32000 MoeError shape), fail (no reply, exit 1), and JSON served as the tool text (bad JSON throws). Unset falls through to ok({success:true}). Both knobs are documented in the header and at the handler, and PROXY_MARKER's line is unchanged. Checked by piping each value through the proxy: the outputs and exit codes are as expected, and with neither knob set nothing new is written.",
+      "startedAt": "2026-11-03T15:16:10.821Z",
+      "completedAt": "2026-11-03T15:17:19.410Z"
     },
     {
       "stepId": "step-2",
       "description": "Route gate in scripts/moe-agent.sh (the behavior behind DoD 1-5). First read mem:gotcha-bash-hot-reload-incremental-parse (task rail).\n- Edit ONLY with the Edit tool. It renames the file, so running seats keep their inode, and it leaves the TOOL witness this contested path needs to land.\n- Keep the main loop's `{ ... exit }` group intact.\n- Afterwards run `bash -n scripts/moe-agent.sh` and `bash scripts/tests/parity-check.sh` (about 3 s; mem:gotcha-parity-check-literals). Parity must stay PASS: no compared family or literal is touched, because CQ-M07n adds the families (mem:decision-wrapper-twin-parity-families-last).\n- Keep the new code bash-3.2-safe: no ${x^^}, mapfile or declare -A.\n\nDefine four functions in one block in the helper region just before the main loop, e.g. directly above wrapper_reload_deferred(). Do NOT put them inside the segment seat-registration.test.mjs slices, from '# moe_rpc TOOL ARGS_JSON' to '# Candidate evidence is pinned outside the CLI'.\n\n1. vm_route_is_wsl. Unless RUNTIME_PROTECTED=1, the test seam MOE_POSTFLIGHT_WSL decides: exactly `1` means WSL, exactly `0` means native. Any other value, unset, or a protected launch falls back to `is_wsl`. is_wsl() and its two callers stay untouched, so they keep reading /proc/version. The seam's name deliberately stays out of the MOE_VERIFIED_LOCAL_, MOE_SEAT_ and MOE_VM_ families that CQ-M07n will compare; it is sh-only, since ps1 has no WSL check.\n\n2. vm_route_worktree_mode. One $PYTHON_CMD read of \"$MOE_DIR/project.json\". It prints `on` only when settings.worktreeMode resolves to 'on', mirroring packages/moe-daemon/src/state/validators.ts resolveWorktreeMode AS LANDED when you start.\n- WT-19 (task-b1ca54f2) is in this row's dependency closure through 64809b19 and flips the unset default. At planning time, :293-296 resolve an absent key to 'off' and refuse every other value, null included. An absent key means JS `settings?.worktreeMode === undefined`: no settings, non-object settings, or no key.\n- Put a comment citing the validators.ts line you mirror.\n- Otherwise it prints the clause:\n  - `is unset, which resolves to 'off'` (only while the landed default is 'off');\n  - `is 'off'`;\n  - `is invalid (<json.dumps(value), control chars as ?, cut to 60 chars>)`;\n  - `cannot be read (.moe/project.json is missing or not a JSON object)`.\n- It never fails (set -e).\n\n3. verified_local_refuse CODE DETAIL: `printf '[ERROR] %s: %s\\n' \"$1\" \"$2\" >&2; exit 1`. Plain text with no colour codes, so `[ERROR] <CODE>:` greps exactly and CQ-M07n1 ports it byte for byte. Keep WORKER_ID: the seat registered before the loop, so the EXIT trap's deregister_worker (reason terminal_closed) must run.\n\n4. verified_local_gate.\n- `reply=$(moe_rpc get_execution_readiness '{}' 2>/dev/null) || return 0`. An error frame (a refusal, or -32601 for an unknown tool), an isError result, a transport failure or an empty reply all keep today's path.\n- A $PYTHON_CMD parse then accepts only a JSON object whose profile is one of legacy|observe|verified-local|unreadable, whose ready is a JSON boolean (1 and \"true\" are malformed) and whose missingCapabilities is a list of strings; evaluatedAt is ignored. It prints the profile, ready, and the ids joined by ', ' in the daemon's order, separated by \\x1f, with control chars replaced by '?'. Any other reply: `|| return 0`.\n- `[ \"$profile\" = verified-local ] || return 0`.\n- Then, using if-forms only, refuse in this order:\n  a. vm_route_is_wsl: MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED, detail 'this project runs verified-local, whose worker and QA seats run natively on Windows (moe-agent.ps1), never inside WSL; refusing to start this seat.'\n  b. CLI_TYPE is not claude or codex: MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED, detail 'this project runs verified-local, whose worker and QA seats run only claude or codex; this seat runs <CLI_TYPE>; refusing to start this seat.' moe-agent.sh:465-476 counts every custom command as claude, so only gemini and grok refuse.\n  c. vm_route_worktree_mode is not `on`: MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED, detail 'this project runs verified-local, whose worker and QA seats run only in worktree mode; settings.worktreeMode <clause>; refusing to start this seat.' CQ-M07m3 adds the post-claim backstop.\n  d. ready is false: MOE_VERIFIED_LOCAL_NOT_READY, detail 'this project runs verified-local, which is not ready; missing: <ids, or (none named)>; refusing to start this seat.'\n  e. otherwise: MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE, detail 'this project runs verified-local and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat.' This is the fail-closed placeholder that CQ-M07m3 replaces.\n- Error handling: today's path prints nothing and sets nothing the CLI inherits. Every RPC, parse and file read on it is guarded, and the function returns 0 explicitly; it never ends on a bare `a && b`. So set -e can never end a legacy seat here, while every failure under a well-formed verified-local reply fails closed (exit 1, never the host CLI).\n\nCall site: inside the main loop, after the per-iteration `read_commit_settings` and before `if [ \"$AUTO_CLAIM\" = true ]; then` (whose body opens with the 'Pre-flight: joining chat, claiming task, loading context...' echo), add `case \"$ROLE\" in worker|qa) verified_local_gate ;; esac` with a one-line CQ-M07m1 comment.\n- That position comes before every pre-flight RPC, so a refused seat claims nothing and consumes no unread mention.\n- It also covers --no-auto-claim worker/QA sessions, which would otherwise launch the host CLI under verified-local (task rail).\n- Architect and governor seats never reach the call.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "startedAt": "2026-11-03T15:17:21.229Z"
     },
     {
       "stepId": "step-3",
@@ -95,11 +102,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:21:49.720Z",
-  "updatedAt": "2026-11-03T15:09:09.915Z",
+  "updatedAt": "2026-11-03T15:17:21.229Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T14:27:03.726Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -147,14 +155,16 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-548034a1@2026-11-01T18:23:42Z",
-    "at": "2026-11-01T18:59:07.591Z"
+    "sessionId": "worker-2dc72348@2026-11-03T15:08:57Z",
+    "at": "2026-11-03T15:14:15.447Z"
   },
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:48:31.668Z",
   "executionContract": {
@@ -223,5 +233,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T18:48:31.693Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T15:16:10.821Z"
 }

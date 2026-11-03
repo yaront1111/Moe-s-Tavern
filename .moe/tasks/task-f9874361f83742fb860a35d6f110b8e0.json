@@ -72,9 +72,11 @@
     {
       "stepId": "step-5",
       "description": "VERIFICATION, once, fresh, from this task worktree's root after the last tracked edit. Its output is the complete_task evidence (DoD 3). Run exactly this ONE command:\nN=\"/mnt/c/Program Files/nodejs/node.exe\" && P=\"/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && bash scripts/tests/parity-check.sh && $P \"$(wslpath -w scripts/tests/parity-check.ps1)\" && S=$(mktemp -d /mnt/d/moe-scratch/f987-XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fp.js\" && MOE_WORKTREE_ONLY=wt-settings,codes node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fp.js\" \"$S\" \"$BASH\" && MOE_WORKTREE_ONLY=wt-settings,codes WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fp.js\")\" \"$(wslpath -w \"$S\")\" powershell && env $(compgen -e | grep -E '^(MOE_|CLAUDE)' | sed 's/^/-u /') bash -c 'node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh' && \"$N\" scripts/tests/postflight-safe.mjs powershell && $P \"$(wslpath -w scripts/tests/worktree-landing.ps1)\"\n\nIt takes about 80-90 min. Start it detached (setsid nohup) with a log and an EXIT= line, wait in the foreground with bounded polls, never end the turn while it runs, and kill only PIDs your own session started.\n\nWhat it covers:\n- The two MOE_WORKTREE_ONLY runs must print '[worktree] wt-settings ok' and '[worktree] codes ok' on each engine.\n- postflight-safe bash and powershell rerun every postflight scenario, shared mode included, since read_commit_settings feeds it.\n- worktree-landing.sh and .ps1 rerun the held-out landing cases.\n\nError handling for a red run: read the failing case's assertion, fix the code (never an existing case's expectations), and rerun the WHOLE command. Paste the tails of the failing run and the final run (mem:gotcha-qa-full-postflight-sh-runtime-and-summary-cap).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T13:51:59.955Z"
+      "note": "Ran the plan's ONE verification command, verbatim, fresh, from the worktree root after the last tracked edit (runner D:\\moe-scratch\\f987-tools\\gate.sh, log gate.log): START 2026-11-03T13:52:11Z, END 15:18:11Z (86 min), EXIT=0; sha256 of all 5 changed files identical at start and end. Results: parity-check.sh PASS, parity-check.ps1 PASS; sh cjs: codes ok, wt-settings ok (2 ok, 0 failed); ps1 PS 5.1 cjs: codes ok, wt-settings ok (2 ok, 0 failed); postflight-safe bash {exit 0, lastScenario Z, failureClass NONE}; worktree-landing.sh 18 passed, 0 failed; postflight-safe powershell {exit 0, lastScenario Z, failureClass NONE}; worktree-landing.ps1 18 passed, 0 failed. No red run, so no fix iteration. Landing check: target moved to 946358a8 (WT-19 etc.); WT-19's CONFIGURATION.md hunks end at line 233, mine are at 263-264 (not adjacent); a git-archive of 946358a8 + my diff passes the L6 gate (parity-check.sh PASS, npm run lint OK); worktree-e2e.cjs on the target keeps claim target == settings consolidationBranch.",
+      "startedAt": "2026-11-03T13:51:59.955Z",
+      "completedAt": "2026-11-03T15:19:04.220Z"
     },
     {
       "stepId": "step-6",
@@ -108,7 +110,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:30:24.086Z",
-  "updatedAt": "2026-11-03T13:52:48.331Z",
+  "updatedAt": "2026-11-03T15:19:04.220Z",
   "contextFetchedBy": [
     "governor-e6b40560",
     "architect-24611a0a",
@@ -123,7 +125,7 @@
     "firstClaimAt": "2026-11-03T13:08:25.095Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -133,7 +135,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:35:29.182Z",

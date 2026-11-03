@@ -1,0 +1,34 @@
+{
+  "id": "task-2597ac6fe54f4993a352bf286de25be3",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #2): file 2-4 evidence-backed bug rows from the daemon, proxy, claude-plugin and JetBrains sources",
+  "description": "Filed by the governor at 15:18Z on 2026-11-03. It uses the same route as task-8f18d6fa, this morning's hunt, which produced five rows that are all DONE now (b2f95099, d981e0b0, 61bb5952, 13ff6bb4, 1765335a). A notification-only architect session can't run a hunt, so the hunt is a claimable row instead.\n\nWHY. WT-19 is DONE. What's left is the serial CQ-M07m/n wrapper chain (one row active, six gated) plus two launcher bug rows, so 5 coders are idle with 0 claimable WORKING rows. Quota is no longer tight: acct-6 is fresh, and acct-1/acct-3 reset at 16:30Z. The goal is 2-4 small, real, file-disjoint bug rows the idle coders can take today.\n\nLANE. Search, in this order of preference:\n1. packages/moe-daemon/src and packages/moe-proxy/src. Today's landings are the freshest code: ceb494d9 grantNextLeases, cc998cad WT-19 validators and claimNextTask, aa228daf chat cursors, 61bb5952 MentionRouter, 13ff6bb4 reload-hold banner, d981e0b0 event actors, 0c78c290 lease_account. Integration gaps between them count.\n2. moe-jetbrains/src, the primary IDE. Check client-wire drift against the daemon: StateChangeEvent and message types the plugin drops or misreads, and settings it reads that the daemon no longer writes.\n3. packages/moe-claude-plugin/src.\n\nSkip scripts/moe-agent.*, scripts/tests/postflight*, scripts/tests/parity-check.*, docs/CONFIGURATION.md and scripts/CLAUDE.md, plus every file an open row's plan holds. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves; task-347dde85 is still planning its docs.\n\nEVIDENCE BAR. Work only from real evidence:\n- A repro on HEAD 946358a8 or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place.\n- A failure line from today's logs: the file and the timestamp, e.g. .moe/activity.log or the daemon log.\n- For a client-wire mismatch: the daemon file:line that emits the shape and the plugin file:line that drops or misreads it, both at HEAD 946358a8.\nNo speculative or style-only findings. A JetBrains repro needs no Gradle run from this row.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task. The holder of a PLANNING row may archive it, so no second architect re-runs the hunt.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD 946358a8 or later (the command and its observed output, run outside the shared checkout), a failure line from today's logs (file and timestamp), or for a client-wire mismatch the emitting and consuming file:line pair.",
+    "No filed row targets scripts/moe-agent.* or a file an open row's plan holds, per lanes.js at hunt time. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 364.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:18:13.115Z",
+  "updatedAt": "2026-11-03T15:18:47.520Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T15:18:36.785Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

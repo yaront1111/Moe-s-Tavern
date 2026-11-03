@@ -81,24 +81,29 @@
     {
       "stepId": "step-5",
       "description": "Verification gate (DoD 5). Run it once, fresh, from the task worktree after the last tracked edit. Its output is the complete_task evidence. Run exactly:\n\ncd \"$(git rev-parse --show-toplevel)\" && N=\"/mnt/c/Program Files/nodejs/node.exe\" && P=\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && C=wt-recover,wt-hooks-sparse,wt-gate-interrupt,wt-moe-post && S=$(mktemp -d /mnt/d/moe-scratch/d2d6ac4b-v.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js $S/fp.js && w(){ wslpath -w \"$1\"; } && bash scripts/tests/parity-check.sh && $P \"$(w scripts/tests/parity-check.ps1)\" && env $E MOE_WORKTREE_ONLY=$C node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" $S/fp.js $S $(command -v bash) && MOE_WORKTREE_ONLY=$C WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(w scripts/moe-agent.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell && env $E bash scripts/tests/worktree-landing.sh && $P \"$(w scripts/tests/worktree-landing.ps1)\" && env $E node scripts/tests/postflight-safe.mjs bash && \"$N\" scripts/tests/postflight-safe.mjs powershell\n\nExpected:\n- PASS from parity-check.sh and from parity-check.ps1.\n- The targeted sh and ps1 runs each print `[worktree] 4 ok, 0 failed`.\n- worktree-landing.sh and worktree-landing.ps1 each exit 0, with every case PASS.\n- Both postflight-safe JSON lines show exit 0 and failureClass NONE. The full postflight.{sh,ps1} runs include every new case on both engines.\n\nHow to run it:\n- It takes about 90 minutes; postflight-safe powershell alone takes about 45 on PS 5.1.\n- The Bash tool caps a call at 10 minutes. So put the exact command in a runner script under /mnt/d/moe-scratch/d2d6ac4b-gate/ that starts with `cd` into the task worktree and ends with `echo EXIT=$?`.\n- Start the script detached (setsid nohup, log file, PID recorded). Wait in the foreground with repeated `timeout 570 tail -f -n +1 <log> | grep -m1 -q '^EXIT='` polls (mem:convention-postflight-scratch-harness; Windows legs: mem:gotcha-qa-ps1-postflight-from-wsl).\n- If an earlier session already started this run, check `ps -ef | grep d2d6ac4b` and the log first. Reuse that run only when HEAD and `git status` are unchanged since it started.\n- Kill only PIDs you started, by recorded PID. Never pkill, killall, or kill by pattern (shared-host rail).\n- Delete $S afterwards.\n\nError handling: on any failure, investigate it and fix it in the step that owns the behaviour, then re-run the whole command. Never paste a partial or stale run as evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T13:40:35.363Z"
+      "note": "Ran the step-5 command verbatim from the task worktree, 2026-11-03 13:40:41–15:07:44 UTC (87m), EXIT=0. Both parity checks PASS; targeted sh and PS 5.1 each 4 ok/0 failed; worktree-landing both 18 passed/0 failed/0 errors; postflight-safe bash and powershell both exit:0, lastScenario:Z, failureClass:NONE. Source SHA256 and git status match pre-run captures. Evidence /mnt/d/moe-scratch/d2d6ac4b-gate/{command.txt,run.log,start.sha256,start.status}; runner PID 2088886 finished, fixture scratch deleted. Also npm run lint exits 0 (39/30/36-line role docs). No tracked edits since gate start.",
+      "startedAt": "2026-11-03T13:40:35.363Z",
+      "completedAt": "2026-11-03T15:17:16.535Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this task's own diff, using the adversarial-self-review skill.\n\nScope and placement:\n- `git diff` touches exactly scripts/moe-agent.sh, scripts/moe-agent.ps1 and scripts/tests/postflight-worktree.cjs.\n- moe-agent.ps1 keeps its UTF-8 BOM; `bash -n` and the PS 5.1 ParseFile are both clean.\n- Each fix stays local to its own site, per the governor's placement note:\n  - (a): only the main-loop worktree_preflight call;\n  - (c): only the worktree arm of moe_commit_with_hooks; the shared-mode path is byte-identical;\n  - (b): only Invoke-MoeWorktreeRounds' gate block; Invoke-MoeLanding, Invoke-MoeFrozenGate, Invoke-MoeWorktreeCompletion and the outer finally are unchanged;\n  - (d): one check in each worktree post-flight.\n- In the suite, no existing case, helper or registration line changed except wtRecover's two new assertions. The three new cases sit in one block after wtLeaseSignal and are registered on one new line after the 'resume-unread' line.\n\nEdge cases:\n- Twice or concurrently: the (b) finally runs once per round, and Recorded=$true makes a second pass a no-op. A passed gate is already Recorded and removed, so a round-2 finally never records round 1's gate.\n- A Ctrl+C during the record itself: the outer finally still stops the child and removes the workspace.\n- Null or empty inputs: an empty PREFLIGHT_CONTEXT or status gives UNKNOWN, as before; an empty W path skips (d); an empty private_git takes (c)'s worktree failure branch.\n- Windows: (d)'s Get-Item -Force sees a dangling junction. On ps1, the (b) test interrupts only the wrapper's console.\n\nEvidence and regression:\n- Each new assertion was RED on the engine that had the drift and GREEN after its fix. Copy the RED AssertionError lines from steps 1-4 into the completion summary.\n- `node --test scripts/tests/hook-isolation-bash.test.mjs` still passes 9/9.\n- Merge risk: re-check task-f9874361's hunks (`git diff $(git merge-base <its moe/task branch> <target>) <its branch>`) against yours. If any hunk is adjacent to yours, say so in the completion summary (mem:gotcha-adjacent-line-edits-conflict-in-worktree-landing).\n\nIf the review changes any tracked byte, re-run step 5's exact command and use that output as the evidence.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "note": "Adversarial review of the full 3-file diff: +85/-7 (78 net); no edits required. Checked repeat/concurrent calls (per-process gate, Recorded guard), null/malformed context fallback, empty W, failed private gitdir/sparse/read-tree cleanup, stop/send exceptions, Ctrl+C during evidence, and .moe presence TOCTOU (diagnostic only; DENY still authoritative). Shared preflight_landing/worktree_preflight and PS Invoke-MoeLanding/Invoke-MoeFrozenGate/Invoke-MoeWorktreeCompletion byte-identical to HEAD; outer finally/shared hook arm untouched. Added tests remain isolated block + one registration; new functions <50 lines. BOM retained; fresh bash -n, PS 5.1 ParseFile and diff --check clean. All RED/GREEN evidence recorded in steps 1–4; hook isolation 9/9 and exact final gate passed. Peer f9874361 branch still eaad2635 (base), no committed hunks against target 946358a8 to assess; no adjacent committed peer hunk found, uncommitted future edits not predicted. Gate hashes/status unchanged; no rerun needed.",
+      "startedAt": "2026-11-03T15:17:16.563Z",
+      "completedAt": "2026-11-03T15:18:28.852Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -123,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:30:36.691Z",
-  "updatedAt": "2026-11-03T13:55:31.855Z",
+  "updatedAt": "2026-11-03T15:19:47.547Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T13:08:08.665Z",
@@ -133,7 +138,7 @@
     "firstClaimAt": "2026-11-03T13:08:47.541Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -147,7 +152,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:32:30.349Z",
@@ -220,10 +227,42 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T13:34:15.653Z",
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T13:08:45Z",
-    "at": "2026-11-03T13:55:31.855Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-03T13:32:37Z",
+    "at": "2026-11-03T15:19:47.547Z"
+  },
+  "reviewStartedAt": "2026-11-03T15:19:02.459Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && N=\"/mnt/c/Program Files/nodejs/node.exe\" && P=\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && C=wt-recover,wt-hooks-sparse,wt-gate-interrupt,wt-moe-post && S=$(mktemp -d /mnt/d/moe-scratch/d2d6ac4b-v.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js $S/fp.js && w(){ wslpath -w \"$1\"; } && bash scripts/tests/parity-check.sh && $P \"$(w scripts/tests/parity-check.ps1)\" && env $E MOE_WORKTREE_ONLY=$C node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" $S/fp.js $S $(command -v bash) && MOE_WORKTREE_ONLY=$C WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(w scripts/moe-agent.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell && env $E bash scripts/tests/worktree-landing.sh && $P \"$(w scripts/tests/worktree-landing.ps1)\" && env $E node scripts/tests/postflight-safe.mjs bash && \"$N\" scripts/tests/postflight-safe.mjs powershell",
+    "exitCode": 0,
+    "outputTail": "45680ef  scripts/moe-agent.sh\n80f35961fb8325c3f9aa6548d92a2d8f967c550cd682b3de7505dd2a05225906  scripts/moe-agent.ps1\n878162647410888b39b1dc18cc640f0b978a16a525eaaa2c18d9c4a2dbc309ec  scripts/tests/postflight-worktree.cjs\nPASS parity-check.sh\nPASS parity-check.ps1\n[worktree] wt-hooks-sparse ok\n[worktree] wt-gate-interrupt ok\n[worktree] wt-moe-post ok\n[worktree] wt-recover ok\n[worktree] 4 ok, 0 failed\n[worktree] wt-hooks-sparse ok\n[worktree] wt-gate-interrupt ok\n[worktree] wt-moe-post ok\n[worktree] wt-recover ok\n[worktree] 4 ok, 0 failed\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nEXIT=0\nTue Nov  3 15:07:44 UTC 2026\nscripts/moe-agent.sh: OK\nscripts/moe-agent.ps1: OK\nscripts/tests/postflight-worktree.cjs: OK\n",
+    "reportedAt": "2026-11-03T15:19:02.459Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "Closed all four worktree twin drifts in 3 files (+85/-7): real recovery status, PS interrupted-gate infra-failure on local frozen candidate, correct sh hook setup failure+cleanup, and nonblocking W/.moe post-flight warning. Shared paths unchanged; BOM retained; adversarial review clean.\nRED evidence: sh wt-recover AssertionError: recovery status [status=UNKNOWN role=worker cli-exit=0]; sh wt-hooks-sparse actual hooked-commit-config-mismatch vs expected hooked-commit-worktree-failed; PS wt-gate-interrupt AssertionError: interrupted gate check run, actual [] vs one infra-failure row; both wt-moe-post AssertionError: checkpoint .moe diagnostic, 0 !== 1. All GREEN afterward on both engines.\nExact step-5 gate fresh 13:40:41–15:07:44 UTC: EXIT=0; both parity PASS; targeted 4/4 each; landing 18/18 each; full postflight-safe bash+powershell exit 0/failureClass NONE. Hook isolation 9/9; syntax/BOM/diff checks and npm run lint pass. Hashes/status unchanged after gate. Evidence /mnt/d/moe-scratch/d2d6ac4b-gate/run.log; handoff in Serena. Peer f9874361 branch still at base eaad2635: no committed hunks against target to assess. Wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "2b934dceacafefc67035c8b197675dffcf96c4aa",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T13:32:37Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T15:19:47.547Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
