@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,16 +99,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:10.941Z",
-  "updatedAt": "2026-11-03T08:48:09.574Z",
+  "updatedAt": "2026-11-03T08:51:13.304Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:35:19.081Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T08:50:47.893Z",
+    "wallClockMs": 928812
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -218,9 +221,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T08:39:30Z",
-    "at": "2026-11-03T08:48:04.038Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T08:48:06Z",
+    "at": "2026-11-03T08:51:13.304Z"
+  },
+  "completedAt": "2026-11-03T08:50:47.893Z",
+  "reviewCompletedAt": "2026-11-03T08:50:47.893Z",
+  "reviewSummary": "Reviewed completion 66f43585 (ancestor of moe/work-2026-10-24; claimNextTask.ts and MCP_SERVER.md at the branch tip match it). 3 files, +224/-10 (net 214, tests 192), under the 400 cap; scope = claimNextTask.ts, the new controlSeatNotice test, one MCP_SERVER.md line; no existing test touched.\n\nRe-ran in a clean clone snapshot of 66f43585 (npm ci there only): vitest on controlSeatNotice + claimNextTask + claimNextTask.contract + governanceFeatures + chatSystemFeed = 5 files, 180/180 (174 existing unedited + 6 new); tsc --noEmit exit 0. Mutation: restoring the pre-fix claimNextTask.ts gave 4 failed | 2 passed, so (a) x2, (b), (e) fail and (c), (d) pass, as the DoD requires.\n\nDoD: (1) controlSeatClaim (REVIEW/PLANNING and worktreeMode 'on') gates the #workers post next to worktreeOnlyCollision; fileCollision is computed before the gate and returned unchanged (a asserts the same entries with the peer attempt worktree and shared); mode off (c) still posts one heads-up, mentions [worker-live, qa-1]; WORKING path untouched (governanceFeatures green). (2) Claim notice posted with { parseMentions: false }, text byte-identical; (e) asserts mentions [] and routingTargets [] for a runtime-built at-token title. (3) New test file covers both modes, PLANNING, invalid mode, at-token title. (4) MCP_SERVER.md fileCollision sentence states the rule and the invalid-value fallback; numstat 1/1. (5) snapshot vitest + tsc passes. Invalid worktreeMode is caught with one warn and keeps today's heads-up (d); the helper is synchronous inside the existing try/catch.\n\nNon-blocking: the test header comment (line 6) spells an at-sign in prose ('parsed @tokens') though the DoD says never spelled in source. The fixture title is built with String.fromCharCode(64) and nothing there is echoed to chat, so I judged it immaterial; a follow-up could reword it. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

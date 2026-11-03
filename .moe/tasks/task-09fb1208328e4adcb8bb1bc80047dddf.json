@@ -10,10 +10,35 @@
     "In a snapshot outside the shared checkout: cd packages/moe-daemon && npx vitest run src/state/massDeletionHeal.test.ts exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add one case per branch of the per-kind wipe rule. Edit only packages/moe-daemon/src/state/massDeletionHeal.test.ts, and only with the main session's Edit tool (project rail: no shell writes and no subagent edits to tracked files). Make exactly two edits; the existing 8 cases, both beforeEach fixtures and the helpers stay byte-unchanged.\n(a) Line 8 becomes: import { healMassDeletion, MASS_DELETION_FRACTION, MASS_DELETION_MIN } from './massDeletionHeal.js';  Both constants are exported at massDeletionHeal.ts:38 and :40.\n(b) Append the two cases below inside the second describe ('healMassDeletion on a board-tracking project (runtime dirs wiped, board kept)'), after its last case ('never applies the per-kind rule to the board kinds a git checkout changes on purpose', which ends at line 206) and before the describe's closing line 207, with one blank line before each case. They reuse that describe's beforeEach unchanged (4 workers, 1 team, 3 proposals, 1 resource 'box-heal', 1 attempt; the before counts [4, 1, 3, 1, 1] are pinned at :141) and its in-scope names (before, entriesOf, fileOf, RUNTIME_DIRS, workerIds, taskIds, moePath, state). Keep the titles' '(z1) ' and '(z2) ' prefixes exactly: checkRef [1] greps the vitest FAIL lines for them.\n\n  it('(z1) rewrites runtime kinds whose directories are gone though each held fewer than MASS_DELETION_MIN entries', async () => {\n    // Only the dirGone clause can fire: each kind is under MASS_DELETION_MIN, and neither is a combined kind.\n    const gone = ['resources', 'attempts'] as const;\n    for (const dir of gone) {\n      expect(before[dir].length).toBeLessThan(MASS_DELETION_MIN);\n      fs.rmSync(path.join(moePath, dir), { recursive: true, force: true });\n    }\n\n    expect(await healMassDeletion(state)).toBe(2);\n    for (const dir of gone) {\n      for (const [id, entity] of before[dir]) {\n        expect(JSON.parse(fs.readFileSync(fileOf(dir, id), 'utf-8'))).toEqual(entity);\n      }\n    }\n\n    await state.load();\n    for (const dir of RUNTIME_DIRS) expect(entriesOf(dir)).toEqual(before[dir]);\n    expect(state.resources.get('box-heal')?.holders.map((h) => h.taskId)).toEqual([taskIds[0]]);\n  });\n\n  it('(z2) rewrites a runtime kind that lost MASS_DELETION_MIN and MASS_DELETION_FRACTION of its files, directory kept', async () => {\n    // Only the per-kind fraction branch can fire: 3 of 4 workers, dir kept; 3 of 59 combined is 5%.\n    const lost = workerIds.slice(0, 3);\n    const combinedKnown = state.tasks.size + state.epics.size + state.teams.size + state.workers.size + state.proposals.size;\n    expect(lost.length).toBeGreaterThanOrEqual(MASS_DELETION_MIN);\n    expect(lost.length).toBeGreaterThanOrEqual(workerIds.length * MASS_DELETION_FRACTION);\n    expect(lost.length).toBeLessThan(combinedKnown * MASS_DELETION_FRACTION);\n    for (const id of lost) fs.rmSync(fileOf('workers', id));\n\n    expect(await healMassDeletion(state)).toBe(3);\n    const was = new Map(before.workers);\n    for (const id of lost) expect(JSON.parse(fs.readFileSync(fileOf('workers', id), 'utf-8'))).toEqual(was.get(id));\n\n    await state.load();\n    for (const dir of RUNTIME_DIRS) expect(entriesOf(dir)).toEqual(before[dir]);\n  });\n\nWhy each shape isolates one branch of massDeletionHeal.ts:94 (`!BOARD_KINDS.has(dir) && (dirGone || isWipe(lost, entries.size))`):\n- (z1) resources and attempts each hold 1 entry, so isWipe(1, 1) is false (1 < MASS_DELETION_MIN), and neither is in COMBINED_KINDS (:60), so the combined rule sees 0 losses. Only dirGone can wipe them, and the heal must return 2.\n- (z2) the workers directory stays, so dirGone is false, and 3 of the 59 combined entities (50 tasks + 1 epic + 1 team + 4 workers + 3 proposals) is 5%, under the 20% combined threshold. Only isWipe(3, 4) can wipe workers, and the heal must return 3.\nThe premise expects make those preconditions fail loudly if the fixture or the constants change. Architect probe at 9657a30c: shipped 10/10; mutant A fails only (z1) with 'expected +0 to be 2'; mutant B fails only (z2) with 'expected +0 to be 3'.\nerror handling: this is a test-only change, so no production failure path changes; the new test cases use only the describe's mkdtemp dir (its afterEach rmSync cleans it), never the live .moe, and no timers. mem:gotcha-mass-deletion-heal-board-tracking has the fixture recipe and QA's original probe.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify in snapshots outside the checkout (project rail: never run npm in the shared checkout or in the worktree). From the worktree root run executionContract checkRef [0], then checkRef [1], each as its own Bash command, verbatim. Each one cds to `git rev-parse --show-toplevel`, git-archives HEAD's packages/moe-daemon into a fresh mktemp dir, overlays only the edited test file, and runs npm ci there. [1] mutates only that snapshot's massDeletionHeal.ts (an exact-once replace of `(dirGone || isWipe(lost, entries.size))`, restored after each run, then cmp-checked). Never mutate or restore anything in the worktree.\nExpected: [0] exits 0 with `Tests  10 passed (10)`. [1] exits 0 and prints, for mutant A `(isWipe(lost, entries.size))`, a FAIL line naming (z1) then `Tests  1 failed | 9 passed (10)`; for mutant B `(dirGone)`, a FAIL line naming (z2) then the same Tests line; then MUTANTS-KILLED.\ncomplete_task: verification = { command: checkRef [0] verbatim, exitCode: 0, outputTail: its tail including the Tests line }; the summary quotes checkRef [1]'s printed lines (both FAIL lines, both Tests lines, MUTANTS-KILLED) as the DoD's mutant evidence.\nError handling for a red run: [0] red: fix the test, never massDeletionHeal.ts (out of scope). [1] red: read its printed lines. `Tests  10 passed` under a mutant means a case no longer isolates its branch (recheck the premises and fixture counts); a missing FAIL line means a title lost its (z1)/(z2) prefix; exit 9 from the node replace means the anchor no longer matches massDeletionHeal.ts, so call moe.report_blocked instead of editing the source. Both commands hide npm ci output, so a nonzero exit with no vitest output means npm ci failed: rerun its lines by hand, or cp -al a lock-matching native node_modules into the snapshot (mem:gotcha-linux-vitest-reuse-native-node-modules) and run the same vitest line. Greps over vitest output need NO_COLOR=1 and grep -a (mem:gotcha-daemon-linux-snapshot-gate).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review (load the adversarial-self-review skill), scoped to this one-file test diff. With B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"): `git diff --stat $B` lists only packages/moe-daemon/src/state/massDeletionHeal.test.ts, and `git diff $B -- packages/moe-daemon/src/state/massDeletionHeal.test.ts` shows exactly one changed import line plus one appended hunk of + lines inside the board-tracking describe, touching no existing case, fixture or helper line (DoD 3). Then check: both titles are unique and keep their prefixes; each case asserts the exact return value (2, 3) and the restored files' JSON, not mere truthiness; the (z2) premise uses the live map sizes (59), not a literal; nothing reads or writes outside the describe's temp dir; no added line contains any project.json globalRails.forbiddenPatterns string. Ask whether a peer adding a fixture entity or a new store could let a case pass for the wrong reason: the premises should fail first. If this step changes anything, rerun checkRefs [0] and [1] and cite the fresh output in complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -25,11 +50,68 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:33.829Z",
-  "updatedAt": "2026-11-03T08:41:11.976Z",
+  "updatedAt": "2026-11-03T08:51:04.082Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T08:40:44.142Z"
+    "firstClaimAt": "2026-11-03T08:40:44.142Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
   },
   "contextFetchedBy": [
     "architect-1dd28c7c"
-  ]
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T08:51:04.053Z",
+  "executionContract": {
+    "intendedBehavior": "massDeletionHeal.test.ts gains two cases in its board-tracking describe, each pinning one branch of the per-kind wipe rule at massDeletionHeal.ts:94. (z1) pins the dirGone clause alone: the resources and attempts dirs are deleted while each holds fewer than MASS_DELETION_MIN entries; the heal returns 2 and restores both files. (z2) pins the isWipe fraction branch alone: 3 of 4 worker files are deleted with the dir kept; the heal returns 3 and restores them. No production code changes.",
+    "acceptanceCriteria": [
+      "Shipped code: the file runs 10/10 in a snapshot outside the checkout (checkRef [0] exits 0).",
+      "Mutant A `(isWipe(lost, entries.size))` fails only (z1), and mutant B `(dirGone)` fails only (z2): checkRef [1] prints both FAIL lines and MUTANTS-KILLED and exits 0.",
+      "Neither new case trips the combined rule: (z1) loses no combined-kind entity, and (z2) loses 3 of 59 combined entities (5% < 20%), asserted as a premise."
+    ],
+    "invariants": [
+      "Only packages/moe-daemon/src/state/massDeletionHeal.test.ts changes; massDeletionHeal.ts and every other file stay byte-identical.",
+      "The existing 8 cases, both beforeEach fixtures and the helpers stay byte-unchanged; the diff is the import line plus one appended hunk."
+    ],
+    "reuse": [
+      "The board-tracking describe's beforeEach fixture and its before, entriesOf and fileOf helpers; no new fixture or helper."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/massDeletionHeal.ts:94 `if (!BOARD_KINDS.has(dir) && (dirGone || isWipe(lost, entries.size))) scan.wiped.push(dir);` has not changed since 28df02f7.",
+      "massDeletionHeal.ts:64-65: isWipe = missing >= MASS_DELETION_MIN && missing >= total * MASS_DELETION_FRACTION. MASS_DELETION_MIN = 3 (:38) and MASS_DELETION_FRACTION = 0.2 (:40) are exported.",
+      "massDeletionHeal.ts:60: COMBINED_KINDS is tasks, epics, teams, workers and proposals, so resources and attempts are outside it.",
+      "massDeletionHeal.test.ts:141 pins the board-tracking fixture's before counts [4, 1, 3, 1, 1] for workers, teams, proposals, resources and attempts. resourceStore.ts:136 writes .moe/resources/<id>.json and attemptStore.ts:303 writes .moe/attempts/<id>.json."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp packages/moe-daemon/src/state/massDeletionHeal.test.ts \"$S/packages/moe-daemon/src/state/\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run src/state/massDeletionHeal.test.ts",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp packages/moe-daemon/src/state/massDeletionHeal.test.ts \"$S/packages/moe-daemon/src/state/\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && f=src/state/massDeletionHeal.ts && cp $f ../o.ts && m(){ cp ../o.ts $f && node -e 'const fs=require(\"fs\"),[f,a]=process.argv.slice(1),s=fs.readFileSync(f,\"utf8\"),k=\"(dirGone || isWipe(lost, entries.size))\";if(s.split(k).length!==2)process.exit(9);fs.writeFileSync(f,s.replace(k,a))' $f \"$1\" && NO_COLOR=1 npx vitest run src/state/massDeletionHeal.test.ts > ../l 2>&1; r=$?; cp ../o.ts $f; grep -aE \"^ +Tests |^ FAIL \" ../l; [ $r = 1 ] && grep -aqE \"^ +Tests +1 failed \\| 9 passed\" ../l && grep -aqF \"> $2 \" ../l; } && m \"(isWipe(lost, entries.size))\" \"(z1)\" && m \"(dirGone)\" \"(z2)\" && cmp $f ../o.ts && echo MUTANTS-KILLED"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Calling scanStores directly: rejected, because it is not exported and the DoD names the heal's return value and restored files. A new fixture per case: rejected, because the board-tracking describe already has 1-entry resources and attempts kinds and a 4-worker kind over a 59-entity combined base. Spying logger.error for rule 'per-kind': rejected as redundant, because both mutants zero the return value, which the exact toBe(2)/toBe(3) already pins. Running the mutants in the worktree: rejected, because a mutated tracked source there could land; checkRef [1] mutates only its own mktemp snapshot.",
+    "codebaseInsights": "Dry-run at 9657a30c (a scratch --shared clone plus a linked worktree, npm ci in a mktemp snapshot, the seat's normal env):\n- checkRef [0] gives Tests 10 passed (10).\n- checkRef [1] prints a (z1) FAIL under mutant A ('expected +0 to be 2') and a (z2) FAIL under mutant B ('expected +0 to be 3'), each with 'Tests  1 failed | 9 passed (10)', then MUTANTS-KILLED.\n- Both hold with the edit uncommitted (the worker's view) and committed (the QA view).\n- Negative control on the unedited 8-case file: [0] exits 0 with 8 passed; [1] exits 1 because mutant A survives with 8 passed.\nisEpicFinal is true only by the highest-order fallback: epic-be924fb8 has no finalTaskId, and this row's order is 355.7. The epic is a rolling hardening epic of 128+ independent rows, so an epic-wide regression run and docs sweep are not this LOW test-only row's job (mem:decision-epic-final-designation). The DoD's single-file gate is the right scope.",
+    "risks": "1) The titles must keep their '(z1) ' and '(z2) ' prefixes, or checkRef [1] fails.\n2) QA runs in the control checkout, where [0] and [1] overlay control's working-tree copy of the test file. First confirm that HEAD is the completion sha and that `git diff <sha> -- packages/moe-daemon/src/state/massDeletionHeal.test.ts` is empty (mem:decision-doc-row-checkrefs-worktree-mode).\n3) npm ci output is hidden, so an exit with no vitest output means npm ci failed, not the tests.\n4) A peer who adds a fixture entity or a new store can break a premise. That failure is loud by design and is not a flake.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/massDeletionHeal.ts",
+      "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "66f435857bec88def397c88a8af901401cb82d8f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T08:51:04.082Z",
+  "approvedPlanRevision": 1
 }
