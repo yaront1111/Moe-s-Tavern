@@ -93,8 +93,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -121,11 +121,17 @@
       "author": "governor-e6b40560",
       "content": "Governor note for QA, 06:35Z. I'm moving this row from BLOCKED back to REVIEW so its substance review can happen while the QA seats are idle. The size exception prop-b13568c2 (cap 450 net; 9eca3971 measures +461/-18 = 443) is still PENDING the human's click.\n\nReview it on substance exactly as you did WT-14 (comment-9922ed28 pattern):\n- If it passes, record your evidence, withhold the verdict, and report_blocked on the waiver. Do not size-reject.\n- If it fails on substance, reject as normal.\n\ntask-648a5916 now builds on 9eca3971 (early start), so name any store or pin API change in your rejectionDetails. For the docs drift qa-7328a40d noted, the fix is task-48bbd091; it is not part of this row's scope.",
       "timestamp": "2026-11-03T06:32:43.751Z"
+    },
+    {
+      "id": "comment-c01fee7fe7b240e5a83cc01718477f97",
+      "author": "qa-af7be174",
+      "content": "QA substance review, qa-af7be174, 2026-11-03 ~06:50Z. Candidate cand-d90b75c2, completion 9eca3971, which is on moe/work-2026-10-24 and origin/moe/work-2026-10-24. Following the WT-14 pattern: the review PASSES on substance, and the verdict is withheld only because the size waiver prop-b13568c2 is still pending. Do not size-reject. A QA seat that picks this up after the waiver is approved can approve on this evidence. The 9eca3971 bytes are unchanged, and no later commit touches moe-vscode (`git log 9eca3971..HEAD -- moe-vscode` is empty).\n\n**Size.** `git diff --shortstat 9eca3971^ 9eca3971` gives 3 files, +461/-18, net 443: extension.ts +3/-1, MoeDaemonClient.ts +165/-17, and the new protected-profile-pin.test.cjs +293. That is over the 400 cap and under the 450 cap of prop-b13568c2. The diff touches exactly the three approvedScope files. No existing test is changed or weakened.\n\n**Re-run on the exact commit.** Fresh full-repo `git archive 9eca3971` snapshots; the three files are cmp-equal to the commit.\n- Linux (/tmp/qa98c8-linux, under env -i, node v24.21.0): `npm ci --no-audit --no-fund && npm test && npm run compile && npm run lint` exits 0. 622 tests, 618 pass, 0 fail, 4 skipped. protected-profile-pin passes 30/30.\n- Windows (D:\\moe-scratch\\qa98c8-win via a .cmd run under cmd.exe, node v24.16.0, `set MOE` not defined): `npm ci && npm test && npm run compile` exits 0. 618 tests, 613 pass, 0 fail, 5 skipped. All 5 skips are pre-existing symlink/NTFS skips, none in the new suite. The new suite passes 26/26; its 4 POSIX-only P6 cases are not registered on Windows.\nThese match the worker's task.verification exactly.\n\n**DoD mapping**\n- DoD 1:\n  - extension.ts sets globalStorage/protected-state as the first statement of activate().\n  - A verified-local read persists {version:1, project, profile:'protected'} with modes 0600/0700 (P1).\n  - A weaker declaration with a PROTECTED or UNTRUSTED record pins the key and asks once, with a modal 'Keep Protected' / 'Allow Downgrade' (P2: legacy, no executionProfile, no project.json).\n  - Only exactly 'Allow Downgrade' writes legacy, and the session stays protected until a restart (P5).\n- DoD 2:\n  - 15 untrusted-record shapes each read as protected and ask, and no record contents reach the log (P6).\n  - A lexically in-project root writes nothing (P7).\n  - An untrusted declaration answers protected and writes nothing (P10).\n- DoD 3:\n  - LEGACY with no record never prompts and never creates the root (P8).\n  - With no root, behavior equals today's (P9).\n  - Both legs are green, as above.\n- Invariants: the import block is unchanged. storedProfile and persistProfile return before hashing when no root is set, so the closed-map suites (accounts-wire, plan-approval-client, task-notifier) pass on both legs.\n- Parity: I read JetBrains RuntimeSelectionPolicy.profile, storedProfile, persist and askDowngrade, and ProtectedStateStore.read. VS Code checks the root before the file in the same order.\n\n**My own mutants** (scratch /tmp/qa98c8-mut; `node --test tests/protected-profile-pin.test.cjs` each):\n- M1, the storedProfile catch returns 'absent': 15 fail, all P6.\n- M2, no pin before askDowngrade: 4 fail (P2 x3, P5).\n- M3, only 'Keep Protected' keeps: 5 fail (P2 x3; P3/P4 dismissal and another label).\n- M4, the root owner check dropped on read: 2 fail (P6 0755 root, symlinked root).\n- M5, the inside-project guard dropped: P7 fails.\nThe restored copy is cmp-equal and passes 30/30.\n\n**One non-blocking residual, demonstrated, not a reject.** On POSIX, a store root that does not exist yet, under a symlinked ancestor that resolves INTO the project, passes isOutsideProject, and the first verified-local read writes the record inside the project. My probe was /tmp/qa98c8-probe/probe.cjs, with root = outside/link/globalStorage/protected-state and link pointing to the project. It printed `isOutsideProject = true` and the record was written under <project>/globalStorage/protected-state. The cause predates this row: pathForms() in MoeDaemonClient.ts walks the nearest existing ancestor (missingRealPath) only on win32, while JetBrains' ancestorOutside runs on every OS. writeProtectedState calls it as the plan said to.\n\nWhy I'm not rejecting:\n- It needs the user's own VS Code user-data path to run through a link into the project, which the repository cannot create.\n- Its worst outcome is no weaker than the mandated refusal. A refused write also reads ABSENT, then legacy with no prompt, next session. A git-planted record is 0644, which reads untrusted, so protected.\nThe same POSIX gap also affects protectedPathEntries, the PATH filter: a missing PATH leaf under a symlinked ancestor that points into the project. Suggested follow-up row: VS Code pathForms skips the missing-leaf ancestor walk on POSIX, so match JetBrains ancestorOutside. Optionally also re-check isOutsideProject after mkdirSync in writeProtectedState.\n\n**Non-blocking notes**\n- The prompt says \"now declares the legacy execution profile\" even for an omitted or observe declaration. This is wording only.\n- ponytail pass: nothing to cut. readCappedFd reuses the existing capped read. The hand-rolled FNV-1a is justified by the rule against new top-level imports.\n\nDocs drift is task-48bbd091, per the governor. The store and pin API task-648a5916 builds on needs no change from this review.\n\n@governor-e6b40560: the substance review passed; this row needs only prop-b13568c2 approved, then a QA approve.",
+      "timestamp": "2026-11-03T06:40:18.207Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:10.352Z",
-  "updatedAt": "2026-11-03T06:33:06.664Z",
+  "updatedAt": "2026-11-03T06:41:05.631Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:15.663Z",
@@ -239,14 +245,15 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-02T22:56:40Z",
-    "at": "2026-11-02T23:15:56.977Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T06:32:53Z",
+    "at": "2026-11-03T06:41:05.631Z"
   },
-  "blockedFromStatus": null,
-  "blockedAt": null,
-  "blockedReason": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-03T06:40:25.110Z",
+  "blockedReason": "QA size hold, verdict withheld (governor's WT-14 pattern, comment-987a6218). The substance review PASSES; the evidence is in comment-c01fee7f. Completion 9eca3971 measures +461/-18, net 443 across exactly the 3 approvedScope files. That is over the 400 cap, and no rail waives it yet: the TASK exception prop-b13568c2 (cap 450 net) is still PENDING the human's IDE click.\n\nQA re-ran both legs on a fresh git archive of 9eca3971:\n- Linux: npm ci, test, compile and lint exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe): npm ci, test and compile exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips.\n- The new suite passes 30/30 on Linux and 26/26 on Windows, and 5 QA mutants are each killed.\n\nOnce prop-b13568c2 is approved, set REVIEW again; the next QA approves on that evidence, since the bytes are unchanged. Nothing for a worker to do. One non-blocking follow-up is suggested in the comment: the VS Code pathForms POSIX missing-leaf ancestor walk, for parity with JetBrains ancestorOutside.",
   "priorBlockedReason": "Governor size hold: the landed completion 9eca3971 measures +461/-18 (net 443) across MoeDaemonClient.ts, extension.ts and protected-profile-pin.test.cjs, which is over the 400 cap. The architect's TASK size exception prop-b13568c2 (cap 450 net, same three files) is PENDING the human's IDE click. Held so that QA does not size-reject it; the governor sets REVIEW again as soon as the waiver is approved. Nothing for a worker to do.",
   "blockedResourceId": null,
   "blockedOnTaskIds": null
