@@ -106,8 +106,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -186,11 +186,17 @@
       "author": "worker-26483323",
       "content": "Fresh recovery verification completed, exit 0, 2026-11-03 01:49Z. Snapshot /mnt/d/moe-scratch/v-befdddf7.W9bE58; log /mnt/d/moe-scratch/verify-befdddf7-26483323.log. Governor-sanctioned setup-only substitution copied the merged scripts tree instead of archiving pre-merge HEAD; every remaining step-5 command was unchanged. Token-set diff empty; parity PASS; postflight-safe Bash and native Windows PowerShell 5.1 each exit 0 / failureClass NONE; worktree-landing 18 passed, 0 failed, 0 errors. WT14D ran on Linux uid 1000 (not root/MSYS), and Windows uses the ACL case; both harnesses enforce their WT-14 scenario counts. No claim that NONE alone detects scenario-prefixed skips (existing bug c25edf45).\nAfter the run, full scripts-tree diff against the snapshot is empty; no conflict markers remain; both syntax parsers and qualityGate `bash scripts/tests/parity-check.sh && npm run lint` again exit 0. No code changes after the snapshot. Two resolution diffs reviewed as add/add integration: both helper bodies retained, braces separated, both provisioning call sites intact; no new concurrency/input/error-path behavior. The wrapper owns the pending merge and landing; no direct Git commands used. All completed steps stay closed. Prior size-waiver/REVIEW-hold ruling still applies; this recovery adds no feature scope.",
       "timestamp": "2026-11-03T01:50:33.795Z"
+    },
+    {
+      "id": "comment-e1687a8efd4d48ad8afe62906b80e9bd",
+      "author": "qa-af7be174",
+      "content": "QA review (qa-af7be174, 2026-11-03 02:45Z). Substance: PASS. Verdict: none. Per governor ruling comment-9922ed28, I'm not approving and not rejecting for size, because the size waiver prop-6812056d is still PENDING and the epic has no WT-14 rail. Next QA: once that rail lands, approve on this evidence. The candidate tree is unchanged: cand-30c175de, tree 830c5c13.\n\nReviewed bytes: completion 78cfa1c1 on moe/work-2026-10-24 (the control HEAD), single parent d7c5e815. Size is +1539/-43 = 1496 net over the 5 declared files, which matches the proposal.\n\nVerification, on the exact commit. Two `git archive 78cfa1c1 scripts` snapshots, every blob checked against the commit with `git hash-object --no-filters`. The task.verification commands were unchanged, except that the bash and PS legs ran concurrently in separate snapshots.\n- Bash leg (/mnt/d/moe-scratch/qa-befdddf7-sh.w2riX1, 01:56:51 to 02:27:56Z):\n  - token-set diff empty;\n  - parity-check PASS;\n  - env-scrubbed `postflight-safe.mjs bash` gave {\"exit\":0,\"failureClass\":\"NONE\"};\n  - worktree-landing 18 passed, 0 failed, 0 errors.\n  - Run as uid 1000, so WT14D executed. Under c25edf45's SKIP rule, a WT14D SKIP would have failed this leg.\n- Native Windows PowerShell 5.1 leg (qa-befdddf7-ps.vtx34n, 01:56:57 to 02:41:44Z): {\"exit\":0,\"failureClass\":\"NONE\"}.\n- `npm run lint` exit 0.\n- After both runs, the snapshot blobs were still identical to the commit.\n\nDoD mapping (both harnesses):\n- DoD 1: WT14A (sentinels byte-identical).\n- DoD 2: WT14E (rescue ref exactly at the unlanded commit, plus a dirt ref holding both dirty files, before removal).\n- DoD 3: WT14F (5-cap, WORKING, open attempt, W/.moe, held and 3h-stale lock).\n- DoD 4: WT14G (unregistered task-ghost named and kept, 1 #general row over 2 runs) and WT14D (forced unlink failure: REFUSED, W registered).\n- DoD 5: the gates above.\n\nLive production evidence. The first real sweep pass ran at 01:52:26Z, in this seat's wrapper (pid 2488121; stamp sweep.last; scan dir wt-sweep-2488121).\n- It skipped task-3ad573a7, which had an open attempt.\n- It then removed exactly 5 DONE, fully landed worktrees in id order: task-137bab15, task-25388400, task-2f22237b, task-31187ec1 and task-3def0804. For each, W, admin dir, .links, .control-dirt and branch are gone, and no sweep rescue ref was needed.\n- The control's .serena/memories (935 files) and .claude/skills (19) are intact. No prunable or leftover directories.\n- Read-only replays through the real proxy and daemon: the porcelain listing gives 38 C rows; 1915 attempt records parse; status reads return DONE, and TASK_NOT_FOUND becomes UNKNOWN.\n- A stubbed replay of worktree_sweep_remove on 5 live DONE worktrees reaches the engine. The real engine also removes a W cleanly on a drvfs replica (WSL links show as junctions), with sentinels intact.\n\nIndependent adversarial read: no blocker. Every failure refuses or aborts; nothing is deleted through a link, outside W, or without a verified rescue. Non-blocking follow-ups, behaviour mostly as the plan prescribes:\n1. A refused candidate counts toward the 5-cap, and each retry mints a new rescue ref and #general row. Consider counting only removals and de-duplicating the rescue.\n2. The stale-lock takeover has a narrow race (already documented).\n3. sweep.last is written before the pass, so an aborted pass waits one interval.\n4. Gitignored bytes in W are not rescued, by design: dirt means git status.\n5. ps1 New-Item -Path and Move-Item -Destination are not literal for paths containing [ ]. This fails safe.\n6. The postflight.ps1 WT-14 junction teardown is not in a finally block.",
+      "timestamp": "2026-11-03T02:43:06.956Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-03T01:54:04.387Z",
+  "updatedAt": "2026-11-03T02:44:40.645Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",
@@ -343,10 +349,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T00:27:10Z",
-    "at": "2026-11-03T01:52:17.625Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T01:53:52Z",
+    "at": "2026-11-03T02:44:40.645Z"
   },
   "reviewStartedAt": "2026-11-03T01:50:50.614Z",
   "verification": {
@@ -361,5 +368,9 @@
   "declaredFiles": [
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1"
-  ]
+  ],
+  "blockedReason": "Waiting for human approval of the WT-14 size waiver prop-6812056da5e142f48194d673f33fb038 (EPIC ADD_RAIL). The diff is 1496 net LOC against the 400 cap.\n\nQA on substance is complete and passes on completion 78cfa1c1 (tree 830c5c13, cand-30c175de):\n- Full verification exit 0 in both engines.\n- Live sweep evidence is clean.\n- An independent adversarial read found no blocker.\nEvidence is in comment-e1687a8e and check run check-qa-af7be174-befdddf7-20261103.\n\nGovernor ruling comment-9922ed28: while the waiver is pending, QA gives no size reject and no verdict. This is the governor's planned BLOCKED-at-REVIEW hold, parked by QA so the seat stops resume-relaunching.\n\nWhen the waiver rail lands, return the row to REVIEW. The next QA approves on the recorded evidence; a re-run is needed only if bytes changed.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-03T02:44:20.451Z"
 }
