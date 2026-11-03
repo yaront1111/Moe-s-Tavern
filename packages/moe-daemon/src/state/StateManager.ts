@@ -169,6 +169,7 @@ import {
   sendMessage,
   togglePinDone,
   unpinMessage,
+  type SystemPostOptions,
 } from './chatStore.js';
 import {
   acquireResource,
@@ -856,6 +857,7 @@ export class StateManager {
   content: string;
   replyTo?: string;
   decisionId?: string;
+  parseMentions?: boolean;
 }): Promise<{ message: ChatMessage; routingTargets: string[] }> {
     return sendMessage(this, opts);
   }
@@ -869,12 +871,12 @@ export class StateManager {
     return messageExistsInChannel(this, channelId, messageId);
   }
 
-  async postSystemMessage(entityId: string, content: string): Promise<void> {
-    return postSystemMessage(this, entityId, content);
+  async postSystemMessage(entityId: string, content: string, opts?: SystemPostOptions): Promise<void> {
+    return opts ? postSystemMessage(this, entityId, content, opts) : postSystemMessage(this, entityId, content);
   }
 
-  async postToGeneral(content: string): Promise<void> {
-    return postToGeneral(this, content);
+  async postToGeneral(content: string, opts?: SystemPostOptions): Promise<void> {
+    return opts ? postToGeneral(this, content, opts) : postToGeneral(this, content);
   }
 
   async postToRoleChannel(roleName: string, content: string): Promise<void> {

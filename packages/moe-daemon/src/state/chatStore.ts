@@ -173,6 +173,12 @@ export async function sendMessage(state: StateManager, opts: {
   content: string;
   replyTo?: string;
   decisionId?: string;
+  /**
+   * false: the content echoes text an agent wrote (a step description), so a tag
+   * it spells is not the sender addressing anyone. Record no mentions and route
+   * to no seat; the router is not consulted. Default true.
+   */
+  parseMentions?: boolean;
 }): Promise<{ message: ChatMessage; routingTargets: string[] }> {
   const channel = state.channels.get(opts.channel);
   if (!channel) throw new Error(`Channel not found: ${opts.channel}`);
@@ -187,22 +193,26 @@ export async function sendMessage(state: StateManager, opts: {
 
   // One parser, imported — this used to be a second copy of the router's regex
   // kept in sync by comment, which is how the two drifted apart on quoting.
-  const rawMentions = parseRawMentions(content);
+  const addressesSeats = opts.parseMentions !== false;
+  const rawMentions = addressesSeats ? parseRawMentions(content) : [];
 
   // Compute routing targets via MentionRouter (expands @all, applies loop guards)
-  let routingTargets: string[];
-  try {
-    const allWorkers = Array.from(state.workers.values());
-    const allTeams = Array.from(state.teams.values());
-    const tempMessage: ChatMessage = {
-      id: '', channel: opts.channel, sender: opts.sender,
-      content, replyTo: opts.replyTo ?? null, mentions: rawMentions, timestamp: ''
-    };
-    const routingResult = state.mentionRouter.route(tempMessage, allWorkers, allTeams);
-    routingTargets = routingResult.targets;
-  } catch {
-    // Fall back to raw mentions on MentionRouter errors
-    routingTargets = rawMentions;
+  // The router re-parses the content itself, so an echo skips it altogether.
+  let routingTargets: string[] = [];
+  if (addressesSeats) {
+    try {
+      const allWorkers = Array.from(state.workers.values());
+      const allTeams = Array.from(state.teams.values());
+      const tempMessage: ChatMessage = {
+        id: '', channel: opts.channel, sender: opts.sender,
+        content, replyTo: opts.replyTo ?? null, mentions: rawMentions, timestamp: ''
+      };
+      const routingResult = state.mentionRouter.route(tempMessage, allWorkers, allTeams);
+      routingTargets = routingResult.targets;
+    } catch {
+      // Fall back to raw mentions on MentionRouter errors
+      routingTargets = rawMentions;
+    }
   }
 
   const message: ChatMessage = {
@@ -373,14 +383,21 @@ export function messageExistsInChannel(state: StateManager, channelId: string, m
  * the id is prepended unless the content already carries it.
  * Silently skips if no general channel is found. Never throws.
  */
-export async function postSystemMessage(state: StateManager, entityId: string, content: string): Promise<void> {
-  await state.postToGeneral(entityId && !content.includes(entityId) ? `${entityId}: ${content}` : content);
+export async function postSystemMessage(
+  state: StateManager, entityId: string, content: string, opts?: SystemPostOptions
+): Promise<void> {
+  const line = entityId && !content.includes(entityId) ? `${entityId}: ${content}` : content;
+  // Forward opts only when given, so a plain call keeps its one-argument shape.
+  await (opts ? state.postToGeneral(line, opts) : state.postToGeneral(line));
 }
+
+/** Options for a daemon-authored post. `parseMentions: false` marks echoed agent text. */
+export type SystemPostOptions = { parseMentions?: boolean };
 
 /**
  * Post a system message to the 'general' channel. Never throws.
  */
-export async function postToGeneral(state: StateManager, content: string): Promise<void> {
+export async function postToGeneral(state: StateManager, content: string, opts?: SystemPostOptions): Promise<void> {
   try {
     let generalChannel: ChatChannel | null = null;
     for (const ch of state.channels.values()) {
@@ -390,7 +407,12 @@ export async function postToGeneral(state: StateManager, content: string): Promi
       }
     }
     if (!generalChannel) return;
-    await state.sendMessage({ channel: generalChannel.id, sender: 'system', content });
+    // The call object stays { channel, sender, content } unless the option is
+    // false, so a spy on the plain shape still matches.
+    await state.sendMessage({
+      channel: generalChannel.id, sender: 'system', content,
+      ...(opts?.parseMentions === false ? { parseMentions: false } : {}),
+    });
   } catch (error) {
     logger.warn({ error }, 'Failed to post to general channel');
   }

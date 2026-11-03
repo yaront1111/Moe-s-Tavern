@@ -137,7 +137,11 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       // Post system message to task channel
       const stepNum = steps.findIndex((s) => s.stepId === params.stepId) + 1;
       try {
-        await state.postSystemMessage(task.id, `Step ${stepNum} completed: ${completedDescription}`);
+        // The description is agent-written plan text: a tag it spells must not
+        // page seats (msg-ee54f9ed woke 4 idle seats), so the notice addresses none.
+        await state.postSystemMessage(
+          task.id, `Step ${stepNum} completed: ${completedDescription}`, { parseMentions: false }
+        );
       } catch { /* never block tool */ }
 
       // Attribution warning: the wrapper's ASSERTED tier is built from
