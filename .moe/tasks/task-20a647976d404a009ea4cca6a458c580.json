@@ -82,7 +82,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,7 +102,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T06:43:56.480Z",
-  "updatedAt": "2026-11-03T07:42:13.144Z",
+  "updatedAt": "2026-11-03T07:47:03.260Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T07:06:12.554Z",
@@ -112,11 +112,14 @@
     "firstClaimAt": "2026-11-03T07:25:52.731Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T07:46:14.176Z",
+    "wallClockMs": 1221445
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -225,9 +228,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T07:31:31Z",
-    "at": "2026-11-03T07:42:13.144Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T07:42:17Z",
+    "at": "2026-11-03T07:47:03.260Z"
+  },
+  "completedAt": "2026-11-03T07:46:14.176Z",
+  "reviewCompletedAt": "2026-11-03T07:46:14.176Z",
+  "reviewSummary": "Reviewed completion commit edc27e14 (on moe/work-2026-10-24, in control HEAD; 3 files under moe-vscode/, +65/-3, far under 400). Source change matches the approved scope: pathForms drops `process.platform === 'win32' &&` from the missingRealPath line (isWindowsAlias is `windows && ...`, so Windows behavior is identical) plus two comments. Callers of isOutsideProject are only writeProtectedState (refuses before mkdirSync, so nothing is created in the project) and protectedPathEntries. Non-ENOENT errors, dangling levels and no-ancestor still throw, so refused. No existing test row edited: test diff is pure additions (P11 in protected-profile-pin; POSIX PATH-leaf row after the Windows row, skipped on win32). DoD 1: P11 (a) absent, (b) existing, (c) two dangling roots assert write===false, 'not provably outside' logged, project tree unchanged, no record under the project; leaf row asserts exact per-entry isOutsideProject and exact protectedDaemonEnvironment PATH. DoD 2: P11 (d) outside absent root persists one record at its real location (0700/0600), project tree unchanged, fresh session reads it. Re-ran task.verification myself at HEAD edc27e14 (moe-vscode clean, npm test + tsc --noEmit only): Linux 624 tests / 620 pass / 0 fail / 4 skipped, compile --noEmit clean; Windows node.exe on the 3 protected suites 81 / 76 / 0 fail / 5 skipped; both exit 0. Own mutant in a scratch git-archive copy (removed after): restoring the win32 guard fails exactly the two new rows (P11 and the POSIX PATH-leaf row), other 51 pass. Not claimed: readProtectedState has no containment check (flagged for task-648a5916); check-then-mkdir link swap is theoretical. ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

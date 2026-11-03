@@ -1,0 +1,33 @@
+{
+  "id": "task-0900b9367fb746248c2e4d2d5db7e603",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: VS Code keeps a confirmed downgrade after the project re-declares verified-local in the same window session, and applies an Allow without re-reading the declaration (no task-6d5d3db2 parity)",
+  "description": "Found by architect-1dd28c7c while planning task-48bbd091 (docs) from the landed 98c81a27 code (9eca3971, at HEAD a13eb354). 98c81a27 was planned and coded before JetBrains' fix task-6d5d3db2 landed (b1e68978), so VS Code mirrors the pre-fix JetBrains behaviour. Its step-5 note does not list this edge among the accepted ones.\n\nEvidence, moe-vscode/src/services/MoeDaemonClient.ts:\n- runtimeProfile(): `if (pinnedProjects.has(key)) { return 'protected'; }` runs before declaresVerifiedLocal(...). After a human clicks Allow Downgrade (askDowngrade persists legacy), a verified-local declaration later in the same window session never re-persists protected. If the repository flips back to legacy before the restart, the next session reads legacy with no prompt.\n- askDowngrade(): the `.then` callback persists legacy on exactly 'Allow Downgrade' without re-reading the declaration. The modal is not awaited, so an Allow answered after the project already re-declares verified-local, or while its project.json is unreadable, still records legacy.\n\nJetBrains (RuntimeSelectionPolicy.profile / askDowngrade) reads the declaration before the pin and persists LEGACY only when stillWeaker(basePath) holds.\n\nImpact is narrow, as for 6d5d3db2: a human allowed legacy once, but the later verified-local declaration is lost, so a second downgrade happens without the confirmation the epic rail requires.\n\nFix direction (mirror 6d5d3db2):\n- On a pinned key, still read the declaration. A verified-local read persists protected when the stored record is not protected.\n- In the prompt callback, persist legacy only while the declaration still reads weaker. Any read failure keeps protected.\n- Keep the 98c81a27 invariants: no new top-level import (closed-require-map vm suites), storedProfile and persistProfile return before hashing when no root is set, and runtimeProfile never throws.\n\nFiles:\n- moe-vscode/src/services/MoeDaemonClient.ts (runtimeProfile, askDowngrade).\n- moe-vscode/tests/protected-profile-pin.test.cjs (new cases, RED first; existing cases unchanged).\n- The VS Code pin sentence in docs/ARCHITECTURE.md, Security Notes, **VS Code parity**. task-48bbd091 names this row there as the open difference; this row replaces that with the landed behaviour.\n\nSerialize: dependsOn task-20a64797 (MoeDaemonClient.ts pathForms and protected-profile-pin P11), task-648a5916 (MoeDaemonClient.ts provenance) and task-48bbd091 (writes the docs sentence this row updates).",
+  "definitionOfDone": [
+    "In one VS Code window session, after Allow Downgrade records legacy, a later verified-local read records the project protected again, so a legacy declaration after the restart asks again. An Allow answered while the project declares verified-local, or while its .moe/project.json is unreadable, records nothing.",
+    "The existing moe-vscode tests pass unchanged. New protected-profile-pin cases cover both paths and fail on the current code first. `cd moe-vscode && npm test && npm run compile` exits 0 on Linux and on Windows, run in a snapshot outside the shared checkout.",
+    "docs/ARCHITECTURE.md Security Notes, VS Code parity, no longer lists this row as an open difference and states the landed behaviour. No other docs file changes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-20a647976d404a009ea4cca6a458c580",
+    "task-648a591623e1405ba788f44b5fe6690d",
+    "task-48bbd091c2204d8eb06de272442d48e8"
+  ],
+  "priority": "LOW",
+  "order": 330.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T07:44:20.312Z",
+  "updatedAt": "2026-11-03T07:44:20.312Z"
+}

@@ -85,11 +85,13 @@
     {
       "stepId": "step-6",
       "description": "Verification. Run the joined command once, fresh, from the task worktree after the last edit, and submit its result as the complete_task verification evidence. checkRefs lists the same command as five legs; run their ` && ` join as one command:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && bash -n scripts/moe-call.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && R=$(git rev-parse --show-toplevel) && cd \"$R\" && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && R=$(git rev-parse --show-toplevel) && cd \"$R\" && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$R/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 && bash scripts/tests/parity-check.sh && npm run lint && R=$(git rev-parse --show-toplevel) && cd \"$R\" && T=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/fake-proxy.js\" && { env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_WORKTREE_ONLY=tooling,project-yml,wt-guard,board-snapshot,board-race,board-push node scripts/tests/postflight-worktree.cjs sh \"$R/scripts/moe-agent.sh\" \"$T/fake-proxy.js\" \"$T\" \"$(command -v bash)\" 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && R=$(git rev-parse --show-toplevel) && cd \"$R\" && W=$(mktemp -d /mnt/d/moe-scratch/3acf7f79-gate.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$W/fake-proxy.js\" && { MOE_WORKTREE_ONLY=wt-guard,project-yml,board-snapshot WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$R/scripts/tests/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$R/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$W/fake-proxy.js\")\" \"$(wslpath -w \"$W\")\" powershell 2>&1 | tr -d '\\r' | tail -6; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }\n\nWhat it runs:\n- The task-0b2ea570 / task-89579137 gate.\n- Two worktree-harness subsets that pin legacy behavior of the edited programs and of the WT-13 refusal: sh on Linux, and ps1 on Windows PowerShell 5.1. The Windows temp dir is on /mnt/d so Windows can reach it, and WSLENV carries only MOE_WORKTREE_ONLY (mem:gotcha-postflight-worktree-mutant-copy).\n\nIn complete_task, report pass/fail/skip counts for both node --test legs and both worktree legs. Confirm from the TAP that W3, W4, X1 and X2 ran on PS 5.1 and PS 7 and were not skipped. Never run npm install, npm ci or npm build anywhere in the checkout.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/protected-agent-command.test.mjs"
       ],
-      "startedAt": "2026-11-03T07:38:18.702Z"
+      "note": "Joined gate run once, fresh, from the task worktree after the last edit (script /mnt/d/moe-scratch/3acf7f79-work/gate.sh = the step-6 command verbatim; log gate.log), finished 07:45:13Z, GATE_EXIT=0. Linux node --test: 206 tests / 173 pass / 0 fail / 33 skip (was 201/171/0/30: +X1, +X2 bash pass; +W3/W4/X2 pwsh skip, no POSIX pwsh). Windows node.exe: 314 / 262 / 0 / 52 (was 306/255/0/51: +W3, W4, X2 on PS 5.1 and PS 7 and X1 pass; +X2 bash skip on Windows). PS 5.1 ParseFile OK, parity-check PASS, lint OK. postflight-worktree sh: 6 ok 0 failed (tooling, project-yml, board-snapshot, board-race, board-push, wt-guard). ps1 PS 5.1: 3 ok 0 failed (project-yml, board-snapshot, wt-guard). No tracked edits after the gate.",
+      "startedAt": "2026-11-03T07:38:18.702Z",
+      "completedAt": "2026-11-03T07:45:26.785Z"
     },
     {
       "stepId": "step-7",
@@ -128,7 +130,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:41:12.507Z",
-  "updatedAt": "2026-11-03T07:38:18.702Z",
+  "updatedAt": "2026-11-03T07:45:26.785Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:57.870Z",
@@ -138,7 +140,7 @@
     "firstClaimAt": "2026-11-03T07:02:42.264Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -153,7 +155,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T07:25:19.447Z",
