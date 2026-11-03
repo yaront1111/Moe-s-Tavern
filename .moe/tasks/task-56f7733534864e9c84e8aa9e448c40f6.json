@@ -1,0 +1,29 @@
+{
+  "id": "task-56f7733534864e9c84e8aa9e448c40f6",
+  "epicId": "epic-be924fb8",
+  "title": "docs: the moe-proxy README's env list documents a MOE_DAEMON_PORT override the proxy never reads, calls MOE_PROJECT_PATH required although it defaults to the cwd, and omits five MOE_* variables the proxy does read",
+  "description": "Filed by defect hunt 11-03 #4 (task-130a6a5c). Evidence is from HEAD 430e4620, run in a git-archive snapshot outside the shared checkout.\n\nPROBLEM\npackages/moe-proxy/README.md:47-56 (\"## Environment Variables\") is the proxy's env reference, and the npm page shows it. It disagrees with the code three ways.\n1. README.md:51 says \"`MOE_DAEMON_PORT` - Daemon port (default: read from .moe/daemon.json)\". No code reads that variable.\n   - `git grep -n MOE_DAEMON_PORT 430e4620 -- packages docs scripts moe-jetbrains moe-vscode` prints only README.md:51. It came in with the first README (1a5a36bb, Feb 2026) and was never implemented.\n   - The port comes only from daemon.json: src/index.ts:501 `const daemonInfo = readDaemonInfoResult(projectPath);`, then `info.port` at :529 and :541, then :554 `new WebSocket(\\`ws://${getDaemonHost()}:${port}/mcp\\`)`. With no daemon.json, the proxy retries for about 5 minutes and exits 1 (:504-519).\n   - A user who follows the README is silently ignored. With no daemon.json the proxy exits; with one, it dials the daemon.json port instead.\n2. README.md:49 says \"`MOE_PROJECT_PATH` - Project path (required)\". But src/utils.ts:162 has `return path.resolve(process.env.MOE_PROJECT_PATH || process.cwd());`, so it defaults to the cwd. docs/CONFIGURATION.md:36 already says \"Current directory\".\n3. The list omits five variables the proxy does read:\n   - MOE_WORKER_ID (src/index.ts:731, injectWorkerId; semantics at src/utils.ts:200-215);\n   - MOE_RUNNER_PROCESS_STARTED_AT and MOE_RUNNER_HOST (src/index.ts:732, injectRunnerIdentity; semantics at src/utils.ts:250-260);\n   - MOE_MESSAGE_TIMEOUT_MS (src/index.ts:40, `parsePositiveIntEnv(process.env.MOE_MESSAGE_TIMEOUT_MS, 30000)`);\n   - MOE_TOOL_NAME_STYLE (src/index.ts:83; semantics at src/utils.ts:455-470: `underscore` exposes `moe_<name>` for grok, anything else is `dot`).\n\nEVIDENCE\n- Repro: `cd /tmp/hunt-130a-B/packages/moe-proxy && npx vitest run src/hunt-daemon-port.test.ts src/hunt-daemon-port-control.test.ts`. The test spawns the proxy through tsx against a .moe/ with no daemon.json, MOE_DAEMON_PORT set to a ws server on port 0, and one tools/call on stdin. Verbatim output:\n  ```\n  MOE_DAEMON_PORT=46783; daemon connections=0; frames received=0\n  × connects to the daemon on MOE_DAEMON_PORT when daemon.json is absent\n  ```\n  Proxy stderr: `[moe-proxy] Daemon not running, retrying in 1156ms (attempt 1)` ... `(attempt 3)`.\n  The control is the same harness with the port in daemon.json instead. It passes: `Tests  1 failed | 1 passed (2)`.\n- Saved in /mnt/d/moe-scratch/hunt-130a/B/: hunt-daemon-port.test.ts, hunt-daemon-port-control.test.ts, daemon-port-repro.txt, daemon-port-control.txt.\n- Mechanical check, which prints 6 difference lines at HEAD:\n  ```\n  diff <(grep -rhoE 'MOE_[A-Z_]+' packages/moe-proxy/src --include=*.ts --exclude=*.test.ts | sort -u) <(sed -n '/^## Environment Variables/,/^## One-shot/p' packages/moe-proxy/README.md | grep -oE 'MOE_[A-Z_]+' | sort -u)\n  ```\n\nFIX DIRECTION\nThis is docs-only. Edit packages/moe-proxy/README.md's Environment Variables list:\n- Delete the MOE_DAEMON_PORT line. Don't implement the override in this row. The connection is deliberately keyed on daemon.json plus the /health identity probe (src/index.ts:529-541), so a port override would need its own design.\n- Change MOE_PROJECT_PATH to say it defaults to the current directory.\n- Add one line each for MOE_WORKER_ID, MOE_RUNNER_PROCESS_STARTED_AT plus MOE_RUNNER_HOST, MOE_MESSAGE_TIMEOUT_MS (default 30000) and MOE_TOOL_NAME_STYLE. Describe each from the code lines cited above. Several are launcher-set: say so, as the MOE_PROXY_ONESHOT_DEADLINE_MS line already does (\"Wrapper-only\").\n\nOut of scope: any src change, docs/MCP_SERVER.md, docs/CONFIGURATION.md and the README's other sections.\n\nFILES: packages/moe-proxy/README.md (only).",
+  "definitionOfDone": [
+    "`git grep -n MOE_DAEMON_PORT HEAD -- packages docs scripts moe-jetbrains moe-vscode` prints nothing (the README line is deleted, and no code was added for it)",
+    "From the repo root, `diff <(grep -rhoE 'MOE_[A-Z_]+' packages/moe-proxy/src --include=*.ts --exclude=*.test.ts | sort -u) <(sed -n '/^## Environment Variables/,/^## One-shot/p' packages/moe-proxy/README.md | grep -oE 'MOE_[A-Z_]+' | sort -u)` prints nothing and exits 0. That means the list names exactly the MOE_* variables the proxy's non-test sources read",
+    "The MOE_PROJECT_PATH line no longer says \"(required)\" and states the current-directory default (src/utils.ts:162), and MOE_MESSAGE_TIMEOUT_MS states its 30000 default (src/index.ts:40)",
+    "The diff against the merge base touches only packages/moe-proxy/README.md, and only lines inside its \"## Environment Variables\" section"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 380.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:01:58.605Z",
+  "updatedAt": "2026-11-03T17:01:58.605Z"
+}

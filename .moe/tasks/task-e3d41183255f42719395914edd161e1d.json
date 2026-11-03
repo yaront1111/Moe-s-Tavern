@@ -112,7 +112,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -125,16 +125,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:29:11.925Z",
-  "updatedAt": "2026-11-03T16:59:44.238Z",
+  "updatedAt": "2026-11-03T17:02:09.610Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T16:38:29.837Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T17:01:52.253Z",
+    "wallClockMs": 1402416
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -253,9 +256,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T16:45:17Z",
-    "at": "2026-11-03T16:59:44.238Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T16:59:55Z",
+    "at": "2026-11-03T17:02:09.610Z"
+  },
+  "completedAt": "2026-11-03T17:01:52.253Z",
+  "reviewCompletedAt": "2026-11-03T17:01:52.253Z",
+  "reviewSummary": "Reviewed completion 6029cee3 (on moe/work-2026-10-24, in control HEAD) via git diff 6029cee3^ 6029cee3: +112/-7 (net 105) over 5 files, under the 400 cap. Re-ran task.verification from the repo root at HEAD 6029cee3: DOC-OK (complete_step section has 'at most 50', 'more than 50 is refused', 'moe.declare_files` (up to 500'; role-doc lint OK); in a git-archive snapshot (npm ci, env -i, never the shared checkout) tsc --noEmit + tt.json clean, focused vitest completeStep/getCommitScope/declareFiles 4 files/101 passed, full daemon suite 243 files/7085 passed/24 skipped, EXIT=0.\nDoD 1: complete_step throws INVALID_INPUT for >MAX_STEP_FILES (50) modifiedFiles, after the note cap and before recordStepCompletion/updateTask, so nothing is written; message names count, bound and moe.declare_files. <=50 unchanged (incl. omitted-list warning); non-array keeps today's handling.\nDoD 2: new completeStep.modifiedFiles.test.ts, 5 cases: 50 stored+asserted with no warning; 60 refused INVALID_INPUT, task JSON byte-identical, step IN_PROGRESS; declare_files escape leaves all 60 asserted; submit_plan refuses 51 and the sanitizer returns 50/50/50. No existing test edited; 50-vs-60 pair kills >= and a dropped refusal (worker reports 5/5 mutants killed).\nDoD 3: only the complete_step doc section changed (param comment + one Notes bullet).\nScope: validators.ts changes only the import and the three per-step file slices; plan.slice(0, 50) at :775 (step count), submitPlan.ts and declareFiles.ts untouched. Simplicity pass: nothing to cut. Notes: duplicate paths count toward the bound, as in submit_plan; submitPlan.ts keeps its literal 50 (pinned to the constant by a test).",
+  "requiredCheckAtDone": null
 }
