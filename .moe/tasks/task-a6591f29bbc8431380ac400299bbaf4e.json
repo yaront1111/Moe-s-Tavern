@@ -8,10 +8,35 @@
     "The fixture seeds each bundled package's lockfile the way the real bundlers read it, and the Gradle row checks the exclude the build actually applies (through distTestExcludes), so neither check is weakened."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first, then two test-only edits in scripts/tests/local-runner-bundle.test.mjs. Nothing else changes: not the bundlers, not moe-jetbrains/build.gradle.kts, not scripts/bundle-manifest.json, and no other row.\n\nRED (test-driven-development): before editing, run the Linux leg of the step-2 command from the worktree root. It must show tests 15, pass 6, fail 9:\n- eight rows fail with 'Actual bundler failed: Lockfile <tmp>/packages/moe-daemon/package-lock.json is missing or unreadable';\n- the Gradle row fails with 'bundledDaemonDir copy must exclude compiled tests and specs'.\nQuote the counts in complete_step. The planning dry run on 5f731334 gave the same 6/9 on Linux node v24.21.0 and on Windows node.exe v24.16.0.\n\nEdit with the Edit tool only. Project rail: no shell writes and no subagent edits to tracked files. The file is LF. A reference diff is at /mnt/d/moe-scratch/a6591f29-plan/fix.diff. Use it to compare only; never git apply it.\n\nEdit A, the fixture (DoD 2, first half). In fixture(), directly after the line `  put(manifestFile, readFileSync(path.join(root, manifestFile)));` (:47 at 5f731334), insert these 7 lines:\n```\n  // Both bundlers read each package's production set from its lockfile (task-864103f3, task-c76a8bf8) and refuse a\n  // missing lockfile or a listed package with no installed package.json.\n  for (const name of ['moe-daemon', 'moe-proxy']) {\n    put(`packages/${name}/package-lock.json`, JSON.stringify({ name, lockfileVersion: 3, requires: true,\n      packages: { '': { name }, 'node_modules/dependency': { version: '0.0.0-fixture' } } }));\n    put(`packages/${name}/node_modules/dependency/package.json`, '{\"name\":\"dependency\",\"version\":\"0.0.0-fixture\"}');\n  }\n```\nPlacement:\n- It follows the governor's comment on this row: separate statements after put(manifestFile, ...).\n- Keep the `for (const name of ['moe-agent.ps1', ...])` scripts list exactly as it is, including the 'moe-serena-ignore.mjs' entry that task-c6a24053 landed in 5f731334. Do not reorder, reflow or drop it.\n- Leave the existing per-package loop as it is too. Its node_modules/.bin/not-production line is what the exclusion row checks.\n\nWhy this shape:\n- moe-vscode/scripts/bundle-assets.mjs productionPackages() (:67) reads packages/<pkg>/package-lock.json (asset.lock, :19/:27) and requires a lockfileVersion 2+ `packages` map. It takes every node_modules/<name> key not marked dev: true and refuses link entries.\n- bundleProblems() (:118) then requires node_modules/<rel>/package.json to be a file.\n- build.gradle.kts productionPackages() applies the same rule.\n- One installed production entry, `dependency`, runs the real read-and-copy path. The fixture already writes node_modules/dependency/index.js, so only its package.json is new.\n\nEdit B, the Gradle row (DoD 2, second half). In test('Gradle drops compiled tests from the daemon and proxy dist copies') (:280), directly after its `const source = readFileSync(...)` line, insert:\n```\n  // The dist copies and the import scan share one list (task-864103f3): check its patterns, then that each copy applies it.\n  const list = source.match(/^val distTestExcludes = listOf\\(([^)]*)\\)$/m)?.[1];\n  assert.ok(list, 'Missing Gradle distTestExcludes list');\n  const patterns = [...list.matchAll(/\"([^\"]*)\"/g)].map(match => match[1]);\n  for (const pattern of ['**/*.test.*', '**/*.spec.*']) assert.ok(patterns.includes(pattern), `distTestExcludes must list ${pattern}`);\n```\nThen, in the loop (:285), replace `block.includes('exclude(\"**/*.test.*\", \"**/*.spec.*\")')` with `block.includes('exclude(distTestExcludes)')`. Keep the assertion message and the block regex unchanged.\n\nWhat the row now matches in build.gradle.kts:\n- :32 declares `val distTestExcludes = listOf(\"**/*.test.*\", \"**/*.spec.*\")`.\n- The from(bundledDaemonDir) and from(bundledProxyDir) copies (:279-286) apply `exclude(distTestExcludes)`.\n- A JS m-flag `$` also matches before a CR, so a CRLF checkout (Windows CI) still matches.\n\nError handling: no runtime error handling changes. The fixture only supplies inputs the bundler already validates: a missing or malformed lockfile, or an uninstalled entry, is refused with exit 1. The new Gradle assertions fail with named messages, not a TypeError, when the list is absent.\n\nAfter both edits, re-run the Linux leg: 15 of 15 pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once (DoD 1). Run this ONE command fresh from the task worktree root, in your normal shell.\n- Only the Linux leg uses env -i, so the seat's MOE_* env never reaches the harness (mem:gotcha-qa-session-env-and-signals-leak-into-harness).\n- The Windows leg needs the Windows PATH that WSL interop carries.\nIts output tail is the complete_task evidence:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 node --test scripts/tests/local-runner-bundle.test.mjs 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/local-runner-bundle.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint\n\nWhat to expect:\n- Two 8-line summaries, each with the lines tests 15, pass 15 and fail 0, then parity-check and lint passing.\n- A leg with no 'tests 15' summary line did not run, whatever its exit code (mem:gotcha-node-test-windows-path-glob).\n- The planning dry run on 5f731334 with the fix: Linux 15/15 in about 6 s, Windows node.exe v24.16.0 15/15 in about 5 s.\n\nWhy it may run in place:\n- The file writes only under the OS temp dir.\n- It runs a copy of the bundler inside its own fixture, never against the real moe-vscode/bundled.\n- No npm runs in the checkout (rails). parity-check.sh and lint are the project's qualityGate.\n\nDeclare scripts/tests/local-runner-bundle.test.mjs as modifiedFiles.\n\nNote: get_context marks this row isEpicFinal only as a fallback. Its catch-all epic (epic-be924fb8, 129+ rows) has no finalTaskId, so the newest row inherits the flag. The DoD is this one file on two platforms, so the gate stays scoped to it, as for task-e54bab27.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record the results in complete_step.\n\nRun mutants only in a scratch copy:\n- `git archive HEAD` into a fresh mktemp dir, overlay your test file with cp, and mutate the copy.\n- Run the Linux leg's env -i node --test on the copy. For the Gradle mutants, `--test-name-pattern='Gradle drops'` is enough.\n- Delete the dir afterwards.\n- Never mutate the worktree, and never touch moe-jetbrains/build.gradle.kts there.\n\nPlanning results on 5f731334:\n(a) Remove the lockfile put. Expect 7 pass, 8 fail, each with 'Lockfile ... package-lock.json is missing or unreadable'.\n(b) Remove the dependency/package.json put. Expect 7 pass, 8 fail, each with 'Bundled moe-daemon production packages from ... are missing at ... : dependency'. This proves the seeded entry goes through the bundlers' installed-package check.\n(c) The Gradle row, on a scratch copy of build.gradle.kts. Each mutant must fail the row with its own message:\n- drop `exclude(distTestExcludes)` from the from(bundledDaemonDir) block: '<dir> copy must exclude ...' naming bundledDaemonDir;\n- drop it from the from(bundledProxyDir) block: the same message naming bundledProxyDir;\n- reduce the list to listOf(\"**/*.test.*\"): 'distTestExcludes must list **/*.spec.*';\n- reduce it to listOf(\"**/*.spec.*\"): 'distTestExcludes must list **/*.test.*';\n- rename the val: 'Missing Gradle distTestExcludes list'.\n(d) Diff scope. With B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"), `git diff --stat $B` lists only scripts/tests/local-runner-bundle.test.mjs, at +13/-1. The scripts-list lines and every other row are byte-identical to $B.\n(e) Process safety: kill nothing by name or pattern. The suite's spawnSync calls have their own 20-40 s timeouts.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -30,16 +55,79 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:53:22.002Z",
-  "updatedAt": "2026-11-03T08:58:22.821Z",
+  "updatedAt": "2026-11-03T09:10:09.584Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:57:54.018Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T08:58:02.359Z"
+    "firstClaimAt": "2026-11-03T08:58:02.359Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
   },
   "contextFetchedBy": [
     "architect-1dd28c7c"
-  ]
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T09:09:32.838Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/tests/local-runner-bundle.test.mjs passes all 15 rows again, under Linux node and under Windows node.exe. Its fixture seeds packages/moe-daemon and packages/moe-proxy package-lock.json files in npm lockfileVersion 3 shape, each with one installed production entry, so the real VS Code bundler's lockfile read and node_modules copy path runs. The Gradle row resolves build.gradle.kts's distTestExcludes list and checks that both dist copies apply it.",
+    "acceptanceCriteria": [
+      "Linux node v24 (env -i) and Windows node.exe each report tests 15, pass 15, fail 0. RED first: 6 pass, 9 fail.",
+      "The fixture writes packages/<pkg>/package-lock.json for moe-daemon and moe-proxy, with a packages map holding a non-dev node_modules/dependency, plus node_modules/dependency/package.json. Removing either fails the 8 bundler rows.",
+      "The Gradle row fails when either from(bundled*Dir) copy drops exclude(distTestExcludes), when distTestExcludes loses either pattern, and when the val is missing."
+    ],
+    "invariants": [
+      "moe-vscode/scripts/bundle-assets.mjs, moe-jetbrains/build.gradle.kts and scripts/bundle-manifest.json are unchanged.",
+      "The fixture's scripts list, including task-c6a24053's 'moe-serena-ignore.mjs' entry, and every other row's assertions stay byte-identical."
+    ],
+    "compatibility": [
+      "The CI 3-OS step in .github/workflows/ci.yml that runs this file with node --test needs no change."
+    ],
+    "approvedScope": [
+      "fixture(): lockfile seeding after put(manifestFile, ...), in scripts/tests/local-runner-bundle.test.mjs.",
+      "The 'Gradle drops compiled tests from the daemon and proxy dist copies' row, in the same file."
+    ],
+    "reuse": [
+      "Reuses the fixture's put() helper and its existing node_modules/dependency directory. The lockfile follows the npm v3 shape of moe-vscode/tests/bundle-assets.test.cjs."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/scripts/bundle-assets.mjs: asset.lock (:19/:27); productionPackages() (:67) needs a packages map, skips dev: true and refuses link: true; bundleProblems() (:118) needs node_modules/<rel>/package.json; main() checks the manifest sources before any lockfile.",
+      "moe-jetbrains/build.gradle.kts:32 declares val distTestExcludes = listOf(\"**/*.test.*\", \"**/*.spec.*\"); the from(bundledDaemonDir) and from(bundledProxyDir) copies at :279-286 apply exclude(distTestExcludes)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 node --test scripts/tests/local-runner-bundle.test.mjs 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/local-runner-bundle.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) CHOSEN: seed a minimal npm v3 lockfile per package, with one installed production entry. It runs the bundlers' real read, filter and copy path, as DoD 2 asks.\n2) Rejected: an empty packages map. It would pass while skipping the node_modules copy entirely.\n3) Rejected: copying the real package-lock.json files. The bundler would then require every real production package to be installed in the fixture.\n4) Rejected: letting the bundler tolerate a missing lockfile. That weakens the refusal task-c76a8bf8 added.\n5) CHOSEN for the Gradle row: assert distTestExcludes' declared patterns, and `exclude(distTestExcludes)` in each dist copy block. Matching only `exclude(` would weaken the row.",
+    "codebaseInsights": "- Both IDE bundlers have read each package's lockfile since 30d483e9 (task-864103f3, Gradle) and 26e10e3d (task-c76a8bf8, VS Code). That Gradle change also introduced distTestExcludes. This file's fixture and its Gradle row were not updated.\n- The landing gate is parity-check plus lint and does not run this file.\n- task-c6a24053 landed 5f731334 during planning and added 'moe-serena-ignore.mjs' to this fixture's scripts list, so the worktree is cut from a target that already has it.",
+    "risks": "(1) Running the Windows leg under env -i loses its PATH; use the normal shell.\n(2) A leg that prints no 'tests 15' line did not run, whatever its exit code.\n(3) The fixture is shared code. If another row lands on this file first, re-anchor Edit A on the put(manifestFile, ...) line, not on a line number.\n(4) Never run the bundler for real in the checkout. The test runs only its copy, inside the temp fixture.",
+    "keyFiles": [
+      "scripts/tests/local-runner-bundle.test.mjs",
+      "moe-vscode/scripts/bundle-assets.mjs",
+      "moe-jetbrains/build.gradle.kts",
+      "moe-vscode/tests/bundle-assets.test.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4693e017ec3968c821db54b5accb06c8e339298b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T09:09:32.875Z",
+  "approvedPlanRevision": 1
 }

@@ -94,7 +94,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,16 +110,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:28.153Z",
-  "updatedAt": "2026-11-03T09:05:52.601Z",
+  "updatedAt": "2026-11-03T09:10:27.734Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:30:35.858Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T09:09:48.609Z",
+    "wallClockMs": 2352751
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -227,9 +230,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T08:52:20Z",
-    "at": "2026-11-03T09:05:52.601Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T09:06:09Z",
+    "at": "2026-11-03T09:10:27.734Z"
+  },
+  "completedAt": "2026-11-03T09:09:48.609Z",
+  "reviewCompletedAt": "2026-11-03T09:09:48.609Z",
+  "reviewSummary": "Reviewed completion 4693e017 (on moe/work-2026-10-24 and origin, recorded pushed): exactly 4 files, +140/-25, net 115.\n\nGate re-run on whole-tree `git archive 4693e017` snapshots, no overlays:\n- Linux (env -i, node 24.21.0): npm ci, npm test, npm run compile exit 0. 685 tests, 676 pass, 0 fail, 9 skipped.\n- Windows (cmd.exe): exit 0. 681 tests, 669 pass, 0 fail, 12 skipped.\n- parity-check.sh and root npm run lint exit 0.\n- The win32 L5 rows ran natively on Windows and the POSIX L5 rows on Linux.\n\nRED: the parent's sources under the new tests give 11 of 68 failing (L1, L5 x4, protected L6, L7 x3, V2, V4). Legacy rows pass. My mutant M2 (refusal falls through) is killed by L6. The restored copy passes.\n\nDoD 1: protectedRun (runtimeProfile first and once, or vmSeat) uses protectedInterpreter, which checks real /bin/bash or SystemRoot's System32 powershell.exe through installedExecutable. The accepted path is quoted as the typed first word and is the win32 shellPath. A rejection errors before readiness and creates no terminal. Control characters are refused (L7).\n\nDoD 2: legacy lines, shellPath and the 'node executable' messages are unchanged. Only the protected expectations L1, V2 and V4 changed, as planned.\n\nDoD 3: RED was recorded and both legs are green.\n\nResiduals left to task-f3f364a6: the POSIX default-profile terminal shell and the Accounts terminal. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
