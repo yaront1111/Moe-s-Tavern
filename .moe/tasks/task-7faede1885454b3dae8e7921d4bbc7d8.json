@@ -88,8 +88,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -101,7 +101,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:06:02.725Z",
-  "updatedAt": "2026-11-03T03:49:37.383Z",
+  "updatedAt": "2026-11-03T03:54:50.494Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:16.532Z",
@@ -111,7 +111,9 @@
     "firstClaimAt": "2026-11-03T03:04:30.974Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T03:54:23.608Z",
+    "wallClockMs": 2992634
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -240,9 +242,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T03:25:38Z",
-    "at": "2026-11-03T03:49:21.909Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T03:49:26Z",
+    "at": "2026-11-03T03:54:50.494Z"
+  },
+  "completedAt": "2026-11-03T03:54:23.608Z",
+  "reviewCompletedAt": "2026-11-03T03:54:23.608Z",
+  "reviewSummary": "Reviewed completion 2c8fdd9d, which is on moe/work-2026-10-24 and its origin and is pushed. 5 files, exactly the declared paths, +243/-9 (net 234), no .moe edits.\n\nGate: QA re-ran the checkRef (byte-identical to task.verification) under the jetbrains-gradle lease, released after the run. It ran in the control checkout at HEAD 2c8fdd9d, which is clean for moe-jetbrains, scripts and docs. Exit 0: parity PASS, lint OK, gradlew.bat test --rerun BUILD SUCCESSFUL, JUnit 609 tests / 5 skipped / 0 failures / 0 errors. Log: /mnt/d/moe-scratch/7faede18-qa/gate.log.\n\nDoD:\n(1) declaresVerifiedLocal checks isRegularFile(NOFOLLOW), else throws UntrustedSetting, then opens NOFOLLOW. profile() then returns PROTECTED without pinning or writing. parseDaemonInfo returns null for a non-regular file, then opens NOFOLLOW. Every daemon.json reader goes through it, so a link is never deleted. F1a (directory) passed in both classes. The 5 link/FIFO rows (F1b-d, F1b-c) skipped here: no symlink privilege and no Linux JDK. I reviewed them statically: each is assume-guarded, with a 5 s future and an O_RDWR unblock. They are not runtime-verified here; CI ubuntu runs them only on push or PR to main.\n(2) vmControlScript: LEGACY returns bundled(). PROTECTED returns installedArtifact's Accepted file, else null, which reports SCRIPT_MISSING. M1 passed.\n(3) The startsInFlight counter and the restart flag's CAS each write their own atomic and then read the other's, so a start and a restart cannot overlap. The decrement is in finally. W40 passed; W14 and W36-39 are unchanged and passed. Worker mutant logs agree: no handshake fails W40, no decrement fails 5 W rows, and both vm mutants fail M1.\n(4) A regular file reads as before; the OneDrive/WOF probe is in gotcha-windows-java-reparse-placeholders.\n\nNon-blocking: the fileLink, within5s and withFifos test helpers are duplicated across the two test classes.",
+  "requiredCheckAtDone": null
 }
