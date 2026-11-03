@@ -25,8 +25,15 @@
   ],
   "priority": "MEDIUM",
   "order": 337.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ae4b502babea4f9e927585a0e4a22fbc",
+      "author": "architect-74d9e1c7",
+      "content": "Architect note (architect-74d9e1c7, 2026-11-03): the VS Code half of this row moved into task-55710898 (plan rev 3, step 5), so that row's own DoD 1 (\"either IDE\") holds at its QA. The bytes that land there:\n- AgentLauncher.AccountsTerminal gains a required `project` field; protectedAccountsTerminal sets it to the basePath it checked.\n- AccountsTreeProvider.runCli passes ['--protected-project', pinned.project, ...args] to the unchanged accountsCommandLine, so the pair follows `--accounts-file <registry>` on win32 and POSIX, typed and clipboard lines alike.\n- windows-terminal-shell.test.cjs: W5-W7 pin the project; W8's literal lines carry '--protected-project' '/home/dev/app'; W10 refuses a project word with a control character. W1-W4 and W9 stay byte-identical.\nSo once task-55710898 lands, this row's DoD 1-2 are met by landed bytes. Its plan should only re-check those rows at HEAD (plus a drop-the-option mutant), write DoD 3's docs (MCP_SERVER.md, TROUBLESHOOTING.md, CONFIGURATION.md), and run DoD 4's gate. The dependsOn edge on task-55710898 stays.",
+      "timestamp": "2026-11-03T13:04:45.292Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:06:45.880Z",
-  "updatedAt": "2026-11-03T12:06:45.880Z"
+  "updatedAt": "2026-11-03T13:04:45.292Z"
 }

@@ -12,69 +12,109 @@
     {
       "stepId": "step-1",
       "description": "DONE in plan rev 1 (checkpoint 4fa4cc9b on moe/task/task-55710898, worker-ed0f6a9e). Do not redo it: confirm the bytes with `git diff 13683b4e HEAD -- packages/moe-daemon/src/accounts/claudeAuth.test.ts`, change nothing, and complete the step with that file as modifiedFiles. Its RED run is already recorded, so skip the RED line. The rev-1 text below stays the spec QA reviews against.\n\nTests first, RED (task-55710898). Read `mem:decision-protected-launch-interpreter` and `mem:gotcha-protected-interpreter-windows-tests`. Edit tracked files only with the Edit/Write tools or a Serena editor. Shell writes go only to scratch copies outside the checkout (global rail).\n\nAdd three describes to packages/moe-daemon/src/accounts/claudeAuth.test.ts. Its existing rows and packages/moe-daemon/src/accounts/cli.test.ts stay byte-identical: they are the legacy proof. Start every new case title with its tag in parentheses, exactly as listed below, because the gate greps the tags.\n\nShared fixture: one builder for both platforms.\n- Root: a mkdtemp under os.tmpdir(), taken through fs.realpathSync.native, removed in afterEach even after a failed assertion. Restore process.cwd() and process.env.ComSpec in finally.\n- Contents: project/, project/bin/, trusted/, other/, home/, a registry file, and the FAKE_CLAUDE_LOG and PLANT_LOG paths.\n- Plants, in project/ and project/bin/: a claude and a node that only append PLANT to PLANT_LOG and exit 0. On POSIX they are executable sh scripts; on Windows, claude.cmd and node.bat with CRLF line ends.\n- The fake claude in trusted/ appends one JSON line {argv, cwd, path: process.env.PATH, node: process.execPath, nodefault: process.env.NoDefaultCurrentDirectoryInExePath ?? null} to FAKE_CLAUDE_LOG. To auth status --json it answers {\"loggedIn\":true,\"authMethod\":\"claude.ai\"} and exits 0.\n  - POSIX: trusted/claude is a `#!/usr/bin/env node` CommonJS script, mode 755. other/ holds a non-executable claude (mode 644).\n  - Windows: trusted/fake-claude.mjs, plus trusted/claude.cmd in the classic npm cmd-shim shape (SET \"_prog=node\" when no node.exe sits beside it, then \"%_prog%\" runs fake-claude.mjs from %dp0% with %*), CRLF. A copy made while planning is /mnt/d/moe-scratch/m557-probe.eOOZ/trusted/claude.cmd.\n- The real node folder is path.dirname(process.execPath). Put it on PATH only in rows that must run claude, after trusted/. Never put it in a refusal row: it may hold a real claude.\n- Build every expected path through realpath.native. CI's Windows temp folder is an 8.3 spelling, and macOS tmp is /private/var.\n\nPOSIX rows, describe.runIf(process.platform !== 'win32'):\n- (pp1) Call protectedClaudeCommand(env, project) with HOME = home and PATH = '.', '', 'bin', project, project/bin, a symlink outside the project to project/bin, other/, trusted/, the node folder, then trusted/ again. It returns, by toEqual: {file: real trusted/claude, prefix: [], shell: false, missing: false, pinned: {path: [other, trusted, node folder] as real paths, in order, deduped, joined by ':', cwd: real home}}.\n- (pp2) A table of refusals, each a toThrow of the exact step-2 message, with cwd = project. Every case keeps other/ on PATH unless it tests the empty-PATH refusal.\n  - claude reachable only through '.', '', 'bin', project/bin or the symlink: MOE_PROTECTED_CLAUDE_NOT_FOUND;\n  - project 'rel/project', a missing folder, or a regular file;\n  - PATH = project/bin only;\n  - HOME = project/home;\n  - MOE_CLAUDE_BIN = 'bin/claude', project/claude, or symlink/claude.\n- (pp3) End to end, with cwd = project and PATH = '.', 'bin', project/bin, trusted/, the node folder.\n  - Control: after a plain ['add'] creates acct-1, runAccountsCli(['check','acct-1']) without the option runs the project/claude plant, so PLANT_LOG exists. This proves the fixture is live and that legacy is unchanged.\n  - Then remove PLANT_LOG and run ['--protected-project', project, 'check', 'acct-1']. It exits 0 and prints acct-1, acct-1, subscription. PLANT_LOG is absent.\n  - The last FAKE_CLAUDE_LOG line has cwd = real home, path = real trusted:real node folder, and node = the real path of process.execPath. So env found the outside node, not project/bin/node.\n\nWindows rows, describe.runIf(process.platform === 'win32'):\n- (pw1) PATHEXT order inside one kept entry. other/ holds claude.exe, claude.bat and claude.cmd (empty files are enough).\n  - PATHEXT '.CMD;.BAT' gives claude.cmd, with shell: true and pinned.cmd = realpath.native of path.win32.join(SystemRoot, 'System32', 'cmd.exe').\n  - '.BAT;.CMD' gives claude.bat.\n  - '.EXE;.CMD' and an unset PATHEXT give claude.exe, with shell: false and no cmd key.\n- (pw2) cwd = project. PATH = '.', '', 'bin', project, an upper-case spelling of project/bin, a forward-slash spelling of project/bin, trusted/ wrapped in double quotes, the node folder. It returns, by toEqual: {file: real trusted/claude.cmd, prefix: [], shell: true, missing: false, pinned: {path: real trusted;real node folder, cwd: real home, cmd: real cmd.exe}}.\n- (pw3) End to end, with cwd = project, PATH = '.', 'bin', project/bin, trusted/, the node folder, PATHEXT '.COM;.EXE;.BAT;.CMD', SystemRoot, and USERPROFILE = home.\n  - Control: after a plain ['add'] creates acct-1, check acct-1 without the option runs the project claude.cmd plant (PLANT_LOG exists).\n  - Then set process.env.ComSpec to a missing project/cmd.exe, so only the pinned cmd.exe can start the shim, and restore it in finally. ['--protected-project', project, 'check', 'acct-1'] exits 0 with subscription, and PLANT_LOG is absent.\n  - The last FAKE_CLAUDE_LOG line has node = realpath.native(process.execPath), so the shim found the real node, not project/node.bat. It also has cwd = real home, nodefault '1', and path = real trusted;real node folder.\n- (pw4) Refusals, each with its exact message:\n  - no SystemRoot in env (a .cmd claude needs cmd.exe);\n  - SystemRoot = project, with project/System32/cmd.exe present;\n  - a drive-relative project ('C:' plus a relative path), and a UNC project;\n  - claude only in project/bin, with other/ kept: MOE_PROTECTED_CLAUDE_NOT_FOUND.\n\nAny platform, describe('protected accounts CLI option'):\n- (pc1) Option handling, in order, with MOE_CLAUDE_BIN = the absolute fake claude, so any run shows in FAKE_CLAUDE_LOG:\n  - ['--protected-project'] exits 2 with 'accounts: --protected-project needs a value'.\n  - ['--protected-project', 'rel', 'add'] exits 0 and creates acct-1; ['--protected-project', 'rel', 'list'] exits 0. Neither resolves claude.\n  - Then each of login acct-1, logout acct-1, check acct-1, vm-token acct-1 and remove acct-1 --sign-out, with the option 'rel':\n    - exits 1 with exactly ['MOE_PROTECTED_CLAUDE_REFUSED: the project rel is not a local folder; nothing was run.'] on err;\n    - creates no account folder (accountConfigDir);\n    - leaves acct-1 registered with signInCheckedAt null;\n    - writes no FAKE_CLAUDE_LOG.\n  - claudeCommand({ PATH: '.' }, 'linux') toStrictEqual {file: 'claude', prefix: [], shell: false, missing: false}, with no pinned key.\n\nRED: run checkRefs[0] once. It must fail: the tagged rows fail on the missing exports, and the existing accounts rows still pass. Record that output.\n\nError handling: each fixture lives under its own root, removed in afterEach. The cwd and ComSpec are restored in finally.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/accounts/claudeAuth.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/claudeAuth.test.ts"
+      ],
+      "note": "Rev-1 bytes confirmed unchanged at checkpoint 4fa4cc9b (git diff 13683b4e HEAD: +204/-2, the 2 deletions are the import lines only; existing rows byte-identical). No edit this session. RED was recorded by worker-ed0f6a9e in rev 1.",
+      "startedAt": "2026-11-03T13:05:10.487Z",
+      "completedAt": "2026-11-03T13:05:46.316Z"
     },
     {
       "stepId": "step-2",
       "description": "DONE in plan rev 1 (checkpoint 4fa4cc9b on moe/task/task-55710898, worker-ed0f6a9e). Do not redo it: confirm the bytes with `git diff 13683b4e HEAD -- packages/moe-daemon/src/accounts/claudeAuth.ts`, change nothing, and complete the step with that file as modifiedFiles. The rev-1 text below stays the spec QA reviews against.\n\nProtected lookup in packages/moe-daemon/src/accounts/claudeAuth.ts. The module keeps only node built-ins and this folder as imports; add `os`.\n\n(1) ClaudeCommand gains `pinned?: { path: string; cwd: string; cmd?: string }`: the claude child's PATH, its working directory and, on Windows for a .cmd or .bat claude, the absolute cmd.exe. Export `class ProtectedClaudeRefused extends Error`.\n\n(2) Export `protectedClaudeCommand(env, project): ClaudeCommand`, on the host platform only. Two rules first:\n- Local: on win32 a path is usable only if it is drive-qualified (a letter, a colon, then a slash or backslash). UNC, device, rooted and drive-relative forms are not. Elsewhere it must be absolute. Its fs.realpathSync.native must succeed and, on win32, still be drive-qualified, because a mapped drive resolves to UNC.\n- In project: walk the real path and each path.dirname ancestor. It is in the project when an ancestor equals the project's real path (lower-cased on win32 and darwin), or has the project's bigint stat identity (dev and ino, with ino not 0n). This is the -ef walk of protected_trusted_dir in scripts/moe-agent.sh. On drvfs, realpath keeps a case-variant spelling, but the identity matches. A failed stat counts as in the project.\n\nThen, in this order, throwing ProtectedClaudeRefused with these exact reasons:\n- project: local and a directory, else 'the project <arg> is not a local folder'.\n- PATH: env.PATH exactly on POSIX; envValue(env, 'PATH') on win32, trimmed and with surrounding double quotes stripped, as findWindowsCommand does. Split it by path.delimiter. Keep each local directory that is not in the project, as its real path, in order, once. If none is kept: 'no absolute PATH entry is outside the project <arg>'.\n- cwd: env.HOME on POSIX, envValue(env, 'USERPROFILE') on win32, else os.homedir(). It must be local, a directory and not in the project, else 'the home folder <home> is not a local folder outside the project <arg>'.\n- claude: bin = MOE_CLAUDE_BIN trimmed, or 'claude'.\n  - A bin holding a path separator must be a local regular file not in the project, else 'MOE_CLAUDE_BIN <bin> is not an absolute file outside the project <arg>'.\n  - A bare bin is searched in the kept entries, in order. On win32 use the PATHEXT names findWindowsCommand builds: extract that one rule into a helper both use, so findWindowsCommand behaves exactly as before. On POSIX use the bare name.\n  - Accept the first candidate whose real path is a regular file not in the project and, on POSIX, passes fs.accessSync(real, X_OK). If none: MOE_PROTECTED_CLAUDE_NOT_FOUND.\n- Result:\n  - A .js/.mjs/.cjs real file runs as {file: process.execPath, prefix: [real]}.\n  - A win32 .exe or .com, and any POSIX file, runs as {file: real, shell: false}.\n  - Any other win32 file needs the shell. cmd must be a local regular file not in the project at path.win32.join(SystemRoot from envValue, 'System32', 'cmd.exe'), else 'cmd.exe under SystemRoot <value, or (unset)> is not a local file outside the project <arg>'.\n  - pinned = {path: kept.join(path.delimiter), cwd, cmd when set}; missing is false.\n\nMessages, exactly:\n- 'MOE_PROTECTED_CLAUDE_REFUSED: <reason>; nothing was run.'\n- 'MOE_PROTECTED_CLAUDE_NOT_FOUND: \"<bin>\" was not found on an absolute PATH entry outside the project <arg>; nothing was run. Install Claude Code outside the project and put its folder on PATH, then try again.'\n\n(3) runClaude changes only when command.pinned is set:\n- The env is a copy with PATH replaced by pinned.path. On win32, drop every case variant of PATH and of NoDefaultCurrentDirectoryInExePath first, then set PATH and NoDefaultCurrentDirectoryInExePath='1'.\n- cwd = pinned.cwd.\n- A shell run uses `shell: pinned.cmd` instead of `true`. Node still runs cmd /d /s /c, because the path ends in cmd.exe.\n- Without pinned, the spawn options stay exactly as they are today.\n\nUpdate the header comment and the findWindowsCommand comment, and name task-55710898.\n\nError handling: every fs call sits in try/catch and fails closed, as a dropped entry or a refusal. Nothing is spawned or written before resolution finishes. pp1, pp2, pw1, pw2 and pw4 turn green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/accounts/claudeAuth.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/claudeAuth.ts"
+      ],
+      "note": "Rev-1 bytes confirmed at checkpoint 4fa4cc9b (git diff 13683b4e HEAD -- claudeAuth.ts: +rev-1 change only, tree clean). No edit this session.",
+      "startedAt": "2026-11-03T13:05:47.059Z",
+      "completedAt": "2026-11-03T13:05:57.502Z"
     },
     {
       "stepId": "step-3",
       "description": "DONE in plan rev 1 (checkpoint 4fa4cc9b on moe/task/task-55710898, worker-ed0f6a9e). Do not redo it: confirm the bytes with `git diff 13683b4e HEAD -- packages/moe-daemon/src/accounts/cli.ts`, change nothing, and complete the step with that file as modifiedFiles. Step 5 rewords one clause of the header comment here, because VS Code now passes the option too; nothing else in this file changes. The rev-1 text below stays the spec QA reviews against.\n\nThe option, in packages/moe-daemon/src/accounts/cli.ts.\n- parseArgs reads `--protected-project <path>` into ParsedArgs.protectedProject through value(), as --accounts-file does, so a missing value is a usage error (exit 2).\n  - USAGE stays byte-identical: the option is the IDEs' contract.\n  - Document it in the header comment instead, naming task-55710898, JetBrains TerminalAgentLauncher.PROTECTED_PROJECT_OPTION and the VS Code twin task-3a98393f.\n- run() gets one resolver, claude().\n  - Without the option it returns claudeCommand(io.env), as today. With it, it returns protectedClaudeCommand(io.env, args.protectedProject), resolved once per run.\n  - Thread it into check, signOut, login and vmToken, in place of their claudeCommand(io.env) calls.\n  - Call it first in login and vmToken, before mkdirSync and the sign-in lines, so a refusal has no side effect.\n  - list, add, help, a plain remove and vm-token --remove never resolve it.\n- runAccountsCli prints a ProtectedClaudeRefused's message as is (like a RegistryError) and returns 1.\n\nError handling: the refusal propagates as an exception to runAccountsCli's catch. No registry write, folder, prompt or spawn happens before it, and this error handling adds no new exit code. pp3, pw3 and pc1 turn green. The existing cli.test.ts rows stay green, unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/accounts/cli.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/cli.ts"
+      ],
+      "note": "Rev-1 bytes confirmed at checkpoint 4fa4cc9b (git diff 13683b4e HEAD -- cli.ts +rev-1 change only). No edit this session; step 5 rewords the header clause.",
+      "startedAt": "2026-11-03T13:05:58.328Z",
+      "completedAt": "2026-11-03T13:06:02.369Z"
     },
     {
       "stepId": "step-4",
       "description": "DONE in plan rev 1 (checkpoint 4fa4cc9b on moe/task/task-55710898, worker-ed0f6a9e). Do not redo it: confirm the bytes with `git diff 13683b4e HEAD -- moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt`, change nothing, and complete the step with those two files as modifiedFiles. The rev-1 text below stays the spec QA reviews against.\n\nJetBrains opt-in. Read the task-26d9dc26 section of `mem:decision-protected-launch-interpreter`.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt:\n- Add `internal const val PROTECTED_PROJECT_OPTION = \"--protected-project\"` next to PROTECTED_WSL_NODE_PROGRAM, with a KDoc naming its contract with packages/moe-daemon/src/accounts/cli.ts (task-55710898).\n- accountsCommandFor, PROTECTED only:\n  - The native routes call buildAccountsCommand(cli.copy(node = node), registryFile, listOf(PROTECTED_PROJECT_OPTION, basePath) + args, shell, interpreter). The pair then follows --accounts-file <registry>, and requireSafeArg checks the project too.\n  - protectedWslAccountsCommand puts PROTECTED_PROJECT_OPTION and the /mnt project (the program's $1) after toWslPath(registryFile).\n  - Update both KDocs.\n- These stay untouched: LEGACY, buildAccountsCommand, PROTECTED_WSL_NODE_PROGRAM and AccountsPanel. runAccountsCommand stays too: its terminal stays in the project, because the CLI now moves claude's own cwd to the home folder.\n\nIn moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt, update only the protected expectations:\n- A2: build the legacy comparison line with listOf(\"--protected-project\", project.path) + args.\n- A4: do the same for the expected BASH line.\n- A5: the literal gains '--protected-project' '/mnt/d/projexts/app' between the registry and 'remove'. Write the option as a literal in A5, so a changed constant cannot pass.\nEvery other row stays byte-identical. A1 and the literal legacy rows are the proof for legacy.\n\nError handling: refusals still throw IllegalArgumentException before any terminal or clipboard write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "Rev-1 bytes confirmed at checkpoint 4fa4cc9b (TerminalAgentLauncher.kt +/- 19 lines, test 9 lines vs 13683b4e). No edit this session.",
+      "startedAt": "2026-11-03T13:06:03.085Z",
+      "completedAt": "2026-11-03T13:06:07.417Z"
     },
     {
       "stepId": "step-5",
       "description": "VS Code Accounts lines pass the option. This folds task-3a98393f's DoD 1-2 into this row, so this row's DoD 1 (\"either IDE\") holds at its own QA (comment-0601e0b0). Tests first. Edit tracked files only with the Edit/Write tools or a Serena editor (global rail). Read `mem:gotcha-vscode-gate-from-wsl` and the task-a6227f4e section of `mem:decision-protected-launch-interpreter`.\n\n(1) RED, in moe-vscode/tests/windows-terminal-shell.test.cjs only. W1-W4, W9 and every other moe-vscode test file stay byte-identical: they are the legacy proof.\n- Header comment: add one sentence saying the selection also carries the project it checked, and the protected line passes it as --protected-project right after the registry (task-55710898).\n- W5: the win32 expectation gains project: win.workspace. The POSIX expectation gains project: posix.workspace and still has no shellPath key.\n- W6: the real node and the outside link both answer { node: real, project: l.workspace }.\n- W7: the accepted selection gains project: l.workspace.\n- W8: add `const PROJECT = '/home/dev/app';` before ACCOUNT_WORDS, and make ACCOUNT_WORDS this literal: `'/opt/moe/daemon/dist/accounts/cli.js' '--accounts-file' '/home/dev/.moe/claude-accounts.json' '--protected-project' '/home/dev/app' 'login' 'acct-2'`. Type the option and the folder there as literals, not from PROJECT, so a renamed option cannot pass. Both selector answers gain project: PROJECT. W_DECODED, W_LINE and P_LINE still derive from ACCOUNT_WORDS, so the win32 decoded script, the win32 typed line, the POSIX line and both clipboard lines all carry the pair.\n- W10: the newline-interpreter answer gains project: PROJECT, so it still fails on the interpreter. Add a loop over 'win32' and 'linux' with refuse: true and the answer { node: W_NODE, project: PROJECT plus a line feed }. It asserts clipboard [] and errors exactly ['Account action failed: Invalid accounts command word: contains control characters'].\nRun the file with `node --test` in a Linux snapshot laid out as checkRefs[2] lays it out (never npm ci in the checkout). W5, W6, W8 and W10 must fail. Record that output.\n\n(2) GREEN:\n- moe-vscode/src/util/AgentLauncher.ts: AccountsTerminal becomes `{ node: string; shellPath?: string; project: string } | { refused: string }`. Its doc says project is the folder both interpreters were checked against, which the line passes to the accounts CLI as --protected-project (task-55710898). protectedAccountsTerminal returns project: basePath in both accepted shapes, the same basePath it gave protectedInterpreter and installedExecutable. Null and refused answers do not change.\n- moe-vscode/src/providers/AccountsTreeProvider.ts, runCli: add `const words = pinned === null ? args : ['--protected-project', pinned.project, ...args];` with one comment naming task-55710898, and pass words to accountsCommandLine in place of args. accountsCommandLine, the terminal options, the refusal message and the closed require map stay unchanged; AccountsTerminal stays a type-only import. extension.ts does not change: the selector's signature is the same.\n- packages/moe-daemon/src/accounts/cli.ts: the header comment's 'VS Code from task-3a98393f.' becomes 'and so does VS Code (AccountsTreeProvider.runCli).' No other byte changes.\n\nError handling: protectedAccountsTerminal still never throws. The project word goes through assertSafeArg with every other word, so a project with a C0 control or DEL throws before any terminal or clipboard write, and guard shows exactly one error (W10).\n\nThe planning prototype of this step on 4fa4cc9b measured +27/-14 across these four files, and W5-W8 and W10 then passed on both legs.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/windows-terminal-shell.test.cjs",
         "moe-vscode/src/util/AgentLauncher.ts",
         "moe-vscode/src/providers/AccountsTreeProvider.ts",
         "packages/moe-daemon/src/accounts/cli.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/windows-terminal-shell.test.cjs",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "packages/moe-daemon/src/accounts/cli.ts"
+      ],
+      "note": "RED (Linux snapshot /tmp/m557-red.l1TH, archive of HEAD 4fa4cc9b + test only, npm ci, node v24.21.0 under env -i, node --test tests/windows-terminal-shell.test.cjs): tests 10, pass 5, fail 4 (W5, W6, W8, W10), skipped 1 (W7, POSIX host); W1-W4 and W9 pass. GREEN after the edits (same snapshot): tests 10, pass 9, fail 0, skipped 1 (W7). Changes: AccountsTerminal gains required project, protectedAccountsTerminal returns project: basePath on both accepted shapes; runCli passes ['--protected-project', pinned.project, ...args] to the unchanged accountsCommandLine only when pinned !== null; cli.ts header clause reworded. Step size +27/-14 (test +17/-9, AgentLauncher +6/-3, provider +3/-1, cli.ts +1/-1).",
+      "startedAt": "2026-11-03T13:06:08.243Z",
+      "completedAt": "2026-11-03T13:07:52.340Z"
     },
     {
       "stepId": "step-6",
       "description": "Verification: run it once, fresh, after the last edit. Its output is the complete_task evidence.\n\nFrom the task worktree, take the jetbrains-gradle lease first (`mem:convention-jetbrains-gradle-lease`: moe.acquire_resource with resourceId jetbrains-gradle), and release it on every path. Then run, as one command, `( <checkRefs[0]> ) && ( <checkRefs[2]> ) && ( <checkRefs[1]> )`, each ref pasted exactly from the executionContract. The subshells keep each ref's exit inside it, and Gradle runs last.\n- checkRefs[0]: the daemon accounts suite in two snapshots of HEAD with the three changed daemon files copied in: Linux (npm ci, tsc --noEmit, vitest src/accounts), then Windows through cmd.exe (npm ci, vitest claudeAuth.test.ts and cli.test.ts). Each leg prints the tagged rows and its totals.\n- checkRefs[2]: moe-vscode in two snapshots of HEAD with the three changed VS Code files copied in: Linux under env -i with node v24.21.0, then Windows through cmd.exe. Each leg runs npm ci, npm test and npm run compile, and prints the W4-W10 rows and its totals.\n- checkRefs[1]: parity, lint, JetBrains gradlew.bat test --rerun, and the JUnit totals.\n\nReport:\n- both vitest totals, and that pp1-pp3 and pc1 pass on the Linux leg, and pw1-pw4 and pc1 on the Windows leg;\n- both moe-vscode totals, with W6 run on the Linux leg, W7 on the Windows leg, and W5, W8, W9 and W10 on both. A skipped row where it should run is a failure to fix, not evidence;\n- the JUnit totals, and that TerminalAgentLauncherTest's A2 (Windows), A4 and A5 rows ran;\n- the size: `git diff --numstat 13683b4e -- <the eight files>`. Keep it at or under 395 net added lines; the planning prototype measured +410/-48, net 362, so no size waiver is expected. If it goes over, trim comments first. If it still exceeds 400 net, file an ADD_RAIL size exception for this task and tell #governors before complete_task (`mem:decision-size-only-reject-of-landed-bytes`).\n\nNever run npm ci or tests inside the checkout (global rail).\n\nError handling: if a row unrelated to this diff flakes, rerun the whole command fresh and report both outputs. Do not widen this task to fix unrelated tests.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh run after the last edit, under the jetbrains-gradle lease (acquired 13:09:29Z, released after): ( checkRefs[0] ) && ( checkRefs[2] ) && ( checkRefs[1] ), pasted verbatim (refs 0/1 byte-compared with rev-1's verified gate.sh), script /mnt/d/moe-scratch/m557-gate/gate2.sh, log gate2.log. GATE_EXIT=0.\n- checkRefs[0] Linux: Test Files 5 passed, Tests 62 passed | 5 skipped (67); pp1, pp2, pp3, pc1 passed (pw rows skipped). Windows: Test Files 2 passed, Tests 19 passed | 7 skipped (26); pw1-pw4 and pc1 passed. tsc --noEmit clean.\n- checkRefs[2] Linux (env -i, node v24.21.0): tests 695, pass 685, fail 0, skipped 10; W4, W5, W6, W8, W9, W10 passed, W7 skipped (Windows only). Windows (cmd.exe): tests 691, pass 678, fail 0, skipped 13; W4, W5, W7, W8, W9, W10 passed, W6 skipped (POSIX only). npm run compile OK on both.\n- checkRefs[1]: PASS parity-check.sh, lint OK, gradlew.bat test --rerun: JUnit totals tests=625 skipped=6 failures=0 errors=0. TerminalAgentLauncherTest 60/1 skipped: A1, A2 (Windows), both A3, A4, A5, A6 ran; A7 skipped (POSIX-only, CI ubuntu).\n- Size: git diff --numstat 13683b4e over the eight files: +410/-48, net 362 (under 395; no waiver needed).",
+      "startedAt": "2026-11-03T13:08:42.293Z",
+      "completedAt": "2026-11-03T13:11:46.458Z"
     },
     {
       "stepId": "step-7",
       "description": "Adversarial self-review of the eight-file diff. Load the adversarial-self-review skill. Read `mem:pattern-mutant-equivalence-and-anchor-traps`.\n\nMutate only snapshot copies under /tmp or /mnt/d/moe-scratch, never the worktree, and diff each mutant copy against its original before running, so only the intended line changed.\n- VS Code: in the Linux snapshot's moe-vscode, run `node --test --test-reporter=tap tests/windows-terminal-shell.test.cjs` and name the failing rows from its `not ok` lines.\n  - V1: runCli passes args without the pair. Killed by W8 and W10.\n  - V2: the option without its value. Killed by W8 and W10.\n  - V3: the pair after args. Killed by W8.\n  - V4: the pair on the null (legacy) path too. Killed by W2 and W3.\n  - V5: the selection carries no project. Killed by W5 and W6.\n  - V6: project set to the node's accepted path instead of basePath. Killed by W5 and W6.\n  - V7: control characters stripped from the project instead of refused. Killed by W10.\n  The planning prototype killed all seven with exactly these rows.\n- Daemon and Kotlin: M1-M9, J1 and J2 were all killed at 4fa4cc9b by rev 1's runners in /mnt/d/moe-scratch/m557-gate (mutants.mjs, jmutants.sh). Re-run them only if a daemon or Kotlin byte other than the cli.ts comment changed.\n\nChecklist:\n- Legacy is byte-identical: USAGE, cli.test.ts, A1, W1-W4, W9, accounts-actions.test.cjs (Q1), accounts-view.test.cjs and powershell-quoting.test.cjs (V2) are untouched.\n- accounts/ imports only node built-ins and its own folder. AccountsTreeProvider.ts still requires only vscode and AccountPresentation.\n- Every refusal comes before any mkdir, prompt, registry write, spawn, terminal or clipboard write.\n- Concurrency: two CLIs share no mutable state, and resolution is per run.\n- No bare at-token appears in code or step text.\n\nName these residuals in the completion summary, without fixing them here:\n- the docs for the contract stay in task-3a98393f, which now only re-checks these VS Code rows and writes MCP_SERVER.md, TROUBLESHOOTING.md and CONFIGURATION.md;\n- a home folder on a network share is refused under the protected profile;\n- claude's own children inherit only the pinned PATH and cwd;\n- cli.script stays unchecked in both IDEs, and VS Code's POSIX default-profile terminal shell stays with task-f3f364a6.\n\nError handling: if the review changes any byte, rerun step 6's command fresh and report that output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/accounts/claudeAuth.ts",
         "packages/moe-daemon/src/accounts/cli.ts",
         "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
         "moe-vscode/src/util/AgentLauncher.ts",
         "moe-vscode/src/providers/AccountsTreeProvider.ts"
-      ]
+      ],
+      "note": "No byte changed by the review, so step 6's run stands. VS Code mutants (runner /mnt/d/moe-scratch/m557-gate/vmutants.mjs, Linux snapshot /tmp/m557-red.l1TH; one-line change checked for each, restored and cmp'd after): V1 killed by W8 W10; V2 by W8 W10; V3 by W8; V4 by W2 W3; V5 by W5 W6; V6 by W5 W6; V7 by W10, matching the plan exactly. Daemon/Kotlin: only the cli.ts comment changed, so rev-1's M1-M9, J1, J2 (all killed) stand. Checklist: USAGE, cli.test.ts, extension.ts, accounts-actions/accounts-view/powershell-quoting tests untouched vs 13683b4e; W1-W4/W9 bytes unchanged; accounts/ imports are node built-ins plus ./registry.js and ./vmTokens.js; the provider's imports are unchanged (AccountsTerminal type-only). Refusals: CLI claude() runs before mkdir/prompts in login/vmToken, before runClaude in signOut/check; VS Code assertSafeArg covers the project word before any terminal or clipboard write (W10). Concurrency: resolution is per run, memoised in a local; no shared state. No added non-ASCII bytes, no forbidden patterns; the only added '@' is batch syntax in test fixtures.",
+      "startedAt": "2026-11-03T13:11:47.568Z",
+      "completedAt": "2026-11-03T13:12:11.195Z"
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -109,7 +149,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T09:21:15.725Z",
-  "updatedAt": "2026-11-03T13:04:28.387Z",
+  "updatedAt": "2026-11-03T13:14:08.913Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-03T12:47:19.800Z",
@@ -119,7 +159,7 @@
     "firstClaimAt": "2026-11-03T11:47:29.595Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 6
+    "executedStepCount": 13
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -131,7 +171,15 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:04:06.154Z",
   "executionContract": {
@@ -215,11 +263,10 @@
   "planApprovedAt": "2026-11-03T13:04:06.179Z",
   "approvedPlanRevision": 3,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T12:33:55Z",
-    "at": "2026-11-03T12:47:48.281Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T13:04:10Z",
+    "at": "2026-11-03T13:14:08.913Z"
   },
   "workStartedAt": "2026-11-03T12:19:45.351Z",
   "commits": [
@@ -241,14 +288,38 @@
       "treeId": "1975f537bbe7bddb0805524dc619ec09d0771cc4",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "fb12628061c797fa9291bdd892d91a9b13d021e2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T13:04:10Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/windows-terminal-shell.test.cjs",
+        "packages/moe-daemon/src/accounts/claudeAuth.test.ts",
+        "packages/moe-daemon/src/accounts/claudeAuth.ts",
+        "packages/moe-daemon/src/accounts/cli.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T13:14:08.913Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
     "packages/moe-daemon/src/accounts/claudeAuth.test.ts",
     "packages/moe-daemon/src/accounts/claudeAuth.ts",
-    "packages/moe-daemon/src/accounts/cli.ts"
+    "packages/moe-daemon/src/accounts/cli.ts",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-vscode/tests/windows-terminal-shell.test.cjs",
+    "moe-vscode/src/util/AgentLauncher.ts",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts"
   ],
   "unattributedPaths": [],
   "priorAttempt": {
@@ -349,5 +420,14 @@
   },
   "planSizeWarnings": [
     "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
-  ]
+  ],
+  "reviewStartedAt": "2026-11-03T13:13:05.085Z",
+  "verification": {
+    "command": "( set -o pipefail && R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/m557-l.XXXX) && W=$(mktemp -d /mnt/d/moe-scratch/m557-w.XXXX) && for S in \"$L\" \"$W\"; do git -C \"$R\" archive HEAD packages/moe-daemon scripts/moe-account-lease.mjs | tar -x -C \"$S\" && for f in claudeAuth.ts cli.ts claudeAuth.test.ts; do cp \"$R/packages/moe-daemon/src/accounts/$f\" \"$S/packages/moe-daemon/src/accounts/\" || exit 1; done || exit 1; done && (cd \"$L/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/accounts --reporter=verbose 2>&1 | grep -aE '[(]p[pwc][0-9][)]|Test Files|Tests ') && cmd.exe /d /c \"cd /d $(wslpath -w \"$W\")\\\\packages\\\\moe-daemon && npm ci --no-audit --no-fund >NUL 2>&1 && set NO_COLOR=1&& npx vitest run src/accounts/claudeAuth.test.ts src/accounts/cli.test.ts --reporter=verbose\" 2>&1 | tr -d '\\r' | grep -aE '[(]p[pwc][0-9][)]|Test Files|Tests ' ) && ( set -o pipefail && R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/m557-vl.XXXX) && W=$(mktemp -d /mnt/d/moe-scratch/m557-vw.XXXX) && for S in \"$L\" \"$W\"; do git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in src/util/AgentLauncher.ts src/providers/AccountsTreeProvider.ts tests/windows-terminal-shell.test.cjs; do cp \"$R/moe-vscode/$f\" \"$S/moe-vscode/$f\" || exit 1; done || exit 1; done && G=' W([4-9]|10) |(tests|pass|fail|skipped) [0-9]+$' && (cd \"$L/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile') >\"$L/v.log\" 2>&1 || { tail -40 \"$L/v.log\"; exit 1; } && grep -aE \"$G\" \"$L/v.log\" && cmd.exe /d /c \"cd /d $(wslpath -w \"$W\")\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\" 2>&1 | tr -d '\\r' >\"$W/v.log\" || { tail -40 \"$W/v.log\"; exit 1; } && grep -aE \"$G\" \"$W/v.log\" ) && ( cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}' )",
+    "exitCode": 0,
+    "outputTail": "Run from the task worktree, under the jetbrains-gradle lease (script /mnt/d/moe-scratch/m557-gate/gate2.sh, full log gate2.log). Condensed tail:\n(pp1) ok (pp2) ok (pp3) ok (pc1) ok [Linux leg] (pw1) ok (pw2) ok (pw3) ok (pw4) ok (pc1) ok [Windows leg]\n Test Files  5 passed (5)\n      Tests  62 passed | 5 skipped (67)\n Test Files  2 passed (2)\n      Tests  19 passed | 7 skipped (26)\n[VS Code Linux] ✔ W4 ✔ W5 ✔ W6 ﹣ W7 (Windows host only) ✔ W8 ✔ W9 ✔ W10\nℹ tests 695\nℹ pass 685\nℹ fail 0\nℹ skipped 10\n[VS Code Windows] ✔ W4 ✔ W5 ﹣ W6 (POSIX host only) ✔ W7 ✔ W8 ✔ W9 ✔ W10\nℹ tests 691\nℹ pass 678\nℹ fail 0\nℹ skipped 13\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nBUILD SUCCESSFUL in 31s\nJUnit totals: tests=625 skipped=6 failures=0 errors=0\nGATE_EXIT=0",
+    "reportedAt": "2026-11-03T13:13:05.085Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Under the protected profile, both IDEs' accounts CLI lines now pass --protected-project <project>. With it, the CLI takes claude only from absolute PATH entries (or MOE_CLAUDE_BIN) whose real path and ancestors are outside the project. The claude child runs with PATH = those entries and cwd = home; on Windows it also gets NoDefaultCurrentDirectoryInExePath=1 and the absolute System32 cmd.exe for a .cmd/.bat. Otherwise the CLI exits 1 (MOE_PROTECTED_CLAUDE_REFUSED / MOE_PROTECTED_CLAUDE_NOT_FOUND) before any folder, prompt, registry write or spawn.\n\n8 files vs 13683b4e, +410/-48 (net 362).\n- Steps 1-4 (CLI + JetBrains): checkpoint 4fa4cc9b, unchanged.\n- Step 5 (VS Code, +27/-14): AccountsTerminal.project = the checked basePath. runCli puts the pair right after the registry only when pinned; cli.ts header comment reworded.\n\nRED: W5, W6, W8, W10 failed. GREEN 9/0, W7 skipped on Linux.\n\nGate, fresh, exit 0:\n- Daemon: Linux 62 passed + 5 skipped (pp1-pp3, pc1); Windows 19 + 7 (pw1-pw4, pc1); tsc clean.\n- VS Code: Linux 695/685/0/10 (W6); Windows 691/678/0/13 (W7); W4, W5, W8-W10 on both; compile OK on both.\n- Parity and lint pass; JUnit 625/6/0/0 (A1-A6 ran, A7 POSIX-only).\n\nMutants: V1-V7 killed by exactly the planned rows (W8/W10, W8/W10, W8, W2/W3, W5/W6, W5/W6, W10). Rev 1's M1-M9, J1, J2 stand, since only a cli.ts comment changed.\n\nLegacy unchanged: USAGE, cli.test.ts, extension.ts, W1-W4/W9, accounts-actions, accounts-view, powershell-quoting.\n\nResiduals, not fixed:\n- contract docs stay in task-3a98393f;\n- a network-share home is refused under protected;\n- claude's children inherit only the pinned PATH and cwd;\n- cli.script is unchecked in both IDEs;\n- VS Code's POSIX default-profile shell is task-f3f364a6."
 }

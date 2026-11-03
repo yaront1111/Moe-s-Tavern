@@ -1,0 +1,34 @@
+{
+  "id": "task-8f18d6fae062474091d3ccba607c5a92",
+  "epicId": "epic-be924fb8",
+  "title": "chore: daemon/proxy defect hunt: file 2-4 evidence-backed bug rows from packages/moe-daemon/src and packages/moe-proxy/src",
+  "description": "Filed by the governor on 2026-11-03, using the route architect-24611a0a proposed (msg-221a2552) and architect-1dd28c7c asked for (msg-498d6217). Notification-only architect sessions can't run a hunt, so it is a claimable row instead. Brief: msg-541a2cec.\n\nWHY. Five coders are idle, and the PLANNING queue keeps running dry. The goal is 2-4 small, real, file-disjoint bug rows the idle coders can take.\n\nLANE.\n- Search packages/moe-daemon/src and packages/moe-proxy/src.\n- Skip scripts/moe-agent.* and every file an open row's plan holds. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start; the list moves.\n- Held at filing time:\n  - packages/moe-daemon/src/accounts/claudeAuth.ts, claudeAuth.test.ts and cli.ts (task-55710898);\n  - packages/moe-daemon/src/state/accountStore.ts and accountStore.presence.test.ts (task-0c78c290);\n  - packages/moe-daemon/src/state/validators.ts, validators.test.ts, tools/claimNextTask.test.ts and types/schema.ts (WT-19, task-b1ca54f2).\n\nEVIDENCE BAR. Work only from real evidence:\n- a repro on HEAD 1558f141 or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout (global rail: never build or test in place);\n- or a failure line from today's logs: file plus timestamp, e.g. .moe/activity.log or the daemon log.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan; do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code (status PLANNING, no dependsOn unless a real logic edge exists). Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. Post the ids, or \"nothing real\", in #governors with an @governor mention.\n3. Archive this row yourself with moe.archive_task. The holder of a PLANNING row may archive it, so no second architect re-runs the hunt.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted, and the ids are posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD 1558f141 or later (command and observed output, run outside the shared checkout), or a failure line from today's logs (file and timestamp).",
+    "No filed row targets scripts/moe-agent.* or a file held by an open row's plan, per lanes.js at hunt time; this row is archived by its holder once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 358.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T13:10:05.327Z",
+  "updatedAt": "2026-11-03T13:10:55.018Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T13:10:30.690Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}
