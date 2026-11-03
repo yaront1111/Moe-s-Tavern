@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -94,12 +94,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:19:28.473Z",
-  "updatedAt": "2026-11-03T18:38:26.816Z",
+  "updatedAt": "2026-11-03T18:40:09.861Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:20:06.822Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T18:39:43.947Z",
+    "wallClockMs": 1177125
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -228,7 +230,11 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-24611a0a@2026-11-03T18:20:05Z",
-    "at": "2026-11-03T18:37:51.708Z"
-  }
+    "sessionId": "qa-7328a40d@2026-11-03T18:38:10Z",
+    "at": "2026-11-03T18:40:09.861Z"
+  },
+  "completedAt": "2026-11-03T18:39:43.947Z",
+  "reviewCompletedAt": "2026-11-03T18:39:43.947Z",
+  "reviewSummary": "APPROVE. Reviewed completion b9119a93 (on moe/work-2026-10-24, in HEAD cc84c88a; 5 files, +175/-8 = 167 net LOC, under cap; code files unchanged since). Diff: archiveTask.ts is only `export` on HOLDER_ONLY_FROM. archiveEpic.ts adds optional workerId to the schema (required ['epicId'], additionalProperties false) and assertNoRowHeldByOthers, run after the IN_FLIGHT gate and before the finalizing loop and first write. Its condition is identical to archive_task's (archiveTask.ts:71-72); it throws NOT_ALLOWED naming each held task and holder. The bare params.workerId is updateTask's 4th arg, so a caller-less call records none. docs: archive_epic section only. Re-ran the worker's verification command verbatim in a git-archive snapshot outside the checkout (npm ci, tsc, tt.json typecheck): EXIT=0. holderActor 3/3 (DoD1); archiveEpic 6 + archiveTask 8 + taskMoveActor 1 = 15/15 (DoD3); attemptHandback 41/41. DoD2: the new allowed-paths it covers a caller-less call (actor null, #general 'by unknown'), the holder (worker-y) and an unassigned row with another caller (architect-c), with the actor map asserted exactly. Test 2 pins atomicity (held row moved last, DONE sibling, NOT_ALLOWED codeName, message names task-held/worker-x, nothing changed, no TASK_ARCHIVED). Mutants in the snapshot copy (restored, 9/9 green): dropping `callerId &&` and `?? 'unknown'` are each killed by the allowed-paths test; dropping the 4th arg by the holderActor actor test and the allowed-paths test. Not run: full daemon suite (plan scopes the gate to these files). No forbidden patterns, no .moe/ edits, no weakened tests. Complexity: nothing to cut.",
+  "requiredCheckAtDone": null
 }
