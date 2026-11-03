@@ -95,8 +95,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -108,16 +108,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:42:33.313Z",
-  "updatedAt": "2026-11-03T19:16:39.687Z",
+  "updatedAt": "2026-11-03T19:21:11.873Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:42:52.720Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T19:20:28.601Z",
+    "wallClockMs": 2255881
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-c9368191"
+    "worker-c9368191",
+    "qa-7328a40d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -208,10 +211,11 @@
   "planApprovedAt": "2026-11-03T18:59:15.861Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T18:59:26Z",
-    "at": "2026-11-03T19:16:37.822Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T19:16:37Z",
+    "at": "2026-11-03T19:21:11.873Z"
   },
   "workStartedAt": "2026-11-03T19:00:49.746Z",
   "reviewStartedAt": "2026-11-03T19:05:25.280Z",
@@ -256,5 +260,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T19:20:28.601Z",
+  "reviewCompletedAt": "2026-11-03T19:20:28.601Z",
+  "reviewSummary": "Reviewed completion f8b8d60c on moe/work-2026-10-24 (pushed). Parent af8ca2bb and tree cf4b68a2 match candidate cand-138f1499. 8 files, +131/-28 (about 103 net LOC), exactly the 8 declared paths; owned paths are clean against HEAD.\n\nRe-run in /tmp snapshots:\n- task.verification (green) verbatim: tsc clean, 'Test Files 8 passed (8)', 'Tests 189 passed (189)', exit 0.\n- checkRef red at 207fc682: FAIL (a1), FAIL (a2), 'Tests 2 failed | 2 passed (4)', RED-AT-BASE.\n- Adjacent: archiveEpic*, getActivityLog, the three *Actor tests, WebSocketServer*, McpAdapter: 12 files, 198 tests, all passed.\n\nMutation check of epicDeleteActor.test.ts. Killed: actor dropped from EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED, the cascade or TASK_DELETED; dropped in any of the four tools; createEpic reading the actor from input; an 'unknown'/'agent' fallback; update_epic not splitting workerId off. Survived, not blocking: (1) workerId in allowedFields, behaviour-equivalent; (2) passing the epic to the EPIC_DELETED append, which would add a top-level epicId. The code keeps it undefined, but no test pins that shape; an optional one-line follow-up.\n\nDoD:\n1. All four tools pass a bare params.workerId into appendActivity's 7th argument, with no placeholder. A caller-less call records null; (a4) covers it, including the /ws-style createEpic with a smuggled workerId.\n2. update_epic destructures workerId: args are not mutated, and allowedFields and the strict loop are unchanged. (a3): an unknown field is refused and nothing is written. (a1): the stored epic has no workerId, in memory or on disk.\n3. Red before, green after; the existing test files pass.\n\nInvariants hold: the /ws paths, archiveEpic.ts:92 and the rail-proposal updateEpic are untouched; payloads are unchanged; no forbiddenPatterns string; the four MCP_SERVER.md lines are present. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

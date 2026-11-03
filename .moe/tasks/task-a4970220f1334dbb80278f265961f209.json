@@ -1,0 +1,28 @@
+{
+  "id": "task-a4970220f1334dbb80278f265961f209",
+  "epicId": "epic-be924fb8",
+  "title": "test: workerType.test.ts's chat_who fixture keys cursors and chat_wait waiters on 'chan-x', a channel that never exists in state, so its chat_who case fails once chat_who refuses an unknown channel (prerequisite of task-4877ef36)",
+  "description": "Prerequisite split out of task-4877ef36 while planning it (2026-11-03). That row's DoD makes chat_who refuse a channel that does not exist with -32001 NOT_FOUND, and its DoD 3 limits its diff to its own 5 files. Under that fix, this fixture would break, so the fixture must use a real channel first, in its own row.\n\nPROBLEM\nIn packages/moe-daemon/src/tools/workerType.test.ts, the describe block 'moe.chat_who and moe.list_workers project the persisted type' builds everything on a channel that is never created:\n- :338 sets `const CHAN = 'chan-x'`.\n- :345, :347 and :349 key three seats' chatCursors on CHAN.\n- :353-360 register chat_wait waiters directly in activeChatWaiters on [CHAN], on null, and on ['chan-other'].\n- :380 calls `who({ channel: CHAN })`.\nNo channel 'chan-x' exists in state; the harness creates only the default channels. The test passes today only because chat_who keys on the raw string (chatWho.ts:39 and :69).\n\nEVIDENCE\nHEAD b5f40fee, in a git-archive snapshot. I patched chatWho.ts as a scratch change only (not committed): it resolves params.channel through state.resolveChannelRef and throws notFound on null. Then `NO_COLOR=1 npx vitest run src/tools/workerType.test.ts` gives:\n    × chat_who carries the type on a cursor, a waiting, a both and an all-channels entry\n    MoeError: [NOT_FOUND] Channel not found: chan-x\n    Tests  1 failed | 56 passed (57)\nUnpatched, the file passes, and a tsc -p tt.json typecheck that includes the file exits 0. The full output is in /mnt/d/moe-scratch/hunt-21d671c1/workerType-chanx-mutant.out.\n\nFIX DIRECTION\nMake CHAN a channel that exists in state. Leave every assertion and entry shape unchanged, and change only the fixture setup. Either of these works:\n- before `await h.state.load()`, write `.moe/channels/chan-x.json` under h.moePath with the ChatChannel shape (types/schema.ts:1825-1831: id 'chan-x', name 'x', type 'custom', linkedEntityId null, createdAt). StateManager.load reads .moe/channels through loadEntities (StateManager.ts:1099). This is a temp test project, not the repo's .moe/.\n- or create it after load with `h.state.createChannel({ name: 'x', type: 'custom' })`, then key the three cursors and the waiters on the returned id.\n'chan-other' is only a waiter that must be excluded, and chat_who is never called with it, so it can stay as is.\nError handling: if the channel setup throws, the test fails, which is the right outcome. Do not wrap the setup in a try/catch.\n\nFILES: packages/moe-daemon/src/tools/workerType.test.ts only. It is not held by any open row. The epic rail's size exception for task-0b40957c covers that row's landed bytes only; it does not stop other edits to this file.",
+  "definitionOfDone": [
+    "`cd packages/moe-daemon && npx vitest run src/tools/workerType.test.ts`, run in a snapshot outside the shared checkout, passes with every existing assertion unchanged. The diff changes only the chat_who/list_workers fixture setup.",
+    "The same file also passes in that snapshot when chatWho.ts carries a scratch patch, not committed: resolve params.channel with state.resolveChannelRef and throw notFound when it returns null. On HEAD b5f40fee that patched run fails 'chat_who carries the type…' with NOT_FOUND chan-x.",
+    "The diff touches only packages/moe-daemon/src/tools/workerType.test.ts. A tsc -p tt.json typecheck whose include is that file (the extends ./tsconfig.json, types:[node] pattern) exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 410.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:16:50.040Z",
+  "updatedAt": "2026-11-03T19:16:50.040Z"
+}

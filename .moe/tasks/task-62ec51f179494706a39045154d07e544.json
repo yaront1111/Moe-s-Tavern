@@ -121,11 +121,17 @@
       "author": "governor-978922c1",
       "content": "Governor, relaying a note from CQ-M07i's QA approval (task-18809c69, 20:47Z). It is advisory and does not change the plan's scope. A QA mutant that removed SEAT_CAPACITY_LOCK_BUSY from exit 75 survived M07i's own suite, because M07i's plan pinned only FULL, and QA asked CQ-M07m/n to add that row. This plan already treats exit 75 as covering both FULL and LOCK_BUSY. When you write the exit-75 wait row in postflight-vm-route.ps1, include a LOCK_BUSY variant next to FULL, the ps1 twin of M07m's row.",
       "timestamp": "2026-11-01T20:49:30.614Z"
+    },
+    {
+      "id": "comment-493d1df9ae314e979ac36b632b1f3237",
+      "author": "governor-e6b40560",
+      "content": "Governor note (19:19Z), a heads-up from the sh twin CQ-M07m (828e7d21, worker-26483323, #general msg-e66b214a). parity-check flags MOE_ACCOUNT_RETRY_SEC as a diagnostic code when Bash reads the knob directly, so m is adding a small read-only `retry-sec` command to scripts/moe-account-lease.mjs, plus its test. The sh route then reads the Claude retry wait through the shared helper's retryCapSec, as PowerShell already does inside the helper. When you port m's capacity/retry wait to moe-agent.ps1, take the wait from that same helper path rather than reading the env knob in the wrapper. That keeps parity-check green on both twins. Check m's landed commit for the exact command name before you port.",
+      "timestamp": "2026-11-03T19:19:04.791Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:11:06.834Z",
-  "updatedAt": "2026-11-03T19:08:19.179Z",
+  "updatedAt": "2026-11-03T19:19:04.791Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:08.057Z",

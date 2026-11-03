@@ -49,9 +49,15 @@
     {
       "stepId": "step-4",
       "description": "Verification gate. Run it ONCE, fresh, after the last tracked edit. Its output is moe.complete_task's evidence: the command, exitCode and outputTail. It takes about 20-30 minutes, so start it with Bash run_in_background and wait for the completion notice instead of polling.\n\nRun the executionContract checkRef exactly (byte-identical copy: /mnt/d/moe-scratch/plan-044c/checkref.txt), from anywhere inside your task worktree:\n\n( R=$(git rev-parse --show-toplevel) && F=\"$(wslpath -w \"$R\")\\scripts\\tests\" && cd /mnt/d/moe-scratch && L=$(mktemp /mnt/d/moe-scratch/044c-gate.XXXX) && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight.ps1\" && bash \"$2/scripts/tests/parity-check.sh\"' _ \"$F\" \"$R\" > \"$L\" 2>&1; r=$?; echo \"log=$L exit=$r\"; tr -d '\\0\\r' < \"$L\" | grep -axE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c; exit $r )\n\nWhat it does: it runs YOUR worktree's harnesses by their D:\\ path (wslpath -w), from a D: cwd. A /tmp cwd breaks postflight.ps1 (mem:gotcha-qa-ps1-postflight-from-wsl). Every MOE_*, CLAUDE* and FAKE_* variable is removed, and MOE_POSTFLIGHT_TIMEOUT_SEC=180 is passed through WSLENV. The legs, in order:\n1. postflight-vm-route.ps1 alone under Windows PowerShell 5.1;\n2. postflight-vm-route.ps1 alone under pwsh 7;\n3. postflight.ps1 under 5.1, which runs postflight-vm-route.ps1 again through n1's hook;\n4. bash scripts/tests/parity-check.sh, which also fails if moe-agent.ps1 lost its UTF-8 BOM (parity-check.sh:311).\nThe subshell exits with the chain's own code, not the trailing grep's.\n\nExpected: `log=... exit=0`, then these counts:\n- `3 PASS postflight-vm-route.ps1` (5.1 alone, 7 alone, nested);\n- `1 PASS parity-check.sh`;\n- `1 PASS postflight.ps1`.\nA leg that never ran is missing from the counts, so check them. In the architect's dry run on n1's current bytes, postflight-vm-route.ps1 passed on 5.1 and on 7 (/mnt/d/moe-scratch/plan-044c/summary.txt). The postflight.ps1 leg had not finished when this plan was submitted.\n\nGlobal rails:\n- Rail 1: never run npm or the daemon/proxy test suites in the shared checkout. This gate runs none.\n- Rail 2: if a run hangs, kill only a PID your own session started, never by name. The harnesses already kill only their own wrapper PIDs with taskkill /T.\n\nError handling for a red run: read the log first.\n- T-malformed-array fails: the fix is not in, or its text differs from the plan's.\n- A refusal row fails: the change over-wraps objects (step 5's M4).\n- postflight.ps1 fails anywhere else: rerun the parent revision's scripts (a scratch `git archive` of the base) before blaming the change, because the WSL launch environment can fail it on its own (mem:gotcha-qa-ps1-postflight-from-wsl).\nNever weaken the command.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T17:28:46.356Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Gate (checkRef, byte-identical): log=/mnt/d/moe-scratch/044c-gate.LNFe exit=0; 3 PASS postflight-vm-route.ps1, 1 PASS parity-check.sh, 1 PASS postflight.ps1. (A first run was killed by the background time limit mid-postflight.ps1 after both vm-route legs passed; rerun was complete.)",
+      "startedAt": "2026-11-03T17:28:46.356Z",
+      "completedAt": "2026-11-03T19:20:49.292Z"
     },
     {
       "stepId": "step-5",
@@ -99,7 +105,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:44.109Z",
-  "updatedAt": "2026-11-03T17:28:46.356Z",
+  "updatedAt": "2026-11-03T19:20:49.292Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T16:31:41.317Z",
@@ -109,7 +115,7 @@
     "firstClaimAt": "2026-11-03T16:40:15.880Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -123,7 +129,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:07:05.765Z",

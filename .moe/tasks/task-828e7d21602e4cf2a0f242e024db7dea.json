@@ -58,26 +58,37 @@
     {
       "stepId": "step-3",
       "description": "A failed job (DoD 5, failed-job part), in scripts/moe-agent.sh.\n\nWhat counts as a failed job:\n- seat-job exits non-zero;\n- it prints no outcome line marked \"seatJob\":1;\n- the outcome says ok:false.\n\nOn a failed job:\n1. Print `[WARN] MOE_SEAT_JOB_FAILED: <code or exit n>` (the fixed code only).\n2. Run seat-stop for the seat's instance. It is idempotent: it answers 'gone' when CQ-M07j's runSeatJob already stopped the VM.\n3. Forget the instance, so the next iteration provisions a fresh VM before its claim.\n4. Set CLI_EXIT_CODE to seat-job's exit (1 when it exited 0 without a valid outcome). The wrapper's existing launch classification then applies unchanged:\n   - a fast failure feeds LAUNCH_FAIL_STREAK and its backoff;\n   - a later one feeds RESUME_ATTEMPTS, with the MOE_RESUME_MAX_ATTEMPTS cap and its #general escalation.\n5. The task stays held and resumes through alreadyAssigned.\n\nNothing is landed from a failed job: there is no admitted tree. CQ-M07m2's helper is not called.\n\nWhy every failed job deletes the VM: DoD 5 asks for it, and the wrapper never reuses a VM whose job failed. The cost is one re-provision per failure. Never the host CLI.\n\nerror handling: a seat-stop that fails here prints `[WARN] MOE_SEAT_STOP_FAILED: <code>` and still forgets the instance. The ledger keeps the record for CQ-M07g cleanup, as stopSeat documents.\n\nTests in postflight-vm-route.sh, two rows:\n- (a) The stub seat-job exits 1 with {seatJob:1, ok:false, code:'SEAT_JOB_SESSION_FAILED', vm:'kept'}.\n- (b) The stub seat-job exits 0 with no outcome line.\nIn each row:\n- the stub log shows seat-stop right after the job;\n- the next iteration does a fresh seat-start before its resume claim (alreadyAssigned) and its next seat-job;\n- the host CLI stub never runs.\nUse `--loop`, with a fake-proxy claim limit so the run ends.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-03T19:12:09.788Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-fake-agent-seat.js",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/moe-account-lease.mjs",
+        "scripts/tests/moe-account-lease.test.mjs"
+      ],
+      "note": "Failed/malformed/ok:false jobs stop and forget the instance, preserve the held task and feed existing backoff/resume budgets. VM-only exemption from host taskless-probe release prevents an unrecoverable outage; legacy unchanged. Covered nonzero/missing/false outcomes, failed stop, 3 failures then recovery, Ctrl+C capacity/token waits, late-failure resume cap. Addressed planner comment-e98f63a: helper rc1 HEAD_MOVED/BASE_MISMATCH/DIRTY rescues a valid admitted tree before exit; DIRTY E2E confirms parent/tree/ref/ledger and untouched W. RED /tmp/moe-m-step3-red.log and /tmp/moe-m-rescue-red.log; GREEN /tmp/moe-m-step3-green.log and /tmp/moe-m-waits.log. Shared fake fixture extended; get_context workspace added to faithfully model resume. Scope addition: shared account helper read-only retry-sec command + test reuses its existing retry policy: direct Bash MOE_ACCOUNT_RETRY_SEC falsely appeared as a new diagnostic to parity. Did not modify PS or weaken parity. Helper suite 41 pass, 1 platform skip; final credential rows green; bash -n/parity/lint pass. 260 changed lines, no size waiver.",
+      "startedAt": "2026-11-03T19:12:09.788Z",
+      "completedAt": "2026-11-03T19:19:54.875Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification gate, run ONCE (DoD 6), plus the DoD audit across the M07m chain.\n\n1. Run `bash -n scripts/moe-agent.sh` and `bash scripts/tests/parity-check.sh`. The new codes use MOE_SEAT_, MOE_VM_ and MOE_VERIFIED_LOCAL_, which parity-check.sh does not compare; CQ-M07n adds them with the ps1 twin.\n2. Run the full harness in place, as the global rail allows for launcher harnesses: `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`. It runs postflight-vm-route.sh through CQ-M07m1's one-line hook.\n   - It takes about 15-20 min, past the Bash tool's 10-minute foreground cap.\n   - Launch it with job control, per mem:gotcha-qa-session-env-and-signals-leak-into-harness: `( set -m; MOE_POSTFLIGHT_TIMEOUT_SEC=360 nohup bash -c 'bash scripts/tests/postflight.sh > <log> 2>&1; echo EXIT=$? >> <log>' >/dev/null 2>&1 & )`, then poll for EXIT=.\n   - A plain background job ignores SIGINT and fails scenario W.\n   - It must end EXIT=0 and print PASS postflight.sh. A row that also fails on HEAD's bytes is pre-existing: report it, don't fix it here.\n3. DoD audit. The completion summary must map each DoD item to its row names:\n   - DoD 1: CQ-M07m1's byte-identity row, plus every existing postflight.sh row.\n   - DoD 2: CQ-M07m3's order row.\n   - DoD 3: CQ-M07m1's refusal rows.\n   - DoD 4: CQ-M07m3's claude canary row and this row's codex canary.\n   - DoD 5: CQ-M07m3's normal-exit and Ctrl+C rows, and this row's failed-job rows.\n   - DoD 6: this run.\n4. Size: `git diff --numstat HEAD` for the changed files. QA counts additions plus deletions against 400. If over, merge rows that share setup; if still over, file an EPIC ADD_RAIL size exception (moe.propose_rail) with the exact numstat before complete_task.\n\nThe fresh harness output tail is the complete_task verification evidence. Its command is `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/postflight-fake-proxy.js"
       ],
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh"
-      ]
+      ],
+      "startedAt": "2026-11-03T19:19:54.904Z"
     },
     {
       "stepId": "step-5",
@@ -138,7 +149,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-03T19:12:09.788Z",
+  "updatedAt": "2026-11-03T19:19:54.904Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",
@@ -148,7 +159,7 @@
     "firstClaimAt": "2026-11-01T12:25:21.951Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -161,7 +172,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T14:25:25.910Z",
