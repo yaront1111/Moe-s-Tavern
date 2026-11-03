@@ -81,7 +81,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T21:02:46.344Z",
-  "updatedAt": "2026-11-03T22:37:12.690Z",
+  "updatedAt": "2026-11-03T22:38:48.272Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:05:47.251Z",
@@ -180,5 +180,30 @@
     "packages/moe-daemon/src/util/rails.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "The shared rail refusal (util/rails.ts assertPlanRails, used by submit_plan steps and contract and by amend_plan_step) now names only the escape hatch that can lift it: moe.propose_rail { proposalType: \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\", taskId, currentValue: <JSON-quoted exact forbiddenPatterns/requiredPatterns entry parsed from the violation label>, ... }, plus the sentence \"Only that GLOBAL change can lift this refusal: the plan check enforces no other rail.\" EPIC, TASK and ADD_RAIL are no longer offered. A non-string or odd violation gets a placeholder currentValue; the builder never throws. Code -32003, the \"[CONSTRAINT_VIOLATION] Rail violation: ... Default action: \" lead, error.data and MoeError context are unchanged. docs/MCP_SERVER.md Rail refusal bullet now says \"Only a GLOBAL proposal can lift a rail refusal\". Tests: submitPlan.test.ts 'rail refusal on the MCP wire' it.each gains assertions for the exact hatch text and no EPIC|TASK|ADD_RAIL, for all three cases. GREEN: docs grep ok, tsc clean, Test Files 6 passed (6), Tests 175 passed (175), rc=0. RED at fa405c59's rails.ts: \"Tests 3 failed | 92 skipped (95)\", RED-AT-BASE. Both ran in mktemp snapshots outside the checkout, removed after. Note for governor (out of scope): the \"Rail Proposals (escape hatch)\" template in docs/roles/{architect,worker,governor}.reference.md still lists every scope for propose_rail in general; a refused plan needs GLOBAL MODIFY/REMOVE."
+  "completionSummary": "The shared rail refusal (util/rails.ts assertPlanRails, used by submit_plan steps and contract and by amend_plan_step) now names only the escape hatch that can lift it: moe.propose_rail { proposalType: \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\", taskId, currentValue: <JSON-quoted exact forbiddenPatterns/requiredPatterns entry parsed from the violation label>, ... }, plus the sentence \"Only that GLOBAL change can lift this refusal: the plan check enforces no other rail.\" EPIC, TASK and ADD_RAIL are no longer offered. A non-string or odd violation gets a placeholder currentValue; the builder never throws. Code -32003, the \"[CONSTRAINT_VIOLATION] Rail violation: ... Default action: \" lead, error.data and MoeError context are unchanged. docs/MCP_SERVER.md Rail refusal bullet now says \"Only a GLOBAL proposal can lift a rail refusal\". Tests: submitPlan.test.ts 'rail refusal on the MCP wire' it.each gains assertions for the exact hatch text and no EPIC|TASK|ADD_RAIL, for all three cases. GREEN: docs grep ok, tsc clean, Test Files 6 passed (6), Tests 175 passed (175), rc=0. RED at fa405c59's rails.ts: \"Tests 3 failed | 92 skipped (95)\", RED-AT-BASE. Both ran in mktemp snapshots outside the checkout, removed after. Note for governor (out of scope): the \"Rail Proposals (escape hatch)\" template in docs/roles/{architect,worker,governor}.reference.md still lists every scope for propose_rail in general; a refused plan needs GLOBAL MODIFY/REMOVE.",
+  "commits": [
+    {
+      "sha": "3441d183aa62af61126e3d1fdbafcadd9115f835",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T22:34:10Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/util/rails.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T22:38:48.272Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T22:34:10Z",
+    "at": "2026-11-03T22:38:48.272Z"
+  }
 }
