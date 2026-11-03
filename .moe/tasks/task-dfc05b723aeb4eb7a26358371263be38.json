@@ -74,7 +74,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -87,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:26.244Z",
-  "updatedAt": "2026-11-02T22:05:58.891Z",
+  "updatedAt": "2026-11-03T00:26:29.634Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:22.389Z",
@@ -97,11 +97,14 @@
     "firstClaimAt": "2026-11-02T21:52:13.611Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T00:26:01.024Z",
+    "wallClockMs": 9227413
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -206,9 +209,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-02T21:59:20Z",
-    "at": "2026-11-02T22:05:58.891Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T00:23:15Z",
+    "at": "2026-11-03T00:26:29.634Z"
+  },
+  "completedAt": "2026-11-03T00:26:01.024Z",
+  "reviewCompletedAt": "2026-11-03T00:26:01.024Z",
+  "reviewSummary": "Reviewed completion 28df02f7 (on moe/control HEAD; the 2 owned files are byte-equal at HEAD 5c5b3706). Diff +227/-20 (net 207), only massDeletionHeal.ts and massDeletionHeal.test.ts (DoD 5).\n\nRe-ran task.verification in a fresh git-archive snapshot (cmp-checked, env -i, node 24.21.0): npm ci, tsc --noEmit, vitest massDeletionHeal + StateManager -> exit 0, 2 files, 151 tests (8 + 143). No npm in the shared checkout.\n\nDoD 1: case (w) heals 10 and the files equal the memory snapshot; after load() all 5 maps deep-equal. DoD 2: (x) one worker file and (y) two proposal files return 0, and load() drops exactly those; the 3 original cases are untouched (3 import lines added). DoD 3: I restored the pre-change heal in my snapshot; (w) fails with \"expected +0 to be 10\", the rest pass. Invariants hold: MIN/FRACTION values and exports, and the combined arithmetic, are unchanged; tasks/epics never trip the per-kind rule (removing BOARD_KINDS fails the 11-of-50 case).\n\nOwn probes in the snapshot, all green: only attempts+resources dirs gone -> 2; 3 of 4 worker files deleted with the dir kept -> 3; teams dir alone -> 1; a second heal returns 0. Mutants: disabling the per-kind fraction branch, or the dirGone clause, alone survives, because (w) trips both. Both branches are correct per my probes. Non-blocking follow-up: add one case per branch.\n\nChecked the daemon's own deleters (deleteTeam/deleteWorker/purgeResolvedProposals/deleteChannel): they delete the map entry with no await after the unlink, or call ignorePath, so they cannot trip the new rule. STORES keys match each store's writeEntity dir/id. FileWatcher watches workers and proposals, so a git clean fires the trigger.\n\nNon-blocking notes: the scan now stats about 3x more files, 2967 on this repo (attempts 1890), about 2.5 s on WSL drvfs and far less on native Windows. Channels are not board kinds, so a checkout that removes 3 or more channel files would be restored.",
+  "requiredCheckAtDone": null
 }

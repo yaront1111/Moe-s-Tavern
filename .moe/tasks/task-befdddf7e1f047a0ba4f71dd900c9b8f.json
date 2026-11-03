@@ -92,7 +92,7 @@
     {
       "stepId": "step-6",
       "description": "Final adversarial self-review, once, over this task's diff. Load adversarial-self-review and attack it:\n1. Can ANY path delete outside W? Check:\n   - a manifest line with '..', an absolute path or a drive letter;\n   - a parent junction;\n   - W or .worktrees itself being a link;\n   - a link not in the manifest (WT-06 reserves every link before making it; confirm that still holds);\n   - git's own recursion on Windows after the unlinks.\n2. Can an unlanded commit or non-DENY dirty byte be deleted without a rescue ref that resolves to it? Check:\n   - rescue_ref's 'nothing to rescue' return being read as success;\n   - a ref-name collision in the same second (`<ts>` then `<ts>-$$`);\n   - an unknown task whose record_commit fails.\n3. Concurrency. Check:\n   - two seats breaking the same stale lock;\n   - the QA removal racing the sweep (both take the lock);\n   - a human reopening a DONE task mid-sweep (the attempt re-check);\n   - a worker provisioning the same TID: `branch -D` refuses a checked-out branch.\n4. Rail 4: with control off moe/control, does either entry point run a git command or print anything? Do existing postflight and worktree-landing scenarios still pass byte-for-byte (the fake knob only touches view:'status')?\n5. Error handling and fail-closed behaviour:\n   - an RPC failure, an unparsable attempt record, a failed porcelain read and a failed stamp write each abort, never delete;\n   - TASK_NOT_FOUND is the ONLY unknown signal;\n   - set -e safety of each new sh line;\n   - PS 5.1 parsing, -LiteralPath and the finally releases.\n6. Twins: identical codes, banners and env name; the token diff is empty; parity-check passes.\n7. Do any test helpers leak junctions, chmod/icacls denies or locks into scratch cleanup?\nIf any byte changes, re-run step 5's command and submit that last fresh output.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
@@ -100,7 +100,9 @@
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
       ],
-      "startedAt": "2026-11-02T23:08:44.729Z"
+      "note": "Final adversarial review of the complete five-file task diff (d08b62d1^..HEAD), read-only: no tracked edits this session. Checked traversal/drive/dot-segment and parent-link validation, W/.worktrees/.moe guards, manifest reservation-before-link in BOTH WT-06 twins, Git's non-following behavior, strict dirt/rescue proof, same-second ref collisions, error paths, literal PS paths/finally, shared-mode gating, counters, ACL teardown and fixture link targets. Extra scratch WT14E variant makes dirty+unlanded task UNKNOWN and rejects both record_commit calls: PASS on bash and PS5.1, both exact rescue refs preserved before W removal (scratch wt14-unknown-fdb.hfgni1rc).\nConcurrency reviewed: QA and sweep use the same lock; sweep re-reads attempts immediately before engine; registration and branch tip are rechecked and branch -D refuses a checked-out branch. The stale-lock break/PS New-Item still have narrow non-atomic windows, status is not re-read after rescue, and interrupted sh locks expire after 2h; documented rather than asserting transaction isolation.\nKnown Git limitations recorded in comment-7c35384c: partial git remove failure can deregister W; Windows git may leave an unmanifested junction remnant despite rc0. Next pass names such leftovers UNREGISTERED. Shared-mode entry uses existing read-only git_top/symbolic-ref predicate; no worktree mutation/RPC/banner. No stronger guarantee claimed.\nFresh exact step-5 command rerun in THIS session, snapshot /mnt/d/moe-scratch/v-befdddf7.xiiXpy, exit 0. Token diff empty, parity PASS; postflight-safe bash and Windows powershell each exit 0/failureClass NONE; worktree-landing 18 passed/0 failed/0 errors. Files cmp-identical after run. QualityGate parity && npm run lint exit 0; bash -n and PS5.1 ParseFile clean; diff --check clean. Log /mnt/d/moe-scratch/verify-befdddf7-fdb.log. WT14D not skipped (Linux uid1000, not MSYS; native Windows ACL case).\nFiled out-of-scope task-c25edf4561964340b3684f5ef0a1b5ff: postflight-safe misses scenario-prefixed SKIP lines (direct repro). This corrects prior note's inference that NONE alone proves no skips. Existing task-f977d76e9a9c44e7af0322be1eb76333 is DONE.\nSize stays 1496 net (+1539/-43), pending human waiver prop-6812056da5e142f48194d673f33fb038. Governor directed complete_task then a REVIEW hold if waiver still pending. Serena handoff/gotchas saved. ponytail: reused existing code, added no abstraction; step net0.",
+      "startedAt": "2026-11-02T23:08:44.729Z",
+      "completedAt": "2026-11-03T00:26:03.392Z"
     }
   ],
   "planRevision": 1,
@@ -158,7 +160,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-02T23:58:46.710Z",
+  "updatedAt": "2026-11-03T00:26:03.392Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",
@@ -168,7 +170,7 @@
     "firstClaimAt": "2026-10-30T13:50:04.185Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-899a90d6",
@@ -184,7 +186,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:31.742Z",
