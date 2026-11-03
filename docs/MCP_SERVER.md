@@ -2892,14 +2892,16 @@ Worker (or governor) hands the task back to the architect for a fresh plan. Snap
   status: "PLANNING",
   priorAttempt: PriorAttempt,
   message,
-  nextAction: { tool: "moe.wait_for_task", args, reason }
+  sessionHandoff?: { action: "END_SESSION", taskId, workerId, reason }
 }
 ```
+
+The seat is freed, so the reply carries no `nextAction` (no `moe.wait_for_task` or `moe.claim_next_task` hint: a second claim inside the session would fail `ATTEMPT_SUPERSEDED`), the same rule as a seat-freeing `moe.report_blocked`. `sessionHandoff` is addressed to the prior assignee, or to a non-governor caller when the row had no assignee; it is omitted for a governor (team role or id prefix) and when that seat's worker record already names another `currentTaskId`.
 
 **Side effects:**
 - Sets `task.reopenReason = reason` and `task.priorAttempt = { attemptedAt, reason, implementationPlan, stepsCompleted }`.
 - Resets `implementationPlan = []` and `stepsCompleted = []`.
-- Marks the assigned worker `IDLE` with `currentTaskId = null`.
+- Marks the assigned worker `IDLE` with `currentTaskId = null` (left untouched when its `currentTaskId` names a different task).
 - Activity event: `TASK_REOPENED`.
 
 ---
