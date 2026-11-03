@@ -49,6 +49,18 @@ async function advance(ms: number): Promise<void> {
 const approvals = () => h.state.getActivityLog(500)
   .filter((event) => event.taskId === TASK && event.event === 'PLAN_AUTO_APPROVED');
 
+/** Fire the pending timer while `work` holds the mutex, queuing its callback behind that work. */
+async function fireTimerBehind(work: () => Promise<unknown>): Promise<void> {
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  // runExclusive takes the lock synchronously, before the timer fires.
+  const held = h.state.runExclusive(async () => { await gate; await work(); });
+  await vi.advanceTimersByTimeAsync(DELAY_MS);
+  open();
+  await held;
+  await advance(0);
+}
+
 describe('an approvalMode switch reaches the SPEED timers', () => {
   it('SPEED then CONTROL before the timer fires: the plan stays awaiting a human', async () => {
     await submitUnder('SPEED');
@@ -60,6 +72,32 @@ describe('an approvalMode switch reaches the SPEED timers', () => {
     expect(h.state.getTask(TASK)).toMatchObject({ status: 'AWAITING_APPROVAL' });
     expect(h.state.getTask(TASK)).not.toHaveProperty('approvedPlanRevision');
     expect(approvals()).toEqual([]);
+  });
+
+  it('a fired SPEED timer queued behind a CONTROL switch leaves the plan awaiting a human', async () => {
+    await submitUnder('SPEED');
+
+    await fireTimerBehind(() => h.state.updateSettings({ approvalMode: 'CONTROL' }));
+
+    expect(h.state.getTask(TASK)).toMatchObject({ status: 'AWAITING_APPROVAL' });
+    expect(h.state.getTask(TASK)).not.toHaveProperty('approvedPlanRevision');
+    expect(approvals()).toEqual([]);
+
+    await advance(DELAY_MS * 4);
+    expect(h.state.getTask(TASK)).toMatchObject({ status: 'AWAITING_APPROVAL' });
+    expect(h.state.getTask(TASK)).not.toHaveProperty('approvedPlanRevision');
+    expect(approvals()).toEqual([]);
+  });
+
+  it('a fired SPEED timer queued behind a TURBO switch approves its submitted revision once', async () => {
+    const submitted = await submitUnder('SPEED');
+
+    await fireTimerBehind(() => h.state.updateSettings({ approvalMode: 'TURBO' }));
+
+    expect(h.state.getTask(TASK)).toMatchObject({
+      status: 'WORKING', approvedPlanRevision: submitted.planRevision,
+    });
+    expect(approvals()).toHaveLength(1);
   });
 
   it('CONTROL then SPEED with a pending row: it is approved after the delay, bound to its submitted revision', async () => {

@@ -104,7 +104,8 @@ function recordSpeedApprovalFailure(state: StateManager, taskId: string, error: 
  * Arm (or re-arm) the SPEED-mode delayed auto-approval for a task. Cancels any
  * prior pending timer for the task before scheduling so the old timer can't leak,
  * then approves inside the StateManager mutex with a re-check that the task is
- * still AWAITING_APPROVAL (TOCTOU-safe against concurrent manual approve/reject).
+ * still AWAITING_APPROVAL and that approvalMode is still SPEED or TURBO
+ * (TOCTOU-safe against concurrent manual approve/reject or a mode switch).
  * The approval is bound to `revision`, the plan revision the timer was armed
  * for: the store refuses it once the plan, DoD or contract has moved on, and the
  * timer then withholds instead of approving (a human approves or resubmits).
@@ -127,6 +128,11 @@ function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: numb
       await state.runExclusive(async () => {
         const currentTask = state.getTask(taskId);
         if (!currentTask || currentTask.status !== 'AWAITING_APPROVAL') return;
+        // A fired timer queued behind a CONTROL switch cannot be cancelled by
+        // clearAllSpeedModeTimeouts (task-8cb8ff4a, residual of task-42aeed8a).
+        // TURBO approves anyway; CONTROL or an unset mode leaves it for a human.
+        const mode = state.project?.settings?.approvalMode;
+        if (mode !== 'SPEED' && mode !== 'TURBO') return;
         try {
           await updateTask(state, taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() },
             'PLAN_AUTO_APPROVED', undefined, { approvedPlanRevision: revision });
