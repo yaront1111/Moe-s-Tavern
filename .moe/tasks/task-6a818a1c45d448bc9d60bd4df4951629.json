@@ -30,28 +30,45 @@
     {
       "stepId": "step-2",
       "description": "Write the NEW test packages/moe-daemon/src/server/WebSocketServer.transitions.test.ts with the Write tool. Copy its content from the dry-run-verified reference /mnt/d/moe-scratch/plan-6a81/WebSocketServer.transitions.test.ts (sha256 086f48de…, 174 lines), and change it only if it fails for you.\n\nIt drives a real MoeWebSocketServer on 127.0.0.1:0 over a temp .moe with a TURBO project and no columnLimits. Before state.load() it writes 2 task files per (from, to) pair, `ws-<from>-<to>` and `mcp-<from>-<to>`, for all 56 pairs with from ≠ to over Object.keys(VALID_TRANSITIONS). Each BLOCKED fixture carries blockedFromStatus 'WORKING'. The fixture also writes task-backlog, task-backlog-2, task-parked-backlog (BACKLOG, needsHumanReview true) and task-parked-blocked (BLOCKED from REVIEW, needsHumanReview true).\n\nA connect() helper buffers frames, so none is lost between awaits. It waits for STATE_SNAPSHOT, and its move(taskId, status) sends UPDATE_TASK and resolves on that task's TASK_UPDATED or an ERROR.\n\nTests:\n1. Parity (DoD 2): for each pair, call setTaskStatusTool(state).handler and classify the result as ok / table-refused (the message contains `<from> -> <to>. Allowed transitions from <from>:`) / other. Then call /ws move and classify it as ok / table-refused (the message starts with `Cannot move task from <from> to <to>. Allowed:`) / other.\n   - Expected: ok where the table allows, table-refused where it refuses.\n   - Each refused /ws pair must match the EXACT text built from VALID_TRANSITIONS[from].join(', ').\n   - Annotated exception: /ws AWAITING_APPROVAL->WORKING is plan approval (it needs CLIENT_HELLO plus the plan-revision token), so it only has to avoid the table refusal.\n   - Collect the mismatch strings and finish with expect(mismatches).toEqual([]), so a failure names every bad pair.\n2. DoD 1: wire state.setEmitter(e => wss.broadcast(e)) and open two clients, an actor and an observer.\n   - The actor's BACKLOG→REVIEW gets TASK_UPDATED {id, status:'REVIEW'}, and the stored status is REVIEW.\n   - The observer receives the broadcast TASK_UPDATED for that task.\n   - BACKLOG→DONE gets an ERROR toMatchObject message 'Cannot move task from BACKLOG to DONE. Allowed: PLANNING, WORKING, REVIEW, ARCHIVED' (the frame also carries operation and context, so use toMatchObject, not toEqual), and the stored status stays BACKLOG.\n3. it.each over task-parked-backlog and task-parked-blocked: a /ws move into REVIEW succeeds and stored needsHumanReview === false.\n\nafterEach closes the sockets, the server and http, awaits state.flushActivityLog(), then rmSync's the temp dir.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/server/WebSocketServer.transitions.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.transitions.test.ts"
+      ],
+      "note": "Added exact 174-line approved reference test using main-session apply_patch; cmp confirms byte equality, git diff --check clean. Four tests exercise all 56 distinct status pairs with annotated /ws approval exception, successful BACKLOG→REVIEW and observer broadcast, exact illegal refusal with unchanged stored status, and both parked needsHumanReview paths. Snapshot verification/mutation RED proof deferred only to approved step 3; no tests run in checkout.",
+      "startedAt": "2026-11-03T16:45:27.662Z",
+      "completedAt": "2026-11-03T16:45:31.793Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification: run once, fresh, in a /tmp snapshot. Never run npm or vitest in /mnt/d/projexts/moes or in your worktree (global rail). From your task checkout:\n  R=$(git rev-parse --show-toplevel); S=$(mktemp -d /tmp/moe-6a81-XXXXXX); P=$S/packages/moe-daemon; mkdir -p \"$P\"\n  tar -C \"$R/packages/moe-daemon\" --exclude=node_modules --exclude=dist -cf - . | tar -xf - -C \"$P\"\n  cmp \"$P/package-lock.json\" /tmp/hunt-859e-snap/packages/moe-daemon/package-lock.json && cp -al /tmp/hunt-859e-snap/packages/moe-daemon/node_modules \"$P/node_modules\" && rm -rf \"$P/node_modules/.vite\"\nThat Linux node_modules matched the daemon lock at 27fc6aed. If the cmp fails or the dir is gone, run `(cd \"$P\" && npm ci --no-audit --no-fund)` instead (mem:gotcha-gate-snapshot-psparse-and-proxy-rolldown).\n\nThen, from \"$S\", run the exact checkRef:\n  cd packages/moe-daemon && npx vitest run src/server/WebSocketServer.transitions.test.ts src/server/WebSocketServer.test.ts src/tools/setTaskStatus.test.ts && npx tsc --noEmit\nIt must exit 0. My dry run gave 'Test Files 3 passed (3)', 'Tests 150 passed (150)' (4 new + 146 existing) and a silent tsc. The 19 files under src/server plus setTaskStatus, releaseTask and taskExecutionPolicy also passed (766).\n\nMutation proof for DoD 2, in the SNAPSHOT only:\n- `B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")`, then `git -C \"$R\" show \"$B:packages/moe-daemon/src/server/WebSocketServer.ts\" > \"$P/src/server/WebSocketServer.ts\"`.\n- Check that the result still contains `const VALID_TRANSITIONS: Record<string, string[]>`. If it does not, B is not the pre-task base: stop and fix B.\n- Run `npx vitest run src/server/WebSocketServer.transitions.test.ts` from $P. My dry run: 4 failed. The parity list names `BACKLOG -> REVIEW: table allows, set_task_status ok, /ws table-refused (Cannot move task from BACKLOG to REVIEW. Allowed: PLANNING, WORKING, ARCHIVED)`, plus the BACKLOG -> AWAITING_APPROVAL/BLOCKED/DONE text mismatches.\n- Quote those lines in complete_task. Then copy your checkout's WebSocketServer.ts back into $P before you cite the green run.\n\nSubmit the green checkRef command, its exit code and the output tail as the verification. Say it ran in a /tmp snapshot of your working tree, with matching sha256sum of the 3 files. Delete only your own mktemp dir, and kill only PIDs your own session started (rail).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verified in /tmp/moe-6a81-Rnq6eK outside checkout, lock-identical Linux node_modules. Ran mutation RED first then restored current handler before GREEN: baseline 8a53505e inline handler makes 4/4 new tests fail, parity names BACKLOG→REVIEW (set_task_status ok vs /ws table-refused), plus BACKLOG→AWAITING_APPROVAL/BLOCKED/DONE exact-text mismatches; BLOCKED→REVIEW leaves flag true. Final exact checkRef `cd packages/moe-daemon && npx vitest run src/server/WebSocketServer.transitions.test.ts src/server/WebSocketServer.test.ts src/tools/setTaskStatus.test.ts && npx tsc --noEmit` exits 0: 3 files, 150/150 tests, tsc clean. cmp + sha256 match all 3 task files: WebSocketServer 3f1b5276…, setTaskStatus eaa91828…, transitions test 086f48de…. No in-checkout npm or unrelated gates.",
+      "startedAt": "2026-11-03T16:45:45.038Z",
+      "completedAt": "2026-11-03T16:46:54.206Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review: one pass over your own diff (`git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") -- packages/moe-daemon` plus anything uncommitted). Check each item and fix what fails:\n(1) `grep -n \"VALID_TRANSITIONS\\|Record<string, string\\[\\]>\" packages/moe-daemon/src/server/WebSocketServer.ts` shows only the import and its uses. No inline table remains (DoD 2).\n(2) `grep -n WebSocketServer packages/moe-daemon/src/tools/setTaskStatus.ts` is empty, so there is no cycle.\n(3) The refusal and BLOCKED texts are byte-identical to before. The parity test pins every refused pair.\n(4) The shared table is typed Readonly<… readonly …[]>, so no importer can mutate it.\n(5) The needsHumanReview clear fires only for a move INTO REVIEW, inside withMutex, and overrides a client-sent true.\n(6) The approval and reopen routes are unchanged. A same-status UPDATE_TASK still skips the transition block.\n(7) Two concurrent UPDATE_TASK frames for one task are still serialized by withMutex.\n(8) WebSocketServer.test.ts and setTaskStatus.test.ts are byte-unchanged (DoD 3).\n(9) The new test has no .only, no fixed sleeps, and closes every socket and server.\n(10) Out of scope, so do not edit it: moe-jetbrains BoardMoves.kt still mirrors the old /ws table, so the JetBrains board still lacks a direct BACKLOG→REVIEW drag. Name it in your complete_task summary as a follow-up for the governor.\nIf you change anything, re-run step 3's checkRef and submit THAT output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.transitions.test.ts"
+      ],
+      "note": "Adversarial review complete, no further edits. Confirmed all 10 planned items: single exported readonly table; no reverse runtime import (grep does match intentional doc comments, so checked import lines); refusal/BLOCKED error lines byte-identical; REVIEW flag reset inside mutex after spread overrides client true for parked rows; same-status still skips block; WIP/profile/approval/reopen paths unchanged; reads/validation/writes remain under runExclusive. Existing two suites byte-identical; new buffered fixture sequential, no only/fixed sleeps, all sockets/server/http closed and activity flushed on assertion failures. Invalid/unlisted status values remain rejected before write. Final approved snapshot checkRef exit 0: 150/150 tests, tsc clean; mutation baseline fails all 4 new tests. No docs/client edits. Known out-of-scope governor follow-up: JetBrains BoardMoves.kt still lacks direct BACKLOG→REVIEW drag.",
+      "startedAt": "2026-11-03T16:46:54.235Z",
+      "completedAt": "2026-11-03T16:47:31.615Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-7328a40d",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -76,12 +93,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:32.139Z",
-  "updatedAt": "2026-11-03T16:45:10.574Z",
+  "updatedAt": "2026-11-03T16:49:22.703Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T16:33:24.277Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -92,7 +109,10 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T16:43:00.247Z",
@@ -161,5 +181,44 @@
   },
   "planApprovedAt": "2026-11-03T16:43:00.280Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T16:44:50.323Z"
+  "workStartedAt": "2026-11-03T16:44:50.323Z",
+  "reviewStartedAt": "2026-11-03T16:48:33.859Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run src/server/WebSocketServer.transitions.test.ts src/server/WebSocketServer.test.ts src/tools/setTaskStatus.test.ts && npx tsc --noEmit",
+    "exitCode": 0,
+    "outputTail": "/tmp snapshot: /tmp/moe-6a81-Rnq6eK; three task files cmp/sha256 match worktree; reused lock-identical Linux node_modules.\n9m\n    \u001b[35mmigration\u001b[39m: \"Add columnLimits to project settings\"\n[2026-11-03 18:46:39.978 +0200] \u001b[32mINFO\u001b[39m: \u001b[36mApplying migration\u001b[39m\n    \u001b[35mmigration\u001b[39m: \"Add chat channels and messages\"\n[2026-11-03 18:46:39.978 +0200] \u001b[32mINFO\u001b[39m: \u001b[36mApplying migration\u001b[39m\n    \u001b[35mmigration\u001b[39m: \"Replace per-task/epic auto-channels with role-based channels\"\n[2026-11-03 18:46:39.978 +0200] \u001b[32mINFO\u001b[39m: \u001b[36mSchema migrations applied\u001b[39m\n    \u001b[35mfrom\u001b[39m: 1\n    \u001b[35mto\u001b[39m: 6\n    \u001b[35mmigrations\u001b[39m: [\n      \"Add schemaVersion field to project.json\",\n      \"Add teams support\",\n      \"Add columnLimits to project settings\",\n      \"Add chat channels and messages\",\n      \"Replace per-task/epic auto-channels with role-based channels\"\n    ]\n[2026-11-03 18:46:40.000 +0200] \u001b[32mINFO\u001b[39m: \u001b[36mRate limiter enabled\u001b[39m\n    \u001b[35mmaxRequests\u001b[39m: 100\n    \u001b[35mwindowMs\u001b[39m: 1000\n\n Test Files  3 passed (3)\n      Tests  150 passed (150)\n   Start at  18:46:23\n   Duration  17.07s (tests 94%, transform 4%, import 2%)\n\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\n",
+    "reportedAt": "2026-11-03T16:48:33.859Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/setTaskStatus.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.transitions.test.ts"
+  ],
+  "completionSummary": "Shared the existing readonly VALID_TRANSITIONS table between set_task_status and /ws UPDATE_TASK, removing the drifted inline copy. BACKLOG→REVIEW now succeeds/broadcasts; entering REVIEW clears existing needsHumanReview. Existing refusal text, mutex, BLOCKED effectiveFrom, WIP/profile, plan-approval and reopen routes retained. No docs or client changes; existing two test suites byte-unchanged.\nNew real-WebSocket regression suite covers all 56 distinct status pairs (annotated plan-approval exception), observer broadcast, exact illegal refusal and both parked-flag paths. Fresh exact checkRef in /tmp/moe-6a81-Rnq6eK: 3 files, 150/150 tests; tsc clean; exit 0. cmp/sha256 matched all three worktree task files to snapshot; reused lock-identical Linux dependencies.\nMutation proof before final green: original baseline inline /ws handler fails 4/4 new tests. Parity: 'BACKLOG -> REVIEW: table allows, set_task_status ok, /ws table-refused (Cannot move task from BACKLOG to REVIEW. Allowed: PLANNING, WORKING, ARCHIVED)'; also BACKLOG→AWAITING_APPROVAL/BLOCKED/DONE refusal-text mismatches. Restored fixed handler before green run.\nAll four approved steps and adversarial review complete. Serena handoff saved. Known governor follow-up (out of scope): JetBrains BoardMoves.kt still lacks direct BACKLOG→REVIEW drag.",
+  "commits": [
+    {
+      "sha": "f830b4cd62a8d8594f74e0a56e555fb78cfbd7ea",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T16:43:00Z",
+      "paths": [
+        "packages/moe-daemon/src/server/WebSocketServer.transitions.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T16:49:20.353Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-03T16:43:00Z",
+    "at": "2026-11-03T16:49:20.353Z"
+  }
 }

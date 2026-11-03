@@ -1,0 +1,30 @@
+{
+  "id": "task-5a5a7189b1c140049246cd6cb691e896",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code prior-handoff card reads from/to/createdAt, but the daemon writes releasedBy/releasedAt/reason, so every card title is just \"#N\" (VS Code twin of the DONE JetBrains fix ac587df5)",
+  "description": "Filed by the governor at 16:50Z on 2026-11-03. This is the VS Code twin that task-ac587df5 (JetBrains, DONE as d5f36e82) marked out of scope. JetBrains went first, and this row brings VS Code to parity. Citations checked at 8a53505e.\n\nPROBLEM. VS Code's Task Detail \"Prior hand-offs\" cards build their title from fields the daemon never writes, so every title reads just \"#1\", \"#2\" and so on. The releaser, the release time and the reason are lost. The test fixture encodes the same wrong shape, so the suite stays green.\n\nEVIDENCE (HEAD 8a53505e).\n- **Daemon:** packages/moe-daemon/src/types/schema.ts:553-571, HandoffNote {whatIsDone, whatRemains, pitfalls?, openQuestions?, releasedBy?, releasedAt, reason?, diskState?}, written by tools/releaseTask.ts.\n- **VS Code:**\n  - moe-vscode/src/types/moe.ts:202-210: HandoffNote {from?, to?, createdAt?, ...};\n  - moe-vscode/src/panels/TaskDetailPanel.ts:1310-1314: renderHandoff's title reads h.from, h.to and h.createdAt;\n  - moe-vscode/tests/task-time-budget.test.cjs:224: the richTask fixture uses from/to/createdAt.\n- **Same bug and repro as the JetBrains row:** /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.wire.test.ts F3. A real release_task writes the handoff keys `reason, releasedAt, releasedBy, whatIsDone, whatRemains`.\n\nFIX DIRECTION. Mirror the landed JetBrains header exactly (d5f36e82, TaskDetailDialog.kt:917-925):\n- \"#N\";\n- then \" released by <releasedBy>\" when it is set;\n- then \" (<releasedAt>)\" when set;\n- then \": <reason>\" when set.\nEvery value stays HTML-escaped as today. Update the HandoffNote type to the daemon's fields, and fix the fixture to the daemon's shape. Add a test that fails if the title reads from/to/createdAt again, and one showing a note without the new fields still renders \"#N\".\n\nSCOPE. moe-vscode only, with no JetBrains or daemon change. Gates: moe-vscode `npm test` and `npm run compile`, run in the task worktree.",
+  "definitionOfDone": [
+    "VS Code's HandoffNote type and renderHandoff use releasedBy, releasedAt and reason. The card title matches the JetBrains header (d5f36e82): \"#N released by X (time): reason\", each part only when present and HTML-escaped. A note without them still renders \"#N\".",
+    "The task-time-budget fixture uses the daemon's handoff shape, and a test fails if the title reads from/to/createdAt again. moe-vscode `npm test` and `npm run compile` pass. No file outside moe-vscode/ changes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-74d9e1c7",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 378.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:49:11.162Z",
+  "updatedAt": "2026-11-03T16:49:16.673Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:49:16.673Z"
+  }
+}
