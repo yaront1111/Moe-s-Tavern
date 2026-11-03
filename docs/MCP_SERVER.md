@@ -1836,7 +1836,7 @@ Create a new task in an epic. **Guardrails are ALL ADVISORY — creation never h
   status?: string,
   priority?: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
   parentTaskId?: string,
-  order?: number,
+  order?: number,                // finite; omitted = one more than the epic's highest finite order (non-finite stored orders are skipped)
   dependsOn?: string[],          // structural prerequisites (unknown ids, ids past the 20 cap, and cycle-closing ids are dropped — each with a warning naming them); gates WORKING-status claims only — see moe.set_task_dependencies
   workerId?: string,             // caller (auto-injected by proxy); resolves the creator's role for createdBy attribution
   createdBy?: "HUMAN" | "WORKER" | "ARCHITECT" | "QA" | "GOVERNOR"
@@ -1848,7 +1848,8 @@ Create a new task in an epic. **Guardrails are ALL ADVISORY — creation never h
 - an unknown `status` or `priority`;
 - a `dependsOn` that is not an array of strings;
 - a `definitionOfDone` that is present (not `null`) but not an array of strings;
-- a `taskRails` that is present (not `null`) but not an array of at most 100 non-empty strings of at most 10000 characters each. These are the bounds `moe.create_epic` applies to `epicRails`.
+- a `taskRails` that is present (not `null`) but not an array of at most 100 non-empty strings of at most 10000 characters each. These are the bounds `moe.create_epic` applies to `epicRails`;
+- an `order` that is present (`null` included) but not a finite number, e.g. a string, `null`, `NaN`, `Infinity` or an object. Fractional and negative orders such as `231.164` are accepted.
 
 Each is `INVALID_INPUT` naming the field, e.g. `taskRails[2]`. These are caller errors, not guardrails; the guardrails below stay advisory. Empty or blank DoD entries are still dropped, and an empty list still gets the placeholder and its warning.
 

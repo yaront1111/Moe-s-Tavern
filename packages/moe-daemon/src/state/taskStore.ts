@@ -842,7 +842,13 @@ export async function reorderTask(state: StateManager, taskId: string, beforeId:
 }
 
 export function nextTaskOrder(state: StateManager, epicId: string): number {
-  const tasks = Array.from(state.tasks.values()).filter((t) => t.epicId === epicId);
-  if (tasks.length === 0) return 1;
-  return Math.max(...tasks.map((t) => t.order)) + 1;
+  // Skip non-finite orders (as nextEpicOrder does): a legacy or hand-edited
+  // non-numeric order made every later default NaN (null on disk) and took
+  // epic-final status (isEpicFinalTask) from the epic's newest default-order row.
+  const orders = Array.from(state.tasks.values())
+    .filter((t) => t.epicId === epicId)
+    .map((t) => t.order as unknown)
+    .filter((o): o is number => typeof o === 'number' && Number.isFinite(o));
+  if (orders.length === 0) return 1;
+  return Math.max(...orders) + 1;
 }

@@ -60,7 +60,7 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
         status?: TaskStatus;
         priority?: TaskPriority;
         parentTaskId?: string;
-        order?: number;
+        order?: unknown;
         createdBy?: Task['createdBy'];
         workerId?: string;
         dependsOn?: unknown;
@@ -81,6 +81,17 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
       const validPriorities = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
       if (params.priority && !validPriorities.includes(params.priority)) {
         throw invalidInput('priority', `must be one of: ${validPriorities.join(', ')}`);
+      }
+
+      // A stored string or null order made every later default-order row in the
+      // epic NaN (null on disk). Fractional orders (231.164) are how rows are placed
+      // between neighbours, so this is NOT create_epic's integer rule.
+      let order: number | undefined;
+      if (params.order !== undefined) {
+        if (typeof params.order !== 'number' || !Number.isFinite(params.order)) {
+          throw invalidInput('order', 'must be a finite number');
+        }
+        order = params.order;
       }
 
       // A non-array DoD used to be sanitized to the placeholder and WRITTEN, after
@@ -182,7 +193,7 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
         status: params.status,
         priority: params.priority,
         parentTaskId: params.parentTaskId,
-        order: params.order,
+        order,
         createdBy: resolvedCreatedBy,
         ...(dependsOn ? { dependsOn } : {}),
       }, params.workerId);
