@@ -19,6 +19,7 @@ import {
   executionAdmissionRefusal,
   heldTaskRefusal,
   isClaimGatedByDependsOn,
+  ownFinalizingAttempt,
   parseExecutionRoute
 } from '../util/claimEligibility.js';
 import { resolveLaunch } from '../util/routing.js';
@@ -531,9 +532,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // task-scoped third-party hold in the claim path below keeps every
           // other seat off that row (explicit-taskId refusal, ranked-pool skip —
           // util/claimEligibility.ts), as qa_approve's hold keeps approval off it.
-          const finalizing = listAttempts(state).find(
-            (a) => a.workerId === params.workerId && a.phase === 'finalizing'
-          );
+          const finalizing = ownFinalizingAttempt(state, params.workerId);
           if (finalizing) {
             throw attemptFinalizingRefusal({
               attemptId: finalizing.id,

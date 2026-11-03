@@ -272,6 +272,25 @@ export function blockingHold(
 }
 
 /**
+ * THIS worker's finalizing attempt, or null: the worker-scoped hold. While its
+ * own landing is open, claim_next_task refuses the worker every claim
+ * (ATTEMPT_FINALIZING) and wait_for_task wakes it for nothing, so both read
+ * this one predicate (the wake→claim→refuse spin otherwise). The answer is the
+ * one `listAttempts(state).find(...)` gave — lowest generation, earliest stored
+ * on a tie — but in one pass over the store, without copying or sorting it:
+ * wait_for_task runs this for every waiter on every task event. Read-only: the
+ * stored record is returned, so callers must not mutate it.
+ */
+export function ownFinalizingAttempt(state: StateManager, workerId: string): ExecutionAttempt | null {
+  let found: ExecutionAttempt | null = null;
+  for (const attempt of state.attempts.values()) {
+    if (attempt.workerId !== workerId || attempt.phase !== 'finalizing') continue;
+    if (!found || attempt.generation < found.generation) found = attempt;
+  }
+  return found;
+}
+
+/**
  * Do not suggest crash recovery to a healthy seat. Non-resource holds can be
  * acknowledged through report_blocked; resource holds stay parked for a grant.
  * Both paths finish this wrapper session before any later claim.

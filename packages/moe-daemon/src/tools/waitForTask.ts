@@ -11,6 +11,7 @@ import {
   foreignFinalizingAttempt,
   heldTaskRefusal,
   isClaimGatedByDependsOn,
+  ownFinalizingAttempt,
   parseExecutionRoute,
   type ExecutionRoute
 } from '../util/claimEligibility.js';
@@ -167,6 +168,10 @@ function findMatchingTask(
   // agent-claimable and so can never be a requested status. Measured spin,
   // twice in one session (task-9d5dfec6).
   if (workerId && blockingHold(state, workerId)) return NO_MATCH;
+  // The caller's own finalizing landing holds its seat the same way: claim_next_task
+  // refuses it ATTEMPT_FINALIZING, so waking it would spin. finalize_attempt's close
+  // announces itself with a TASK_UPDATED (announceAttemptClosed), which re-runs this.
+  if (workerId && ownFinalizingAttempt(state, workerId)) return NO_MATCH;
   // Eligibility here must be at least as strict as claim_next_task's ranked
   // pool: any task that is wait-visible but claim-ineligible wakes the waiter
   // into a claim that declines straight back to wait_for_task — a hot
