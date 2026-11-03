@@ -94,8 +94,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -132,7 +132,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:10.352Z",
-  "updatedAt": "2026-11-03T07:16:13.844Z",
+  "updatedAt": "2026-11-03T07:20:20.949Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:15.663Z",
@@ -142,7 +142,9 @@
     "firstClaimAt": "2026-11-02T22:51:29.480Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T07:19:26.220Z",
+    "wallClockMs": 30476740
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -250,13 +252,17 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-af7be174@2026-11-03T06:32:53Z",
-    "at": "2026-11-03T06:41:05.631Z"
+    "sessionId": "qa-7328a40d@2026-11-03T07:15:47Z",
+    "at": "2026-11-03T07:20:20.949Z"
   },
   "blockedFromStatus": null,
   "blockedAt": null,
   "blockedReason": null,
   "priorBlockedReason": "QA size hold, verdict withheld (governor's WT-14 pattern, comment-987a6218). The substance review PASSES; the evidence is in comment-c01fee7f. Completion 9eca3971 measures +461/-18, net 443 across exactly the 3 approvedScope files. That is over the 400 cap, and no rail waives it yet: the TASK exception prop-b13568c2 (cap 450 net) is still PENDING the human's IDE click.\n\nQA re-ran both legs on a fresh git archive of 9eca3971:\n- Linux: npm ci, test, compile and lint exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe): npm ci, test and compile exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips.\n- The new suite passes 30/30 on Linux and 26/26 on Windows, and 5 QA mutants are each killed.\n\nOnce prop-b13568c2 is approved, set REVIEW again; the next QA approves on that evidence, since the bytes are unchanged. Nothing for a worker to do. One non-blocking follow-up is suggested in the comment: the VS Code pathForms POSIX missing-leaf ancestor walk, for parity with JetBrains ancestorOutside.",
   "blockedResourceId": null,
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-03T07:19:26.220Z",
+  "reviewCompletedAt": "2026-11-03T07:19:26.220Z",
+  "reviewSummary": "QA qa-7328a40d approves completion 9eca3971 (cand-d90b75c2; tree d3d065ff matches). It is an ancestor of origin/moe/work-2026-10-24, and no later commit touches moe-vscode.\n\nSIZE: +461/-18, net 443, across exactly the 3 approvedScope files. That is within the TASK size exception in taskRails (cap 450). No existing test is modified.\n\nRE-RUN on fresh `git archive 9eca3971` snapshots (/mnt/d/moe-scratch/qa7328-98c8/run.sh, exit 0):\n- Linux (node 24.21): npm ci, test, compile and lint exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe, node 24.16): npm ci, test and compile exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips.\n- The new suite passes 30/30 on Linux and 26/26 on Windows.\n\nMUTANTS, all killed:\n- foreign-key check dropped: P6 fails;\n- file 0600 check dropped: P6 0644 fails;\n- verified-local does not re-protect a legacy record: P5 fails.\n\nDoD 1: the root is set first in activate(). The record is persisted 0600/0700 (P1). The prompt is modal and asks once (P2 x3). Only 'Allow Downgrade' writes legacy, effective after a restart (P5). Keep, dismiss, another label, a rejected prompt and a throwing prompt write nothing (P3/P4).\nDoD 2: 15 untrusted shapes read protected, with no content in logs (P6). A root inside the project writes nothing (P7). An untrusted declaration writes nothing (P10).\nDoD 3: legacy never prompts (P8). No root behaves as today (P9). Both legs are green.\nImports are unchanged.\n\nRESIDUAL, not a reject: a missing POSIX root under a symlinked in-project ancestor passes the pre-existing isOutsideProject, because pathForms walks ancestors only on win32. Tracked as task-20a64797. Docs drift is task-48bbd091.",
+  "requiredCheckAtDone": null
 }

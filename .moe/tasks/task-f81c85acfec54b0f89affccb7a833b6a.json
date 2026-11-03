@@ -61,7 +61,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-c9368191",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -76,11 +76,17 @@
       "author": "architect-24611a0a",
       "content": "Split for size (architect-24611a0a, 2026-11-03). As one row this is about 12 files, over submit_plan's 10-file cap and QA's 400-net-LOC cap. The daemon hold (DoD 1-2) moved to task-4ddbfb31aa2041bdbed1861aa32903ea, which this row now depends on. This row keeps the human DoD and lands last. It owns the sh and ps1 postflight arms (DoD 3) and the four docs (DoD 4), and it re-verifies DoD 1-2 by running task-4ddbfb31's landed test file inside the full daemon suite.\n\nDesign, so the human can veto it before it ships (drag either row to BACKLOG):\n- The hold keys on the existing reason \"wrapper_restart\", and neither wrapper is edited. Every live seat's old bytes already send that reason, so the first reload after the daemon fix is protected. A wrapper landing would itself hot-reload the whole fleet under the unfixed daemon.\n- A seat that holds an active task keeps it, stays not DEAD, and gets reloadHoldUntil. Its next claim_next_task ends the hold and answers alreadyAssigned.\n- If the seat has not claimed by the deadline, the 60 s worker sweep deregisters it as \"reload_hold_expired\", which is today's full release.\n- Setting: settings.reloadHoldMs. Default 120000 ms; 0 restores today's behaviour; capped at 30 min.\n- Evidence from the 11-01..11-03 activity log: relaunches re-claimed their row 2.4-8.5 s after the deregister. Peers won three times, inside 1.7-2.4 s.\n- Known residual: the reload-block comments in moe-agent.{sh,ps1} still say a held task is released. They are left unchanged on purpose, because editing either file hot-reloads every seat. Fold the correction into the next wrapper change.",
       "timestamp": "2026-11-03T06:56:09.372Z"
+    },
+    {
+      "id": "comment-e23913ff90714c97ad66d1594f5dee09",
+      "author": "governor-e6b40560",
+      "content": "Governor early start, 07:19Z. I removed this row's dependsOn on task-4ddbfb31, and you may start now. 4ddbfb31's completion a13eb354 has landed on moe/work-2026-10-24 (pushed), and that row is in REVIEW, so only QA's verdict is still pending.\n- Build on the landed bytes in a13eb354. Steps 1 and 4 tell you to read 4ddbfb31's landed deregisterWorker/claim code and document the code: that means a13eb354 (`git show a13eb354`), not the plan text.\n- If a QA reject on 4ddbfb31 changes those response shapes or the reloadHoldMs semantics, re-sync the fake-daemon mirror and the docs to the new completion before you complete.\n- The two rows share no files: 4ddbfb31 changed only packages/moe-daemon/src, and this row touches scripts/tests and docs.",
+      "timestamp": "2026-11-03T07:19:03.741Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:08:50.369Z",
-  "updatedAt": "2026-11-03T06:59:12.716Z",
+  "updatedAt": "2026-11-03T07:19:36.651Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:59.859Z",
@@ -92,11 +98,10 @@
     "plannedDistinctFileCount": 7
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-c9368191"
   ],
-  "dependsOn": [
-    "task-4ddbfb31aa2041bdbed1861aa32903ea"
-  ],
+  "dependsOn": [],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
