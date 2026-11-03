@@ -1,0 +1,31 @@
+{
+  "id": "task-cc4213c02513416d87ce0742ccfd8546",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: a launch outage carried into a verified-local iteration never ends: the VM route turns every launch probe into a no-launch while the outage suppresses every claim (moe-agent.sh)",
+  "description": "Found while planning task-1ccae85c. It is the residual of QA hand-forward comment-87cd53fd (b) on CQ-M07m (task-828e7d21).\n\nSince M07m, a VM-route iteration never ENTERS a launch outage (scripts/moe-agent.sh:11953 gates outage entry on VM_ROUTE != true). But LAUNCH_OUTAGE is wrapper-process state, and the readiness gate re-reads the profile on every iteration.\n\nRepro:\n1. A legacy-profile bash worker seat reaches 3 fast launch failures, so LAUNCH_OUTAGE=true and the held task is released.\n2. The project flips to verified-local (ready) while that wrapper process lives.\n3. On the next iteration VM_ROUTE=true and the seat VM starts. The claim is suppressed (~:10022, outage with nothing held).\n4. The taskless decision sets LAUNCH_PROBE=true and prints `MOE_LAUNCH_PROBE ... launching a taskless launch probe` (~:11037). The VM block then turns that probe into a no-launch (`reason=vm-route`).\n5. MOE_SKIP_LAUNCH leaves the streak and the outage as they were (~:11923). Only a launch that runs clears the outage (~:11985), so the seat never claims again. It idles until a hot reload or relaunch resets the shell state.\n\nFix direction (the planner decides): a VM-route iteration does not honour a carried-over outage, because outage mode is a host-CLI concept and the VM route has its own job-failure budget. Either clear the outage state when the route engages, or skip the outage claim-suppression and the probe on the route. Also, print MOE_LAUNCH_PROBE only when a probe actually launches. Legacy launches and outage handling must stay byte-identical.\n\nTest needs a mid-run readiness flip. The shared fixture scripts/tests/postflight-fake-proxy.js answers FAKE_READINESS from env only, so it needs an additive knob that is inert when unset. The PowerShell twin follows CQ-M07n (task-62ec51f1), which mirrors M07m's outage exemption.",
+  "definitionOfDone": [
+    "A bash verified-local iteration that starts in a launch outage carried over from a legacy iteration claims again, launches no host CLI, and prints no MOE_LAUNCH_PROBE line.",
+    "Legacy launch-outage behavior and diagnostics are byte-identical; the existing postflight.sh launch-outage rows pass unchanged.",
+    "A postflight-vm-route.sh row flips readiness mid-run (legacy outage, then verified-local) and asserts the claim resumes; focused wrapper rows and parity-check pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-1ccae85c01d145d5b3167c0a3f1371d6"
+  ],
+  "priority": "LOW",
+  "order": 238.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:12:21.590Z",
+  "updatedAt": "2026-11-03T22:12:21.590Z"
+}
