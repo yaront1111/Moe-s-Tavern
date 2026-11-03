@@ -77,8 +77,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -106,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:23.553Z",
-  "updatedAt": "2026-11-03T22:27:39.285Z",
+  "updatedAt": "2026-11-03T22:30:00.836Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:14:24.970Z",
@@ -116,12 +116,15 @@
     "firstClaimAt": "2026-11-03T21:15:01.538Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T22:29:31.680Z",
+    "wallClockMs": 4470142
   },
   "contextFetchedBy": [
     "architect-24611a0a",
     "worker-d6c1cb7a",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -247,10 +250,15 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T22:23:39Z",
-    "at": "2026-11-03T22:27:36.505Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:27:36Z",
+    "at": "2026-11-03T22:30:00.836Z"
   },
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-03T22:29:31.680Z",
+  "reviewCompletedAt": "2026-11-03T22:29:31.680Z",
+  "reviewSummary": "Reviewed completion 52185bb4 (on moe/work-2026-10-24 = control HEAD; 3 files, +79/-5, far under the 400 LOC cap), read via git show, not the working tree.\n\nRe-ran task.verification in a snapshot outside the shared checkout (git archive HEAD + overlay, npm ci there): tsc --noEmit clean; vitest waitForTask deleteTask dependencyUnblock waiter-ownership = 6 files, 86 tests passed, exit 0. Re-ran RED-AT-BASE (base 54635828 + only the new test file): 2 failed | 1 passed (3), FAIL lines for (w2) and (w3), printed RED-AT-BASE. Removed my two temp dirs by fingerprint; nothing built or installed in the shared tree.\n\nDoD 1: the parked listener's filter in waitForTask.ts now also accepts TASK_DELETED and reuses findMatchingTask. (w2) deleting the only unmet prerequisite wakes the waiter with task-dep (nextAction moe.claim_next_task) and the claim then hands out task-dep. (w1) an unrelated delete and (w3) deleting one of two prerequisites leave the waiter in activeWaiters, so an unrelated TASK_DELETED does not wake it.\nDoD 2: the ported hunt repro passes with the fix and fails at base; the four existing suites stay green.\n\nInvariants: the pending-question branch still keys on TASK_UPDATED, MESSAGE_CREATED branch untouched, no new state/timer/subscription/error path; runtime change is the filter line plus comment (+3/-2).\nDocs: docs/MCP_SERVER.md wait_for_task names TASK_DELETED in all three places. The landing-conflict hunk was resolved as the governor asked: task-a024ac57's execution-route bullet kept unchanged above the TASK_DELETED wake-triggers line; no markers left.\n\nNot run: the full daemon suite (narrow plan-named set only, mid-epic). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
