@@ -24,7 +24,7 @@ import type { StateManager } from './StateManager.js';
 import type { ExecutionAttempt, RailProposal, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { listAttempts, setAttemptPhase } from './attemptStore.js';
-import { isWorkerAlive, nextStatusForRelease } from './workerLifecycle.js';
+import { deregisterWorker, isWorkerAlive, nextStatusForRelease, RELOAD_HOLD_EXPIRED_REASON } from './workerLifecycle.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
 import { cleanupStaleResourceWaiters } from '../tools/waitForResource.js';
 import { reapResources } from './resourceStore.js';
@@ -125,6 +125,9 @@ export function startStaleWorkerWatcher(state: StateManager, intervalMs = 60_000
   state.stopStaleWorkerWatcher();
   // mutex.exit: see startBlockedTimeoutCheck.
   state.staleWorkerInterval = state.mutex.exit(() => setInterval(() => {
+    checkReloadHolds(state).catch((err) => {
+      logger.error({ error: err }, 'Error expiring reload holds');
+    });
     state.checkStaleWorkers(livenessTimeoutMs).catch((err) => {
       logger.error({ error: err }, 'Error checking stale workers');
     });
@@ -302,6 +305,26 @@ export async function runReconcileWindowSweep(
     }
   }
   return closed;
+}
+
+/** Caller must hold state.mutex. Malformed persisted deadlines expire rather than strand tasks. */
+export async function runReloadHoldSweep(state: StateManager, nowMs = Date.now()): Promise<string[]> {
+  const expired: string[] = [];
+  for (const worker of Array.from(state.workers.values())) {
+    if (worker.reloadHoldUntil == null || Date.parse(worker.reloadHoldUntil) > nowMs) continue;
+    try {
+      await deregisterWorker(state, worker.id, RELOAD_HOLD_EXPIRED_REASON);
+      expired.push(worker.id);
+    } catch (error) {
+      logger.error({ workerId: worker.id, error }, 'Failed to expire reload hold');
+    }
+  }
+  return expired;
+}
+
+/** Serialize expiry with the returning seat's claim and its hold clear. */
+export async function checkReloadHolds(state: StateManager, nowMs = Date.now()): Promise<string[]> {
+  return state.mutex.runExclusive(() => runReloadHoldSweep(state, nowMs));
 }
 
 /** Mutex-wrapped entry point for the interval and for direct callers. */

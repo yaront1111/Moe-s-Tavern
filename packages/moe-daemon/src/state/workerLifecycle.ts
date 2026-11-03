@@ -7,7 +7,7 @@
 // =============================================================================
 
 import type { StateManager } from './StateManager.js';
-import type { Task, TaskStatus } from '../types/schema.js';
+import type { ProjectSettings, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { announceAttemptClosed, closeOpenAttempts, listAttempts, setAttemptPhase } from './attemptStore.js';
 import { releaseDeregisteredClaims } from './resourceStore.js';
@@ -15,6 +15,25 @@ import { releaseDeregisteredClaims } from './resourceStore.js';
 export { isWorkerAlive, LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
 
 const CLAIMABLE_FALLBACK_STATUS: TaskStatus = 'BACKLOG';
+
+export const RELOAD_HOLD_REASON = 'wrapper_restart';
+export const RELOAD_HOLD_EXPIRED_REASON = 'reload_hold_expired';
+export const DEFAULT_RELOAD_HOLD_MS = 120_000;
+export const MAX_RELOAD_HOLD_MS = 1_800_000;
+
+export function resolveReloadHoldMs(settings?: Pick<ProjectSettings, 'reloadHoldMs'>): number {
+  const ms = settings?.reloadHoldMs;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
+    ? Math.min(ms, MAX_RELOAD_HOLD_MS)
+    : DEFAULT_RELOAD_HOLD_MS;
+}
+
+/** Caller holds state.mutex. Propagate a failed clear: resuming with a live deadline is unsafe. */
+export async function endReloadHold(state: StateManager, workerId?: string): Promise<void> {
+  if (!workerId || state.getWorker(workerId)?.reloadHoldUntil == null) return;
+  await state.updateWorker(workerId, { reloadHoldUntil: null });
+  logger.info({ workerId }, 'worker returned from reload hold');
+}
 
 /** True iff the task has an implementation plan and every step is COMPLETED. */
 export function allStepsCompleted(task: Pick<Task, 'implementationPlan'>): boolean {
@@ -159,6 +178,35 @@ export interface DeregisterResult {
   workerId: string;
   released: ReleaseResult[];
   alreadyDead: boolean;
+  held: string[];
+  holdUntil?: string;
+}
+
+/** Caller holds state.mutex. A failed hold write falls back to full deregistration. */
+async function beginReloadHold(state: StateManager, worker: Worker, reason: string): Promise<DeregisterResult | null> {
+  const ms = resolveReloadHoldMs(state.project?.settings);
+  if (reason !== RELOAD_HOLD_REASON || worker.status === 'DEAD' || ms === 0) return null;
+  const tasks = state.getActiveTasksAssignedToWorker(worker.id);
+  if (tasks.length === 0) return null;
+  const held = tasks.map(task => task.id);
+  if (worker.reloadHoldUntil != null) {
+    return { workerId: worker.id, released: [], alreadyDead: false, held, holdUntil: worker.reloadHoldUntil };
+  }
+  const holdUntil = new Date(Date.now() + ms).toISOString();
+  try {
+    await state.updateWorker(worker.id, { reloadHoldUntil: holdUntil });
+  } catch (error) {
+    logger.warn({ workerId: worker.id, error }, 'deregisterWorker: reload hold write failed; releasing');
+    return null;
+  }
+  const banner = `🔌 ${worker.id} reloading (${reason}); holding ${held.length} task(s) for its relaunch until ${holdUntil}: ${tasks
+    .map(task => `${task.id}(${task.status})`).join(', ')}`;
+  try { await state.postToRoleChannel('workers', banner); } catch { /* never block */ }
+  try { await state.postToRoleChannel('governors', banner); } catch { /* never block */ }
+  state.appendActivity('WORKER_DISCONNECTED', {
+    workerId: worker.id, reason, releasedTaskIds: [], heldTaskIds: held, holdUntil,
+  }, undefined, worker);
+  return { workerId: worker.id, released: [], alreadyDead: false, held, holdUntil };
 }
 
 /**
@@ -218,7 +266,8 @@ export async function closeOwnFinalizingAttempts(state: StateManager, workerId: 
  * tasks, mark worker DEAD, drop the released tasks' claims on
  * releaseOnDeregister resources, post chat-leave system messages to every
  * channel the worker had a cursor for, and emit a single banner to #workers /
- * #governors summarizing the cleanup.
+ * #governors summarizing the cleanup. A wrapper_restart with active tasks
+ * instead holds the seat for its relaunch until claim or deadline expiry.
  *
  * Marking the worker DEAD (rather than deleting it) keeps lastError/history for
  * post-mortem and makes repeat calls idempotent; the record prune in
@@ -243,7 +292,7 @@ export async function deregisterWorker(
 
   const worker = state.getWorker(workerId);
   if (!worker) {
-    return { workerId, released: [], alreadyDead: true };
+    return { workerId, released: [], alreadyDead: true, held: [] };
   }
 
   // Already fully deregistered — no-op, no chat spam on repeat calls. Key on
@@ -252,8 +301,11 @@ export async function deregisterWorker(
   // and left a dangling assignment, a retry should re-run releaseWorkerTasks.
   // The finalizing close above has already run, so this answer stays quiet.
   if (worker.status === 'DEAD' && state.getTasksAssignedToWorker(workerId).length === 0) {
-    return { workerId, released: [], alreadyDead: true };
+    return { workerId, released: [], alreadyDead: true, held: [] };
   }
+
+  const hold = await beginReloadHold(state, worker, reason);
+  if (hold) return hold;
 
   const released = await releaseWorkerTasks(state, workerId, reason);
 
@@ -265,6 +317,7 @@ export async function deregisterWorker(
     await state.updateWorker(workerId, {
       status: 'DEAD',
       currentTaskId: null,
+      ...(worker.reloadHoldUntil != null ? { reloadHoldUntil: null } : {}),
     });
   } catch (err) {
     logger.warn({ workerId, error: err }, 'deregisterWorker: updateWorker failed');
@@ -322,5 +375,5 @@ export async function deregisterWorker(
   );
 
   logger.info({ workerId, reason, released: released.length }, 'worker deregistered');
-  return { workerId, released, alreadyDead: false };
+  return { workerId, released, alreadyDead: false, held: [] };
 }

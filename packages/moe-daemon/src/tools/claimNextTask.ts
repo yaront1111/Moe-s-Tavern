@@ -5,6 +5,7 @@ import type { ExecutionAttempt, ExecutionPolicySnapshot, ExecutionWorkspaceMode,
 import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidInput } from '../util/errors.js';
 import { WORKER_TYPE_SCHEMA, normalizeWorkerType, refreshWorkerType } from './joinTeam.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
+import { endReloadHold } from '../state/workerLifecycle.js';
 import { planSubmissionSnapshot } from '../state/taskStore.js';
 import { resolveAttemptWorkspace, resolveWorktreeMode } from '../state/validators.js';
 import { validateEntityId } from '../util/sanitize.js';
@@ -475,6 +476,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // above, and never creating a record: auto-registration stays on a
         // successful claim.
         await refreshWorkerType(state, params.workerId, params.workerType);
+        await endReloadHold(state, params.workerId);
 
         // One task per worker: a worker already holding an active task
         // (PLANNING/WORKING/REVIEW/BLOCKED — see workerStore's active set) must

@@ -12,7 +12,9 @@ export function deregisterWorkerTool(_state: StateManager): ToolDefinition {
       'task it held (dropping their leases and queue entries on resources declared releaseOnDeregister), mark the record DEAD (kept, not deleted) and post chat-leave messages. ' +
       'Called by the agent wrapper shell trap on terminal close (try/finally in moe-agent.ps1, ' +
       'trap EXIT in moe-agent.sh). Idempotent — a repeat call on a DEAD worker that holds no task is a quiet ' +
-      'close-only retry: it retries a failed finalizing close and posts nothing.',
+      'close-only retry: it retries a failed finalizing close and posts nothing. ' +
+      'A non-DEAD seat holding an active task with reason wrapper_restart instead keeps its tasks for settings.reloadHoldMs ' +
+      '(default 2 minutes, 0 disables), until its next claim or the reload-hold expiry sweep.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -35,9 +37,13 @@ export function deregisterWorkerTool(_state: StateManager): ToolDefinition {
           alreadyDead: result.alreadyDead,
           releasedTaskIds: result.released.map((r) => r.taskId),
           releasedCount: result.released.length,
-          message: result.alreadyDead
-            ? `${result.workerId} already deregistered`
-            : `${result.workerId} deregistered; released ${result.released.length} task(s)`,
+          heldTaskIds: result.held,
+          ...(result.holdUntil !== undefined ? { holdUntil: result.holdUntil } : {}),
+          message: result.held.length > 0
+            ? `${result.workerId} reloading; holding ${result.held.length} task(s) for its relaunch until ${result.holdUntil}`
+            : result.alreadyDead
+              ? `${result.workerId} already deregistered`
+              : `${result.workerId} deregistered; released ${result.released.length} task(s)`,
         };
       });
     },

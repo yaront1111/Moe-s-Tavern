@@ -331,6 +331,8 @@ export interface ProjectSettings {
    * never from a worker's lastActivityAt. default: 7200000 (2 h)
    */
   reconcileWindowMs?: number;
+  /** Wrapper-restart hold from deregistration, never idle time. Default 120000 ms; 0 disables; capped at 1800000. */
+  reloadHoldMs?: number;
   /**
    * Project-relative globs for files every task appends to (changelogs,
    * release notes). Claim-time fileCollision warnings ignore them so real
@@ -1195,6 +1197,8 @@ export interface Worker {
   chatCursors?: Record<string, string>; // channelId → lastReadMessageId (default: {})
   /** Claude account the seat's current claude launch runs under (moe.lease_account); null/absent when not rotating. */
   accountId?: string | null;
+  /** ISO deadline of a wrapper_restart hold; absent or null means no hold. */
+  reloadHoldUntil?: string | null;
 }
 
 // =============================================================================
