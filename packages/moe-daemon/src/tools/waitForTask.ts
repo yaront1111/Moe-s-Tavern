@@ -436,8 +436,9 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
             return;
           }
 
-          // Only react to task creation/update events
-          if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED') return;
+          // Re-match on task creation, update and deletion: a delete can free a
+          // dependent, since a legacy consumer counts a missing dependsOn id as met.
+          if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED' && event.type !== 'TASK_DELETED') return;
 
           const found = findMatchingTask(state, statuses, params.epicId, workerId, executionRoute);
           if (found.match) {
