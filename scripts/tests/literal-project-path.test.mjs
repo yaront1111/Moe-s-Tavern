@@ -10,13 +10,23 @@ import { fileURLToPath } from 'node:url';
 // project "control é [x] $;'" is missed. PS 5.1 Start-Process also interprets an
 // inherited current location as a wildcard, so its working directory needs escaping.
 const pathCommands = 'Test-Path Get-Content Set-Content Add-Content Clear-Content Out-File Get-Item Get-ChildItem Copy-Item Move-Item Remove-Item Rename-Item Resolve-Path Convert-Path Push-Location Set-Location Get-Acl Set-Acl Get-FileHash'.split(' ');
-const commandPattern = new RegExp(`(?:^|[({|;=]|\\breturn)\\s*(${[...pathCommands, 'Start-Process'].join('|')})\\b`, 'gmi');
+const listed = [...pathCommands, 'Start-Process'].join('|');
+const commandPattern = new RegExp(`(?:^|[({|;=]|\\breturn)\\s*(${listed})\\b`, 'gmi');
+const namePattern = new RegExp(`\\b(?:${listed})\\b`, 'gi');
 const normalize = text => text.replace(/^\ufeff/, '').replaceAll('\r\n', '\n');
 const mask = text => text.replace(/[^\n]/g, ' ');
 function codeOnly(text) {
   // Preserve offsets/lines while excluding quoted prose, here-strings and comments.
-  return text.replace(/<#[\s\S]*?#>|^[ \t]*#[^\n]*|@'\n[\s\S]*?^'@|@"\n[\s\S]*?^"@|'(?:''|[^'])*'|"(?:`[\s\S]|[^"`])*"/gm, mask);
+  // A # outside a string starts a comment at a token boundary: after whitespace, one of
+  // ; ( ) { } | , or a closing quote (probed on PS 5.1). A # inside a word such as a#b is text.
+  return text.replace(/<#[\s\S]*?#>|(?<![^\s;(){}|,'"])#[^\n]*|@'\n[\s\S]*?^'@|@"\n[\s\S]*?^"@|'(?:''|[^'])*'|"(?:`[\s\S]|[^"`])*"/gm, mask);
 }
+// Coverage view, independent of codeOnly's quote and comment rules: mask only full-line
+// comments, <# #> blocks and literal @' here-strings, so code that codeOnly hides surfaces as
+// an uninspected cmdlet name instead of passing silently. An expandable @" here-string stays
+// visible because its $(...) is code.
+const coverageView = text => text.replace(/<#[\s\S]*?#>|^[ \t]*#[^\n]*|@'\n[\s\S]*?^'@/gm, mask);
+const escapedDirectory = /(?:^|\s)-WorkingDirectory\s+\(\s*\[(?:System\.Management\.Automation\.)?WildcardPattern\]::Escape\(/i;
 function segment(code, original, start) {
   let depth = 0, top = '', rawTop = '', end = start;
   for (; end < code.length; end++) {
@@ -29,30 +39,35 @@ function segment(code, original, start) {
   return { top, rawTop, full: code.slice(start, end) };
 }
 function scan(text, file) {
-  const code = codeOnly(text), violations = [];
+  const code = codeOnly(text), lines = text.split('\n'), violations = [], inspected = new Set();
+  const where = index => { const line = text.slice(0, index).split('\n').length; return `${file}:${line}: ${lines[line - 1].trim()}`; };
   let paths = 0;
   for (const match of code.matchAll(commandPattern)) {
     const command = match[1], start = match.index + match[0].length;
-    const part = segment(code, text, start), line = text.slice(0, start).split('\n').length;
+    inspected.add(start - command.length);
+    const part = segment(code, text, start);
     const processCommand = command.toLowerCase() === 'start-process';
     if (!processCommand) paths++;
-    const env = /(?:^|\s)(?:-Path\s+)?["']?Env:/i.test(part.rawTop);
+    // Only the operand itself (first argument or -Path value) may be an Env: drive path.
+    const env = /^\s*(?:-Path\s+)?["']?Env:/i.test(part.rawTop);
     const bad = processCommand
-      ? !/(?:^|\s)-WorkingDirectory\b/i.test(part.top) || !/WildcardPattern\]::Escape\(/i.test(part.full)
+      ? !/(?:^|\s)-WorkingDirectory\b/i.test(part.top) || !escapedDirectory.test(part.full)
       : !env && !/(?:^|\s)-LiteralPath\b/i.test(part.top);
-    if (bad) violations.push(`${file}:${line}: ${text.split('\n')[line - 1].trim()}`);
+    if (bad) violations.push(where(start));
   }
-  return { violations, paths };
+  const uninspected = [...coverageView(text).matchAll(namePattern)].filter(m => !inspected.has(m.index)).map(m => where(m.index));
+  return { violations, uninspected, paths };
 }
 function staticTests() {
   for (const file of ['moe-agent.ps1', 'moe-team.ps1']) {
     test(`${file}: G1 literal filesystem paths; G2 escaped process working directory`, () => {
       const result = scan(normalize(fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')), file);
       assert.ok(result.paths > 0, 'must inspect path cmdlets, not an empty source');
+      assert.deepEqual(result.uninspected, [], 'every listed cmdlet outside full-line comments, <# #> blocks and literal here-strings must be inspected: a string or comment is hiding code, or the name sits in prose (reword it)');
       assert.deepEqual(result.violations, [], 'G1 requires top-level -LiteralPath; G2 requires escaped -WorkingDirectory');
     });
   }
-  test('scanner pins the exact flags, including nested arguments and exemptions', () => {
+  test('scanner pins the exact flags, including comments, nesting and exemptions', () => {
     const lines = [
       'if (-not (Test-Path $a)) { New-Item -ItemType Directory -Force -Path $a | Out-Null }',
       '$c = Get-Content -Raw -LiteralPath $p | ConvertFrom-Json',
@@ -64,12 +79,26 @@ function staticTests() {
       'return Get-Content -Path $f',
       'Start-Process -FilePath node -ArgumentList @($a)',
       'Start-Process node -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape($d))',
-      '<#\nTest-Path $comment\n#>',
+      '<#', 'Test-Path $comment', '#>',
       'Remove-Item -Path "Env:\\$k"',
       'Write-Host "(Test-Path $quoted)"',
+      // An apostrophe in a trailing comment must not open a string that hides the next line.
+      "$n = 1 # it's a note", 'Test-Path $y',
+      "$v = (Get-Item -LiteralPath $p)# it's", 'Test-Path $w',
+      "Write-Host 'x'# it's", 'Test-Path $u',
+      "Write-Host 'a # b'; Test-Path $z",
+      'Write-Host a#b; Test-Path $q',
+      "@'", 'Test-Path $here', "'@",
+      // Env: exempts only the operand itself. G2 needs the escape as Start-Process's own -WorkingDirectory value.
+      'Remove-Item $f -Force # drop the Env: copy', 'Set-Content $log "Env:PATH=$p"',
+      'Start-Process node -WorkingDirectory $d -ArgumentList ([WildcardPattern]::Escape($a))',
+      'Start-Process node -ArgumentList (Get-Args -WorkingDirectory ([WildcardPattern]::Escape($d)))',
+      // An expandable here-string's $(...) is code.
+      '@"', '$(Get-Content $f -Raw)', '"@',
     ];
-    assert.deepEqual(scan(lines.join('\n'), 'sample').violations,
-      [0, 2, 3, 7, 8].map(i => `sample:${i + 1}: ${lines[i]}`));
+    const result = scan(lines.join('\n'), 'sample'), at = i => `sample:${i + 1}: ${lines[i]}`;
+    assert.deepEqual(result.violations, [0, 2, 3, 7, 8, 16, 18, 20, 21, 22, 26, 27, 28, 29].map(at));
+    assert.deepEqual(result.uninspected, [5, 14, 31].map(at));
   });
 }
 
