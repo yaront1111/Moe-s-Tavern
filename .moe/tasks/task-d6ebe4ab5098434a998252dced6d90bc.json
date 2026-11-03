@@ -76,8 +76,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -89,7 +89,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:05:43.620Z",
-  "updatedAt": "2026-11-03T01:26:55.709Z",
+  "updatedAt": "2026-11-03T01:29:18.306Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:14.940Z",
@@ -101,7 +101,9 @@
     "plannedDistinctFileCount": 4,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-03T01:29:18.304Z",
+    "wallClockMs": 5858514
   },
   "contextFetchedBy": [
     "worker-c9368191",
@@ -259,7 +261,7 @@
     "sessionId": "architect-24611a0a@2026-11-02T23:51:37Z",
     "at": "2026-11-03T01:26:55.709Z"
   },
-  "reviewCompletedAt": "2026-11-03T00:58:13.972Z",
+  "reviewCompletedAt": "2026-11-03T01:29:18.304Z",
   "rejectionDetails": {
     "failedDodItems": [
       "`moe-daemon stop` (and `status`) never sends a signal on the strength of a /health answer from an address that is not loopback or a local interface. A test with a daemon.json `bindHost` that resolves off-host asserts no signal and no deletion of a live daemon's file."
@@ -338,5 +340,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-03T01:29:18.304Z",
+  "reviewSummary": "Reviewed completion 08255424 (round 2).\n- Candidate treeSha 21335b4d equals 08255424^{tree}; pushed; work branch equals origin.\n- 5c5b3706..08255424: +248/-13, net 235, the 4 declared files, no .moe paths.\nVerification: task.verification.command re-run verbatim from control (4 files identical to 08255424). Snapshot /tmp/moe-d6ebe4ab.WPIF3j, node 24.21.0, 01:24Z. Exit 0: account-trust-docs 5/5, tsc clean, vitest 229 files, 6943 passed, 20 skipped.\nRED: 08255424 tests on 12d7bb62's index.ts (-t task-d6ebe4ab): 4 failed (B8 x3 zoned, B5), 18 passed.\nMutants, all killed:\n- addSubnet 64/24: B7 x2\n- zone check as startsWith('%'): B8 x3, B5\n- refuse all of fe80::/10: the unzoned B8 row\n- foreign filter trusts the recorded literal: B5\n- probe gate dropped: 7 rows\nWSL 6.18 probe: an unzoned dial to eth0's own link-local reached the local listener, so unzoned link-local stays local.\nDoD:\n1. expectRefused (no dial, no signal, json/lock unchanged, no daemon.stop, exit 1, status reason) in B1, B7, zoned B8; plus B4, and B5 (foreign).\n2. B2, B3, unzoned B8; full suite green.\n3. The ARCHITECTURE bullet and TROUBLESHOOTING Cause state the zone rule; anchors resolve; no line over 120 chars.\nRails: no forbidden patterns. The only removed test lines are B1's header, moved into expectRefused with every assertion kept.\nCollision: our ARCHITECTURE hunk is lines 549-561, task-525551's uncommitted edit is 422-428: disjoint.\nComplexity: lean already, net -0 lines possible. Nit: the rewrap left one short line in the ARCHITECTURE bullet.",
+  "requiredCheckAtDone": null
 }

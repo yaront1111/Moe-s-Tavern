@@ -44,7 +44,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -64,7 +64,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:24:59.530Z",
-  "updatedAt": "2026-11-03T01:27:59.631Z",
+  "updatedAt": "2026-11-03T01:30:02.920Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T00:49:21.224Z",
@@ -74,11 +74,14 @@
     "firstClaimAt": "2026-11-03T01:19:22.058Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T01:29:35.689Z",
+    "wallClockMs": 613631
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-93f9625e"
   ],
   "tier": "light",
   "effort": "medium",
@@ -182,9 +185,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T01:24:48Z",
-    "at": "2026-11-03T01:27:59.631Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T01:28:12Z",
+    "at": "2026-11-03T01:30:02.920Z"
+  },
+  "completedAt": "2026-11-03T01:29:35.689Z",
+  "reviewCompletedAt": "2026-11-03T01:29:35.689Z",
+  "reviewSummary": "Approved. Reviewed completion 7379c2bc (in moe/control HEAD and moe/work-2026-10-24) via git show: only the 2 approved paths, +41/-1. postflight-safe.mjs gains SKIP_LINE and its use in summarizePostflight; precedence, VT stripping and the closed five-key summary are untouched. The test file only appends 2 tests; the 12 existing tests are unchanged and no assertion was loosened.\n\nRe-ran the DoD command on a git-archive snapshot of 7379c2bc (node v24.21.0): node --test postflight-safe.test.mjs gave tests 14, pass 14, fail 0, skipped 0; parity-check.sh printed PASS.\n\nOwn probes on the snapshot:\n- The DoD repro '[scenario WT14D] SKIP (root ignores mode bits)' + PASS gives exit 1 and SKIP_DETECTED for bash, powershell and pwsh; the keys are exactly engine, exit, lastScenario, failureClass, failureLine.\n- CRLF, ANSI wrapping, trailing colon, EOL SKIP, '(d) SKIP:', '[block] SKIP', lowercase skip and a bare SKIP are all detected.\n- The WT14F line, '(d) SKIPPED:', 'skipped:' notes, '[skip] path', MOE_*_SKIPPED, a mid-line skip, '[a][b] SKIP' and '[a]SKIP' stay NONE with exit 0.\n- 1M-character '[' run, repeated '[a] (' run and a 4M unterminated tag: no throw, at most 10 ms.\n- Unanchored, no-boundary and old-rule mutants each fail exactly 1 of 14, so the new tests kill them.\n- git grep of scripts/tests at 7379c2bc finds no harness line printing '[tag] SKIP'; the 3 v-b5c8fd34 scratch logs have 0 matches (partial logs, no PASS line, so not full green replays).\n\nCompatibility: after WT-14 lands, '[scenario WT14D] SKIP' under root or MSYS now fails the bash safe gate. That is intended; use non-root Linux or the ps1 twin.\n\nNot verified: a full postflight harness run, deliberately skipped per the plan. Complexity pass: nothing to flag (one constant, one call site).",
+  "requiredCheckAtDone": null
 }
