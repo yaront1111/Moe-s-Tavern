@@ -1038,6 +1038,44 @@ async function wtLeaseFails(){
     else leased(p,r,1,'{0}');
   }
 }
+// task-f9874361: a worktree completion reads .moe/project.json at post-flight and fails closed. Missing, empty,
+// truncated, an array, or a settings value that is no object: MOE_LAND_SETTINGS_UNREADABLE before any lease,
+// candidate, gate, journal or push, routed unlanded (gate) with T on a rescue ref. No settings key keeps the
+// defaults. The target is the claim's pinned workspace.target; a settings target that differs is named once.
+async function wtSettings(){
+  const UNREAD='MOE_LAND_SETTINGS_UNREADABLE',MISMATCH='MOE_LAND_TARGET_MISMATCH',pjOf=p=>path.join(p.dir,'.moe','project.json');
+  const gated=n=>({...REVIEW,WT_GATE_LOG:path.join(root,`wt-settings-${n}-gate.jsonl`)}),runs=n=>rows(gated(n).WT_GATE_LOG).length;
+  for(const [n,bytes] of [['missing',null],['empty',''],['truncated','{"settings":{"autoCommit":true,'],['array','[]'],['settings-string','{"settings":"x"}']]){
+    const p=repo('wt-settings-'+n,{settings:{...LANDS,qualityGate:gateCmd()}}),main=mainOf(p);
+    let b=null;
+    if(n==='truncated'){b=path.join(root,'wt-settings-origin.git');git(root,'init','-q','--bare',b);git(p.top,'remote','add','origin',b);git(p.top,'push','-q','origin','main');}
+    const origin=b&&git(b,'for-each-ref');
+    if(bytes===null)fs.rmSync(pjOf(p));
+    const r=await landRun(p,'wt-settings-'+n,{'src/a.txt':'done\n',...(bytes===null?{}:{[pjOf(p)]:bytes})},{...gated(n),MOE_LAND_NET_BACKOFF_SEC:'0'});
+    const row=done(p),f=unlanded(p);
+    assert.deepEqual([mainOf(p),row.map(x=>[x.outcome,x.code,x.pushed]),/^\.moe\/project\.json is missing or malformed/.test(row[0]&&row[0].message),leases(p),
+      rpcs(p).filter(x=>x.tool==='record_candidate').length,runs(n),present(journal(p)),git(p.top,'show',p.branch+':src/a.txt'),
+      f.map(x=>[x.outcome,x.unlandedReason,x.targetTip]),!!f[0]&&revOf(p.top,f[0].rescueRef)===revOf(p.top,p.branch),
+      r.log.includes(`[WARN] ${UNREAD}: task ${TASK} -- `),b&&git(b,'for-each-ref')],
+      [main,[['failed',UNREAD,false]],true,[],0,0,false,'done\n',[['unlanded','gate',null]],true,true,origin],
+      `${n}: main, the row, a lease, candidate or gate run, the journal, T, the finalize, the rescue ref, the code line or origin`+tail(r.log));
+  }
+  let p=repo('wt-settings-absent',{settings:{...LANDS,qualityGate:gateCmd()}});const main=mainOf(p);
+  let r=await landRun(p,'wt-settings-absent',{'src/a.txt':'done\n',[pjOf(p)]:'{"id":"proj-worktree"}'},gated('absent'));
+  assert.deepEqual([mainOf(p)!==main,done(p).map(x=>[x.outcome,x.ref]),runs('absent'),leases(p),[UNREAD,MISMATCH].filter(c=>r.log.includes(c))],
+    [true,[['committed','refs/heads/main']],0,[],[]],'absent: main, the row, a gate run, a lease call or a code'+tail(r.log));
+  p=repo('wt-settings-pinned',{settings:{...LANDS,qualityGate:gateCmd()}});git(p.top,'branch','moe/work-x','main');
+  const X='refs/heads/moe/work-x',m=mainOf(p),said=log=>(log.match(new RegExp(`^\\[WARN\\] ${MISMATCH}: .*?(?=\\r?$)`,'gm'))||[]);
+  for(const [n,cb] of [['pinned',null],['agree','moe/work-x']]){
+    if(cb)write(pjOf(p),JSON.stringify({id:'proj-worktree',name:'Worktree',settings:{...LANDS,qualityGate:gateCmd(),consolidationBranch:cb}}));
+    const x=revOf(p.top,X);
+    r=await landRun(p,'wt-settings-'+n,{'src/a.txt':n+'\n'},{...gated(n),FAKE_CLAIM_WORKSPACE:p.ws({target:'moe/work-x'}),FAKE_LEASE_RESOURCE:'git-land-moe-work-x'});
+    const c=revOf(p.top,X),L=leases(p);
+    assert.deepEqual([parents(p.top,c),git(p.top,'show',c+':src/a.txt'),mainOf(p),done(p).map(y=>[y.outcome,y.ref]),L.length>0&&L.every(y=>y.args.resourceId==='git-land-moe-work-x'),runs(n),said(r.log)],
+      [[x],n+'\n',m,[['committed',X]],true,1,cb?[]:[`[WARN] ${MISMATCH}: task ${TASK} -- .moe/project.json names main, but this attempt was cut from moe/work-x; it lands on moe/work-x.`]],
+      `${n}: moe/work-x, main, the row, the lease calls, the gate runs or the ${MISMATCH} lines`+tail(r.log));
+  }
+}
 // A handled exit while queued or while the gate runs (SIGTERM; sh only, as Windows has no signal to send)
 // still releases; T keeps the bytes.
 async function wtLeaseSignal(){
@@ -1733,6 +1771,7 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'wt-resume-unmerged':wtResumeUnmerged,'wt-resume-retry-path':wtResumeRetryPath,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
   'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});
 cases['wt-follow-lock']=wtFollowLock;
+cases['wt-settings']=wtSettings;
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;

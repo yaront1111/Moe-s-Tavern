@@ -2943,18 +2943,28 @@ function ConvertTo-MoeRootRelative([string]$TopPath, [string]$Rel) {
 
 # One project.json read. Explicit-false semantics for the booleans that
 # default on (as autoCommit always had); commitHooks defaults OFF and needs an
-# explicit true. Env overrides last.
+# explicit true. Env overrides last. A key left out takes its default.
+# settingsReadable is $true only when the file parsed as a JSON object whose
+# settings value is absent, null or an object; a file that is missing,
+# unreadable, not JSON or not a JSON object, or whose settings value is present
+# and not an object, is unreadable (the worktree completion refuses to land).
 function Read-MoeCommitSettings {
     $s = @{
         autoCommit = $true; checkpointCommits = $true; checkpointPush = $true
         commitBoardState = $true; commitHooks = $false
         undeclared = 'solo'; contested = 'skip-untouched'; exclude = @()
         qualityGate = ''; qualityGateScope = 'epicFinal'; consolidationBranch = ''; configuredGate = ''
+        settingsReadable = $false
     }
     $projJsonPath = Join-Path $moeDir "project.json"
     if (Test-Path -LiteralPath $projJsonPath) {
         try {
             $cfg = Get-Content -Raw -LiteralPath $projJsonPath | ConvertFrom-Json
+            # Properties, not Get-MoeProp (its return unrolls arrays), and the full type name:
+            # the [PSCustomObject] accelerator means PSObject and matches wrapped scalars.
+            $obj = $cfg -is [System.Management.Automation.PSCustomObject]
+            $sp = if ($obj) { $cfg.PSObject.Properties['settings'] } else { $null }
+            $s.settingsReadable = $obj -and ($null -eq $sp -or $null -eq $sp.Value -or $sp.Value -is [System.Management.Automation.PSCustomObject])
             $st = Get-MoeProp $cfg 'settings'
             if ($st) {
                 foreach ($k in @('autoCommit', 'checkpointCommits', 'checkpointPush', 'commitBoardState')) {
@@ -7214,7 +7224,8 @@ function Release-MoeLandLease {
 # nothing (WT-11); '' for any other code. Twin: unlanded_reason.
 function Get-MoeUnlandedReason([string]$Code) {
     $map = @{ MOE_COMMIT_FAILED_CONFLICT = 'conflict'; MOE_WORKTREE_UNRESOLVED_CONFLICT = 'conflict'; MOE_COMMIT_FAILED_REF_CONTENTION = 'contention'
-        MOE_COMMIT_FAILED_LAND_LEASE = 'contention'; MOE_COMMIT_FAILED_GATE = 'gate'; MOE_LAND_TARGET_DIVERGED = 'diverged'; MOE_LAND_FETCH_FAILED = 'remote'; MOE_PUSH_FAILED = 'remote' }
+        MOE_COMMIT_FAILED_LAND_LEASE = 'contention'; MOE_COMMIT_FAILED_GATE = 'gate'; MOE_LAND_SETTINGS_UNREADABLE = 'gate'; MOE_LAND_TARGET_DIVERGED = 'diverged'
+        MOE_LAND_FETCH_FAILED = 'remote'; MOE_PUSH_FAILED = 'remote' }
     if ($Code -and $map.ContainsKey($Code)) { return $map[$Code] }
     return ''
 }
@@ -7248,11 +7259,15 @@ function Invoke-MoeUnlandedRoute([hashtable]$Git, [hashtable]$Res, [hashtable]$L
 
 # A worktree completion exit (design §2.2): L0-L2 commit W's dirt to its
 # branch (owner guard, no ledger row of its own), then the net change lands
-# on the target (literal consolidationBranch, else main) as ONE squash commit:
-# a local CAS without a remote, else (any remote, or a failed probe) the
-# non-forced push of WT-09. With a qualityGate set (whatever qualityGateScope
-# says), the landing holds the git-land-<target> lease (L3, L14) and gates each
-# merged tree (L6); MOE_DISABLE_QUALITY_GATE=1 refuses it instead.
+# on the target (the attempt's pinned workspace.target, $script:MoeWtTarget,
+# which W was cut from) as ONE squash commit: a local CAS without a remote,
+# else (any remote, or a failed probe) the non-forced push of WT-09.
+# $Settings is the post-flight read: unreadable refuses the landing before L3
+# (MOE_LAND_SETTINGS_UNREADABLE, routed unlanded), and a consolidationBranch that
+# names another target is only warned (MOE_LAND_TARGET_MISMATCH). With a
+# qualityGate set (whatever qualityGateScope says), the landing holds the
+# git-land-<target> lease (L3, L14) and gates each merged tree (L6);
+# MOE_DISABLE_QUALITY_GATE=1 refuses it instead.
 # Never Ensure-MoeSafeBranch, the peel or the shared push. Twin: land_worktree_completion.
 function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
     $tid = $preflightTaskId; $branch = $script:MoeWtBranch
@@ -7261,7 +7276,11 @@ function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
         -Status $M.Status -ReopenCount $M.ReopenCount -CliExit $M.CliExit -Sid $M.Sid -Internal $true
     if ($l2.Outcome -eq 'refused') { return $l2 }
     $cb = [string]$Settings.consolidationBranch
-    $target = if ($cb -and $cb -notmatch '[?\[]') { $cb } else { 'main' }
+    $st = if ($cb -and $cb -notmatch '[?\[]') { $cb } else { 'main' }
+    $target = if ($script:MoeWtTarget) { [string]$script:MoeWtTarget } else { $st }
+    if ($Settings.settingsReadable -and $st -cne $target) {
+        Write-Host "[WARN] MOE_LAND_TARGET_MISMATCH: task $tid -- .moe/project.json names $st, but this attempt was cut from $target; it lands on $target." -ForegroundColor Yellow
+    }
     $ref = "refs/heads/$target"; $rescue = $false
     $res = @{ Outcome = 'failed'; Kind = 'completion'; Sha = ''; Ref = ''; Code = 'MOE_COMMIT_FAILED'; Branch = $target; Landed = @()
         PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0; Pushed = $false; StopLoop = [bool]$l2.StopLoop; Held = '' }
@@ -7275,6 +7294,8 @@ function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
         if ($l2.Outcome -eq 'failed') {
             if ($l2.Code) { $res.Code = $l2.Code }
             $res.Ref = $l2.Ref; $res.Sha = $l2.Sha; $L.Msg = if ($l2.Msg) { $l2.Msg } else { 'the task-branch commit failed' }
+        } elseif (-not $Settings.settingsReadable) {
+            $res.Code = 'MOE_LAND_SETTINGS_UNREADABLE'; $L.Msg = '.moe/project.json is missing or malformed, so this landing cannot read its qualityGate'
         } elseif (-not $t -or $t.Rc -ne 0) { $L.Msg = "refs/heads/$branch does not resolve" }
         elseif ((Invoke-MoeGit -Top $git.Top -GitArgs @('check-ref-format', $ref)).Rc -ne 0 -or
             (-not $L.Remote -and (Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '-q', '--verify', "$ref^{commit}")).Rc -ne 0)) {
