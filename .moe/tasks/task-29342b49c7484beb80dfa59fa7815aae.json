@@ -13,34 +13,54 @@
     {
       "stepId": "step-1",
       "description": "Both tools take presence from isWorkerAlive (packages/moe-daemon/src/util/workerLiveness.ts:15-31: not DEAD and lastActivityAt within LIVENESS_TIMEOUT_MS; the predicate list_workers reports as isAlive).\n(a) packages/moe-daemon/src/tools/chatWho.ts:\n- import `isWorkerAlive` from '../util/workerLiveness.js' and delete the module constant PRESENCE_TIMEOUT_MS (:6);\n- Pass 1 (:51-53): replace the inline lastActivity computation and its check with `if (!isWorkerAlive(worker, now)) continue;`;\n- Pass 2 (:96-98): a worker parked in chat_wait counts as present even past the window, because a long wait does not refresh activity, but never a DEAD record. Change `if (worker)` to `if (worker && worker.status !== 'DEAD')`. Never upgrade a DEAD record either: Pass 1 already skipped it, so it cannot be in `seen`.\n(b) packages/moe-daemon/src/tools/chatJoin.ts (:62-71): import isWorkerAlive. Replace the inline loop's condition with `if (isWorkerAlive(worker, now))` and delete the local PRESENCE_TIMEOUT_MS.\n- Chosen rule: the DOC's. Every live seat is online, IDLE included, so the `status !== 'IDLE'` exclusion goes. Its own comment ('active status or recent activity') and `### moe.chat_join` already describe that rule, and no consumer reads onlineWorkers (grep: only chatJoin.ts and the doc).\n- Rewrite the comment to name isWorkerAlive.\nDo not touch mentionRouter.ts: its IDLE/DEAD filter (:244-249) picks notification targets, not presence, and its comment documents that.\nError handling: unchanged. Neither tool gains a new throw, and the channel and worker validation stay first. Edit with the seat's own editor (Serena or Edit on Claude, apply_patch on codex exec), never a shell write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatWho.ts",
         "packages/moe-daemon/src/tools/chatJoin.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts",
+        "packages/moe-daemon/src/tools/chatJoin.ts"
+      ],
+      "note": "chatWho/chatJoin now use isWorkerAlive; Pass 2 skips DEAD; chat_join drops IDLE exclusion (doc rule). Error handling unchanged.",
+      "startedAt": "2026-11-03T23:58:22.847Z",
+      "completedAt": "2026-11-03T23:58:37.760Z"
     },
     {
       "stepId": "step-2",
       "description": "Regression test: new packages/moe-daemon/src/tools/chatPresence.test.ts, built from /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_chatWhoDead.test.ts (ToolTestHarness; mock postToRoleChannel).\nSeed, with FRESH = now and STALE = 5 min ago:\n- worker-closed: CODING, FRESH, with a cursor on #general;\n- worker-idle: IDLE, FRESH, with a cursor on #general;\n- worker-busy: CODING, FRESH;\n- worker-stale: CODING, STALE, with a cursor on #general;\n- worker-joiner: READING_CONTEXT, FRESH, the chat_join caller.\nThen deregister_worker worker-closed, so it is DEAD with its recent lastActivityAt kept. Put chat_wait waiters straight into activeChatWaiters (the tools/chatChannelRef.test.ts:238-241 pattern) for worker-closed and for worker-stale, both watching #general. Clear them, and their timers, in afterEach.\nAssert exact id lists, sorted:\n1. DoD 1:\n   - chat_who {} lists [worker-busy, worker-idle, worker-joiner], with no worker-closed;\n   - chat_who {channel:'#general'} lists worker-idle (source 'cursor') and worker-stale (source 'waiting'), and never worker-closed in either pass;\n   - chat_join {channel:'#general', workerId:'worker-joiner'} onlineWorkers ids are [worker-busy, worker-idle, worker-joiner].\n2. DoD 2: worker-idle is in list_workers with isAlive:true, and both tools list it. That pins the shipped rule: chat_join no longer drops IDLE.\n3. Parity: the chat_who {} ids and the chat_join onlineWorkers ids both equal the ids list_workers reports with isAlive:true.\n4. Unchanged behaviour: worker-stale is in neither no-channel list. It is listed with a channel only through its waiter.\nUse toEqual on sorted arrays, never truthiness. Edit with the seat's own editor, never a shell write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/chatPresence.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatPresence.test.ts"
+      ],
+      "note": "Added chatPresence.test.ts (5 cases); run in step 4 snapshot.",
+      "startedAt": "2026-11-03T23:58:46.330Z",
+      "completedAt": "2026-11-03T23:59:00.768Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs sync, these two sections only (ruling msg-71db57ac): docs/MCP_SERVER.md `### moe.chat_join` (:2649-2670) and `### moe.chat_who` (:2711-2733).\n- chat_join's Notes: replace 'Online workers are those with activity within the last 120 seconds' with: online workers are those `moe.list_workers` reports `isAlive`, meaning not `DEAD` and active within the last 120 seconds, whatever their status, so an `IDLE` seat between tasks is listed.\n- chat_who's Notes: 'Online' becomes the same rule (not `DEAD`, active within 120 s, as `moe.chat_join` and list_workers' isAlive). The `channel` bullet adds that a worker blocked in `moe.chat_wait` on the channel counts even past the window, because a parked wait does not refresh activity, but never a `DEAD` record.\nKeep the type, source and no-channel bullets. Edit no other section. Edit with the seat's own editor (Edit on Claude, apply_patch on codex exec), never Serena (it ignores docs/) or a shell write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Synced chat_join and chat_who Notes only.",
+      "startedAt": "2026-11-03T23:59:03.618Z",
+      "completedAt": "2026-11-03T23:59:12.062Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, run once before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written (text also at /mnt/d/moe-scratch/plan-29342b49/checkref-gate.txt, 884 chars).\n- What it does: it overlays chatWho.ts, chatJoin.ts and the new test onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive). It checks that no PRESENCE_TIMEOUT_MS is left in either tool and that both call isWorkerAlive(, printing 'inline presence left (<dir>)' on failure. Then, under env -i with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci && npx vitest run src/tools/{chatPresence,chatChannelRef,workerType,listWorkers}`: the new file plus every existing chat_who, chat_join and list_workers suite.\n- Expected: exit 0; 'Test Files 4 passed'; the last line is 'presence ok (/tmp/m2934.XXXX)'.\n- Architect dry run with a prototype of this plan: exit 0, 4 files and 84 tests. The base chatWho.ts exits 1 at the structural check.\n- Then `rm -rf` the printed literal /tmp/m2934.XXXX path.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit, read the printed snapshot path and log tail first, then fix the owning step's file.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T23:59:13.151Z"
     },
     {
       "stepId": "step-5",
@@ -68,11 +88,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:34:06.481Z",
-  "updatedAt": "2026-11-03T23:57:42.233Z",
+  "updatedAt": "2026-11-03T23:59:13.151Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:54:34.552Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -82,7 +103,11 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T23:57:08.496Z",
   "executionContract": {
@@ -147,5 +172,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T23:57:08.534Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:58:22.847Z"
 }

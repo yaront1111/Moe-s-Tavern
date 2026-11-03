@@ -64,8 +64,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -77,12 +77,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:23:15.930Z",
-  "updatedAt": "2026-11-03T23:56:10.344Z",
+  "updatedAt": "2026-11-03T23:59:14.859Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:23:20.563Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T23:58:51.220Z",
+    "wallClockMs": 2130657
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -211,9 +213,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T23:42:23Z",
-    "at": "2026-11-03T23:55:37.814Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:55:52Z",
+    "at": "2026-11-03T23:59:14.859Z"
+  },
+  "completedAt": "2026-11-03T23:58:51.220Z",
+  "reviewCompletedAt": "2026-11-03T23:58:51.220Z",
+  "reviewSummary": "Reviewed completion 19af5ca6 (on moe/work-2026-10-24; 4 files, net 346 LOC, under the 400 cap; no daemon/VS Code/docs change; diff --check clean).\nDoD1: EpicArchive.plan returns no frames plus in-flight TITLES (board order) for PLANNING/AWAITING_APPROVAL/WORKING rows of that epic only; else the non-ARCHIVED count (other epics and ARCHIVED rows excluded). DoD2: archive plan = [Details(edits, current status), Status(ARCHIVED, order)]; other saves stay one Details frame. DoD3: dialog Save plans and saves via the helper, sends only through its send callback, confirms with the task count before any ARCHIVED frame, closes only if sent; Cancel/warn send nothing. Checked the daemon: UPDATE_EPIC runs archive_epic first and the FIFO mutex keeps frame order. Worker's M1-M5 mutant claims reviewed, not re-run.\nRe-ran task.verification (Windows gradlew.bat under the jetbrains-gradle lease, released). Run 1 (/tmp/tmp.PwAx9Opd4M): EpicArchiveTest 13/0/0 but the full suite had ONE failure, MoeProjectConnectionTest malformed-readiness (TimeoutException :217), exit 1. Run 2, same command (/tmp/tmp.S8Pe8dGZ7w): BUILD SUCCESSFUL x2, 664 tests, 6 skipped, 0 failures/errors, EpicArchiveTest 13/0/0, exit 0. That test also failed once for the worker, covers loopback readiness code this diff does not touch, and is tracked in task-8784d35dd2814e8ab678689c1476ab0d; I treat it as pre-existing flakiness and disclose the first-run failure. parity-check PASS, npm run lint OK. Evidence is Windows Gradle, not the POSIX command.\nAccepted plan limit: a stale cache can make the daemon refuse ARCHIVED after the edits landed; the balloon still reports it.",
+  "requiredCheckAtDone": null
 }
