@@ -54,7 +54,9 @@
 3. Open a task with an assigned worker. Expected: a **Release Agent** button. A task with no worker shows none.
 4. Click **Release Agent** and dismiss the dialog. Expected: nothing is sent and the task keeps its worker.
 5. Click it again and confirm. Expected: the daemon releases the task (`assignedWorkerId` cleared; a WORKING task stays WORKING) with the reason "Released from board", and no success toast appears.
-6. Keep the panel open while the task changes: a check run or receipt is recorded, the delivery evidence is cleared, an agent claims the task, or it is released from the board. Expected: the Delivery section and the **Release Agent** button update in place without reopening the panel. The section disappears when the task has no delivery evidence, and the button disappears when no worker is assigned.
+6. Open a task whose agent is mid-step (a step IN_PROGRESS, e.g. a hung or crashed worker), click **Release Agent** and confirm. Expected: a second modal naming the agent, the step and the task, with a **Force Release Agent** button. Dismiss it: nothing is sent. Repeat and click **Force Release Agent**: the daemon releases the task (`assignedWorkerId` cleared; a WORKING task stays WORKING). If the step completes or the task changes hands while that modal is open, the "Nothing was sent. ..." warning appears and nothing is sent.
+7. Click **Release Agent** on a task with no step in progress, have its agent start a step (`moe.start_step`) before you confirm, then confirm. Expected: an error message "Agent was not released: [STEP_LEASE_HELD] ..." carrying the daemon's text, not only an output-channel line.
+8. Keep the panel open while the task changes: a check run or receipt is recorded, the delivery evidence is cleared, an agent claims the task, or it is released from the board. Expected: the Delivery section and the **Release Agent** button update in place without reopening the panel. The section disappears when the task has no delivery evidence, and the button disappears when no worker is assigned.
 
 ## Claude accounts view
 1. Open the **Claude accounts** view in the Moe sidebar while connected to a daemon that reports a rotation.

@@ -31,12 +31,13 @@ const BUNDLE_PATH = path.join(__dirname, '../../moe-jetbrains/src/main/resources
 // The JetBrains wording, read from its bundle
 // ===========================================================================
 
-const BUNDLE_KEYS = ['moe.button.releaseAgent', 'moe.message.releaseAgent', 'moe.message.releasedInUI'];
+const BUNDLE_KEYS = ['moe.button.releaseAgent', 'moe.message.releaseAgent', 'moe.message.releasedInUI',
+    'moe.message.releaseAgentForce', 'moe.message.releaseAgentForceTitle', 'moe.message.releaseAgentForceStale'];
 
 function readBundle() {
     const text = fs.readFileSync(BUNDLE_PATH, 'utf8');
     const values = {};
-    for (const [, key, value] of text.matchAll(/^(moe\.(?:button\.releaseAgent|message\.releaseAgent|message\.releasedInUI))=(.*?)\r?$/gm)) {
+    for (const [, key, value] of text.matchAll(/^(moe\.(?:button\.releaseAgent|message\.releaseAgent(?:Force(?:Title|Stale)?)?|message\.releasedInUI))=(.*?)\r?$/gm)) {
         values[key] = value;
     }
     for (const key of BUNDLE_KEYS) {
@@ -51,6 +52,13 @@ const RELEASE_REASON = BUNDLE['moe.message.releasedInUI'];
 const CONFIRM_TEMPLATE = BUNDLE['moe.message.releaseAgent'];
 const NOT_CONNECTED = 'Not connected to Moe daemon — agent was not released.';
 const NO_AGENT = 'No agent is assigned to this task.';
+const FORCE_TEMPLATE = BUNDLE['moe.message.releaseAgentForce'];
+const FORCE_TITLE = BUNDLE['moe.message.releaseAgentForceTitle'];
+const STALE_TEMPLATE = BUNDLE['moe.message.releaseAgentForceStale'];
+
+function expectedText(template, ...values) {
+    return template.split(/(\{\d\})/).map(part => /^\{\d\}$/.test(part) ? values[Number(part[1])] ?? part : part).join('');
+}
 
 /**
  * The bundle text with {0} = worker id and {1} = task title, built by splitting
@@ -81,10 +89,10 @@ function strict(name, members) {
 const subscription = () => ({ dispose() {} });
 
 // Runs a transpiled module that may require only the given dependencies.
-function loadModule(source, filename, dependencies) {
+function loadModule(source, filename, dependencies, globals = {}) {
     const module = { exports: {} };
     const context = vm.createContext({
-        exports: module.exports, module, console,
+        exports: module.exports, module, console, ...globals,
         require: name => {
             if (Object.prototype.hasOwnProperty.call(dependencies, name)) { return dependencies[name]; }
             throw new Error(`unexpected require from ${path.basename(filename)}: ${name}`);
@@ -325,4 +333,188 @@ test('an unassigned task page loads without throwing and has nothing to click', 
     assert.doesNotThrow(() => { page = loadDetailPage(html); }, 'the page script must guard the absent button');
     assert.deepEqual(page.posted, []);
     assert.ok(!html.includes('releaseAgentBtn'), 'there is no button to click');
+});
+
+// Real-client force-release regressions: raw frames, live cache updates and errors.
+const CLIENT_SOURCE = transpile('src/services/MoeDaemonClient.ts');
+const FORCE_FRAME = '{"type":"RELEASE_TASK","payload":{"taskId":"task-release","reason":"Released from board","force":true}}';
+const PLAIN_FRAME = '{"type":"RELEASE_TASK","payload":{"taskId":"task-release","reason":"Released from board"}}';
+const step = (stepId, status) => ({ stepId, description: stepId, status, affectedFiles: [] });
+const midTask = (overrides = {}) => makeTask({ assignedWorkerId: 'w-mid', implementationPlan: [
+    step('step-1', 'COMPLETED'), step('step-2', 'IN_PROGRESS'), step('step-3', 'IN_PROGRESS')
+], ...overrides });
+
+class RecordingEventEmitter {
+    constructor() {
+        this.listeners = [];
+        this.event = listener => {
+            this.listeners.push(listener);
+            return { dispose: () => { this.listeners = this.listeners.filter(l => l !== listener); } };
+        };
+    }
+    fire(payload) { for (const listener of this.listeners.slice()) { listener(payload); } }
+    dispose() { this.listeners = []; }
+}
+
+function liveVscode(panel, calls, answers, onWarning) {
+    return {
+        EventEmitter: RecordingEventEmitter, ViewColumn: { One: 1 },
+        Uri: { joinPath: (base, ...segments) => ({ path: [base.path, ...segments].join('/') }) },
+        workspace: { getConfiguration: () => ({ get: () => false }) },
+        window: strict('vscode.window', {
+            createOutputChannel: () => ({ appendLine() {}, dispose() {} }),
+            createWebviewPanel: () => panel,
+            showWarningMessage: (...args) => {
+                const index = calls.warnings.push(args) - 1;
+                onWarning?.(index, args);
+                return Promise.resolve(answers[index]);
+            },
+            showInformationMessage: (...args) => { calls.infos.push(args); return Promise.resolve(undefined); },
+            showErrorMessage: (...args) => { calls.errors.push(args); return Promise.resolve(undefined); }
+        })
+    };
+}
+
+function openLive({ task = midTask(), answers = [], onWarning } = {}) {
+    const calls = { warnings: [], infos: [], errors: [] };
+    let listener;
+    const panel = {
+        webview: {
+            html: '', cspSource: 'vscode-webview://test', asWebviewUri: uri => uri.path,
+            onDidReceiveMessage: fn => { listener = fn; return subscription(); },
+            postMessage: () => Promise.resolve(true)
+        },
+        onDidDispose: subscription, reveal() {}, dispose() {}
+    };
+    const vscode = liveVscode(panel, calls, answers, onWarning);
+    function StubWebSocket() { throw new Error('no real socket'); }
+    StubWebSocket.OPEN = 1;
+    const globals = { process, setTimeout, clearTimeout, setInterval, clearInterval };
+    const loaded = loadModule(CLIENT_SOURCE, 'MoeDaemonClient.ts', {
+        vscode, ws: StubWebSocket, fs, path, net: require('node:net'),
+        child_process: { spawn() { throw new Error('unexpected spawn'); } }
+    }, globals);
+    const client = new loaded.exports.MoeDaemonClient('extension');
+    const sent = [];
+    client['ws'] = { readyState: 1, send: frame => sent.push(frame), close() {} };
+    client['_connectionState'] = 'connected';
+    const deliver = frame => client['handleMessage'](JSON.stringify(frame));
+    deliver({ type: 'STATE_SNAPSHOT', payload: {
+        project: { id: 'p', name: 'p', settings: {} }, epics: [], workers: [], proposals: [], tasks: [task]
+    } });
+    const review = loadModule(PLAN_REVIEW_SOURCE, 'PlanReviewPanel.ts', { vscode }, globals);
+    const detail = loadModule(PANEL_SOURCE, 'TaskDetailPanel.ts', { vscode, './PlanReviewPanel': review.exports }, globals);
+    const instance = detail.exports.TaskDetailPanel.createOrShow({ path: '/ext' }, client, task.id);
+    assert.equal(typeof listener, 'function');
+    return { sent, calls, client, deliver, send: () => listener({ type: 'releaseAgent' }),
+        dispose: () => { try { instance.dispose(); } finally { client.dispose(); } } };
+}
+
+test('RF1 bundle: force texts stay plain MessageFormat-compatible strings', () => {
+    for (const text of [FORCE_TEMPLATE, FORCE_TITLE, STALE_TEMPLATE]) {
+        assert.ok(text.length > 0 && !text.includes("'") && !text.includes('\\'));
+    }
+    assert.equal(FORCE_TEMPLATE.split('{0}').length, 3);
+    for (const token of ['{1}', '{2}']) { assert.equal(FORCE_TEMPLATE.split(token).length, 2); }
+    for (const token of ['{0}', '{1}']) { assert.equal(STALE_TEMPLATE.split(token).length, 2); }
+    assert.equal(FORCE_TITLE, 'Force Release Agent');
+});
+
+test('RF2 force: two confirmations name the first leased step and send one force frame', async () => {
+    for (const task of [midTask(), midTask({ assignedWorkerId: 'w{2}$&', implementationPlan: [step('s{0}', 'IN_PROGRESS')] })]) {
+        const h = openLive({ task, answers: [BUTTON_LABEL, FORCE_TITLE] });
+        try {
+            await h.send();
+            const warnings = h.calls.warnings;
+            assert.equal(warnings.length, 2);
+            assert.equal(warnings[0][0], expectedText(CONFIRM_TEMPLATE, task.assignedWorkerId, task.title));
+            assert.equal(warnings[1].length, 3);
+            const stepId = task.implementationPlan.find(s => s.status === 'IN_PROGRESS').stepId;
+            assert.equal(warnings[1][0], expectedText(FORCE_TEMPLATE, task.assignedWorkerId, stepId, task.title));
+            assert.equal(JSON.stringify(warnings[1][1]), '{"modal":true}');
+            assert.equal(warnings[1][2], FORCE_TITLE);
+            assert.deepEqual(h.sent, [FORCE_FRAME]);
+            assert.deepEqual([h.calls.infos, h.calls.errors], [[], []]);
+        } finally { h.dispose(); }
+    }
+    const h = openLive({ answers: [BUTTON_LABEL, FORCE_TITLE], onWarning: index => { if (index === 1) h.client.disconnect(); } });
+    try {
+        await h.send();
+        assert.deepEqual(h.sent, []);
+        assert.equal(h.calls.warnings.length, 3);
+        assert.deepEqual(h.calls.warnings[2], [NOT_CONNECTED]);
+        assert.deepEqual([h.calls.infos, h.calls.errors], [[], []]);
+    } finally { h.dispose(); }
+});
+
+test('RF3 decline: dismissing either modal sends nothing', async () => {
+    for (const answers of [[undefined], [BUTTON_LABEL, undefined]]) {
+        const h = openLive({ answers });
+        try {
+            await h.send();
+            assert.equal(h.calls.warnings.length, answers.length);
+            assert.deepEqual(h.sent, []);
+            assert.deepEqual([h.calls.infos, h.calls.errors], [[], []]);
+        } finally { h.dispose(); }
+    }
+});
+
+test('RF4 plain: completed or pending steps and an empty plan keep the original frame', async () => {
+    for (const implementationPlan of [[step('step-1', 'COMPLETED'), step('step-2', 'PENDING')], [], undefined, null, {}, [{ stepId: 'no-status' }]]) {
+        const h = openLive({ answers: [BUTTON_LABEL], onWarning: index => {
+            // A newly started step must not upgrade a plain confirmation to force.
+            if (index === 0) h.deliver({ type: 'TASK_UPDATED', payload: midTask() });
+        } });
+        try {
+            // Update after initial rendering: this isolates the lease guard from
+            // the renderer's separate assumptions about the plan's shape.
+            h.deliver({ type: 'TASK_UPDATED', payload: midTask({ implementationPlan }) });
+            await h.send();
+            assert.equal(h.calls.warnings.length, 1);
+            assert.deepEqual(h.sent, [PLAIN_FRAME]);
+            assert.deepEqual([h.calls.infos, h.calls.errors], [[], []]);
+        } finally { h.dispose(); }
+    }
+});
+
+test('RF5 stale: changed or vanished leases are refused but a newer equal lease still forces', async () => {
+    const updates = [
+        { assignedWorkerId: 'w-new' },
+        { implementationPlan: [step('step-2', 'COMPLETED'), step('step-3', 'IN_PROGRESS')] },
+        { implementationPlan: [step('step-2', 'COMPLETED')] },
+        { assignedWorkerId: null }, null, { title: 'Renamed while confirming' }
+    ];
+    for (const warningIndex of [0, 1]) for (const update of updates) {
+        const equalLease = update?.title !== undefined;
+        const h = openLive({ answers: [BUTTON_LABEL, FORCE_TITLE], onWarning: index => {
+            if (index === warningIndex) h.deliver(update === null
+                ? { type: 'TASK_DELETED', payload: { id: 'task-release' } }
+                : { type: 'TASK_UPDATED', payload: midTask(update) });
+        } });
+        try {
+            await h.send();
+            assert.equal(h.calls.warnings.length, equalLease ? 2 : 3);
+            assert.equal(h.calls.warnings[1][0], expectedText(FORCE_TEMPLATE, 'w-mid', 'step-2', midTask().title));
+            assert.deepEqual(h.sent, equalLease ? [FORCE_FRAME] : []);
+            if (!equalLease) assert.deepEqual(h.calls.warnings[2], [expectedText(STALE_TEMPLATE, 'w-mid', 'step-2')]);
+            assert.deepEqual([h.calls.infos, h.calls.errors], [[], []]);
+        } finally { h.dispose(); }
+    }
+});
+
+test('RF6 refusal: only a RELEASE_TASK error correlated to this panel is shown once', () => {
+    const h = openLive();
+    const frame = { type: 'ERROR', operation: 'RELEASE_TASK', code: -32003, codeName: 'STEP_LEASE_HELD',
+        message: '[STEP_LEASE_HELD] Task task-release is leased by w-mid with step step-2 IN_PROGRESS; only a governor or a human may override that lease (moe.release_task force), and only for a confirmed-dead holder',
+        context: { taskId: 'task-release' } };
+    try {
+        h.deliver({ ...frame, context: { taskId: 'task-other' } });
+        h.deliver({ ...frame, operation: 'UPDATE_TASK' });
+        const { context, ...contextless } = frame;
+        h.deliver(contextless);
+        assert.deepEqual([h.calls.errors, h.calls.warnings, h.calls.infos], [[], [], []]);
+        h.deliver(frame);
+        assert.deepEqual(h.calls.errors, [['Agent was not released: ' + frame.message]]);
+        assert.deepEqual([h.calls.warnings, h.calls.infos, h.sent], [[], [], []]);
+    } finally { h.dispose(); }
 });

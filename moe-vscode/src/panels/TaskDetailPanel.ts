@@ -258,7 +258,8 @@ export function deliveryDisplay(delivery: unknown) {
 
 /**
  * The text of JetBrains' Release Agent action (moe.button.releaseAgent,
- * moe.message.releasedInUI and moe.message.releaseAgent in MoeBundle.properties,
+ * moe.message.releasedInUI, moe.message.releaseAgent, releaseAgentForce,
+ * releaseAgentForceTitle and releaseAgentForceStale in MoeBundle.properties,
  * used by TaskDetailDialog and MoeToolWindowPanel.handleReleaseAgent), copied
  * exactly: tests/task-release.test.cjs reads that bundle and compares. The
  * confirm text keeps its {0} (worker id) and {1} (task title) placeholders. It
@@ -267,6 +268,22 @@ export function deliveryDisplay(delivery: unknown) {
 const RELEASE_AGENT_LABEL = 'Release Agent';
 const RELEASED_FROM_BOARD = 'Released from board';
 const RELEASE_AGENT_CONFIRM = 'Release agent "{0}" from "{1}"? The task stays claimable where it is (Working stays Working, unassigned; Review if all steps are done) and the agent goes idle — the next agent may pick it up immediately. To pull the task away from the fleet instead, drag it to Backlog.';
+const RELEASE_AGENT_FORCE = 'Agent "{0}" is mid-step: step {1} of "{2}" is IN_PROGRESS, so a normal release is refused. Force the release only if you believe "{0}" is dead (hung or crashed). A live agent would lose the task in the middle of its step. Force release?';
+const RELEASE_AGENT_FORCE_TITLE = 'Force Release Agent';
+const RELEASE_AGENT_FORCE_STALE = 'Nothing was sent. The task changed while you were confirming, and agent "{0}" no longer holds step {1} IN_PROGRESS. Reopen the task and try again.';
+
+/** Plain-text bundle substitution, never re-scanning inserted values. */
+function formatBundleText(template: string, ...values: string[]): string {
+    return template.replace(/\{(\d)\}/g, (match, index: string) => values[Number(index)] ?? match);
+}
+
+/** Mirror the daemon guard: the holder leases the first IN_PROGRESS step. */
+function stepLease(task: Task | undefined): { holder: string; stepId: string } | null {
+    const holder = nonBlankString(task?.assignedWorkerId);
+    if (holder === null || !Array.isArray(task?.implementationPlan)) { return null; }
+    const step = task.implementationPlan.find(entry => entry?.status === 'IN_PROGRESS');
+    return step ? { holder, stepId: step.stepId } : null;
+}
 
 /** The Release Agent button's label when the task has an agent to release, else null: one rule for the initial page and every live update. */
 function releaseAgentLabel(task: Task): string | null {
@@ -404,6 +421,12 @@ export class TaskDetailPanel implements vscode.Disposable {
         codeName?: string;
         context?: { taskId?: string };
     }): void {
+        if (event.operation === 'RELEASE_TASK') {
+            if (event.context?.taskId === this.taskId) {
+                vscode.window.showErrorMessage('Agent was not released: ' + event.message);
+            }
+            return;
+        }
         if (!this.approvalPending || event.operation !== 'APPROVE_TASK') { return; }
         if (event.context?.taskId !== this.taskId) { return; }
         this.approvalPending = false;
@@ -501,14 +524,34 @@ export class TaskDetailPanel implements vscode.Disposable {
                         vscode.window.showInformationMessage('No agent is assigned to this task.');
                         break;
                     }
-                    // One pass, so a worker id or title that looks like a
-                    // placeholder is never substituted again.
+                    // Only the click-time snapshot chooses force; the cache
+                    // recheck below can refuse it, never authorize a new lease.
+                    const lease = stepLease(current);
+                    const title = current.title;
                     const choice = await vscode.window.showWarningMessage(
-                        RELEASE_AGENT_CONFIRM.replace(/\{([01])\}/g, (_match, index: string) => (index === '0' ? workerId : current.title)),
+                        formatBundleText(RELEASE_AGENT_CONFIRM, workerId, title),
                         { modal: true },
                         RELEASE_AGENT_LABEL
                     );
-                    if (choice === RELEASE_AGENT_LABEL && !this.client.releaseTask(this.taskId, RELEASED_FROM_BOARD)) {
+                    if (choice !== RELEASE_AGENT_LABEL) { break; }
+                    let released: boolean;
+                    if (lease) {
+                        const forceChoice = await vscode.window.showWarningMessage(
+                            formatBundleText(RELEASE_AGENT_FORCE, lease.holder, lease.stepId, title),
+                            { modal: true },
+                            RELEASE_AGENT_FORCE_TITLE
+                        );
+                        if (forceChoice !== RELEASE_AGENT_FORCE_TITLE) { break; }
+                        const latestLease = stepLease(this.findTask());
+                        if (!latestLease || latestLease.holder !== lease.holder || latestLease.stepId !== lease.stepId) {
+                            vscode.window.showWarningMessage(formatBundleText(RELEASE_AGENT_FORCE_STALE, lease.holder, lease.stepId));
+                            break;
+                        }
+                        released = this.client.releaseTask(this.taskId, RELEASED_FROM_BOARD, true);
+                    } else {
+                        released = this.client.releaseTask(this.taskId, RELEASED_FROM_BOARD);
+                    }
+                    if (!released) {
                         vscode.window.showWarningMessage('Not connected to Moe daemon — agent was not released.');
                     }
                     break;

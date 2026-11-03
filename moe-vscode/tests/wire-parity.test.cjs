@@ -178,6 +178,26 @@ test('A4: a throwing socket makes releaseTask return false and report the failur
     });
 });
 
+test('RF7 wire: releaseTask appends force:true after reason only when force is true; any other value sends the plain frame', () => {
+    withClient(h => {
+        const sent = h.connectSocket();
+        assert.equal(h.client.releaseTask('t1', 'Released from board', true), true);
+        assert.equal(h.client.releaseTask('t1', undefined, true), true);
+        for (const force of [false, undefined, null, 1, 'true', {}]) {
+            assert.equal(h.client.releaseTask('t1', 'Released from board', force), true);
+        }
+        assert.deepStrictEqual(sent, [
+            '{"type":"RELEASE_TASK","payload":{"taskId":"t1","reason":"Released from board","force":true}}',
+            '{"type":"RELEASE_TASK","payload":{"taskId":"t1","force":true}}',
+            ...Array(6).fill('{"type":"RELEASE_TASK","payload":{"taskId":"t1","reason":"Released from board"}}')
+        ]);
+        sent.length = 0;
+        h.client['_connectionState'] = 'disconnected';
+        assert.equal(h.client.releaseTask('t1', 'Released from board', true), false);
+        assert.deepStrictEqual(sent, []);
+    });
+});
+
 // =============================================================================
 // B: CHANNEL_DELETED (inbound), through the real ChatViewProvider
 // =============================================================================

@@ -1229,12 +1229,17 @@ export class MoeDaemonClient implements vscode.Disposable {
      * The daemon (WebSocketServer.ts case 'RELEASE_TASK') routes it through
      * moe.release_task and substitutes 'Released from board' for a missing reason.
      * A blank reason is left off the frame; a non-blank one goes verbatim, because
-     * the daemon does the trimming. `force` is never sent.
+     * the daemon does the trimming. force:true is sent only when force === true:
+     * the board's override of a dead holder's step lease (STEP_LEASE_HELD),
+     * requested by TaskDetailPanel after a second confirmation.
      */
-    releaseTask(taskId: string, reason?: string): boolean {
-        const payload: { taskId: string; reason?: string } = { taskId };
+    releaseTask(taskId: string, reason?: string, force?: boolean): boolean {
+        const payload: { taskId: string; reason?: string; force?: true } = { taskId };
         if (typeof reason === 'string' && reason.trim().length > 0) {
             payload.reason = reason;
+        }
+        if (force === true) {
+            payload.force = true;
         }
         return this.sendMessage('RELEASE_TASK', payload);
     }
