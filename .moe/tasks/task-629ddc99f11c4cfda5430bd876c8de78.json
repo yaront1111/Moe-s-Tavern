@@ -9,10 +9,44 @@
     "`npx vitest run src/tools/setTaskStatus.test.ts src/state/activityActor.test.ts src/state/attemptHandback.test.ts src/tools/governancePlaneV2.integration.test.ts` stays green in the same snapshot."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the test, see it fail, then add the gate (TDD; one concern, two files).\n(1) Create packages/moe-daemon/src/tools/setTaskStatus.roleGate.test.ts with your Write tool, never cp or a shell write (project rail: tracked files need a TOOL witness). The architect's dry-run reference is /mnt/d/moe-scratch/plan-629ddc99/setTaskStatus.roleGate.test.ts.ref: Read it and Write the same content. What it pins (a case tag leads each title, so a vitest FAIL line names the case):\n- Fixture: ToolTestHarness (h.init/h.cleanup, setupMoeFolder, createEpic). Rows: task-review (REVIEW, assignedWorkerId 'qa-reviewer': worker-1's own row under review, so an ungated DONE move would also clear the assignee), task-peer (WORKING, assignedWorkerId 'worker-peer', one IN_PROGRESS step), task-plan (PLANNING, assignedWorkerId 'architect-peer'). After h.state.load(), seats via h.state.createWorker + createTeam({ name, role }) + addTeamMember: worker-1 (worker team), qa-1 (qa team), seat-arch (architect team; unprefixed, so only the team role admits it).\n- it.each refusals, each asserting rejects.toMatchObject({ codeName: 'NOT_ALLOWED', message: stringContaining('architect or governor role required') }) and getTask(id) deep-equal to a structuredClone taken before the call: (r1) worker-1 task-review to DONE; (r2) qa-1 task-peer to BACKLOG; (r3) worker-1 task-plan to ARCHIVED; (r4) workerId ''; (r5) workerId null; (r6) unregistered unprefixed 'seat-x'; (r7) worker-1 on unknown 'task-missing' (gate before lookup: NOT_ALLOWED, not NOT_FOUND).\n- (r8) after the r1/r2 attempts: task-review { status: 'REVIEW', assignedWorkerId: 'qa-reviewer' } and task-peer { status: 'WORKING', assignedWorkerId: 'worker-peer' } (DoD 1 wording).\n- (d1) the description starts with 'Architect/governor/human:' and contains 'NOT_ALLOWED' and 'ask a governor'; a worker-1 refusal message contains 'ask a governor in #governors' (governor-e6b40560's 20:00Z row comment).\n- it.each allowed, each moving task-review REVIEW to DONE and task-plan PLANNING to ARCHIVED and asserting the resolved { success: true, status } plus the stored status: (a1) 'governor-1' (unregistered; prefix only), (a2) 'seat-arch' (team role only), (a3) no workerId key at all (build the args without the key).\n(2) Run the Step 2 checkRef once now: it must exit 1 with failures only in the new file, 'Tests 9 failed' = r1-r8 and d1, with a1-a3 passing (architect dry-run: 9 failed | 240 passed (249)).\n(3) Edit packages/moe-daemon/src/tools/setTaskStatus.ts with your Edit tool; the reference hunks are /mnt/d/moe-scratch/plan-629ddc99/setTaskStatus.ts.diff:\n- import { workerHasRole } from '../util/workerRole.js';\n- directly after the VALID_STATUSES check and before state.getTask: if (params.workerId !== undefined) { const callerId = typeof params.workerId === 'string' ? params.workerId : ''; if (!workerHasRole(state, callerId, 'architect', 'governor')) throw notAllowed('set_task_status', `architect or governor role required (worker ${callerId || '(none)'} is not on an architect or governor team and its id declares neither role); ask a governor in #governors to move the row`); } with a short why-comment: TOOL_AUDIENCE only filters tools/list; an absent key is the human path, because a seat's proxy injects MOE_WORKER_ID whenever the key is missing; a key set to '' or null skips that injection, so it is judged like any id and refused.\n- description: 'Architect/governor/human: set task status (optionally with a reopen reason). A caller whose workerId resolves to neither role (a worker or QA seat) is refused with NOT_ALLOWED and should ask a governor in #governors to move the row.'\nOn error handling: the refusal is the existing coded MoeError (notAllowed, codeName NOT_ALLOWED), thrown before the task is read and before any write: no updateTask, no activity event, no worker touch. Normalising a non-string workerId to '' keeps roleFromWorkerId from calling startsWith on a non-string, which would escape as an uncoded TypeError. Change nothing else: VALID_TRANSITIONS, the BLOCKED/approval/WIP checks, the updateTask actor (params.workerId) and the reply shape stay as they are. docs/MCP_SERVER.md and the /ws UPDATE_TASK handler are out of scope (row description).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.roleGate.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.roleGate.test.ts"
+      ],
+      "note": "Test written first (9 red: r1-r8,d1), then gate added after VALID_STATUSES check, before getTask.",
+      "startedAt": "2026-11-03T20:16:56.069Z",
+      "completedAt": "2026-11-03T20:17:28.266Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, once, before complete_task. From the worktree root run executionContract checkRef #1 exactly as written. It archives HEAD into a mktemp snapshot outside the checkout, overlays the two owned files with cp --parents, runs npm ci under env -i with node v24.21.0, type-checks the sources (tsc --noEmit) and the new test (tsc -p tt.json, because tsconfig excludes tests), then makes one vitest run over the new file, the four DoD-3 files (setTaskStatus, activityActor, attemptHandback, governancePlaneV2.integration) and the other direct set_task_status test callers. Exit 0 and its printed 'Test Files' / 'Tests' lines are the complete_task verification (architect dry-run: 13 files, 249 passed, about 13 s). Then run checkRef #2 (the DoD-2 grep) and quote its lines in the completion summary.\nError handling for a red run: if a file other than the new one fails, rerun that file alone in a fresh snapshot to rule out a host-load flake (mem:gotcha-daemon-linux-snapshot-gate). A real failure there can only come from a call that passes a workerId to set_task_status: fix the gate, not that test, unless the test asserts that a worker or QA seat may move rows; then stop and report_blocked with the test name. Never run npm or vitest in the shared checkout (project rail).",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T20:17:29.288Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of your own diff (load the adversarial-self-review skill). git diff in the worktree must show exactly the two paths. Check:\n(a) the gate sits before state.getTask and before every transition, approval and WIP check, and nothing above it writes;\n(b) an absent key is allowed; '', null, a non-string and an unregistered unprefixed id are refused; the team role wins over the id prefix (workerHasRole and resolveWorkerRole are unchanged), so a governor-prefixed id on a worker team is refused, as in the sibling gates;\n(c) concurrency: the handler runs under the global state mutex and the gate only reads team membership, so no write can slip past it between two calls;\n(d) every in-repo caller still works: the only test caller passing a workerId is activityActor.test.ts (governor-z, allowed); scripts/tests/onboarding.mjs:200 and wave1-pilot.mjs:490 strip MOE_* before they spawn the proxy; src/benchmarks/baselineRun.ts calls through scripts/moe-call.sh outside a seat; the governor prompts in moe-agent.{sh,ps1} keep working for governor seats;\n(e) no added line contains a project.json globalRails.forbiddenPatterns string;\n(f) the refusal and the description point only at a route a refused seat can use: chat_send is open to every role (TOOL_AUDIENCE ALL; mem:gotcha-role-aware-refusals-tools-list).\nFix anything found in the same two files, then rerun checkRef #1 and use that fresh run as the complete_task verification.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -31,11 +65,97 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:58:44.818Z",
-  "updatedAt": "2026-11-03T20:00:03.850Z",
+  "updatedAt": "2026-11-03T20:17:29.288Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T19:59:23.737Z"
+    "firstClaimAt": "2026-11-03T19:59:23.737Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
-  ]
+    "architect-74d9e1c7",
+    "worker-8cf0816c"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T20:15:47.468Z",
+  "executionContract": {
+    "intendedBehavior": "moe.set_task_status refuses with MoeError NOT_ALLOWED, writing nothing, any call whose workerId key is present but does not resolve through workerHasRole to the architect or governor role: worker-, qa- and role-less ids, plus '', null and non-string values. A call with no workerId key (the human path: moe-call.sh outside a seat, harness scripts, existing tests) and every architect or governor seat (by team role or id prefix) keep today's behavior, including every transition rule. The tool description names the audience and the refusal route (ask a governor in #governors).",
+    "acceptanceCriteria": [
+      "setTaskStatus.roleGate.test.ts (r1), (r2) and (r8): worker-1 moving its own REVIEW row to DONE and qa-1 moving a peer-held WORKING row with an IN_PROGRESS step to BACKLOG each reject with codeName NOT_ALLOWED, with status and assignedWorkerId unchanged (DoD 1).",
+      "(a1)-(a3): a governor-prefixed seat, an architect-team seat and a workerId-less call each move REVIEW to DONE and PLANNING to ARCHIVED; grep -n workerHasRole on setTaskStatus.ts prints at least one line (DoD 2).",
+      "setTaskStatus.test.ts, activityActor.test.ts, attemptHandback.test.ts and governancePlaneV2.integration.test.ts stay green in the same snapshot run (DoD 3).",
+      "(r3)-(r7): a worker archiving a held PLANNING row, '' and null workerIds, an unregistered unprefixed id and an unknown task named by a worker all reject NOT_ALLOWED with 'architect or governor role required' and leave the row deep-equal; (d1): the description and the refusal name the governor route."
+    ],
+    "invariants": [
+      "A refused call writes nothing: the task record (deep-equal), the activity log and worker records are untouched.",
+      "The gate runs before any task lookup, so a refused caller gets NOT_ALLOWED even for an unknown task.",
+      "An absent workerId key is never refused by the gate."
+    ],
+    "compatibility": [
+      "Input schema, reply shape, VALID_TRANSITIONS, the BLOCKED/approval/WIP checks and the updateTask actor stay unchanged.",
+      "workerId-less callers stay allowed: scripts/tests/onboarding.mjs:200 and wave1-pilot.mjs:490 (both strip MOE_* before spawning the proxy), src/benchmarks/baselineRun.ts through scripts/moe-call.sh, and every daemon test caller; activityActor.test.ts:57 passes governor-z, which is allowed.",
+      "Governor flows in docs/roles/governor.md (:6, :68: flips to PLANNING, waiver parks, BACKLOG promotions) keep working. The board's /ws UPDATE_TASK is a separate handler and is untouched. docs/MCP_SERVER.md is out of scope per the row.",
+      "The documented audience (TOOL_AUDIENCE [A] plus governors; MCP_SERVER.md: a human or governor uses set_task_status) already excluded worker and QA seats, so this enforces the existing contract. governor-e6b40560's 20:00Z audit found no live flow that needs worker or QA access."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/tools/setTaskStatus.ts setTaskStatusTool: import workerHasRole; one role gate after the VALID_STATUSES check and before state.getTask; the tool description string.",
+      "New packages/moe-daemon/src/tools/setTaskStatus.roleGate.test.ts (cases r1-r8, d1, a1-a3)."
+    ],
+    "reuse": [
+      "util/workerRole.ts workerHasRole / resolveWorkerRole (team role wins, id-prefix fallback): the helper set_task_priority, set_task_dependencies, amend_plan_step and submit_plan_critique already gate with.",
+      "util/errors.ts notAllowed (codeName NOT_ALLOWED).",
+      "tools/toolTestHarness.ts ToolTestHarness plus StateManager createWorker / createTeam / addTeamMember for the fixture."
+    ],
+    "sourceAssumptions": [
+      "setTaskStatus.ts:85-111: the handler validates taskId and status, then calls state.getTask, then the transition checks; params.workerId is used only as the updateTask actor (:262).",
+      "util/workerRole.ts:48-63: resolveWorkerRole returns null for a falsy id; roleFromWorkerId calls workerId.startsWith, which a non-string would throw on.",
+      "packages/moe-proxy/src/utils.ts:211-236 injectWorkerId never injects a blank MOE_WORKER_ID and skips injection when the arguments already own a workerId key.",
+      "server/McpAdapter.ts:270: the tools/list role filter is not a permission check, and tools/call does no inputSchema validation, so '', null or a number reach the handler.",
+      "state/taskStore.ts:543-546: updateTask clears assignedWorkerId on a status change unless the caller sets one, so an ungated REVIEW to DONE would clear 'qa-reviewer' (r8 relies on it)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/setTaskStatus{.ts,.roleGate.test.ts} \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/setTaskStatus.roleGate.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{setTaskStatus.roleGate,setTaskStatus,governancePlaneV2.integration,lifecycleLimits,lifecycleFixes,reportBlocked,archiveEpic}.test.ts src/state/{activityActor,attemptHandback,dependencyUnblock}.test.ts src/server/WebSocketServer.transitions.test.ts src/__e2e__/{lifecycle.e2e,defensiveBatch}.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+      "grep -n \"workerHasRole\" packages/moe-daemon/src/tools/setTaskStatus.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Truthiness gate `if (params.workerId && ...)`, like archive_task's holder check: rejected. A caller that sets workerId to '' or null skips the proxy's MOE_WORKER_ID injection and would then pass as 'human'. `!== undefined` keeps the key-absent human path and fails closed on every set value; mutants show r4/r5 pin it. (2) Fail closed on a missing workerId like the siblings: rejected. The row, DoD 2 and the governor's comment keep the human path (moe-call.sh, harness scripts, nearly all existing tests). (3) Gate in McpAdapter by TOOL_AUDIENCE: rejected, because it would change every tool at once; the per-handler gate is the established pattern. (4) Role-tailored hints in the refusal (complete_task for workers, qa_approve for QA): rejected as extra code. The governor asked for the 'ask a governor' route instead.",
+    "codebaseInsights": "Architect dry-run, 2026-11-03 ~22:14Z, in a scratch clone at 5592bcc0 with the exact checkRef #1 text. With only the reference test written: EXIT 1, 'Tests 9 failed | 240 passed (249)', all 9 in the new file (r1-r8, d1). With the reference fix: EXIT 0, 'Test Files 13 passed (13)', 'Tests 249 passed (249)', about 13 s including npm ci and both tsc runs. Mutants on the reference, each killed by exactly the intended case: truthiness gate (r4+r5), `!= null` (r5), dropping 'governor' (a1), dropping 'architect' (a2), a prefix-only check (a2). Reference files, outside the checkout: /mnt/d/moe-scratch/plan-629ddc99/setTaskStatus.roleGate.test.ts.ref, setTaskStatus.ts.diff and gate.txt. Every set_task_status test caller in the daemon is workerId-less except activityActor.test.ts (governor-z). The call helpers in executionPolicyLifecycle.test.ts, attemptHandback.test.ts and __acceptance__/mcpCall.ts pass args verbatim, with no injected workerId.",
+    "risks": "Host-load flakes can redden an unrelated file in the gate: rerun that file alone before acting. Writing the test with cp from the reference would leave no TOOL witness: Read it, then Write it. docs/MCP_SERVER.md:1624 still quotes the old one-line description and does not list the NOT_ALLOWED role refusal. The row puts that doc out of scope, so leave it (a follow-up docs candidate). A seat whose team role is worker or qa but whose id carries a governor- or architect- prefix is refused, because the team role wins. That matches the siblings and is intended.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "packages/moe-daemon/src/util/workerRole.ts",
+      "packages/moe-daemon/src/tools/setTaskDependencies.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "677d051a573ae7396ce11a4a92e0490eeb1dc02f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T20:15:47.511Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-74d9e1c7@2026-11-03T19:59:22Z",
+    "at": "2026-11-03T20:16:40.593Z"
+  },
+  "workStartedAt": "2026-11-03T20:16:56.069Z"
 }
