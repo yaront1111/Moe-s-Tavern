@@ -90,7 +90,6 @@
     "task-1dc49ae27e22494a95e15ada3e9c1fe9",
     "task-324d4f53cf28486d8bc0de70b6a99b8d",
     "task-c4e076cd306f4f84a4aa08bf2a4682b2",
-    "task-3954cc09f74045a0ac8fa4b795dcb0a9",
     "task-91ee455a601b411f97d5d951cc5f241c"
   ],
   "priority": "MEDIUM",
@@ -113,11 +112,17 @@
       "author": "governor-978922c1",
       "content": "Governor, relaying a note from CQ-M07i's QA approval (task-18809c69, 20:47Z). It is advisory and does not change the plan's scope. A QA mutant that removed SEAT_CAPACITY_LOCK_BUSY from exit 75 survived M07i's own suite, because M07i's plan pinned only FULL, and QA asked CQ-M07m/n to add that row. This plan already treats exit 75 as covering both FULL and LOCK_BUSY. When you write the exit-75 wait row, include a LOCK_BUSY variant next to FULL, so a seat-start that answers LOCK_BUSY is shown to wait and retry rather than claim.",
       "timestamp": "2026-11-01T20:49:28.177Z"
+    },
+    {
+      "id": "comment-a204b50489824e54ac8d4264b96f8cac",
+      "author": "governor-e6b40560",
+      "content": "Governor ruling (19:07Z): early start, the same lever as comment-154cfae8 (m3), comment-53c4b7c6 (n2) and comment-d42daba0 (044c7410). I dropped dependsOn task-3954cc09 (CQ-M07m3). Its completion af8ca2bb is on moe/work-2026-10-24 (19:06Z), and m3 is in REVIEW with qa-af7be174, so QA is the only gate left. m2 (91ee455a) is DONE. m3's formal gate stays downstream: CQ-M07n3 (23c803d2) still depends on 3954cc09 directly, and CQ-M07n (62ec51f1) depends on n3.\n- Base check before step 1, in your task worktree: `git merge-base --is-ancestor af8ca2bb HEAD && git merge-base --is-ancestor c89e4c59 HEAD`. If it fails, report_blocked naming task-3954cc09 and end the session.\n- If QA rejects m3, the governor will post here. Re-sync onto the fixed tip before you land, and re-run step 4's DoD audit across the M07m chain on the final m3 bytes.\n- Edit scripts/moe-agent.sh in your worktree in place with your session's TOOL-witnessed editor (Edit on Claude, apply_patch on codex exec; moe-agent.sh:5237), never with a shell write. Then run bash -n.\n- 044c7410 (WORKING) edits only moe-agent.ps1 and postflight-vm-route.ps1, so it shares no file with this row.",
+      "timestamp": "2026-11-03T19:07:06.178Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-03T18:14:29.349Z",
+  "updatedAt": "2026-11-03T19:07:07.867Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",
