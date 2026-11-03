@@ -37,22 +37,29 @@
     {
       "stepId": "step-2",
       "description": "2. Port wt_strong_intent as Test-MoeWorktreeStrongIntent, the strong-profile intent rule that CQ-M07m2 added to the sh worktree completion rounds. Port it from the same m2 commit.\n\nFUNCTION `Test-MoeWorktreeStrongIntent([string]$M, [string]$B)`, with a `Twin: wt_strong_intent` comment.\n- If `Test-MoeStrongLandingTask $preflightTaskId $Git.GitDir` is false, it returns $true. Legacy and observe are byte-for-byte unchanged, and so is an empty task id.\n- Otherwise it requires $script:MoeFrozen.CandidateId, $script:MoeFrozen.Tree -ceq $M, $script:MoeFrozen.Base -ceq $B, $script:MoeAttemptId and $script:PinnedAttemptPlanRevision. These are the same globals Invoke-MoeLanding's CQ-V07 check reads, near line ~5735.\n- Else it sets $Res.Outcome='refused', $Res.Code='MOE_COMMIT_REFUSED_INTENT_INCOMPLETE' and $L.Msg, with the sh message text, and returns $false. Pass $Res and $L, or return the pieces, matching how Invoke-MoeWorktreeRounds reports refusals.\n\nCALL SITE. In Invoke-MoeWorktreeRounds, once per round: after the .moe diff-tree guard and the WT-10 L6 gate call, before New-MoeCommitMessage -Kind 'completion', commit-tree, Write-MoeWorktreeJournal and the CAS or Publish-MoeWorktreeLanding. Use the same position as the sh call. Invoke-MoeWorktreeCompletion already maps refused to 'nothing moves, no rescue ref' (as for MOE_COMMIT_REFUSED_UNRECONCILED_INTENT); keep that path unchanged.\n\nROWS. A `[strong intent]` section mirroring m2's G1-G8. Use a scratch $projectPath with a .moe/attempts record for the attempt-record case. G8 is a source check on Invoke-MoeWorktreeRounds' AST text: exactly one call, after the gate and before the first commit-tree, Write-MoeWorktreeJournal, update-ref and Publish-MoeWorktreeLanding.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
       "newFiles": [
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-03T18:43:54.462Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Ported wt_strong_intent as Test-MoeWorktreeStrongIntent, placed just before Invoke-MoeWorktreeRounds, which is where the sh puts it. Its header comment gains 'the strong intent rule', as wt_land_rounds' did. It is called exactly once per round, after the L6 gate block and before L7: the diff-tree, New-MoeCommitMessage, commit-tree, Write-MoeWorktreeJournal, the seam, the CAS and Publish-MoeWorktreeLanding. A refusal returns $false with Outcome 'refused', Code MOE_COMMIT_REFUSED_INTENT_INCOMPLETE and the sh's message text, so Invoke-MoeWorktreeCompletion's existing refused path (nothing moves, no rescue ref) handles it unchanged. DEVIATION FROM THE PLAN TEXT: the plan said to read $script:MoeFrozen, but the ps1 worktree rounds keep this round's frozen candidate in a local $frozen. Only the shared arm sets $script:MoeFrozen, so reading the global would refuse every gated strong landing, or accept a stale candidate an earlier landing left behind. The call therefore passes '$(if ($Settings.configuredGate) { $frozen } else { $null })'. The inline 'if' stops dynamic scoping from picking up a caller's $frozen when no gate ran, and gives the same result as the sh's empty FROZEN_* in that case. The ps1-only row G6d pins this: a matching $script:MoeFrozen with no round candidate is refused. Also guarded: an empty $preflightTaskId returns $true, as the sh's [ -n LAND_TASK_ID ] does. Without the guard, Test-MoeStrongLandingTask '' matches a pinned '' task id (G1b). Harness: G1-G7 and G6d pass on powershell.exe 5.1 and pwsh 7. G8 was RED until the call landed. Mutants: guard dropped -> G1b, base check dropped -> G5, plan revision dropped -> G6b, $script:MoeFrozen used -> G6d, call moved after commit-tree -> G8. Legacy and observe are unchanged: the function returns $true before touching anything.",
+      "startedAt": "2026-11-03T18:43:54.462Z",
+      "completedAt": "2026-11-03T18:47:28.775Z"
     },
     {
       "stepId": "step-3",
       "description": "3. One verification gate, at the end, run once, from WSL in /mnt/d/projexts/moes, in place (launcher harnesses run in place per the global rail). Remove the seat's MOE_*, CLAUDE* and FAKE_* variables (mem:gotcha-qa-ps1-postflight-from-wsl; mem:gotcha-pwsh7-reachable-from-wsl for pwsh.exe), and launch it in the background with job control. The exact command:\n`powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight-vm-route.ps1' && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight-vm-route.ps1' && powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\worktree-landing.ps1' && bash scripts/tests/parity-check.sh && [ \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d ' \\n')\" = efbbbf ]`\nRequired:\n- exit 0;\n- each PowerShell leg prints its PASS marker with every [vm candidate] and [strong intent] row run. A SKIP line, or an EXIT=0 without the marker, is a failure, never green (see that memory's false-green note);\n- worktree-landing.ps1 green and unedited, proving the legacy rounds are unchanged;\n- parity PASS: the MOE_VM_ family is not compared until CQ-M07n, and no compared-family code is added;\n- the BOM is intact.\nThe fresh command, exitCode and outputTail are the complete_task evidence.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-03T18:48:26.295Z"
     },
     {
       "stepId": "step-4",
@@ -91,12 +98,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:51.655Z",
-  "updatedAt": "2026-11-03T18:43:54.462Z",
+  "updatedAt": "2026-11-03T18:48:26.295Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:54:05.533Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-1a34a669",
@@ -107,7 +114,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:56:58.433Z",
