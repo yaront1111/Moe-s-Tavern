@@ -58,14 +58,23 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this row's diff (adversarial-self-review skill), once, as the last step; then moe.complete_task with step 3's evidence.\n(1) Scope: `git status --short` and `git diff --stat` against the task base show exactly the four source files (+8/-6, the same text as /mnt/d/moe-scratch/plan-c05b/fix.diff) plus the new test file. No edits to createTask.test.ts, recordCommit.test.ts, server/WebSocketServer.ts, docs or any .moe/ path; every tracked write was made with Edit or Write.\n(2) Mutation check (DoD 3: restoring either call site fails the test). From your worktree run `bash /mnt/d/moe-scratch/plan-c05b/mutants.sh`. It only READS the worktree: it archives HEAD, overlays the five owned paths into its own mktemp snapshot, runs npm ci there under env -i, requires the fixed baseline at 3/3, then applies 8 mutants one at a time: M1 drop create_task's argument; M2 drop record_commit's argument; M3 taskStore drops actorWorkerId; M4 the StateManager wrapper drops it; M5 `params.workerId || 'unknown'`; M6 `recordedBy`; M7 `resolvedCreatedBy`; M8 taskStore reads input.workerId. Each must fail its expected case (z1: M1-M4; z2: M5, M6; z1 and z2: M7; z3: M8). It then restores the files and byte-compares them with your worktree. Expected: 8 `killed` lines naming their assertions, `restored fix: Tests  3 passed (3)` and `mutants exit=0` (architect dry-run: /mnt/d/moe-scratch/plan-c05b/mutants.output.txt). Paste the output into the step note. A `NOT APPLIED` line means your text differs from fix.diff: match it. Never mutate the worktree yourself.\n(3) Edge cases, confirmed by reading, not by new code: a caller-less call records no workerId (z2); an explicit workerId '' records workerId \"\", exactly like the review-loop rows (normalizing belongs in appendActivity, a shared surface; out of scope per mem:gotcha-task-event-actor-inventory); a /ws payload naming workerId or actorWorkerId cannot set the actor (z3, M8); recordedBy keeps its 'unknown' fallback while the event records none; the owner-guard branch is untouched; no #general 'Task moved to' line changes, because record_commit never writes status and a create is not a move; concurrency is unchanged (both tools run under the global state mutex).\n(4) After the gate is green, add create_task (TASK_CREATED) and record_commit's normal branch to the Fixed list in mem:gotcha-task-event-actor-inventory with Serena edit_memory. .serena/ is gitignored, so this is not a tracked write.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T16:41:48.614Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "packages/moe-daemon/src/tools/createCommitActor.test.ts"
+      ],
+      "note": "Self-review by reading: scope = 4 source files +8/-6 plus the new test; no other edits. Mutants: baseline 3/3; M1-M8 all killed (M1,M3,M4 z1; M2 z1; M5,M6 z2; M7 z1+z2; M8 z3); restored fix 3 passed; mutants exit=0. Edge cases (caller-less, '' actor, /ws payload cannot set the actor, owner-guard untouched) confirmed by reading and z2/z3.",
+      "startedAt": "2026-11-03T16:41:48.614Z",
+      "completedAt": "2026-11-03T16:42:17.678Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -77,12 +86,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:21:44.730Z",
-  "updatedAt": "2026-11-03T16:41:48.614Z",
+  "updatedAt": "2026-11-03T16:43:25.791Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T16:22:13.076Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -95,7 +104,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T16:39:39.457Z",
@@ -170,5 +180,48 @@
   },
   "planApprovedAt": "2026-11-03T16:39:39.486Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T16:40:42.677Z"
+  "workStartedAt": "2026-11-03T16:40:42.677Z",
+  "reviewStartedAt": "2026-11-03T16:42:29.366Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && P=packages/moe-daemon/src && cp --parents $P/state/taskStore.ts $P/state/StateManager.ts $P/tools/createTask.ts $P/tools/recordCommit.ts $P/tools/createCommitActor.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/createCommitActor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && { npx vitest run src/tools/createCommitActor.test.ts src/tools/createTask.test.ts src/tools/recordCommit.test.ts src/state/StateManager.test.ts src/tools/getActivityLog.test.ts src/server/executionPolicySnapshot.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ]; } && npx tsc --noEmit && npx tsc -p tt.json'",
+    "exitCode": 0,
+    "outputTail": " Test Files  6 passed (6)\n      Tests  252 passed (252)\nnpm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\nexit=0",
+    "reportedAt": "2026-11-03T16:42:29.366Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/createCommitActor.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/createTask.ts",
+    "packages/moe-daemon/src/tools/recordCommit.ts"
+  ],
+  "completionSummary": "create_task now records the calling seat (bare params.workerId) as TASK_CREATED's top-level workerId through a new optional actorWorkerId parameter on taskStore.createTask and StateManager.createTask. record_commit's normal branch passes params.workerId as updateTask's 4th argument. Caller-less calls and the board's /ws create stay actor-less, because the actor is a separate parameter and is never read from input. New tools/createCommitActor.test.ts (z1, z2, z3) passes. Mutation check: baseline 3/3 and M1-M8 all killed. The existing createTask.test.ts and recordCommit.test.ts pass unchanged. No response or contract change.",
+  "commits": [
+    {
+      "sha": "8a53505e75f2c4f679c2a3104774481b7d88b689",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T16:39:40Z",
+      "paths": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/createCommitActor.test.ts",
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T16:43:25.791Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T16:39:40Z",
+    "at": "2026-11-03T16:43:25.791Z"
+  }
 }
