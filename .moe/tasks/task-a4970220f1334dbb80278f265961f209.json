@@ -13,16 +13,22 @@
     {
       "stepId": "step-1",
       "description": "Make CHAN a channel that exists in the temp project's state. Edit packages/moe-daemon/src/tools/workerType.test.ts with your seat's own editor (Edit on Claude, apply_patch on codex exec). Never use a shell write, cp or patch from scratch: the rails' TOOL-witness rule. The whole intended diff (+7/-1, dry-run green) is /mnt/d/moe-scratch/plan-a4970220/reference-fix.diff.\n\nTwo changes only:\n- (1) The schema type import becomes `import type { ChatChannel, Team, Worker, WorkerType } from '../types/schema.js';`.\n- (2) In the beforeEach of describe('moe.chat_who and moe.list_workers project the persisted type'), after the last h.createWorker(...) line and BEFORE `await h.state.load();`, add:\n  - a 2-3 line comment: CHAN must exist in state because chat_who resolves its channel reference and refuses an unknown one (task-4877ef36). The comment also says this writes the temp test project's .moe/channels the way createWorker writes worker files.\n  - `const channel: ChatChannel = { id: CHAN, name: 'x', type: 'custom', linkedEntityId: null, createdAt: FRESH };`\n  - `fs.mkdirSync(path.join(h.moePath, 'channels'), { recursive: true });` (setupMoeFolder does not create that dir);\n  - `fs.writeFileSync(path.join(h.moePath, 'channels', `${CHAN}.json`), JSON.stringify(channel, null, 2));`\n\nKeep CHAN = 'chan-x', so the three chatCursors and the [CHAN] waiters keep their keys. 'chan-other' stays a waiter-only id. Change no expect() line and no entry shape, and add no precondition assertion: checkRef 1's patched run already proves that the channel resolves.\n\nThis step owns the error handling: do not wrap the setup in try/catch. If the channel write or load throws, the test fails, which is the right outcome. Why a file and not h.state.createChannel after load: createChannel generates the id, so the cursors (written by createWorker before load) and the waiters would all need re-keying, a bigger diff.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/workerType.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/workerType.test.ts"
+      ],
+      "startedAt": "2026-11-03T19:29:22.476Z",
+      "completedAt": "2026-11-03T19:29:29.990Z"
     },
     {
       "stepId": "step-2",
       "description": "Verify once (mem:gotcha-daemon-linux-snapshot-gate).\n\nRun checkRef 1 (the GREEN gate) exactly as written. In a mktemp snapshot of HEAD, with only workerType.test.ts overlaid, it:\n- runs npm ci there, never in the shared checkout;\n- runs a tsc -p tt.json typecheck whose include is that file (extends ./tsconfig.json, types:[node]), satisfying DoD 3;\n- runs workerType.test.ts (DoD 1);\n- applies a scratch-only patch to the snapshot's chatWho.ts (resolve params.channel via state.resolveChannelRef, throw notFound on null, key both passes on the canonical id), mirroring task-4877ef36 step 1;\n- runs the file again (DoD 2) and prints PATCHED-GREEN.\nDry run: Tests 57 passed (57) twice, exit 0, about 14 s. Use this exact command, its exit code and its output tail as complete_task verification.\n\nThen run checkRef 2 (the RED gate). At b5f40fee with the same scratch patch and the ORIGINAL fixture, 'chat_who carries the type…' must fail with 'Channel not found: chan-x' (Tests 1 failed | 56 passed (57)), and it prints RED-AT-BASE. This proves the patch is not a no-op.\n\nScope check (DoD 3): `git status --porcelain` in your worktree lists only packages/moe-daemon/src/tools/workerType.test.ts.\n\nError handling for a red run:\n- A TS error: fix the fixture typing (the ChatChannel fields are id, name, type, linkedEntityId, createdAt).\n- A patched-run NOT_FOUND: the channel file is not loading (wrong dir, written after load, or a wrong id). Fix the fixture, never the gate.\n- node exit 9 means the patch anchor drifted in chatWho.ts: report it, do not edit chatWho.ts.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T19:29:30.583Z"
     },
     {
       "stepId": "step-3",
@@ -45,11 +51,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:16:50.040Z",
-  "updatedAt": "2026-11-03T19:28:33.550Z",
+  "updatedAt": "2026-11-03T19:29:30.583Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:23:13.515Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -60,7 +67,9 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6-luna",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:27:52.698Z",
   "executionContract": {
@@ -121,5 +130,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T19:27:52.737Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T19:29:22.476Z"
 }
