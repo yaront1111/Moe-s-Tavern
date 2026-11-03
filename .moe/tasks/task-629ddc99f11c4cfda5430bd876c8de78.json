@@ -54,8 +54,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -74,12 +74,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:58:44.818Z",
-  "updatedAt": "2026-11-03T20:21:59.998Z",
+  "updatedAt": "2026-11-03T20:24:00.189Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:59:23.737Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T20:23:33.229Z",
+    "wallClockMs": 1449492
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -163,10 +165,11 @@
   "planApprovedAt": "2026-11-03T20:15:47.511Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T20:15:48Z",
-    "at": "2026-11-03T20:19:39.110Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T20:21:38Z",
+    "at": "2026-11-03T20:24:00.189Z"
   },
   "workStartedAt": "2026-11-03T20:16:56.069Z",
   "reviewStartedAt": "2026-11-03T20:18:11.664Z",
@@ -199,5 +202,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T20:23:33.229Z",
+  "reviewCompletedAt": "2026-11-03T20:23:33.229Z",
+  "reviewSummary": "Reviewed completion 14126ecd (on moe/work-2026-10-24 = control HEAD; 2 files, +105/-1, net 104). Re-ran task.verification verbatim in a git-archive snapshot outside the shared checkout (env -i, node v24.21.0): npm ci, tsc --noEmit, tsc -p tt.json green; vitest 13 files / 249 tests passed, EXIT=0.\nDoD1: roleGate test rejects worker-1 REVIEW->DONE (r1) and qa-1 peer WORKING->BACKLOG (r2) with codeName NOT_ALLOWED + 'architect or governor role required'; rows deep-equal via structuredClone (r1-r7), r8 pins status/assignedWorkerId.\nDoD2: a1 governor-prefixed, a2 architect-team seat (unprefixed), a3 workerId-less call all move REVIEW->DONE and PLANNING->ARCHIVED; grep workerHasRole setTaskStatus.ts -> :8 import, :107 gate.\nDoD3: setTaskStatus, activityActor, attemptHandback, governancePlaneV2.integration are in the green 13-file run (plus lifecycleLimits/Fixes, reportBlocked, archiveEpic, dependencyUnblock, WS transitions, lifecycle.e2e, defensiveBatch).\nMutation check: pre-fix setTaskStatus.ts restored in the snapshot -> 9 of 12 roleGate tests fail (r1-r8, d1), a1-a3 pass.\nAdversarial read: gate is after status validation, before state.getTask and any write; absent key = human path; ''/null/non-string normalised to '' (no startsWith TypeError); handler under global mutex, gate only reads team membership; no daemon-internal caller of the handler (WS UPDATE_TASK untouched); no forbiddenPatterns; reply shape/transitions/BLOCKED/approval/WIP unchanged. Ponytail: nothing to cut.\nNon-blocking: docs/MCP_SERVER.md still quotes the old description and omits the NOT_ALLOWED role refusal (out of scope per row); a small docs follow-up row is a candidate.",
+  "requiredCheckAtDone": null
 }
