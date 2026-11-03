@@ -263,6 +263,21 @@ test('Windows missing PATH leaves are judged by their nearest existing ancestor'
     }));
 });
 
+// task-20a64797: the POSIX twin of the Windows row above; a missing leaf below a link is judged where a folder created there later would land.
+test('POSIX missing PATH leaves are judged by their nearest existing ancestor', { skip: process.platform === 'win32' && 'the Windows row above covers junction, 8.3, subst and mapped forms' }, t => {
+    const f = fixture(t), api = f.api, p = f.project, out = f.outside;
+    const sub = path.join(p, 'sub'), later = path.join(p, 'later'); fs.mkdirSync(sub);
+    const link = (name, target) => { const at = path.join(out, name); fs.symlinkSync(target, at, 'dir'); return at; };
+    const [toProject, toSub, toHome] = [['to-project', p], ['to-sub', sub], ['to-home', f.home]].map(([n, to]) => link(n, to));
+    fs.mkdirSync(later); const dangling = link('dangling', later); fs.rmdirSync(later);
+    const inside = [path.join(toProject, 'later'), path.join(toSub, 'later', 'bin'), dangling, path.join(dangling, 'bin'), path.join(later, 'bin')];
+    const outside = [path.join(out, 'later'), path.join(out, 'later', 'deeper'), path.join(toHome, 'later')];
+    for (const entry of inside) { assert.equal(api.isOutsideProject(entry, p), false, entry); }
+    for (const entry of outside) { assert.equal(api.isOutsideProject(entry, p), true, entry); }
+    const env = api.protectedDaemonEnvironment({ PATH: [...inside, ...outside].join(':') }, p, f.node, false, undefined);
+    assert.equal(env.PATH, [path.dirname(f.node), ...outside].join(':'), 'protected PATH keeps exactly the outside entries');
+});
+
 for (const code of ['ENOENT', 'EACCES']) {
     test(`protected async ${code} resets the guard and does not poll readiness`, async t => {
         const f = fixture(t); f.failure = Object.assign(new Error(code), { code });

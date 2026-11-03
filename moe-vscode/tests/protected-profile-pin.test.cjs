@@ -273,6 +273,53 @@ test('P10: an untrusted declaration answers protected with no prompt and no writ
     }
 });
 
+// task-20a64797: a root that is missing is judged by its nearest existing ancestor's real path, on every host (a junction needs no privilege on Windows).
+test('P11: a store root below an outside link into the project persists nothing in the project, absent, existing or dangling', () => {
+    const link = (target, at) => { fs.symlinkSync(target, at, 'junction'); return at; };
+    const refuses = (root, dir) => {
+        const before = tree(dir), s = session(root), name = s.api.protectedStateName('profile', keyOf(dir));
+        assert.equal(s.api.runtimeProfile(dir), 'protected', root);
+        assert.deepEqual(s.asks, [], root);
+        assert.equal(s.api.writeProtectedState(name, '{}', dir), false, root);
+        assert.ok(s.logs.some(line => line.includes('not provably outside the project')), s.logs.join('\n'));
+        assert.deepEqual(tree(dir), before, root);
+        assert.ok(!tree(dir).some(entry => path.basename(entry) === name), `${name} must not exist under the project`);
+    };
+    // (a) initially absent root
+    const [dir, outside] = [project(VERIFIED), tempDir()];
+    const viaLink = link(dir, path.join(outside, 'link'));
+    refuses(path.join(viaLink, 'globalStorage', 'protected-state'), dir);
+    assert.equal(fs.existsSync(path.join(dir, 'globalStorage')), false);
+    // (b) existing root, which resolves into the project
+    const existing = path.join(dir, 'globalStorage', 'protected-state');
+    fs.mkdirSync(existing, { recursive: true, mode: 0o700 });
+    if (POSIX) { fs.chmodSync(existing, 0o700); }
+    refuses(path.join(viaLink, 'globalStorage', 'protected-state'), dir);
+    assert.deepEqual(fs.readdirSync(existing), []);
+    // (c) a link whose target was removed: into the project, and outside every project
+    for (const [label, gone] of [['project', path.join(dir, 'later')], ['outside', path.join(tempDir(), 'gone')]]) {
+        fs.mkdirSync(gone);
+        const dangling = link(gone, path.join(outside, `dangling-${label}`));
+        fs.rmdirSync(gone);
+        refuses(path.join(dangling, 'globalStorage', 'protected-state'), dir);
+        assert.equal(fs.existsSync(gone), false, gone);
+    }
+    // (d) outside success: an absent root below a link to a real outside directory persists at its real location
+    const [target, other] = [tempDir(), project(VERIFIED)];
+    const root = path.join(link(target, path.join(outside, 'home-link')), 'globalStorage', 'protected-state');
+    const [before, name] = [tree(other), session().api.protectedStateName('profile', keyOf(other))];
+    assert.equal(session(root).api.runtimeProfile(other), 'protected');
+    const [realRoot, file] = [path.join(target, 'globalStorage', 'protected-state'), path.join(target, 'globalStorage', 'protected-state', name)];
+    assert.deepEqual(tree(target), ['globalStorage', path.join('globalStorage', 'protected-state'), path.join('globalStorage', 'protected-state', name)]);
+    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(other), 'protected'));
+    assert.deepEqual(tree(other), before);
+    if (POSIX) {
+        assert.equal(fs.statSync(realRoot).mode & 0o777, 0o700);
+        assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    }
+    assert.equal(session(root).api.readProtectedState(name), record(keyOf(other), 'protected'));
+});
+
 test('S1: the store round-trips one kind, refuses names that are not its own, and keeps no temp file on a failed write', () => {
     const [root, dir] = [storeRoot(), project(LEGACY)];
     const { api } = session(root);

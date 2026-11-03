@@ -595,10 +595,10 @@ export function isOutsideProject(p: string, basePath: string, foldCase = default
 function pathForms(p: string): string[] {
     const forms = [path.resolve(p)];
     try { forms.push(fs.realpathSync.native(p)); } catch (err) {
-        // Missing PATH directories are harmless; permission/invalid-path errors must fail closed.
+        // A missing PATH entry or store root is harmless only if it stays outside; permission/invalid-path errors must fail closed.
         if (errorCode(err) !== 'ENOENT') { throw err; }
-        // A folder created there later is searched where its nearest existing ancestor really is (a link, 8.3 name, subst or mapped drive).
-        if (process.platform === 'win32' && !isWindowsAlias(forms[0])) { forms.push(missingRealPath(forms[0])); }
+        // A folder created there later lands where its nearest existing ancestor really is: below a link on any host, or an 8.3 name, subst or mapped drive on Windows. A dangling link or an unresolvable ancestor throws, so isOutsideProject refuses.
+        if (!isWindowsAlias(forms[0])) { forms.push(missingRealPath(forms[0])); }
     }
     return forms;
 }
