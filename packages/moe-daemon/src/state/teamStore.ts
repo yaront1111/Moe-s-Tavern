@@ -21,6 +21,7 @@ import type { StateManager } from './StateManager.js';
 import type { Team, TeamRole } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
+import { MoeError, MoeErrorCode } from '../util/errors.js';
 import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 import { validateCreateTeamInput, validateTeamUpdates } from './validators.js';
 
@@ -165,6 +166,26 @@ async function evictDeadMembers(state: StateManager, team: Team, deadIds: string
   logger.info({ teamId: team.id, evicted: deadIds }, 'Evicted DEAD members from a full team');
 }
 
+/**
+ * Refuse a join the team has no seat for. A current member always keeps its
+ * seat, and DEAD members never hold one (a member with no worker record is not
+ * DEAD). Shared by addTeamMember and join_team, so a full team is refused
+ * before join_team auto-registers the caller, and the live-member rule cannot
+ * drift between them. Retryable once a seat frees, hence INVALID_STATE.
+ */
+export function assertTeamHasSeat(state: StateManager, team: Team, workerId: string): void {
+  if (team.memberIds.includes(workerId) || team.memberIds.length < team.maxSize) return;
+  const live = team.memberIds.filter((id) => state.workers.get(id)?.status !== 'DEAD');
+  if (live.length >= team.maxSize) {
+    throw new MoeError(
+      MoeErrorCode.INVALID_STATE,
+      `Team ${team.name} is full (max ${team.maxSize} members)`,
+      { teamId: team.id, maxSize: team.maxSize },
+      'TEAM_FULL'
+    );
+  }
+}
+
 export async function addTeamMember(state: StateManager, teamId: string, workerId: string): Promise<Team> {
   const existing = state.teams.get(teamId);
   if (!existing) throw new Error(`Team not found: ${teamId}`);
@@ -183,11 +204,9 @@ export async function addTeamMember(state: StateManager, teamId: string, workerI
   // Order matters: refuse a full team BEFORE any write, and so before clearing
   // the tombstone. Clearing first would strip the worker's only route back to
   // its team as a side effect of a join that then failed.
+  assertTeamHasSeat(state, existing, workerId);
   if (existing.memberIds.length >= existing.maxSize) {
     const dead = existing.memberIds.filter((id) => state.workers.get(id)?.status === 'DEAD');
-    if (existing.memberIds.length - dead.length >= existing.maxSize) {
-      throw new Error(`Team ${existing.name} is full (max ${existing.maxSize} members)`);
-    }
     await evictDeadMembers(state, existing, dead);
   }
 

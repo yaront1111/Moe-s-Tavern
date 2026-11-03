@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { WorkerType } from '../types/schema.js';
 import { missingRequired, notFound } from '../util/errors.js';
+import { assertTeamHasSeat } from '../state/teamStore.js';
 import { logger } from '../util/logger.js';
 
 // Record<WorkerType, true> makes tsc fail if WorkerType grows without this list.
@@ -66,6 +67,10 @@ export function joinTeamTool(_state: StateManager): ToolDefinition {
 
       const team = state.getTeam(params.teamId);
       if (!team) throw notFound('Team', params.teamId);
+
+      // A full team is refused before the caller is registered, so a refused join
+      // writes no worker record and emits no WORKER_CREATED.
+      assertTeamHasSeat(state, team, params.workerId);
 
       // Auto-register worker if it doesn't exist
       if (!state.getWorker(params.workerId)) {
