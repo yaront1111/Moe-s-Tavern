@@ -100,8 +100,9 @@ node -e "require('./.moe/project.json')"
 
 **Solution:** Initialize the project:
 ```bash
-# From JetBrains plugin: Tools > Moe > Initialize Project
-# Or manually create .moe/project.json
+# From the JetBrains plugin: Tools > Moe > Initialize Moe
+# Or from a terminal (creates .moe/ and starts the daemon; never hand-write .moe/project.json):
+node packages/moe-daemon/dist/index.js init --project <path>
 ```
 
 ### `submit_plan` refusal ends with `spawn git ENOENT` (Windows, JetBrains)
@@ -165,7 +166,7 @@ node packages/moe-daemon/dist/index.js start --project /your/project
 **Solution:** Check daemon.json for actual port:
 ```bash
 cat .moe/daemon.json
-# Shows: { "port": 3141, ... }
+# Shows: { "port": 9876, ... }  (9876 is the default; a taken port moves to the next free one, up to 50 higher)
 ```
 
 #### Firewall blocking localhost
@@ -217,7 +218,7 @@ cat .moe/daemon.json
 
 #### Project not initialized
 
-**Solution:** Initialize via Tools > Moe > Initialize Project
+**Solution:** Initialize via Tools > Moe > Initialize Moe
 
 #### Plugin not loaded
 
@@ -338,9 +339,12 @@ node packages/moe-proxy/dist/index.js
 ls .moe/tasks/
 ```
 
-#### "Worker not registered"
+#### `Unknown worker: workerId must be a registered worker, "human", or "system"`
 
-**Solution:** Register the worker first using `moe.claim_next_task`.
+**Solution:** `moe.chat_join` refuses a `workerId` that has no worker record. Register the seat first:
+`moe.claim_next_task` or `moe.join_team` creates the record (`moe.enter_governance` for a governor), and the
+agent wrappers do both in pre-flight. A daemon restart purges worker records that are neither recently active
+nor mid-execution, so re-register after one.
 
 #### "[CONSTRAINT_VIOLATION] Rail violation: …" (moe.submit_plan)
 
@@ -552,8 +556,11 @@ git for-each-ref refs/moe/rescue/task-<id>/
   declared, no tool write was harvested. Fix: `moe.declare_files { taskId, paths }` for the paths that
   belong to it, then let the task's next session exit land them.
 - **`{ outcome: "refused", code: "MOE_COMMIT_REFUSED_OWNED_PATH_MISSING" }`** — every asserted path is
-  absent from disk and from HEAD (renamed, deleted, or edited inside a `.worktrees/` checkout the
-  post-flight cannot see). Move the edits into the project root and re-declare.
+  absent from disk and from HEAD of the checkout the post-flight lands from (renamed, deleted, or edited
+  in another checkout). In shared mode that is the project root: move edits made inside a `.worktrees/`
+  checkout into the root and re-declare. In worktree mode a worker lands from its own task worktree
+  `.worktrees/<taskId>`: move edits made in the control checkout or in another task's worktree into that
+  task worktree and re-declare, never into the control checkout.
 - **`MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE` | `MOE_COMMIT_REFUSED_OWNER_UNKNOWN`** (not a
   `lastCommitOutcome` value) — expected, nothing lost: the exiting session was not the task's assignee
   (an architect or QA seat whose task moved on), and the owner was live or held an open attempt, another
@@ -628,10 +635,9 @@ real non-REVIEW status lands a `wip(...)` checkpoint instead of the old quiet no
 **Note:** the fleet runs the wrapper scripts and launcher bundled into the **installed** plugin, not
 the ones in your working tree. Fixing this in the repo does nothing until you rebuild and reinstall:
 
-```bash
-cd packages/moe-daemon && npm run build     # buildPlugin hard-fails on a stale daemon dist
-cd moe-jetbrains && ./gradlew buildPlugin
-.\scripts\install-all.ps1                   # then restart the IDE
+```powershell
+# Builds the daemon, the proxy and the plugin, then installs the plugin. Restart the IDE afterwards.
+.\scripts\install-all.ps1 -BuildPlugin -InstallPlugin -IdeVersion <IDE folder>
 ```
 
 Regression coverage for both causes lives in `scripts/tests/postflight.sh` and its `.ps1` sibling
@@ -664,8 +670,11 @@ launched.
 3. `settings.checkpointCommits=false`, `MOE_DISABLE_CHECKPOINT=1` or `settings.autoCommit=false` turn
    checkpoints off — the wrapper logs `[info] settings.autoCommit=false — no git activity` when that is
    the reason.
-4. The edits were made inside a `.worktrees/` checkout — invisible to the post-flight, which only ever
-   runs against the project root. Copy them into the root and `moe.declare_files` them.
+4. The edits were made in a checkout the post-flight does not land from. In shared mode it lands from
+   the project root, so edits inside a `.worktrees/` checkout are invisible: copy them into the root and
+   `moe.declare_files` them. In worktree mode a worker lands from its own task worktree
+   `.worktrees/<taskId>`: move edits made in the control checkout or another worktree into that task
+   worktree and declare them there, never into the control checkout.
 
 Prerequisite checks belong on HEAD, not on a dirty tree: `get_context.epicSiblings[*].landed` or
 `git log <branch> --grep 'Moe-Task: task-<sibling>'` is the test. BLOCKED is a wait state, never a
@@ -933,8 +942,10 @@ Runbook for retiring a board's free-text "verify-or-block" gate doctrine once th
 `dependsOn`/`blockedOnTaskIds` is installed (moe-next is the reference case: 17 stale BLOCKED rows whose
 free-text reasons pointed at tasks that were long DONE, 119/632 meta evidence rows, 24 `customRules`
 rails at ~20KB per `get_context`). The rails existed because dependencies were prose, not fields — with
-the fields live, rewrite the rails. Apply via `moe.update_settings` / `scripts/moe-call.sh`, never by
-hand-editing `.moe/`:
+the fields live, rewrite the rails. Apply each rail edit as a `moe.propose_rail` proposal
+(`targetScope: "GLOBAL"`, `MODIFY_RAIL` / `REMOVE_RAIL` / `ADD_RAIL`; from an agent seat or
+`scripts/moe-call.sh`) that a human approves on the board, and any settings change through the plugin
+(`UPDATE_SETTINGS`), never by hand-editing `.moe/`:
 
 1. **Rewrite `customRules[13]`** (the verify-or-block DoD gate rule): "declare
    `blockedOnTaskIds`/`dependsOn`; read the prerequisite's `verification` from `epicSiblings`; DoD grep
