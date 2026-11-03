@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,16 +94,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:25:34.209Z",
-  "updatedAt": "2026-11-03T13:47:15.038Z",
+  "updatedAt": "2026-11-03T13:50:25.290Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T13:36:32.002Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T13:50:08.091Z",
+    "wallClockMs": 816089
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -218,9 +221,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T13:41:56Z",
-    "at": "2026-11-03T13:47:15.038Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T13:48:19Z",
+    "at": "2026-11-03T13:50:25.290Z"
+  },
+  "completedAt": "2026-11-03T13:50:08.091Z",
+  "reviewCompletedAt": "2026-11-03T13:50:08.091Z",
+  "reviewSummary": "Reviewed completion aa228daf (on moe/work-2026-10-24, in control HEAD 40c82161; owned files unchanged since). Diff: chatRead.ts +24/-8, new chatRead.cursor.test.ts 144 lines, MCP_SERVER.md chat_read section +3/-2; net ~161 LOC. No existing test touched; no forbidden pattern in added lines.\n\nRe-ran task.verification in a git-archive snapshot outside the shared checkout (node v24.21.0, env -i, npm ci): exit 0, 7 files / 101 tests pass (chatRead.cursor 6, chatBudgets, chatChannelRef, chatSystemFeed, chatWait, joinTeam.notification, completeStep), tsc --noEmit clean.\n\nOwn mutants on the snapshot copy (restored identical; baseline 6/6): M1 drop !peek on cursor update -> cases 1-4 fail; M3 apply id to every channel -> case 4 fails. Real failures.\n\nDoD 1: peek guard covers updateWorkerCursors and clearUnread; case 1 seeds cursor m6, peeks m1 limit 1 -> [m2], cursor stays m6, next cursor read [], chat_wait hasMessage false; cases 2-3 cover unread and ahead-of-cursor peek.\nDoD 2: all-channel id applied only where state.messageExistsInChannel holds it (collectChatBacklog rule), else stored cursor; case 4 asserts workers cursor and unread unchanged and the next cursor read still returns the @-mention; case 5 pins the anonymous newest-window fallback.\nDoD 3: cursor-mode path untouched; the named suites pass unchanged. Empty sinceId stays cursor mode; response shape, refusals, chat_wait/chatStore/workerStore/proxy unchanged; descriptions and docs updated as scoped.\nNon-blocking note: `let sinceId = params.sinceId` remains beside explicitSinceId (harmless).",
+  "requiredCheckAtDone": null
 }
