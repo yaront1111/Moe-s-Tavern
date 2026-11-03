@@ -94,7 +94,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:19:28.473Z",
-  "updatedAt": "2026-11-03T18:36:09.657Z",
+  "updatedAt": "2026-11-03T18:37:23.342Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:20:06.822Z",
     "plannedStepCount": 5,
@@ -201,5 +201,32 @@
     "packages/moe-daemon/src/tools/archiveEpic.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "archive_epic now applies archive_task's holder-only rule and actor attribution. archiveTask.ts: `export` on HOLDER_ONLY_FROM only. archiveEpic.ts: optional workerId in the schema; a helper assertNoRowHeldByOthers runs after the IN_FLIGHT gate and before the finalizing loop and the first write, refusing NOT_ALLOWED (-32003) with archive_task's exact condition and naming each held row and its holder, so the epic and every task stay unchanged; the bare params.workerId is passed as updateTask's 4th (actor) argument, so a caller-less call records no workerId. docs/MCP_SERVER.md: archive_epic section only (refusal sentence + workerId? param). Tests: new archiveEpic.holderActor.test.ts (3 its; test 2 hardened with a resting DONE sibling, the held row moved last in state.tasks, NOT_ALLOWED codeName + message naming task-held/worker-x, and nothing-changed/no-TASK_ARCHIVED assertions) and one allowed-paths it in archiveEpic.test.ts (caller-less, holder, unassigned row; actor map {hu:null, ho:worker-y, un:architect-c}; #general lines 'by unknown'/'by worker-y'/'by architect-c'). Gate in a git-archive snapshot: tsc + tt.json clean; holderActor 3/3 (RED baseline was 2 failed | 1 passed); archiveEpic+archiveTask+taskMoveActor 15/15; attemptHandback 41/41. Mutants M1-M6 each killed by 1-2 tests."
+  "completionSummary": "archive_epic now applies archive_task's holder-only rule and actor attribution. archiveTask.ts: `export` on HOLDER_ONLY_FROM only. archiveEpic.ts: optional workerId in the schema; a helper assertNoRowHeldByOthers runs after the IN_FLIGHT gate and before the finalizing loop and the first write, refusing NOT_ALLOWED (-32003) with archive_task's exact condition and naming each held row and its holder, so the epic and every task stay unchanged; the bare params.workerId is passed as updateTask's 4th (actor) argument, so a caller-less call records no workerId. docs/MCP_SERVER.md: archive_epic section only (refusal sentence + workerId? param). Tests: new archiveEpic.holderActor.test.ts (3 its; test 2 hardened with a resting DONE sibling, the held row moved last in state.tasks, NOT_ALLOWED codeName + message naming task-held/worker-x, and nothing-changed/no-TASK_ARCHIVED assertions) and one allowed-paths it in archiveEpic.test.ts (caller-less, holder, unassigned row; actor map {hu:null, ho:worker-y, un:architect-c}; #general lines 'by unknown'/'by worker-y'/'by architect-c'). Gate in a git-archive snapshot: tsc + tt.json clean; holderActor 3/3 (RED baseline was 2 failed | 1 passed); archiveEpic+archiveTask+taskMoveActor 15/15; attemptHandback 41/41. Mutants M1-M6 each killed by 1-2 tests.",
+  "commits": [
+    {
+      "sha": "b9119a93a1d5044161e92ae40aff0170706d0804",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T18:30:34Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "packages/moe-daemon/src/tools/archiveTask.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T18:37:23.342Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T18:30:34Z",
+    "at": "2026-11-03T18:37:23.342Z"
+  }
 }
