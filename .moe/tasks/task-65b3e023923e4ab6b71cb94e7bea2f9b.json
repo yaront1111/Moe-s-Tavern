@@ -72,15 +72,20 @@
     {
       "stepId": "step-3",
       "description": "Gate. Run it ONCE, after the last byte change. Its output is complete_task's evidence.\n\nIt takes 20-30 min: launch it in the background (Bash run_in_background) and wait for the completion notice rather than polling. It runs from the repo root on D:, with the seat's MOE_*, CLAUDE* and FAKE_* variables removed and MOE_POSTFLIGHT_TIMEOUT_SEC passed through WSLENV (mem:gotcha-qa-ps1-postflight-from-wsl):\n\ncd /mnt/d/projexts/moes && L=/mnt/d/moe-scratch/n1-gate.log && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=\"D:\\projexts\\moes\\scripts\\tests\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh' > \"$L\" 2>&1; echo \"exit=$?\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c\n\nIt must print exit=0 and these counts:\n- `1 PASS parity-check.sh`;\n- `3 PASS postflight-vm-route.ps1` (5.1 alone, 7 alone, and nested in postflight.ps1);\n- `1 PASS postflight.ps1`.\n\nA leg that never ran can still exit 0, so check the counts. If postflight.ps1 fails, rerun the parent revision's scripts before blaming the change.\n\nThe complete_task verification is this command, its exit code and that output.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T16:29:14.691Z"
+      "note": "Fresh complete gate EXIT=0. Exact expected markers: 3 PASS postflight-vm-route.ps1 (PS5.1 standalone, pwsh7 standalone, nested PS5.1), 1 PASS postflight.ps1, 1 PASS parity-check.sh. Also npm run lint PASS per worktree-mode qualityGate. Log /mnt/d/moe-scratch/n1-gate.log. Executed named chain against wrapper-provisioned task worktree, replacing stale plan control-checkout paths with $PWD/wslpath to test changed bytes; scrubbed MOE_*/CLAUDE*/FAKE_* and set timeout180 through WSLENV. Long foreground process was polled to actual completion. No tracked edits during run.",
+      "startedAt": "2026-11-03T16:29:14.691Z",
+      "completedAt": "2026-11-03T17:22:04.437Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of your own diff, scoped to this row. Load the adversarial-self-review skill.\n\n- **Placement.** The gate runs before every claim_next_task of a worker/QA iteration, on exactly m1's paths. Nothing after it runs on a refusal. Architect and governor are untouched.\n- **Legacy.** No new output against an older daemon. The L rows normalize only per-run fields.\n- **Two mutants, on a scratch copy only, never the tracked file.**\n  - Setup: `mkdir -p /mnt/d/moe-scratch/n1-mut/docs && cp -r scripts /mnt/d/moe-scratch/n1-mut/ && cp -r docs/roles /mnt/d/moe-scratch/n1-mut/docs/`.\n  - Mutate the copy's moe-agent.ps1 byte-safely, keeping its BOM. Run the copy's postflight-vm-route.ps1 by its D:\\ path on 5.1. Delete the copy afterwards.\n  - Mutant 1: read missingCapabilities through Get-MoeProp. V4b must fail.\n  - Mutant 2: drop the role filter. R1 or R2 must fail.\n- **Size.** Measure `git diff --numstat -- scripts/moe-agent.ps1 scripts/tests/postflight.ps1`, plus the new file's line count. Expect about 60 wrapper lines and about 220 harness lines. Over 400 changed lines, file the EPIC ADD_RAIL size waiver before complete_task, with moe.propose_rail and the CQ-M07k rail template with per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap).\n- **Fresh evidence.** If any tracked byte changed in this step, rerun step 3.\n- **Handoff.** Write the Serena note task-task-65b3e023923e4ab6b71cb94e7bea2f9b-handoff for CQ-M07n2 and n3: the function name, the call site, and the harness helpers they can reuse.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
+      "note": "Adversarial review complete: inspected all 3 paths, preflight placement, fail-closed config reads, strict input types/case, control-character diagnostics, cleanup, legacy env/argv normalization and profile/config TOCTOU (existing daemon claim backstop; no new locks/state writes). 3/3 scratch mutants killed: Get-MoeProp=>N3 exit1; removed role filter=>A1 exit1; case-insensitive enum+profile=>T-Verified-Local exit1. Unmutated N3 scratch control passed; scratch-only row selector avoids earlier single-ID refusals hiding N3. Copied validators.ts too for drift guard; copies deleted and source hashes unchanged. Logs n1-mut-*.log in /mnt/d/moe-scratch. Size 88+2+217=307 lines; BOM retained; no waiver. No tracked changes since full green gate. Governor confirmed inherited singleton-array boundary bug 044c7410 is deferred (comment-89dbe584), not a blocker; completion will disclose it. Handoff and diagnostic-rendering gotcha saved to Serena.",
+      "startedAt": "2026-11-03T17:22:04.465Z",
+      "completedAt": "2026-11-03T17:24:57.892Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -94,8 +99,8 @@
     }
   ],
   "planRevision": 4,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -133,12 +138,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:16.023Z",
-  "updatedAt": "2026-11-03T16:31:38.913Z",
+  "updatedAt": "2026-11-03T17:26:05.326Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:23.394Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-12ae794e",
@@ -150,7 +155,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:48:15.616Z",
@@ -224,5 +231,44 @@
   },
   "planApprovedAt": "2026-11-01T18:48:15.644Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T16:20:47.173Z"
+  "workStartedAt": "2026-11-03T16:20:47.173Z",
+  "reviewStartedAt": "2026-11-03T17:25:17.749Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-65b3e023923e4ab6b71cb94e7bea2f9b && L=/mnt/d/moe-scratch/n1-gate.log && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=$(wslpath -w \"$PWD/scripts/tests\"); powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh && npm run lint' > \"$L\" 2>&1; rc=$?; echo \"exit=$rc\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c; exit \"$rc\"",
+    "exitCode": 0,
+    "outputTail": "exit=0\n      1 PASS parity-check.sh\n      3 PASS postflight-vm-route.ps1\n      1 PASS postflight.ps1\nSKIP lines: 0\nnpm run lint -> npm run docs:lint -> bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nLog: /mnt/d/moe-scratch/n1-gate.log",
+    "reportedAt": "2026-11-03T17:25:17.749Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-vm-route.ps1",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "Ported m1's verified-local gate into moe-agent.ps1, exact refusal order/strings minus WSL; worker/QA iteration checks before AutoClaim, architect/governor untouched. Added 29-row standalone PS harness and two-line parent hook; BOM retained. Port source rechecked immediately before completion: 9578c6096d99ef9a4e7380c9d949c8e8f438aa86 unchanged. Full final-byte gate passed: PS5.1 + pwsh7 standalone, full PS5.1 postflight, parity, lint; required PASS counts 3/1/1, zero SKIP. Three scratch mutants killed (N3, A1, T-Verified-Local); control passes. 307 added lines across 3 files; no manual Git writes. Serena handoff saved.\nKnown exception, governor-approved comment-89dbe584: inherited Invoke-MoeRpc unwraps malformed [{\"profile\":\"verified-local\",\"ready\":true,\"missingCapabilities\":[]}] into an object. Scratch repro with unset mode refuses MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED (on reaches VM_ROUTE_UNAVAILABLE), whereas sh treats it as malformed and launches legacy. Adds refusal only, never host fallback. Tracked separately as task-044c7410e7a24c1bbe56da35ff643232; governor excludes it from n1 DoD1 and directs no blocking or tracked singleton-array assertion here.",
+  "commits": [
+    {
+      "sha": "6d6bdc517720e56e57a755a76bc9e5b33158eb65",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T16:19:03Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight.ps1"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T17:26:04.437Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T16:19:03Z",
+    "at": "2026-11-03T17:26:05.326Z"
+  }
 }

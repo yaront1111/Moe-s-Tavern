@@ -1,0 +1,28 @@
+{
+  "id": "task-c5c092ae499c481780171977d91c2426",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-compaction-keeper's post-compaction task snapshot prints each step's original description instead of its active amendment, so a seat that auto-compacts on an amended step is handed superseded instructions (the keeper twin of the DONE JetBrains fix 37e03b91)",
+  "description": "Filed by the 11-03 #6 defect hunt (task-cea8fa39, architect-1dd28c7c).\n\nPROBLEM\nscripts/mods/moe-compaction-keeper/hooks/register.ts:57 builds each \"Steps:\" line of the post-compaction snapshot from `s.description`. The current step gets up to 1500 chars of it.\n- The daemon never rewrites `description` when a step is amended. packages/moe-daemon/src/types/schema.ts:458-463 says: \"The step as originally planned. Never rewritten by an amendment — read `effectiveStepDescription(step)` (util/planAmendments.ts) for the text a worker must actually follow\".\n- packages/moe-daemon/src/util/planAmendments.ts:38-44 resolves the effective text as `activeAmendmentId ? amendments[match].description : description`. Its comment reads \"This is the ONE resolution point\".\n- The keeper's own `Step` type (register.ts:23) declares neither `amendments` nor `activeAmendmentId`.\nSo after an auto-compaction, the snapshot (which the keeper heads \"The board is the source of truth\") hands the seat the step text as first planned. This is the same defect class as the DONE JetBrains fix task-37e03b91.\n\nLIVE IMPACT\n- 32 task records under .moe/tasks carry an activeAmendmentId.\n- The WORKING row task-23c803d2 (CQ-M07n3) has amended steps 1, 2, 3 and 5. Its step-2 amendment exists because the plan now \"pins five scrubbed credential variables (not four)\". A worker seat that compacts on that step would be shown the original text, which says four.\n\nEVIDENCE (HEAD 19d5e67a; git-archive snapshot /tmp/hunt-cea8-snap; MOE_* env unset)\n1. Red mod test. Copy /mnt/d/moe-scratch/hunt-cea8/mine/zzAmendedStep.test.ts into scripts/mods/moe-compaction-keeper/hooks/ and run `claude plugin test scripts/mods/moe-compaction-keeper`. Result: \"6 pass / 1 fail\", rc=1:\n   Expected: containing \"- step-1 IN_PROGRESS: AMENDED step text\"\n   Received: \"...Steps:\\n- step-1 IN_PROGRESS: ORIGINAL step text\\n...\"\n   Full output: /mnt/d/moe-scratch/hunt-cea8/mine/zzAmendedStep.output.txt.\n2. Plain-node repro: `node /mnt/d/moe-scratch/hunt-cea8/mine/keeper-amended-step.repro.mjs <path to register.ts>` prints \"shows ORIGINAL: true | shows AMENDED: false\". Output: keeper-amended-step.output.txt in the same folder.\n\nFIX DIRECTION\nIn register.ts, resolve each step's text the way util/planAmendments.ts does:\n- When `activeAmendmentId` is a non-empty string and `amendments` is an array holding an entry with that amendmentId and a string description, use that entry's description.\n- Otherwise use `description`. A dangling id degrades to the original and never throws.\nAdd `amendments?` and `activeAmendmentId?` to the `Step` type. The mod ships standalone in both IDE bundles and can't import daemon code, so copy the few-line rule and mark it with a `Twin: effectiveStepDescription (packages/moe-daemon/src/util/planAmendments.ts)` comment. You may also tag an amended line \"(amended)\" so the seat knows the plan changed. No doc change is needed: scripts/CLAUDE.md:41 says only that the snapshot carries \"steps\".\n\nFILES\n- scripts/mods/moe-compaction-keeper/hooks/register.ts\n- scripts/mods/moe-compaction-keeper/hooks/register.test.ts (test)\nOut of scope: scripts/moe-agent.* (the CQ-M07 lane) and docs/MCP_SERVER.md.\n\nNOTE FOR THE PLANNER\nRun the mod suite with every MOE_* variable unset (for example `env -u MOE_WORKER_ID -u MOE_PROJECT_PATH ... claude plugin test ...`). A seat exports them, and the tests mock their own env.",
+  "definitionOfDone": [
+    "scripts/mods/moe-compaction-keeper/hooks/register.test.ts gains two cases. (1) A task whose IN_PROGRESS step has amendments [amend-1] and activeAmendmentId \"amend-1\": the snapshot's line for that step contains the amendment's description and does not contain the original description. (2) A dangling activeAmendmentId with no matching entry: that line shows the original description.",
+    "`claude plugin test scripts/mods/moe-compaction-keeper` exits 0 with every test passing, including the 6 existing ones, run in a snapshot with the MOE_* env unset.",
+    "The diff touches only scripts/mods/moe-compaction-keeper/hooks/register.ts and register.test.ts."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 386.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:23:13.101Z",
+  "updatedAt": "2026-11-03T17:23:13.101Z"
+}

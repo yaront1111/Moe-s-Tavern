@@ -38,22 +38,29 @@
     {
       "stepId": "step-2",
       "description": "2. Strong-profile intent rule for worktree completions: the planner's adjustment, required by the task's 'never let an unverified commit reach the target'.\n\nFINDING. WT-07/08's land_worktree_completion lands everything on refs/heads/moe/task/<id>: LAND_WT_T is the branch tip after L2, and wt_land_rounds merges it into the target. So step 1's commit reaches the target only through that path. That arm never applies CQ-V07's intent rule, though. run_landing's land_plumbing refuses a strong completion that has no frozen candidate of the landed tree (MOE_COMMIT_REFUSED_INTENT_INCOMPLETE). wt_land_rounds would instead CAS an ungated merge under verified-local: WT-10 freezes and gates M only when settings.qualityGate is set, and an ungated landing writes the candidate-less journal.\n\nCHANGE. Add `wt_strong_intent M B`, with a short header naming CQ-V07 and this task.\n- It returns 0 unless `strong_landing_task \"$LAND_TASK_ID\"`. Legacy and observe are therefore byte-for-byte unchanged, and so is a task-less landing such as WT-10M's migration, if it reuses the rounds.\n- Under the strong profile it returns 0 only when all of these hold: FROZEN_CANDIDATE_ID is set; FROZEN_TREE = M and FROZEN_BASE = B (what WT-10's L6 freeze_candidate B M leaves once its gate passed); MOE_ATTEMPT_ID and PINNED_ATTEMPT_PLAN_REVISION are set.\n- Otherwise it sets LAND_OUTCOME=refused, LAND_CODE=MOE_COMMIT_REFUSED_INTENT_INCOMPLETE (a code both wrappers already carry, so parity-check is untouched) and a LAND_MESSAGE naming M and B, then returns 1.\nCall `wt_strong_intent \"$m\" \"$b\" || return 1` in every wt_land_rounds round: after the .moe board guard and after WT-10's L6 gate call, before L7's commit-tree, the journal write and the CAS or publish. Error handling stays on the existing path: land_worktree_completion already turns a refused outcome into 'nothing moves and no rescue ref' and records it, as for MOE_COMMIT_REFUSED_UNRECONCILED_INTENT. Leave that path and every legacy line unchanged.\n\nROWS. A `[strong intent]` section. Slice wt_strong_intent, strong_landing_task and receipt_journal_path, and use PYTHON_CMD as the file does. Use a scratch PROJECT and MOE_GITDIR, never the vm-candidate fixture.\nG1: legacy with no frozen candidate returns 0 and leaves LAND_CODE untouched.\nG2 (strong by PINNED_ATTEMPT_PROFILE=verified-local with PREFLIGHT_TASK_ID = LAND_TASK_ID) and G3 (strong by a .moe/attempts/*.json record whose newest generation is verified-local), each with no frozen candidate: return 1 with that code and outcome refused.\nG4: FROZEN_TREE != M returns 1.\nG5: FROZEN_BASE != B returns 1.\nG6: MOE_ATTEMPT_ID or PINNED_ATTEMPT_PLAN_REVISION empty returns 1.\nG7: everything matching returns 0.\nG8, a source check on wt_land_rounds' body: wt_strong_intent is called once inside the round loop, after its gate call (if any), and before its first commit-tree, wt_journal_write, update-ref and wt_publish. Removing the call, or moving it after L7, must fail G8.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
       "newFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-03T17:14:54.981Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "wt_strong_intent M B added before wt_land_rounds (header names CQ-V07, CQ-M07m2, twin CQ-M07n2). No-op unless LAND_TASK_ID is non-empty and strong_landing_task; under the strong profile it passes only with FROZEN_CANDIDATE_ID set, FROZEN_TREE=M, FROZEN_BASE=B (both non-empty), MOE_ATTEMPT_ID and PINNED_ATTEMPT_PLAN_REVISION set; else LAND_OUTCOME=refused, LAND_CODE=MOE_COMMIT_REFUSED_INTENT_INCOMPLETE (existing code), LAND_MESSAGE naming M and B, rc 1. Called once per wt_land_rounds round right after the L6 gate block, before LAND_N_PATHS/write_commit_message/commit-tree/journal/CAS/publish. land_worktree_completion's existing refused path handles it (WARN, refused ledger row, no rescue ref, lease released). [strong intent] G1,G1b,G2,G3,G4,G5,G6a-c,G7,G8 GREEN (postflight-vm-route.sh EXIT=0, 37s). Mutants on /mnt/d/moe-scratch/mut-91ee455a copies all killed: call removed (G8), call moved after commit-tree (G8), base check dropped (G5), empty-task guard dropped (G1b), plan-revision check dropped (G6b). Test tweak: gline gets `|| true` so a missing call reports the G8 message instead of a silent pipefail exit.",
+      "startedAt": "2026-11-03T17:14:54.981Z",
+      "completedAt": "2026-11-03T17:21:15.640Z"
     },
     {
       "stepId": "step-3",
       "description": "3. One verification gate, at the end, run once. Run it from the repo root, in place: launcher harnesses run in place per the global rail. Launch it with job control and a scrubbed MOE_*/CLAUDE* env (mem:gotcha-qa-session-env-and-signals-leak-into-harness): `( set -m; nohup bash -c '<command> > log 2>&1; echo EXIT=$? >> log' >/dev/null 2>&1 & )`, then poll the log with a foreground timeout.\nThe exact command:\n`bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/worktree-landing.sh && bash scripts/tests/postflight-vm-route.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`\nRequired:\n- exit 0;\n- parity PASS: MOE_VM_ is not a compared family until CQ-M07n, and no MOE_COMMIT_/MOE_ATTR_/MOE_CHECKPOINT_/MOE_ATTRIBUTION_/MOE_ACCOUNT_ code was added;\n- worktree-landing.sh green and unedited, proving legacy worktree completions are unchanged by step 2;\n- every [vm candidate] and [strong intent] row passing;\n- postflight.sh green, which also re-runs postflight-vm-route.sh through CQ-M07m1's line.\nThe fresh command, exitCode and outputTail are the complete_task evidence. Load regression-check and verification-before-completion. If a dependency's bytes are missing or a harness cannot run, report that; never claim green.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "startedAt": "2026-11-03T17:22:11.825Z"
     },
     {
       "stepId": "step-4",
@@ -88,12 +95,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:12.430Z",
-  "updatedAt": "2026-11-03T17:14:54.981Z",
+  "updatedAt": "2026-11-03T17:22:11.825Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T14:50:10.406Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-30d804be",
@@ -105,7 +112,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:50:37.463Z",
