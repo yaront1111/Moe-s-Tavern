@@ -47,7 +47,9 @@ Read current project/epic/task rails before running commands. All test and re-ru
 - `task.lastCommitOutcome` (outcome and code; null means nothing was recorded): for example `nothing` for a nothing-to-commit landing, or `refused`/`failed`;
 - `task.landingRetry` when `get_context` returns it;
 - each rescue entry (`rescueRefsHint`, refs under `refs/moe/rescue/<taskId>/`);
-- the row's paths that are still dirty, with any held-path remedy its landing printed (`MOE_CONTESTED_HELD`).
+- the row's paths that are still dirty, with any held-path code its landing printed (`MOE_CONTESTED_HELD`).
+
+`moe.qa_reject` refuses an issue description longer than 500 characters (`INVALID_INPUT`), so keep that issue to the codes, refs and paths. Put the held-path remedy text the landing printed in `reason` (max 2000 characters) or quote it in a task comment.
 
 Add a separate issue for any defect your verification re-run found. Name `failedDodItems` only for DoD items you verified failing, never for the landing gap alone, so a repeated gap never counts as the same DoD item failing twice. An empty or foreign-dirty shared tree alone never disproves a clone-delivered commit: after checking isolated delivery, an unproven delivery is this evidence gap, not a verdict on the code. The reject hands the row back to a worker, whose session can close every variant of the gap: its wrapper's pre-flight recovers a rescue ref or a dead session's bytes (`MOE_CHECKPOINT_RECOVERED`), the worker reports its own unattributed paths and re-edits held ones with a tool, and its exit lands the completion. A landing-gap reject counts toward the reopen cap like any other, and a re-plan cannot fix a landing gap.
 

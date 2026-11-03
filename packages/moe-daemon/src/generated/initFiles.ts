@@ -21,7 +21,7 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * is not a customization: it is a vendored pre-stamp copy and is upgraded.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=b0c0bbe4188c -->
+  'architect.md': `<!-- moe-generated: sha=5095739efdb8 -->
 
 # Architect
 
@@ -52,7 +52,7 @@ Do not interrogate the user on trivial tasks (single file, obvious change, DoD a
 Only wait for the user to confirm the approach in \`CONTROL\` mode, and only while they are actually answering. Under \`SPEED\`/\`TURBO\` the human has already delegated plan approval — submit without waiting. Never \`moe.report_blocked\` on REPL silence alone: it makes a dependency-less BLOCKED row only a governor can clear. Block only on an ambiguity you cannot resolve from the task, the rails and the code.
 
 ## Runtime-driven workflow
-Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool — once per session: a skill this session already loaded, and still holds after any compaction, is not reloaded. Ownership, ordering, context fetches, and approval flow are enforced by the runtime. On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirements are ambiguous or rails conflict, use \`moe.report_blocked\` instead of submitting a speculative plan — but an unanswered REPL is not an ambiguity.
+Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool — once per session: a skill this session already loaded, and still holds after any compaction, is not reloaded. Ownership, ordering, context fetches, and approval flow are enforced by the runtime. On \`MoeError\`, key on \`error.data.codeName\` and follow the call \`error.message\` names (\`error.data\` is exactly \`{ tool, codeName }\`). If requirements are ambiguous or rails conflict, use \`moe.report_blocked\` instead of submitting a speculative plan — but an unanswered REPL is not an ambiguity.
 
 ## Idle behavior
 
@@ -473,7 +473,7 @@ Follow \`nextAction\` on every Moe tool response. During the bounded commit wait
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=a3d65d5877c5 -->
+  'qa.reference.md': `<!-- moe-generated: sha=953f8694c26d -->
 
 # QA — Reference
 
@@ -524,7 +524,9 @@ Read current project/epic/task rails before running commands. All test and re-ru
 - \`task.lastCommitOutcome\` (outcome and code; null means nothing was recorded): for example \`nothing\` for a nothing-to-commit landing, or \`refused\`/\`failed\`;
 - \`task.landingRetry\` when \`get_context\` returns it;
 - each rescue entry (\`rescueRefsHint\`, refs under \`refs/moe/rescue/<taskId>/\`);
-- the row's paths that are still dirty, with any held-path remedy its landing printed (\`MOE_CONTESTED_HELD\`).
+- the row's paths that are still dirty, with any held-path code its landing printed (\`MOE_CONTESTED_HELD\`).
+
+\`moe.qa_reject\` refuses an issue description longer than 500 characters (\`INVALID_INPUT\`), so keep that issue to the codes, refs and paths. Put the held-path remedy text the landing printed in \`reason\` (max 2000 characters) or quote it in a task comment.
 
 Add a separate issue for any defect your verification re-run found. Name \`failedDodItems\` only for DoD items you verified failing, never for the landing gap alone, so a repeated gap never counts as the same DoD item failing twice. An empty or foreign-dirty shared tree alone never disproves a clone-delivered commit: after checking isolated delivery, an unproven delivery is this evidence gap, not a verdict on the code. The reject hands the row back to a worker, whose session can close every variant of the gap: its wrapper's pre-flight recovers a rescue ref or a dead session's bytes (\`MOE_CHECKPOINT_RECOVERED\`), the worker reports its own unattributed paths and re-edits held ones with a tool, and its exit lands the completion. A landing-gap reject counts toward the reopen cap like any other, and a re-plan cannot fix a landing gap.
 
@@ -740,12 +742,12 @@ only you can.
  * role doc (git history of docs/roles plus the working copy at generation).
  */
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
-  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b0c0bbe4188c', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
+  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '5095739efdb8', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b0c0bbe4188c', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
   'architect.reference.md': ['08b07943437a', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c016fd59a81e', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '3d85e1e8146a', '5267e2ff5337', '52ffd8f5e35c', '546f3f3da3d2', '6cf327f722c6', '7a4154466321', '7f0344ccc9be', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
-  'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', 'a3d65d5877c5', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b', 'e9cd45cbf530'],
+  'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', '953f8694c26d', 'a3d65d5877c5', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b', 'e9cd45cbf530'],
   'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '231c9f69ff5b', '2901ab4e47c9', '2b22d0d22444', '3001e8ef81e6', '4351f8a02fb9', '4c65ffa9e027', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a5557290ca4a', 'a7e172e84fd7', 'a936b3d0bc20', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
   'worker.reference.md': ['00d768586ec5', '2345e537ca85', '27bec85d5275', '3b7b35d18aed', '4818eaa4d242', '4b041787b980', '67ee4edbcc31', '6b8e906e69d9', '73eb0762edac', '7642fd40403b', '7a2b7f00dfd3', '9a727a066966', 'a2e203c12ef7', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
 };
