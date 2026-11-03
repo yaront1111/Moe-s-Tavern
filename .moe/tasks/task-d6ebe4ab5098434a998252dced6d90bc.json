@@ -15,77 +15,48 @@
     {
       "stepId": "step-1",
       "description": "Tests first, RED before step 2 (test-driven-development). File: packages/moe-daemon/src/index.test.ts, edited in your task worktree with the Edit tool. A prototype of every row, which passed against the step-2 code, is at /mnt/d/moe-scratch/d6ebe4ab-plan/bindhost.proto.test.ts (D:\\moe-scratch\\d6ebe4ab-plan on Windows). Port its rows onto the file's existing helpers; do not copy its local helpers.\n(a) Add `import dns from 'dns';`.\n(b) In describe 'daemon.json across the WSL boundary', give writeDaemonFiles an optional 4th parameter `extra: Partial<DaemonInfo> = {}`, spread into daemonInfo({ port, pid, projectPath, ...extra }). Existing callers stay as they are.\n(c) Inside that describe, add describe('a daemon.json bindHost is dialed only when it names this machine (task-d6ebe4ab)'). The outer describe already owns otherSide, killSpyWithoutSignals, writeDaemonFiles, jsonPath/lockPath/stopPath, DEAD_PID and the process.exitCode save/restore.\n- Constants: OFF = '192.0.2.10' (RFC 5737 TEST-NET-1) and NAME = 'moe-bindhost.test'.\n- Two os.networkInterfaces fixtures: loopback only (lo 127.0.0.1), and loopback plus eth0 holding OFF.\n- beforeEach, part 1: set `dialed = []`, then vi.spyOn(http, 'request'). The spy pushes options.hostname into `dialed` and forwards the call to the real http.request with hostname '127.0.0.1'. Every address then answers like the healthy fake daemon, so only the new rule can withhold a signal.\n- beforeEach, part 2: vi.spyOn(dns.promises, 'lookup'). NAME returns { address: OFF, family: 4 }; anything else throws ENOTFOUND (the stubDns pattern of src/server/healthHost.test.ts C).\n- Each row spies os.networkInterfaces itself.\nRows:\n- B1: it.each over [OFF, NAME], loopback-only interfaces, writeDaemonFiles(await healthServer(testDir, process.pid), process.pid, testDir, { bindHost }).\n  - validateDaemonInfoForProject(testDir, info) toEqual { valid: false, reason: 'bindHost not local' }.\n  - probeDaemonHealth(info, testDir, 2000) is false.\n  - Then run statusDaemon and stopDaemon, and assert: dialed toEqual []; the kill spy recorded no signal other than 0; daemon.json and daemon.lock bytes are unchanged and there is no daemon.stop; process.exitCode is 1.\n  - The fields of the 'Daemon status' log call toMatchObject [{ status: 'stopped', reason: 'bindHost not local', pid: process.pid }].\n- B2: it.each over [OFF, NAME], interfaces with eth0 = OFF.\n  - validate toEqual { valid: true, info }.\n  - stopDaemon's non-zero signals toEqual [[process.pid, 'SIGTERM']], and daemon.stop exists.\n  - dialed toEqual [OFF, OFF]: the literal, never the name.\n  - dns lookup is called 2 times for NAME and 0 times for the literal: one resolution per validation.\n- B3: it.each over bindHost [absent, '127.0.1.1', '::1', '::ffff:127.0.0.1', '0.0.0.0', '::', 'wsl'], with os.networkInterfaces throwing. validate is valid, and stopDaemon sends exactly one SIGTERM to process.pid.\n- B4: OFF with os.networkInterfaces throwing gives { valid: false, reason: 'bindHost not local' } and dialed [].\n- B5: under otherSide, pid DEAD_PID, healthServer(testDir, DEAD_PID), bindHost OFF.\n  - Loopback-only interfaces: toEqual { valid: false, reason: 'foreign daemon unreachable', foreign: true }, with dialed [].\n  - Interfaces with eth0 = OFF: { valid: true, info, foreign: true }, with dialed [OFF].\nInstall killSpyWithoutSignals BEFORE every stopDaemon call. Without it, a passing validation SIGTERMs the vitest worker.\nRun `npx vitest run src/index.test.ts` against the unchanged index.ts, in a snapshot built like step 4's (mem:gotcha-daemon-linux-snapshot-gate). Both B1 rows, B4 and B5 must fail with 'expected { valid: true, …': today's code trusts the off-host answer. B2 and B3 already pass. Paste that RED test output tail into this step's notes.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/index.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/index.test.ts"
-      ],
-      "note": "Added `import dns`, optional 4th `extra` param on writeDaemonFiles, and describe 'a daemon.json bindHost is dialed only when it names this machine (task-d6ebe4ab)' (B1 x2, B2 x2, B3 x7, B4, B5) inside 'daemon.json across the WSL boundary', reusing otherSide/killSpyWithoutSignals/writeDaemonFiles/healthServer/daemonInfo. Small extras beyond the prototype: B1 also asserts logger.error got only pino fields {pid, bindHost}; B3 asserts dialed equals the exact probed literal twice (not just length 2). RED in snapshot /tmp/moe-d6ebe4ab-red.E1vKBU (clone of 5c5b3706 + this test file, index.ts unchanged, node v24.21.0, env -i): `npx vitest run src/index.test.ts` exit=1 -> `× B1 an IP literal…`, `× B1 a name that resolves…`, `× B4 …`, `× B5 …`, all with \"AssertionError: expected { valid: true, …(1) } to deeply equal { valid: false, …(1) }\" (B5: …(2)); B2 x2 and B3 x7 pass. Tail: \"Test Files  1 failed (1) / Tests  4 failed | 55 passed | 1 skipped (60)\". Scratch tsconfig (include src/index.test.ts, types node) tsc -p exit 0.",
-      "startedAt": "2026-11-03T00:20:38.054Z",
-      "completedAt": "2026-11-03T00:24:27.753Z"
+      ]
     },
     {
       "stepId": "step-2",
       "description": "Implement the rule in packages/moe-daemon/src/index.ts (Edit tool, task worktree). A reference diff (+49/-8) that passed every step-1 row and the full suite is at /mnt/d/moe-scratch/d6ebe4ab-plan/index.ts.proto.diff.\n(a) Add three helpers after probeHostFor:\n- `const BIND_HOST_NOT_LOCAL = 'bindHost not local';`\n- `recordedProbeHost(info)`, returning `info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST`. probeDaemonHealth and the foreign branch inline this expression today.\n- `isLocalAddress(address: string): boolean`, on the stdlib net.BlockList:\n  - addSubnet('127.0.0.0', 8, 'ipv4'): the whole loopback /8, because Debian maps the hostname to 127.0.1.1;\n  - addAddress('::1', 'ipv6');\n  - then the address of every os.networkInterfaces() entry (ipv6 when net.isIPv6, else ipv4);\n  - return check(address, net.isIPv6(address) ? 'ipv6' : 'ipv4').\n  Error handling: the interface read sits in try/catch. A failure logs at debug and leaves loopback only, which refuses every other bindHost.\n  Probed on Node 22 and 24: BlockList matches IPv4-mapped IPv6 against the IPv4 rules, compares IPv6 canonically and ignores a %zone. Add exact interface addresses, never their subnets: a peer on the LAN is not this machine.\n  The doc comment says why: daemon.json is repository content, and a /health answer from another host could name any pid (task-d6ebe4ab).\n(b) probeDaemonHealth: `const address = await healthProbeAddress(host ?? recordedProbeHost(info), timeoutMs);`, then `if (address === null || (host === undefined && !isLocalAddress(address))) return false;`.\n- An explicit host stays the caller's choice: either the checked literal or the WSL gateway.\n- Direct callers of the export get the rule too.\n- The signature and the boolean result do not change.\n(c) validateDaemonInfoForProject resolves once, with `healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS)`, and passes that literal on. The address it judges is then the one it dials, and no second lookup can rebind it.\n- Foreign branch: hosts = [that literal] only when it is non-null and isLocalAddress, then wslGatewayHost() as today, with the dedupe. The routing table names the gateway, not the repository.\n- Native branch, after the isProcessAlive check: a non-null literal that is not local returns { valid: false, reason: BIND_HOST_NOT_LOCAL }. A null literal, or a false probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, address), stays 'health check failed'.\n(d) stopDaemon, first thing inside `if (!validation.valid || !validation.info)`, when reason === BIND_HOST_NOT_LOCAL:\n- Call logger.error({ pid: info.pid, bindHost: info.bindHost }, ...). The message says that daemon.json names a bindHost that is not an address of this machine, so its pid cannot be verified here; that no signal was sent and nothing was removed; and that you should check what that process is and stop it yourself if it is a Moe daemon. Never call that process a Moe daemon.\n- Then set process.exitCode = 1 and return. Like the foreign refusal: no SIGTERM, no writeStopSentinel, no cleanupStaleDaemonFiles.\n- The pid is alive here, because validation checks that first.\nJetBrains installedStop() and Stop and Replace count only exit 0 as success, so both protected flows refuse instead of signalling.\nstatusDaemon and existingDaemonBlocksStart need no change: status reports 'stopped' with the new reason and removes only a dead pid's file, and start keeps its cleanup of a native daemon.json it cannot verify.\nThen run `npx tsc --noEmit && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts` in the snapshot. Every test must pass.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/index.ts"
-      ],
-      "note": "index.ts: added module-private BIND_HOST_NOT_LOCAL, recordedProbeHost(info), isLocalAddress(address) (net.BlockList: 127.0.0.0/8 + ::1 + exact os.networkInterfaces() addresses; interface read in try/catch -> logger.debug, loopback only). probeDaemonHealth: resolves host ?? recordedProbeHost(info) once, returns false when null or (no explicit host and not local); signature unchanged. validateDaemonInfoForProject: foreign branch resolves once and probes the literal only when local, then the WSL gateway as before; native branch, after isProcessAlive, resolves once -> non-null non-local literal = { valid:false, reason:'bindHost not local' }, null or failed probe(info, own, SOCKET_TIMEOUT_MS, literal) = 'health check failed'. stopDaemon: on BIND_HOST_NOT_LOCAL logs error with pino fields {pid, bindHost} only, sets exitCode 1, returns (no SIGTERM, no sentinel, no cleanup). statusDaemon / existingDaemonBlocksStart / exports unchanged. Code equals the planner's index.ts.proto.diff byte-for-byte except two comment wordings (+50/-7). GREEN in snapshot /tmp/moe-d6ebe4ab-red.E1vKBU (cmp-checked overlay): `npx tsc --noEmit && npx tsc -p tsconfig.scratch.json && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts` exit=0 -> \"Test Files  3 passed (3) / Tests  142 passed | 1 skipped (143)\".",
-      "startedAt": "2026-11-03T00:24:30.925Z",
-      "completedAt": "2026-11-03T00:26:07.535Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "Docs (Edit tool). Keep the surrounding line wrap, and use none of the daemonGitDocs phrases ('never runs git', 'runs no git', 'does not run git').\ndocs/ARCHITECTURE.md, Security Notes: add one new bullet right after **Restart Daemon on Windows** and before **VS Code parity**, for example **The daemon CLI's `stop` and `status`** (`packages/moe-daemon/src/index.ts`, task-d6ebe4ab). It states:\n- Both flows above reach the old daemon through the installed CLI's `stop`.\n- `stop`, `status` and the `start` gate find it through `.moe/daemon.json`, which is repository content.\n- So the CLI dials its `bindHost` only when the literal it resolves to is loopback (127.0.0.0/8 or `::1`) or an address that one of this machine's network interfaces holds. The name is resolved once, and that literal is the one dialed.\n- Otherwise nothing is probed. While the recorded pid is alive, `stop` sends no signal, removes nothing and exits 1. Stop and Replace then starts nothing, and the protected Restart Daemon reports that the stop request failed. `status` reports `stopped` with reason `bindHost not local`.\n- A dead pid's daemon.json is still removed, and `start` replaces the file as it does any daemon.json it cannot verify.\n- Loopback, `0.0.0.0`, `::`, `--host wsl`, and a name or address of a local interface stop as before.\n- For a daemon.json from the other side of the WSL boundary, the gateway from the routing table is still probed, and such a file is never signalled or removed.\ndocs/TROUBLESHOOTING.md:\n(1) Under ## Daemon Issues, after the `submit_plan` ... `spawn git ENOENT` entry and before the `---` that precedes ## Plugin Issues, add `### \\`moe-daemon stop\\` sends no signal: \\`bindHost not local\\``. It has three parts:\n- **Symptom:** `stop` exits 1 with step 2's error line. `status` shows `stopped` with reason `bindHost not local`. In JetBrains, Stop and Replace starts nothing, or Restart Daemon reports \"the stop request failed\".\n- **Cause:** `.moe/daemon.json` is repository content, and the CLI probes its `bindHost` for /health before it signals the recorded pid. A pull, a hand edit, or a DNS change for a daemon started with `--host <name>` can point it elsewhere.\n- **Solution:** Check what the pid is (`ps -p <pid> -o pid,lstart,args`, or Task Manager's Details tab). If it is this project's Moe daemon, stop it yourself. Otherwise leave that process alone and remove `.moe/daemon.json` as in [daemon.json is stale](#daemonjson-is-stale). Then start the daemon again (in JetBrains, Restart Daemon). A `--host` value should name this machine.\n(2) Append one sentence to the **Stop and Replace** bullet of \"Protected profile: daemon was not started by this IDE\", and one to the **Cause** of \"Restart Daemon refuses or starts nothing\". Each says that this `stop` signals nothing when daemon.json's `bindHost` is not an address of this machine, and links to (#moe-daemon-stop-sends-no-signal-bindhost-not-local).\nLeave the Table of Contents unchanged. Check that both anchors resolve to existing headings (GitHub slugs) and that every claim matches the step-2 code.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "docs/ARCHITECTURE.md",
         "docs/TROUBLESHOOTING.md"
-      ],
-      "modifiedFiles": [
-        "docs/ARCHITECTURE.md",
-        "docs/TROUBLESHOOTING.md"
-      ],
-      "note": "ARCHITECTURE.md Security Notes: new bullet **The daemon CLI's `stop` and `status`** (index.ts, task-d6ebe4ab) between **Restart Daemon on Windows** and **VS Code parity**, covering every planned point (repository content, loopback 127.0.0.0/8 or ::1 or local-interface address, resolved once and literal dialed, stop no signal/no removal/exit 1, Stop and Replace starts nothing, protected Restart Daemon \"the stop request failed\" (STOP_FAILED, MoeDaemonSupervisor.kt:952), status `stopped`/`bindHost not local`, dead pid still removed, start replaces like any unverifiable daemon.json, unchanged loopback/0.0.0.0/::/wsl/local cases, foreign gateway still probed and never signalled/removed). TROUBLESHOOTING.md: new Daemon Issues entry `### \\`moe-daemon stop\\` sends no signal: \\`bindHost not local\\`` after the spawn git ENOENT entry (Symptom quotes the stop error line verbatim; Cause; Solution with ps/Task Manager, link to #daemonjson-is-stale, Restart Daemon, --host names this machine), plus one pointer sentence each in the Stop and Replace bullet and the Restart Daemon Cause. Checked: all three anchors resolve to existing heading slugs (node slug script), the doc's quoted message equals the code string, no daemonGitDocs phrases, TOC unchanged.",
-      "startedAt": "2026-11-03T00:26:09.555Z",
-      "completedAt": "2026-11-03T00:27:42.644Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run this once, fresh, from the task worktree. This exact command is the complete_task evidence: verification.command is the command verbatim, exitCode 0, and outputTail holds the vitest Test Files/Tests lines plus the node --test summary. QA re-runs it.\ncd \"$(git rev-parse --show-toplevel)\" && S=\"$(mktemp -d /tmp/moe-d6ebe4ab.XXXXXX)\" && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$(git rev-parse HEAD)\" && for f in packages/moe-daemon/src/index.ts packages/moe-daemon/src/index.test.ts docs/ARCHITECTURE.md docs/TROUBLESHOOTING.md; do cp \"$f\" \"$S/repo/$f\" && cmp \"$f\" \"$S/repo/$f\" || exit 1; done && cd \"$S/repo\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run'\nWhat it does: it snapshots HEAD plus the 4 working-tree files (cmp-checked) and runs account-trust-docs, which reads both docs. Then, under env -i, it runs `npm ci`, `tsc --noEmit` and the full daemon test suite. The shared checkout's node_modules is Windows-native and must never be rebuilt (customRule 1, mem:gotcha-daemon-linux-snapshot-gate, mem:decision-doc-row-checkrefs-worktree-mode).\nExpected result: the planner's dry run at HEAD 5c5b3706 with the prototype applied gave 230 files, 6934 passed, 20 skipped, exit 0, in about 45 s.\nIf an unrelated file fails, check `uptime` and rerun that file alone. Known load flakes are src/index.version.test.ts, the bindHosts.test.ts D-fail row and baselineRun.test.ts E2. Report such a failure with evidence; never edit it.\nOn a Windows-native seat, run the same line in Git Bash, adding SYSTEMROOT=\"$SYSTEMROOT\" TEMP=\"$TEMP\" TMP=\"$TMP\" after env -i HOME=\"$HOME\" (Node on Windows needs them), and cite that variant verbatim.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "note": "Ran the plan's step-4 command verbatim from the task worktree (WSL, node v24.21.0), snapshot /tmp/moe-d6ebe4ab.wpZWo6, exit 0, load avg 14. node --test account-trust-docs: tests 5, pass 5, fail 0. Daemon: tsc --noEmit clean; vitest \"Test Files  229 passed (229) / Tests  6934 passed | 20 skipped (6954)\", 44.3 s. The planner's 230 files counted the separate prototype test file; the test count (6934) matches exactly.",
-      "startedAt": "2026-11-03T00:27:43.561Z",
-      "completedAt": "2026-11-03T00:28:50.076Z"
+      "status": "PENDING",
+      "affectedFiles": []
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (load the adversarial-self-review skill). Review `git diff \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\"` plus the working tree of the 4 files. Check:\n- Every DoD item maps to a passing test row.\n- A non-string, empty or huge bindHost still yields false or 'health check failed', never a throw.\n- The name is resolved once per validation, and the dialed literal equals the judged one (B2's lookup count and its dialed list).\n- A failed interface read refuses every non-loopback bindHost (B3, B4).\n- On a refusal, stop writes no sentinel, deletes nothing and keeps exit 1.\n- status and the start gate behave as the docs say.\n- No test can SIGTERM the vitest worker.\n- Repository strings reach only pino fields, never the message text.\nMutants: copy /mnt/d/moe-scratch/d6ebe4ab-plan/mut.py into your scratch dir. It drives 8 single-string mutants: probe gate, native gate, stop refusal, loopback /8 to /32, foreign gate, interface loop, catch rethrow, and ::1. Point it at your snapshot's index.ts and at src/index.test.ts, with the search strings updated to your final code. Back up once, and count a kill only when the Tests line shows real failures. Restore, then cmp against your worktree before you cite the results.\nSize: net non-board LOC must stay under 400 (expect about +190). Record the mutant table and any residual in the completion summary.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/index.ts",
-        "packages/moe-daemon/src/index.test.ts"
-      ],
-      "note": "Adversarial self-review of the 4 files. FINDING (fixed): the step's \"non-string bindHost never throws\" check failed for a one-element array. net.isIP coerces, so `bindHost: [\"192.0.2.10\"]` passed as a literal and then threw a TypeError: at HEAD from http.request (pre-existing), and with the fix from BlockList.check. Probe script (tsx, fix vs HEAD) over [array, array, 5, {}, '', 100k string, null, true]: only the arrays threw. Fix: a one-line `typeof target !== 'string'` -> null guard at the top of healthProbeAddress, whose only callers are the three probe sites this task changes (small scope growth past approvedScope, same file, root-cause spot). Added test row B6 (it.each [OFF], ['127.0.0.1'], 5 -> 'health check failed', probe false, dialed []); it was RED for the arrays (TypeError) before the guard. Mutants: copied the planner's mut.py to /tmp/moe-d6ebe4ab-mut.QxUtR1, pointed it at src/index.test.ts, added M9 (second lookup: drop the literal arg) and M10 (type guard off). All 10 KILLED with real failures: M1 probe gate 2, M2 native gate 3, M3 stop refusal 2, M4 /8->/32 1, M5 foreign gate 1, M6 no interfaces 3, M7 catch rethrow 8, M8 no ::1 1, M9 second lookup 1, M10 type guard 2. Restored, then cmp equal to the worktree. Other checks OK: one lookup per validation (B2 count + dialed [OFF,OFF]); unreadable interfaces leave loopback only (B3/B4); refusal = no sentinel, no delete, exit 1 (B1); status 'stopped' and the start gate as the docs say; every stopDaemon call has killSpyWithoutSignals installed first (B4/B5/B6 never call stop); repository strings only in pino fields. Residual (theoretical): an interface address BlockList rejects aborts the loop and leaves fewer local addresses, which fails closed. Size: +205/-13, net 192. Fresh step-4 command on final bytes: exit 0, 229 files, 6937 passed, 20 skipped; account-trust-docs 5/5; scratch tsc on index.test.ts exit 0.",
-      "startedAt": "2026-11-03T00:28:50.933Z",
-      "completedAt": "2026-11-03T00:33:17.735Z"
+      "status": "PENDING",
+      "affectedFiles": []
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-c9368191",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Human \"move from backlog\": CQ-RF07 residual finding 1, daemon `stop` trusts a /health answer from a daemon.json bindHost before SIGTERM. Real, evidence at 28df02f7.",
+  "reopenCount": 1,
+  "reopenReason": "Reviewed completion 12d7bb62 (+205/-13, net 192). Most of it holds. The verification command, re-run verbatim, exits 0 with 229 files, 6937 passed, 20 skipped, and account-trust-docs passes 5/5. The new rows fail against 12d7bb62^ (B1 x2, B4, B5 and B6 x2) and pass at 12d7bb62. The docs anchors resolve. The JetBrains claims hold: a non-zero stop exit makes Stop and Replace start nothing, and the protected Restart Daemon reports STOP_FAILED.\n\nDoD item 1 is still bypassable with a zoned IPv6 link-local literal. net.BlockList.check ignores the %zone. So isLocalAddress('fe80::a%docker0') is true whenever ANY interface holds fe80::a, but the zone sends the dial out of docker0 onto its link, to a peer and not to this machine. A /health answer from that peer then gets the recorded pid a SIGTERM.\n\nSeparately, the \"exact addresses, never subnets\" rule has no test. A mutant that adds each interface's subnet instead of its address survives the whole index.test.ts.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -93,7 +64,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:05:43.620Z",
-  "updatedAt": "2026-11-03T00:34:42.505Z",
+  "updatedAt": "2026-11-03T00:59:01.941Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:14.940Z",
@@ -103,24 +74,26 @@
     "firstClaimAt": "2026-11-02T23:51:39.790Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-24611a0a",
-    "worker-2dc72348"
+    "worker-c9368191",
+    "qa-af7be174"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
+  "tier": "heavy",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5"
+  "stepsCompleted": [],
+  "failedDodItems": [
+    {
+      "item": "`moe-daemon stop` (and `status`) never sends a signal on the strength of a /health answer from an address that is not loopback or a local interface. A test with a daemon.json `bindHost` that resolves off-host asserts no signal and no deletion of a live daemon's file.",
+      "rejectedAt": "2026-11-03T00:58:13.972Z",
+      "rejectedBy": "qa-af7be174"
+    }
   ],
-  "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T00:18:52.984Z",
   "executionContract": {
     "intendedBehavior": "The daemon CLI dials a .moe/daemon.json bindHost only when the IP literal it resolves to is loopback (127.0.0.0/8, ::1, or their IPv4-mapped forms) or an address one of this machine's network interfaces holds. The name is resolved once, and that literal is the one dialed.\nFor a native daemon.json with a live pid whose bindHost resolves anywhere else, validateDaemonInfoForProject returns { valid: false, reason: 'bindHost not local' }. stop then logs an error, sends no signal, writes no stop sentinel, removes nothing and exits 1. status reports stopped with that reason and keeps the file.\nA foreign daemon.json's off-host bindHost is skipped, while the WSL gateway is still probed.\nLoopback, 0.0.0.0, ::, wsl, and local-interface addresses or names behave as before, including their SIGTERM.",
@@ -231,9 +204,90 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T00:19:03Z",
-    "at": "2026-11-03T00:34:42.505Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T00:51:21Z",
+    "at": "2026-11-03T00:59:01.941Z"
+  },
+  "reviewCompletedAt": "2026-11-03T00:58:13.972Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "`moe-daemon stop` (and `status`) never sends a signal on the strength of a /health answer from an address that is not loopback or a local interface. A test with a daemon.json `bindHost` that resolves off-host asserts no signal and no deletion of a live daemon's file."
+    ],
+    "issues": [
+      {
+        "type": "security",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 100,
+        "description": "isLocalAddress ignores an IPv6 %zone (net.BlockList.check drops it), but the zone picks the link that is dialed. Scratch vitest at 12d7bb62: eth0 holds fe80::a, docker0 holds fe80::b, bindHost 'fe80::a%docker0' -> validate {valid:true}, dialed ['fe80::a%docker0' x2], stopDaemon SIGTERMs the pid. A peer on docker0's link answers that, not this machine. OS proof on this host: eth0's link-local with %eth0 hit the local listener; with %docker0 it went out on the link and timed out."
+      },
+      {
+        "type": "security",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 100,
+        "description": "Fix direction, either one:\n- A zoned literal is local only when the interface named by its zone holds that exact address. Match it against os.networkInterfaces() keys, or scopeid for a numeric zone.\n- Or refuse every zoned literal and fail closed: no Moe --host flow records one.\nThe native gate and the foreign recorded-literal filter both go through isLocalAddress, so fixing it there covers both."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/index.test.ts",
+        "line": 668,
+        "description": "Add a zone row in the task-d6ebe4ab describe. Use bindHost 'fe80::a%<other iface>', with fe80::a held by a different interface. Assert 'bindHost not local', dialed [], no non-zero signal, daemon.json and daemon.lock unchanged, no daemon.stop, and exitCode 1. If zones stay allowed, also add a row where the holding interface's zone still stops with one SIGTERM. The row must be RED on 12d7bb62."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/index.test.ts",
+        "line": 668,
+        "description": "No row proves 'exact interface addresses, never subnets'. Mutant: in isLocalAddress, replace addAddress(own, ...) with addSubnet(own, isIPv6 ? 64 : 24, ...). It survives: src/index.test.ts 62 passed, 1 skipped. Add a B1-style row with eth0 holding 192.0.2.11 (cidr 192.0.2.11/24) and bindHost OFF (192.0.2.10). Assert 'bindHost not local', dialed [] and no signal."
+      },
+      {
+        "type": "other",
+        "file": "docs/ARCHITECTURE.md",
+        "line": 549,
+        "description": "After the fix, state the zone rule in this Security Notes bullet and in the TROUBLESHOOTING 'bindHost not local' Cause. Both now say only 'an address one of this machine's network interfaces holds'. Re-run the plan's step-4 command on the final bytes and cite it. Net size stays well under 400."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Reviewed completion 12d7bb62 (+205/-13, net 192). Most of it holds. The verification command, re-run verbatim, exits 0 with 229 files, 6937 passed, 20 skipped, and account-trust-docs passes 5/5. The new rows fail against 12d7bb62^ (B1 x2, B4, B5 and B6 x2) and pass at 12d7bb62. The docs anchors resolve. The JetBrains claims hold: a non-zero stop exit makes Stop and Replace start nothing, and the protected Restart Daemon reports STOP_FAILED.\n\nDoD item 1 is still bypassable with a zoned IPv6 link-local literal. net.BlockList.check ignores the %zone. So isLocalAddress('fe80::a%docker0') is true whenever ANY interface holds fe80::a, but the zone sends the dial out of docker0 onto its link, to a peer and not to this machine. A /health answer from that peer then gets the recorded pid a SIGTERM.\n\nSeparately, the \"exact addresses, never subnets\" rule has no test. A mutant that adds each interface's subnet instead of its address survives the whole index.test.ts.",
+      "rejectedAt": "2026-11-03T00:58:13.972Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "`moe-daemon stop` (and `status`) never sends a signal on the strength of a /health answer from an address that is not loopback or a local interface. A test with a daemon.json `bindHost` that resolves off-host asserts no signal and no deletion of a live daemon's file."
+      ],
+      "issues": [
+        {
+          "type": "security",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 100,
+          "description": "isLocalAddress ignores an IPv6 %zone (net.BlockList.check drops it), but the zone picks the link that is dialed. Scratch vitest at 12d7bb62: eth0 holds fe80::a, docker0 holds fe80::b, bindHost 'fe80::a%docker0' -> validate {valid:true}, dialed ['fe80::a%docker0' x2], stopDaemon SIGTERMs the pid. A peer on docker0's link answers that, not this machine. OS proof on this host: eth0's link-local with %eth0 hit the local listener; with %docker0 it went out on the link and timed out."
+        },
+        {
+          "type": "security",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 100,
+          "description": "Fix direction, either one:\n- A zoned literal is local only when the interface named by its zone holds that exact address. Match it against os.networkInterfaces() keys, or scopeid for a numeric zone.\n- Or refuse every zoned literal and fail closed: no Moe --host flow records one.\nThe native gate and the foreign recorded-literal filter both go through isLocalAddress, so fixing it there covers both."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/index.test.ts",
+          "line": 668,
+          "description": "Add a zone row in the task-d6ebe4ab describe. Use bindHost 'fe80::a%<other iface>', with fe80::a held by a different interface. Assert 'bindHost not local', dialed [], no non-zero signal, daemon.json and daemon.lock unchanged, no daemon.stop, and exitCode 1. If zones stay allowed, also add a row where the holding interface's zone still stops with one SIGTERM. The row must be RED on 12d7bb62."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/index.test.ts",
+          "line": 668,
+          "description": "No row proves 'exact interface addresses, never subnets'. Mutant: in isLocalAddress, replace addAddress(own, ...) with addSubnet(own, isIPv6 ? 64 : 24, ...). It survives: src/index.test.ts 62 passed, 1 skipped. Add a B1-style row with eth0 holding 192.0.2.11 (cidr 192.0.2.11/24) and bindHost OFF (192.0.2.10). Assert 'bindHost not local', dialed [] and no signal."
+        },
+        {
+          "type": "other",
+          "file": "docs/ARCHITECTURE.md",
+          "line": 549,
+          "description": "After the fix, state the zone rule in this Security Notes bullet and in the TROUBLESHOOTING 'bindHost not local' Cause. Both now say only 'an address one of this machine's network interfaces holds'. Re-run the plan's step-4 command on the final bytes and cite it. Net size stays well under 400."
+        }
+      ]
+    }
+  ]
 }

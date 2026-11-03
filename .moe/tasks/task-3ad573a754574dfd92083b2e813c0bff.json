@@ -11,13 +11,14 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (static guard + CI). Create scripts/tests/literal-project-path.test.mjs (node:test, ESM). Header comment: PowerShell reads [ ] (and backtick) in a -Path argument as wildcard syntax, so a project dir named \"control é [x] $;'\" fails Resolve-Path -Path / Test-Path; PS 5.1 Start-Process also resolves the inherited current location as a wildcard.\n\nRead scripts/moe-agent.ps1 and scripts/moe-team.ps1 via new URL('../<name>', import.meta.url); strip the BOM; CRLF->LF.\n\nScanner rules:\n- Skip full-line `#` comments and `<# ... #>` blocks.\n- A cmdlet counts only at command position: preceded, after optional whitespace, by line start, `(`, `{`, `|`, `;`, `=` or the keyword `return`.\n- Its segment ends at the first `|`, `;` or newline at depth 0, or at the `)`/`}` that closes an enclosing group.\n- Text nested in (...) or {...} inside the segment is NOT top level.\n\nRules:\n- G1: these cmdlets need `-LiteralPath` at the top level of their segment: Test-Path, Get-Content, Set-Content, Add-Content, Clear-Content, Out-File, Get-Item, Get-ChildItem, Copy-Item, Move-Item, Remove-Item, Rename-Item, Resolve-Path, Convert-Path, Push-Location, Set-Location, Get-Acl, Set-Acl, Get-FileHash.\n  - Exempt an operand on the Env: drive (`Remove-Item Env:X`, `Remove-Item -Path \"Env:\\$k\"`).\n  - New-Item is not listed: its -Path is literal by design and it has no -LiteralPath (probed).\n- G2: every Start-Process segment contains `-WorkingDirectory` and `WildcardPattern]::Escape(`.\n\nTests:\n(1) Per file: assert.deepEqual(violations, []). Each violation is `<file>:<line>: <trimmed text>`; the message names the rule and the reason. Also assert each file has at least one G1 invocation, so a broken read cannot pass vacuously.\n(2) Scanner self-test on an inline sample, asserting the EXACT flagged set:\n- `if (-not (Test-Path $a)) { New-Item -ItemType Directory -Force -Path $a | Out-Null }` -> Test-Path only\n- `$c = Get-Content -Raw -LiteralPath $p | ConvertFrom-Json` -> none\n- `Get-ChildItem -Path $d -File -Filter '*.md' | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $t }` -> Get-ChildItem only\n- `Test-Path (Get-Item -LiteralPath $p).FullName` -> Test-Path only (a nested literal does not count)\n- `# Test-Path $x` -> none\n- `Write-Host \"run Test-Path by hand\"` -> none\n- `Remove-Item Env:MOE_X -ErrorAction SilentlyContinue` -> none\n- `return Get-Content -Path $f` -> Get-Content\n- `Start-Process -FilePath node -ArgumentList @($a)` -> G2\n- `Start-Process node -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape($d))` -> none\nRegister no tests when argv[2] is `cli` or `start` (the step-2 fake modes).\n\nCI: in .github/workflows/ci.yml, job build-all-platforms, add a NEW step right after \"Test agent runtime discovery\", with no OS condition:\n  - name: Test launcher literal project paths\n    run: node --test scripts/tests/literal-project-path.test.mjs\nDo not edit the existing node --test lines: task-4e412148 plans to append to one of them.\n\nRED: on the unmodified launchers, `node --test scripts/tests/literal-project-path.test.mjs` fails (1), listing about 50 moe-agent.ps1 sites plus moe-team.ps1's 4 G1 and 3 G2 sites, while (2) passes. Note the counts in the step note.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         ".github/workflows/ci.yml"
       ],
       "newFiles": [
         "scripts/tests/literal-project-path.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T00:58:44.750Z"
     },
     {
       "stepId": "step-2",
@@ -89,7 +90,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-03T00:50:38.372Z",
+  "updatedAt": "2026-11-03T00:58:44.750Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
