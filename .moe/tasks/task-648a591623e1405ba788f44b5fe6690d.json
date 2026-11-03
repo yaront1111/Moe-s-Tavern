@@ -101,17 +101,24 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) Admission: no path admits without an HMAC match against a session or owner-only store record that names the installed daemon. daemon.json, /health identity, pid and port can only refuse.\n(b) Fail closed: untrusted store state, a malformed record, a probe timeout, a cancelled connect, an install change and a store inside the project all refuse after a restart, and none opens a socket.\n(c) Secrets: the key appears only in the session map, the owner-only store record (0600 on POSIX) and the spawned daemon's env. The stop and legacy spawns never carry it. Grep the diff for any log or message that could print it.\n(d) Concurrency: connect re-entry, a cancel during the modal or the stop, and two windows. Window B's newer record must still admit B's daemon in window A through the stored-record fallback.\n(e) The replace flow stops only through the installed CLI, kills only its own stop child on timeout, and its bounded wait cannot spin past the budget.\n(f) The strict-map suites still pass: no new top-level import.\n(g) Mutation check in a scratch copy of the Linux snapshot:\n  - admit on a mismatched proof: case (4) must fail;\n  - drop the env key: cases (1) and (7) must fail;\n  - skip the confirmation: case (6) must fail.\n  Then confirm the restored copy passes.\n(h) The residual matches JetBrains: no port↔pid binding beyond what the HMAC over the dialled port already proves.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/protected-daemon-provenance.test.cjs"
       ],
-      "startedAt": "2026-11-03T08:02:45.271Z"
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "note": "Adversarial self-review of the whole row diff (b4cfae12..worktree), adversarial-self-review loaded. Before the step-5 run I fixed 4 findings, each with a test that was RED against c7bc13a3's client (8 failures):\n1. The refusal printed daemon.json's pid verbatim. That is repository text, and a non-modal VS Code notification renders [x](command:…) links. Now only a positive integer pid is shown; the invalid-pid loop covers 0, -1, 1.5, '4242' and a link string.\n2. Bypass: a workspace switched to a legacy folder during the identity probe skipped the gate (old code: \"Missing expected rejection\", the socket opened). connect() now captures the project before getVerifiedDaemonInfo, the same folder that check resolves. This also keeps LEGACY's no-workspace path unchanged.\n3. Every automatic reconnect re-popped the modal, every 5 s for up to 10 times. A final refusal now sets manualDisconnect, matching JetBrains doConnect (\"no client, no registration and no retry\"); an explicit connect clears it. Test (6) asserts scheduleReconnect sets no timer.\n4. The spawn record's daemon key uses projectStateKey(args[0]), as admission does. No behaviour change.\nChecklist:\n(a) Only an HMAC match admits, against a session or store record naming the installed daemon. A configured endpoint is refused outright.\n(b) Untrusted/malformed/foreign/oversize records, probe timeout, cancel, install change and a store inside the project all refuse with no socket (tests 4, 10, 11, invalid proof, cancel ×3).\n(c) Every added log or message is fixed text (JSON.parse rewrapped). The key lives only in the session map, the 0600 record and the spawn env. Stop env deletes every case variant; LEGACY test 9. No forbidden tokens.\n(d) connect re-entry is guarded. Cancel during proof, modal and stop is covered, and the two-window stored fallback passes.\n(e) Only the installed CLI stops the daemon. kill() is called only on our own stop child. The wait shares one deadline budget.\n(f) No new top-level import; the strict-map suites pass on both legs.\n(g) /tmp/moe-648a-mutants.sh on a copy of the Linux snapshot: admit-mismatched fails (4) mismatched proof, (7) and invalid-proof ff…; drop-env-key fails (1), (2), (7), (11), D1 and two-windows; skip-confirmation fails (6), (3) and every (4)/workspace refusal. Restored: 72/68/0 fail/4 skipped.\n(h) Residuals, same as JetBrains: the HMAC binds the dialled endpoint's answer, not a pid. A same-user local relay is out of the threat model. Two windows racing spawns can refuse each other, and Replace then disconnects the peer (JetBrains warns about this). A /health probe slower than 1.5 s is refused as unverified (fail closed). Workspace moe.daemon.host still picks the probe host, but no remote host can answer the HMAC.",
+      "startedAt": "2026-11-03T08:02:45.271Z",
+      "completedAt": "2026-11-03T08:03:43.596Z"
     }
   ],
   "planRevision": 4,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -178,7 +185,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T08:02:45.271Z",
+  "updatedAt": "2026-11-03T08:06:11.953Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -188,7 +195,7 @@
     "firstClaimAt": "2026-11-02T22:37:43.536Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -208,7 +215,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:58:16.854Z",
@@ -346,17 +354,43 @@
       "treeId": "a957cad8ac8ceb62216f2e93b02ba4fc2edd09e3",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "119fce99412b215f0d31e61045bd05a740a4f7b6",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T07:46:17Z",
+      "paths": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T08:06:11.953Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
+    "moe-vscode/tests/protected-daemon-provenance.test.cjs",
     "moe-vscode/src/services/MoeDaemonClient.ts",
-    "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+    "moe-vscode/tests/protected-daemon-spawn.test.cjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-26483323@2026-11-03T06:32:38Z",
-    "at": "2026-11-03T06:47:16.409Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T07:46:17Z",
+    "at": "2026-11-03T08:06:11.953Z"
+  },
+  "reviewStartedAt": "2026-11-03T08:04:49.449Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-648a591623e1405ba788f44b5fe6690d && bash /mnt/d/moe-scratch/648a-verify2.sh",
+    "exitCode": 0,
+    "outputTail": "HEAD c7bc13a3\nLinux snapshot: /tmp/moe-648a-v2-linux.pDMp56\nWindows snapshot: /mnt/d/moe-scratch/648a-v2-win.dLV62r\n/tmp/moe-648a-v2-linux.pDMp56/linux.log\nℹ tests 669\nℹ suites 0\nℹ pass 665\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\n/mnt/d/moe-scratch/648a-v2-win.dLV62r/windows.log\nℹ tests 665\nℹ suites 0\nℹ pass 658\nℹ fail 0\nℹ cancelled 0\nℹ skipped 7\nℹ todo 0\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nLinux exit=0 (npm ci, npm test, npm run compile, npm run lint), Windows exit=0 (npm ci, npm test, npm run compile), quality gate exit=0\nEXIT=0\n(Script: git archive HEAD into fresh Linux and D:\\moe-scratch dirs, cp+cmp overlay of MoeDaemonClient.ts, protected-daemon-provenance.test.cjs and protected-daemon-spawn.test.cjs, then the plan's legs in parallel; root parity-check + lint in the Linux snapshot.)",
+    "reportedAt": "2026-11-03T08:04:49.449Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Protected VS Code now admits a daemon only if a fresh /health?challenge answer matches the HMAC of a key this extension minted. The key goes into the installed daemon's env (MOE_SPAWN_PROOF_KEY) and is kept in the session map plus the owner-only store (kind 'spawn', read only from a root outside the project). Everything else gets the fixed refusal and no WebSocket: daemon.json, /health identity, a configured endpoint, untrusted/malformed/stale records, timeouts. Replace is offered only for a daemon.json daemon with a valid pid, via a modal whose only action is Stop and Replace. It runs the installed CLI stop (20 s; only its own child is killed), waits 15 s/250 ms for the pid and metadata to clear, then does a fresh spawn and re-admission. LEGACY is unchanged.\nReview fixes this session, RED-checked:\n- pid text shown only for a positive integer (daemon.json is repo text);\n- workspace captured before the identity probe (a mid-probe switch to legacy bypassed the gate);\n- a final refusal suppresses auto-reconnect (JetBrains no-retry, so no modal re-pops);\n- record daemon key via projectStateKey.\nThird-file disclosure (comment-d4217a23, amend-1): tests/protected-daemon-spawn.test.cjs +5/-2. D1 adds a 64-hex MOE_SPAWN_PROOF_KEY to the exact env, and both ENOENT-after-cancel tests cancel at the stub spawn, still with 1 spawn. No other existing test changed. Size from b4cfae12: +454/-9, net 445 of 520 (prop-35eadcbd, pending).\nedc27e14 is NOT an ancestor of HEAD c7bc13a3. Merged check (edc27e14 + task diff, clean patch): 671/667/0/4, compile ok. Mutants (mismatched proof, dropped key, skipped confirmation) each fail their cases; restored copy 72/68/0. Residuals: same-user relay, two-window spawn race, /health slower than 1.5 s refused."
 }

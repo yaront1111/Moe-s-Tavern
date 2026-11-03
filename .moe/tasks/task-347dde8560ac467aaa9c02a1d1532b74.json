@@ -1,0 +1,31 @@
+{
+  "id": "task-347dde8560ac467aaa9c02a1d1532b74",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: docs outside CONFIGURATION.md still describe worktreeMode's pre-WT-19 default ('off' when unset) instead of the gate-aware rule",
+  "description": "Problem: since WT-19 (task-b1ca54f2), resolveWorktreeMode (packages/moe-daemon/src/state/validators.ts) resolves an UNSET settings.worktreeMode to 'on' when settings.qualityGate is non-blank after trim, else 'off' (decision dec-eb7b8337 (b)). docs/CONFIGURATION.md's worktreeMode row states this; four other docs still state the old rule.\nWhere (at WT-19's base 3c4e766f): docs/ARCHITECTURE.md:289 \"`settings.worktreeMode` is `'off'` by default\"; docs/SCHEMA.md:212-215 ProjectSettings comment \"Absent means 'off'\"; docs/MCP_SERVER.md:1468 \"Only a WORKING claim made while settings.worktreeMode is 'on'\" and docs/roles/worker.reference.md:78 \"while settings.worktreeMode is 'on'\" (both should say the mode resolves to 'on'); docs/TROUBLESHOOTING.md \"Worktree mode: flip on / roll back\" step 3 (\"set a qualityGate if none is set\") does not say that, with worktreeMode unset, that gate already resolves the mode to 'on' at the next WORKING claim, so seats must stay drained until step 6 (or set 'off' first).\nWhy it was not fixed in WT-19: its scope forbids editing docs other than CONFIGURATION.md and routes such findings to bug: rows.\nFix: docs only, aligned word for word with CONFIGURATION.md's worktreeMode row. worker.reference.md is vendored into packages/moe-daemon/src/generated/initFiles.ts (line ~673), so regenerate it (npm run generate-init-files in a snapshot, never in the shared checkout).",
+  "definitionOfDone": [
+    "ARCHITECTURE.md, SCHEMA.md, MCP_SERVER.md and worker.reference.md state the gate-aware rule (unset resolves to 'on' with a non-blank qualityGate, else 'off'), or say the mode 'resolves to' 'on'; outside docs/plans, `grep -rn \"'off'\\` by default\\|Absent means 'off'\" docs` finds nothing.",
+    "TROUBLESHOOTING.md's flip runbook step 3 notes that with worktreeMode unset the new qualityGate already resolves the mode to 'on' at the next WORKING claim, so seats stay drained until step 6, and that setting 'off' first adds a gate without switching.",
+    "packages/moe-daemon/src/generated/initFiles.ts matches the edited worker.reference.md (generate-init-files run in a snapshot), and npm run lint passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b1ca54f2716442be889a14623eb59983"
+  ],
+  "priority": "MEDIUM",
+  "order": 49,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T08:05:45.996Z",
+  "updatedAt": "2026-11-03T08:05:45.996Z"
+}
