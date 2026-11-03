@@ -46,14 +46,16 @@
     {
       "stepId": "step-3",
       "description": "Verification gate (DoD 3). Run it once, fresh, from the task worktree after the last tracked edit. Its output is the complete_task evidence: command, exitCode 0, and an outputTail holding the snapshot= line and the Test Files/Tests lines. Never run it in the shared checkout (global rail 1). Run exactly:\n\n( set -o pipefail && R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/e977-v.XXXX) && echo \"snapshot=$S\" && git -C \"$R\" archive HEAD packages/moe-daemon scripts/moe-account-lease.mjs | tar -x -C \"$S\" && for f in tools/addComment.ts tools/amendPlanStep.ts tools/releaseTask.ts tools/taskEventActor.test.ts; do cp \"$R/packages/moe-daemon/src/$f\" \"$S/packages/moe-daemon/src/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/taskEventActor.test.ts\"],\"exclude\":[]}' > tt.json && npx tsc -p tt.json && NO_COLOR=1 npx vitest run src/tools/taskEventActor.test.ts src/tools/addComment.test.ts src/tools/amendPlanStep.test.ts src/tools/releaseTask.test.ts src/tools/echoedReasonNotices.test.ts src/tools/getActivityLog.test.ts 2>&1 | tail -15 )\n\nWhat it does: archives HEAD's packages/moe-daemon plus scripts/moe-account-lease.mjs (needed by the package-wide tsc) into /tmp, overlays this row's four files, runs npm ci, then `tsc --noEmit` for the sources and tt.json for the new test (the package tsconfig excludes tests and vitest does not typecheck; mem:convention-daemon-full-suite-gate-checkref). Then it runs the description's four files, plus echoedReasonNotices.test.ts (the release chat lines) and getActivityLog.test.ts (the workerId query).\n\nThe architect dry-ran this exact command from a throwaway repo that held the fix and the prototype test: exit 0, Test Files 6 passed (6), Tests 109 passed (109), which is 107 existing plus 2 new. Counts may grow if a peer lands tests in these files; exit 0 is the requirement.\n\nError handling in the gate: every stage is chained with && inside a pipefail subshell, so a failing archive, cp, npm ci or tsc ends the run with that stage's non-zero code, and vitest's own exit code survives the tail. npm ci prints nothing on failure, because its output goes to /dev/null. If the gate fails silently, rerun npm ci in that snapshot without the redirect to see why. Keep the printed snapshot= path for step 4.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T16:02:01.883Z"
+      "note": "Ran the exact approved snapshot gate after all tracked edits. snapshot=/tmp/e977-v.U1Th; exit 0. Both npx tsc --noEmit and npx tsc -p tt.json succeeded. Test Files 6 passed (6); Tests 109 passed (109), including both new regression cases. All dependency installation and tests stayed outside the checkout. No tracked edits after this verification.",
+      "startedAt": "2026-11-03T16:02:01.883Z",
+      "completedAt": "2026-11-03T16:02:34.676Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this row's diff, using the adversarial-self-review skill. Do it once, as the last step.\n- Scope: `git diff` against the task base shows the four one-argument additions (9 changed lines in the three source files, matching /mnt/d/moe-scratch/plan-e977/fix.diff) and the new test. No other byte, no .moe/ path, and every tracked write was made with Edit or Write.\n- Mutation check, in the step-3 snapshot and never the worktree: `bash /mnt/d/moe-scratch/plan-e977/mutants.sh <snapshot>/packages/moe-daemon`. It applies 7 mutants one at a time:\n  - drop each of the 4 arguments;\n  - release main path -> actors.actor;\n  - comment -> comment.author;\n  - repair path -> params.workerId || UNIDENTIFIED_RELEASER.\n  It must print 7 `killed` lines, each naming its own assertion (M3 and M4 also name the notice check), then `restored fix: Tests 2 passed (2)`, and exit 0. Paste the output into the step note. The script refuses the shared checkout, edits only the snapshot it is given, and restores the fixed files after each mutant. The architect dry-ran it: 7 of 7 killed. A `NOT APPLIED` line means your fix is formatted differently from fix.diff: either match fix.diff, or apply that mutant by hand in the snapshot.\n- Edge cases, confirmed by reading, not by new code:\n  - a call with no caller id records no workerId (case 2);\n  - a governor's forced strip records the governor, never the stripped holder;\n  - an explicit workerId '' records workerId \"\", exactly as the review-loop tools have done since 3ba2bddd. That is not a false attribution, and normalizing it belongs in appendActivity, outside this row;\n  - concurrency is unchanged: tool handlers serialize on the state mutex, and release_task already runs inside runExclusive;\n  - error handling is unchanged: no new throw or IO path, and the best-effort activity write and chat posts still never fail a persisted comment, amendment or release.\n- If any tracked file changes after step 3, rerun step 3 and cite the new output.\n- Kill only PIDs you started (global rail 2). Delete only the exact snapshot paths your own runs printed.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/addComment.ts",
         "packages/moe-daemon/src/tools/amendPlanStep.ts",
@@ -61,7 +63,16 @@
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/taskEventActor.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/addComment.ts",
+        "packages/moe-daemon/src/tools/amendPlanStep.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/taskEventActor.test.ts"
+      ],
+      "note": "Adversarial self-review completed once over all four owned paths; no further edits. Diff matches fix.diff, 9 changed source lines plus the 145-line test, no .moe or other paths. Main native apply_patch created test; one-shot Serena editor made source edits. Reviewed concurrency (MCP global mutex; reentrant release runExclusive), input absence/empty id/forced governor strip, unchanged validation and IO failures, and side effects/cleanup. Bare params.workerId never guesses assignee or placeholder; '' remains '' per existing appendActivity semantics. Tool results, banners, handoffs and error handling unchanged. Snapshot/worktree cmp on all four files and git diff --check pass. Fresh quality gate `bash scripts/tests/parity-check.sh && npm run lint` exit 0. Step-3 gate remains current: 6 files / 109 tests passed, both TypeScript checks clean.\nMutation command: bash /mnt/d/moe-scratch/plan-e977/mutants.sh /tmp/e977-v.U1Th/packages/moe-daemon ; exit 0.\n[M1-drop-comment-actor] killed :: TASK_COMMENT_ADDED actor: get_activity_log { workerId:\n[M2-drop-amend-actor] killed :: amend TASK_UPDATED actor: get_activity_log { workerId:\n[M3-drop-release-actor] killed :: #general move notices: get_activity_log { workerId: holder release actor:\n[M4-drop-repair-actor] killed :: #general move notices: get_activity_log { workerId: repair release actor:\n[M5-release-actors.actor] killed :: caller-less release actor: get_activity_log { workerId:\n[M6-comment-author] killed :: caller-less comment actor: get_activity_log { workerId:\n[M7-repair-unidentified] killed :: caller-less repair actor: get_activity_log { workerId:\nrestored fix: Tests 2 passed (2)\nHandoff and actor-callers gotcha recorded in Serena.",
+      "startedAt": "2026-11-03T16:02:34.706Z",
+      "completedAt": "2026-11-03T16:03:28.751Z"
     }
   ],
   "planRevision": 1,
@@ -78,12 +89,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:42:40.727Z",
-  "updatedAt": "2026-11-03T16:02:08.582Z",
+  "updatedAt": "2026-11-03T16:03:28.751Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:43:19.555Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -95,7 +106,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T15:59:06.676Z",

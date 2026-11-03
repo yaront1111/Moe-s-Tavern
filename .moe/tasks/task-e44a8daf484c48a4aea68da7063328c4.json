@@ -74,8 +74,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,12 +87,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:43:28.073Z",
-  "updatedAt": "2026-11-03T16:00:59.430Z",
+  "updatedAt": "2026-11-03T16:03:25.144Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:51:53.789Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:03:00.613Z",
+    "wallClockMs": 666824
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -173,9 +175,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T15:55:27Z",
-    "at": "2026-11-03T15:59:57.616Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:00:40Z",
+    "at": "2026-11-03T16:03:25.144Z"
+  },
+  "completedAt": "2026-11-03T16:03:00.613Z",
+  "reviewCompletedAt": "2026-11-03T16:03:00.613Z",
+  "reviewSummary": "APPROVED. Reviewed completion 8be13403 (git show; recorded in task.commits, on moe/work-2026-10-24). 4 files, +98/-11 (net ~87 LOC), only the plan's files; TaskDetailDialog/daemon/VS Code untouched.\nDoD1: BoardMoves.previous() is an explicit when: WORKING/AWAITING_APPROVAL->PLANNING, PLANNING->BACKLOG, REVIEW/DONE->Reopen, else null. Re-read WebSocketServer.ts:498-507 at HEAD: VALID_TRANSITIONS is identical to the test's copy and every returned target is allowed. BoardMovesTest: 7 cases, exact assertEquals/assertNull plus a legality test over the full daemon table; reverting to the workflowOrder rule fails it.\nDoD2: getPreviousStatus is gone (git grep). handlePrevious (MoeToolWindowPanel.kt:561), the detail-dialog prevCb (:635) and TaskColumn's per-card arrow (:175, takeIf hasPrevious) all use BoardMoves, so BLOCKED/BACKLOG/unknown get no arrow and no prompt. The reason is never dropped: Reopen sends it with REOPEN_TASK; Status moves send ADD_TASK_COMMENT (daemon case WebSocketServer.ts:928) then UPDATE_TASK; blank/cancel sends nothing. Next path unchanged.\nDoD3: under the jetbrains-gradle lease (released) I re-ran `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && gradlew.bat test --rerun\"` in the control checkout (moe-jetbrains/src identical to 8be13403): BUILD SUCCESSFUL, exit 0, :test executed. XML totals tests=632 skipped=6 failures=0 errors=0; fresh TEST-com.moe.toolwindow.BoardMovesTest.xml lists all 7 cases. The fails-on-946358a8 clause rests on the worker's recorded red run (2/7 failed on the old rule); by inspection the old WORKING->AWAITING_APPROVAL mapping contradicts workingGoesToPlanning and the legality test.\nComplexity pass: no findings. Non-blocking: a refused Status move (e.g. PLANNING WIP limit) leaves its comment, which the plan accepted. VS Code twin out of scope.",
+  "requiredCheckAtDone": null
 }
