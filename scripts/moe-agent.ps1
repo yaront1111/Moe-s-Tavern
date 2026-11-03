@@ -7216,7 +7216,8 @@ function Get-MoeWorktreeControlDirt([hashtable]$Git, [hashtable]$Settings) {
 # reused. Returns the line the prompt starts with, LANDING-CONFLICT: <unmerged
 # paths> or LANDING-RETRY: <reason>; '' without a retry. Any other git failure
 # stops the seat (MOE_WORKTREE_RESUME_FAILED); never a reset, clean or abort,
-# so W keeps its bytes. Twin: worktree_resume.
+# so W keeps its bytes. Both lines end with the resume rule (verify the merged
+# working tree, not HEAD; git stays read-only). Twin: worktree_resume.
 function Invoke-MoeWorktreeResume([string]$Top) {
     $r = Get-MoeProp (Get-MoeProp $preflightContext 'task') 'landingRetry'
     $why = Get-MoeProp $r 'reason'
@@ -7243,11 +7244,12 @@ function Invoke-MoeWorktreeResume([string]$Top) {
         }
     }
     $u = @(Get-MoeUnmergedPaths $W | Select-Object -Unique)
+    $resumeRule = "The wrapper commits this merge only when it lands, so HEAD can lack the merged target: where the verification builds a snapshot from HEAD (git archive HEAD, or a clone checked out at HEAD), build it from the tracked files of this worktree instead (the paths git ls-files lists), keep every other command unchanged, and say so in the evidence. Git stays read-only here: run only git status, git diff, git log, git show, git ls-files and git rev-parse, never a git write (commit, merge, reset, checkout, switch, restore, stash, add, rm, mv, rebase, cherry-pick, revert, apply, clean, or any other command that changes the index, HEAD, a ref or MERGE_HEAD)."
     if ($u.Count -gt 0) {
         $s = (@($u | Select-Object -First 20 | ForEach-Object { $_.Substring(0, [Math]::Min(200, $_.Length)) -replace '[\p{C}\p{Z}-[ \p{Cs}]]', '?' }) -join ', ') + $(if ($u.Count -gt 20) { " +$($u.Count - 20) more" } else { '' })
-        $line = "LANDING-CONFLICT: $s`nYour last completion did not land: $T is merged into this worktree and these paths conflict. Edit files only (no git commands, no new plan): remove every conflict marker (<<<<<<<, =======, >>>>>>>), re-run the plan's verification, then call moe.complete_task."
+        $line = "LANDING-CONFLICT: $s`nYour last completion did not land: $T is merged into this worktree and these paths conflict. Edit files only (no new plan): remove every conflict marker (<<<<<<<, =======, >>>>>>>), re-run the plan's verification, then call moe.complete_task. $resumeRule"
     } else {
-        $line = "LANDING-RETRY: $($script:MoeWtRetry)`nYour last completion did not land ($($script:MoeWtRetry)); $T is merged into this worktree. Edit files only (no git commands, no new plan), re-run the plan's verification, then call moe.complete_task."
+        $line = "LANDING-RETRY: $($script:MoeWtRetry)`nYour last completion did not land ($($script:MoeWtRetry)); $T is merged into this worktree. Edit files only (no new plan), re-run the plan's verification, then call moe.complete_task. $resumeRule"
     }
     Write-Host "[WARN] $($line.Split("`n")[0])" -ForegroundColor Yellow
     return $line

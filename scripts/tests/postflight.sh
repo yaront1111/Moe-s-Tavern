@@ -5845,6 +5845,66 @@ if grep -Fq 'reason=teamless' "$TMP_DIR/wrapper-teamheal.out"; then
 fi
 echo "[team heal] ok"
 
+# --- [landing resume] WT-11's resume prompt, beyond the shared suite (twin: the [landing resume]
+# block in postflight.ps1). A worktree seat whose task.landingRetry is set merges the target into
+# W before the CLI starts and leaves the merge uncommitted, so HEAD is still the pre-merge task tip.
+# Both prompt lines carry LR_RULE (verify the merged working tree, not HEAD; git stays read-only)
+# instead of "no git commands"; a seat without landingRetry gets neither line. ---
+echo "[landing resume] LANDING-RETRY and LANDING-CONFLICT prompts carry the merged-tree verification rule"
+LR_RULE="The wrapper commits this merge only when it lands, so HEAD can lack the merged target: where the verification builds a snapshot from HEAD (git archive HEAD, or a clone checked out at HEAD), build it from the tracked files of this worktree instead (the paths git ls-files lists), keep every other command unchanged, and say so in the evidence. Git stays read-only here: run only git status, git diff, git log, git show, git ls-files and git rev-parse, never a git write (commit, merge, reset, checkout, switch, restore, stash, add, rm, mv, rebase, cherry-pick, revert, apply, clean, or any other command that changes the index, HEAD, a ref or MERGE_HEAD)."
+LR_DIR="$TMP_DIR/lr-project"
+LR_W="$LR_DIR/.worktrees/task-postflight"
+mkdir -p "$LR_DIR/src" "$LR_DIR/.moe/messages"
+printf '.worktrees/\n.mcp.json\nlogs/\n' > "$LR_DIR/.gitignore"
+printf 'seed a\n' > "$LR_DIR/src/a.txt"
+printf '{"id":"proj-lr","name":"postflight-lr","settings":{"autoCommit":false}}\n' > "$LR_DIR/.moe/project.json"
+: > "$LR_DIR/.moe/messages/chan-general.jsonl"
+write_task_record "$LR_DIR" '[]' WORKING
+# The repo carries its identity: the resume's own merge needs one, and the seat's HOME has none.
+lr_git() { git -C "$LR_DIR" "$@"; }
+lr_git init -q; lr_git symbolic-ref HEAD refs/heads/main; lr_git config user.name 'Moe Test'; lr_git config user.email moe@test.local
+lr_git add .gitignore src .moe/project.json .moe/tasks; lr_git commit -qm seed; lr_git switch -q -c moe/control
+lr_fail() { cat "$TMP_DIR/wrapper-lr-$1.out" "$CLI_ARGS_FILE" >&2 || true; echo "LANDING RESUME FAILED ($1): $2" >&2; exit 1; }
+# lr_main FILE TEXT -- one commit on main; the control checkout goes back to moe/control.
+lr_main() { lr_git switch -q main && printf '%s\n' "$2" > "$LR_DIR/$1" && lr_git add -- "$1" && lr_git commit -qm "main $1" && lr_git switch -q moe/control; }
+# lr_run NAME -- one worker seat whose claim says worktree mode; it exits 0 and its CLI ran.
+lr_run() {
+  : > "$CLI_ARGS_FILE"
+  set +e
+  env PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_TASK_STATUS=WORKING \
+    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' MOE_LAND_NET_BACKOFF_SEC=0 timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+    "$WRAPPER" --project "$LR_DIR" --worker-id worker-lr --role worker --team Smoke --no-start-daemon \
+    --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$TMP_DIR/wrapper-lr-$1.out" 2>&1
+  lr_code=$?
+  set -e
+  [ "$lr_code" -eq 0 ] && [ -s "$CLI_ARGS_FILE" ] || lr_fail "$1" "exit $lr_code, or the CLI did not run"
+}
+# lr_prompt NAME HEADER -- the prompt holds HEADER and LR_RULE, not "no git commands"; W is mid-merge.
+lr_prompt() {
+  grep -Fq -- "$2" "$CLI_ARGS_FILE" || lr_fail "$1" "no '$2' in the prompt"
+  grep -Fq -- "$LR_RULE" "$CLI_ARGS_FILE" || lr_fail "$1" "the prompt lacks the merged-tree verification rule"
+  ! grep -Fq 'no git commands' "$CLI_ARGS_FILE" || lr_fail "$1" "the prompt still says no git commands"
+  git -C "$LR_W" rev-parse -q --verify MERGE_HEAD >/dev/null || lr_fail "$1" "W has no pending merge"
+}
+# (a) No landingRetry: W is made and the prompt has no resume line and no rule.
+lr_run plain
+[ -d "$LR_W" ] && ! grep -Fq 'LANDING-' "$CLI_ARGS_FILE" && ! grep -Fq -- "$LR_RULE" "$CLI_ARGS_FILE" || lr_fail plain "no W, or a resume line without landingRetry"
+# (b) A gate retry after main moved without a conflict: LANDING-RETRY, MERGE_HEAD set.
+printf 'task a\n' > "$LR_W/src/a.txt"; git -C "$LR_W" commit -qam 'task a'
+lr_main src/m.txt 'main m'
+printf '{"reason":"gate","count":1}\n' > "$LR_DIR/.moe/landing-retry.json"
+lr_run retry
+lr_prompt retry 'LANDING-RETRY: gate'
+! grep -Fq 'LANDING-CONFLICT' "$CLI_ARGS_FILE" || lr_fail retry "a clean merge said LANDING-CONFLICT"
+# (c) A same-line conflict: LANDING-CONFLICT, and src/a.txt stays unmerged in W.
+git -C "$LR_W" merge --abort
+lr_main src/a.txt 'main a'
+printf '{"reason":"conflict","paths":["src/a.txt"],"count":1}\n' > "$LR_DIR/.moe/landing-retry.json"
+lr_run conflict
+lr_prompt conflict 'LANDING-CONFLICT: src/a.txt'
+[ -n "$(git -C "$LR_W" ls-files -u -- src/a.txt)" ] || lr_fail conflict "src/a.txt is not unmerged in W"
+echo "[landing resume] ok"
+
 # --- [worktree reuse] Worktree provisioning regressions beyond the shared suite
 # (twin: the [worktree reuse] block in postflight.ps1). Only a missing index file marks
 # a half-made W, so a W whose agent emptied its index with `git rm` is reused as

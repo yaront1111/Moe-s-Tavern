@@ -5338,6 +5338,98 @@ exit 0
     }
     Write-Host '[team heal] ok'
 
+    # --- [landing resume] WT-11's resume prompt, beyond the shared suite (twin: the [landing resume]
+    # block in postflight.sh). A worktree seat whose task.landingRetry is set merges the target into
+    # W before the CLI starts and leaves the merge uncommitted, so HEAD is still the pre-merge task tip.
+    # Both prompt lines carry $lrRule (verify the merged working tree, not HEAD; git stays read-only)
+    # instead of "no git commands"; a seat without landingRetry gets neither line. The fake CLI is a
+    # .ps1, so the prompt reaches it verbatim (no cmd.exe parsing of the marker characters), and it
+    # also copies the private session context file a quoted or long Windows prompt is routed through. ---
+    Write-Host '[landing resume] LANDING-RETRY and LANDING-CONFLICT prompts carry the merged-tree verification rule'
+    $lrRule = 'The wrapper commits this merge only when it lands, so HEAD can lack the merged target: where the verification builds a snapshot from HEAD (git archive HEAD, or a clone checked out at HEAD), build it from the tracked files of this worktree instead (the paths git ls-files lists), keep every other command unchanged, and say so in the evidence. Git stays read-only here: run only git status, git diff, git log, git show, git ls-files and git rev-parse, never a git write (commit, merge, reset, checkout, switch, restore, stash, add, rm, mv, rebase, cherry-pick, revert, apply, clean, or any other command that changes the index, HEAD, a ref or MERGE_HEAD).'
+    $lrDir = Join-Path $tempRoot 'lr-project'
+    $lrW = Join-Path $lrDir '.worktrees\task-postflight'
+    $lrPrompt = Join-Path $tempRoot 'lr-prompt.txt'
+    $lrCli = Join-Path $tempRoot 'landing-cli.ps1'
+    [IO.File]::WriteAllText($lrCli, @'
+$t = @($args | ForEach-Object { [string]$_ }) -join "`n"
+if ($t -match 'session context file at (.+?\.md)\. ') { $t += "`n" + [IO.File]::ReadAllText($Matches[1]) }
+[IO.File]::WriteAllText($env:FAKE_LR_PROMPT, $t)
+exit 0
+'@)
+    New-Item -ItemType Directory -Force -Path (Join-Path $lrDir 'src'), (Join-Path $lrDir '.moe\messages') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $lrDir '.gitignore'), ".worktrees/`n.mcp.json`nlogs/`n")
+    [IO.File]::WriteAllText((Join-Path $lrDir 'src\a.txt'), "seed a`n")
+    [IO.File]::WriteAllText((Join-Path $lrDir '.moe\project.json'), '{"id":"proj-lr","name":"postflight-lr","settings":{"autoCommit":false}}')
+    [IO.File]::WriteAllText((Join-Path $lrDir '.moe\messages\chan-general.jsonl'), '')
+    Write-TaskRecord $lrDir @() 'WORKING'
+    # Invoke-LrGit DIR ARGS -- one fixture git call's output lines; a failed call fails the case.
+    function Invoke-LrGit([string]$Dir, [string[]]$GitArgs) {
+        $ErrorActionPreference = 'Continue'
+        $out = @(& git -C $Dir @GitArgs 2>$null)
+        if ($LASTEXITCODE -ne 0) { throw "LANDING RESUME FAILED: fixture git $GitArgs exited $LASTEXITCODE" }
+        return $out
+    }
+    # The repo carries its identity: the resume's own merge needs one, and the seat's profile has none.
+    foreach ($a in @(@('init', '-q'), @('symbolic-ref', 'HEAD', 'refs/heads/main'), @('config', 'core.autocrlf', 'false'),
+            @('config', 'user.name', 'Moe Test'), @('config', 'user.email', 'moe@test.local'), @('add', '.gitignore', 'src', '.moe/project.json', '.moe/tasks'),
+            @('commit', '-qm', 'seed'), @('switch', '-q', '-c', 'moe/control'))) {
+        $null = Invoke-LrGit $lrDir $a
+    }
+    function Stop-Lr([string]$Name, [string]$Why, $Run) { Write-Host $Run.Text; Write-Host $Run.Prompt; throw "LANDING RESUME FAILED ($Name): $Why" }
+    # Set-LrMain FILE TEXT -- one commit on main; the control checkout goes back to moe/control.
+    function Set-LrMain([string]$File, [string]$Text) {
+        $null = Invoke-LrGit $lrDir @('switch', '-q', 'main')
+        [IO.File]::WriteAllText((Join-Path $lrDir $File), "$Text`n")
+        foreach ($a in @(@('add', '--', $File), @('commit', '-qm', "main $File"), @('switch', '-q', 'moe/control'))) { $null = Invoke-LrGit $lrDir $a }
+    }
+    # Invoke-LrRun NAME -- one worker seat whose claim says worktree mode: @{ Code; Text; Prompt }; it exits 0 and its CLI ran.
+    function Invoke-LrRun([string]$Name) {
+        Remove-Item -LiteralPath $lrPrompt -Force -ErrorAction SilentlyContinue
+        $knobs = @{ MOE_PROXY_PATH = $fakeProxy; USERPROFILE = $homeDir; MOE_DISABLE_HEARTBEAT = '1'; FAKE_TASK_STATUS = 'WORKING'
+            FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; MOE_LAND_NET_BACKOFF_SEC = '0'; FAKE_LR_PROMPT = $lrPrompt }
+        $saved = @{}
+        foreach ($k in $knobs.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $knobs[$k]) }
+        $out = Join-Path $tempRoot "wrapper-lr-$Name.out"
+        try {
+            $code = Invoke-WrapperProcess @('-Project', $lrDir, '-WorkerId', 'worker-lr', '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $lrCli, '-NoLoop', '-PollInterval', '0') $out
+        } finally {
+            foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+        }
+        $run = @{ Code = $code; Text = [string](Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue)
+            Prompt = [string](Get-Content -Raw -LiteralPath $lrPrompt -ErrorAction SilentlyContinue) }
+        if ($run.Code -ne 0 -or -not $run.Prompt) { Stop-Lr $Name "exit $($run.Code), or the CLI did not run" $run }
+        return $run
+    }
+    # Assert-LrPrompt NAME HEADER RUN -- the prompt holds HEADER and $lrRule, not "no git commands"; W is mid-merge.
+    function Assert-LrPrompt([string]$Name, [string]$Header, $Run) {
+        if (-not $Run.Prompt.Contains($Header)) { Stop-Lr $Name "no '$Header' in the prompt" $Run }
+        if (-not $Run.Prompt.Contains($lrRule)) { Stop-Lr $Name 'the prompt lacks the merged-tree verification rule' $Run }
+        if ($Run.Prompt.Contains('no git commands')) { Stop-Lr $Name 'the prompt still says no git commands' $Run }
+        $ErrorActionPreference = 'Continue'
+        $null = & git -C $lrW rev-parse -q --verify MERGE_HEAD 2>$null
+        if ($LASTEXITCODE -ne 0) { Stop-Lr $Name 'W has no pending merge' $Run }
+    }
+    # (a) No landingRetry: W is made and the prompt has no resume line and no rule.
+    $run = Invoke-LrRun 'plain'
+    if (-not (Test-Path -LiteralPath $lrW) -or $run.Prompt.Contains('LANDING-') -or $run.Prompt.Contains($lrRule)) { Stop-Lr 'plain' 'no W, or a resume line without landingRetry' $run }
+    # (b) A gate retry after main moved without a conflict: LANDING-RETRY, MERGE_HEAD set.
+    [IO.File]::WriteAllText((Join-Path $lrW 'src\a.txt'), "task a`n")
+    $null = Invoke-LrGit $lrW @('commit', '-qam', 'task a')
+    Set-LrMain 'src/m.txt' 'main m'
+    [IO.File]::WriteAllText((Join-Path $lrDir '.moe\landing-retry.json'), '{"reason":"gate","count":1}')
+    $run = Invoke-LrRun 'retry'
+    Assert-LrPrompt 'retry' 'LANDING-RETRY: gate' $run
+    if ($run.Prompt.Contains('LANDING-CONFLICT')) { Stop-Lr 'retry' 'a clean merge said LANDING-CONFLICT' $run }
+    # (c) A same-line conflict: LANDING-CONFLICT, and src/a.txt stays unmerged in W.
+    $null = Invoke-LrGit $lrW @('merge', '--abort')
+    Set-LrMain 'src/a.txt' 'main a'
+    [IO.File]::WriteAllText((Join-Path $lrDir '.moe\landing-retry.json'), '{"reason":"conflict","paths":["src/a.txt"],"count":1}')
+    $run = Invoke-LrRun 'conflict'
+    Assert-LrPrompt 'conflict' 'LANDING-CONFLICT: src/a.txt' $run
+    if (@(Invoke-LrGit $lrW @('ls-files', '-u', '--', 'src/a.txt')).Count -eq 0) { Stop-Lr 'conflict' 'src/a.txt is not unmerged in W' $run }
+    Write-Host '[landing resume] ok'
+
     # --- [worktree reuse] Worktree provisioning regressions beyond the shared suite
     # (twin: the [worktree reuse] block in postflight.sh). Only a missing index file
     # marks a half-made W, so a W whose agent emptied its index with `git rm` is
