@@ -69,14 +69,21 @@
     {
       "stepId": "step-5",
       "description": "Verify once, then do one adversarial self-review. The gate is narrow, per the epic-be924fb8 ruling msg-bbf4f109 that this row's description cites.\n\nRun this exact command from the task worktree. It also works verbatim in the control checkout after landing.\n\ncd \"$(git rev-parse --show-toplevel)\" && d=packages/moe-daemon/src && ! grep -q \"pass force:true\" $d/util/claimGuards.ts && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $d/tools/{releaseTask,releaseResource}.ts $d/util/claimGuards.ts $d/tools/{releaseResource.generation,releaseForceGate}.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/release*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/release src/tools/claimNextTask.race src/state/resourceStore > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'\n\nExpect exit 0 and no FAIL line. The architect's dry-run of this exact command on a scratch tree holding the draft fix printed 'Test Files 10 passed (10)' and 'Tests 156 passed (156)'. On the unfixed checkout it exits 1. The architect also ran src/server/WebSocketServer*, reportBlocked.test.ts and deregisterWorker* green on the draft fix (213 tests). Never run npm in the shared checkout, and never pass TMPDIR inside the env -i (`mem:convention-daemon-full-suite-gate-checkref`).\n\nError handling for a red run: fix only the owned files and re-run the same command.\n\nSelf-review:\n- Can any non-governor seat still reach force? The proxy injects MOE_WORKER_ID, so a seat cannot go workerId-less by accident.\n- Does a refusal write anything? (p2)-(p4) and (r1) pin that it does not.\n- Does /ws RELEASE_TASK still force? It sends no workerId; releaseTask.test.ts arm 4 pins it.\n- Is any message still telling the caller to pass force? The grep in the gate checks.\n- Does the store ever read the '' caller under force?\n- The diff is the 6 planned files.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T20:37:37.871Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/releaseResource.ts",
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts"
+      ],
+      "note": "Fresh exact step-5 snapshot command passed exit 0: production/test typechecks and 10 files / 182 tests. Worktree qualityGate `bash scripts/tests/parity-check.sh && npm run lint` passed exit 0 (parity PASS; role docs 39/30/36). git diff --check passed. Adversarial review of all three changed paths: malformed JSON caller IDs deny before task/resource reads or writes; resource force truthiness matches its consumer; MCP serializes role check/action; board RELEASE_TASK still omits workerId and the existing mid-step board regression passed. Existing guard codeNames/context and descriptions unchanged. No new functions >50 lines; releaseTask was already >300. Separate real non-force blank/null-ID ownership bypass was reproduced with 2 scratch-only probes and filed as task-c8d6dbd50b734050b8eb05f859d719a4, including stale ownership doc text; not fixed inline or a blocker for this force-only contract. Handoff and gotcha memory updated. modifiedFiles lists the three task-wide QA-repair paths; final verification itself made no tracked edits.",
+      "startedAt": "2026-11-03T20:37:37.871Z",
+      "completedAt": "2026-11-03T20:40:04.531Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -88,12 +95,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:01:05.255Z",
-  "updatedAt": "2026-11-03T20:37:37.871Z",
+  "updatedAt": "2026-11-03T20:41:37.393Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:03:54.143Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 9,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -112,7 +119,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [
     {
@@ -201,23 +209,21 @@
   "planApprovedAt": "2026-11-03T20:13:17.150Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T20:14:51.025Z",
-  "reviewStartedAt": "2026-11-03T20:21:06.461Z",
+  "reviewStartedAt": "2026-11-03T20:40:18.276Z",
   "verification": {
     "command": "cd \"$(git rev-parse --show-toplevel)\" && d=packages/moe-daemon/src && ! grep -q \"pass force:true\" $d/util/claimGuards.ts && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $d/tools/{releaseTask,releaseResource}.ts $d/util/claimGuards.ts $d/tools/{releaseResource.generation,releaseForceGate}.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/release*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/release src/tools/claimNextTask.race src/state/resourceStore > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
     "exitCode": 0,
-    "outputTail": "npm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' -p tt.json\n Test Files  10 passed (10)\n      Tests  157 passed (157)",
-    "reportedAt": "2026-11-03T20:21:06.461Z",
+    "outputTail": "npm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' -p tt.json\n Test Files  10 passed (10)\n      Tests  182 passed (182)",
+    "reportedAt": "2026-11-03T20:40:18.276Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "packages/moe-daemon/src/tools/releaseForceGate.test.ts",
     "packages/moe-daemon/src/tools/releaseTask.ts",
-    "packages/moe-daemon/src/util/claimGuards.ts",
     "packages/moe-daemon/src/tools/releaseResource.ts",
-    "packages/moe-daemon/src/tools/releaseResource.generation.test.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "force on release_task and release_resource is now restricted to its documented audience: governor seats and human or board calls that omit workerId. Any other seat is refused NOT_ALLOWED before anything is read or written.\n\n- release_task (releaseTask.ts): a force call whose workerId resolves to no governor role (workerHasRole) is refused right after `force` is computed, before the handoff validation, the git fingerprint, the mutex and any task read. /ws RELEASE_TASK sends no workerId, so it still forces.\n- release_resource (releaseResource.ts): `required` is now ['resourceId'], and workerId is required unless force is set, which is the human path. The gate runs before touchWorker, the precondition reads and the store write. force is read once as Boolean(params.force), the same truthiness the store's matchesCaller uses. Args are not schema-validated, so an `=== true` gate would have let `force: 'true'` from a worker through. r1 pins this, and the check was proven red against the earlier gate.\n- claimGuards.ts: the STEP_LEASE_HELD and RELEASE_NOT_ASSIGNEE refusals now name 'a governor or a human (moe.release_task force)' instead of 'pass force:true'. The codeNames, MoeErrorCode and context are unchanged.\n- Tests: new releaseForceGate.test.ts with 9 cases, ported from the hunt repro. It was red at base (6 failed, 3 passed) and is green now. The releaseResource.generation peer-lease case now forces as governor-1.\n- Docs: the docs/MCP_SERVER.md parameter blocks for both tools now state the rule.\n\nGate: the plan's exact command exited 0, with 10 test files and 157 tests passing. A wider snapshot run of 23 files (claimNextTask*, WebSocketServer*, reportBlocked, deregisterWorker*, taskEventActor, acquire/waitForResource) gave 531 passed.\n\nNot fixed, out of scope: the release_task intro in MCP_SERVER.md still says 'Anyone can call — no ownership check', which has been stale since assertReleaseCaller landed. A seat that explicitly sends workerId:\"\" is treated as workerId-les",
+  "completionSummary": "Fixed QA's malformed-workerId force bypass in release_task and release_resource: present IDs are type-normalized and role-checked, while omitted-ID human/board and governor force remain supported. Resource non-force requires a usable string caller and only touches valid string IDs. Added 25 regression cases covering empty/null/numeric/boolean/whitespace/object/array IDs, unknown tasks, scoped/all resource force, truthy force variants, and unchanged tasks/workers/leases/queues/activity. Red-first repro: 18 failed / 16 passed; fresh exact verification: both typechecks and 182/182 tests across 10 files passed. Worktree parity/lint quality gate and diff-check passed. Original guard wording, docs and generation fixture retained. Only three repair paths changed. Handoff/gotcha memory saved. Separate non-force blank-ID ownership bypass filed as task-c8d6dbd50b734050b8eb05f859d719a4, not fixed inline.",
   "commits": [
     {
       "sha": "31492ac5027f9afbf2cc5ea4f82fc5ed91fe19c1",
@@ -237,15 +243,30 @@
       "recordedAt": "2026-11-03T20:22:29.968Z",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "8ca8d38951e5279bf01f47578550b18d6ec87088",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T20:29:23Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts",
+        "packages/moe-daemon/src/tools/releaseResource.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T20:41:36.990Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-93f9625e@2026-11-03T20:24:56Z",
-    "at": "2026-11-03T20:30:06.864Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T20:29:23Z",
+    "at": "2026-11-03T20:41:37.393Z"
   },
   "reviewCompletedAt": "2026-11-03T20:29:19.734Z",
   "rejectionDetails": {
