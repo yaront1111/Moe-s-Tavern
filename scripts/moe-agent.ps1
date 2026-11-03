@@ -3111,6 +3111,91 @@ function Stop-MoeWorktreeSeat([string]$Code, [string]$Detail) {
     exit 1
 }
 
+# Twin: vm_route_worktree_mode (including WT-19's qualityGate-aware default).
+function Get-MoeVmRouteWorktreeMode {
+    try {
+        $projectData = Get-Content -LiteralPath (Join-Path $moeDir 'project.json') -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($projectData -isnot [System.Management.Automation.PSCustomObject]) { throw 'not an object' }
+        $settings = $projectData.settings
+        if ($settings -isnot [System.Management.Automation.PSCustomObject]) { $settings = [pscustomobject]@{} }
+        $mode = $settings.PSObject.Properties['worktreeMode']
+        if ($null -eq $mode) {
+            # JS trim whitespace, not .NET Trim (which also strips U+0085).
+            $ws = [char[]]@(9, 10, 11, 12, 13, 32, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)
+            if ($settings.qualityGate -is [string] -and $settings.qualityGate.Trim($ws).Length -gt 0) { return 'on' }
+            return "is unset, which resolves to 'off' while settings.qualityGate is blank"
+        }
+        if ($mode.Value -is [string] -and $mode.Value -ceq 'on') { return 'on' }
+        if ($mode.Value -is [string] -and $mode.Value -ceq 'off') { return "is 'off'" }
+        $json = if ($null -eq $mode.Value) { 'null' } else { ConvertTo-Json -InputObject $mode.Value -Depth 100 -Compress }
+        # 5.1 HTML-escapes <, >, &, apostrophes; json.dumps leaves them literal.
+        # Consume escaped backslashes too, so a literal "\u003c" stays literal.
+        $json = [regex]::Replace($json, '\\(?:u([0-9a-fA-F]{4})|.)', {
+            param($m)
+            if ($m.Groups[1].Success) {
+                $n = [Convert]::ToInt32($m.Groups[1].Value, 16)
+                if ($n -ge 32 -and $n -lt 127 -and $n -ne 34 -and $n -ne 92) { return [string][char]$n }
+            }
+            return $m.Value
+        })
+        # json.dumps uses ASCII escapes for non-ASCII characters.
+        $json = [regex]::Replace($json, '[^\x00-\x7f]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })
+        $shown = ConvertTo-MoeVmRoutePrintable $json
+        return ('is invalid ({0})' -f $shown.Substring(0, [Math]::Min(60, $shown.Length)))
+    } catch { return 'cannot be read (.moe/project.json is missing or not a JSON object)' }
+}
+
+# Twin: verified_local_gate's Python str.isprintable cleaner; preserve Unicode
+# letters (including surrogate pairs), replacing controls/separators except space.
+function ConvertTo-MoeVmRoutePrintable([string]$Value) {
+    $clean = [Text.StringBuilder]::new()
+    for ($i = 0; $i -lt $Value.Length; $i++) {
+        $category = [Globalization.CharUnicodeInfo]::GetUnicodeCategory($Value, $i).ToString()
+        $width = if ([char]::IsSurrogatePair($Value, $i)) { 2 } else { 1 }
+        $part = $Value.Substring($i, $width)
+        if ($part -cne ' ' -and $category -match '^(Control|Format|Surrogate|PrivateUse|OtherNotAssigned|.*Separator)$') { $part = '?' }
+        [void]$clean.Append($part)
+        $i += $width - 1
+    }
+    return $clean.ToString()
+}
+
+# Twin: verified_local_refuse. Keep WorkerId for the loop's finally deregistration.
+function Stop-MoeVerifiedLocalSeat([string]$Code, [string]$Detail) {
+    [Console]::Error.WriteLine("[ERROR] ${Code}: $Detail")
+    exit 1
+}
+
+# Twin: verified_local_gate, without its sh-only WSL refusal.
+function Invoke-MoeVerifiedLocalGate {
+    try {
+        $reply = Invoke-MoeRpc -Tool 'get_execution_readiness' -Args @{} 6>$null
+        if ($reply -isnot [System.Management.Automation.PSCustomObject]) { return }
+        $names = @($reply.PSObject.Properties.Name)
+        if ($names -cnotcontains 'profile' -or $names -cnotcontains 'ready' -or $names -cnotcontains 'missingCapabilities') { return }
+        if ($reply.profile -isnot [string] -or @('legacy', 'observe', 'verified-local', 'unreadable') -cnotcontains $reply.profile -or $reply.ready -isnot [bool]) { return }
+        # RAW property access: Get-MoeProp unrolls [] and a single-id array.
+        $missing = $reply.PSObject.Properties['missingCapabilities']
+        if ($missing.Value -isnot [array]) { return }
+        foreach ($id in $missing.Value) { if ($id -isnot [string]) { return } }
+        if ($reply.profile -cne 'verified-local') { return }
+    } catch { return } # Unreadable/refused/older daemon: today's path, silently.
+    if ($cliType -ne 'claude' -and $cliType -ne 'codex') {
+        Stop-MoeVerifiedLocalSeat MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED "this project runs verified-local, whose worker and QA seats run only claude or codex; this seat runs $cliType; refusing to start this seat."
+    }
+    $mode = Get-MoeVmRouteWorktreeMode
+    if ($mode -cne 'on') {
+        Stop-MoeVerifiedLocalSeat MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED "this project runs verified-local, whose worker and QA seats run only in worktree mode; settings.worktreeMode $mode; refusing to start this seat."
+    }
+    if (-not $reply.ready) {
+        $ids = (@($missing.Value | ForEach-Object { ConvertTo-MoeVmRoutePrintable $_ }) -join ', ')
+        if (-not $ids) { $ids = '(none named)' }
+        Stop-MoeVerifiedLocalSeat MOE_VERIFIED_LOCAL_NOT_READY "this project runs verified-local, which is not ready; missing: $ids; refusing to start this seat."
+    }
+    # Fail-closed placeholder: CQ-M07n3 replaces it with the seat VM route.
+    Stop-MoeVerifiedLocalSeat MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE 'this project runs verified-local and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat.'
+}
+
 # The seat's workspace from the fresh claim (WT-01), else get_context (WT-02),
 # read only from a context that answered for this task (its task.id is the
 # claimed id): @{ Mode = worktree|shared|unknown; Read; Target; Foreign }. On
@@ -9262,6 +9347,9 @@ do {
     $script:MoePreflightEvidence = $null
     $script:MoePreflightDirty = $null
     $script:MoeLastLanding = $null
+
+    # CQ-M07n1: before every pre-flight RPC, including -AutoClaim:$false seats.
+    if ($Role -eq 'worker' -or $Role -eq 'qa') { Invoke-MoeVerifiedLocalGate }
 
     if ($AutoClaim) {
         Write-Host "Pre-flight: joining chat, claiming task, loading context..." -ForegroundColor Cyan

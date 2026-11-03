@@ -6140,6 +6140,8 @@ exit 0
     }
     Write-Host '[protected runtime] ok'
 
+    & $psExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'postflight-vm-route.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'VM route scenarios failed' }
     Write-Host 'PASS postflight.ps1'
 } catch {
     # CI keeps raw fixture output private. Emit only a line in this harness so
