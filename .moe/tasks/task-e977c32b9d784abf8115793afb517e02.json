@@ -76,8 +76,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -89,7 +89,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:42:40.727Z",
-  "updatedAt": "2026-11-03T16:03:28.751Z",
+  "updatedAt": "2026-11-03T16:04:24.599Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:43:19.555Z",
     "plannedStepCount": 4,
@@ -184,10 +184,44 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T16:00:47.483Z",
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T15:43:18Z",
-    "at": "2026-11-03T16:02:08.582Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T15:59:05Z",
+    "at": "2026-11-03T16:04:24.599Z"
+  },
+  "reviewStartedAt": "2026-11-03T16:03:35.443Z",
+  "verification": {
+    "command": "( set -o pipefail && R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/e977-v.XXXX) && echo \"snapshot=$S\" && git -C \"$R\" archive HEAD packages/moe-daemon scripts/moe-account-lease.mjs | tar -x -C \"$S\" && for f in tools/addComment.ts tools/amendPlanStep.ts tools/releaseTask.ts tools/taskEventActor.test.ts; do cp \"$R/packages/moe-daemon/src/$f\" \"$S/packages/moe-daemon/src/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/taskEventActor.test.ts\"],\"exclude\":[]}' > tt.json && npx tsc -p tt.json && NO_COLOR=1 npx vitest run src/tools/taskEventActor.test.ts src/tools/addComment.test.ts src/tools/amendPlanStep.test.ts src/tools/releaseTask.test.ts src/tools/echoedReasonNotices.test.ts src/tools/getActivityLog.test.ts 2>&1 | tail -15 )",
+    "exitCode": 0,
+    "outputTail": "snapshot=/tmp/e977-v.U1Th\nnpx tsc --noEmit: exit 0\nnpx tsc -p tt.json: exit 0\nTest Files  6 passed (6)\nTests  109 passed (109)\nStart at  18:02:17\nDuration  3.42s (tests 48%, transform 45%, import 7%)",
+    "reportedAt": "2026-11-03T16:03:35.443Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/taskEventActor.test.ts",
+    "packages/moe-daemon/src/tools/addComment.ts",
+    "packages/moe-daemon/src/tools/amendPlanStep.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts"
+  ],
+  "completionSummary": "Added caller actor attribution to add_comment, amend_plan_step and both release_task writes without changing contracts, banners, results or caller-less fallbacks. Added exact actor/query/REVIEW-notice regressions. RED on 946358a8: 9 expected failing checks. Fresh snapshot verification: both TypeScript checks clean, 6 files / 109 tests passed. All 7 mutants killed; restored tests 2/2 pass and snapshot matches worktree. Parity and lint pass; adversarial review and Serena handoff recorded. Four owned paths only; wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "ef5c7101ff683691eaa12fb7e9a5a785e659b7f7",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T15:59:05Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/addComment.ts",
+        "packages/moe-daemon/src/tools/amendPlanStep.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/taskEventActor.test.ts"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T16:04:24.599Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
