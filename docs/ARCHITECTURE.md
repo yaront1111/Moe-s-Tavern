@@ -643,6 +643,9 @@ and `verified-local` stays refused until certification and the client gates pass
     absent declaration keeps it protected and asks once per window session, in a modal with **Keep Protected** and
     **Allow Downgrade**. Only Allow Downgrade records legacy, and it takes effect after VS Code restarts. Any other
     answer changes nothing. An unreadable `project.json`, or a pin VS Code would not have written, reads as protected.
+    A later `verified-local` read in the same window session records the project protected again (task-0900b936). An
+    Allow answered while the project declares `verified-local`, or while its `project.json` is unreadable, records
+    nothing.
   - **Spawn provenance** (task-648a5916). A protected start passes the installed daemon a fresh key in
     `MOE_SPAWN_PROOF_KEY` and records the key with that daemon's path. Before the WebSocket opens, VS Code sends a
     fresh `/health` challenge. It connects only when the daemon's `spawnProof` is the HMAC under a key from this

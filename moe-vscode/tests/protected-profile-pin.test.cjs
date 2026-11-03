@@ -320,6 +320,55 @@ test('P11: a store root below an outside link into the project persists nothing 
     assert.equal(session(root).api.readProtectedState(name), record(keyOf(other), 'protected'));
 });
 
+// task-0900b936, the parity of JetBrains D13/D14 (task-6d5d3db2): the declaration is read before the session pin, and an Allow re-reads it.
+test('P12: a verified-local read after an allowed downgrade records protected again, so a legacy declaration after the restart asks again', async () => {
+    const [root, dir] = [storeRoot(), project(VERIFIED)];
+    const file = confirmProtected(root, dir);
+    declare(dir, LEGACY);
+    const s2 = session(root, ALLOW);
+    assert.equal(s2.api.runtimeProfile(dir), 'protected');
+    await settle();
+    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'legacy'), 'the allowed downgrade is recorded');
+    declare(dir, '{');
+    assert.equal(s2.api.runtimeProfile(dir), 'protected');
+    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'legacy'), 'an unreadable declaration writes nothing');
+    declare(dir, VERIFIED);
+    assert.equal(s2.api.runtimeProfile(dir), 'protected');
+    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'protected'), 'a verified-local read withdraws the allowed downgrade');
+    declare(dir, LEGACY);
+    assert.equal(s2.api.runtimeProfile(dir), 'protected');
+    await settle();
+    assert.equal(s2.asks.length, 1, 'no second question this session');
+    assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'protected'));
+    const s3 = session(root, KEEP);
+    assert.equal(s3.api.runtimeProfile(dir), 'protected', 'after the restart the legacy declaration asks again');
+    assert.equal(s3.asks.length, 1);
+});
+
+for (const [label, later] of [['verified-local', VERIFIED], ['an unreadable project.json', '{']]) {
+    test(`P13 (${label}): an Allow answered after the project re-declares records nothing, and the next session asks again`, async () => {
+        const [root, dir] = [storeRoot(), project(VERIFIED)];
+        const file = confirmProtected(root, dir);
+        declare(dir, LEGACY);
+        let answer;
+        const s2 = session(root, () => new Promise(resolve => { answer = resolve; }));
+        assert.equal(s2.api.runtimeProfile(dir), 'protected');
+        assert.equal(s2.asks.length, 1);
+        const before = fs.statSync(file).ino;
+        declare(dir, later);
+        answer(ALLOW);
+        await settle();
+        assert.equal(fs.readFileSync(file, 'utf8'), record(keyOf(dir), 'protected'));
+        assert.equal(fs.statSync(file).ino, before, 'no write at all');
+        assert.ok(s2.logs.some(line => line.includes('Moe keeps the protected profile')), s2.logs.join('\n'));
+        assert.ok(!s2.logs.some(line => line.includes('recorded the allowed downgrade')), s2.logs.join('\n'));
+        declare(dir, LEGACY);
+        const s3 = session(root, KEEP);
+        assert.equal(s3.api.runtimeProfile(dir), 'protected');
+        assert.equal(s3.asks.length, 1);
+    });
+}
+
 test('S1: the store round-trips one kind, refuses names that are not its own, and keeps no temp file on a failed write', () => {
     const [root, dir] = [storeRoot(), project(LEGACY)];
     const { api } = session(root);

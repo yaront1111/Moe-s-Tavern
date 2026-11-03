@@ -430,14 +430,14 @@ export function runtimeProfile(basePath: string): RuntimeProfile {
     try {
         if (basePath.trim() === '') { return 'legacy'; }
         const key = projectStateKey(basePath);
-        if (pinnedProjects.has(key)) { return 'protected'; }
-        const verifiedLocal = declaresVerifiedLocal(path.join(basePath, '.moe', 'project.json'));
-        const stored = storedProfile(key);
-        if (verifiedLocal) {
+        // Read before the session pin: a verified-local read withdraws a downgrade allowed earlier this session (task-0900b936).
+        if (declaresVerifiedLocal(path.join(basePath, '.moe', 'project.json'))) {
             pinnedProjects.add(key);
-            if (stored !== 'protected') { persistProfile(basePath, key, 'protected'); }
+            if (storedProfile(key) !== 'protected') { persistProfile(basePath, key, 'protected'); }
             return 'protected';
         }
+        if (pinnedProjects.has(key)) { return 'protected'; }
+        const stored = storedProfile(key);
         if (stored === 'absent' || stored === 'legacy') { return 'legacy'; }
         pinnedProjects.add(key);
         askDowngrade(basePath, key);
@@ -486,6 +486,9 @@ function askDowngrade(basePath: string, key: string): void {
         void Promise.resolve(vscode.window.showWarningMessage(message, { modal: true }, 'Keep Protected', 'Allow Downgrade')).then(choice => {
             if (choice !== 'Allow Downgrade') {
                 keep(choice === undefined ? 'the downgrade prompt was dismissed' : 'the downgrade was declined');
+            } else if (declaredProfile(basePath) !== 'legacy-like') {
+                // An Allow applies only while the declaration still reads weaker; an untrusted read is logged by declaredProfile (task-0900b936).
+                keep('the project no longer declares a weaker profile');
             } else if (persistProfile(basePath, key, 'legacy')) {
                 log('Moe recorded the allowed downgrade; it takes effect after VS Code restarts');
             }
