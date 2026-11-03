@@ -56,9 +56,18 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of the diff, then complete_task.\n(a) DoD 1: with parseMentions false, nothing re-derives mentions from the content. No router call, no rawMentions, no unread increment. isSystemFeedMessage then also treats the #general line as feed. Check the wrapper side too: scripts/moe-agent.sh reads msg['mentions'] (around :9583 and :10093), so recorded mentions [] means no wake.\n(b) DoD 2: every other caller's call shape is byte-identical when the option is absent. The collision heads-up (claimNextTask collisionNotice via postToRoleChannel), the addComment relay and reportBlocked's prefix tags still route. Their tests pass unchanged in the full run.\n(c) The text stays readable: the content is stored unchanged, with no escaping or code-span wrapping.\n(d) Types: the optional parameters are additive, so no MCP tool contract changes (epic rail). StateManager wrappers pass opts through, and no test spy breaks on a new trailing undefined argument.\n(e) Re-read your own step notes and chat posts in this task: none may contain an at-sign directly followed by a name.\n(f) All 5 paths were written with the Edit tool and listed in complete_step.modifiedFiles.\nIf anything changes, rerun step 3's command fresh and submit THAT output.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T02:28:07.735Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review of the 5-file diff. (a) With parseMentions false, rawMentions and routingTargets are both empty and the router is never called, so there is no hop or unread change. Stored mentions are [], so the #general line is feed. The wrapper wake logic reads msg mentions (moe-agent.sh around 9583 and 10093), and chat_wait relevance uses event.routingTargets, which is [] and not nullish. (b) With the option absent the code path is unchanged: sendMessage runs the same parse and route, postToGeneral builds the same sendMessage object, and postSystemMessage and the StateManager wrappers forward opts only when given. The collision heads-up, addComment relay and reportBlocked tests passed unchanged in the full run. (c) Content is stored verbatim. (d) Additive optional params; no tool contract change. (e) No added line or note spells a tag; I restored a pre-existing comment line that I had touched. (f) All 5 paths edited with the Edit tool. The size check still throws before any write, and the step-notice post stays best-effort in completeStep's try/catch. Residual, noted not fixed: the option also skips mention recording for any sender, but only the post helpers expose it, and only the step notice uses it. Because the comment changed after step 3, I reran the verification fresh: exit 0, focused 5 files 150 tests, full suite 229 files, 6946 passed, 20 skipped.",
+      "startedAt": "2026-11-03T02:28:07.735Z",
+      "completedAt": "2026-11-03T02:29:46.430Z"
     }
   ],
   "planRevision": 1,
@@ -75,12 +84,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:35:53.599Z",
-  "updatedAt": "2026-11-03T02:28:07.735Z",
+  "updatedAt": "2026-11-03T02:29:46.430Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T02:19:02.854Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -93,7 +102,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T02:23:35.691Z",
