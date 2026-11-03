@@ -1,6 +1,7 @@
 package com.moe.util
 
 import com.google.gson.JsonParser
+import com.intellij.openapi.util.SystemInfo
 import com.moe.model.AccountCli
 import com.moe.util.RuntimeProfile.LEGACY
 import com.moe.util.RuntimeProfile.PROTECTED
@@ -9,10 +10,12 @@ import com.moe.util.TerminalAgentLauncher.AgentCommandChoice
 import com.moe.util.TerminalAgentLauncher.AgentCommandChoice.Refused
 import com.moe.util.TerminalAgentLauncher.AgentCommandChoice.Run
 import com.moe.util.TerminalAgentLauncher.ScriptKind
+import com.moe.util.TerminalAgentLauncher.ProtectedInterpreter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -22,6 +25,122 @@ import java.util.Base64
 class TerminalAgentLauncherTest {
     @get:Rule
     val temporaryFolder = TemporaryFolder()
+
+    @Test
+    fun `protected POSIX interpreter is the real outside bash`() {
+        val project = temporaryFolder.newFolder("project")
+        val bash = temporaryFolder.newFile("bash")
+        assertEquals(
+            ProtectedInterpreter.Ready(bash.toPath().toRealPath().toString()),
+            TerminalAgentLauncher.protectedInterpreter(ScriptKind.BASH, false, project.path, false, null, bash.path)
+        )
+    }
+
+    @Test
+    fun `protected POSIX interpreter refuses project missing and directory paths`() {
+        val project = temporaryFolder.newFolder("project")
+        val inside = temporaryFolder.newFile("project/bash")
+        val missing = File(temporaryFolder.root, "missing-bash")
+        val directory = temporaryFolder.newFolder("bash-directory")
+        for (path in listOf(inside, missing, directory)) {
+            val result = TerminalAgentLauncher.protectedInterpreter(ScriptKind.BASH, false, project.path, false, null, path.path)
+            assertTrue("must refuse $path: $result", result is ProtectedInterpreter.Refused)
+            assertTrue((result as ProtectedInterpreter.Refused).reason.contains(path.path))
+            assertFalse(result.reason.contains("node executable"))
+        }
+    }
+
+    @Test
+    fun `protected POSIX interpreter refuses a PowerShell wrapper`() {
+        assertTrue(TerminalAgentLauncher.protectedInterpreter(
+            ScriptKind.POWERSHELL, false, temporaryFolder.root.path, false, null
+        ) is ProtectedInterpreter.Refused)
+    }
+
+    @Test
+    fun `protected Windows interpreter uses forward slashes or the WSL mount`() {
+        assumeTrue(SystemInfo.isWindows)
+        assumeTrue(Regex("""[A-Za-z0-9:\\._-]+""").matches(temporaryFolder.root.toPath().toRealPath().toString()))
+        val project = temporaryFolder.newFolder("project")
+        val root = temporaryFolder.newFolder("sysroot")
+        val exe = powerShellFixture(root).toPath().toRealPath().toString()
+        assertEquals(
+            ProtectedInterpreter.Ready(exe.replace('\\', '/')),
+            TerminalAgentLauncher.protectedInterpreter(ScriptKind.POWERSHELL, false, project.path, true, root.path)
+        )
+        assertEquals(
+            ProtectedInterpreter.Ready(TerminalAgentLauncher.toWslPath(exe)),
+            TerminalAgentLauncher.protectedInterpreter(ScriptKind.POWERSHELL, true, project.path, true, root.path)
+        )
+    }
+
+    @Test
+    fun `protected Windows interpreter refuses absent or unsafe SystemRoot`() {
+        assumeTrue(SystemInfo.isWindows)
+        val project = temporaryFolder.newFolder("project")
+        val inside = temporaryFolder.newFolder("project", "sysroot")
+        val untypable = temporaryFolder.newFolder("sys root")
+        val missing = temporaryFolder.newFolder("missing")
+        powerShellFixture(inside)
+        powerShellFixture(untypable)
+        for (root in listOf(null, "", " ", inside.path, untypable.path, missing.path, "invalid\u0000root")) {
+            val result = TerminalAgentLauncher.protectedInterpreter(ScriptKind.POWERSHELL, false, project.path, true, root)
+            assertTrue("must refuse $root: $result", result is ProtectedInterpreter.Refused)
+            val reason = (result as ProtectedInterpreter.Refused).reason
+            if (root.isNullOrBlank()) assertTrue(reason.contains("SystemRoot")) else assertTrue(reason.contains(root))
+            assertFalse(reason.contains("node executable"))
+        }
+    }
+
+    @Test
+    fun `protected Windows bash requires WSL agent mode`() {
+        assumeTrue(SystemInfo.isWindows)
+        assertTrue(TerminalAgentLauncher.protectedInterpreter(
+            ScriptKind.BASH, false, temporaryFolder.root.path, true, null
+        ) is ProtectedInterpreter.Refused)
+        assertEquals(ProtectedInterpreter.Ready("/bin/bash"), TerminalAgentLauncher.protectedInterpreter(
+            ScriptKind.BASH, true, temporaryFolder.root.path, true, null
+        ))
+    }
+
+    @Test
+    fun `protected bash launch lines change only the interpreter word`() {
+        for (wsl in listOf(false, true)) {
+            val word = if (wsl) "/bin/bash" else "/usr/bin/bash"
+            val legacy = protectedInterpreterLine(ScriptKind.BASH, wsl, null)
+            val protected = protectedInterpreterLine(ScriptKind.BASH, wsl, word)
+            assertEquals(legacy.replaceFirst(" bash '", " '$word' '"), protected)
+            assertTrue(protected.contains(" '$word' '"))
+            assertFalse(protected.contains(" bash '"))
+        }
+    }
+
+    @Test
+    fun `protected PowerShell launch lines change only the interpreter word`() {
+        for (wsl in listOf(false, true)) {
+            val word = if (wsl) "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+                else "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+            val legacy = protectedInterpreterLine(ScriptKind.POWERSHELL, wsl, null)
+            val protected = protectedInterpreterLine(ScriptKind.POWERSHELL, wsl, word)
+            assertEquals(word + legacy.substring(legacy.indexOf(' ')), protected)
+            assertEquals(typedScript(legacy, if (wsl) "powershell.exe" else "powershell"), typedScript(protected, word))
+            assertFalse(protected.startsWith("powershell"))
+        }
+    }
+
+    private fun powerShellFixture(root: File): File {
+        val directory = File(root, "System32/WindowsPowerShell/v1.0")
+        assertTrue(directory.mkdirs())
+        return File(directory, "powershell.exe").also { assertTrue(it.createNewFile()) }
+    }
+
+    private fun protectedInterpreterLine(kind: ScriptKind, wsl: Boolean, interpreter: String?): String =
+        TerminalAgentLauncher.buildCommandForTest(
+            "D:/project", "worker", "C:/installed/scripts/moe-agent", kind,
+            linkedMapOf("MOE_DAEMON_PATH" to "C:/installed/daemon/index.js",
+                "MOE_PROXY_PATH" to "C:/installed/proxy/index.js", "MOE_RUNTIME_PROTECTED" to "1"),
+            "claude", null, wsl, "worker-0000abcd", interpreter = interpreter
+        )
 
     @Test
     fun `PowerShell worker Claude command stays in print mode`() {
