@@ -27,19 +27,26 @@
     {
       "stepId": "step-2",
       "description": "SH TWIN, scripts/moe-agent.sh only (edit in this worktree with a TOOL-witnessed editor, then `bash -n scripts/moe-agent.sh` and `bash scripts/tests/parity-check.sh`). Keep every hunk inside read_commit_settings, land_worktree_completion and unlanded_reason (task-d2d6ac4b edits other sites of this file).\n(a) read_commit_settings (~line 3090) must tell 'key absent' (its default) from 'file unreadable'. In the python program, load the JSON in its own try (`except Exception: d = None`); s = d.get('settings') if d is a dict, else None; readable = d is a dict and (s is None or s is a dict); a non-dict s then becomes {} as today. Emit 'true' or 'false' as an 11th field AFTER qualityGate, and never reorder the first ten. In bash, set CS_SETTINGS_READABLE=false before the python call, read the 11th field in the same read group, then default it to false, so a failed or empty python run reads as unreadable (fail closed). Keep encoding utf-8: the daemon cannot parse a BOM'd project.json either. Every existing CS_* value must stay identical for every input, so shared mode is unchanged (epic rail 4). Update the function's comment: one read per iteration plus the worktree completion's fresh post-flight read; a key left out takes its default; a file that is missing, unreadable, not JSON or not a JSON object, or whose settings value is present and not an object, is unreadable.\n(b) land_worktree_completion (~line 7756): its first statement becomes `read_commit_settings`, so the landing sees project.json as it is at post-flight, as the ps1 twin does (ps1 ~11064). Then declare st=\"${CS_CONSOLIDATION_BRANCH:-main}\" and target=\"${MOE_WT_TARGET:-}\": the claim's workspace.target, which provision_worktree checked is a local branch (~3389) and stored (~3466). The existing case that maps a target holding ? or [ to main now applies to st, then `[ -n \"$target\" ] || target=\"$st\"`. After the owner-refusal return, when CS_SETTINGS_READABLE is true and st differs from target, print in yellow exactly: [WARN] MOE_LAND_TARGET_MISMATCH: task $LAND_TASK_ID -- .moe/project.json names $st, but this attempt was cut from $target; it lands on $target.\n(c) The refusal: a new branch directly after `if [ \"$l2\" = failed ]`, ahead of the journal and target checks: `elif [ \"$CS_SETTINGS_READABLE\" != true ]; then LAND_CODE=MOE_LAND_SETTINGS_UNREADABLE; LAND_MESSAGE=\".moe/project.json is missing or malformed, so this landing cannot read its qualityGate\"`. It precedes the MOE_DISABLE_QUALITY_GATE refusal, wt_target_checked_out, acquire_land_lease and wt_land_rounds: there is no lease call, merge-tree, gate, journal or push, and LAND_OUTCOME stays failed.\n(d) unlanded_reason: `MOE_COMMIT_FAILED_GATE|MOE_LAND_SETTINGS_UNREADABLE) echo gate ;;`. The existing outcome block then prints '[WARN] <code>: task <id> -- <message>; <target> did not move and the task's bytes stay on <branch>.' and runs take_unlanded_route gate: a rescue ref of the task tip, the failed row with pushed false, and finalize_attempt unlanded with reason gate. The daemon returns the row to WORKING with landingRetry, and the next session merges the target and lands again; the 3rd consecutive unlanded landing blocks it.\nError handling: anything but a literal 'true' flag refuses, so this error handling fails closed; take_unlanded_route's own failure path (a failed rescue ref or row keeps the attempt finalizing and stops the seat) is unchanged. Done when the step-1 sh command prints '[worktree] wt-settings ok'.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-03T13:41:27.593Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "sh twin: read_commit_settings emits an 11th field (readable = dict and settings absent/null/dict), CS_SETTINGS_READABLE defaults false before python and after the read group (fail closed); first ten fields byte-identical to HEAD's reader on 21 inputs (empty, [], null, scalar, truncated, BOM, non-utf8, settings \"\"/[]/0/\"x\"/null/{}, full settings, glob cb, missing). land_worktree_completion: read_commit_settings first; st=consolidationBranch||main (?/[ -> main), target=MOE_WT_TARGET||st; MOE_LAND_TARGET_MISMATCH warning after the owner-refusal return when readable and st != target; refusal branch MOE_LAND_SETTINGS_UNREADABLE right after the l2-failed branch. unlanded_reason maps it to gate. bash -n ok, parity-check.sh PASS, MOE_WORKTREE_ONLY=wt-settings sh: '[worktree] wt-settings ok'. Scope note: the step-1 test also needed the EXISTING fake knob FAKE_LEASE_RESOURCE='git-land-moe-work-x' on the pinned/agree launches (the fake asserts each lease call's resourceId; default git-land-main), so postflight-worktree.cjs changed by one token; no new fake-proxy knob.",
+      "startedAt": "2026-11-03T13:41:27.593Z",
+      "completedAt": "2026-11-03T13:47:42.797Z"
     },
     {
       "stepId": "step-3",
       "description": "PS1 TWIN, scripts/moe-agent.ps1 only, kept UTF-8 with its BOM. Edit with a TOOL-witnessed editor, then parse the file on PS 5.1 with [System.Management.Automation.Language.Parser]::ParseFile and run `bash scripts/tests/parity-check.sh`. Keep every hunk inside Read-MoeCommitSettings, Invoke-MoeWorktreeCompletion (never its catch/finally, which is task-d2d6ac4b's site) and Get-MoeUnlandedReason.\n(a) Read-MoeCommitSettings (~line 2947): add settingsReadable = $false to the defaults. Inside the existing try, after ConvertFrom-Json, take the property with $cfg.PSObject.Properties['settings'] (not Get-MoeProp, whose return unrolls arrays). Test types with the FULL name [System.Management.Automation.PSCustomObject], never the [PSCustomObject] accelerator, which means PSObject and matches wrapped scalars. This is Get-MoeWorkspaceClaim's idiom (ps1 ~3116-3117). settingsReadable becomes $true only when $cfg is such an object and its settings property is absent, $null or such an object, and only then are the keys read, exactly as today. These leave it $false: a missing file, the catch (Get-Content or ConvertFrom-Json throws), an empty or blank file (PS 5.1 yields $null), '[]', a scalar, or a settings value that is not an object. No existing key changes value for any input.\n(b) Invoke-MoeWorktreeCompletion (~line 7245): after the L2 'refused' return, compute $st from consolidationBranch by today's rule. Then $target = [string]$script:MoeWtTarget when it is set (Initialize-MoeWorktree ~3350, after the local-branch check at ~3191), else $st. When $Settings.settingsReadable and $st -cne $target (case-sensitive, like git refs), Write-Host -ForegroundColor Yellow the step-2 sentence verbatim with $tid, $st and $target. Add `elseif (-not $Settings.settingsReadable) { $res.Code = 'MOE_LAND_SETTINGS_UNREADABLE'; $L.Msg = '.moe/project.json is missing or malformed, so this landing cannot read its qualityGate' }` directly after the `$l2.Outcome -eq 'failed'` branch. It then precedes the target check, the MOE_DISABLE_QUALITY_GATE refusal, Test-MoeTargetCheckedOut, Acquire-MoeLandLease and Invoke-MoeWorktreeRounds.\n(c) Get-MoeUnlandedReason: map MOE_LAND_SETTINGS_UNREADABLE to 'gate', so Invoke-MoeUnlandedRoute runs as it does for a gate failure.\nError handling: settingsReadable defaults to $false, so any path that never proves the file readable refuses. Done when the step-1 ps1 command prints '[worktree] wt-settings ok'.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-03T13:47:44.544Z"
     },
     {
       "stepId": "step-4",
@@ -88,7 +95,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:30:24.086Z",
-  "updatedAt": "2026-11-03T13:41:27.593Z",
+  "updatedAt": "2026-11-03T13:47:44.544Z",
   "contextFetchedBy": [
     "governor-e6b40560",
     "architect-24611a0a",
@@ -103,14 +110,15 @@
     "firstClaimAt": "2026-11-03T13:08:25.095Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:35:29.182Z",
