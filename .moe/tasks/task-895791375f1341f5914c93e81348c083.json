@@ -26,29 +26,42 @@
     {
       "stepId": "step-2",
       "description": "Implement the final-path compare in scripts/moe-agent.ps1. /mnt/d/moe-scratch/89579137-plan/proto-moe-agent.ps1.diff is the validated prototype (a reference, not the final bytes). Save with a tool-witnessed editor per the rail, keep the UTF-8 BOM and LF, then run the ParseFile check.\n(a) Move Get-MoeSha256Hex with its 3-line comment, byte-identical, from above $script:MoeGateProcessDefinition (about :5358) to just above the '# A protected file resolves only from' comment (about :526). PowerShell defines a function only when its statement runs, and the type name below must exist before the first top-level Find-MoeProtectedFile call (the node pin, about :565).\n(b) Add $script:MoeFinalPathDefinition, a C# static class MoeFinalPath. Its Of(path) calls CreateFileW with FILE_READ_ATTRIBUTES 0x80, share 7, OPEN_EXISTING 3 and FILE_FLAG_BACKUP_SEMANTICS 0x02000000, and no FILE_FLAG_OPEN_REPARSE_POINT, so junctions, links and mount points are followed. It keeps the SafeFileHandle in a using, calls GetFinalPathNameByHandleW with flags 0 (FILE_NAME_NORMALIZED | VOLUME_NAME_DOS) into a 32768-char StringBuilder, and returns null when the open fails or the length is 0 or at least the capacity. Name it like MoeFrozenGateProcess: $script:MoeFinalPathTypeName = 'MoeFinalPath' + the first 12 hex of Get-MoeSha256Hex of the UTF-8 source, so a hot reload that reruns the file in the same process compiles a changed source under a new name. Get-MoeFinalPath($Path) compiles the type once (skipped when -as [type] resolves; Add-Type -ErrorAction Stop with the class name replaced) and returns Of($Path). Use C# 5 syntax only, because PS 5.1 compiles with the .NET Framework csc.\n(c) In Find-MoeProtectedFile, keep the untrimmed real path ($projectFull = Get-MoeRealPath ..., with $project its TrimEnd): a drive-root project trimmed to 'C:' would open that drive's current directory. On Windows only, read $final = Get-MoeFinalPath $projectFull.\nFor error handling, a compile failure, a null final path or a \\\\?\\UNC\\ one writes one [WARN] line naming $projectFull and the reason, then returns $null. The line has no MOE_PROTECTED_ token and no new MOE_ code. Each caller then keeps its existing refusal: MOE_PROTECTED_INTERPRETER_NOT_FOUND, MOE_PROTECTED_AGENT_CLI_NOT_FOUND, or MOE_AGENT_GIT_GUARD_FAILED for the guard git. No proof means no trust.\nOtherwise $projectKey = $final.TrimEnd('\\') + '\\'. In the entry loop, right after the existing string compare and only when $projectKey is set: $f = Get-MoeFinalPath $realFull (the untrimmed path, as the file join uses), then continue when $f is null, starts with '\\\\?\\UNC\\', or \"$($f.TrimEnd('\\'))\\\" starts with $projectKey under $cmp.\nA network entry never counts as outside: a share or mapped drive can be rooted inside the project, and its final path stops at the share. This is the JetBrains rule in docs/TROUBLESHOOTING.md, 'Protected profile: path is not a plain local Windows path'. POSIX pwsh keeps $projectKey null and today's compare; legacy seats never call Find-MoeProtectedFile.\n(d) Rewrite the ponytail comment above Find-MoeProtectedFile to say this, and keep the file-level-link residual. No docs change: no doc states the old 8.3 gap, and the Protected control plane bullet already says outside the project.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-03T03:42:03.495Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Edit-tool saves (TOOL witness). (a) Get-MoeSha256Hex + its 3-line comment moved byte-identical above Find-MoeProtectedFile. (b) $script:MoeFinalPathDefinition (C# 5, CreateFileW 0x80/7/3/0x02000000, SafeFileHandle in using, GetFinalPathNameByHandleW flags 0, 32768 buffer), $script:MoeFinalPathTypeName (source-hash name), Get-MoeFinalPath. (c) $projectFull untrimmed; Windows-only project final path, WARN + return $null on compile failure/null/\\\\?\\UNC\\; loop skips null, UNC or under-$projectKey entries. (d) comment rewritten, file-level-link residual kept. Diff equals the architect prototype except comment wording and $f. BOM kept, 0 CR, PS 5.1 ParseFile exit 0. I1+I2 GREEN on PS 5.1 and PS 7 (4/4), all 7 forms ran and skipped, subst control resolved; log /mnt/d/moe-scratch/89579137-work/green.log.",
+      "startedAt": "2026-11-03T03:42:03.495Z",
+      "completedAt": "2026-11-03T03:44:27.807Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification: run the plan's one command once, after step 2, from the worktree root. It is the three checkRefs joined with &&; /mnt/d/moe-scratch/89579137-plan/joined.sh holds the exact line, and the refs are the same as task-0b2ea570's.\n- r0, the Linux env -i leg: bash -n on both sh scripts and the six launcher test files; I1 and I2 skip off Windows.\n- r1, the Windows node.exe leg: protected-agent-command under PS 5.1 and PS 7, moe-call, agent-git-guard, prompt-cache-launcher, usage-launcher.\n- r2: PS 5.1 ParseFile of moe-agent.ps1, parity-check.sh and npm run lint.\nIt must exit 0 with fail 0 on both legs, and its fresh output tail is the complete_task evidence. The prototype snapshot ran the r1 and r0 file sets green (proto-r1-full.log, proto-r0-linux.log). Never run npm build, install or test in packages/* on the shared checkout. Kill only PIDs your session started: no pkill, killall or pattern kills.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/protected-agent-command.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "Ran the plan's joined checkRefs (joined.sh, byte-equal to the three checkRefs) once from the worktree root, foreground-polled: GATE_EXIT=0, 03:44:43-03:48:45Z. r0 Linux env -i: 201 tests/171 pass/0 fail/30 skip. r1 Windows node.exe: 306/255/0/51. r2 PS 5.1 ParseFile OK, PASS parity-check.sh, lint OK. Counts equal the architect's prototype snapshot. Log /mnt/d/moe-scratch/89579137-work/gate.log. No files changed in this step.",
+      "startedAt": "2026-11-03T03:44:28.658Z",
+      "completedAt": "2026-11-03T03:48:51.865Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's diff only. Load adversarial-self-review; keep evidence in /mnt/d/moe-scratch/89579137-work.\n1. Run I1 and I2 alone through Windows node.exe with --test-reporter=tap. Confirm the 8.3, \\\\?\\+8.3 and all three subst forms ran, with no 'not reachable' diagnostic: the DoD needs the 8.3 and subst forms proved on Windows.\n2. Mutants, each in a git archive copy of your final bytes, never in the worktree, and each must be KILLED:\n   - (m1) drop the final-path check from the loop: I1 fails on both engines;\n   - (m2) let a \\\\?\\UNC\\ final path through: the I1 UNC form and I2 fail;\n   - (m3) skip only a final path equal to the project, not one under it: I1 fails;\n   - (m4) swap in the volume-serial plus file-index parent walk from proto-identity-walk.ps1.diff.rejected: the subst-of-project\\bin form fails.\n   Record each outcome.\n3. Re-read:\n   - the handle is disposed on every path;\n   - a second call in one process reuses the compiled type;\n   - the WARN path returns before the loop and cannot match the protectedLines filter;\n   - a drive-root project key ('\\\\?\\D:\\') puts every D: entry in the project, which is correct;\n   - the case-insensitive compare only over-skips;\n   - legacy (marker unset or '01') never compiles the type: grep the Find-MoeProtectedFile call sites;\n   - there is no new MOE_ code, and the BOM is kept with no CR.\n4. Note the accepted fail-closed residuals: a PATH folder whose final path cannot be read is skipped, and so is every network or mapped-drive entry.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/protected-agent-command.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T03:48:52.699Z"
     }
   ],
   "planRevision": 1,
@@ -78,7 +91,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:35:38.591Z",
-  "updatedAt": "2026-11-03T03:42:03.495Z",
+  "updatedAt": "2026-11-03T03:48:52.699Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:14.066Z",
@@ -92,7 +105,7 @@
     "firstClaimAt": "2026-11-03T03:11:13.891Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -103,7 +116,9 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T03:38:01.431Z",

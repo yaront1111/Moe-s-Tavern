@@ -73,14 +73,23 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review: one pass over the diff. Check:\n(a) Concurrency. Interleave a restart and a start at every point: no order lets a stop run while a start body runs, or a start body run while a restart holds the flag. Two concurrent starts both run (LEGACY). A throwing start releases its count.\n(b) Every exit path, and the error handling of each read: NoSuchFileException, AccessDeniedException, a dangling link, a directory, a FIFO, a device. Each one fails closed (PROTECTED or null) without reading.\n(c) Windows: a regular file on a subst, mapped or junction ancestor still reads, because NOFOLLOW applies to the leaf only.\n(d) The vm-control refusal reaches the SCRIPT_MISSING report, and the legacy path is byte-identical.\n(e) The POSIX rows cannot hang: each has a 5 s future and an O_RDWR unblock.\n(f) Mutants, re-run under the lease with the two --tests classes:\n- remove the handshake check: W40 fails;\n- make vmControlScript's protected branch return bundled(): M1 fails;\n- drop the regular-file check: F1(b)/(c) fail only where links and FIFOs exist, which is CI. Say so in the summary.\nList the RED run, the mutants, and the skipped cases in the completion summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T03:42:09.055Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "Self-review, no code change needed.\n(a) Concurrency: a start does inc(starts) then reads the flag; a restart does CAS(flag) then reads starts. These are SC atomics, so whichever goes second sees the first: no stop runs during a start body, and no start body runs during a restart. Concurrent starts stay concurrent because it is a counter. The decrement is in finally. Nothing on the start path calls stopWindowsRestart; its only caller is MoeProjectService.restartDaemon, which publishes the refusal. Moving the increment after the check is a race-only mutant that no deterministic row kills (theoretical, noted).\n(b) Each read: a missing file reads as before (absent/legacy, null). A dangling link, directory, FIFO or device fails closed unread. AccessDenied or a delete race makes isRegularFile false, which fails closed. profile() never throws and never pins or writes on refusal.\n(c) Windows: NOFOLLOW is leaf-only; subst/device rows (D7 etc.) passed in the gate. A Java probe shows OneDrive placeholders and WOF files read regular=true and read real bytes under NOFOLLOW.\n(d) A null vm-control gives SCRIPT_MISSING. The legacy branch is bundled() with the same relative string.\n(e) The FIFO rows use a 5 s future and an O_RDWR unblock in finally.\n(f) Mutants in a scratch snapshot under the lease:\n- control: green.\n- no handshake: W40 fails.\n- no decrement: W14/W27/W37/W38/W40 fail.\n- vm protected branch returns bundled(): M1 fails.\n- vm legacy branch takes the installed copy: M1 fails.\n- full guard revert: survives on Windows, as planned; CI's F1b/F1c catch it.\nOther daemon.json readers (replacementMetadataCleared) go through parseDaemonInfo, so no bug was filed. Lease released.",
+      "startedAt": "2026-11-03T03:42:09.055Z",
+      "completedAt": "2026-11-03T03:48:10.351Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -92,7 +101,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:06:02.725Z",
-  "updatedAt": "2026-11-03T03:42:09.055Z",
+  "updatedAt": "2026-11-03T03:49:21.909Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:16.532Z",
@@ -102,7 +111,7 @@
     "firstClaimAt": "2026-11-03T03:04:30.974Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -120,7 +129,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T03:10:49.127Z",
@@ -190,5 +200,48 @@
   },
   "planApprovedAt": "2026-11-03T03:10:49.152Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T03:26:33.008Z"
+  "workStartedAt": "2026-11-03T03:26:33.008Z",
+  "reviewStartedAt": "2026-11-03T03:48:35.781Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n> Task :test\nBUILD SUCCESSFUL in 28s\n11 actionable tasks: 2 executed, 9 up-to-date\nJUnit totals: tests=609 skipped=5 failures=0 errors=0",
+    "reportedAt": "2026-11-03T03:48:35.781Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt"
+  ],
+  "completionSummary": "JetBrains hardening, 5 files (+243/-9).\n(1) declaresVerifiedLocal and parseDaemonInfo open only a regular file reached without a final link, via Files.isRegularFile(NOFOLLOW_LINKS) and then a NOFOLLOW open. A link, FIFO, directory or device is never opened: project.json reads UNTRUSTED (profile PROTECTED, nothing pinned, written or asked) and daemon.json reads null, so a link is never deleted. The KDoc names the swap-race residual.\n(2) ManagedVmPanel.vmControlScript: LEGACY uses bundled(); PROTECTED uses installedArtifact(installedRoot, scripts/local-runner/vm-control.mjs, base), else SCRIPT_MISSING.\n(3) startsInFlight counter: ensureDaemonRunning increments it, runs the unchanged body, and decrements in finally. stopWindowsRestart, after its CAS, refuses with START_IN_PROGRESS when a start is in flight, before any stop or signal. profile() moved inside that try.\nRows: RuntimeSelectionPolicyTest F1a-F1d and M1; MoeDaemonSupervisorTest F1a-F1c and W40 (with a no-op WinRestart.onStart hook). W14 and W36-W39 are untouched.\nRED: compile failure, only vmControlScript unresolved.\nGate (checkRef, lease held, exit 0): parity PASS, lint OK, gradlew.bat test --rerun BUILD SUCCESSFUL, JUnit 609 tests / 5 skipped / 0 failed (600 before). The 5 skips are exactly F1b/F1c/F1d (policy) and F1b/F1c (supervisor), which need file symlinks or FIFOs; this host has neither, and CI ubuntu runs them. FIFO rows use a 5 s future plus an O_RDWR unblock.\nMutants (scratch snapshot):\n- no handshake: W40 fails.\n- no decrement: W14/W27/W37/W38/W40 fail.\n- vm protected branch returns bundled(): M1 fails.\n- vm legacy branch takes the installed copy: M1 fails.\n- full guard revert: survives here, as planned; CI's F1b/F1c catch it.\nWindows probe (Java 21): OneDrive placeholders and WOF files read regular=true with real bytes under NOFOLLOW, so LEGACY reads are unchanged.\nEvidence: /mnt/d/moe-scratch/7faede18-worker/{red,green-focused,gate,probe}.log, results.json.",
+  "commits": [
+    {
+      "sha": "2c8fdd9dbe7f2f8d4581c5d01508ec92edd5e963",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T03:25:38Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T03:49:21.909Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T03:25:38Z",
+    "at": "2026-11-03T03:49:21.909Z"
+  }
 }
