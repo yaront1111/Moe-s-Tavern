@@ -65,8 +65,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:39:02.411Z",
-  "updatedAt": "2026-11-03T22:01:15.870Z",
+  "updatedAt": "2026-11-03T22:03:14.905Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T20:57:45.753Z",
@@ -88,7 +88,9 @@
     "firstClaimAt": "2026-11-03T21:02:08.278Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:03:14.901Z",
+    "wallClockMs": 3666623
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -211,5 +213,9 @@
     "kind": "completion",
     "sessionId": "worker-c9368191@2026-11-03T21:10:18Z",
     "at": "2026-11-03T21:18:22.779Z"
-  }
+  },
+  "completedAt": "2026-11-03T22:03:14.901Z",
+  "reviewCompletedAt": "2026-11-03T22:03:14.901Z",
+  "reviewSummary": "APPROVED. Reviewed completion b995dd68 (kind=completion, pushed, on moe/work-2026-10-24; HEAD 6272d308 contains it, and the 3 owned files are byte-identical at HEAD). Diff: 3 files, +42/-2 (net 40 LOC), under the 400 cap. releaseTask.ts +8/-1 (one guard right after the 0adea941 force gate, plus the tool-description ownership sentence); docs/MCP_SERVER.md 1 line (release_task paragraph only); releaseForceGate.test.ts +33 ((n1) x8, (n2), (n3)). claimGuards.ts untouched.\n\nRe-ran verification myself in a git-archive snapshot outside the repo (removed after): task.verification verbatim incl. the docs grep. tsc --noEmit clean; Test Files 15 passed (15), Tests 513 passed (513), exit 0. RED-AT-BASE at 395172f0 with the new test file: exactly the 8 (n1) cases FAIL, 'Tests 8 failed | 36 passed (44)', (n2)/(n3) green, printed RED-AT-BASE. So the tests fail without the fix and pass with it.\n\nDoD: (1) no-force blank/null/non-string workerId is refused INVALID_INPUT before any getTask/runExclusive/touchWorker/appendActivity, for task-idle, task-peer and a missing task, state unchanged ((n1) spies, 8 shapes). (2) Omitted-id release between steps and the holder's own mid-step release (n2), non-holder still RELEASE_NOT_ASSIGNEE (n3); existing force cases (p1)-(p7)/(r1)-(r5) green in the 513. (3) 'Anyone can call — no ownership check' is gone from docs and the tool description, replaced by accurate ownership rules.\n\nAdversarial: guard is after the force gate, so force + malformed id stays NOT_ALLOWED (p7); it reads only its own args (no race) and throws before the mutex and handoff capture. Callers: board RELEASE_TASK (WebSocketServer ~740) sends no workerId; wrappers' launch_outage_release (sh 9072 / ps1 8895) send the real WORKER_ID, never force, so only a blank WORKER_ID there (theoretical) now gets INVALID_INPUT on a best-effort path. Ponytail: nothing to cut. Not exercised: JetBrains/VS Code and wrapper harnesses (untouched).",
+  "requiredCheckAtDone": null
 }
