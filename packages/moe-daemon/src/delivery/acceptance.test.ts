@@ -260,6 +260,8 @@ const STRICT_SETTINGS = {
   qualityGateScope: 'everyTask',
   autoCreateBranch: false,
   checkpointPush: false,
+  // The pilot is the shared-mode delivery path; with a gate, unset now means 'on' (WT-19).
+  worktreeMode: 'off',
 } as const;
 
 const PILOT_GATE_COMMAND = 'node gate.cjs';

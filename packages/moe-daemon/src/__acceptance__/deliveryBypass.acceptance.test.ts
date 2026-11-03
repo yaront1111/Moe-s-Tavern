@@ -79,7 +79,8 @@ beforeEach(async () => {
   vi.stubEnv('MOE_RUNNER_KEY_DIR', path.join(h.testDir, 'runner-keys'));
   h.setupMoeFolder({ schemaVersion: 6, settings: { approvalMode: 'TURBO', speedModeDelayMs: 2000, autoCreateBranch: false, branchPattern: '',
     commitPattern: '', agentCommand: 'claude', deliveryPolicy: 'local-branch', qualityGate: GATE, qualityGateScope: 'everyTask',
-    checkEnvironments: [ENV] } as never });
+    // The shared-mode path; with a gate, unset now means 'on' (WT-19).
+    worktreeMode: 'off', checkEnvironments: [ENV] } as never });
   h.createEpic();
   h.createTask({ id: TASK, status: 'PLANNING' });
   h.createTask({ id: CONSUMER, status: 'WORKING', dependsOn: [TASK], planRevision: 1, approvedPlanRevision: 1,

@@ -23,15 +23,21 @@ fail() { echo "PARITY FAIL: $*" >&2; failures=$((failures + 1)); }
 
 # ---- 1. Code families: extract the full set from each file, diff them. -------
 # Word-bounded so MOE_COMMIT_FAILED is not satisfied by MOE_COMMIT_FAILED_REF_CONTENTION.
-# The sh wrapper's internal env-plumbing names that share a prefix (bash ->
-# inline-python bridging from an earlier revision) are exempt from the symmetry
-# rule — same allowlist as parity-check.ps1; the operator-facing vocabulary is
-# fully compared.
-INTERNAL_PLUMBING='^(MOE_ATTR_UNDECLARED|MOE_ATTR_EXCLUDE|MOE_ATTR_POLICY_OVERRIDE|MOE_COMMIT_BOARD_STATE)$'
+# INTERNAL_PLUMBING exempts a wrapper-internal env name that shares a compared
+# prefix (an env bridge, never printed) from the symmetry rule. Add such a name
+# to BOTH scripts (parity-check.ps1's $internalPlumbing) with a comment, as
+# '^(NAME_A|NAME_B)$', and never exempt a whole family. The list is empty: the
+# sh wrapper's bash -> inline-python bridge uses MOE_PY_* names, which is not a
+# compared family, so '^$' (no extracted code is empty) exempts nothing.
+INTERNAL_PLUMBING='^$'
 extract_codes() { # $1 = file, $2 = prefix regex
   grep -oE "\b$2[A-Z0-9_]*\b" "$1" 2>/dev/null | grep -vE "$INTERNAL_PLUMBING" | sort -u || true
 }
-for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_'; do
+# The worktree-mode families follow the land-on-every-exit ones. MOE_WRAPPER_
+# is not a family: moe-agent.sh carries sh-only internal MOE_WRAPPER_* names
+# (its hot-reload plumbing), so section 2 requires its codes by name.
+for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_' \
+  'MOE_WORKTREE_' 'MOE_LAND_' 'MOE_CONTROL_' 'MOE_BOARD_' 'MOE_PUSH_' 'MOE_MIGRATION_'; do
   sh_set="$(extract_codes "$SH" "$prefix")"
   ps_set="$(extract_codes "$PS1" "$prefix")"
   only_sh="$(comm -23 <(printf '%s\n' "$sh_set") <(printf '%s\n' "$ps_set") | sed '/^$/d' || true)"
@@ -58,7 +64,8 @@ for code in \
   MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY \
   MOE_ATTR_EXCLUDED MOE_ATTR_CONTESTED MOE_ATTR_PEER_DECLARED MOE_ATTR_PREEXISTING MOE_ATTR_MISSING MOE_ATTR_CONCURRENT \
   MOE_ATTR_ASSERTED_FOREIGN \
-  MOE_CHECKPOINT_RECOVERED MOE_RESCUE_REF MOE_ATTRIBUTION_UNRESOLVED; do
+  MOE_CHECKPOINT_RECOVERED MOE_RESCUE_REF MOE_ATTRIBUTION_UNRESOLVED \
+  MOE_WRAPPER_IN_WORKTREE; do
   require_both "code" "$code"
 done
 

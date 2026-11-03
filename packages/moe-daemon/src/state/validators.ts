@@ -290,9 +290,19 @@ export function validatePatternSetting(value: unknown, fieldName: string): strin
 // Worktree contract: epic-dce3a64f §7.1/§2.7. Mode/path are pinned; target is live.
 const WORKTREE_MODES: readonly WorktreeMode[] = ['off', 'on'];
 
-export function resolveWorktreeMode(settings?: { worktreeMode?: unknown } | null): WorktreeMode {
+/**
+ * The one place the worktreeMode default lives (WT-19, decision dec-eb7b8337 (b)).
+ * A stored 'off'/'on' is honored as written; any other stored value, null
+ * included, is INVALID_INPUT and never read as the default. An unset key is
+ * 'on' only when qualityGate is a string that is non-blank after trim (the
+ * wrappers' own gate test), else 'off': a worktree landing moves the target
+ * only after the gate (epic rail 1), so a gate-less project keeps shared mode.
+ */
+export function resolveWorktreeMode(settings?: { worktreeMode?: unknown; qualityGate?: unknown } | null): WorktreeMode {
   const mode = settings?.worktreeMode;
-  return mode === undefined ? 'off' : validateEnumValue(mode, 'worktreeMode', WORKTREE_MODES);
+  if (mode !== undefined) return validateEnumValue(mode, 'worktreeMode', WORKTREE_MODES);
+  const gate = settings?.qualityGate;
+  return typeof gate === 'string' && gate.trim() !== '' ? 'on' : 'off';
 }
 
 export function resolveWorktreeTarget(settings?: { consolidationBranch?: unknown } | null): string {
