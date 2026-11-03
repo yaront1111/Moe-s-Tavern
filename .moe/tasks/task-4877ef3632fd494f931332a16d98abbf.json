@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,16 +111,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:10:57.784Z",
-  "updatedAt": "2026-11-03T19:49:50.120Z",
+  "updatedAt": "2026-11-03T19:52:51.683Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:12:59.296Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T19:52:25.548Z",
+    "wallClockMs": 2366252
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-c9368191"
+    "worker-c9368191",
+    "qa-93f9625e"
   ],
   "dependsOn": [
     "task-a4970220f1334dbb80278f265961f209"
@@ -241,9 +244,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T19:33:19Z",
-    "at": "2026-11-03T19:49:50.120Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T19:50:35Z",
+    "at": "2026-11-03T19:52:51.683Z"
+  },
+  "completedAt": "2026-11-03T19:52:25.548Z",
+  "reviewCompletedAt": "2026-11-03T19:52:25.548Z",
+  "reviewSummary": "Reviewed completion a028ec65 (on moe/work-2026-10-24): 5 files, +265/-18 (net 247, under the 400 cap), exactly the DoD FILES. Re-ran task.verification verbatim from a git-archive snapshot outside the shared checkout: both tsc passes clean, vitest 7 files / 137 tests passed, exit 0. Red-at-base: with HEAD^ tool files swapped in, chatChannelRef+chatBudgets gave 12 failed / 20 passed, so the new cases fail on base. DoD 1: chat_who lists [WORKER_ID] for id, 'general', '#general' and matches a canonical-id waiter; chat_join '#general' returns the canonical id, posts one join line, idempotent across id/name/#name; chat_resync '#general' clears then sets the cursor keyed by the id (updateWorker spy: 2 writes, no '#general' key); all three reject '#nope' with NOT_FOUND (resync refusal: zero writes, cursors deep-equal); non-string channel is INVALID_INPUT. DoD 2: single- and all-channel budget cases assert cost <= MAX_CHAT_RESPONSE_CHARS, same newest window as chat_read, last id is the newest posted, messagesCount===length, cursor on the last returned id. DoD 3: chatRead.cursor, chatSystemFeed, chatDecision, workerType, registry green in the same run. Code read: resolution precedes the first write in all three tools; cap runs on the reversed window before cursors in both branches; omitted/empty chat_who channel unchanged; join-line text unchanged; no inputSchema property added or removed. Not covered (worker disclosed): per-tool ambiguous-name refusal; an over-budget single message is unreachable (10,240-byte cap). Note: the typeof+resolve+notFound block repeats in three tools, so a shared helper is a possible follow-up, not a defect. docs/MCP_SERVER.md for these tools was not updated (held by other rows).",
+  "requiredCheckAtDone": null
 }
