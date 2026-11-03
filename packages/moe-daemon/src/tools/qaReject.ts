@@ -9,6 +9,9 @@ import { bumpEffort, bumpTier, defaultModel, isEffort, isTier, planSizeFloor, ti
 import { recordReview } from '../state/reviewStore.js';
 import { assertReviewBinding } from '../delivery/reviewBinding.js';
 
+// An entry names a DoD item, which is stored at 1000 chars at most (taskStore's sanitizeStringArray(definitionOfDone, 50, 1000)).
+const MAX_FAILED_DOD_ITEM_LENGTH = 1000;
+
 const VALID_ISSUE_TYPES: QAIssueType[] = [
   'test_failure', 'lint', 'security', 'missing_feature', 'regression', 'other'
 ];
@@ -83,9 +86,25 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         throw invalidInput('reason', `too long (${params.reason.length} chars). Maximum ${MAX_REASON_LENGTH} characters allowed.`);
       }
 
-      // Validate failedDodItems
-      if (params.failedDodItems && params.failedDodItems.length > 20) {
-        throw invalidInput('failedDodItems', 'too many items (max 20)');
+      // Validate failedDodItems. Entries are refused, never truncated, so the
+      // repeated-failure match stays exact; a non-string used to crash the trim
+      // below with an uncoded TypeError.
+      if (params.failedDodItems !== undefined && params.failedDodItems !== null) {
+        if (!Array.isArray(params.failedDodItems)) {
+          throw invalidInput('failedDodItems', 'must be an array of strings');
+        }
+        if (params.failedDodItems.length > 20) {
+          throw invalidInput('failedDodItems', 'too many items (max 20)');
+        }
+        params.failedDodItems.forEach((item: unknown, i) => {
+          if (typeof item !== 'string') {
+            throw invalidInput(`failedDodItems[${i}]`, 'must be a string');
+          }
+          const len = item.trim().length;
+          if (len > MAX_FAILED_DOD_ITEM_LENGTH) {
+            throw invalidInput(`failedDodItems[${i}]`, `too long (${len} chars). Maximum ${MAX_FAILED_DOD_ITEM_LENGTH} characters.`);
+          }
+        });
       }
 
       // Validate issues
