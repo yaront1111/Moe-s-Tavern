@@ -10,7 +10,8 @@
 // evidence-rpcs.jsonl, account-rpcs.jsonl, served-context.json
 // (FAKE_CTX_PAD_BYTES), reload-hold.holder and claim-answers.jsonl
 // (FAKE_CLAIM_MODE=reload-hold) and the attempts/, candidates/,
-// checks/, receipts/ and resources/ records.
+// checks/, receipts/ and resources/ records. FAKE_CALL_LOG (a log of every
+// call) and FAKE_READINESS (the get_execution_readiness answer) are inert unset.
 const fs = require('fs');
 const path = require('path');
 const raw = fs.readFileSync(0, 'utf8').trim();
@@ -19,6 +20,10 @@ const tool = String(req.params?.name || '').replace(/^moe\./, '');
 const args = req.params?.arguments || {};
 const project = process.env.MOE_PROJECT_PATH || process.cwd();
 const moe = path.join(project, '.moe');
+// FAKE_CALL_LOG=<file> (opt-in): every call appends {tool, args} before any
+// handler, hold or early exit runs, so a row can prove what the wrapper did NOT
+// call. Kept apart from evidence-rpcs.jsonl, whose order other rows assert.
+if (process.env.FAKE_CALL_LOG) fs.appendFileSync(process.env.FAKE_CALL_LOG, JSON.stringify({ tool, args }) + '\n');
 function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
 function ok(payload) {
   process.stdout.write(JSON.stringify({
@@ -445,6 +450,21 @@ if (tool === 'get_context' && args.taskId) {
     const a = JSON.parse(fs.readFileSync(file,'utf8'));
     if (a.phase === 'running') { a.phase = 'finalizing'; fs.writeFileSync(file,JSON.stringify(a)); }
   }
+}
+// moe.get_execution_readiness (CQ-M07d's {profile, ready, missingCapabilities,
+// evaluatedAt}) from FAKE_READINESS. Unset: the default ok({success:true}) below,
+// a malformed reply. `unknown`: McpAdapter's -32601 for an older daemon.
+// `refuse`: a MoeError frame. `fail`: no reply at all (a transport failure).
+// Anything else is JSON served as the tool text; unparseable JSON throws.
+if (tool === 'get_execution_readiness' && process.env.FAKE_READINESS) {
+  const mode = process.env.FAKE_READINESS;
+  const error = mode === 'unknown' ? { code: -32601, message: 'Tool not found: moe.get_execution_readiness' }
+    : mode === 'refuse' ? { code: -32000, message: 'fixture readiness refused', data: { tool: 'moe.get_execution_readiness', codeName: 'FIXTURE_REFUSED' } }
+    : null;
+  if (mode === 'fail') process.exit(1);
+  if (error) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id || 1, error }) + '\n');
+  else ok(JSON.parse(mode));
+  process.exit(0);
 }
 
 switch (tool) {

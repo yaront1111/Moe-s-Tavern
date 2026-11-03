@@ -6721,4 +6721,5 @@ ovf_has_block "$OVF_C/prompt-1" "$OVF_C/project/.moe/served-context.json" \
 case "$(cat "$OVF_C/prompt-1")" in 'First read the private session context file at '*) ovf_fail "a prompt under the threshold was routed through a file" ;; esac
 echo "[prompt overflow] ok"
 
+bash "$ROOT_DIR/scripts/tests/postflight-vm-route.sh"
 echo "PASS postflight.sh"

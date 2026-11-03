@@ -9387,6 +9387,92 @@ fi
 # A pinned seat runs its copy from the open file: the copy itself can go now.
 if [ "${BASH_SOURCE[0]:-$0}" != "$MOE_WRAPPER_FILE" ]; then MOE_WRAPPER_PIN="${BASH_SOURCE[0]:-$0}"; wrapper_pin_drop; fi
 
+# CQ-M07m1: the verified-local route gate. A worker or QA iteration reads
+# moe.get_execution_readiness once, before any claim or chat read. Only a
+# well-formed reply whose profile is verified-local changes anything: the seat
+# then refuses (exit 1, no claim, no CLI). Every other answer (legacy, observe,
+# unreadable, a refusal, an older daemon's -32601, no reply, a malformed reply)
+# keeps today's path silently: nothing printed or exported, and every step is
+# guarded so set -e never ends the seat here.
+# The gate's WSL check; is_wsl() and its other callers keep reading /proc/version.
+vm_route_is_wsl() {
+    # Test seam, sh only and ignored under MOE_RUNTIME_PROTECTED=1: MOE_POSTFLIGHT_WSL
+    # 1 (WSL) or 0 (native) decides this check alone.
+    if [ "$RUNTIME_PROTECTED" != 1 ]; then
+        case "${MOE_POSTFLIGHT_WSL:-}" in 1) return 0 ;; 0) return 1 ;; esac
+    fi
+    is_wsl
+}
+# Print `on` when settings.worktreeMode resolves to 'on', else the clause the
+# refusal names. Never fails. Mirrors resolveWorktreeMode at
+# packages/moe-daemon/src/state/validators.ts:301-306 (WT-19): a present key is
+# exactly 'off' or 'on', anything else (null included) is invalid; an absent key
+# is 'on' only while settings.qualityGate is a string non-blank after JS trim().
+# normalizeProject spreads a non-object settings to no keys, and JSON.parse
+# refuses a BOM and NaN, so those read as unset and unreadable here too.
+vm_route_worktree_mode() {
+    local out
+    out=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c '
+import json, sys
+def refuse(c):
+    raise ValueError(c)
+with open(sys.argv[1], encoding="utf-8") as f:
+    d = json.load(f, parse_constant=refuse)
+s = d["settings"] if isinstance(d.get("settings"), dict) else {}
+if "worktreeMode" not in s:
+    # JS trim() whitespace (WhiteSpace and LineTerminator); str.strip() would also strip 0x1C-0x1F and 0x85.
+    g, ws = s.get("qualityGate"), "".join(map(chr, (9, 10, 11, 12, 13, 32, 0xA0, 0x1680, *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)))
+    print("on" if isinstance(g, str) and g.strip(ws) else "is unset, which resolves to \x27off\x27 while settings.qualityGate is blank")
+elif s["worktreeMode"] == "on":
+    print("on")
+elif s["worktreeMode"] == "off":
+    print("is \x27off\x27")
+else:
+    print("is invalid (%s)" % "".join(c if c.isprintable() else "?" for c in json.dumps(s["worktreeMode"]))[:60])
+' "$MOE_DIR/project.json" 2>/dev/null) || out="cannot be read (.moe/project.json is missing or not a JSON object)"
+    printf '%s\n' "$out"
+}
+# Plain text, no colour codes, so `[ERROR] <CODE>:` greps exactly. WORKER_ID stays
+# set: the EXIT trap deregisters the seat.
+verified_local_refuse() {
+    printf '[ERROR] %s: %s\n' "$1" "$2" >&2
+    exit 1
+}
+verified_local_gate() {
+    local reply parsed profile rest ready missing mode us=$'\x1f'
+    reply=$(moe_rpc get_execution_readiness '{}' 2>/dev/null) || return 0
+    parsed=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c '
+import json, sys
+def refuse(c):
+    raise ValueError(c)
+d = json.loads(sys.stdin.read(), parse_constant=refuse)
+p, r, m = d.get("profile"), d.get("ready"), d.get("missingCapabilities")
+if p not in ("legacy", "observe", "verified-local", "unreadable") or not isinstance(r, bool) or not isinstance(m, list) or not all(isinstance(x, str) for x in m):
+    sys.exit(1)
+clean = lambda s: "".join(c if c.isprintable() else "?" for c in s)
+sys.stdout.write("\x1f".join([p, "true" if r else "false", ", ".join(clean(x) for x in m)]))
+' 2>/dev/null <<< "$reply") || return 0
+    profile=${parsed%%"$us"*}; rest=${parsed#*"$us"}
+    ready=${rest%%"$us"*}; missing=${rest#*"$us"}
+    [ "$profile" = verified-local ] || return 0
+    if vm_route_is_wsl; then
+        verified_local_refuse MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED "this project runs verified-local, whose worker and QA seats run natively on Windows (moe-agent.ps1), never inside WSL; refusing to start this seat."
+    fi
+    case "$CLI_TYPE" in
+        claude|codex) ;;
+        *) verified_local_refuse MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED "this project runs verified-local, whose worker and QA seats run only claude or codex; this seat runs $CLI_TYPE; refusing to start this seat." ;;
+    esac
+    mode=$(vm_route_worktree_mode)
+    if [ "$mode" != on ]; then
+        verified_local_refuse MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED "this project runs verified-local, whose worker and QA seats run only in worktree mode; settings.worktreeMode $mode; refusing to start this seat."
+    fi
+    if [ "$ready" != true ]; then
+        verified_local_refuse MOE_VERIFIED_LOCAL_NOT_READY "this project runs verified-local, which is not ready; missing: ${missing:-(none named)}; refusing to start this seat."
+    fi
+    # Fail-closed placeholder: CQ-M07m3 replaces it with the seat VM route.
+    verified_local_refuse MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE "this project runs verified-local and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat."
+}
+
 # Bash reads scripts incrementally from a saved file offset. An in-place save
 # (same inode: editor/apply_patch) could end the loop on NEW bytes at the OLD
 # offset ("e: command not found", task-f31d415d). Parse the loop and tail as one
@@ -9558,6 +9644,8 @@ while [ "$LOOP_RUNNING" = true ]; do
     LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""; LAND_SUMMARY_HELD=""
     POSTFLIGHT_SNAPSHOT=""
     read_commit_settings
+    # CQ-M07m1: before any claim or chat read; a verified-local reply refuses here.
+    case "$ROLE" in worker|qa) verified_local_gate ;; esac
 
     if [ "$AUTO_CLAIM" = true ]; then
         echo -e "${BLUE}Pre-flight: joining chat, claiming task, loading context...${NC}"
