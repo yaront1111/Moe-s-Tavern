@@ -1,0 +1,38 @@
+{
+  "id": "task-e3e81c457c0e405a909cde910a2a8330",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a seat's Serena server is unusable for 15-23 min at startup when a big tree is excluded only via .git/info/exclude (UnAI .moe-next/trees); the launchers should hand Serena git's own ignore set",
+  "description": "Reported by the human on 2026-11-03 from the UnAI fleet: \"MCP task k12f44qvb (serena/read_memory) failed.\" The owner wants the fix in Moe's source, not as a hand-made workaround inside the UnAI repo.\n\nOBSERVED (D:/projexts/UnAI, shared mode, 2026-11-03)\n- architect-e0242da9 made 5 Serena calls in parallel at 06:55:40Z: 4 read_memory and 1 list_memories. Each failed with \"Error executing tool read_memory: TimeoutError:\" at Serena's tool_timeout of 240 s, one after another; k12f44qvb failed at 07:03:43Z. The seat transcript is acct-1 .../-mnt-d-projexts-UnAI/15b604e6-*.jsonl.\n- Every Serena server started at the UnAI root today processed 115 .gitignore files, 112 of them under .moe-next/trees. The three that finished took 15m54s, 17m37s and 23m13s (~/.serena/logs/2026-11-03/mcp_20261103-083718_*, -084426_*, -085526_*). Eleven more never finished, and the logs hold 41 TimeoutError lines. The UnAI governor counted 66 of 434 Serena servers with timeouts on 11-02.\n\nCAUSE (verified in serena-agent 1.6.2.dev0, ~/.local/share/uv/tools/serena-agent/.../site-packages)\n- serena/project.py _gather_ignorespec: when ignore_all_files_in_gitignore is true (the default), it runs GitignoreParser(project_root). Tools wait for that ignore spec.\n- serena/util/file_system.py GitignoreParser._iter_gitignore_files: walks the whole tree breadth-first. It prunes a directory only when an already-loaded .gitignore pattern matches it, and it also enters .git/.\n- It never reads .git/info/exclude or core.excludesFile. Global and project ignored_paths are merged only after the walk, so they cannot prune it.\n- UnAI hides .moe-next/ and .serena/ only in .git/info/exclude. .moe-next/trees holds 112 git worktrees made by the separate moe-next tool, on the slow /mnt/d drvfs mount.\n- Moe's launchers give every seat its own Serena via the MCP config they write (moe-agent.sh ~:1063-1641, moe-agent.ps1 ~:774-1614: start-mcp-server --project <root>). So every new seat pays the walk, and the seat's early Serena calls die at 240 s.\n\nFACTS FOR THE FIX\n- git computes the same ignore set fast: `git -C /mnt/d/projexts/UnAI ls-files --others --ignored --exclude-standard --directory` returns 48 entries in 0.8 s. It honours .gitignore, info/exclude and core.excludesFile, and prunes ignored directories.\n- Serena applies .serena/project.local.yml as a shallow key override over project.yml (serena/config/serena_config.py ~:713, yaml_data.update). `ignore_all_files_in_gitignore: false` skips the walk entirely, and `ignored_paths` then becomes the whole ignore set. UnAI already has a project.local.yml (Serena's commented template).\n\nSUGGESTED FIX (the architect confirms or replaces it)\n- In both launchers, before a seat's Serena entry is written, compute git's ignored set for the Serena project root.\n- Hand it to Serena together with .git/, with the walk off. The likely vehicle is .serena/project.local.yml:\n  - merge it with any keys the user already set;\n  - union in project.yml's own ignored_paths, because a local key replaces the project's;\n  - write it only when the content changes.\n- Fail open: when Serena is absent, git fails, or the root is not a git repo, change nothing (today's behaviour).\n- Consider worktree mode too. The launch already rewrites W/.serena/project.yml (WT-06). A project that excludes .worktrees/ only via info/exclude would have its control-checkout Serena walk every task worktree in the same way.\n- Alternatives to weigh: an upstream Serena fix (honour info/exclude, skip .git), or pinning a fixed Serena.",
+  "definitionOfDone": [
+    "With a fixture git repo in which a directory holding many nested .gitignore files is excluded only via .git/info/exclude, a seat launch through scripts/moe-agent.sh and through scripts/moe-agent.ps1 leaves Serena configured so that its ignore spec is built without walking that directory. A test asserts the exact override: the walk is off, and the excluded directory and .git/ are in the ignored set. The test also shows that keys the user already set in .serena/project.local.yml, and project.yml's own ignored_paths, are preserved.",
+    "Fail-open: when Serena is not installed, git fails, or the project root is not a git repository, the launch proceeds exactly as today and writes no override. Both launchers have a test for this.",
+    "Both launchers implement the same behaviour: parity-check.sh exits 0 and the postflight harnesses pass, and worktree-mode launches keep WT-06's W/.serena/project.yml rewrite and the deny lists working.",
+    "docs/MEMORY.md (Serena section) and scripts/CLAUDE.md (MCP servers for spawned agents) describe the override, why it exists (Serena's startup walk ignores .git/info/exclude) and how to opt out."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 351.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T07:25:34.188Z",
+  "updatedAt": "2026-11-03T07:41:56.260Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T07:31:25.007Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ],
+  "dependsOn": [
+    "task-c6a2405324174deda18c4f672747994f"
+  ]
+}

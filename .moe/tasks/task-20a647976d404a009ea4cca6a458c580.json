@@ -8,9 +8,81 @@
     "Regression tests cover initial absent roots, existing roots, outside-root success and refusal without any in-project record write."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "moe-vscode/src/services/MoeDaemonClient.ts, pathForms (:595-604). Edit with the Edit tool only.\n\nThe change:\n- Drop `process.platform === 'win32' &&` from the missingRealPath line, so it reads `if (!isWindowsAlias(forms[0])) { forms.push(missingRealPath(forms[0])); }`.\n- After this, on every host, a path whose realpath fails with ENOENT also gets a second form: its nearest existing ancestor's real path plus the missing tail. That is the JetBrains rule (RuntimeSelectionPolicy.ancestorOutside, task-dd545bf1), which applies on every OS under the strict profile.\n- isWindowsAlias() is false off Windows, so Windows behavior is unchanged byte for byte.\n\nUpdate the two comments above that line to say:\n- A missing PATH entry or store root is judged where a folder created there later would really land: below a symlink on any host, or below an 8.3 name, subst or mapped drive on Windows.\n- Error handling is unchanged. missingRealPath throws for a non-ENOENT error, for a level that exists without resolving (a dangling link), and for a path with no existing ancestor. isOutsideProject turns any throw into false (refused).\n\nThe resulting behavior:\n- writeProtectedState refuses an absent root beneath an outside link into the project before mkdirSync runs, so nothing is created inside the project. The existing log line 'the protected state root is not provably outside the project' names the refusal.\n- protectedPathEntries and protectedDaemonEnvironment drop a missing PATH leaf beneath such a link, and also one beneath a dangling link (fail closed).\n\nOut of scope: readProtectedState, which has no basePath. Its containment is not in this DoD; see the planning notes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Dropped the win32 guard on missingRealPath in pathForms; comments updated.",
+      "startedAt": "2026-11-03T07:34:07.377Z",
+      "completedAt": "2026-11-03T07:34:15.847Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "moe-vscode/tests/protected-profile-pin.test.cjs: add P11 after P10. It is the store regression test and runs on every platform.\n\nSetup:\n- Make directory links with fs.symlinkSync(target, link, 'junction'). The type argument is ignored off Windows, and a junction needs no privilege on Windows.\n- Fixture: dir = project(VERIFIED); an outside temp dir holds link L -> dir.\n- Reuse tree(), recordFile(), keyOf() and storeRoot().\n- Every refusal case asserts that tree(dir) is unchanged before and after, and that no file named protectedStateName('profile', key) exists anywhere under dir.\n\nCases:\n- (a) Initial absent root L/globalStorage/protected-state:\n  - session(root).api.runtimeProfile(dir) === 'protected', and asks is [] (the session pin);\n  - writeProtectedState(name, '{}', dir) === false;\n  - the logs include 'not provably outside the project';\n  - fs.existsSync(path.join(dir, 'globalStorage')) === false.\n- (b) Existing root: first create dir/globalStorage/protected-state with mode 0700, so the root resolves. The same refusals hold, and the pre-created directory stays empty.\n- (c) A root beneath a dangling link: a link that points at a removed directory. It is refused, and nothing is created at the link target.\n- (d) Outside success: link M -> a second temp dir outside every project, with root = M/globalStorage/protected-state, initially absent.\n  - runtimeProfile persists exactly one record, at the real location: realpath(M)/globalStorage/protected-state/<name>;\n  - on POSIX the root is mode 0700 and the file 0600;\n  - a fresh session(root).api.readProtectedState(name) returns that record.\n\nRED check: before step 1, case (a) fails on POSIX, because the write returns true and the record lands in dir/globalStorage. Cases (b)-(d) pin today's behavior.\n\nMutation-resistant: assert exact values (false, the directory tree, the record path), never only truthiness.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "note": "Added P11 (absent / existing / dangling x2 roots refused with the project tree unchanged; outside absent root persists one 0700/0600 record at its real location and a fresh session reads it). Pin suite: 31 pass with the fix. RED control in /mnt/d/moe-scratch/20a64797-work with the original source: P11 (a) fails because globalStorage/protected-state/7cc6bcb2532d5599.json lands inside the project.",
+      "startedAt": "2026-11-03T07:37:23.486Z",
+      "completedAt": "2026-11-03T07:37:54.789Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "moe-vscode/tests/protected-daemon-spawn.test.cjs: the PATH-leaf regression row. It is the POSIX twin of 'Windows missing PATH leaves are judged by their nearest existing ancestor' (:233). Add it right after that row, with `{ skip: process.platform === 'win32' && 'the Windows row above covers junction, 8.3, subst and mapped forms' }`.\n\nWith fixture(t), create these links under f.outside:\n- to-project -> f.project;\n- to-sub -> f.project/sub (mkdir sub first);\n- to-home -> f.home;\n- dangling -> f.project/later, then remove later.\n\nEntries:\n- inside = [to-project/later, to-sub/later/bin, dangling, dangling/bin, f.project/later/bin].\n- outside = [f.outside/later, f.outside/later/deeper, to-home/later].\n\nAssertions:\n- api.isOutsideProject(entry, f.project) is false for every inside entry and true for every outside entry. Pass the entry as the assertion message.\n- api.protectedDaemonEnvironment({ PATH: [...inside, ...outside].join(':') }, f.project, f.node, false, undefined).PATH === [path.dirname(f.node), ...outside].join(':').\n\nRED check: before step 1, the three link-based inside entries (to-project/later, to-sub/later/bin, dangling/bin) read as outside on Linux.\n\nDo not edit the existing Windows row or any other row.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "note": "Added the POSIX PATH-leaf row after the Windows row (skipped on win32 by design). Passes with the fix on Linux (22 pass, 4 skipped in the suite); RED against the original source: to-project/later reads as outside.",
+      "startedAt": "2026-11-03T07:37:55.457Z",
+      "completedAt": "2026-11-03T07:38:16.418Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run once, fresh, after the last edit, and submit the result as complete_task evidence:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R/moe-vscode\" && { npm test 2>&1 | tail -15; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && npm run compile -- --noEmit && { \"/mnt/c/Program Files/nodejs/node.exe\" --test tests/protected-daemon-spawn.test.cjs tests/protected-profile-pin.test.cjs tests/protected-runtime.test.cjs 2>&1 | tr -d '\\r' | tail -12; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }\n\nSetup and conditions:\n- In a task worktree, first run `npm ci --prefer-offline --no-audit --no-fund` in that worktree's moe-vscode. The tests need typescript, which is pure JS, so Windows node.exe can use the same node_modules. Never run npm ci or npm install in the shared checkout D:\\projexts\\moes, whose moe-vscode already has node_modules.\n- Run from a normal WSL shell, not env -i, so WSL interop gives Windows node its PATH.\n- `-- --noEmit` keeps the typecheck from writing dist/.\n\nIn the report:\n- Give the Linux pass/fail/skip counts for the whole package suite, and the Windows counts for the three protected suites.\n- Confirm that P11 and the new PATH-leaf row ran on Linux, and that P11 ran on Windows (the leaf row is skipped there by design).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "note": "Fresh verification exit 0. Linux npm test: 624 tests, 620 pass, 0 fail, 4 skipped (base 622/618/4). tsc --noEmit clean. Windows node.exe, three protected suites: 81 tests, 76 pass, 0 fail, 5 skipped. P11 and the POSIX leaf row ran on Linux; P11 ran and passed on Windows; the POSIX leaf row is skipped on Windows by design. Log: /mnt/d/moe-scratch/20a64797-work/verify.log.",
+      "startedAt": "2026-11-03T07:38:17.021Z",
+      "completedAt": "2026-11-03T07:39:20.828Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this diff only (load the adversarial-self-review skill). Then run mutants in a scratch copy, never in the checkout.\n\nSetup:\n- Copy moe-vscode/src and moe-vscode/tests into /mnt/d/moe-scratch/20a64797-work/, next to a node_modules symlink.\n- Run an unmutated control first.\n\nMutants:\n- M1: put the `process.platform === 'win32' &&` guard back. P11 (a) and the PATH-leaf row must fail on Linux.\n- M2: make missingRealPath return the lexical path. Same kill.\n- M3: remove the 'exists but does not resolve' throw. The dangling cases in P11 (c) and the leaf row must fail.\n\nChecklist:\n- macOS tmpdir symlinks: the fixtures use real paths.\n- A race where the leaf appears between realpath and lstat fails closed.\n- '/' as the nearest ancestor.\n- Windows untouched: the platform-gated rows on the Windows leg stay green.\n- P7-P10 and S1 unchanged.\n\nError handling: confirm that every new failure path returns false and leaves no temp file, and that nothing is ever created in the project.\n\nRecord the evidence in that scratch dir, and write the Serena handoff memory task-task-20a647976d404a009ea4cca6a458c580-handoff.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "note": "Adversarial review done on this task's diff only. Mutants M1/M2/M3 (scratch copy) each fail both new rows; unmutated control green before and after. Callers of isOutsideProject are only writeProtectedState and protectedPathEntries. Leaf-appears race, ENOTDIR/EACCES, '/' ancestor all fail closed or resolve outside; every new refusal returns false before mkdirSync, so nothing is created in the project and no temp file exists. Theoretical, left out: same-user link swap between the check and mkdir; readProtectedState has no containment (noted for task-648a5916 in the handoff memory). Evidence: /mnt/d/moe-scratch/20a64797-work/EVIDENCE.md.",
+      "startedAt": "2026-11-03T07:39:22.625Z",
+      "completedAt": "2026-11-03T07:40:10.654Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -30,10 +102,132 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T06:43:56.480Z",
-  "updatedAt": "2026-11-03T07:06:12.554Z",
+  "updatedAt": "2026-11-03T07:42:13.144Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T07:06:12.554Z",
     "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T07:25:52.731Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-d6c1cb7a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T07:31:12.079Z",
+  "executionContract": {
+    "intendedBehavior": "On every host, isOutsideProject judges a path that does not exist by its nearest existing ancestor's real path plus the missing tail, as JetBrains does. A missing store root or PATH leaf beneath a symlink into the project (or beneath a dangling link) is therefore refused. writeProtectedState writes nothing inside the project, and the protected PATH keeps only entries that are really outside. Windows behavior is unchanged.",
+    "acceptanceCriteria": [
+      "P11 (every platform): an absent root, an existing root and a dangling-link root beneath an outside link into the project are each refused (writeProtectedState false, the project tree unchanged, no record under the project). An absent root beneath an outside link to a real outside dir persists one owner-only record at its real location, and a fresh session reads it back.",
+      "PATH-leaf row (POSIX): missing leaves beneath links to the project, to a project subdir or through a dangling link are refused; outside and home-link leaves are kept. protectedDaemonEnvironment's PATH equals the node dir plus exactly the outside entries.",
+      "The moe-vscode suite and typecheck pass on Linux, and the three protected suites pass under Windows node.exe."
+    ],
+    "invariants": [
+      "Windows behavior of pathForms, isOutsideProject and every caller is unchanged.",
+      "Any realpath error other than ENOENT, a dangling level, or a path with no existing ancestor refuses (isOutsideProject false).",
+      "writeProtectedState never creates a file or directory inside the project, and leaves no temp file on refusal.",
+      "No existing test row is edited or weakened."
+    ],
+    "compatibility": [
+      "The isOutsideProject, protectedPathEntries, protectedDaemonEnvironment, protectedVmControlRuntime and writeProtectedState signatures are unchanged. readProtectedState is unchanged."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/services/MoeDaemonClient.ts pathForms: the missingRealPath condition and its two comments only.",
+      "moe-vscode/tests/protected-profile-pin.test.cjs: new row P11.",
+      "moe-vscode/tests/protected-daemon-spawn.test.cjs: one new POSIX PATH-leaf row after the Windows missing-leaf row."
+    ],
+    "reuse": [
+      "missingRealPath, unchanged, now on every host.",
+      "The pin suite's session/project/storeRoot/tree/recordFile helpers, and the spawn suite's fixture and protectedDaemonEnvironment assertion shape from the Windows row."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/services/MoeDaemonClient.ts:601: `if (process.platform === 'win32' && !isWindowsAlias(forms[0])) { forms.push(missingRealPath(forms[0])); }`, added by task-dd545bf1 (1f6c2721), which added no VS Code test.",
+      "moe-vscode/src/services/MoeDaemonClient.ts:371: writeProtectedState refuses when !isOutsideProject(root, basePath), before mkdirSync(root, { recursive: true }).",
+      "moe-jetbrains RuntimeSelectionPolicy.ancestorOutside applies the nearest-existing-ancestor rule on every OS under the strict profile.",
+      "moe-vscode/tests/protected-daemon-spawn.test.cjs:233: the existing missing-leaf row is Windows-only."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R/moe-vscode\" && { npm test 2>&1 | tail -15; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && npm run compile -- --noEmit && { \"/mnt/c/Program Files/nodejs/node.exe\" --test tests/protected-daemon-spawn.test.cjs tests/protected-profile-pin.test.cjs tests/protected-runtime.test.cjs 2>&1 | tr -d '\\r' | tail -12; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Drop the win32 guard. Chosen: missingRealPath has no Windows-specific step. It uses lstat, dirname and realpath.native, which work on POSIX too.\n2. Add a POSIX-only ancestor walk in writeProtectedState. Rejected: protectedPathEntries has the same gap (the DoD names PATH leaves), and JetBrains fixes it in the shared containment check.\n3. Refuse any store root that contains a symlink. Rejected: it would break symlinked home directories, and JetBrains does not do it.\n4. Read-side containment (readProtectedState has no basePath; JetBrains gates the whole store with usableFor). Left out: it is not in this DoD, it changes an exported signature that the BLOCKED task-648a5916 builds on, and once writes are refused Moe never writes a record into the project. task-648a5916's plan should gate its spawn-key read on isOutsideProject(root, basePath).",
+    "codebaseInsights": "- The VS Code store has no usableFor gate; only writeProtectedState checks containment.\n- task-dd545bf1 added missingRealPath on win32 only and added no VS Code test, which is why this bug survived.\n- protected-profile-pin and protected-daemon-spawn load MoeDaemonClient.ts by transpiling it with typescript into a vm context, so no build is needed.\n- On POSIX, isWindowsAlias() is always false.",
+    "risks": "- Behavior change on POSIX: a missing PATH entry beneath a dangling link is now dropped (fail closed), where before it was kept lexically.\n- A race in which a missing leaf appears between realpath and lstat refuses for that one call.\n- macOS: tempDir() already uses real paths (/private/var).\n- The Windows node leg reuses node_modules from the Linux npm ci; that works because typescript is pure JS.\n- Run the Windows leg from a normal WSL shell, not env -i.\n- `npm run compile` without `-- --noEmit` writes moe-vscode/dist.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/protected-profile-pin.test.cjs",
+      "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "a13eb35468c76805c2fc211254912e552335e7ce",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T07:31:12.107Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T07:34:07.377Z",
+  "reviewStartedAt": "2026-11-03T07:40:36.044Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R/moe-vscode\" && { npm test 2>&1 | tail -15; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && npm run compile -- --noEmit && { \"/mnt/c/Program Files/nodejs/node.exe\" --test tests/protected-daemon-spawn.test.cjs tests/protected-profile-pin.test.cjs tests/protected-runtime.test.cjs 2>&1 | tr -d '\\r' | tail -12; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 624\nℹ suites 0\nℹ pass 620\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 36461.426281\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./ --noEmit\n✔ L1 a protected launch uses only the installed wrapper, daemon and proxy, plus the marker (6.8494ms)\n✔ L2 a missing installed proxy/index.js refuses with no terminal (9.3463ms)\n✔ L3 a missing installed scripts/moe-agent.ps1 refuses with no terminal (7.0751ms)\n✔ L4 a legacy launch keeps the project script first and carries no marker (7.5823ms)\nℹ tests 81\nℹ suites 0\nℹ pass 76\nℹ fail 0\nℹ cancelled 0\nℹ skipped 5\nℹ todo 0\nℹ duration_ms 793.307\nEXIT=0",
+    "reportedAt": "2026-11-03T07:40:36.044Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/tests/protected-profile-pin.test.cjs",
+    "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+  ],
+  "completionSummary": "pathForms in moe-vscode/src/services/MoeDaemonClient.ts now calls missingRealPath on every host (dropped the win32 guard; condition is !isWindowsAlias(forms[0]), identical on Windows). A missing store root or PATH leaf below a symlink into the project, or below a dangling link, is refused. writeProtectedState returns false before mkdirSync and creates nothing in the project; the protected PATH keeps only the really-outside entries. Tests: protected-profile-pin P11 (absent, existing and two dangling roots refused with project tree unchanged and no record under the project; an outside absent root persists one 0700/0600 record at its real location and a fresh session reads it back; runs on Linux and Windows) and a POSIX PATH-leaf row in protected-daemon-spawn (skipped on win32 by design). RED against the original source: P11 writes globalStorage/protected-state/<hash>.json inside the project, and to-project/later reads as outside. Mutants (guard back, lexical missingRealPath, no dangling throw) each fail both new rows. Counts: Linux npm test 624 tests / 620 pass / 0 fail / 4 skipped (base 622/618/4); tsc --noEmit clean; Windows node.exe, 3 protected suites: 81 tests / 76 pass / 0 fail / 5 skipped. Residual for task-648a5916: readProtectedState still has no containment check; gate its spawn-key read on isOutsideProject(root, basePath). Evidence: /mnt/d/moe-scratch/20a64797-work (EVIDENCE.md, mutants.log, verify.log).",
+  "commits": [
+    {
+      "sha": "edc27e1433f9583b129ed285ac51d184fe3c84f0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T07:31:31Z",
+      "paths": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T07:42:13.144Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T07:31:31Z",
+    "at": "2026-11-03T07:42:13.144Z"
   }
 }

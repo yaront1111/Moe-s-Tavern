@@ -9,10 +9,102 @@
     "Legacy seats are unchanged. parity-check.sh, the protected-agent-command and agent-git-guard suites, and the launcher suites exit 0 on Linux and through Windows node.exe."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/moe-agent.ps1: PATH scrub under the marker, with the WT-13 check moved after it. This is the twin of sh protected_scrub_path (task-0b2ea570). Edit with the Edit tool only, and keep the UTF-8 BOM and LF-only endings.\n\n(a) Give Find-MoeProtectedFile (:570) a list mode instead of copying its per-entry test. This follows the architect comment on this row: the scrub and every lookup share ONE definition of 'outside the project', the one from task-89579137 (see mem:gotcha-windows-final-path-canonicalization and mem:gotcha-windows-subst-ancestor-walk).\n- An empty -Name collects every entry that passes the existing checks. Those checks are: absolute; its real path is neither the project nor under it; and on Windows its final path is local and not under the project key.\n- Collect each entry's UNTRIMMED real path ($realFull) and return the list in PATH order. Do not use the trimmed $real: a root entry trimmed to 'C:' would become drive-relative.\n- The named mode keeps its first-hit return.\n- Error handling stays as it is. The per-entry try/catch skips an unreadable entry. A project that cannot be placed prints the one [WARN] line and returns nothing.\n- Leave every other task-89579137 byte unchanged.\n\n(b) Add the scrub under $script:MoeRuntimeProtected, after Resolve-MoeProtectedCli is defined and before `$script:MoeNode = $null` (the node pin).\n- Compute `$moeTrusted = @(Find-MoeProtectedFile '' @() | Where-Object { $_ })`. Filter, because a function that returns $null yields one $null element.\n- If the list is empty, call Stop-MoeProtectedAgent with the existing node line, verbatim: '[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start.' Add no new MOE_ code, and never set PATH to '': in PowerShell that deletes the variable (mem:gotcha-powershell-empty-env-var-deletes).\n- Otherwise set `$env:PATH = $moeTrusted -join [IO.Path]::PathSeparator`.\n- A hot-reload pass reruns this on a PATH that is already scrubbed. It must leave that PATH unchanged (idempotent).\n\n(c) WT-13: turn the `$moeInWorktree = & { ... }` block (:145) and its refusal (:168) into a function with the same body.\n- Keep the local `$ErrorActionPreference = 'Continue'`, the catch that returns $false, the MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -cne '1' seam, and the same stderr line with `exit 1`.\n- At the function's current spot, call it only when `$env:MOE_RUNTIME_PROTECTED -cne '1'`. $script:MoeRuntimeProtected is not defined yet at that point. This keeps legacy order and output unchanged.\n- Under the marker, call it right after the scrub, so its three `& git` calls resolve from the scrubbed PATH.\n- Add a comment that under the marker no bare-name command may run before the scrub. A grep of :120-616 finds no other native command today.\n\nThe Windows tests in steps 3-4 cover this.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Find-MoeProtectedFile list mode (empty -Name emits each trusted entry's untrimmed $realFull, PATH order; named mode unchanged). Protected scrub before the node pin: @(Find-MoeProtectedFile '' @() | Where-Object {$_}); empty refuses with the existing node MOE_PROTECTED_INTERPRETER_NOT_FOUND line; else PATH = join. WT-13 block is now Assert-MoeWrapperNotInWorktree (same body, indented), called at its spot only when $env:MOE_RUNTIME_PROTECTED -cne '1', and right after the scrub under the marker. PS 5.1 ParseFile OK, BOM kept, 0 CR. Rows W3/W4 in step 3 exercise it.",
+      "startedAt": "2026-11-03T07:27:52.360Z",
+      "completedAt": "2026-11-03T07:30:03.601Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Both wrappers: under the marker, the worktree-launch and board-snapshot Node programs spawn only an absolute git.\n\n(a) Programs. Make the same edit in both copies, so each pair stays byte-identical and ASCII. postflight-worktree.cjs boardJs() already asserts the board pair, and X1 in step 4 asserts both pairs.\n- The tooling programs are ps1 Initialize-MoeWorktreeLaunch :3327 and sh worktree_tooling_node :3461.\n- The board programs are ps1 Invoke-MoeBoardSnapshot :7408 and sh board_snapshot_node :7928.\n- Reuse the agent Git guard's idiom from task-52555102: `const strict = process.env.MOE_RUNTIME_PROTECTED === '1', GIT = strict ? process.env.MOE_PROTECTED_GIT || '' : 'git';`\n- In each git helper, before spawning, add `if (strict && !path.isAbsolute(GIT)) throw Error(...)` with a message that names MOE_PROTECTED_GIT. Then spawn GIT instead of 'git'.\n- Add a one-line comment that cites task-3acf7f79 and says why: Node looks a bare name up in the cwd (Node < 22) and in '.', relative and in-project PATH entries. See mem:gotcha-windows-libuv-spawn-searches-cwd-first.\n\nError handling: each helper's first call already sits inside its program's try, so a refusal takes the existing failure path.\n- The tooling program exits 1 with the message as its last line, which the wrapper reports as MOE_WORKTREE_CREATE_FAILED.\n- The board program prints [WARN] MOE_BOARD_SNAPSHOT_SKIPPED and exits 0, so the landing is unaffected.\n- Keep the argv layout (argv.slice(-4) and argv.slice(-3)) and every other byte. postflight-worktree.cjs runs both programs directly, with a legacy env.\n\n(b) Export MOE_PROTECTED_GIT under the marker.\n- ps1: inside the node-pin block, after Set-Alias, set `$env:MOE_PROTECTED_GIT = Find-MoeProtectedFile 'git' <@('.exe') on Windows, @('') on POSIX>`. A missing git assigns $null, which deletes the variable, so the programs fail closed.\n- sh: in protected_pin_interpreters, after PYTHON_CMD, add `MOE_PROTECTED_GIT=$(protected_path_lookup git \"$project\" .exe) || MOE_PROTECTED_GIT=\"\"` and then `export MOE_PROTECTED_GIT`. This form is set -e safe.\n- Legacy never sets the variable, and the programs ignore it there.\n- Leave the guard's own lookups ($guardGit and guard_git) unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Both program pairs edited identically (tooling 4887 chars, board 8305 chars; both equal across wrappers, ASCII, no spawnSync('git'). Each git helper: `const strict = MOE_RUNTIME_PROTECTED === '1', GIT = strict ? MOE_PROTECTED_GIT || '' : 'git'`, throw 'MOE_PROTECTED_GIT must be an absolute path to git when MOE_RUNTIME_PROTECTED=1' before spawning when strict && !path.isAbsolute(GIT); spawn GIT. Argv layout untouched. ps1 exports $env:MOE_PROTECTED_GIT = Find-MoeProtectedFile 'git' $nodeExtensions after Set-Alias; sh exports MOE_PROTECTED_GIT=$(protected_path_lookup git \"$project\" .exe) || \"\" in protected_pin_interpreters. Guard lookups untouched. bash -n OK, PS 5.1 ParseFile OK.",
+      "startedAt": "2026-11-03T07:30:04.493Z",
+      "completedAt": "2026-11-03T07:31:31.110Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/tests/protected-agent-command.test.mjs: launch rows, appended after I2 (the architect comment on this row). Background: a governor role is what launches the CLI. Windows rows need GIT_DIR on PATH, and they run through Windows node.exe from a normal WSL shell, not env -i (mem:gotcha-protected-agent-command-reaching-the-cli).\n\nW3 (each ps1 engine, Windows only; skip without GIT_DIR):\n- Copy process.execPath to fx.project\\git.exe and fx.project\\bin\\git.exe, and reuse G1's NODE_OPTIONS --require logger, which logs {pid, ppid, exe, args}.\n- For each of plantedEntries.slice(1) ('.', relative 'bin', absolute fx.project\\bin), put the entry first on PATH, ahead of nodeBin(fx), fx.trusted, TAIL and GIT_DIR, and run a governor launch twice.\n- Under the marker, assert: exit 0; 'trusted claude' in ran.log; and NO log row whose exe lies in fx.project or below it. This is the whole log, not only guard children.\n- With marker null (legacy), assert at least one such row. That shows the plant is reachable through that entry (non-vacuity).\n\nW4 (each ps1 engine, Windows): plant fx.project\\git.exe and the logger, set PATH to ['.'] only and the marker to '1'.\n- assertRefused(engine, fx, r, interpreterNotFound('node')).\n- The exe log holds no planted row, which shows WT-13's git did not run before the scrub.\n\nX2 (every engine; a ps1 engine on Windows needs GIT_DIR): a governor launch whose claude stub also appends `git [<MOE_PROTECTED_GIT>]`. In a .cmd file, %VAR% expands an unset variable to empty, which C2 relies on.\n- Under the marker, the value names the first trusted git: on Linux, the first TAIL dir that holds git (its real path); on Windows, GIT_DIR\\git.exe, compared case-insensitively.\n- In legacy it prints `git []`.\n\nAlso update G1's comment that says the launcher's own PowerShell lookups are not covered (task-3acf7f79), so it points at W3.\n\nThese test rows must fail on the current bytes (RED: W3's marker legs, W4, and X2's marker leg) and pass after steps 1-2.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "Appended after I2: exeLogger(fx) (G1's NODE_OPTIONS logger, filtering rows whose exe real path lies in fx.project or below), plantGit(fx) (node.exe copies as project\\git.exe and project\\bin\\git.exe), W3 + W4 per ps1 engine (Windows, need GIT_DIR), X2 per engine (claude stub echoes `git [MOE_PROTECTED_GIT]`; marker = first trusted git: GIT_DIR\\git.exe on Windows (case-insensitive), realpath(first TAIL dir with git)/git on Linux; legacy `git []`). G1 comment now points at W3. GREEN: Linux bash X2 ok (pwsh absent); Windows node.exe W3/W4/X2 x PS 5.1 + PS 7 all ok (45 s). RED on HEAD bytes (scratch /mnt/d/moe-scratch/3acf7f79-work/red): bash X2, PS5.1/PS7 X2 ('git []'), W3, W4 all fail; per-form probe: dot/relative/absolute in-project each ran the plant 3x under the marker on HEAD, legacy 4x.",
+      "startedAt": "2026-11-03T07:31:32.011Z",
+      "completedAt": "2026-11-03T07:36:18.125Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/tests/protected-agent-command.test.mjs: X1, a program row on every platform. It uses no engine, only process.execPath.\n\nExtract and compare the programs:\n- The tooling program from both wrappers. In sh it is the MOE_WT_TOOLING_JS heredoc. In ps1 it is the `$js = @'` block inside Initialize-MoeWorktreeLaunch: anchor on the function name, not on the first here-string in the file.\n- The board program from both wrappers, with postflight-worktree.cjs's MARK regex.\n- Assert each pair is identical and ASCII, and that neither text contains spawnSync('git'.\n\nRun each program: write its text to a file in the fixture root and run `node --require <shim> <file> <args>`. The shim wraps child_process.spawnSync, appends {cmd, status} as JSON to a log, and returns the original's result.\n\nFixture:\n- `git init -q` a project that holds .moe/project.json.\n- Give the child a git identity through GIT_AUTHOR_* and GIT_COMMITTER_*, so commit-tree works.\n- Clear MOE_* and NoDefaultCurrentDirectoryInExePath from the child env, as run() does.\n- Arguments: tooling gets <project> <fresh dir> <project> task-x1; board gets <project> task-x1 WORKING.\n\nCases for each program:\n- (a) MOE_RUNTIME_PROTECTED='1' with MOE_PROTECTED_GIT unset, and (b) the same with it set to the relative 'git'. No spawn is logged. The tooling program exits 1 with a last stdout line that names MOE_PROTECTED_GIT. The board program exits 0 with a '[WARN] MOE_BOARD_SNAPSHOT_SKIPPED:' line that names it.\n- (c) '1' with the absolute real git: the first TAIL git on Linux, GIT_DIR\\git.exe on Windows; skip this case if there is none. At least one spawn is logged, every logged cmd equals that path, and the first spawn has status 0. The board program also prints '[OK] board snapshot'.\n- (d) Legacy: the marker unset, and the marker 'true'. MOE_PROTECTED_GIT is set to the absolute git anyway. At least one spawn is logged and every logged cmd is 'git'. This shows legacy is unchanged and only exactly '1' counts.\n\nThis row must fail on the current bytes, where the programs spawn 'git' in (a)-(c).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "X1 appended (every platform, process.execPath only): wrapperPrograms() extracts the tooling pair (sh heredoc; ps1 `$js = @'` anchored at function Initialize-MoeWorktreeLaunch) and the board pair (postflight-worktree MARK); asserts identical, ASCII, no spawnSync('git'. Runs each program under a --require spawnSync shim logging {cmd,status}; git-init'd project with .moe/project.json plus a git-init'd W (so tooling (c) also exits 0), GIT_CONFIG_GLOBAL empty file + GIT_AUTHOR/COMMITTER ids, MOE_*/NoDefaultCurrentDirectoryInExePath cleared. Cases (a) unset, (b) relative: nothing spawned, tooling exit 1 last line names MOE_PROTECTED_GIT, board exit 0 with [WARN] MOE_BOARD_SNAPSHOT_SKIPPED naming it; (c) absolute trusted git: every cmd = it, exit 0, first status 0, board [OK] board snapshot; (d) unset and 'true' with MOE_PROTECTED_GIT set anyway: every cmd 'git'. GREEN Linux (0.5 s) and Windows node.exe (2 s). RED on HEAD bytes: static bare-name assert; with that assert removed, runtime case tooling (a) fails (spawned git, exit 0).",
+      "startedAt": "2026-11-03T07:36:19.035Z",
+      "completedAt": "2026-11-03T07:37:37.427Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "docs/ARCHITECTURE.md, the Protected control plane bullet (:467-485). Replace 'The ps1 launcher's own lookups stay open (task-3acf7f79); on POSIX it puts the pinned node's directory first on PATH.' with one or two sentences that say:\n- moe-agent.ps1 rewrites PATH the same way before its first bare-name command. It keeps only the entries Find-MoeProtectedFile trusts, so an 8.3, subst, junction or network spelling of the project is dropped too, and it runs its WT-13 git check only after that.\n- Under the marker, both wrappers export MOE_PROTECTED_GIT. The worktree-launch and board-snapshot Node programs spawn only that absolute git, or fail closed (MOE_WORKTREE_CREATE_FAILED / MOE_BOARD_SNAPSHOT_SKIPPED).\n- On POSIX, ps1 still puts the pinned node's directory first on PATH.\n\nKeep the rest of the bullet unchanged. No other doc names this residual (the CONFIGURATION env list is for operator-set variables, and MOE_PROTECTED_GIT is wrapper-set).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Protected control plane bullet: replaced the 'ps1 launcher's own lookups stay open (task-3acf7f79)' sentence with the ps1 PATH rewrite (Find-MoeProtectedFile's trusted entries, so 8.3/subst/junction/network spellings go too; WT-13 after it), the MOE_PROTECTED_GIT export for the worktree-launch and board-snapshot programs with their fail-closed codes, and the unchanged POSIX node-dir prepend. Rest of the bullet untouched.",
+      "startedAt": "2026-11-03T07:37:38.421Z",
+      "completedAt": "2026-11-03T07:37:58.255Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification. Run the joined command once, fresh, from the task worktree after the last edit, and submit its result as the complete_task verification evidence. checkRefs lists the same command as five legs; run their ` && ` join as one command:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && bash -n scripts/moe-call.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && R=$(git rev-parse --show-toplevel) && cd \"$R\" && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && R=$(git rev-parse --show-toplevel) && cd \"$R\" && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$R/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 && bash scripts/tests/parity-check.sh && npm run lint && R=$(git rev-parse --show-toplevel) && cd \"$R\" && T=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/fake-proxy.js\" && { env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_WORKTREE_ONLY=tooling,project-yml,wt-guard,board-snapshot,board-race,board-push node scripts/tests/postflight-worktree.cjs sh \"$R/scripts/moe-agent.sh\" \"$T/fake-proxy.js\" \"$T\" \"$(command -v bash)\" 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && R=$(git rev-parse --show-toplevel) && cd \"$R\" && W=$(mktemp -d /mnt/d/moe-scratch/3acf7f79-gate.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$W/fake-proxy.js\" && { MOE_WORKTREE_ONLY=wt-guard,project-yml,board-snapshot WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$R/scripts/tests/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$R/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$W/fake-proxy.js\")\" \"$(wslpath -w \"$W\")\" powershell 2>&1 | tr -d '\\r' | tail -6; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }\n\nWhat it runs:\n- The task-0b2ea570 / task-89579137 gate.\n- Two worktree-harness subsets that pin legacy behavior of the edited programs and of the WT-13 refusal: sh on Linux, and ps1 on Windows PowerShell 5.1. The Windows temp dir is on /mnt/d so Windows can reach it, and WSLENV carries only MOE_WORKTREE_ONLY (mem:gotcha-postflight-worktree-mutant-copy).\n\nIn complete_task, report pass/fail/skip counts for both node --test legs and both worktree legs. Confirm from the TAP that W3, W4, X1 and X2 ran on PS 5.1 and PS 7 and were not skipped. Never run npm install, npm ci or npm build anywhere in the checkout.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "startedAt": "2026-11-03T07:38:18.702Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this diff only (load the adversarial-self-review skill). Then run mutants in scratch copies, never in the checkout.\n\nSetup:\n- Copy the worktree's scripts/ to /mnt/d/moe-scratch/3acf7f79-work/<mutant>/scripts. A shell copy OUT of the tree is fine.\n- Apply exactly one edit per copy. Keep the BOM in ps1 copies.\n- Run an unmutated control copy first.\n- Run the Windows rows through Windows node.exe from a normal WSL shell.\n\nEach mutant must be KILLED by an AssertionError on the named row:\n- M1: the ps1 scrub removed. Killed by W3 (every form) and W4.\n- M2: WT-13 also called at its old spot under the marker. Killed by W3 '.' and W4.\n- M3: list mode keeps in-project entries. Killed by W3 relative and absolute.\n- M4: the tooling program spawns 'git'. Killed by X1 (c).\n- M5: the board program spawns 'git', in both copies. Killed by X1 (c).\n- M6: the strict isAbsolute check removed from either helper. Killed by X1 (b).\n- M7: the ps1 export removed. Killed by X2 ps1.\n- M8: the sh export removed. Killed by X2 bash.\n- M9: strict ignores the marker's exact '1'. Killed by X1 (d).\n\nChecklist:\n- The hot-reload pass is idempotent.\n- Root entries (C:\\ and /) are kept untrimmed.\n- PS 5.1 and PS 7 differ: 5.1 has no $IsWindows.\n- BOM and LF endings are kept.\n- Both program pairs are identical and ASCII.\n- No new MOE_ code.\n- Legacy never touches PATH or MOE_PROTECTED_GIT.\n- The refusal precedence under the marker is now: command refusal, then WT-13. This is accepted.\n\nRecord the evidence under /mnt/d/moe-scratch/3acf7f79-work, then write the Serena handoff memory task-task-3acf7f7994514fc7905a939adaa41c15-handoff.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -36,16 +128,107 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:41:12.507Z",
-  "updatedAt": "2026-11-03T07:02:46.824Z",
+  "updatedAt": "2026-11-03T07:38:18.702Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:57.870Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T07:02:42.264Z"
+    "firstClaimAt": "2026-11-03T07:02:42.264Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-33f67e5b"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T07:25:19.447Z",
+  "executionContract": {
+    "intendedBehavior": "Under MOE_RUNTIME_PROTECTED=1, moe-agent.ps1 replaces PATH, before its first bare-name command, with the real paths of the entries Find-MoeProtectedFile trusts, in order. An empty result refuses with the existing node MOE_PROTECTED_INTERPRETER_NOT_FOUND line. Its WT-13 worktree check runs after that scrub. Both wrappers export an absolute MOE_PROTECTED_GIT, and their worktree-launch and board-snapshot Node programs (identical in both wrappers) spawn only that git, or fail closed through their existing failure paths. Legacy behavior is unchanged.",
+    "acceptanceCriteria": [
+      "W3 (PS 5.1 and PS 7, Windows): a git.exe planted at fx.project and fx.project\\bin, reachable through a '.', relative 'bin' or absolute in-project entry, never appears in the whole NODE_OPTIONS exe log of a protected governor launch, which exits 0 and runs the trusted claude. Legacy reaches the plant for each form.",
+      "W4 (PS 5.1 and PS 7, Windows): PATH '.' only under the marker refuses with exactly interpreterNotFound('node') and no planted git runs.",
+      "X1 (Linux and Windows node): both program pairs are identical and ASCII, and contain no spawnSync('git'. Under '1' with MOE_PROTECTED_GIT unset or relative, nothing spawns: tooling exits 1 naming MOE_PROTECTED_GIT, and the board prints MOE_BOARD_SNAPSHOT_SKIPPED and exits 0. With an absolute git, every spawn uses it. In legacy (unset or 'true'), every spawn is 'git'.",
+      "X2 (every available engine): under the marker the CLI sees MOE_PROTECTED_GIT = the first trusted git; in legacy it sees none.",
+      "The joined verification command exits 0, with no new skips of W3, W4, X1 or X2 on the Windows leg, and every pre-existing row stays green."
+    ],
+    "invariants": [
+      "Legacy (MOE_RUNTIME_PROTECTED not exactly '1') leaves PATH untouched, runs WT-13 at its current position with identical logic and output, never sets MOE_PROTECTED_GIT, and its programs spawn 'git'.",
+      "The tooling pair and the board pair stay byte-identical and ASCII across the two wrappers, and their argv layout is unchanged.",
+      "Under the marker, no bare-name command runs in moe-agent.ps1 before the scrub, and the scrub is idempotent across hot-reload passes.",
+      "The scrub and every protected lookup use one definition of a trusted PATH entry (Find-MoeProtectedFile's).",
+      "moe-agent.ps1 keeps its UTF-8 BOM and LF-only endings. No new MOE_ code. No existing test is weakened or removed."
+    ],
+    "compatibility": [
+      "postflight-worktree.cjs runs both programs directly (projectYml over stdin with 4 args, boardJs as a file under its spawnSync shim, which reuses the cmd it is given). Both keep working.",
+      "The I1/I2, N*, G1/G2, C1/C2 and W1/W2/M2 rows stay green unchanged. The agent Git guard's own git lookup is not changed."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.ps1: Find-MoeProtectedFile list mode (empty -Name); the protected PATH scrub before the node pin; the WT-13 check as a function, called at its spot in legacy and after the scrub under the marker; $env:MOE_PROTECTED_GIT in the node-pin block; the git helper of the tooling program (Initialize-MoeWorktreeLaunch) and of the board program (Invoke-MoeBoardSnapshot).",
+      "scripts/moe-agent.sh: the MOE_PROTECTED_GIT export in protected_pin_interpreters; the git helper of worktree_tooling_node and of board_snapshot_node (the same text as in ps1).",
+      "scripts/tests/protected-agent-command.test.mjs: rows W3, W4, X1 and X2 appended after I2; G1's comment.",
+      "docs/ARCHITECTURE.md: the ps1 sentence of the Protected control plane bullet."
+    ],
+    "reuse": [
+      "Find-MoeProtectedFile's per-entry test (task-89579137), through a list mode, so no second definition.",
+      "The guard program's strict / path.isAbsolute idiom.",
+      "G1's planted node.exe copies and NODE_OPTIONS exe logger; plantedEntries, assertRefused, interpreterNotFound, cliStub, run({role:'governor'}) and GIT_DIR.",
+      "The existing node MOE_PROTECTED_INTERPRETER_NOT_FOUND line for an empty scrub, the existing MOE_WORKTREE_CREATE_FAILED and MOE_BOARD_SNAPSHOT_SKIPPED failure paths, and postflight-worktree.cjs's MARK regex and MOE_WORKTREE_ONLY subsets."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1:145-171: the WT-13 `$moeInWorktree = & { ... & git -C ... }` block and its refusal are the only native commands between :120 and the node pin at :616 (grep-checked).",
+      "scripts/moe-agent.ps1:435: $projectPath resolves here. Find-MoeProtectedFile (:570-612) needs it, so the scrub cannot run before :435.",
+      "scripts/moe-agent.ps1:3327 and moe-agent.sh:3461: the tooling git helper, `cp.spawnSync('git', a, ...)`. Its first call is inside try, and the catch exits 1 with the message as the last line; the wrapper then reports MOE_WORKTREE_CREATE_FAILED (ps1 :3383, sh :3527).",
+      "scripts/moe-agent.ps1:7408 and moe-agent.sh:7928: the board git helper. Its first call, rev-parse --show-prefix, is inside try, and the catch prints [WARN] MOE_BOARD_SNAPSHOT_SKIPPED with exit 0.",
+      "scripts/moe-agent.sh:591 protected_pin_interpreters runs only under the marker (:745). sh PATH is already scrubbed (task-0b2ea570, :81 and :142).",
+      "The agent Git guard (ps1 :8746-8760, sh :9096-9110) already uses `strict = process.env.MOE_RUNTIME_PROTECTED === '1'` and `if (strict && !path.isAbsolute(gitCmd)) throw` (task-52555102)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && bash -n scripts/moe-call.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}'",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$R/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 && bash scripts/tests/parity-check.sh && npm run lint",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && T=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/fake-proxy.js\" && { env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_WORKTREE_ONLY=tooling,project-yml,wt-guard,board-snapshot,board-race,board-push node scripts/tests/postflight-worktree.cjs sh \"$R/scripts/moe-agent.sh\" \"$T/fake-proxy.js\" \"$T\" \"$(command -v bash)\" 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && W=$(mktemp -d /mnt/d/moe-scratch/3acf7f79-gate.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$W/fake-proxy.js\" && { MOE_WORKTREE_ONLY=wt-guard,project-yml,board-snapshot WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$R/scripts/tests/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$R/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$W/fake-proxy.js\")\" \"$(wslpath -w \"$W\")\" powershell 2>&1 | tr -d '\\r' | tail -6; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Pass git to the two programs as an extra argv, like the guard does. Rejected: it changes argv.slice(-4) and argv.slice(-3), which postflight-worktree.cjs's direct runs (projectYml, boardJs) depend on. An env var (MOE_PROTECTED_GIT) leaves the argv alone.\n2. Rely on the ps1 PATH scrub alone for the programs. Rejected: Node < 22 still searches the cwd (the project) first on Windows, and DoD 2 forbids any bare-name spawn under the marker.\n3. Move the marker and the protected helpers above WT-13. Rejected: they need $projectPath, which resolves at :435 and can come from a -ProjectName registry lookup. Deferring WT-13 under the marker is smaller and keeps legacy identical.\n4. Copy Find-MoeProtectedFile's per-entry test into the scrub. Rejected: two definitions drift. A list mode (empty -Name) shares the one from task-89579137 and keeps the named mode's first-hit return.\n5. Refuse the launch up front when no trusted git exists. Not needed: the guard already refuses any CLI launch with MOE_AGENT_GIT_GUARD_FAILED, and the programs fail closed.",
+    "codebaseInsights": "- The ps1 hot-reload supervisor reruns the whole file in the same process, so $env:PATH carries over between passes and the scrub must be idempotent.\n- PowerShell walks '.', relative and in-project PATH entries, but never the cwd implicitly. cmd.exe and Node 22+ skip the cwd under NoDefaultCurrentDirectoryInExePath, and every libuv still walks '.' and relative entries.\n- Under the marker, both .NET process starts (Start-Process at :977 and ProcessStartInfo at :10167) use the pinned $script:MoeNode.\n- In sh, PATH is already scrubbed at :81 and :142 (task-0b2ea570). The only remaining sh gap is the programs' bare 'git' under DoD 2.\n- The tooling pair (4465 chars) is identical today, but only the board pair is asserted identical (postflight-worktree.cjs boardJs). X1 adds the tooling assertion.\n- protected-agent-command's run() clears MOE_* and sets MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1, so its rows never reach the WT-13 refusal. The worktree-harness wt-guard case covers that refusal, which is why both the sh and the ps1 wt-guard are in the gate.",
+    "risks": "- `@(f)` on a function that returns $null gives a one-element array, so filter with Where-Object.\n- Use the untrimmed real path: 'C:' is drive-relative.\n- `$env:PATH = ''` deletes the variable, so refuse before it.\n- Precedence under the marker changes only in which refusal comes first: the command refusal now precedes WT-13. Both still come before any side effect.\n- Network or UNC PATH entries are dropped under the marker on Windows, consistent with task-89579137 (fail closed).\n- Git Bash: MOE_PROTECTED_GIT reaches native node.exe only through MSYS env conversion, and the suite skips sh-on-Windows. If the path is unconverted, /mingw64/... spawns ENOENT, and the programs fail closed (mem:gotcha-msys-argv-posix-path-conversion-launcher-tests).\n- Performance: list mode resolves every PATH entry once per pass (on PS 5.1, roughly 0.1-0.3 s). The named lookups still stop at their first hit.\n- Plant only git.exe in W3. PS 5.1 resolves a git.ps1 before git.exe in the same dir (mem:gotcha-git-shim-windows-powershell), and a .ps1 is invisible to the node logger, so the legacy non-vacuity leg would go blind.\n- X1 (c) needs a git identity for commit-tree.\n- Windows rows need a normal WSL shell for the node.exe leg: under env -i, interop loses git.\n- The ps1 worktree leg needs a D: temp dir.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/protected-agent-command.test.mjs",
+      "scripts/tests/postflight-worktree.cjs",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "a13eb35468c76805c2fc211254912e552335e7ce",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T07:25:19.485Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T07:27:52.360Z"
 }

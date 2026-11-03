@@ -18,22 +18,30 @@
     {
       "stepId": "step-1",
       "description": "Close parity (DoD 2, plus item 1 of WT-S comment-54c4e7a6). Nothing here depends on the flip.\n\nparity-check.sh:\n- Append 'MOE_WORKTREE_' 'MOE_LAND_' 'MOE_CONTROL_' 'MOE_BOARD_' 'MOE_PUSH_' 'MOE_MIGRATION_' to the section-1 family loop. That loop already fails on an empty sh family or a difference between the twins.\n- Add the single code MOE_WRAPPER_IN_WORKTREE to section 2's require_both list.\n- Do NOT add MOE_WRAPPER_ as a family. The sh wrapper carries sh-only internal MOE_WRAPPER_* names (at rev 1: ARGV, CURRENT_HASH, DEFERRED_HASH, LAUNCH_HASH, PARSE_ERR, PARSE_RC, PATH and REFUSED_HASH); re-grep at HEAD.\n\nparity-check.ps1:\n- Add the same six families to $dynamicPatterns. If any landed code carries a digit, make the pattern accept digits; grep both wrappers to check.\n- Add MOE_WRAPPER_IN_WORKTREE to $required.\n\nStale allowlist:\n- Remove the INTERNAL_PLUMBING entries that neither wrapper contains any more. At rev 1 these were MOE_ATTR_UNDECLARED, MOE_ATTR_EXCLUDE, MOE_ATTR_POLICY_OVERRIDE and MOE_COMMIT_BOARD_STATE; re-check at HEAD.\n- Keep the mechanism.\n- Fix the ps1 NOTE comment's names: they are now MOE_PY_*, which is not a compared family.\n\nA new-family token present in only one twin:\n- An internal env-bridge name joins the allowlist in BOTH scripts, with a comment.\n- An operator-visible code missing from one twin is an epic defect. If emitting it at the twin's equivalent site is a one-line wrapper edit, make it and report scripts/moe-agent.{sh,ps1} in modifiedFiles. Otherwise file a bug: task in this epic and stop, because DoD 2 needs exit 0.\n\nError handling: both scripts keep failing on any asymmetry and on an empty family. Never allowlist a whole family.\n\nTest: `bash scripts/tests/parity-check.sh` and `powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w scripts/tests/parity-check.ps1)\"` both exit 0.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Parity closed (DoD 2 + WT-S comment-54c4e7a6 item 1). At HEAD a13eb354 the six new families are symmetric and digit-free in both wrappers (WORKTREE 21, LAND 8, CONTROL 4, BOARD 3, PUSH 3, MIGRATION 3 codes), so no wrapper edit and no new allowlist entry was needed.\n- parity-check.sh: the section-1 family loop adds MOE_WORKTREE_ MOE_LAND_ MOE_CONTROL_ MOE_BOARD_ MOE_PUSH_ MOE_MIGRATION_ (it already fails on an empty sh family); section 2 requires MOE_WRAPPER_IN_WORKTREE. MOE_WRAPPER_ is not a family: re-grepped at HEAD, the sh wrapper has 12 sh-only internal MOE_WRAPPER_* names (ARGV, CURRENT_HASH, DEFERRED_HASH, FILE, LAUNCH_HASH, PARSE_ERR, PARSE_RC, PATH, PIN, PIN_ERR, REFUSED_HASH, SOURCE).\n- parity-check.ps1: the same six patterns in $dynamicPatterns, MOE_WRAPPER_IN_WORKTREE in $required 'reason codes', and a new empty-family failure (the plan's \"both scripts fail on an empty family\"; the ps1 lacked it).\n- Stale allowlist: MOE_ATTR_UNDECLARED, MOE_ATTR_EXCLUDE, MOE_ATTR_POLICY_OVERRIDE and MOE_COMMIT_BOARD_STATE are in neither wrapper (0/0 hits), so both lists are now empty and the mechanism stays (sh '^$', ps1 @()). The ps1 NOTE now names the MOE_PY_* bridge, which is not a compared family.\nEvidence:\n- In place: `bash scripts/tests/parity-check.sh` PASS rc=0; `powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w scripts/tests/parity-check.ps1)\"` (Windows PowerShell 5.1) PASS rc=0.\n- Mutation harness /mnt/d/moe-scratch/wt19-b1ca/parity-mut.sh (scratch copies only): 16 mutants = a one-sided bogus code per new family in each twin (12), MOE_WRAPPER_IN_WORKTREE missing from either twin (2), MOE_LAND_ emptied in both (1), and the old allowlisted MOE_COMMIT_BOARD_STATE in sh only (1). RED with the old checkers: all 16 sh=0 ps1=0. GREEN with the new ones: all 16 sh=1 ps1=1, each naming the token; the unmutated control sh=0 ps1=0.",
+      "startedAt": "2026-11-03T07:24:21.877Z",
+      "completedAt": "2026-11-03T07:31:07.122Z"
     },
     {
       "stepId": "step-2",
       "description": "Commit an end-to-end check of the whole flow (DoD 5) as a new file, scripts/tests/worktree-e2e.cjs. It does not depend on the flip: the scratch project sets worktreeMode 'on' explicitly.\n\nModel it on WT-04T's scripts/tests/postflight-worktree.cjs:\n- the same CLI shape, `<sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>`;\n- a `cli` fake-CLI mode;\n- one result line per scenario, and exit 1 on any failure;\n- no output line starting with SKIP.\n\nSetup:\n- The real wrappers with the shared fake daemon+proxy. Per WT-S comment-ce50a0ee, no real daemon is needed.\n- One scratch repo from `git init` under mktemp, with branch main.\n- The control checkout on moe/control.\n- .moe/project.json settings {worktreeMode:'on', consolidationBranch:'main'}, gate-less like WT-08T's cases. Gated landings are WT-10's held-out cases; name them in the summary.\n\nScenarios:\n(a) parallel. Launch two worker seats at once, with different worker ids and tasks (task-a, task-b). Each fake CLI writes its own file in its W (its cwd) and completes. Both must land:\n- main gains exactly two commits;\n- `git log --first-parent main` is linear;\n- every `git reflog refs/heads/main` entry's new value descends from its old one (fast-forward only, never forced);\n- neither W holds .moe.\n(b) conflict-resume.\n- task-c's fake CLI changes a line that task-a already landed differently.\n- The landing ends unlanded on a conflict, main does not move, and the fake records finalize_attempt outcome 'unlanded'.\n- A second session of task-c gets the LANDING-CONFLICT prompt (WT-11). Its fake CLI resolves the markers and completes, and the task lands.\n- History stays linear and fast-forward only.\n(c) WT-S comment-54c4e7a6 item 2:\n- The remote race: A publishes while B's fetch and push fail. There must be no fork (local == origin), and B ends unlanded 'remote'.\n- An unknown push outcome that receipt_replay later resolves.\n- If WT-08T's or WT-09's worktree-landing suites already cover these, name those cases here and let step 6 run them. Add a case to this file only if one is missing.\n\nFake-proxy support:\n- Reuse the knobs that WT-04T, WT-08T and WT-11 added: per-seat task ids, workspace, finalize 'unlanded', landingRetry.\n- Add a missing knob to scripts/tests/postflight-fake-proxy.js only as an opt-in knob. With it unset, every answer stays byte-identical.\n- Never edit a held-out suite.\n\nError handling: a scenario that can't be set up (git missing, a fixture command failing) fails with its reason; it never passes vacuously. Cleanup removes only the mktemp tree, on every exit path.\n\nTest: `node scripts/tests/worktree-e2e.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d)\" \"$(command -v bash)\"` prints ok for (a) and (b), and for (c) when its cases live here. The ps1 engine leg runs in step 6.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js"
       ],
       "newFiles": [
         "scripts/tests/worktree-e2e.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T07:31:14.392Z"
     },
     {
       "stepId": "step-3",
@@ -214,7 +222,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-11-03T07:20:56.299Z",
+  "updatedAt": "2026-11-03T07:31:14.392Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",
@@ -223,7 +231,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:36:47.832Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 9
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -237,7 +246,9 @@
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:46:16.161Z",
   "executionContract": {
@@ -305,5 +316,6 @@
   },
   "planApprovedAt": "2026-10-30T14:46:16.190Z",
   "approvedPlanRevision": 2,
-  "effort": "max"
+  "effort": "max",
+  "workStartedAt": "2026-11-03T07:24:21.877Z"
 }
