@@ -28,6 +28,11 @@ function makeProjectWithDaemon(port: number): string {
   return tmp;
 }
 
+// moe-agent exports MOE_DAEMON_HOST (the Windows host address) to WSL seats.
+// Clear it so the loopback fixtures never dial that address.
+beforeEach(() => { vi.stubEnv('MOE_DAEMON_HOST', undefined); });
+afterEach(() => { vi.unstubAllEnvs(); });
+
 describe('classifier helpers', () => {
   it('detects moe tool names in both mcp__moe__ and moe. forms', () => {
     expect(isMoeToolName('mcp__moe__moe_list_tasks')).toBe(true);
