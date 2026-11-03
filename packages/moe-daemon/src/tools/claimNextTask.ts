@@ -346,9 +346,10 @@ function collisionNotice(taskId: string, collisions: CollisionEntry[], claimerId
  *
  * A live peer with no open attempt, or one without workspaceMode (a legacy
  * record), counts as shared and keeps today's paging, as does every claimer
- * that is not in a worktree (REVIEW/PLANNING claims, worktreeMode off, no
- * workerId). The mode is pinned per attempt and the setting only picks a
- * fresh attempt's mode, so this reads attempts, never the live setting.
+ * that is not in a worktree (worktreeMode off, no workerId). A REVIEW/PLANNING
+ * claim is skipped by controlSeatClaim instead, since its shared attempt says
+ * nothing about the mode. The mode is pinned per attempt and the setting only
+ * picks a fresh attempt's mode, so this reads attempts, never the live setting.
  */
 function worktreeOnlyCollision(
   state: StateManager,
@@ -357,6 +358,25 @@ function worktreeOnlyCollision(
 ): boolean {
   if (claimed?.workspaceMode !== 'worktree') return false;
   return collisions.every((c) => !c.liveAssignee || currentAttempt(state, c.task)?.workspaceMode === 'worktree');
+}
+
+/**
+ * True for a REVIEW or PLANNING claim while worktree mode is on. Such a claim
+ * always opens a shared attempt (openClaimAttempt), so the attempt cannot say
+ * which mode the project runs, and this reads the live setting. In worktree mode
+ * those seats work in the control checkout on moe/control, which lands nothing,
+ * so "coordinate before either of you lands" asks them for nothing, and the
+ * mention-less lines that result route to every busy seat. An invalid setting
+ * keeps today's heads-up: a page is never suppressed on an unreadable mode.
+ */
+function controlSeatClaim(state: StateManager, task: Task): boolean {
+  if (task.status !== 'REVIEW' && task.status !== 'PLANNING') return false;
+  try {
+    return resolveWorktreeMode(state.project?.settings) === 'on';
+  } catch (error) {
+    logger.warn({ error, taskId: task.id }, 'claim_next_task: unreadable worktreeMode; keeping the #workers heads-up');
+    return false;
+  }
 }
 
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
@@ -849,9 +869,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       // and a failure of it, like of the post, is swallowed (the claim already
       // wrote its assignment and attempt). We post a heads-up to #workers if
       // there's any overlap, @mentioning the seats live on a colliding peer and
-      // the claimer so they can coordinate before either lands. The one
-      // exception is worktree mode (worktreeOnlyCollision): when the claimer and
-      // every live peer each run in their own worktree there is nothing to
+      // the claimer so they can coordinate before either lands. The exceptions
+      // are worktree mode: worktreeOnlyCollision (the claimer and every live peer
+      // each run in their own worktree) and controlSeatClaim (a REVIEW/PLANNING
+      // seat lands nothing from the control checkout). Neither has anything to
       // coordinate, so nothing is posted and no seat is paged.
       // Append-only files (CHANGELOG.md by default) are filtered out so the
       // expected shared-file overlap doesn't drown the real ones. `??` — never
@@ -865,7 +886,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       }
       if (fileCollision.length > 0) {
         try {
-          if (worktreeOnlyCollision(state, claimedAttempt, fileCollision)) {
+          if (worktreeOnlyCollision(state, claimedAttempt, fileCollision) || controlSeatClaim(state, task)) {
             logger.info(
               { taskId: task.id, peers: fileCollision.map((c) => c.task) },
               'claim_next_task: worktree-mode file collision; no #workers heads-up'
@@ -876,10 +897,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         } catch { /* never block tool */ }
       }
 
-      // Post system message to #general so the team sees who claimed it
+      // Post system message to #general so the team sees who claimed it. The
+      // title is agent text, echoed without parsing mentions out of it.
       if (params.workerId) {
         try {
-          await state.postToGeneral(`${params.workerId} claimed task: ${task.title}`);
+          await state.postToGeneral(`${params.workerId} claimed task: ${task.title}`, { parseMentions: false });
         } catch { /* never block tool */ }
       }
 
