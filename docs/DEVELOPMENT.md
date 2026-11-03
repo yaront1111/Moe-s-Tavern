@@ -447,15 +447,25 @@ Build and run using Docker:
 cd packages/moe-daemon
 docker build -t moe-daemon .
 
-# Run with your project mounted
-docker run -p 9876:9876 -v /path/to/project:/project moe-daemon
+# Run it for your project, from the project's root
+cd /path/to/project
+docker run -d --name moe-daemon --user "$(id -u):$(id -g)" \
+  -p 127.0.0.1:9876:9876 \
+  -v "$PWD":"$PWD" -e MOE_PROJECT_PATH="$PWD" \
+  moe-daemon
 ```
 
-Or use docker-compose:
+Why each flag is needed:
+
+- `-p 127.0.0.1:9876:9876` publishes the daemon on host loopback only, because `/mcp` has no authentication and a port published without an address is reachable on every host interface. Keep 9876 on both sides: host clients take the port from the `.moe/daemon.json` the container writes. Inside the container the image sets `MOE_BIND_HOST=0.0.0.0`, because a published port reaches the container's network interface, never its loopback.
+- `-v "$PWD":"$PWD" -e MOE_PROJECT_PATH="$PWD"` mounts the project at the absolute path it has on the host. The daemon reports that path in `.moe/daemon.json` and on `/health`, and moe-proxy and the IDE plugins refuse a daemon that reports another project's path. On a Windows host, mount `D:\x` at `/mnt/d/x` and set `MOE_PROJECT_PATH=/mnt/d/x`: those clients treat `D:\x` and `/mnt/d/x` as the same project.
+- `--user "$(id -u):$(id -g)"` runs the daemon as you, so it can write the project's `.moe/`. The image's own user is uid 1001.
+
+Or use docker-compose. It mounts `${PWD}` the same way, so run it from the project's root:
 
 ```bash
-# From repo root
-docker-compose up -d
+# From the project root (here, this repo)
+MOE_UID=$(id -u) MOE_GID=$(id -g) docker-compose up -d
 
 # View logs
 docker-compose logs -f moe-daemon

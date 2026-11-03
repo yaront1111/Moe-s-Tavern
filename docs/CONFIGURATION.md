@@ -127,14 +127,18 @@ node packages/moe-daemon/dist/index.js start --project "$MOE_PROJECT_PATH"
 
 ### Docker (Optional)
 
-If you are using Docker (not required for most users):
+If you are using Docker (not required for most users), run it from your project's root:
 
 ```bash
-docker run -e MOE_PROJECT_PATH=/project \
+docker run -d --user "$(id -u):$(id -g)" \
+           -p 127.0.0.1:9876:9876 \
+           -v "$PWD":"$PWD" \
+           -e MOE_PROJECT_PATH="$PWD" \
            -e LOG_MAX_SIZE_MB=5 \
-           -v /your/project:/project \
            moe-daemon
 ```
+
+Publish on `127.0.0.1` only, because `/mcp` has no authentication. Mount the project at its own absolute path and name that path in `MOE_PROJECT_PATH`, because moe-proxy and the IDE plugins refuse a daemon that reports another project's path. `--user` lets the daemon write the project's `.moe/`. The image sets `MOE_BIND_HOST=0.0.0.0` itself, so the published port reaches the daemon. See the Docker section of [DEVELOPMENT.md](./DEVELOPMENT.md) for details.
 
 ---
 

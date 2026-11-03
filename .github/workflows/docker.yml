@@ -78,3 +78,36 @@ jobs:
             echo "Expected daemon version $expected_version, got: $actual_version" >&2
             exit 1
           fi
+
+          # Serve this checkout (its .moe/project.json is tracked) the way the docs do: mounted at its own
+          # path, published on host loopback only, and run as the checkout's owner so it can write .moe/.
+          name="moe-daemon-health-${GITHUB_RUN_ID:-local}-$$"
+          cleanup() {
+            rc=$?
+            if [ "$rc" -ne 0 ]; then docker logs "$name" 2>&1 | tail -n 40 || true; fi
+            docker rm -f "$name" >/dev/null 2>&1 || true
+            exit "$rc"
+          }
+          trap cleanup EXIT
+          docker run -d --name "$name" --user "$(id -u):$(id -g)" -p 127.0.0.1::9876 \
+            -v "$PWD":"$PWD" -e MOE_PROJECT_PATH="$PWD" moe-daemon-test
+          port=$(docker port "$name" 9876/tcp | head -n 1)
+          port=${port##*:}
+          health=""
+          for _ in $(seq 1 30); do
+            if health=$(curl -fsS -m 2 "http://127.0.0.1:$port/health"); then break; fi
+            health=""
+            sleep 1
+          done
+          HEALTH="$health" EXPECTED="$PWD" node -e '
+            let h = {};
+            try { h = JSON.parse(process.env.HEALTH) ?? {}; } catch {}
+            if (h.status !== "healthy" || h.projectPath !== process.env.EXPECTED) {
+              console.error(`Expected a healthy daemon serving ${process.env.EXPECTED} on 127.0.0.1, got: ${process.env.HEALTH || "no answer"}`);
+              process.exit(1);
+            }
+            console.log(`healthy: ${h.projectPath}`);
+          '
+          # The image's own HEALTHCHECK command must pass inside the container too.
+          docker exec "$name" sh -c "$(docker inspect --format '{{index .Config.Healthcheck.Test 1}}' moe-daemon-test)"
+          echo "image HEALTHCHECK passed"
