@@ -52,14 +52,16 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of your own `git diff` in the worktree. Fix any finding, re-run step 3's gate, and only then call complete_task.\n(1) Scope: exactly three files. Each wrapper hunk is the match line plus the one comment line, and the twins' comment text is identical.\n(2) Fixture: only the anchor, the 'gone' reply and the three assertions changed. 'error' still refuses with the unprefixed 'Team Workers is full (max 1 members)'. That is out of scope: the wrappers print that text and never branch on it.\n(3) False positives: the substring fires only on a message that contains 'Team not found: '. A team NAME containing that text would make a full-team refusal drop the id. The cost is one idempotent create_team by name per retry, and nothing else.\n(4) moe-agent.ps1 still starts with ef bb bf (parity-check fails otherwise).\n(5) Nothing new: no state, concurrency or IO. The variables are per seat, and moe_rpc and Invoke-MoeRpcRaw are untouched.\nWould you be embarrassed if a deleted team still left a seat teamless? Step 3's RED/GREEN pair is the proof that it does not.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T20:50:38.565Z"
+      "note": "Adversarial scoped diff review complete: exactly three files; wrapper hunks only native match + identical comment, fixture only anchor/coded gone/three assertions. No new shared state, IO, races, cleanup or null paths; ps1 failure remains a non-null string; Bash literal quoted substring cannot inject code. Other refusal outcomes retain id, and warnings/RPC readers unchanged. Approved theoretical false positive: a team name containing 'Team not found: ' in a full-team refusal triggers one idempotent create-by-name retry. BOM ef bb bf preserved; git diff --check and exact-comment checks pass. No findings/edits after fresh step-3 GREEN gate (WSL20/58 with38skip; Windows58/58), so no repeat of the plan's run-once suite needed. Handoff and gotcha memories written.",
+      "startedAt": "2026-11-03T20:50:38.565Z",
+      "completedAt": "2026-11-03T20:51:21.589Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -71,12 +73,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:26:29.022Z",
-  "updatedAt": "2026-11-03T20:50:38.565Z",
+  "updatedAt": "2026-11-03T20:53:49.640Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:27:12.270Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -89,7 +91,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T20:42:30.928Z",
@@ -156,5 +159,44 @@
   },
   "planApprovedAt": "2026-11-03T20:42:30.959Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T20:44:41.305Z"
+  "workStartedAt": "2026-11-03T20:44:41.305Z",
+  "reviewStartedAt": "2026-11-03T20:51:35.380Z",
+  "verification": {
+    "command": "bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/seat-registration.test.mjs)\" && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "WSL:\nℹ tests 58\nℹ pass 20\nℹ fail 0\nℹ cancelled 0\nℹ skipped 38\nWindows:\n✔ PowerShell 5.1: moe-agent.ps1 parses\n✔ PowerShell 7: moe-agent.ps1 parses\nℹ tests 58\nℹ suites 0\nℹ pass 58\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 106781.9056\nPASS parity-check.sh",
+    "reportedAt": "2026-11-03T20:51:35.380Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/seat-registration.test.mjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "Both launchers now clear deleted-team IDs on the daemon's coded NOT_FOUND refusal, then recreate by name next pre-flight. Native case-sensitive substring matching; readers/warnings/other refusal behavior unchanged. Fixture repaired exact stale ps1 slice anchor, models real error code/message/data, asserts coded warning/create args and no creates on six other refusal types. Exactly three files; PowerShell BOM retained. Fresh GREEN: WSL 58 tests,20 pass,0 fail,38 skipped; Windows 58/58,0 skipped (Git Bash,PS5.1,PS7 and both ParseFile checks). Syntax/parity PASS; project qualityGate parity+lint exit0. Negative control on 677d051a wrappers: WSL RED 19 pass,1 fail,38 skipped; Windows RED 55 pass,3 fail,0 skipped. All four failures are deleted-team rows at tools(run,2), proving broken wrappers retry dead id. Owned scratch cleaned; no source edits after gate. Adversarial review and diff whitespace check clean; handoff/gotcha memories saved.",
+  "commits": [
+    {
+      "sha": "9834628e1656689aea635f266a421e9ca65ee2af",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T20:42:35Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T20:53:49.640Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T20:42:35Z",
+    "at": "2026-11-03T20:53:49.640Z"
+  }
 }
