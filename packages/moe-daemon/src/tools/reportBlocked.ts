@@ -141,7 +141,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
           // skips the blocked-timeout sweep for any task carrying it. A task
           // HOLDING the lease is in no queue, so no grant is ever coming.
           const grantCorrects = heldWhileBlocked && current.blockedReason !== params.reason;
-          if (grantCorrects) await state.updateTask(task.id, { blockedReason: params.reason });
+          if (grantCorrects) await state.updateTask(task.id, { blockedReason: params.reason }, undefined, params.workerId);
           return {
             success: true,
             taskId: task.id,
@@ -349,7 +349,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
           blockedResourceId: params.resourceId ?? null,
           blockedFromStatus: task.status,
           blockedAt: new Date().toISOString(),
-        }, 'TASK_BLOCKED');
+        }, 'TASK_BLOCKED', params.workerId);
       } else if (alreadyBlocked && (!identicalRepeat || freeSeat)) {
         // No status change here: clear the seat explicitly when acknowledged
         // by its assignee, preserving block bookkeeping. TASK_UPDATED
@@ -361,7 +361,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
           blockedReason: params.reason,
           ...(blockedOnIdsChanged ? { blockedOnTaskIds: mergedBlockedOnIds } : {}),
           ...(params.resourceId !== undefined ? { blockedResourceId: params.resourceId } : {}),
-        });
+        }, undefined, params.workerId);
       }
 
       // Seat handling. Non-resource hand-back: the seat was freed above — put the

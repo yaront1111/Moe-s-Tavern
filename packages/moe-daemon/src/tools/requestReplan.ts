@@ -74,7 +74,8 @@ export function requestReplanTool(_state: StateManager): ToolDefinition {
           priorAttempt,
           reopenReason: params.reason,
         },
-        'TASK_REOPENED'
+        'TASK_REOPENED',
+        params.workerId
       );
 
       // Worker is done with this task; touchWorker is a no-op for missing records.

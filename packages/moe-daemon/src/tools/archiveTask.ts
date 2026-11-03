@@ -76,7 +76,7 @@ export function archiveTaskTool(_state: StateManager): ToolDefinition {
         );
       }
 
-      const updated = await state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED');
+      const updated = await state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED', params.workerId);
       return { success: true, taskId: updated.id, status: updated.status };
     }
   };
