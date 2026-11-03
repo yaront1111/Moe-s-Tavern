@@ -8,7 +8,8 @@
 // live daemon. Side effects land under <project>/.moe: messages/<channel>.jsonl
 // (chat_send), heartbeat.log, record_commit.jsonl, deregister.log,
 // evidence-rpcs.jsonl, account-rpcs.jsonl, served-context.json
-// (FAKE_CTX_PAD_BYTES) and the attempts/, candidates/,
+// (FAKE_CTX_PAD_BYTES), reload-hold.holder and claim-answers.jsonl
+// (FAKE_CLAIM_MODE=reload-hold) and the attempts/, candidates/,
 // checks/, receipts/ and resources/ records.
 const fs = require('fs');
 const path = require('path');
@@ -389,7 +390,38 @@ if (tool === 'claim_next_task' && claimLimit > 0) {
   fs.writeFileSync(claimCount, String(claimN));
   if (claimN > claimLimit) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
 }
-if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam','noteam-until-joined'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
+if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam','noteam-until-joined','reload-hold'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
+// FAKE_CLAIM_MODE=reload-hold ([hot reload hold]): task-4ddbfb31's reload hold
+// (workerLifecycle.ts beginReloadHold) for two seats sharing this fake. The
+// first claimant becomes the holder of task-postflight: .moe/reload-hold.holder,
+// created with 'wx' so two seats can never both win. The holder's later claims
+// answer alreadyAssigned (the resume shape), and any other seat's claim answers
+// idle. Each answer appends {workerId, answer: claimed|resumed|none} to
+// .moe/claim-answers.jsonl. deregister_worker below keeps the holder on its
+// wrapper_restart and deletes the file (a release) on any other reason.
+const reloadHoldFile = path.join(moe, 'reload-hold.holder');
+function reloadHolder() {
+  // A holder file deleted mid-read, or created but not yet written, is no
+  // holder: the reader fails toward 'none'. Any other fs error throws.
+  try { return fs.readFileSync(reloadHoldFile, 'utf8').trim() || null; }
+  catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+}
+function reloadHoldClaim() {
+  const me = String(args.workerId || '');
+  let answer = 'none';
+  if (me) {
+    try { fs.writeFileSync(reloadHoldFile, me, { flag: 'wx' }); answer = 'claimed'; }
+    catch (e) { if (e.code !== 'EEXIST') throw e; if (reloadHolder() === me) answer = 'resumed'; }
+  }
+  fs.appendFileSync(path.join(moe, 'claim-answers.jsonl'), JSON.stringify({ workerId: me, answer }) + '\n');
+  if (answer === 'claimed') return { ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } };
+  if (answer === 'none') return { hasNext: false };
+  return {
+    hasNext: false,
+    alreadyAssigned: { taskId: 'task-postflight', title: 'Postflight smoke', status: 'WORKING' },
+    nextAction: { tool: 'moe.get_context', args: { taskId: 'task-postflight', workerId: me }, reason: 'One task per worker: you already hold task-postflight (WORKING).' }
+  };
+}
 // FAKE_TASK_STATUS_MAP=taskId=STATUS,...: a get_context view 'status' read (WT-14's
 // orphan sweep; no wrapper sent one before) answers {contextScope:'status',
 // task:{id,status}}, WORKING for an unmapped id. NOT_FOUND refuses as the daemon
@@ -493,6 +525,8 @@ switch (tool) {
       // Nothing claimable and nothing held: the board state that used to make
       // the wrapper launch a CLI and tell it to claim itself.
       ok({ hasNext: false });
+    } else if (process.env.FAKE_CLAIM_MODE === 'reload-hold') {
+      ok(reloadHoldClaim());
     } else {
       ok({ ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' },
         ...(claimWorkspace ? { workspace: claimWorkspace } : {}) });
@@ -797,7 +831,19 @@ switch (tool) {
       fs.writeFileSync(process.env.FAKE_RELOAD_RACE_DST, fs.readFileSync(raceSrc));
       fs.unlinkSync(raceSrc);
     }
-    ok({ success: true });
+    if (process.env.FAKE_CLAIM_MODE !== 'reload-hold') { ok({ success: true }); break; }
+    // reload-hold: deregisterWorker.ts's answer. The holder's wrapper_restart
+    // keeps its task (heldTaskIds + holdUntil, the 120 s default); any other
+    // reason releases it, and a seat holding nothing releases nothing.
+    const holderId = reloadHolder() === args.workerId ? args.workerId : null;
+    const keepsHold = holderId !== null && args.reason === 'wrapper_restart';
+    if (holderId !== null && !keepsHold) fs.rmSync(reloadHoldFile, { force: true });
+    const released = holderId !== null && !keepsHold ? ['task-postflight'] : [];
+    const holdUntil = keepsHold ? new Date(Date.now() + 120000).toISOString() : undefined;
+    ok({ success: true, workerId: args.workerId, alreadyDead: false, releasedTaskIds: released, releasedCount: released.length,
+      heldTaskIds: keepsHold ? ['task-postflight'] : [], ...(keepsHold ? { holdUntil } : {}),
+      message: keepsHold ? `${args.workerId} reloading; holding 1 task(s) for its relaunch until ${holdUntil}`
+        : `${args.workerId} deregistered; released ${released.length} task(s)` });
     break;
   }
   case 'lease_account':
