@@ -1179,4 +1179,68 @@ describe('moe.get_commit_scope', () => {
       });
     });
   });
+
+  describe('orphan mode at the completing seat\'s own landing (task-7d3428d1)', () => {
+    // complete_task's two writes (completeTask.ts): the attempt goes finalizing, then the
+    // REVIEW write clears the seat (taskStore shouldClearWorker). The seat's own wrapper
+    // lands afterwards, so its get_commit_scope call no longer comes from "the assignee".
+    beforeEach(async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+      h.createTask({ id: 'task-2', status: 'WORKING', assignedWorkerId: null });
+      const now = Date.now();
+      h.createWorker({ id: 'worker-1', status: 'CODING', currentTaskId: 'task-1', lastActivityAt: new Date(now).toISOString() });
+      h.createWorker({ id: 'worker-3', status: 'IDLE', lastActivityAt: new Date(now - 10 * 60_000).toISOString() });
+      await h.state.load();
+    });
+
+    async function complete(taskId = 'task-1', workerId = 'worker-1') {
+      const attempt = await openAttempt(h.state, { taskId, workerId, runnerId: workerId, workspace: h.testDir });
+      await setAttemptPhase(h.state, attempt.id, 'finalizing');
+      await h.state.updateTask(taskId, { status: 'REVIEW' });
+    }
+
+    it('(o1) the holder of the task\'s finalizing attempt is not a peer of its own completion landing', async () => {
+      await complete();
+      const s = await checked({ workerId: 'worker-1', phase: 'postflight' });
+      expect(s.assignedWorkerId).toBeNull();
+      expect(s.finalizingAttempt?.workerId).toBe('worker-1');
+      expect({ live: s.livePeerIds, active: s.activePeerIds, peersActive: s.peersActive })
+        .toEqual({ live: [], active: [], peersActive: false });
+    });
+
+    it('(o2) a caller that is neither the assignee nor the finalizing holder is still an orphan-mode peer', async () => {
+      await complete();
+      const s = await checked({ workerId: 'worker-2', phase: 'postflight' });
+      expect(s.activePeerIds).toEqual(['worker-1', 'worker-2']);
+      expect(s.peersActive).toBe(true);
+    });
+
+    it('(o3) a finalizing attempt on another task exempts nobody here', async () => {
+      await complete('task-2');
+      await h.state.updateTask('task-1', { assignedWorkerId: null });
+      const s = await checked({ workerId: 'worker-1', phase: 'postflight' });
+      expect(s.finalizingAttempt).toBeNull();
+      expect(s.activePeerIds).toEqual(['worker-1']);
+      expect(s.peersActive).toBe(true);
+    });
+
+    it('(o4) the exemption hides no other live worker', async () => {
+      await complete();
+      await h.state.touchWorker('worker-3');
+      const s = await checked({ workerId: 'worker-1', phase: 'postflight' });
+      expect(s.livePeerIds).toEqual(['worker-3']);
+      expect(s.activePeerIds).toEqual(['worker-3']);
+      expect(s.peersActive).toBe(true);
+    });
+
+    it('(o5) the tool and workerId descriptions name the finalizing-holder exemption', () => {
+      const tool = getCommitScopeTool(h.state);
+      const props = tool.inputSchema.properties as Record<string, { description: string }>;
+      const phrase = /neither the assignee nor the holder of the task's finalizing attempt/;
+      expect(props.workerId.description).toMatch(phrase);
+      expect(tool.description).toMatch(phrase);
+    });
+  });
 });

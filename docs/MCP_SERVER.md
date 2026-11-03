@@ -716,7 +716,7 @@ All seven are required; `additionalProperties` is `false`.
 ```typescript
 {
   taskId: string,                          // Required
-  workerId?: string,                       // caller (auto-injected by proxy); counted in activePeerIds when it is not the assignee
+  workerId?: string,                       // caller (auto-injected by proxy); counted in activePeerIds when it is neither the assignee nor the holder of the task's finalizing attempt
   sessionId?: string,                      // "<workerId>@<preflight-iso>" — the Moe-Session trailer of the landing commit
   phase?: "preflight" | "postflight",
   since?: string                           // ISO; peers active since this instant (default: the 120s presence window)

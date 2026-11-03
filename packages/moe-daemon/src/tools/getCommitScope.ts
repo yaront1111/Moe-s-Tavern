@@ -116,12 +116,12 @@ function sortedById<T extends { id: string }>(items: Iterable<T>): T[] {
 export function getCommitScopeTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.get_commit_scope',
-    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), the DECLARED part of them (moe.declare_files: committed regardless of the pre-task baseline; the rest of ASSERTED only when this task produced the dirty bytes), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; while this task is not DONE/ARCHIVED, a peer that waits on it (dependsOn or blockedOnTaskIds, transitively) and has no active assignee and no open attempt contributes only its asserted paths, since it cannot have run yet; once this task is DONE/ARCHIVED, or while that peer has an active assignee or an open attempt, it counts like any other peer; each entry\'s peerActive is false only when, since `since`, no contributing task had an active assignee, an open attempt or an attempt phase change — always true without `since`; taskIds lists every contributing task in id order, taskId being the first; activeTaskIds lists the contributors that are active by the peerActive rule, in id order — every contributor without `since` — so peerActive is true exactly when it is non-empty; editingTaskIds lists the contributors with an IN_PROGRESS plan step naming the path that are active by the same rule, a subset of activeTaskIds — every such contributor without `since`), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds — but assigneeProtected tells a caller that is not the assignee whether it must leave the task\'s source paths alone. finalizingAttempt names the task\'s finalizing attempt exactly as claim_next_task\'s finalizing hold selects it ({attemptId, workerId, generation}, whoever holds it, the caller included) or is null; a daemon older than the field omits it.',
+    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), the DECLARED part of them (moe.declare_files: committed regardless of the pre-task baseline; the rest of ASSERTED only when this task produced the dirty bytes), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; while this task is not DONE/ARCHIVED, a peer that waits on it (dependsOn or blockedOnTaskIds, transitively) and has no active assignee and no open attempt contributes only its asserted paths, since it cannot have run yet; once this task is DONE/ARCHIVED, or while that peer has an active assignee or an open attempt, it counts like any other peer; each entry\'s peerActive is false only when, since `since`, no contributing task had an active assignee, an open attempt or an attempt phase change — always true without `since`; taskIds lists every contributing task in id order, taskId being the first; activeTaskIds lists the contributors that are active by the peerActive rule, in id order — every contributor without `since` — so peerActive is true exactly when it is non-empty; editingTaskIds lists the contributors with an IN_PROGRESS plan step naming the path that are active by the same rule, a subset of activeTaskIds — every such contributor without `since`), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId neither the assignee nor the holder of the task\'s finalizing attempt) is counted in activePeerIds — but assigneeProtected tells a caller that is not the assignee whether it must leave the task\'s source paths alone. finalizingAttempt names the task\'s finalizing attempt exactly as claim_next_task\'s finalizing hold selects it ({attemptId, workerId, generation}, whoever holds it, the caller included) or is null; a daemon older than the field omits it.',
     inputSchema: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'The task whose commit scope to compute' },
-        workerId: { type: 'string', description: 'Caller worker id (auto-injected by proxy). Excluded from livePeerIds; counted in activePeerIds when it is not the assignee.' },
+        workerId: { type: 'string', description: 'Caller worker id (auto-injected by proxy). Excluded from livePeerIds; counted in activePeerIds when it is neither the assignee nor the holder of the task\'s finalizing attempt (the seat landing its own completion after complete_task cleared the assignee).' },
         sessionId: { type: 'string', description: '<workerId>@<preflight-iso> of the calling wrapper session (informational).' },
         phase: { type: 'string', enum: [...PHASES], description: 'preflight (baseline merge) or postflight (landing).' },
         since: { type: 'string', description: 'ISO instant (usually the session pre-flight time). Peers active at/after since−120s or registered after it count as active; omitted → the standard 120s presence window.' }
@@ -229,18 +229,20 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
         if (caller !== null && worker.id === caller) continue;
         if (isPeerActive(worker, nowMs, sinceMs)) livePeerIds.push(worker.id);
       }
+      // The finalizing hold claim_next_task enforces (util/claimEligibility.ts), named whoever
+      // holds it: the wrapper's owner guard compares workerId instead of parsing .moe/attempts.
+      const finalizing = finalizingAttemptsByTask(state).get(task.id);
       // Orphan mode: a caller that is not the assignee is itself a concurrent
       // actor on this task's paths, so it counts toward peersActive — the
       // policy then degrades to declared-only unless attribution.undeclared is
-      // 'always'.
-      const orphanCaller = caller !== null && caller !== task.assignedWorkerId;
+      // 'always'. The holder of the task's finalizing attempt is exempt: it is
+      // the seat landing its own completion, and complete_task's REVIEW write
+      // cleared its assignment before its wrapper's post-flight asks.
+      const orphanCaller = caller !== null && caller !== task.assignedWorkerId && finalizing?.workerId !== caller;
       const activePeerIds = orphanCaller ? [...livePeerIds, caller] : [...livePeerIds];
       const assignee = task.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null;
       const assigneeAlive = assignee ? isWorkerAlive(assignee, nowMs) : false;
       const assigneeProtected = isAssigneeProtected(state, task);
-      // The finalizing hold claim_next_task enforces (util/claimEligibility.ts), named whoever
-      // holds it: the wrapper's owner guard compares workerId instead of parsing .moe/attempts.
-      const finalizing = finalizingAttemptsByTask(state).get(task.id);
       const livePeerSet = new Set(livePeerIds);
 
       // ---- board state -----------------------------------------------------
