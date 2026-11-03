@@ -95,3 +95,39 @@ test('failure-line markers cannot change a successful outcome or fabricate a sou
     assert.equal(summarizePostflight('bash', 0, `${marker}PASS postflight.sh\n`, null, 17).failureLine, null);
     assert.equal(summarizePostflight('invalid', 1, marker, null, 17).failureLine, null);
 });
+
+test('a SKIP after one leading [tag] fails even with an exact PASS marker and exit zero', () => {
+    for (const engine of ['bash', 'powershell', 'pwsh']) {
+        const pass = `PASS postflight.${engine === 'bash' ? 'sh' : 'ps1'}`;
+        for (const skip of [
+            '[scenario WT14D] SKIP (root ignores mode bits)',
+            '[scenario WT14D] SKIP (msys: mode bits do not deny an unlink; the ps1 twin denies it with icacls)',
+            '\u001b[33m[scenario Q] SKIP: unavailable\u001b[0m',
+            '[scenario M2] (d) SKIP: no process start token',
+            '[worktree reuse] SKIP',
+            '[scenario AB2]\tskip optional variant',
+        ]) {
+            const result = summarizePostflight(engine, 0, `${skip}\r\n${pass}\r\n`);
+            assert.equal(result.failureClass, 'SKIP_DETECTED', skip);
+            assert.notEqual(result.exit, 0, skip);
+            assert.equal(JSON.stringify(result).includes('mode bits'), false);
+        }
+    }
+});
+
+test('SKIPPED, a later skip word and lowercase skipped notes leave a clean run green', () => {
+    for (const line of [
+        '[scenario WT14F] at most 5 removals a pass; WORKING, an open attempt and W/.moe are kept; a held lock skips the pass, a 3h-old one is broken',
+        '[scenario M2] (d) SKIPPED: this platform exposes no process start token, so the probe is identity-only by design',
+        '[scenario AE] skipped: this host cannot create symlinks',
+        '[scenario AD] link variant skipped: this host cannot create symlinks',
+        '[frozen candidate] sha256-repo skipped: this git cannot create a sha256 repository',
+        '[skip] owned.txt (MOE_ATTR_PREEXISTING)',
+        'MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=task-resume',
+        'MOE_DISABLE_QUALITY_GATE=1 should skip the gate and allow the commit',
+    ]) {
+        const result = summarizePostflight('bash', 0, `${line}\nPASS postflight.sh\n`);
+        assert.equal(result.failureClass, 'NONE', line);
+        assert.equal(result.exit, 0, line);
+    }
+});

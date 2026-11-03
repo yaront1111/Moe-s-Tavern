@@ -6,6 +6,10 @@ import { stripVTControlCharacters } from 'node:util';
 
 const engines = new Set(['bash', 'powershell', 'pwsh']);
 const failures = new Set(['SPAWN_FAILED', 'TIMEOUT', 'OUTPUT_LIMIT']);
+// A skip is the word SKIP at the start of a line, or right after one leading [tag] such as
+// "[scenario WT14D]" and an optional "(sub-case)" tag: "[scenario WT14D] SKIP (root ignores mode bits)".
+// SKIPPED, a later "skips", and lowercase "skipped:" host-capability notes are not skips.
+const SKIP_LINE = /^(?:\[[^\]\r\n]*\][ \t]+(?:\([^)\r\n]*\)[ \t]+)?)?SKIP(?:\s|:|$)/i;
 
 // Output is untrusted fixture material. Return only this closed metadata shape.
 export function summarizePostflight(engine, exitCode, output = '', failure = null, sourceLineCount = 0) {
@@ -17,7 +21,7 @@ export function summarizePostflight(engine, exitCode, output = '', failure = nul
     const failureClass = !validEngine ? 'INVALID_ENGINE'
         : failure ? (failures.has(failure) ? failure : 'PROCESS_FAILURE')
         : exitCode !== 0 ? 'HARNESS_FAILURE'
-        : lines.some(line => /^SKIP(?:\s|:|$)/i.test(line)) ? 'SKIP_DETECTED'
+        : lines.some(line => SKIP_LINE.test(line)) ? 'SKIP_DETECTED'
         : !lines.includes(marker) ? 'PASS_MARKER_MISSING' : 'NONE';
     const failureLines = lines.flatMap(line => /^MOE_POSTFLIGHT_FAILURE_LINE=([1-9]\d*)$/.exec(line)?.slice(1) ?? [])
         .map(Number).filter(line => Number.isSafeInteger(line) && line <= sourceLineCount);
