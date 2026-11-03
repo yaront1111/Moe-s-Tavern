@@ -82,8 +82,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -95,14 +95,16 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:01:05.255Z",
-  "updatedAt": "2026-11-03T20:42:01.098Z",
+  "updatedAt": "2026-11-03T20:51:11.935Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:03:54.143Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-03T20:50:04.255Z",
+    "wallClockMs": 2770112
   },
   "contextFetchedBy": [
     "qa-93f9625e",
@@ -263,12 +265,13 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T20:29:23Z",
-    "at": "2026-11-03T20:41:37.393Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T20:41:58Z",
+    "at": "2026-11-03T20:51:11.935Z"
   },
-  "reviewCompletedAt": "2026-11-03T20:29:19.734Z",
+  "reviewCompletedAt": "2026-11-03T20:50:04.255Z",
   "rejectionDetails": {
     "failedDodItems": [
       "release_task with force:true from a worker- or qa- seat on a peer-held row (with or without an IN_PROGRESS step) is refused NOT_ALLOWED and writes nothing (assignee, step and lease unchanged); a governor seat and a workerId-less call can still force, and the ported hunt repro passes in a snapshot outside the shared checkout.",
@@ -323,5 +326,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-03T20:50:04.255Z",
+  "reviewSummary": "Approved 8ca8d389, the repair after reject #1. It is on moe/work-2026-10-24, which a fresh fetch shows at origin's tip. Candidate tree 864ea38c = 8ca8d389^{tree}, base ef354ee9. Diff: round 2 is +83/-17 (3 files), round 1 (31492ac5) was +191/-22. Task net 235 LOC, in scope.\nRe-ran:\n(1) The exact task.verification command at HEAD 8ca8d389: exit 0, both tsc passes, 10 files / 182 tests green.\n(2) The test file against old runtimes: 31492ac5 gives 18 failed (the new p7/r4/r5 cases), 14126ecd gives 26 failed; restored, 34/34.\n(3) Round-1 probe zzQaProbe on the landed bytes: release_task force with '', null, 123 or governor-x on a worker team gives NOT_ALLOWED and the assignee is kept; release_resource force with '' gives NOT_ALLOWED and the holders are kept; '' without force gives MISSING_REQUIRED. Hunt repro zzHuntB 5/5.\n(4) My 8-case probe: the assignee's non-force mid-step release is unchanged; the assignee's force is refused (role-only); team role beats prefix; force 1/'true' on release_task stays non-force; resource force 0 is a no-op and 'false' is refused; human force with no taskId drops every lease and queue entry; the ifHolderWorkerId precondition holds.\n(5) qualityGate in an archive of 8ca8d389: PASS. diff --check clean.\nDoD1: releaseTask.ts:141-153 has a key-presence gate with non-string normalization. It refuses before handoff, getTask and runExclusive (p7 spies). p2-p5 and p7 green.\nDoD2: releaseResource.ts:38-52 has the same gate; without force it needs a usable string id; touchWorker runs only for a non-blank id. r1-r5 green.\nDoD3: no 'pass force:true' in the guards; codeNames and context unchanged; the existing release, race and resourceStore files are green.\n/ws RELEASE_TASK sends no workerId, and McpAdapter passes args unchanged.\nNon-blocking: the non-force blank-id release_task bypass between steps predates this task and is filed as task-c8d6dbd5. The complexity pass found nothing to cut.",
+  "requiredCheckAtDone": null
 }

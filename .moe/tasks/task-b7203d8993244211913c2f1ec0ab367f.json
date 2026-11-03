@@ -1,0 +1,30 @@
+{
+  "id": "task-b7203d8993244211913c2f1ec0ab367f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a parked wait_for_task re-matches only on TASK_CREATED and TASK_UPDATED, so a delete_task that makes a legacy dependent claimable (its only unmet prerequisite is gone) never wakes the waiting seat",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor in BACKLOG. It edits tools/waitForTask.ts, the same file as task-4fbd3c69 (wait_for_task vs the caller's finalizing attempt), so it waits on that row. The governor promotes it once 4fbd3c69 is DONE. Impact is low.\n\nPROBLEM. For a legacy (non verified-local) consumer a missing prerequisite counts as satisfied, so deleting a dependent's only unmet prerequisite makes the dependent claimable. But delete emits TASK_DELETED, and a parked wait_for_task re-matches only on TASK_CREATED and TASK_UPDATED. The waiting seat sleeps until its timeout or an unrelated update.\n\nEVIDENCE (at 8ca8d389):\n- waitForTask.ts:435 `if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED') return;`\n- Repro: /mnt/d/moe-scratch/hunt-afe61cc0/A/zzHuntA_waitDeleteWake.test.ts with its .output.txt. \"wakes a parked WORKING waiter when deleting its only unmet prerequisite makes the dependent claimable\" fails, \"Tests 1 failed (1)\".\n\nFIX DIRECTION. Also re-run the existing findMatchingTask match on TASK_DELETED, and on any other event that can change dependency readiness, such as TASK_ARCHIVED if it is not already covered. Keep the wake/cleanup path unchanged.",
+  "definitionOfDone": [
+    "A wait_for_task parked for WORKING rows wakes with the dependent row when delete_task removes that row's only unmet prerequisite, and an unrelated TASK_DELETED still doesn't wake it.",
+    "The ported hunt repro passes, and the existing wait_for_task test files stay green in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-4fbd3c69b8bc4bdcb2760d62c73bd3c3"
+  ],
+  "priority": "LOW",
+  "order": 435.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:23.553Z",
+  "updatedAt": "2026-11-03T20:47:23.553Z"
+}

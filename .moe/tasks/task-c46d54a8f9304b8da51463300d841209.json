@@ -1,0 +1,28 @@
+{
+  "id": "task-c46d54a8f9304b8da51463300d841209",
+  "epicId": "epic-be924fb8",
+  "title": "bug: qa_reject's failedDodItems entries have no type or length check (only the 20-item count is capped), so a numeric DoD index throws an uncoded \"s.trim is not a function\" and a 100k-char entry is stored, while qa_reject bounds reason and issues and submit_plan_critique bounds its concerns",
+  "description": "Held item (b) from hunt #10 (task-49a2c07f, architect-1dd28c7c, msg-e3e8725e), filed by the governor. Re-checked at tip 8ca8d389: qaReject.ts is unchanged since the hunt's repro HEAD 677d051a. No stored entry is affected yet (0 of 101 real failedDodItems entries are non-strings or oversized), hence LOW.\n\nPROBLEM. qa_reject validates the count of failedDodItems but not the entries. A non-string entry, such as a DoD index sent as a number, crashes the handler with an uncoded TypeError instead of a coded INVALID_INPUT. An entry of any length is stored in rejectionDetails and carried into the repeated-failure tracking. Its sibling fields are bounded: reason has MAX_REASON_LENGTH, and issues[].description is refused over 500 chars.\n\nEVIDENCE (at 8ca8d389):\n- qaReject.ts:87-88 caps the count (`> 20` → invalidInput). qaReject.ts:141 maps `(s) => s.trim()` over every entry with no typeof check and no length bound, and :150 stores the result in rejectionDetails.failedDodItems.\n- The siblings bound their text: qaReject.ts:82-83 (reason) and :103-104 (issues.description, 500). submitPlanCritique.ts:8-9 (MAX_CONCERNS 20, MAX_CONCERN_LEN 1000) with its array type check at :67-68.\n- Repro: /mnt/d/moe-scratch/hunt-49a2c07f/B/zzHuntB_failedDodItems.test.ts, output B/B_failedDodItems.out.txt at 677d051a: \"Tests 2 failed | 1 passed (3)\". A numeric entry gives \"TypeError: s.trim is not a function\", where `{ code: -32602 }` was expected. An over-long entry is stored: \"expected [ Array(3) ] to deeply equal []\".\n\nFIX DIRECTION. Before any write, refuse a non-string entry and an entry over a bound with a coded INVALID_INPUT. That matches qa_reject's own refusals for reason and issues. Use the DoD-item length (1000) or submit_plan_critique's MAX_CONCERN_LEN as the bound. Refusal (not truncation) keeps the repeated-failure matching exact.\n\nPLACEMENT. No open row edits qaReject.ts. No dependsOn.",
+  "definitionOfDone": [
+    "qa_reject refuses a failedDodItems entry that is not a string with a coded INVALID_INPUT (no uncoded TypeError), and writes nothing.",
+    "qa_reject refuses (coded INVALID_INPUT, nothing written) a failedDodItems entry longer than the chosen bound (at most 1000 chars), so no stored rejectionDetails entry exceeds it. Valid rejections, including the repeated-failure escalation, behave as before.",
+    "The hunt repro (zzHuntB_failedDodItems.test.ts) ported into the package's qa_reject tests passes 3 of 3, where it gave 2 failed | 1 passed at 677d051a, and the existing qa_reject test files stay green in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 431.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:44:47.676Z",
+  "updatedAt": "2026-11-03T20:44:47.676Z"
+}

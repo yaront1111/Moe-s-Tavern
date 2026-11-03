@@ -1,0 +1,27 @@
+{
+  "id": "task-6cf09180bca64f2bb9a5dc85389c2e71",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a claim_next_task call with no workerId (a peek) still stamps the offered row's metrics.firstClaimAt and posts the #workers file-collision notice, so a terminal or tool peek skews wall-clock metrics and pages busy seats for a claim nobody made",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor. Re-checked at tip 8ca8d389: claimNextTask.ts is unchanged since the repro HEAD 31492ac5. It is low and rare: the proxy injects workerId for agent seats, so only direct callers such as moe-call.sh peek.\n\nPROBLEM. claim_next_task without a workerId assigns nothing, but it still writes. It stamps `metrics.firstClaimAt` on the offered row, and list_metrics wall-clock then starts at the peek. When the row's files overlap a peer, it also posts the #workers collision heads-up.\n\nEVIDENCE (at 8ca8d389):\n- claimNextTask.ts:860-865: `if (!task.metrics?.firstClaimAt) { … state.updateTask(task.id, { metrics: nextMetrics }, undefined, params.workerId) }` runs with no workerId guard.\n- claimNextTask.ts:887-898: `state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId))` runs with no workerId guard.\n- Repro: /mnt/d/moe-scratch/hunt-afe61cc0/A/zzHuntA_peekClaimWrites.test.ts with its .output.txt. \"writes nothing when no worker is named\" fails, \"Tests 1 failed (1)\".\n\nFIX DIRECTION. Skip both writes when no workerId is supplied. Keep the offered-row response unchanged.\n\nPLACEMENT. Open row task-4fbd3c69 may touch claimNextTask.ts around :534-544, its ATTEMPT_FINALIZING check, if it extracts a shared helper. Keep this edit inside the firstClaimAt and collision-notice blocks, add no dependsOn, and use the seat's own editor.",
+  "definitionOfDone": [
+    "A claim_next_task call with no workerId leaves the offered row's metrics.firstClaimAt untouched and posts nothing to #workers, and it still returns the same offered row as before.",
+    "A claim with a workerId still stamps firstClaimAt once and still posts the collision notice exactly as before. The ported hunt repro passes, and the existing claim_next_task test files stay green in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 433.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:07.200Z",
+  "updatedAt": "2026-11-03T20:47:07.200Z"
+}

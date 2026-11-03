@@ -1,0 +1,27 @@
+{
+  "id": "task-72f02ef3fbd84ca4823101d3abddfebc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: get_activity_log's eventTypes schema example advertises TASK_STATUS_CHANGED, a type that is not in ACTIVITY_EVENT_TYPES and is never emitted, and any unknown eventTypes value silently matches nothing, so a seat following the example gets 0 events with no hint",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor. Re-checked at tip 8ca8d389: getActivityLog.ts is unchanged since the repro HEAD 31492ac5.\n\nPROBLEM. The tool's input schema tells callers to filter with `eventTypes` \"(e.g. STEP_COMPLETED, TASK_STATUS_CHANGED)\". TASK_STATUS_CHANGED does not exist. ACTIVITY_EVENT_TYPES (types/schema.ts:1710) has TASK_UPDATED, TASK_STARTED, TASK_COMPLETED, TASK_REOPENED, TASK_BLOCKED and so on, and no emitter writes the advertised type. An unknown eventTypes value silently matches nothing, so the documented example returns an empty page that looks like \"no status changes\".\n\nEVIDENCE:\n- getActivityLog.ts:192 (at 8ca8d389): `description: 'Filter by event types (e.g. STEP_COMPLETED, TASK_STATUS_CHANGED)'`.\n- Repro: /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_eventTypeExample.test.ts with its .output.txt. \"a status change is findable with the advertised TASK_STATUS_CHANGED filter, or the filter is refused\" fails, \"Tests 1 failed (1)\".\n\nFIX DIRECTION.\n- Correct the example to name emitted types.\n- Report unknown eventTypes values additively, for example an `unknownEventTypes` list or a warning in the response. Don't refuse them: MCP contract changes stay additive.\n- Keep the response shape otherwise unchanged.\n\nPLACEMENT. Open row task-05a77c0d (activity-log rotation) edits src/state/activityLog.ts, reverseReader.ts and a new rotation test, not tools/getActivityLog.ts. So this row edits getActivityLog.ts plus its own test, and no dependsOn is needed. Leave docs/MCP_SERVER.md alone unless lanes.js shows it free.",
+  "definitionOfDone": [
+    "get_activity_log's eventTypes schema text names only types in ACTIVITY_EVENT_TYPES, and a test pins that every example type in the description is a member.",
+    "A query whose eventTypes include an unknown value still returns its normal page, and the response also reports the unknown value(s) additively. The ported hunt repro passes, and the existing get_activity_log tests stay green in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 432.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:46:58.752Z",
+  "updatedAt": "2026-11-03T20:46:58.752Z"
+}

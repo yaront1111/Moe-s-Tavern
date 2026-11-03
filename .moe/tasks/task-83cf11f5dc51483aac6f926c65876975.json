@@ -1,0 +1,30 @@
+{
+  "id": "task-83cf11f5dc51483aac6f926c65876975",
+  "epicId": "epic-be924fb8",
+  "title": "bug: list_metrics doneCount, the dashboard's totalCompleted and per-epic completed count only status DONE while avgWallClockMs includes ARCHIVED rows, so a Done-column Clear zeroes \"completed\" for delivered work and the aggregates disagree",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor in BACKLOG. It edits util/metrics.ts, the same file as task-5d739855 (the sinceIso fix), so it waits on that row. The governor promotes it once 5d739855 is DONE.\n\nPROBLEM. Archiving a delivered task (the IDE's Done-column Clear) drops it from every \"completed\" count, while the same row still feeds avgWallClockMs. Today 205 live ARCHIVED rows carry doneAt, and none of them counts as completed.\n\nEVIDENCE (util/metrics.ts at 8ca8d389):\n- :71 `if (task.status === 'DONE') { doneCount += 1; … }`.\n- :186 per-epic `completed: agg.doneCount`, and :197 `totalCompleted: overall.doneCount`. avgWallClockMs is computed over rows that include ARCHIVED.\n- Repro: /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_metricsArchived.test.ts with its .output.txt. \"counts a delivered-then-archived task consistently across doneCount, firstPass% and avgWallClockMs\" fails.\n\nDECISION (governor reading; the planner may refine it with evidence). \"Completed\" means delivered: a row in DONE, or a row in ARCHIVED with metrics.doneAt (or another landed-delivery marker). An ARCHIVED row that never reached DONE (shelved) is not completed. Apply the same set to doneCount, firstPass%, per-epic completed, totalCompleted and avgWallClockMs, so the aggregates agree.",
+  "definitionOfDone": [
+    "doneCount, firstPass%, per-epic completed, totalCompleted and avgWallClockMs all count the same delivered set: DONE rows plus ARCHIVED rows that reached DONE. A shelved ARCHIVED row that never reached DONE counts in none of them.",
+    "The ported hunt repro passes, and the existing metrics and list_metrics tests stay green in a snapshot outside the shared checkout. MCP_SERVER.md or SCHEMA.md wording on \"completed\" is updated only if the file is free per lanes.js."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5d7398551e5940ba8a3dcadf54c45b50"
+  ],
+  "priority": "LOW",
+  "order": 434.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:16.002Z",
+  "updatedAt": "2026-11-03T20:47:16.002Z"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "task-2cc41d1a434a4e42ae2d34101cf2ad22",
+  "epicId": "epic-be924fb8",
+  "title": "bug: amend_plan_step stores replacement step text without the checkPlanRails check submit_plan applies, so an amendment can add a forbidden pattern or remove the plan's only required phrase, and the worker then executes the active (amended) text the approval never rail-checked",
+  "description": "Held item (a) from hunt #10 (task-49a2c07f, architect-1dd28c7c, msg-e3e8725e), filed by the governor. Re-checked at tip 8ca8d389: amendPlanStep.ts, submitPlan.ts and util/rails.ts are unchanged since the hunt's repro HEAD 677d051a.\n\nPROBLEM. submit_plan refuses a plan whose text carries a globalRails forbiddenPattern or lacks a requiredPattern. amend_plan_step REPLACES a step's instructions, and complete_step and get_context then serve the amended text as the active step. But it never runs that check, so an amendment can do either: put a forbidden pattern into the plan, or remove the plan's only required phrase. Only architects and governors can call it, so this is a gate gap, not a privilege escalation.\n\nEVIDENCE (at 8ca8d389):\n- submitPlan.ts:437-438 `const railsCheck = checkPlanRails(planText, project.globalRails, epic, task); assertPlanRails(railsCheck, task.id);`. assertPlanRails is the module-local function at submitPlan.ts:194, which throws the coded \"Rail violation: …\" refusal. checkPlanRails is exported from util/rails.ts:8.\n- amendPlanStep.ts:39-48 validates only presence, type, trim, emptiness and the MAX_STEP_DESCRIPTION_CHARS cap of `description`. Nothing in the file references rails (grep \"rail\" finds only the import list).\n- Repro: /mnt/d/moe-scratch/hunt-49a2c07f/me/zzHunt49a2_amendRails.test.ts, output me/amendRails.out at 677d051a: \"Tests 2 failed | 1 passed (3)\". (a1) An amendment carrying a forbidden pattern is accepted (\"expected 'no error' to contain 'Rail violation'\"). (a2) An amendment that drops the plan's only required phrase is accepted. (a3), a compliant amendment, passes.\n\nFIX DIRECTION.\n- Build the plan's effective text with the replacement applied, the same way submit_plan builds planText from step descriptions, and run checkPlanRails under the project's globalRails and the epic and task rails before any write.\n- Refuse a violation with submit_plan's coded refusal. Moving assertPlanRails into util/rails.ts as an export is one way to share it.\n- Decide how a violation that already exists elsewhere in the plan is handled, for example a rail added after approval. At minimum an amendment must not INTRODUCE a violation, and the plan must say which reading it implements.\n\nPLACEMENT. Open row 34e42a0a edits proposeRail.ts, railChange.ts and StateManager.ts, not util/rails.ts, so a minimal export in rails.ts lands beside it. No dependsOn.",
+  "definitionOfDone": [
+    "amend_plan_step refuses, with submit_plan's coded \"Rail violation\" refusal, an amendment that introduces a globalRails forbiddenPattern or removes the plan's last occurrence of a requiredPattern, and writes nothing: no amendment, no planRevision change and no activity event.",
+    "A compliant amendment behaves exactly as before, and the hunt repro (zzHunt49a2_amendRails.test.ts) ported into the package's own tests passes 3 of 3; at 677d051a it gave 2 failed | 1 passed.",
+    "The vitest run of the amend_plan_step and submit_plan test files passes in a snapshot outside the shared checkout. The plan names how a pre-existing violation elsewhere in the plan is treated."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 430.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:44:36.392Z",
+  "updatedAt": "2026-11-03T20:44:36.392Z"
+}

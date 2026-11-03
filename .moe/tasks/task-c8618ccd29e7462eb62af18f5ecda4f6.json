@@ -1,0 +1,30 @@
+{
+  "id": "task-c8618ccd29e7462eb62af18f5ecda4f6",
+  "epicId": "epic-be924fb8",
+  "title": "bug: get_pending_questions (and wait_for_task's pending-question path) treat any non-\"human\" comment as an agent answer, so a moe-daemon system comment posted after a human question masks the still-unanswered question",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor in BACKLOG. There is no live case today. Its fix may touch tools/waitForTask.ts, which task-4fbd3c69 is editing, so it waits on that row. The governor promotes it once 4fbd3c69 is DONE.\n\nPROBLEM. get_pending_questions finds the last comment whose author is not 'human' and treats every human comment after it as unanswered. A comment the daemon posts itself, with author 'moe-daemon' (landing notes, system notices), is therefore taken as an agent's answer. A human question followed only by a daemon comment drops out of get_pending_questions and out of wait_for_task's pending-question surfacing, though nobody answered it.\n\nEVIDENCE (at 8ca8d389):\n- getPendingQuestions.ts:130 `if (comments[i].author !== 'human') {` (the \"last agent comment\" scan), then :136-139 `.filter((c) => c.author === 'human')` after it.\n- Repro: /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_pendingMasked.test.ts with its .output.txt. \"still surfaces the human question when only a moe-daemon comment follows it\" fails, \"Tests 1 failed (1)\".\n\nFIX DIRECTION.\n- Skip system authors (moe-daemon, and any other daemon-authored id) when looking for the last answering comment.\n- Apply the same rule wherever wait_for_task or taskPayload derive pending questions, so the two surfaces agree.",
+  "definitionOfDone": [
+    "A human question followed only by moe-daemon comments still appears in get_pending_questions and in wait_for_task's pending-question surfacing. A human question followed by a real agent comment is still treated as answered.",
+    "The ported hunt repro passes, and the existing get_pending_questions and wait_for_task test files stay green in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-4fbd3c69b8bc4bdcb2760d62c73bd3c3"
+  ],
+  "priority": "LOW",
+  "order": 436.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:31.406Z",
+  "updatedAt": "2026-11-03T20:47:31.406Z"
+}

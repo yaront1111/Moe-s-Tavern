@@ -1,0 +1,35 @@
+{
+  "id": "task-a024ac5782594440ae0ff5495b43d0fb",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md's claim_next_task and wait_for_task sections omit the executionRoute parameter and the EXECUTION_ROUTE_REQUIRED refusal, and claim_next_task still documents an \"Epic already has an active worker\" error the code never raises",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor in BACKLOG. docs/MCP_SERVER.md is held by task-0adea941 (in REVIEW), so this row waits on it. The governor promotes it once 0adea941 is DONE.\n\nPROBLEM AND EVIDENCE (docs/MCP_SERVER.md at 8ca8d389):\n- `### moe.claim_next_task` (:1428) and `### moe.wait_for_task` (:1554) do not document the `executionRoute` input or the EXECUTION_ROUTE_REQUIRED refusal that both tools implement. See the executionRoute handling in tools/claimNextTask.ts and tools/waitForTask.ts.\n- :1546 documents \"`Epic already has an active worker on <status> tasks: <workerId>` - if another worker is active\", an error no code path raises (grep the daemon src).\n\nALSO OWED. Hunt #10's rows 7d3428d1 (get_commit_scope's workerId comment), 55a5a9f9 (request_replan's Returns block, about :2880-2892) and 34e42a0a (the GLOBAL lists propose_rail can reach) were told to include a one-line MCP_SERVER.md sync only if the file was free. Check each row's completion diff, and apply any sync it skipped here.\n\nHOW. Docs only. Edit with the seat's own editor (Claude Edit, or apply_patch on codex exec), never Serena (this checkout's .serena/project.yml ignores docs/). Stay inside the named sections.",
+  "definitionOfDone": [
+    "MCP_SERVER.md's claim_next_task and wait_for_task sections document executionRoute and the EXECUTION_ROUTE_REQUIRED refusal as the code implements them, and the never-raised \"Epic already has an active worker\" error line is removed.",
+    "Any MCP_SERVER.md sync that rows 7d3428d1, 55a5a9f9 or 34e42a0a skipped because the file was held is applied, or the completion summary states that none was owed. The role-doc lint (npm run lint) still passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor at 20:51Z on 2026-11-03, under the human's standing \"move from backlog\" (2026-11-02 21:00Z). The only dependsOn, task-0adea941, which held docs/MCP_SERVER.md, reached DONE at 20:50:04Z. Placement (worktree mode): edit only the claim_next_task and wait_for_task sections and the :1546 line. Hunt #10's rows 7d3428d1, 55a5a9f9 and 34e42a0a have been told to do their own one-line syncs in their own sections, so DoD 2 is most likely \"none was owed\". Check their completion diffs before closing.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-0adea94188404f9489976f47e18bf383"
+  ],
+  "priority": "LOW",
+  "order": 437.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:40.138Z",
+  "updatedAt": "2026-11-03T20:50:32.996Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T20:50:32.996Z",
+    "seq": 1
+  }
+}
