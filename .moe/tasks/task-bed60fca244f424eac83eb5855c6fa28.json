@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:43:41.189Z",
-  "updatedAt": "2026-11-03T21:01:02.815Z",
+  "updatedAt": "2026-11-03T21:13:24.445Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:53:14.675Z",
     "plannedStepCount": 4,
@@ -174,5 +174,29 @@
     "packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts",
     "packages/moe-daemon/src/state/FileWatcher.ts"
   ],
-  "completionSummary": "FileWatcher.ignorePaths is now a Map<string, Timeout>: one token and one 500 ms timer per normalized path. ignorePath clears any prior timer before re-arming, and the expiry callback deletes only its own token (`=== t` guard). scheduleChange clears the timer when it consumes the token, and stop() clears every pending timer. Timers stay unref'd; the window, consume-on-first-match, debounce and error handling are unchanged. New FileWatcher.selfWrite.test.ts has 4 fake-timer cases: (s1) the t=0/200/400/550 sequence is suppressed, (s2) a single self-write is suppressed, (s3) an event after the window reaches onChange once, (s4) stop() leaves no timer pending. Negative control (base source + new test only): \"Tests  2 failed | 2 passed (4)\" and RED-AT-BASE, with (s1) and (s4) failing. With the fix, tsc is clean and the 3 FileWatcher files pass 30 tests in a snapshot outside the repo."
+  "completionSummary": "FileWatcher.ignorePaths is now a Map<string, Timeout>: one token and one 500 ms timer per normalized path. ignorePath clears any prior timer before re-arming, and the expiry callback deletes only its own token (`=== t` guard). scheduleChange clears the timer when it consumes the token, and stop() clears every pending timer. Timers stay unref'd; the window, consume-on-first-match, debounce and error handling are unchanged. New FileWatcher.selfWrite.test.ts has 4 fake-timer cases: (s1) the t=0/200/400/550 sequence is suppressed, (s2) a single self-write is suppressed, (s3) an event after the window reaches onChange once, (s4) stop() leaves no timer pending. Negative control (base source + new test only): \"Tests  2 failed | 2 passed (4)\" and RED-AT-BASE, with (s1) and (s4) failing. With the fix, tsc is clean and the 3 FileWatcher files pass 30 tests in a snapshot outside the repo.",
+  "commits": [
+    {
+      "sha": "54635828cf3870f288cccc168bb4cb10d8c8df3e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T20:57:05Z",
+      "paths": [
+        "packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts",
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ],
+      "recordedBy": "qa-af7be174",
+      "recordedAt": "2026-11-03T21:13:24.445Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T20:57:05Z",
+    "at": "2026-11-03T21:13:24.445Z"
+  }
 }
