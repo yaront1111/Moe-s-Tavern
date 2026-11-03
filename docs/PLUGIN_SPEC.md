@@ -33,7 +33,7 @@ JetBrains is the **primary** IDE surface — implement and test here first; the 
 - `MoeProjectService` — WS client, daemon spawn/supervision, reconnect
 - `MoeProjectRegistry` — multi-project daemon tracking (kills the daemon only when the last project using that PID closes)
 - `MoeNotificationService` — IDE notifications ("Moe Notifications" group)
-- Auto-initialize `.moe/` when missing; force-sync bundled role docs/skills on connect
+- Auto-initialize `.moe/` when missing; on connect, create missing role docs/skills only, and upgrade stale marked copies only right before starting the daemon itself
 - Actions: `InitMoeAction`, `OpenBoardAction`, `CreateTaskAction`, `ApproveTaskAction`, `RejectTaskAction`, `StartAgentAction`
 
 ---

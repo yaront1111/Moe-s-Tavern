@@ -59,7 +59,7 @@ Swing tool window: epic-grouped 5-column board, task/epic/plan dialogs, chat / m
 
 Key behaviors:
 - Connects to daemon WebSocket at `/ws` (port from `.moe/daemon.json`).
-- Auto-initializes `.moe` on first connect if missing; force-syncs bundled role docs/skills.
+- Auto-initializes `.moe` on first connect if missing. On an existing `.moe` it only creates missing role docs/skills, and it upgrades stale marked copies only right before it starts the daemon itself (the daemon also rewrites them at every start), so a live daemon's newer docs are never downgraded.
 - Auto-starts the bundled daemon (or `MOE_DAEMON_COMMAND`/installer shims); kills it on close if it is the last project using that PID.
 - UI is Swing-based; no JCEF/webview.
 

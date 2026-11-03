@@ -173,6 +173,35 @@ class MoeDaemonSupervisorTest {
         assertEquals(0, starts)
     }
 
+    // A live daemon rewrote its own docs at its start; an older plugin bundle must not downgrade them (task-b1d7d104).
+    @Test
+    fun `connecting to an existing moe dir only creates missing docs`() {
+        val events = mutableListOf<String>()
+        val supervisor = supervisor(initializedRoot("doc-connect"), docSync = { _, upgrade -> events += "sync:$upgrade" })
+
+        assertTrue(supervisor.ensureMoeInitialized())
+        assertEquals(listOf("sync:false"), events)
+    }
+
+    @Test
+    fun `a reachable daemon never gets its docs upgraded`() {
+        val root = initializedRoot("doc-reachable")
+        writeDaemonInfo(root, DaemonInfo(9876, 42, "now", root.canonicalPath))
+        val events = mutableListOf<String>()
+        val supervisor = supervisor(
+            root,
+            portProbe = { port, timeout -> port == 9876 && timeout > 0 },
+            processAliveProbe = { it == 42 },
+            processStarter = { events += "start"; FakeProcess() },
+            docSync = { _, upgrade -> events += "sync:$upgrade" }
+        )
+
+        // connect()'s order: ensureMoeInitialized, then ensureDaemonRunning.
+        assertTrue(supervisor.ensureMoeInitialized())
+        assertFalse(supervisor.ensureDaemonRunning())
+        assertEquals(listOf("sync:false", "sync:false"), events)
+    }
+
     @Test
     fun `isProcessAlive returns false when the probe fails`() {
         val root = temporaryFolder.newFolder("probe-failure")
@@ -300,6 +329,36 @@ class MoeDaemonSupervisorTest {
         assertFalse(supervisor.ensureDaemonRunning())
         assertEquals(1, starts)
         supervisor.killSpawnedDaemon()
+    }
+
+    @Test
+    fun `the upgrade runs once, right before this plugin starts its own daemon`() {
+        val events = mutableListOf<String>()
+        val supervisor = supervisor(
+            initializedRoot("doc-spawn"),
+            processStarter = { events += "start"; FakeProcess() },
+            docSync = { _, upgrade -> events += "sync:$upgrade" }
+        )
+
+        assertTrue(supervisor.ensureDaemonRunning())
+        assertEquals(listOf("sync:false", "sync:true", "start"), events)
+        assertFalse(supervisor.ensureDaemonRunning())
+        assertEquals(listOf("sync:false", "sync:true", "start", "sync:false"), events)
+        supervisor.killSpawnedDaemon()
+    }
+
+    @Test
+    fun `a refused spawn never upgrades docs`() {
+        val events = mutableListOf<String>()
+        val supervisor = supervisor(
+            initializedRoot("doc-refused"),
+            processStarter = { events += "start"; FakeProcess() },
+            docSync = { _, upgrade -> events += "sync:$upgrade" }
+        )
+        setSpawnAttempts(supervisor, 3)
+
+        assertFalse(supervisor.ensureDaemonRunning())
+        assertEquals(listOf("sync:false"), events)
     }
 
     @Test
@@ -1417,14 +1476,16 @@ class MoeDaemonSupervisorTest {
         onStatus: (Boolean, String) -> Unit = { _, _ -> },
         portProbe: (Int, Int) -> Boolean = { _, _ -> false },
         processAliveProbe: (Int) -> Boolean = { false },
-        processStarter: (ProcessBuilder) -> Process = { FakeProcess() }
+        processStarter: (ProcessBuilder) -> Process = { FakeProcess() },
+        docSync: (File, Boolean) -> Unit = { _, _ -> }
     ): MoeDaemonSupervisor = MoeDaemonSupervisor(
         root.canonicalPath,
         "Test Project",
         onStatus,
         portProbe,
         processAliveProbe,
-        processStarter
+        processStarter,
+        docSync = docSync
     )
 
     private fun otherSideSpelling(base: String): String {

@@ -171,13 +171,18 @@ object MoeProjectInitializer {
      * create if missing, overwrite if the on-disk marker sha differs, and leave
      * unmarked files alone (user customizations — deleting the marker line opts
      * a file out of auto-upgrades).
+     *
+     * [upgrade] = false makes the write create-only: an existing file is never
+     * replaced. A sha difference does not say which copy is newer, and the
+     * running daemon rewrites its own docs at every start, so the connect path
+     * must not downgrade them to an older plugin bundle.
      */
-    internal fun writeGeneratedDoc(target: File, stamped: String) {
+    internal fun writeGeneratedDoc(target: File, stamped: String, upgrade: Boolean = true) {
         if (!target.exists()) {
             target.writeText(stamped)
             return
         }
-        if (shouldUpgradeGeneratedDoc(target.readText(), stamped)) {
+        if (upgrade && shouldUpgradeGeneratedDoc(target.readText(), stamped)) {
             target.writeText(stamped)
         }
     }
@@ -185,13 +190,17 @@ object MoeProjectInitializer {
     /**
      * Syncs all bundled role docs (every .md under docs/roles, incl. governor
      * and the .reference.md companions) to .moe/roles/ with sha-marker upgrade
-     * semantics. Safe to call on every project open: bundled updates always
-     * reach the project, user-customized (unmarked) files are preserved.
+     * semantics; user-customized (unmarked) files are preserved.
+     *
+     * [upgrade] = false only creates missing docs. The connect path uses it,
+     * because a live daemon may have written newer copies than this plugin's
+     * bundle (see writeGeneratedDoc). [bundled] overrides the plugin bundle
+     * lookup, which finds nothing in unit tests.
      */
-    fun syncRoleDocs(moeDir: File) {
+    fun syncRoleDocs(moeDir: File, upgrade: Boolean = true, bundled: Map<String, String>? = null) {
         File(moeDir, "roles").mkdirs()
-        for ((name, raw) in loadBundledRoleDocs()) {
-            writeGeneratedDoc(File(moeDir, "roles/$name"), stampMarker(raw))
+        for ((name, raw) in bundled ?: loadBundledRoleDocs()) {
+            writeGeneratedDoc(File(moeDir, "roles/$name"), stampMarker(raw), upgrade)
         }
     }
 
@@ -234,10 +243,11 @@ object MoeProjectInitializer {
      * user edits), so an edited skill actually reaches projects that were
      * initialized before the edit. Other vendored assets stay create-only.
      *
-     * Skip-if-exists per file so user customizations survive.
+     * [upgrade] = false makes every file create-only, for the connect path,
+     * where a live daemon may have written newer copies (see writeGeneratedDoc).
      */
     @JvmOverloads
-    fun syncSkills(moeDir: File, bundledDir: File? = null) {
+    fun syncSkills(moeDir: File, bundledDir: File? = null, upgrade: Boolean = true) {
         val skillsDir = File(moeDir, "skills")
         if (!skillsDir.exists()) skillsDir.mkdirs()
 
@@ -252,9 +262,9 @@ object MoeProjectInitializer {
         // Copy nested skill directories + their files (SKILL.md, SOURCE.md).
         for (entry in bundled.listFiles().orEmpty()) {
             if (entry.isDirectory) {
-                syncSkillDir(entry, File(skillsDir, entry.name))
+                syncSkillDir(entry, File(skillsDir, entry.name), upgrade)
             } else if (entry.isFile && (entry.name == "LICENSE-VENDORED.md" || entry.name == "manifest.json")) {
-                writeGeneratedDoc(File(skillsDir, entry.name), stampSkillFile(entry.name, entry.readText()))
+                writeGeneratedDoc(File(skillsDir, entry.name), stampSkillFile(entry.name, entry.readText()), upgrade)
             }
         }
     }
@@ -263,17 +273,17 @@ object MoeProjectInitializer {
      * Recursive copy of one bundled skill directory, preserving nested assets
      * (e.g. cpp/templates/) the way the daemon's SKILL_FILES map does.
      */
-    private fun syncSkillDir(source: File, targetDir: File) {
+    private fun syncSkillDir(source: File, targetDir: File, upgrade: Boolean) {
         if (!targetDir.exists()) targetDir.mkdirs()
         for (file in source.listFiles().orEmpty()) {
             if (file.isDirectory) {
-                syncSkillDir(file, File(targetDir, file.name))
+                syncSkillDir(file, File(targetDir, file.name), upgrade)
                 continue
             }
             if (!file.isFile) continue
             val target = File(targetDir, file.name)
             if (file.name.endsWith(".md")) {
-                writeGeneratedDoc(target, stampSkillFile(file.name, file.readText()))
+                writeGeneratedDoc(target, stampSkillFile(file.name, file.readText()), upgrade)
             } else if (!target.exists()) {
                 target.writeText(file.readText())
             }

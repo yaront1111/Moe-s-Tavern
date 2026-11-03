@@ -44,7 +44,8 @@ class MoeDaemonSupervisor(
     private val onDispatchThread: () -> Boolean = { ApplicationManager.getApplication()?.isDispatchThread == true },
     private val sleep: (Long) -> Unit = Thread::sleep,
     private val exitTimeoutMs: Long = EXIT_TIMEOUT_MS,
-    private val windowsRestart: () -> Boolean = ::isWindowsHost
+    private val windowsRestart: () -> Boolean = ::isWindowsHost,
+    private val docSync: (File, Boolean) -> Unit = ::syncBundledDocs
 ) {
     private val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
     private val gson = Gson()
@@ -160,6 +161,8 @@ class MoeDaemonSupervisor(
         val projectBasePath = basePath.ifBlank { return false }
         val isProtected = profile() == RuntimeProfile.PROTECTED
         val direct = if (isProtected) protectedCommandOrRefuse(projectBasePath) ?: return false else buildDirectDaemonCommand(projectBasePath)
+        // This plugin is about to start its own daemon, which serves the plugin's bundled docs.
+        syncDocs(File(projectBasePath, ".moe"), upgrade = true)
 
         try {
             val pb = if (direct != null) {
@@ -625,18 +628,18 @@ class MoeDaemonSupervisor(
                 false
             }
         }
-        // Always sync role docs and skills to ensure agents get latest production-ready versions
-        try {
-            MoeProjectInitializer.syncRoleDocs(moeDir)
-        } catch (ex: Exception) {
-            log.debug("Failed to sync role docs: ${ex.message}")
-        }
-        try {
-            MoeProjectInitializer.syncSkills(moeDir)
-        } catch (ex: Exception) {
-            log.debug("Failed to sync skills: ${ex.message}")
-        }
+        // Create missing docs only: a live daemon rewrote these at its own start and may be newer than this
+        // plugin's bundle. Stale copies are upgraded by the daemon at every start, or by the spawn path below.
+        syncDocs(moeDir, upgrade = false)
         return true
+    }
+
+    private fun syncDocs(moeDir: File, upgrade: Boolean) {
+        try {
+            docSync(moeDir, upgrade)
+        } catch (ex: Exception) {
+            log.debug("Failed to sync bundled docs: ${ex.message}")
+        }
     }
 
     internal fun buildDaemonCommand(basePath: String): String {
@@ -995,6 +998,21 @@ class MoeDaemonSupervisor(
 
         private val PORT_CHECK_TIMEOUT_MS: Int =
             System.getProperty("moe.portCheckTimeoutMs")?.toIntOrNull() ?: 200
+
+        /** Each sync logs its own failure, so a role-doc failure never skips the skills or blocks the caller. */
+        private fun syncBundledDocs(moeDir: File, upgrade: Boolean) {
+            val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
+            try {
+                MoeProjectInitializer.syncRoleDocs(moeDir, upgrade)
+            } catch (ex: Exception) {
+                log.debug("Failed to sync role docs: ${ex.message}")
+            }
+            try {
+                MoeProjectInitializer.syncSkills(moeDir, upgrade = upgrade)
+            } catch (ex: Exception) {
+                log.debug("Failed to sync skills: ${ex.message}")
+            }
+        }
 
         private fun defaultProcessAliveProbe(pid: Int): Boolean {
             val handle = ProcessHandle.of(pid.toLong())

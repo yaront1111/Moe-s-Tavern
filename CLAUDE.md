@@ -13,7 +13,7 @@ JetBrains/VS Code Plugin ── ws://…/ws ──▶ Moe Daemon ◀── ws://
                                          .moe/  (source of truth)
 ```
 
-The daemon is the sole writer of `.moe/` **runtime state** (tasks, epics, workers, teams, proposals) — agents and humans must never edit `.moe/` by hand; go through `moe.*` MCP tools. The IDE plugins do, however, write to `.moe/` outside that invariant: they scaffold `.moe/` when missing, force-sync bundled role docs/skills into it on connect, and delete `.moe/daemon.json` when stale.
+The daemon is the sole writer of `.moe/` **runtime state** (tasks, epics, workers, teams, proposals) — agents and humans must never edit `.moe/` by hand; go through `moe.*` MCP tools. The IDE plugins do, however, write to `.moe/` outside that invariant: they scaffold `.moe/` when missing and delete `.moe/daemon.json` when stale. JetBrains also syncs its bundled role docs/skills: on connect it only creates missing files, and it upgrades stale marked copies only right before it starts the daemon itself, so a live daemon's newer copies are never downgraded.
 
 Roles: **architect** plans (`submit_plan`), **worker** codes per-step, **QA** reviews (`qa_approve`/`qa_reject`), **governor** oversees the fleet (never claims tasks). Humans gate transitions unless approval mode is relaxed.
 
@@ -39,7 +39,7 @@ cd moe-jetbrains       && ./gradlew runIde                # sandbox IDE for dev
 cd moe-vscode          && npm install && npm run package  # .vsix via vsce (compile/watch = typecheck only; no build script)
 ```
 
-Both IDE plugin builds hard-fail unless daemon AND proxy each have `dist/` **and** `node_modules/` — npm install + build both first. Role-doc/skill edits reach IDE users only through a plugin rebuild (they're bundled into the plugin, then force-synced into each project's `.moe/`).
+Both IDE plugin builds hard-fail unless daemon AND proxy each have `dist/` **and** `node_modules/` — npm install + build both first. Role-doc/skill edits reach IDE users only through a plugin rebuild (they're bundled into the plugin and its daemon, and the daemon rewrites stale marked copies in each project's `.moe/` at every start).
 
 Windows full build (daemon + proxy + JetBrains plugin ZIP): `.\scripts\install-all.ps1 -BuildPlugin`
 
