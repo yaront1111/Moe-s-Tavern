@@ -53,8 +53,11 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   LOW: 3,
 };
 
-/** Statuses in which a task legitimately holds or waits on a resource. */
-const RESOURCE_ELIGIBLE_STATUSES = new Set<TaskStatus>([
+/**
+ * Statuses in which a task legitimately holds or waits on a resource. The grant
+ * path, the lease reaper and the acquire/wait tools all apply this one rule.
+ */
+export const RESOURCE_ELIGIBLE_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   'PLANNING',
   'WORKING',
   'REVIEW',
