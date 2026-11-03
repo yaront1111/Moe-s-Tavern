@@ -534,10 +534,6 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 val idx = workflowOrder.indexOf(current)
                 return if (idx >= 0 && idx < workflowOrder.size - 1) workflowOrder[idx + 1] else null
             }
-            fun getPreviousStatus(current: String): String? {
-                val idx = workflowOrder.indexOf(current)
-                return if (idx > 0) workflowOrder[idx - 1] else null
-            }
 
             fun handleNext(task: Task) {
                 val nextStatus = getNextStatus(task.status) ?: return
@@ -562,7 +558,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             }
 
             fun handlePrevious(task: Task) {
-                val prevStatus = getPreviousStatus(task.status) ?: return
+                val move = BoardMoves.previous(task.status) ?: return
                 val reason = Messages.showInputDialog(
                     project,
                     MoeBundle.message("moe.message.previousReason"),
@@ -570,10 +566,13 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     Messages.getQuestionIcon()
                 )
                 if (reason.isNullOrBlank()) return
-                if (task.status == "DONE" || task.status == "REVIEW") {
-                    service.reopenTask(task.id, reason)
-                } else {
-                    service.updateTaskStatus(task.id, prevStatus, task.order)
+                when (move) {
+                    PreviousMove.Reopen -> service.reopenTask(task.id, reason)
+                    is PreviousMove.Status -> {
+                        // UPDATE_TASK carries no reason, so record it as a task comment first.
+                        service.addTaskComment(task.id, reason)
+                        service.updateTaskStatus(task.id, move.target, task.order)
+                    }
                 }
             }
 
@@ -633,7 +632,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                             PlanReviewDialog(project, task, service).show()
                         } else {
                             val nextCb = if (getNextStatus(task.status) != null) { t: Task -> handleNext(t) } else null
-                            val prevCb = if (getPreviousStatus(task.status) != null) { t: Task -> handlePrevious(t) } else null
+                            val prevCb = if (BoardMoves.hasPrevious(task.status)) { t: Task -> handlePrevious(t) } else null
                             TaskDetailDialog(project, task, service, onNext = nextCb, onPrevious = prevCb).show()
                         }
                     },
