@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,16 +79,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:46:35.853Z",
-  "updatedAt": "2026-11-03T22:59:16.812Z",
+  "updatedAt": "2026-11-03T23:01:12.255Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:48:01.332Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T23:00:52.246Z",
+    "wallClockMs": 770914
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -200,9 +203,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T22:52:14Z",
-    "at": "2026-11-03T22:59:16.812Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:59:26Z",
+    "at": "2026-11-03T23:01:12.255Z"
+  },
+  "completedAt": "2026-11-03T23:00:52.246Z",
+  "reviewCompletedAt": "2026-11-03T23:00:52.246Z",
+  "reviewSummary": "Reviewed completion 2ee4bada (on moe/work-2026-10-24, pushed) via git show. 3 files, +378/-32 (net 346, under the 400 cap), all in approvedScope; no doc change owed (MCP_SERVER.md :3249-3250 cover rotation:false with a reason).\n\nRe-ran task.verification (env -i, whole-tree git archive snapshot in /tmp, npm ci): tsc --noEmit clean; vitest run src/state/accountStore src/accounts = 8 files, 100 passed, 5 skipped (pre-existing), exit 0. Existing tests untouched. Mutation check: pre-fix registry.ts + accountStore.ts under the new test file → 10 failed / 3 passed (the 3 are the intended guards: ENOENT, invalid JSON and failed validation each read once across two leases); with the fix 13/13.\n\nDoD 1: RegistryError.readFailed (optional 3rd param, message byte-identical) set only in readRegistry's non-ENOENT read catch; loadRegistry returns it without caching. Tests: EACCES/EBUSY/EMFILE injected, re-read on the next call, after restore rotation:true acct-1 and view.error null; real chmod 000→600 case (skipIf win32/root).\nDoD 2: readUsage returns UnreadableUsage for non-ENOENT; loadUsage keeps the last good sample (null if none, fail-open as before) and caches nothing. Tests: 95% account stays blocked while its rewritten file is unreadable, re-read, new 5% read after restore; accountSwitchFor still switches. recordAccountReport's merge is in mergeReportUsage and skips merge+write on an unreadable file (bytes-unchanged test), reply null-guarded, warn log has account id + errno code only.\nDoD 3: content errors still cached and still MOE_ACCOUNT_REGISTRY_INVALID (read-once assertions plus message detail). ENOENT unchanged.\n\nAdversarial and complexity passes: no new throw path, stat failure still maps to 'missing', uncached re-read only while the error lasts, other RegistryError call sites and the accounts CLI unchanged, reply shapes unchanged. Nothing to cut. No blocking findings.",
+  "requiredCheckAtDone": null
 }

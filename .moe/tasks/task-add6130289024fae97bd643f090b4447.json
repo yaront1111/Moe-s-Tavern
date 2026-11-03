@@ -8,10 +8,60 @@
     "nextTaskOrder skips non-finite stored orders the way nextEpicOrder does, so a legacy non-numeric order on disk no longer yields a NaN/null default order and the epic's newest default-order row stays epic-final; a vitest file of the row's own proves the hunt repro's r1-r4 cases green."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1. packages/moe-daemon/src/tools/createTask.ts: refuse a present `order` that is not a finite number, before any write.\n\nIn the handler's params cast, change `order?: number` to `order?: unknown`. Right after the priority check (~:83) and before c90b41f1's definitionOfDone block, add:\n\n```ts\nlet order: number | undefined;\nif (params.order !== undefined) {\n  if (typeof params.order !== 'number' || !Number.isFinite(params.order)) throw invalidInput('order', 'must be a finite number');\n  order = params.order;\n}\n```\n\nThen pass `order` (not params.order) to state.createTask (~:166). Add a 2-line comment:\n- a stored string or null order made every later default-order row in the epic NaN (null on disk);\n- fractional orders (231.164) are how rows are placed between neighbours, so this is NOT create_epic's integer rule.\n\nnull is refused, as the DoD lists and as create_epic refuses it (validateIntegerValue). JSON also carries NaN and Infinity as null. undefined still means default. Do not add a range check: negative and fractional finite orders stay valid.\n\nError handling: the coded INVALID_INPUT names field 'order' (context.field) and is thrown before state.createTask, so nothing is written and a retry cannot duplicate a row. /ws CREATE_TASK (WebSocketServer.ts:448) still stores an unchecked order. That is out of scope (the DoD names create_task), and step 2's nextTaskOrder skip protects the default against it. Tests come in step 3.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 2. packages/moe-daemon/src/state/taskStore.ts nextTaskOrder (~:844-848): skip non-finite stored orders, exactly as StateManager.nextEpicOrder (~:1471-1479) does. Collect `.map((t) => t.order).filter((o) => typeof o === 'number' && Number.isFinite(o))` over the epic's tasks, return 1 when none is left, else Math.max(...orders) + 1.\n\nCarry over nextEpicOrder's comment: a legacy or hand-edited non-numeric order made every later default NaN, which JSON writes as null. It also took epic-final status (isEpicFinalTask, delivery/policy.ts:240, maps non-finite orders to 0 and fails on a NaN own order) away from the epic's newest default-order row.\n\nFinite-order epics get byte-identical results, so StateManager.test.ts's existing `describe('nextTaskOrder')` (~:1118-1140) must pass unchanged. Error handling: there is no new throw path; an epic whose rows all have non-finite orders gets 1, as an empty epic does. Tests come in step 3.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 1, 2. New test file packages/moe-daemon/src/tools/createTask.order.test.ts, the row's own.\n\nPort the hunt repro /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_createTaskOrder.test.ts. It uses ToolTestHarness with epic-1, task-a order 1, task-b order 2. Keep its cases:\n- sibling: create_epic refuses 'abc'.\n- r1: create_task refuses 'abc' with `{ codeName: 'INVALID_INPUT', context: { field: 'order' } }`.\n- r2: after that refusal, the next default-order task has a finite order equal to its on-disk value.\n- r3: a legacy row with order 'x' on disk gives the next default 3.\n- r4: the newest default-order row is epic-final and task-b is not.\n\nAdd these cases:\n- (a) A refusal matrix: 'abc', '1', NaN, Infinity, -Infinity, null, {}, [] and true. Each one is refused INVALID_INPUT with field 'order', and nothing is written: the task count, the .moe/tasks file listing and the TASK_CREATED emits are all unchanged. Reuse createTask.shape.test.ts's no-write assertions from c90b41f1.\n- (b) Fractional and edge finite orders are accepted and stored exactly in memory and on disk: 231.164, 0, -2.5.\n- (c) nextTaskOrder through state.nextTaskOrder: rows with order null and 'x' on disk are skipped, so the result is max finite + 1. An epic whose only rows are non-finite gives 1.\n\nUse mutation-resistant toBe/toMatchObject assertions, never bare truthiness.\n\nRed first: with createTask.ts and taskStore.ts at HEAD, r1-r4 and the matrix must fail. Note the counts in the completion summary. Error handling is what this file proves: every refusal path is coded and leaves no partial write.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/createTask.order.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "DoD 1 (docs, ruling msg-71db57ac: this row syncs its own `### moe.create_task` section).\n\nIn docs/MCP_SERVER.md, `### moe.create_task` (~:1824), add one bullet to the **Input refusals** list after the taskRails bullet (~:1851):\n\n\"- an `order` that is present (`null` included) but not a finite number, e.g. a string, `null`, `NaN`, `Infinity` or an object. Fractional and negative orders such as `231.164` are accepted.\"\n\nIn the Parameters block, extend `order?: number,` with this comment: `// finite; omitted = one more than the epic's highest finite order (non-finite stored orders are skipped)`.\n\nThe verification grep reads the phrase 'not a finite number' from this section. Touch nothing else in the file. The existing sentence 'Each is INVALID_INPUT naming the field' already covers the code.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification: run this once, fresh, before complete_task. It is the narrow suite for this mid-epic slice, run on a snapshot outside the repo per the live-runtime rail:\n\n`cd \"$(git rev-parse --show-toplevel)\" && awk '$0==\"### moe.create_task\"{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'not a finite number' && S=$(mktemp -d) && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/createTask.ts packages/moe-daemon/src/state/taskStore.ts packages/moe-daemon/src/tools/createTask.order.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/createTask.order.test.ts src/tools/createTask.shape.test.ts src/tools/createTask.test.ts src/state/StateManager.test.ts src/tools/qaApprove.test.ts src/tools/createEpic.validation.test.ts'`\n\nWhat it covers:\n- tsc confirms the `order?: unknown` narrowing.\n- StateManager.test.ts carries the existing nextTaskOrder tests.\n- qaApprove.test.ts exercises isEpicFinalTask.\n- docs/roles is archived because some daemon tests read it.\n\nSubmit the exit code and output tail as complete_task evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review (final step, adversarial-self-review skill), scoped to this diff (4 files). Check each item below.\n\n(a) The order check sits with the other input checks, before state.createTask: no partial write and no TASK_CREATED on refusal.\n\n(b) undefined still defaults, and finite fractional or negative orders pass unchanged.\n\n(c) No caller of moe.create_task in the repo sends `order: null`. Grep scripts/, packages/ and the role docs/skills: refusing null mirrors create_epic but used to mean default. Name any hit in the summary.\n\n(d) nextTaskOrder's result is identical for all-finite epics; null, 'x' and NaN rows are skipped.\n\n(e) Mutant proof: the new test file fails against HEAD's createTask.ts/taskStore.ts and passes with the fix.\n\n(f) Error handling: the refusal is coded INVALID_INPUT with context.field 'order' (not an uncoded TypeError), and the docs bullet matches the behaviour.\n\n(g) Out of scope, untouched: /ws CREATE_TASK's unchecked order and update paths that set order (reorder). Mention them as follow-ups if relevant.\n\nIf anything changes, re-run step 5's command and submit that fresh output as the test evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-d6c1cb7a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -26,16 +76,88 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:34:59.618Z",
-  "updatedAt": "2026-11-03T22:58:01.577Z",
+  "updatedAt": "2026-11-03T23:01:04.371Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:51:43.186Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T22:57:59.122Z"
+    "firstClaimAt": "2026-11-03T22:57:59.122Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
-  ]
+    "architect-1dd28c7c",
+    "worker-d6c1cb7a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:00:44.082Z",
+  "executionContract": {
+    "intendedBehavior": "moe.create_task refuses, before any write, a present `order` that is not a finite number (string, null, NaN, Infinity, object, array, boolean) with coded INVALID_INPUT naming 'order'; finite fractional/negative orders are stored exactly; an omitted order defaults to one more than the epic's highest finite stored order, skipping non-finite legacy orders, so the newest default-order row stays epic-final.",
+    "acceptanceCriteria": [
+      "create_task with order 'abc', '1', NaN, Infinity, -Infinity, null, {}, [] or true is refused INVALID_INPUT with context.field 'order', and no task, file or TASK_CREATED results.",
+      "create_task with order 231.164, 0 or -2.5 stores exactly that order.",
+      "With rows ordered 1, 2 and a legacy 'x' or null, the next default order is 3; an epic with only non-finite orders defaults to 1.",
+      "After a refused string order, the epic's newest default-order row is epic-final.",
+      "docs/MCP_SERVER.md ### moe.create_task names the refusal."
+    ],
+    "invariants": [
+      "Finite-order epics get the same default order as before.",
+      "undefined order still means default."
+    ],
+    "compatibility": [
+      "Existing finite-order rows and legacy non-finite rows on disk load unchanged (nothing is rewritten).",
+      "/ws CREATE_TASK behaviour is unchanged (out of scope)."
+    ],
+    "approvedScope": [
+      "createTaskTool handler input check for order",
+      "taskStore.nextTaskOrder",
+      "docs/MCP_SERVER.md ### moe.create_task section"
+    ],
+    "reuse": [
+      "invalidInput from the existing error helpers",
+      "nextEpicOrder's finite filter",
+      "the hunt repro test and createTask.shape.test.ts no-write assertions"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/taskStore.ts:844 nextTaskOrder has no finiteness filter; :346 uses input.order ?? nextTaskOrder.",
+      "packages/moe-daemon/src/state/StateManager.ts:1471 nextEpicOrder filters typeof number && Number.isFinite.",
+      "packages/moe-daemon/src/delivery/policy.ts:240 isEpicFinalTask picks the highest finite order."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && awk '$0==\"### moe.create_task\"{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'not a finite number' && S=$(mktemp -d) && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/createTask.ts packages/moe-daemon/src/state/taskStore.ts packages/moe-daemon/src/tools/createTask.order.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/createTask.order.test.ts src/tools/createTask.shape.test.ts src/tools/createTask.test.ts src/state/StateManager.test.ts src/tools/qaApprove.test.ts src/tools/createEpic.validation.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "The refusal could live in taskStore.createTask, so /ws CREATE_TASK is covered too. That was rejected: the board's /ws payload may carry order null for 'unset', and the task and governor placement put the check in create_task next to c90b41f1's checks. nextTaskOrder's skip makes any stored junk order harmless to defaults whatever its source.\n\ncreate_epic's validateIntegerValue rule was rejected: board task orders are fractional (231.164), and placement relies on that. null is refused, per the DoD and as create_epic does; it is also the JSON wire form of NaN and Infinity.",
+    "codebaseInsights": "- createTask.ts: status/priority checks at ~:73-83, c90b41f1's DoD/taskRails checks right after, state.createTask at ~:157-169 passing order.\n- taskStore.ts:346: `order: input.order ?? state.nextTaskOrder(input.epicId)`, so null fell through to the default and strings were stored.\n- nextTaskOrder: taskStore.ts:844-848. Its sibling nextEpicOrder, with the skip: StateManager.ts:1471-1479.\n- isEpicFinalTask (delivery/policy.ts:240-252) maps others' non-finite orders to 0, but a NaN own order compares false.\n- ToolTestHarness: init/setupMoeFolder/createEpic/createTask/state.load/cleanup/moePath.",
+    "risks": "- A caller that sends order null now gets INVALID_INPUT where it used to get a default. The self-review greps for one.\n- The `order?: unknown` cast must be narrowed before state.createTask (tsc checks it).\n- The snapshot must include docs/roles (c90b41f1's note).\n- /ws CREATE_TASK and reorder paths remain unchecked: out of scope.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/createTask.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/tools/createTask.shape.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "2ee4bada2e2fff57edaa2b2e7215a1ec98fff07a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:00:44.113Z",
+  "approvedPlanRevision": 1
 }
