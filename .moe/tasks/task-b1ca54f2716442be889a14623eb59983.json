@@ -258,11 +258,17 @@
       "author": "governor-e6b40560",
       "content": "Governor, for DoD 3. I applied both drop-after-runbook edges from your step-5 handoff (msg-f02df10b, comment-edabc19c) with moe.set_task_dependencies, using full ids:\n- task-0900b936 removeDependsOn task-648a5916. Removed. dependsOnUnmet is 1 (48bbd091, kept as a producer).\n- task-48bbd091 removeDependsOn task-3acf7f79. Removed. dependsOnUnmet is 1 (648a5916, kept as a producer). Its planner, architect-1dd28c7c, was told on the row and may re-add the edge only if its plan consumes 3acf7f79's text.\nNeither row has a dependent that consumed the dropped producer: 0900b936 has none, and 48bbd091's only dependent is 0900b936, which consumes 48bbd091 itself. I made no other edge edits. Cite this comment in the completion summary's DoD 3 list.",
       "timestamp": "2026-11-03T08:17:26.409Z"
+    },
+    {
+      "id": "comment-0020695c59a448458b0ba7725c927b27",
+      "author": "governor-e6b40560",
+      "content": "Governor, for DoD 3's list. These are post-sweep edge edits; cite them next to comment-edabc19c and my 08:17Z comment.\n- task-48bbd091 removeDependsOn task-648a5916, at 09:14Z. Your sweep classed this edge as kept (produces). I dropped it afterwards for a different reason: 648a5916's bytes are on the target (119fce99, pushed), QA's review passed (comment-dfa8493a), and the row is parked only until the human approves size waiver prop-35eadcbd. That is the waiver-park consumer rule; reasons are in comment-cad85ba3 on 48bbd091. 48bbd091's dependsOn is now [98c81a27] (DONE).\n- task-0900b936: at 09:14Z I mistakenly re-added the 648a5916 edge that your sweep had dropped, and I removed it again at 09:20Z. The net state is your sweep's: 0900b936 dependsOn [20a64797, 48bbd091].\n- task-e3e81c45 removeDependsOn task-c6a24053, at 09:14Z, under the same waiver-park rule (5f731334, comment-4c8cebc8, prop-49f31f04). That row isn't in the §8 audit; I'm listing it only for completeness.\nAlso, at 09:18:11Z this seat went through the hot-reload race this epic's sibling fix targets: a wrapper_restart deregister released this row and the seat re-claimed it at 09:18:21Z. Step 6 is still IN_PROGRESS under you. Nothing was lost; the checkpoint is e71aaeef.",
+      "timestamp": "2026-11-03T09:19:34.627Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-11-03T08:17:26.409Z",
+  "updatedAt": "2026-11-03T09:19:34.627Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",
@@ -379,18 +385,54 @@
       "treeId": "9029b9a6c99daf40a21225830644987807700165",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "e71aaeefc79fe8fb975614330f7e40b5b54aee9e",
+      "ref": "refs/heads/moe/task/task-b1ca54f2716442be889a14623eb59983",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T07:51:57Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+        "packages/moe-daemon/src/__acceptance__/producerConsumer.acceptance.test.ts",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "scripts/tests/wave1-pilot.mjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T09:17:57.965Z",
+      "treeId": "527480b68cf02957125c9f353a919a23f6fe904a",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/parity-check.ps1",
     "scripts/tests/parity-check.sh",
-    "scripts/tests/worktree-e2e.cjs"
+    "scripts/tests/worktree-e2e.cjs",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+    "packages/moe-daemon/src/__acceptance__/producerConsumer.acceptance.test.ts",
+    "packages/moe-daemon/src/delivery/acceptance.test.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+    "packages/moe-daemon/src/state/validators.test.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "scripts/tests/wave1-pilot.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-8cf0816c@2026-11-03T07:20:20Z",
-    "at": "2026-11-03T07:51:16.712Z"
+    "sessionId": "worker-8cf0816c@2026-11-03T07:51:57Z",
+    "at": "2026-11-03T09:17:57.965Z"
   }
 }

@@ -53,20 +53,35 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once (DoD 1-3). From your task worktree, run checkRefs [0] to [6] fresh, joined with ' && ', as ONE command. Its output tail is the complete_task verification evidence.\n\nWhat each check proves:\n- [0] `npm run lint` passes, only the three docs changed against the merge-base with MOE_LAND_TARGET (the wrapper exports it), no daemonGitDocs phrase appears, and the heading and TOC are intact.\n- [1] The stale sentences are gone, and no VS Code passage says session-only.\n- [2], [3], [4] Each passage holds the landed refusal, prompt, buttons, env name and store facts, read from moe-vscode/src at run time.\n- [5] The 20 s and 15 s bounds match replaceStopTimeoutMs and replaceExitTimeoutMs, and every backticked identifier in the three VS Code passages exists in moe-vscode/src.\n- [6] The account-trust-docs node test plus the four daemon doc-guard test files (daemonGitDocs, executionContractDocs, taskTimeBudgetDocs, qaCommitPolicy) pass in a git-clone snapshot with the three docs overlaid. npm never runs in the shared checkout (global rail).\n\nThis row's error handling for a red run: fix the doc text and re-run the whole command. Never edit a check, a test or code. If [2]-[5] report that a landed name is not in moe-vscode/src, the code changed after planning: re-read it and follow it. If the behaviour itself is gone, report to the architect instead of guessing.\n\nDeclare modifiedFiles: the three docs.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T09:16:46.343Z"
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "checkRefs [0]-[6] all green (C0..C4 OK); daemon doc-guard 48 tests pass in a clone snapshot.",
+      "startedAt": "2026-11-03T09:16:46.343Z",
+      "completedAt": "2026-11-03T09:17:45.722Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, once (load adversarial-self-review). Read `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\") -- docs` as a hostile reviewer and check:\n(a) Every sentence about VS Code behaviour maps to code at HEAD. List sentence -> function in complete_step.\n(b) Nothing JetBrains-only is claimed for VS Code: same-session re-declaration, an Allow-time re-check, pid and start-time records, Restart Daemon, an ACL check.\n(c) No text prints the spawn key or tells a reader to edit `.moe/daemon.json`, `project.json` or a store record, except the one last-resort deletion.\n(d) Every link resolves: the TOC entry, #protected-profile-in-vs-code, and the JetBrains anchor.\n(e) The diff touches only the three VS Code passages. JetBrains text and the Accepted Windows costs bullet are unchanged.\n(f) DoD 1-3 each map to a passing check in step 4's output.\nIf (a)-(e) finds a defect, fix it and re-run step 4's command, so the evidence matches the final bytes.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Self-review, sentence -> code: store -> useProtectedStateRoot/readProtectedState/writeProtectedState/requireOwnerOnly/protectedStateName; pin -> runtimeProfile/storedProfile/askDowngrade; provenance -> startProtectedDaemon/protectedAdmissionRefusal/parseSpawnRecord/protectedProvenanceRefusal; replace -> replaceUnverifiedDaemon/stopProtectedDaemon/waitForReplacementExit; no-retry -> manualDisconnect in doConnect. (b) none of same-session re-declaration, Allow-time re-check, pid/start-time, Restart Daemon is claimed; ACL appears only as 'Node has no ACL API'. (c) no key value; only the one last-resort record deletion. (d) anchors unchanged. (e) diff is limited to the three VS Code passages (42+/10-). (f) DoD1 -> C1-C3, DoD2 -> C0 diff check, DoD3 -> npm run lint in C0.",
+      "startedAt": "2026-11-03T09:17:46.582Z",
+      "completedAt": "2026-11-03T09:18:06.180Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -100,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:58:07.768Z",
-  "updatedAt": "2026-11-03T09:16:46.343Z",
+  "updatedAt": "2026-11-03T09:20:17.209Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T07:18:49.566Z",
@@ -110,18 +125,17 @@
     "firstClaimAt": "2026-11-03T07:32:11.443Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
     "worker-2dc72348"
   ],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-1dd28c7c@2026-11-03T08:01:12Z",
-    "at": "2026-11-03T08:40:04.162Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T09:14:25Z",
+    "at": "2026-11-03T09:20:17.209Z"
   },
   "tier": "standard",
   "effort": "high",
@@ -131,7 +145,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:23:57.988Z",
@@ -200,5 +216,38 @@
   },
   "planApprovedAt": "2026-11-03T08:23:58.012Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T09:15:46.823Z"
+  "workStartedAt": "2026-11-03T09:15:46.823Z",
+  "reviewStartedAt": "2026-11-03T09:18:11.855Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-48bbd091c2204d8eb06de272442d48e8 && for c in c0 c1 c2a c2b c2c c3 c4; do bash /tmp/t48bb/$c.sh || exit 1; done   # the seven checkRefs [0]-[6] verbatim as scripts",
+    "exitCode": 0,
+    "outputTail": "C0 OK (npm run lint exit 0) / C1 OK / C2a OK / C2b OK / C2c OK / C3 OK; account-trust-docs 5 pass 0 fail; daemon doc-guard vitest in clone snapshot: 4 files, 48 tests passed; C4 OK",
+    "reportedAt": "2026-11-03T09:18:11.855Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/ARCHITECTURE.md",
+    "docs/TROUBLESHOOTING.md",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "Rewrote the three VS Code protected-profile doc passages to match the landed code in moe-vscode/src: the owner-only `protected-state` store, the RF02 pin with the Keep Protected / Allow Downgrade prompt, spawn provenance (MOE_SPAWN_PROOF_KEY, /health challenge HMAC, fixed refusal, configured endpoint never admitted), and the Stop and Replace flow with its 20 s and 15 s bounds. The stale \"two gaps\", \"session-only\" and \"no such store\" text is gone. Only docs/ARCHITECTURE.md, docs/TROUBLESHOOTING.md and docs/CONFIGURATION.md changed. No JetBrains text changed, and the heading, TOC link and anchors are intact.",
+  "commits": [
+    {
+      "sha": "41b8b57930ec5b410fb313b6fc82f4ca1ee9c375",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T09:14:25Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T09:20:17.209Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

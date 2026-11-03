@@ -96,8 +96,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -109,12 +109,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:23.746Z",
-  "updatedAt": "2026-11-03T09:17:26.427Z",
+  "updatedAt": "2026-11-03T09:19:55.729Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:38:33.924Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T09:19:55.726Z",
+    "wallClockMs": 2481802
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -253,5 +255,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T09:19:55.726Z",
+  "reviewCompletedAt": "2026-11-03T09:19:55.726Z",
+  "reviewSummary": "Reviewed completion 8233f108, which is on moe/work-2026-10-24 and origin/moe/work-2026-10-24 and is contained in control HEAD 9dee717a. The six files are identical at HEAD and in the worktree.\nScope (C0): git diff --name-only 8233f108^..8233f108 lists exactly the six planned files, numstat +152/-11 (runtime +26/-11, test +126). The new test file has 0 at-signs.\nGate (C1): fresh git clone --shared snapshot at 8233f108 in /tmp, npm ci, then vitest on echoedReasonNotices, qaReject, releaseTask, completeStep, chatSystemFeed and state/reloadHold: 6 files, 154/154 passed. npx tsc --noEmit clean, EXIT=0.\nRED: with the five runtime files restored to 8233f108^ in the snapshot, echoedReasonNotices fails 5/5. (a)(b)(c) fail on recorded mentions, (d) on #workers routing to worker-busy, (e) on the ignored option.\nDoD:\n1. The option is on all six posts: qaReject 'QA rejected', requestReplan 'Replan requested', and release_task's auto-route and released lines in #general and #workers. sendMessage parseMentions:false records mentions [] and skips the router.\n2. Each posting line changes only by the appended argument, so texts are byte-identical. No return, response, error or nextAction changed. The #governors/#architects posts and the cascade post still parse mentions, and test (c) pins the #governors one.\n3. The new test builds the at-sign at runtime and asserts mentions [] and routingTargets [] for each tool. qaReject.test.ts and releaseTask.test.ts are unedited and pass.\n4. The snapshot gate exited 0.\nThe helper only spreads parseMentions:false when given, so plain calls still send {channel, sender, content}. Exactly two callers use the new 3-arg postToRoleChannel. Every post stays in its try/catch, and the helper keeps catch plus logger.warn.\nPonytail pass found nothing; the wrapper mirrors the existing postToGeneral pattern.",
+  "requiredCheckAtDone": null
 }
