@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
-import { MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
+import { MAX_STEP_FILES, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { assertContextFetched, assertWorkerHoldsTask } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
@@ -18,7 +18,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       properties: {
         taskId: { type: 'string' },
         stepId: { type: 'string' },
-        modifiedFiles: { type: 'array', items: { type: 'string' }, description: 'Every project-relative path this step created or modified (ASSERTED attribution tier for the auto-commit). Omit nothing.' },
+        modifiedFiles: { type: 'array', items: { type: 'string' }, description: `Every project-relative path this step created or modified (ASSERTED attribution tier for the auto-commit). Omit nothing. At most ${MAX_STEP_FILES}: more is refused; pass the rest to moe.declare_files.` },
         note: { type: 'string' },
         workerId: { type: 'string' },
         attemptId: { type: 'string', maxLength: 128, description: 'The attemptId moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
@@ -85,6 +85,13 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       // refuse it up front instead, like every other capped text field.
       if (typeof params.note === 'string' && params.note.length > MAX_STEP_NOTE_CHARS) {
         throw invalidInput('note', `too long (${params.note.length} chars). Maximum ${MAX_STEP_NOTE_CHARS} characters allowed.`);
+      }
+
+      // The plan sanitizer keeps only the first MAX_STEP_FILES paths on the write,
+      // so the paths past it would silently leave the ASSERTED tier; refuse up
+      // front, like the note cap and submit_plan.
+      if (Array.isArray(params.modifiedFiles) && params.modifiedFiles.length > MAX_STEP_FILES) {
+        throw invalidInput('modifiedFiles', `too many paths (${params.modifiedFiles.length}). At most ${MAX_STEP_FILES} per step: report ${MAX_STEP_FILES} here and pass the rest to moe.declare_files.`);
       }
 
       // Strict evidence goes on the attempt BEFORE the task write, on purpose:

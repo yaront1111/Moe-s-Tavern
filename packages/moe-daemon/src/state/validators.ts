@@ -37,7 +37,7 @@ import type {
 } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
 import { assertExecutionProfileReady, EXECUTION_PROFILES, resolveExecutionProfile } from '../delivery/executionProfile.js';
-import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
+import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_FILES, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { normalizeAffectedFile, normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
@@ -785,9 +785,9 @@ export function sanitizeImplementationPlan(plan: unknown): ImplementationStep[] 
       // between those sizes was persisted cut mid-sentence on the next write.
       description: s.description.slice(0, MAX_STEP_DESCRIPTION_CHARS),
       status: (typeof s.status === 'string' && VALID_STEP_STATUSES.includes(s.status) ? s.status : 'PENDING') as StepStatus,
-      affectedFiles: Array.isArray(s.affectedFiles) ? (s.affectedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [],
-      ...(s.newFiles !== undefined ? { newFiles: Array.isArray(s.newFiles) ? (s.newFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
-      ...(s.modifiedFiles !== undefined ? { modifiedFiles: Array.isArray(s.modifiedFiles) ? (s.modifiedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
+      affectedFiles: Array.isArray(s.affectedFiles) ? (s.affectedFiles as string[]).filter(f => typeof f === 'string').slice(0, MAX_STEP_FILES) : [],
+      ...(s.newFiles !== undefined ? { newFiles: Array.isArray(s.newFiles) ? (s.newFiles as string[]).filter(f => typeof f === 'string').slice(0, MAX_STEP_FILES) : [] } : {}),
+      ...(s.modifiedFiles !== undefined ? { modifiedFiles: Array.isArray(s.modifiedFiles) ? (s.modifiedFiles as string[]).filter(f => typeof f === 'string').slice(0, MAX_STEP_FILES) : [] } : {}),
       ...(typeof s.note === 'string' ? { note: s.note.slice(0, MAX_STEP_NOTE_CHARS) } : {}),
       ...(typeof s.startedAt === 'string' ? { startedAt: s.startedAt } : {}),
       ...(typeof s.completedAt === 'string' ? { completedAt: s.completedAt } : {}),
