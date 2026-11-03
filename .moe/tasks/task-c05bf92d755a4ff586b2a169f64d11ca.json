@@ -73,8 +73,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,12 +86,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:21:44.730Z",
-  "updatedAt": "2026-11-03T16:43:58.569Z",
+  "updatedAt": "2026-11-03T16:45:16.536Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T16:22:13.076Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:44:58.966Z",
+    "wallClockMs": 1365890
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -220,9 +222,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T16:39:40Z",
-    "at": "2026-11-03T16:43:25.791Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T16:43:32Z",
+    "at": "2026-11-03T16:45:16.536Z"
+  },
+  "completedAt": "2026-11-03T16:44:58.966Z",
+  "reviewCompletedAt": "2026-11-03T16:44:58.966Z",
+  "reviewSummary": "Reviewed completion 8a53505e (on moe/work-2026-10-24, contained in control HEAD) via git show; 5 files, +143/-6 net 137 (source +8/-6, new test 135), under the 400 cap. DoD1: taskStore.createTask and StateManager.createTask gain an optional actorWorkerId, passed as appendActivity's 7th arg on TASK_CREATED; tools/createTask.ts passes params.workerId (response and createdBy untouched); the actor is a separate parameter, never read from input; WebSocketServer.ts:451 unchanged and still one-arg (only two non-test callers of state.createTask exist). DoD2: recordCommit.ts normal branch now passes params.workerId as updateTask's 4th arg (bare, no recordedBy/'unknown' fallback; owner-guard branch untouched). DoD3: new tools/createCommitActor.test.ts z1 (caller ids on create_task, committed, nothing, owner-guard control, plus per-seat get_activity_log), z2 (caller-less create_task and record_commit record [null], recordedBy keeps 'unknown', empty for 'unknown'/'WORKER'), z3 (real /ws CREATE_TASK with payload naming workerId and actorWorkerId records no actor); createTask.test.ts and recordCommit.test.ts not in the diff (pass unchanged). DoD4 re-run myself in a git-archive snapshot of 8a53505e outside the repo, under env -i node v24.21.0, with npm ci: vitest on createCommitActor + createTask + recordCommit + StateManager + getActivityLog + executionPolicySnapshot gave Test Files 6 passed (6), Tests 252 passed (252); tsc --noEmit and tsc -p tt.json clean; exit=0. Independent mutation spot-check in the snapshot: dropping the createTask.ts actor arg and the recordCommit.ts 4th arg made z1 fail on the create_task, committed and nothing actors and on the governor-g1 and worker-1 get_activity_log queries; snapshot restored. No rails violated (no shared-checkout builds/tests, no .moe edits, no process kills). Ponytail pass: nothing to cut. Mid-epic change; no contract or docs change needed.",
+  "requiredCheckAtDone": null
 }
