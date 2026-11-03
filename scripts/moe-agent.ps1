@@ -523,15 +523,64 @@ function Get-MoeRealPath([string]$Path) {
     }
     throw "symlink loop at $Path"
 }
+# .NET, not Get-FileHash: Windows PowerShell 5.1 started by node under pwsh (the
+# CI 5.1 leg) inherits pwsh's PSModulePath and cannot resolve Get-FileHash at
+# all, which silently turned the hot reload below off there.
+function Get-MoeSha256Hex([byte[]]$Bytes) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($Bytes)) -replace '-', '') } finally { $sha.Dispose() }
+}
+# A folder's final path (GetFinalPathNameByHandle: normalized, DOS volume name).
+# An 8.3 name, a subst drive, a \\?\ prefix, a junction or a mount point all
+# resolve to one physical \\?\X:\ spelling, and a network folder to \\?\UNC\.
+# Of returns null when the folder cannot be opened or its path read.
+$script:MoeFinalPathDefinition = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+public static class MoeFinalPath {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+    public static string Of(string path) {
+        // FILE_READ_ATTRIBUTES, any sharing, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS (opens a folder).
+        using (SafeFileHandle handle = CreateFileW(path, 0x80, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+            if (handle.IsInvalid) return null;
+            StringBuilder buffer = new StringBuilder(32768);
+            uint length = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Capacity, 0);
+            return length == 0 || length >= buffer.Capacity ? null : buffer.ToString();
+        }
+    }
+}
+'@
+# Named after its source, like MoeFrozenGateProcess: a hot reload reruns this file in the same process.
+$script:MoeFinalPathTypeName = 'MoeFinalPath' + (Get-MoeSha256Hex ([Text.Encoding]::UTF8.GetBytes($script:MoeFinalPathDefinition))).Substring(0, 12)
+# Throws when the type cannot be compiled.
+function Get-MoeFinalPath([string]$Path) {
+    if (-not ($script:MoeFinalPathTypeName -as [type])) { Add-Type -TypeDefinition $script:MoeFinalPathDefinition.Replace('MoeFinalPath', $script:MoeFinalPathTypeName) -ErrorAction Stop }
+    return ($script:MoeFinalPathTypeName -as [type])::Of($Path)
+}
 # A protected file resolves only from an absolute PATH entry outside the
-# project's real path (empty, '.', relative and in-project entries skipped) by
-# this manual scan, never Get-Command. ponytail: 8.3 short-name aliases of the project and a
-# file-level link inside a trusted dir are not followed; resolve them if needed.
+# project (empty, '.', relative and in-project entries skipped) by this manual
+# scan, never Get-Command. On Windows the entry's final path is compared with
+# the project's, so an 8.3, subst, \\?\ or junction spelling of the project is
+# in-project, and a network entry never counts as outside: a share can be rooted
+# inside the project (task-89579137). ponytail: a file-level link inside a
+# trusted dir is not followed; resolve it if needed.
 function Find-MoeProtectedFile([string]$Name, [string[]]$Extensions) {
     $onWindows = $PSVersionTable.PSEdition -ne 'Core' -or $IsWindows
     $cmp = if ($onWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
     $sep = [IO.Path]::DirectorySeparatorChar
-    try { $project = (Get-MoeRealPath $projectPath.ProviderPath).TrimEnd('\', '/') } catch { $project = $null }
+    try { $projectFull = Get-MoeRealPath $projectPath.ProviderPath; $project = $projectFull.TrimEnd('\', '/') } catch { $project = $null }
+    $projectKey = $null
+    if ($project -and $onWindows) {
+        # The untrimmed path: a drive-root project trimmed to 'C:' would open that drive's current directory.
+        $why = 'it cannot be opened'
+        try { $final = Get-MoeFinalPath $projectFull } catch { $final = $null; $why = $_.Exception.Message }
+        if ($final -and $final.StartsWith('\\?\UNC\', $cmp)) { $final = $null; $why = 'it is on a network share' }
+        if (-not $final) { Write-Host "[WARN] Cannot resolve the final path of the project $projectFull ($why); no PATH entry counts as outside it." -ForegroundColor Yellow; return $null }
+        $projectKey = $final.TrimEnd('\') + '\'
+    }
     foreach ($entry in "$env:PATH".Split([IO.Path]::PathSeparator)) {
         if (-not $project) { break }
         $entry = $entry.Trim('"')
@@ -541,6 +590,10 @@ function Find-MoeProtectedFile([string]$Name, [string[]]$Extensions) {
             $realFull = Get-MoeRealPath $entry
             $real = $realFull.TrimEnd('\', '/')
             if ($real.Equals($project, $cmp) -or "$real$sep".StartsWith("$project$sep", $cmp)) { continue }
+            if ($projectKey) {
+                $f = Get-MoeFinalPath $realFull
+                if (-not $f -or $f.StartsWith('\\?\UNC\', $cmp) -or "$($f.TrimEnd('\'))\".StartsWith($projectKey, $cmp)) { continue }
+            }
             foreach ($ext in $Extensions) {
                 # The untrimmed path: a root entry trimmed to 'C:' or '' would join drive- or cwd-relative.
                 $file = [IO.Path]::Combine($realFull, "$Name$ext")
@@ -5354,14 +5407,6 @@ function Update-MoeSharedIndex([string]$Top, [array]$Paths) {
     return $false
 }
 
-
-# .NET, not Get-FileHash: Windows PowerShell 5.1 started by node under pwsh (the
-# CI 5.1 leg) inherits pwsh's PSModulePath and cannot resolve Get-FileHash at
-# all, which silently turned the hot reload below off there.
-function Get-MoeSha256Hex([byte[]]$Bytes) {
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { return ([BitConverter]::ToString($sha.ComputeHash($Bytes)) -replace '-', '') } finally { $sha.Dispose() }
-}
 
 # Suspended launch + an owned kill-on-close job closes the child-registration
 # race. One inherited log handle captures both streams without memory buffering.

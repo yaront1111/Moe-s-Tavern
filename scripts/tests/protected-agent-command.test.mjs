@@ -546,3 +546,69 @@ test('S3 the protected trusted-directory helper is byte-identical in both sh scr
   assert.ok(call, 'moe-call.sh has the trusted-directory helper');
   assert.equal(call, agent);
 });
+
+// task-89579137: on Windows the ps1 launcher compares a PATH entry with the project by its
+// final path (GetFinalPathNameByHandle), not by spelling. project\bin reached through an 8.3
+// name, a subst drive (of a parent, of the project, or of project\bin itself), or a \\?\ or
+// UNC prefix is skipped. A subst spelling of a trusted dir still resolves; a network spelling
+// never counts as outside, since a share can be rooted inside the project.
+const PS51 = ENGINES.find((e) => e.name === 'PowerShell 5.1');
+// null when the volume has no 8.3 name for dir.
+function shortPath(dir) {
+  const r = spawnSync(PS51.exe, ['-NoProfile', '-NonInteractive', '-Command', `(New-Object -ComObject Scripting.FileSystemObject).GetFolder(${psq(dir)}).ShortPath`], { encoding: 'utf8', timeout: 60_000 });
+  const short = r.status === 0 ? r.stdout.trim() : '';
+  return short && short.toLowerCase() !== dir.toLowerCase() ? short : null;
+}
+// Maps a free drive letter to dir until the row ends; null when none is free.
+// subst answers 1 on a letter that is already taken, so it never unmaps another one.
+function substDrive(t, dir) {
+  const subst = path.join(TAIL[0], 'subst.exe');
+  for (const letter of 'ZYXWVUTSRQPONMLKJIHG') {
+    if (existsSync(`${letter}:\\`) || spawnSync(subst, [`${letter}:`, dir]).status !== 0) continue;
+    t.after(() => spawnSync(subst, [`${letter}:`, '/D']));
+    return `${letter}:\\`;
+  }
+  return null;
+}
+for (const engine of ENGINES.filter((e) => e.kind === 'ps1')) {
+  const skip = engine.skip || (!windows && '8.3 names, subst drives and UNC shares are Windows-only');
+  test(`${engine.name}: I1 skips project\\bin spelled through an 8.3 name, a subst drive, or a \\\\?\\ or UNC prefix`, { skip }, async (t) => {
+    const fx = fixture(t);
+    const bin = path.join(fx.project, 'bin');
+    copyFileSync(path.join(TAIL[0], 'whoami.exe'), path.join(bin, 'node.exe'));
+    cliStub(fx, bin, 'claude', 'project-bin');
+    const file = cliStub(fx, fx.trusted, 'claude', 'trusted');
+    const short = shortPath(fx.root);
+    const rootDrive = substDrive(t, fx.root), projectDrive = substDrive(t, fx.project), binDrive = substDrive(t, bin);
+    const unc = `\\\\localhost\\${fx.root[0]}$${fx.root.slice(2)}`;
+    const forms = [
+      ['an 8.3 name', short && path.join(short, 'project', 'bin')],
+      ['an 8.3 name behind \\\\?\\', short && `\\\\?\\${path.join(short, 'project', 'bin')}`],
+      ['a subst drive of the fixture root', rootDrive && path.join(rootDrive, 'project', 'bin')],
+      ['a subst drive of the project', projectDrive && path.join(projectDrive, 'bin')],
+      ['a subst drive of project\\bin', binDrive],
+      ['a \\\\?\\ prefix', `\\\\?\\${bin}`],
+      ['a UNC admin share', existsSync(unc) && path.join(unc, 'project', 'bin')],
+    ];
+    for (const [label, entry] of forms) {
+      if (!entry) { t.diagnostic(`${label}: not reachable on this host`); continue; }
+      const r = await run(engine, fx, { command: 'claude', pathEntries: [entry, nodeBin(fx), fx.trusted, ...TAIL], stopOn: 'MOE_PROTECTED_AGENT_CLI:', env: { MOE_NODE_COMMAND: undefined } });
+      try { assertResolved(fx, r, 'claude', file); assertNode(engine, fx, r); }
+      catch (error) { error.message = `${label} (${entry}) was not skipped: ${error.message}`; throw error; }
+      t.diagnostic(`${label}: skipped (${entry})`);
+    }
+    if (!rootDrive) { t.diagnostic('subst control: no free drive letter'); return; }
+    const alias = path.join(rootDrive, 'trusted');
+    const r = await run(engine, fx, { command: 'claude', pathEntries: [alias, nodeBin(fx), ...TAIL], stopOn: 'MOE_PROTECTED_AGENT_CLI:', env: { MOE_NODE_COMMAND: undefined } });
+    assertResolved(fx, r, 'claude', path.join(alias, 'claude.cmd'));
+  });
+  const uncSkip = skip || (tailHas('claude') && 'a system PATH dir holds claude');
+  test(`${engine.name}: I2 never takes a CLI that only a network spelling of a trusted dir reaches`, { skip: uncSkip }, async (t) => {
+    const fx = fixture(t);
+    cliStub(fx, fx.trusted, 'claude', 'trusted');
+    const unc = `\\\\localhost\\${fx.trusted[0]}$${fx.trusted.slice(2)}`;
+    if (!existsSync(unc)) { t.skip('the admin share is not reachable on this host'); return; }
+    const r = await run(engine, fx, { command: 'claude', pathEntries: [unc, nodeBin(fx), ...TAIL], env: { MOE_NODE_COMMAND: undefined } });
+    assertRefused(engine, fx, r, notFoundLine('claude'));
+  });
+}
