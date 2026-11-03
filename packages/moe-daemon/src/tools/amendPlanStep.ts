@@ -5,6 +5,7 @@ import { invalidInput, invalidState, missingRequired, notAllowed, notFound, MoeE
 import { MAX_AMENDMENTS_PER_STEP, effectiveStepDescription, nextAmendmentId } from '../util/planAmendments.js';
 import { workerHasRole } from '../util/workerRole.js';
 import { MAX_STEP_DESCRIPTION_CHARS } from '../util/planSize.js';
+import { assertPlanRails, listPlanRailViolations, planRailText } from '../util/rails.js';
 
 // Same bound as submit_plan and the plan sanitizer (util/planSize): an amendment
 // may carry the full 10000-char step, e.g. to restore text an older daemon clipped.
@@ -91,6 +92,23 @@ export function amendPlanStepTool(_state: StateManager): ToolDefinition {
           'amend_plan_step',
           `step ${step.stepId} already has ${existing.length} amendments (max ${MAX_AMENDMENTS_PER_STEP}). A step amended this many times is a re-plan — use moe.request_replan.`
         );
+      }
+
+      // Rails (submit_plan's rules and text): refuse only a violation this
+      // amendment INTRODUCES. One the plan already had (a rail tightened after
+      // approval, an older daemon's plan) neither blocks it nor is named, and an
+      // amendment may remove it. The check runs before any write.
+      const project = state.project;
+      if (!project) throw notFound('Project', 'current');
+      const railText = (replacement?: string): string => planRailText(plan.map((s) => ({
+        description: replacement !== undefined && s.stepId === step.stepId ? replacement : effectiveStepDescription(s),
+        affectedFiles: s.affectedFiles,
+        newFiles: s.newFiles,
+      })));
+      const already = new Set(listPlanRailViolations(railText(), project.globalRails));
+      const introduced = listPlanRailViolations(railText(description), project.globalRails).find((v) => !already.has(v));
+      if (introduced !== undefined) {
+        assertPlanRails({ ok: false, violation: introduced }, task.id, 'revise the replacement text to satisfy this rail and call moe.amend_plan_step again');
       }
 
       const previousDescription = effectiveStepDescription(step);

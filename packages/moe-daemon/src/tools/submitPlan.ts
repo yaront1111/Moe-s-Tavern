@@ -2,7 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { Effort, ProjectSettings, RecipeInstance, TaskStatus } from '../types/schema.js';
 import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
-import { checkPlanRails, type RailsCheckResult } from '../util/rails.js';
+import { assertPlanRails, checkPlanRails, planRailText } from '../util/rails.js';
 import {
   validateExecutionContract, MAX_CONTRACT_BEHAVIOR_CHARS, MAX_CONTRACT_LIST_ITEMS, MAX_CONTRACT_ITEM_CHARS,
   MAX_REQUIRED_CHECKS, MAX_REQUIRED_CHECK_PATHS, MAX_REQUIRED_CHECK_COMMAND_CHARS,
@@ -187,35 +187,6 @@ export function rearmSpeedModeApprovals(state: StateManager): void {
       ? Math.max(0, delayMs - (now - submittedAt))
       : 0;
     armSpeedModeApproval(state, task.id, remaining, revision);
-  }
-}
-
-/** Keep step and contract rail refusals identical, including the escape hatch. */
-function assertPlanRails(railsCheck: RailsCheckResult, taskId: string): void {
-  if (!railsCheck.ok) {
-    // Steer the agent toward the escape hatch when the rail is wrong for
-    // this task (rare but legitimate). The default path is still to fix
-    // the plan — propose_rail is only for when the rail itself is the
-    // bug, not when the plan skipped a required pattern.
-    const v = railsCheck.violation || {};
-    const message =
-      `Rail violation: ${JSON.stringify(v)}. ` +
-      `Default action: revise the plan to satisfy this rail and resubmit moe.submit_plan. ` +
-      `Escape hatch: if this rail is genuinely wrong for task ${taskId} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +
-      `moe.propose_rail { proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL" | "EPIC" | "TASK", taskId: "${taskId}", currentValue, proposedValue, reason, workerId } ` +
-      `to request a human-approved rail change. Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
-    throw new MoeError(
-      MoeErrorCode.CONSTRAINT_VIOLATION,
-      message,
-      {
-        violation: v,
-        suggestedAction: {
-          tool: 'moe.propose_rail',
-          reason: 'Use this only if the rail itself is wrong for this task; otherwise fix the plan and resubmit.'
-        }
-      },
-      'CONSTRAINT_VIOLATION'
-    );
   }
 }
 
@@ -430,9 +401,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
         // newFiles are part of the plan's file surface — fold them into the rail
         // text so declaring a path as "new" can't smuggle it past a rail.
-        const planText = normalizedSteps
-          .map((step) => `${step.description} ${step.affectedFiles.join(' ')} ${step.newFiles.join(' ')}`)
-          .join(' ');
+        const planText = planRailText(normalizedSteps);
 
         const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
         assertPlanRails(railsCheck, task.id);
