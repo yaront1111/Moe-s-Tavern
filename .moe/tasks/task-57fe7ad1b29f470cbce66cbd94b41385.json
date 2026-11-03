@@ -47,7 +47,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -67,17 +67,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:19:52.719Z",
-  "updatedAt": "2026-11-03T18:43:28.211Z",
+  "updatedAt": "2026-11-03T18:45:34.529Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:30:43.434Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T18:45:07.343Z",
+    "wallClockMs": 863909
   },
   "contextFetchedBy": [
     "architect-24611a0a",
     "worker-26483323",
-    "worker-ed0f6a9e"
+    "worker-ed0f6a9e",
+    "qa-93f9625e"
   ],
   "tier": "light",
   "effort": "medium",
@@ -150,10 +153,11 @@
   "blockedAt": null,
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T18:40:53Z",
-    "at": "2026-11-03T18:43:28.211Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T18:43:29Z",
+    "at": "2026-11-03T18:45:34.529Z"
   },
   "priorBlockedReason": "Cannot safely edit the approved documentation path: Serena replace_in_files refuses docs/TROUBLESHOOTING.md as ignored for safety, and project rail expressly prohibits shell writes into the tree. No changes were applied; needs an allowed editor/path access.",
   "reviewStartedAt": "2026-11-03T18:42:18.059Z",
@@ -183,5 +187,9 @@
       "status": "REVIEW",
       "pushed": true
     }
-  ]
+  ],
+  "completedAt": "2026-11-03T18:45:07.343Z",
+  "reviewCompletedAt": "2026-11-03T18:45:07.343Z",
+  "reviewSummary": "Reviewed completion 207fc682 (on moe/control HEAD and moe/work-2026-10-24, pushed). One file, docs/TROUBLESHOOTING.md, +27/-16 (net 11); `git show --name-only` lists only that path. Re-ran task.verification in the control checkout minus the diff check (board diffs are uncommitted there): dod1=0 dod2=0 dod3=0 wt=1,1. DoD1 grep = 0. DoD2: all 3 install-all.ps1 lines (:120, :446, :640) carry -InstallPlugin; the reinstall block is now the single `install-all.ps1 -BuildPlugin -InstallPlugin -IdeVersion <IDE folder>`. DoD3: line-joined 'only ever runs against the project root' = 0; both .worktrees passages now cover worktree mode (land from .worktrees/<taskId>, never the control checkout) and keep the shared-mode advice. Facts re-checked at HEAD: plugin.xml:85 'Initialize Moe'; index.ts:43-44 port 9876/range 50; chatJoin.ts:31 real refusal text, 'Worker not registered' has 0 hits; tools/index.ts has 0 update_settings; proposeRail.ts enums match; WebSocketServer.ts:828 UPDATE_SETTINGS; install-all.ps1 installs the plugin only under -InstallPlugin and builds daemon+proxy; createWorker in claimNextTask/joinTeam/enterGovernance; scripts/CLAUDE.md:13 worktree-landing rule. Invariants: never-hand-edit-.moe kept; NO-COMPLETION-COMMIT heading (:849) and #agent-git-write-refusal anchor intact, banned phrases absent (qaCommitPolicy.test.ts conditions checked by grep, vitest not run per the shared-checkout npm rail); `node --test scripts/tests/account-trust-docs.test.mjs` 5/5; no inbound anchors to edited headings; fences balanced; no forbidden tokens in added lines. Not run: qualityGate (parity-check + lint), since no scripts or role docs changed.",
+  "requiredCheckAtDone": null
 }
