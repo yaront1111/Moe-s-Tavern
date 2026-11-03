@@ -27,6 +27,7 @@ VS Code parity with JetBrains and shared client behaviour (epic-aabc654d; see `d
 - The `moe.agentCommand` and `moe.chat.notifications.soundEnabled` settings, which the extension never read. **Moe: Start Agent** asks which CLI to launch (the last one used is listed first), and **Moe: Open Settings** still edits the project's agent command in `.moe/project.json`.
 
 ### Fixed
+- The board's **Delete** (card menu) and the Done column's clear button now ask in a VS Code modal and then act, as in JetBrains. Before, both did nothing, because a webview cannot show a confirmation dialog. The clear quotes every Done task it archives (the selected epic, else the whole board), not only the cards the board search shows.
 - A deleted chat channel (CHANNEL_DELETED) leaves the channel list and the current selection.
 - Chat channel auto-selection matches JetBrains: on first load, or when the selected channel is gone, the view selects the general channel, else the first listed one. A repeated CHANNEL_CREATED frame no longer lists a channel twice.
 - Terminal commands refuse every C0 control character and DEL. PowerShell quoting doubles the curly single quotes PowerShell also treats as quotes, so a project path such as `Bob’s work` stays one argument.

@@ -14,6 +14,14 @@ function dbg(msg: string): void {
     debugChannel.appendLine(`[${new Date().toISOString()}] ${msg}`);
 }
 
+/**
+ * How many tasks ARCHIVE_DONE_TASKS archives: every DONE task in the epic, else on the
+ * whole board (packages/moe-daemon/src/server/WebSocketServer.ts ARCHIVE_DONE_TASKS).
+ */
+export function archiveDoneCount(tasks: ReadonlyArray<{ status?: unknown; epicId?: unknown }>, epicId: string | undefined): number {
+    return tasks.filter(t => t?.status === 'DONE' && (!epicId || t.epicId === epicId)).length;
+}
+
 export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
     public static readonly viewType = 'moe.board';
     private _view?: vscode.WebviewView;
@@ -97,6 +105,51 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             return;
         }
         this.daemonClient.updateTaskStatus(taskId, status);
+    }
+
+    /**
+     * The card menu's Delete. A webview's sandbox has no allow-modals, so the page cannot
+     * ask; this modal (worded as JetBrains moe.message.deleteTask) is the only gate, and
+     * DELETE_TASK goes out only for "Delete".
+     */
+    private async confirmDelete(taskId: unknown): Promise<void> {
+        if (typeof taskId !== 'string' || taskId.length === 0) return;
+        try {
+            const title = this.daemonClient.currentState?.tasks?.find(t => t.id === taskId)?.title;
+            const choice = await vscode.window.showWarningMessage(
+                title ? `Delete "${title}"? This cannot be undone.` : 'Delete this task? This cannot be undone.',
+                { modal: true },
+                'Delete'
+            );
+            if (choice !== 'Delete' || this.disposed) return;
+            this.daemonClient.deleteTask(taskId);
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            void vscode.window.showErrorMessage(`Failed to delete task: ${errMsg}`);
+        }
+    }
+
+    /**
+     * The Done column's clear. The count is taken from the client's full state at click
+     * time with the daemon's own filter, never from the search-filtered column, because
+     * ARCHIVE_DONE_TASKS never sees the board search (JetBrains DoneColumnClear.archiveCount).
+     */
+    private async confirmArchiveDone(epicId: unknown): Promise<void> {
+        const scope = typeof epicId === 'string' && epicId.length > 0 ? epicId : undefined;
+        try {
+            const count = archiveDoneCount(this.daemonClient.currentState?.tasks ?? [], scope);
+            if (count === 0) return;
+            const choice = await vscode.window.showWarningMessage(
+                `Archive ${count} completed task(s)? They will be hidden from the board but remain on disk.`,
+                { modal: true },
+                'Archive'
+            );
+            if (choice !== 'Archive' || this.disposed) return;
+            this.daemonClient.archiveDoneTasks(scope);
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            void vscode.window.showErrorMessage(`Failed to archive tasks: ${errMsg}`);
+        }
     }
 
     private handleApprovalError(event: { operation?: string; message: string; codeName?: string; context?: { taskId?: string } }): void {
@@ -248,20 +301,10 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                     }
                     break;
                 case 'deleteTask':
-                    try {
-                        this.daemonClient.deleteTask(message.taskId);
-                    } catch (err) {
-                        const errMsg = err instanceof Error ? err.message : String(err);
-                        vscode.window.showErrorMessage(`Failed to delete task: ${errMsg}`);
-                    }
+                    void this.confirmDelete(message.taskId);
                     break;
                 case 'archiveDoneTasks':
-                    try {
-                        this.daemonClient.archiveDoneTasks(message.epicId);
-                    } catch (err) {
-                        const errMsg = err instanceof Error ? err.message : String(err);
-                        vscode.window.showErrorMessage(`Failed to archive tasks: ${errMsg}`);
-                    }
+                    void this.confirmArchiveDone(message.epicId);
                     break;
                 case 'connect':
                     vscode.commands.executeCommand('moe.connect');

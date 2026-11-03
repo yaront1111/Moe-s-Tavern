@@ -315,9 +315,8 @@
             deleteItem.addEventListener('click', function(ev) {
                 ev.stopPropagation();
                 closeContextMenu();
-                if (window.confirm('Delete this task?')) {
-                    vscode.postMessage({ type: 'deleteTask', taskId: taskId });
-                }
+                // The extension host asks first: a webview's sandbox cannot show a modal dialog.
+                vscode.postMessage({ type: 'deleteTask', taskId: taskId });
             });
             menu.appendChild(deleteItem);
 
@@ -633,7 +632,7 @@
                             ? '<button class="create-task-btn" data-action="createTask" title="Create Task">+</button>'
                             : '';
                         var archiveBtn = (status === 'DONE' && colTasks.length > 0)
-                            ? '<button class="archive-btn" data-action="archiveDone" data-count="' + colTasks.length + '" title="Archive done tasks">&times;</button>'
+                            ? '<button class="archive-btn" data-action="archiveDone" title="Archive done tasks">&times;</button>'
                             : '';
                         html += '<div class="column" id="column-' + escapeHtml(status) + '" data-status="' + escapeHtml(status) + '"'
                             + ' data-drop="column">'
@@ -673,7 +672,7 @@
                             ? '<button class="create-task-btn" data-action="createTask" title="Create Task">+</button>'
                             : '';
                         var archiveBtn = (status === 'DONE' && colTasks.length > 0)
-                            ? '<button class="archive-btn" data-action="archiveDone" data-count="' + colTasks.length + '" title="Archive done tasks">&times;</button>'
+                            ? '<button class="archive-btn" data-action="archiveDone" title="Archive done tasks">&times;</button>'
                             : '';
 
                         var colHtml = '<div class="column-header">'
@@ -705,7 +704,7 @@
                         ? '<button class="create-task-btn" data-action="createTask" title="Create Task">+</button>'
                         : '';
                     var archiveBtn = (status === 'DONE' && colTasks.length > 0)
-                        ? '<button class="archive-btn" data-action="archiveDone" data-count="' + colTasks.length + '" title="Archive done tasks">&times;</button>'
+                        ? '<button class="archive-btn" data-action="archiveDone" title="Archive done tasks">&times;</button>'
                         : '';
                     fallbackHtml += '<div class="column" id="column-' + escapeHtml(status) + '" data-status="' + escapeHtml(status) + '"'
                         + ' data-drop="column">'
@@ -1126,12 +1125,11 @@
             vscode.postMessage({ type: 'createTask' });
         }
 
-        function archiveDone(event, count) {
+        // The extension host asks first (a webview cannot show a modal dialog) and counts what
+        // ARCHIVE_DONE_TASKS archives: every DONE task in the epic filter, whatever the search hides.
+        function archiveDone(event) {
             event.stopPropagation();
-            if (count <= 0) { return; }
-            if (window.confirm('Archive ' + count + ' done task' + (count > 1 ? 's' : '') + '?')) {
-                vscode.postMessage({ type: 'archiveDoneTasks', epicId: selectedEpicFilter || undefined });
-            }
+            vscode.postMessage({ type: 'archiveDoneTasks', epicId: selectedEpicFilter || undefined });
         }
 
         function openTask(taskId) {
@@ -1235,11 +1233,7 @@
                 var action = actionEl.getAttribute('data-action');
                 switch (action) {
                     case 'createTask': createTask(e); break;
-                    case 'archiveDone': {
-                        var count = parseInt(actionEl.getAttribute('data-count') || '0', 10);
-                        archiveDone(e, count);
-                        break;
-                    }
+                    case 'archiveDone': archiveDone(e); break;
                     case 'navTask': {
                         var card = actionEl.closest('.task-card');
                         var tid = card ? card.getAttribute('data-task-id') : null;
