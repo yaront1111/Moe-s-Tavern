@@ -233,7 +233,8 @@ test('V6: dispose removes every listener, silences the provider and tolerates a 
 test('X1: extension.ts creates the provider and the TreeView, attaches it and registers the refresh command', () => {
     const source = read(files.extension);
     assert.match(source, /^import \{ AccountsTreeProvider \} from '\.\/providers\/AccountsTreeProvider';$/m);
-    assert.match(source, /const accountsProvider = new AccountsTreeProvider\(daemonClient\);/);
+    assert.match(source, /const accountsProvider = new AccountsTreeProvider\(daemonClient, undefined, protectedAccountsTerminal\);/);
+    assert.match(source, /^import \{[^}]*\bprotectedAccountsTerminal\b[^}]*\} from '\.\/util\/AgentLauncher';$/m);
     assert.match(source, /const accountsView = vscode\.window\.createTreeView\('moe\.accounts', \{ treeDataProvider: accountsProvider \}\);/);
     assert.match(source, /accountsProvider\.attach\(accountsView\);/);
     assert.match(source, /context\.subscriptions\.push\(\s*accountsProvider,\s*accountsView,\s*vscode\.commands\.registerCommand\('moe\.accounts\.refresh', \(\) => accountsProvider\.refresh\(\)\)\s*\);/);

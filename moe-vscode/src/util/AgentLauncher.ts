@@ -34,14 +34,33 @@ export function protectedInterpreter(
     basePath: string,
     windows = process.platform === 'win32',
     env: NodeJS.ProcessEnv = process.env,
-    posixBash = '/bin/bash'
+    posixBash = '/bin/bash',
+    subject = 'wrapper interpreter'
 ): ArtifactSelection {
     const candidate = windows
         ? (env.SystemRoot ? path.win32.join(env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : undefined)
         : posixBash;
-    const label = windows ? 'wrapper interpreter %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-        : `wrapper interpreter ${posixBash}`;
+    const label = windows ? `${subject} %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+        : `${subject} ${posixBash}`;
     return installedExecutable(candidate, basePath, defaultFoldCase, label);
+}
+
+/** What the Accounts terminal starts and types under the protected profile: accepted real paths, or why not. */
+export type AccountsTerminal = { node: string; shellPath?: string } | { refused: string };
+
+/**
+ * The protected Accounts terminal's interpreters (task-a6227f4e; JetBrains TerminalAgentLauncher.accountsCommandFor):
+ * on win32 the SystemRoot powershell.exe, both shellPath and typed word, then the daemon's node, each as its validated
+ * real path outside the project. Null under the legacy profile. Never throws: every refusal is a reason without the path.
+ */
+export function protectedAccountsTerminal(node: string, windows: boolean, env: NodeJS.ProcessEnv = process.env): AccountsTerminal | null {
+    const basePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+    if (runtimeProfile(basePath) !== 'protected') { return null; }
+    const shell = windows ? protectedInterpreter(basePath, true, env, undefined, 'Accounts terminal interpreter') : undefined;
+    if (shell !== undefined && 'rejected' in shell) { return { refused: shell.rejected }; }
+    const checked = installedExecutable(node, basePath, defaultFoldCase, 'Accounts node executable');
+    if ('rejected' in checked) { return { refused: checked.rejected }; }
+    return shell === undefined ? { node: checked.accepted } : { node: checked.accepted, shellPath: shell.accepted };
 }
 
 const TERMINAL_NAMES: Record<AgentRole, string> = {

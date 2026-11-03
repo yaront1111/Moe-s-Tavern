@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { MoeDaemonClient } from '../services/MoeDaemonClient';
 import { actions, chips, isValidLabel, parseAccountRotation, resolveAccountText, rows } from '../util/AccountPresentation';
 import type { AccountActions } from '../util/AccountPresentation';
+import type { AccountsTerminal } from '../util/AgentLauncher';
 
 interface AccountNode { label: string; description?: string; tooltip?: string; id?: string; contextValue?: string }
 interface AccountParts { items: AccountNode[]; description?: string; message?: string }
@@ -66,13 +67,16 @@ function shQuote(value: string): string {
 
 /**
  * JetBrains TerminalAgentLauncher.buildAccountsCommand: `<node> <cli.js> --accounts-file <file> <args>`, every word quoted.
- * Windows gets it through PowerShell -EncodedCommand, AgentLauncher's injection-safe form. Throws on a C0 control or DEL in any word.
+ * Windows gets it through PowerShell -EncodedCommand, AgentLauncher's injection-safe form, started as `& '<interpreter>'`
+ * when one is given (the protected profile) and as a bare `powershell` otherwise. Throws on a C0 control or DEL in any word.
  */
-export function accountsCommandLine(cli: { node: string; script: string }, registryFile: string, args: string[], windows: boolean): string {
+export function accountsCommandLine(cli: { node: string; script: string }, registryFile: string, args: string[], windows: boolean, interpreter?: string): string {
     const words = [cli.node, cli.script, '--accounts-file', registryFile, ...args];
     words.forEach(word => assertSafeArg('accounts command word', word));
+    if (interpreter !== undefined) { assertSafeArg('interpreter', interpreter); }
     if (!windows) { return words.map(shQuote).join(' '); }
-    return `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`& ${words.map(psQuote).join(' ')}`, 'utf16le').toString('base64')}`;
+    const shell = interpreter === undefined ? 'powershell' : `& ${psQuote(interpreter)}`;
+    return `${shell} -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`& ${words.map(psQuote).join(' ')}`, 'utf16le').toString('base64')}`;
 }
 
 /**
@@ -91,7 +95,15 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
     /** Set by a sent add: the next ACCOUNT_ADDED signs that account in, as JetBrains AccountsPanel does. */
     private awaitingAdd = false;
 
-    constructor(private readonly client: AccountsClient, private readonly clock: Clock = localClock()) {
+    /**
+     * `protectedTerminal` is AgentLauncher.protectedAccountsTerminal, supplied by extension.ts (a runtime import would break
+     * the closed require maps above). Null, the default, keeps the legacy line and terminal.
+     */
+    constructor(
+        private readonly client: AccountsClient,
+        private readonly clock: Clock = localClock(),
+        private readonly protectedTerminal: (node: string, windows: boolean) => AccountsTerminal | null = () => null
+    ) {
         // A STATE_SNAPSHOT flips isStateReady and carries the first rotation, so onStateChanged matters as well as onAccountsChanged.
         this.subscriptions = [client.onAccountsChanged(() => this.refresh()), client.onConnectionChanged(() => this.refresh()), client.onStateChanged(() => this.refresh())];
     }
@@ -278,11 +290,17 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
         const rotation = parseAccountRotation(this.client.accountRotation);
         if (rotation === null || rotation.cli === null) { return; }
         const windows = process.platform === 'win32';
-        const line = accountsCommandLine(rotation.cli, rotation.registryFile, args, windows); // throws on a C0 control or DEL
+        const pinned = this.protectedTerminal(rotation.cli.node, windows);
+        if (pinned !== null && 'refused' in pinned) {
+            throw new Error(`Protected execution profile: ${pinned.refused}. Moe runs account commands only with an interpreter outside the project, so nothing was started.`);
+        }
+        const cli = pinned === null ? rotation.cli : { ...rotation.cli, node: pinned.node };
+        const line = accountsCommandLine(cli, rotation.registryFile, args, windows, pinned?.shellPath); // throws on a C0 control or DEL
         let terminal: vscode.Terminal;
         try {
-            // The win32 line is PowerShell, so the terminal starts powershell.exe whatever the default profile is (AgentLauncher WINDOWS_SHELL).
-            terminal = vscode.window.createTerminal({ name: text('moe.accounts.terminal.tab'), ...(windows ? { shellPath: 'powershell.exe' } : {}) });
+            // The win32 line is PowerShell, so the terminal starts powershell.exe whatever the default profile is (AgentLauncher WINDOWS_SHELL);
+            // under the protected profile it starts the validated SystemRoot powershell.exe the line also types.
+            terminal = vscode.window.createTerminal({ name: text('moe.accounts.terminal.tab'), ...(windows ? { shellPath: pinned?.shellPath ?? 'powershell.exe' } : {}) });
         } catch {
             void vscode.env.clipboard.writeText(line);
             void vscode.window.showWarningMessage(text('moe.accounts.terminal.unavailable', line));

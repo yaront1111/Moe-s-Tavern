@@ -14,7 +14,7 @@ import { PlanReviewPanel } from './panels/PlanReviewPanel';
 import { TaskCreatePanel } from './panels/TaskCreatePanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 import { TaskDetailPanel } from './panels/TaskDetailPanel';
-import { launchAgent, launchAllAgents, AgentProvider, AgentRole } from './util/AgentLauncher';
+import { launchAgent, launchAllAgents, AgentProvider, AgentRole, protectedAccountsTerminal } from './util/AgentLauncher';
 import { isAntigravity, registerMcpServer } from './util/AntigravityIntegration';
 import { registerTaskNotifier } from './util/TaskNotifier';
 import { AgentSeatTracker, wireAgentSeats } from './util/AgentSeatTracker';
@@ -123,7 +123,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('moe.managedVms.cleanup', () => managedVms.cleanup())
     );
     // Claude accounts: the read-only rotation view (VSC-14); a TreeView, because the chips line and the note go in its description and message
-    const accountsProvider = new AccountsTreeProvider(daemonClient);
+    const accountsProvider = new AccountsTreeProvider(daemonClient, undefined, protectedAccountsTerminal);
     const accountsView = vscode.window.createTreeView('moe.accounts', { treeDataProvider: accountsProvider });
     accountsProvider.attach(accountsView);
     context.subscriptions.push(accountsProvider, accountsView, vscode.commands.registerCommand('moe.accounts.refresh', () => accountsProvider.refresh()));
