@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "Tests first (load test-driven-development). This row mirrors task-b071e3bf: JetBrains goes first, and this row dependsOn it. Read its landed plan and code before starting. If it settled a different interpreter or check, mirror that instead, and say so in complete_step.\n\nThe rule applies under protected only (runtimeProfile(...) === 'protected' || vmSeat). The wrapper's interpreter is an absolute path outside the workspace, chosen by a new export in moe-vscode/src/util/AgentLauncher.ts: `protectedInterpreter(basePath, windows = process.platform === 'win32', env = process.env, posixBash = '/bin/bash')`.\n- POSIX: posixBash, which is moe-agent.sh's own shebang.\n- win32: path.win32.join(env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe').\n- Both go through MoeDaemonClient.installedExecutable with a label (step 2). The POSIX label is `wrapper interpreter ${posixBash}`; the win32 label is the fixed text 'wrapper interpreter %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'. The result is { accepted: <real path> } or { rejected: <reason> }.\n\nThe protected typed line starts with that real path:\n- POSIX: `<env> '<interp>' '<wrapper>' --role ...`.\n- win32: `<env>& '<interp>' -NoProfile -ExecutionPolicy Bypass -EncodedCommand <b64>`. The win32 terminal's shellPath is the same path.\n\nA rejection shows `Protected execution profile: <reason>. Moe starts the agent wrapper only with an interpreter outside the project.` and creates no terminal. Legacy is unchanged: the typed `bash` and `powershell`, the win32 shellPath 'powershell.exe', and every legacy row.\n\nRows in moe-vscode/tests/protected-runtime.test.cjs (reuse its harness; tests share no helper module):\n- interp() gives the expected real path: fs.realpathSync.native('/bin/bash'), or on win32 fs.realpathSync.native(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')).\n- L1 already exists. It pins the PROTECTED line, which DoD 1 changes. expectedCommand gains an optional interpreter argument, and L1 expects the interpreter form. L1 also asserts the terminal options: on win32 {name: 'Moe Coder', cwd: dir, shellPath: interp()}; elsewhere, no shellPath key. L4 (legacy) passes no interpreter and stays byte-identical.\n- L5 tests protectedInterpreter in one table; each row is skipped off its platform.\n  - POSIX: the defaults give { accepted: interp() }. posixBash '/nonexistent/bash' gives { rejected: 'wrapper interpreter /nonexistent/bash not found' }. posixBash 'bash' gives '... is not an absolute path'. posixBash set to a file written inside the project gives '... resolves inside the project'.\n  - win32: env { SystemRoot: process.env.SystemRoot } gives { accepted: interp() }. env {} gives '... not found'. { SystemRoot: 'Windows' } gives '... is not an absolute path'. { SystemRoot: <a temp dir outside the project with no powershell.exe> } gives '... not found'. { SystemRoot: <the project dir> }, with System32\\WindowsPowerShell\\v1.0\\powershell.exe written inside it, gives '... resolves inside the project'.\n- L6: a protected launch (declare('verified-local') plus extension()). The client stub's installedExecutable returns { rejected: 'wrapper interpreter X not found' } and counts its calls.\n  - errors === ['Protected execution profile: wrapper interpreter X not found. Moe starts the agent wrapper only with an interpreter outside the project.'];\n  - no terminal is created, and the stub was called once;\n  - under a legacy launch (project(undefined, true)) the same stub gets zero calls, and L4's line is unchanged.\n\nIn moe-vscode/tests/verified-local-launch.test.cjs, expectedCommand's marker rows (V2 for architect and governor, V4 for worker and QA: the protected runtime) expect the interpreter form. Marker-false rows stay byte-identical.\n\nThese are the only existing rows that change, because they pin exactly the protected line that DoD 1 changes. Record that reading of DoD 2 in complete_step.\n\nRun both files RED in a Linux snapshot (step 4's archive, overlay and npm ci, then `node --test tests/protected-runtime.test.cjs tests/verified-local-launch.test.cjs`). L1, V2, V4, L5 and L6 must fail on today's bytes, and the legacy rows must pass. Keep that tail: it is the RED that DoD 3 asks for.\n\nError handling in the tests: every temp dir goes into the existing `made` cleanup, and no row depends on PATH.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/tests/protected-runtime.test.cjs",
         "moe-vscode/tests/verified-local-launch.test.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T08:56:04.507Z"
     },
     {
       "stepId": "step-2",
@@ -73,14 +74,15 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:28.153Z",
-  "updatedAt": "2026-11-03T08:52:22.791Z",
+  "updatedAt": "2026-11-03T08:56:04.507Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:30:35.858Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-26483323"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -144,5 +146,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T08:36:36.138Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T08:56:04.507Z"
 }

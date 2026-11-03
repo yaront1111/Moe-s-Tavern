@@ -81,31 +81,47 @@
     {
       "stepId": "step-4",
       "description": "DoD 4. In scripts/bundle-manifest.json, add \"moe-serena-ignore.mjs\" to the files list of the copy whose from is \"scripts\", right after \"moe-account-lease.mjs\". Use the Edit tool and keep the file valid JSON. Both IDE builds read this list: moe-jetbrains/build.gradle.kts (prepareSandbox) and moe-vscode/scripts/bundle-assets.mjs. scripts/tests/local-runner-bundle.test.mjs checks that neither build re-lists it.\n\nAdd one static test row, F7, to serena-ignore.test.mjs:\n- the manifest's scripts copy lists 'moe-serena-ignore.mjs';\n- every import specifier in the script's source starts with 'node:', both static `from '...'` and dynamic import('...');\n- the source contains no require(.\n\nError handling: the row's failure message names the offending specifier.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/bundle-manifest.json",
         "scripts/tests/serena-ignore.test.mjs"
       ],
-      "startedAt": "2026-11-03T08:50:32.994Z"
+      "modifiedFiles": [
+        "scripts/bundle-manifest.json",
+        "scripts/tests/serena-ignore.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "DoD 4. TDD: F7 RED first (manifest lacked the name), then \"moe-serena-ignore.mjs\" added after \"moe-account-lease.mjs\" in the scripts copy (valid JSON). F7 checks the manifest entry, that every static `from '...'` / dynamic import('...') specifier starts with 'node:', and that there is no require(. Suite: Linux 27/27 pass; Windows node.exe 25 pass, 2 skipped (F3-8, F6), 0 fail.\nSCOPE GROWTH (one line, outside the plan's affectedFiles): scripts/tests/local-runner-bundle.test.mjs seeds a hard-coded list of scripts files into its bundler fixture, the same list commit 9879f51 extended for moe-account-lease.mjs. Without the new name there, 3 more rows fail (\"Required scripts/moe-serena-ignore.mjs asset not found\"): 3 pass / 12 fail. With it the file matches pristine HEAD exactly: 6 pass / 9 fail. The 9 are pre-existing (no lockfile in the fixture since task-864103f3/c76a8bf8, plus a stale Gradle exclude assertion), verified on a `git archive HEAD` snapshot, and filed as task-a6591f29bbc8431380ac400299bbaf4e. Not fixed here.",
+      "startedAt": "2026-11-03T08:50:32.994Z",
+      "completedAt": "2026-11-03T08:54:05.954Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification (DoD 5). Run this ONCE, fresh, after the last edit, from a normal WSL shell in the task worktree. Do not use env -i: the Windows leg needs interop and the Windows PATH (mem:gotcha-node-test-windows-path-glob).\n\ncd \"$(git rev-parse --show-toplevel)\" && node --test scripts/tests/serena-ignore.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/serena-ignore.test.mjs && npm run lint\n\n- Leg 1 is Linux node. Leg 2 is Windows node.exe: its cwd maps to D:\\..., so process.platform is win32 and the fixtures use Windows git under %TEMP%.\n- Each leg must print an `ℹ tests N` summary with 0 failures. A run without that summary did not run.\n- Report tests / pass / fail / skipped for each leg. On Windows, only row F3-8 (symlink, EPERM) and F6 (':x') may skip.\n- This command's exit code and output tail are the complete_task evidence.\n- npm run lint is the repo-root role-doc linter. Never run npm install, npm ci or npm run build anywhere.\n- Then report the size: `wc -l scripts/moe-serena-ignore.mjs scripts/tests/serena-ignore.test.mjs`, plus the manifest's one line. The net total must be at most 680 (prop-4df448137840449eb49b97bd6245d2c0). If it is over, compact the test tables and re-run.\n- Declare exactly the three files as modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-serena-ignore.mjs",
         "scripts/tests/serena-ignore.test.mjs",
         "scripts/bundle-manifest.json"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-serena-ignore.mjs",
+        "scripts/tests/serena-ignore.test.mjs",
+        "scripts/bundle-manifest.json"
+      ],
+      "note": "Fresh run of `cd \"$(git rev-parse --show-toplevel)\" && node --test scripts/tests/serena-ignore.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/serena-ignore.test.mjs && npm run lint` -> exit 0. Linux leg: tests 27, pass 27, fail 0, skipped 0. Windows node.exe leg: tests 27, pass 25, fail 0, skipped 2 (only F3-8 symlink EPERM and F6 ':x', as allowed). Lint: architect 39, worker 30, qa 36 lines, OK. Size: moe-serena-ignore.mjs 347 + serena-ignore.test.mjs 317 = 664, + manifest 1, + the step-4 fixture line in local-runner-bundle.test.mjs 1 = 666 net, under the 680 cap (prop-4df44813). Step 6 re-runs this command after any fix.",
+      "startedAt": "2026-11-03T08:54:10.963Z",
+      "completedAt": "2026-11-03T08:54:40.669Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review, once (load adversarial-self-review), recorded in complete_step.\n\nThen run mutants in a scratch copy outside the repo: /mnt/d/moe-scratch/c6a24053-mut/<name> = `git archive HEAD scripts`, plus the three files copied over (cp then cmp). Run an unmutated control first. Then run `node --test scripts/tests/serena-ignore.test.mjs` on Linux for each mutant (M12 needs Linux), and record KILLED (by which row) or SURVIVED:\n- M1: convertGitignore's '**/' branch removed -> U1.\n- M2: TextDecoder without ignoreBOM -> F1 (sub/inner's BOM).\n- M3: the check-ignore pruning removed, so every dir is walked -> F1 (big/, .venv/lib).\n- M4: the walk replaced by `git ls-files -z --cached --others --exclude-standard -- ':(glob)**/.gitignore'` -> F1 (.venv/**/* missing, vend included).\n- M5: bin = 'git' even under the marker -> F3 5a and 5b, and F5.\n- M6: the check-ignore -q gate skipped -> F3 6 and 7.\n- M7: always rewrite -> F1's rerun (line, inode).\n- M8: a content skip leaves the block -> F4.\n- M9: the user-key opt-out removed -> F2 (d).\n- M10: the begin marker matched exactly instead of by prefix -> F2 (b).\n- M11: plain scalars accept a leading '*' -> U3.\n- M12: no './' prefix for check-ignore -> F6.\n- M13: the YAML escape replace removed -> U4.\nA SURVIVED mutant needs a new assertion. After any fix, re-run step 5's command and use its fresh output.\n\nChecklist; state an answer for each:\n- Two seats racing on one root: identical bytes and an atomic rename.\n- A CRLF or BOM user part.\n- A root path with spaces.\n- A very wide or deep tree against the 60 s budget.\n- A WSL seat and a Windows seat on one root read different global excludes, so each may rewrite the other's block. The bytes are valid either way; this churn is accepted.\n- Nothing but the one line reaches stdout, and no env value is printed.\n- Exit 0 on every path, including a thrown error.\n\nUpdate the handoff memory task-task-c6a2405324174deda18c4f672747994f-handoff. The architect wrote its contract section; append the delivered facts (timings, reasons, and anything e3e81c45's launcher tests should know).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-serena-ignore.mjs",
         "scripts/tests/serena-ignore.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T08:54:46.287Z"
     }
   ],
   "planRevision": 3,
@@ -129,12 +145,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:41:40.072Z",
-  "updatedAt": "2026-11-03T08:50:32.994Z",
+  "updatedAt": "2026-11-03T08:54:46.287Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:45:57.717Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -147,7 +163,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:26:37.704Z",

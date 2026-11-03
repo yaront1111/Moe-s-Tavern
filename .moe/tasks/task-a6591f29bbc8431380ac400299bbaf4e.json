@@ -1,0 +1,27 @@
+{
+  "id": "task-a6591f29bbc8431380ac400299bbaf4e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: scripts/tests/local-runner-bundle.test.mjs fails 9 of 15 on HEAD df0ca60a: its fixture has no package-lock.json for the lockfile-reading bundlers, and the Gradle row still expects a literal exclude(\"**/*.test.*\", \"**/*.spec.*\")",
+  "description": "Repro: `git archive HEAD` (df0ca60a) into a temp dir, then `node --test scripts/tests/local-runner-bundle.test.mjs` -> tests 15, pass 6, fail 9. Eight rows fail with \"Actual bundler failed: Lockfile <tmp>/packages/moe-daemon/package-lock.json is missing or unreadable\": the fixture never wrote a lockfile, and the bundlers have read one since task-864103f3 (Gradle) and task-c76a8bf8 (VS Code). The ninth, \"Gradle drops compiled tests from the daemon and proxy dist copies\", asserts the literal `exclude(\"**/*.test.*\", \"**/*.spec.*\")`, but build.gradle.kts now says `exclude(distTestExcludes)`. Found by worker-d6c1cb7a on task-c6a24053, whose only change to this file is one fixture line seeding scripts/moe-serena-ignore.mjs.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/local-runner-bundle.test.mjs` passes every row on Linux and through Windows node.exe.",
+    "The fixture seeds each bundled package's lockfile the way the real bundlers read it, and the Gradle row checks the exclude the build actually applies (through distTestExcludes), so neither check is weakened."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 356.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T08:53:22.002Z",
+  "updatedAt": "2026-11-03T08:53:22.002Z"
+}

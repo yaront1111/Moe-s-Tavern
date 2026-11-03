@@ -14,31 +14,47 @@
     {
       "stepId": "step-1",
       "description": "Add one case per branch of the per-kind wipe rule. Edit only packages/moe-daemon/src/state/massDeletionHeal.test.ts, and only with the main session's Edit tool (project rail: no shell writes and no subagent edits to tracked files). Make exactly two edits; the existing 8 cases, both beforeEach fixtures and the helpers stay byte-unchanged.\n(a) Line 8 becomes: import { healMassDeletion, MASS_DELETION_FRACTION, MASS_DELETION_MIN } from './massDeletionHeal.js';  Both constants are exported at massDeletionHeal.ts:38 and :40.\n(b) Append the two cases below inside the second describe ('healMassDeletion on a board-tracking project (runtime dirs wiped, board kept)'), after its last case ('never applies the per-kind rule to the board kinds a git checkout changes on purpose', which ends at line 206) and before the describe's closing line 207, with one blank line before each case. They reuse that describe's beforeEach unchanged (4 workers, 1 team, 3 proposals, 1 resource 'box-heal', 1 attempt; the before counts [4, 1, 3, 1, 1] are pinned at :141) and its in-scope names (before, entriesOf, fileOf, RUNTIME_DIRS, workerIds, taskIds, moePath, state). Keep the titles' '(z1) ' and '(z2) ' prefixes exactly: checkRef [1] greps the vitest FAIL lines for them.\n\n  it('(z1) rewrites runtime kinds whose directories are gone though each held fewer than MASS_DELETION_MIN entries', async () => {\n    // Only the dirGone clause can fire: each kind is under MASS_DELETION_MIN, and neither is a combined kind.\n    const gone = ['resources', 'attempts'] as const;\n    for (const dir of gone) {\n      expect(before[dir].length).toBeLessThan(MASS_DELETION_MIN);\n      fs.rmSync(path.join(moePath, dir), { recursive: true, force: true });\n    }\n\n    expect(await healMassDeletion(state)).toBe(2);\n    for (const dir of gone) {\n      for (const [id, entity] of before[dir]) {\n        expect(JSON.parse(fs.readFileSync(fileOf(dir, id), 'utf-8'))).toEqual(entity);\n      }\n    }\n\n    await state.load();\n    for (const dir of RUNTIME_DIRS) expect(entriesOf(dir)).toEqual(before[dir]);\n    expect(state.resources.get('box-heal')?.holders.map((h) => h.taskId)).toEqual([taskIds[0]]);\n  });\n\n  it('(z2) rewrites a runtime kind that lost MASS_DELETION_MIN and MASS_DELETION_FRACTION of its files, directory kept', async () => {\n    // Only the per-kind fraction branch can fire: 3 of 4 workers, dir kept; 3 of 59 combined is 5%.\n    const lost = workerIds.slice(0, 3);\n    const combinedKnown = state.tasks.size + state.epics.size + state.teams.size + state.workers.size + state.proposals.size;\n    expect(lost.length).toBeGreaterThanOrEqual(MASS_DELETION_MIN);\n    expect(lost.length).toBeGreaterThanOrEqual(workerIds.length * MASS_DELETION_FRACTION);\n    expect(lost.length).toBeLessThan(combinedKnown * MASS_DELETION_FRACTION);\n    for (const id of lost) fs.rmSync(fileOf('workers', id));\n\n    expect(await healMassDeletion(state)).toBe(3);\n    const was = new Map(before.workers);\n    for (const id of lost) expect(JSON.parse(fs.readFileSync(fileOf('workers', id), 'utf-8'))).toEqual(was.get(id));\n\n    await state.load();\n    for (const dir of RUNTIME_DIRS) expect(entriesOf(dir)).toEqual(before[dir]);\n  });\n\nWhy each shape isolates one branch of massDeletionHeal.ts:94 (`!BOARD_KINDS.has(dir) && (dirGone || isWipe(lost, entries.size))`):\n- (z1) resources and attempts each hold 1 entry, so isWipe(1, 1) is false (1 < MASS_DELETION_MIN), and neither is in COMBINED_KINDS (:60), so the combined rule sees 0 losses. Only dirGone can wipe them, and the heal must return 2.\n- (z2) the workers directory stays, so dirGone is false, and 3 of the 59 combined entities (50 tasks + 1 epic + 1 team + 4 workers + 3 proposals) is 5%, under the 20% combined threshold. Only isWipe(3, 4) can wipe workers, and the heal must return 3.\nThe premise expects make those preconditions fail loudly if the fixture or the constants change. Architect probe at 9657a30c: shipped 10/10; mutant A fails only (z1) with 'expected +0 to be 2'; mutant B fails only (z2) with 'expected +0 to be 3'.\nerror handling: this is a test-only change, so no production failure path changes; the new test cases use only the describe's mkdtemp dir (its afterEach rmSync cleans it), never the live .moe, and no timers. mem:gotcha-mass-deletion-heal-board-tracking has the fixture recipe and QA's original probe.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ],
+      "startedAt": "2026-11-03T08:53:50.059Z",
+      "completedAt": "2026-11-03T08:54:05.553Z"
     },
     {
       "stepId": "step-2",
       "description": "Verify in snapshots outside the checkout (project rail: never run npm in the shared checkout or in the worktree). From the worktree root run executionContract checkRef [0], then checkRef [1], each as its own Bash command, verbatim. Each one cds to `git rev-parse --show-toplevel`, git-archives HEAD's packages/moe-daemon into a fresh mktemp dir, overlays only the edited test file, and runs npm ci there. [1] mutates only that snapshot's massDeletionHeal.ts (an exact-once replace of `(dirGone || isWipe(lost, entries.size))`, restored after each run, then cmp-checked). Never mutate or restore anything in the worktree.\nExpected: [0] exits 0 with `Tests  10 passed (10)`. [1] exits 0 and prints, for mutant A `(isWipe(lost, entries.size))`, a FAIL line naming (z1) then `Tests  1 failed | 9 passed (10)`; for mutant B `(dirGone)`, a FAIL line naming (z2) then the same Tests line; then MUTANTS-KILLED.\ncomplete_task: verification = { command: checkRef [0] verbatim, exitCode: 0, outputTail: its tail including the Tests line }; the summary quotes checkRef [1]'s printed lines (both FAIL lines, both Tests lines, MUTANTS-KILLED) as the DoD's mutant evidence.\nError handling for a red run: [0] red: fix the test, never massDeletionHeal.ts (out of scope). [1] red: read its printed lines. `Tests  10 passed` under a mutant means a case no longer isolates its branch (recheck the premises and fixture counts); a missing FAIL line means a title lost its (z1)/(z2) prefix; exit 9 from the node replace means the anchor no longer matches massDeletionHeal.ts, so call moe.report_blocked instead of editing the source. Both commands hide npm ci output, so a nonzero exit with no vitest output means npm ci failed: rerun its lines by hand, or cp -al a lock-matching native node_modules into the snapshot (mem:gotcha-linux-vitest-reuse-native-node-modules) and run the same vitest line. Greps over vitest output need NO_COLOR=1 and grep -a (mem:gotcha-daemon-linux-snapshot-gate).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ],
+      "startedAt": "2026-11-03T08:54:06.322Z",
+      "completedAt": "2026-11-03T08:54:41.781Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review (load the adversarial-self-review skill), scoped to this one-file test diff. With B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"): `git diff --stat $B` lists only packages/moe-daemon/src/state/massDeletionHeal.test.ts, and `git diff $B -- packages/moe-daemon/src/state/massDeletionHeal.test.ts` shows exactly one changed import line plus one appended hunk of + lines inside the board-tracking describe, touching no existing case, fixture or helper line (DoD 3). Then check: both titles are unique and keep their prefixes; each case asserts the exact return value (2, 3) and the restored files' JSON, not mere truthiness; the (z2) premise uses the live map sizes (59), not a literal; nothing reads or writes outside the describe's temp dir; no added line contains any project.json globalRails.forbiddenPatterns string. Ask whether a peer adding a fixture entity or a new store could let a case pass for the wrong reason: the premises should fail first. If this step changes anything, rerun checkRefs [0] and [1] and cite the fresh output in complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ],
+      "note": "Self-review: diff is one import line plus one appended hunk, no existing line touched. Both titles are unique with their (z1)/(z2) prefixes. Return values 2 and 3 are asserted exactly, and the premise uses live map sizes. No code change, so no rerun was needed.",
+      "startedAt": "2026-11-03T08:54:42.623Z",
+      "completedAt": "2026-11-03T08:54:56.233Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-af7be174",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -50,11 +66,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:34:33.829Z",
-  "updatedAt": "2026-11-03T08:52:25.325Z",
+  "updatedAt": "2026-11-03T08:56:57.542Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:40:44.142Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -65,7 +82,11 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:51:04.053Z",
   "executionContract": {
@@ -116,10 +137,39 @@
   "planApprovedAt": "2026-11-03T08:51:04.082Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-1dd28c7c@2026-11-03T08:40:41Z",
-    "at": "2026-11-03T08:52:25.325Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T08:51:24Z",
+    "at": "2026-11-03T08:56:55.709Z"
+  },
+  "workStartedAt": "2026-11-03T08:53:50.059Z",
+  "reviewStartedAt": "2026-11-03T08:54:59.732Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp packages/moe-daemon/src/state/massDeletionHeal.test.ts \"$S/packages/moe-daemon/src/state/\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run src/state/massDeletionHeal.test.ts",
+    "exitCode": 0,
+    "outputTail": " Test Files  1 passed (1)\n      Tests  10 passed (10)\n   Duration  1.70s",
+    "reportedAt": "2026-11-03T08:54:59.732Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+  ],
+  "completionSummary": "Added (z1) pinning the dirGone clause (resources+attempts dirs deleted, each under 3 entries; heal returns 2) and (z2) pinning the isWipe fraction branch (3 of 4 workers deleted, dir kept; heal returns 3, premise asserts 3 of 59 combined is under 20%). Only massDeletionHeal.test.ts changed (import line plus one appended hunk). checkRef[0]: Tests 10 passed (10). checkRef[1] output: FAIL ... > (z1) ...; Tests 1 failed | 9 passed (10); FAIL ... > (z2) ...; Tests 1 failed | 9 passed (10); MUTANTS-KILLED.",
+  "commits": [
+    {
+      "sha": "620ca6715f729a546ad727eb4e0c7551d332401b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T08:51:24Z",
+      "paths": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T08:56:55.076Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
