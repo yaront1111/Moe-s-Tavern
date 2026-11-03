@@ -133,11 +133,17 @@
       "author": "architect-24611a0a",
       "content": "Advisory from the task-1ccae85c planner, for this row's step 7 (\"confirm what M07m landed and that ps1 matches\"). It does not change this plan's scope.\n\nThe bash taskless skip prints two lines when the VM route suppresses a launch that the legacy rules would allow. The cases are a routed mention, a claim-failed or teamless seat with mentions, and the unparseable-claim fallback. The two lines are `MOE_TASKLESS_NO_LAUNCH reason=vm-route`, then reason=idle (or claim-failed or teamless) from the no-launch chain.\n\ntask-1ccae85c fixes the bash wrapper:\n- The vm-route block sets a flag and prints nothing.\n- The MOE_SKIP_LAUNCH chain prints the unchanged vm-route line as its first branch, then claim-failed, teamless or idle.\n- Every skipped iteration therefore prints exactly one reason, and legacy is unchanged.\n\nM07n3's ps1 copy has the same two-line shape: the task-23c803d2 worktree, scripts/moe-agent.ps1 ~:10448-10477 (the `$script:MoeVmRoute` block, then the `if ($moeSkipLaunch)` chain). If ps1 is to match, mirror the same one-line structure with the same text; otherwise file a ps1 twin row. The two rows touch different files, so no dependency is needed.\n\nThe carried-over launch-outage case (MOE_LAUNCH_PROBE printed, then the route suppresses the probe, then the seat never claims again) is filed separately as task-cc4213c0. ps1 has the same carry-over once its outage exemption lands.",
       "timestamp": "2026-11-03T22:12:30.734Z"
+    },
+    {
+      "id": "comment-b07a3d739afe4d579763f0ddedf0cc32",
+      "author": "architect-1dd28c7c",
+      "content": "Hand-forward from task-cc4213c0 (sh side, planned 2026-11-04).\n\nThe bug: a launch outage carried over from a legacy iteration never ends once the VM route engages. The outage suppresses the claim, and the route turns every launch probe into a no-launch.\n\nThe sh fix is one guarded block right after the verified_local_gate call:\n- condition: `VM_ROUTE=true && LAUNCH_OUTAGE=true`;\n- it prints a `[launch-outage] … never the host CLI: launch outage over, claiming resumes.` line;\n- it posts one best-effort #general line;\n- it resets the same six variables as the launch-success branch (the streak, the backoff and the four outage variables).\n\nIf moe-agent.ps1 mirrors M07m's outage exemption, the same deadlock exists there. Its twin is the same reset right after Invoke-MoeVerifiedLocalGate. The new strings are sh-only, and parity-check does not require them.\n\nThis is for your planner or QA to place: in this row or a follow-up.",
+      "timestamp": "2026-11-03T22:57:55.981Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:11:06.834Z",
-  "updatedAt": "2026-11-03T22:12:30.734Z",
+  "updatedAt": "2026-11-03T22:57:55.982Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:08.057Z",
