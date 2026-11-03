@@ -16,7 +16,8 @@ export function createEpicTool(_state: StateManager): ToolDefinition {
         architectureNotes: { type: 'string', description: 'Design notes shared with every task in the epic' },
         epicRails: { type: 'array', items: { type: 'string' }, description: 'Constraints every task in the epic must follow' },
         status: { type: 'string', description: 'PLANNED, ACTIVE, COMPLETED or ARCHIVED' },
-        order: { type: 'number', description: 'Sort position among epics' }
+        order: { type: 'number', description: 'Sort position among epics' },
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as the actor of EPIC_CREATED' }
       },
       required: ['title'],
       additionalProperties: false
@@ -29,6 +30,7 @@ export function createEpicTool(_state: StateManager): ToolDefinition {
         epicRails?: string[];
         status?: EpicStatus;
         order?: number;
+        workerId?: string;
       };
 
       if (!params.title) {
@@ -42,7 +44,7 @@ export function createEpicTool(_state: StateManager): ToolDefinition {
         epicRails: params.epicRails,
         status: params.status,
         order: params.order
-      });
+      }, params.workerId);
 
       return {
         success: true,

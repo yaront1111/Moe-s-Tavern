@@ -14,7 +14,8 @@ export function deleteEpicTool(_state: StateManager): ToolDefinition {
           type: 'boolean',
           description: 'If true, delete all tasks in the epic. If false (default), fail if epic has tasks.',
           default: false
-        }
+        },
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as the actor of EPIC_DELETED and each cascaded TASK_DELETED' }
       },
       required: ['epicId'],
       additionalProperties: false
@@ -23,6 +24,7 @@ export function deleteEpicTool(_state: StateManager): ToolDefinition {
       const params = (args || {}) as {
         epicId?: string;
         cascadeDelete?: boolean;
+        workerId?: string;
       };
 
       if (!params.epicId) {
@@ -43,7 +45,7 @@ export function deleteEpicTool(_state: StateManager): ToolDefinition {
       }
 
       // deleteEpic in StateManager already handles cascade deletion
-      const epic = await state.deleteEpic(params.epicId);
+      const epic = await state.deleteEpic(params.epicId, params.workerId);
 
       return {
         success: true,

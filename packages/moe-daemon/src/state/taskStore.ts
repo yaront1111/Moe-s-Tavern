@@ -687,7 +687,7 @@ export async function updateTask(
   return updated;
 }
 
-export async function deleteTask(state: StateManager, taskId: string): Promise<Task> {
+export async function deleteTask(state: StateManager, taskId: string, actorWorkerId?: string): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
     throw new Error(`Task not found: ${taskId}`);
@@ -740,7 +740,7 @@ export async function deleteTask(state: StateManager, taskId: string): Promise<T
     }
   }
 
-  state.appendActivity('TASK_DELETED', { title: task.title }, task);
+  state.appendActivity('TASK_DELETED', { title: task.title }, task, undefined, undefined, undefined, actorWorkerId);
   state.emit({ type: 'TASK_DELETED', payload: task });
   return task;
 }

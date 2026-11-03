@@ -1863,7 +1863,8 @@ Create a new epic.
   architectureNotes?: string,
   epicRails?: string[],
   status?: "PLANNED" | "ACTIVE" | "COMPLETED" | "ARCHIVED",  // default "PLANNED"
-  order?: number   // an integer >= 0; default: the highest finite epic order + 1
+  order?: number,  // an integer >= 0; default: the highest finite epic order + 1
+  workerId?: string   // caller (auto-injected by moe-proxy); recorded as the actor of EPIC_CREATED
 }
 ```
 
@@ -1896,7 +1897,8 @@ Update an existing epic.
   epicRails?: string[],
   status?: "ACTIVE" | "COMPLETED" | "ARCHIVED",
   order?: number,
-  finalTaskId?: string          // the epic's final (integration-and-hardening) task; "" clears the designation
+  finalTaskId?: string,         // the epic's final (integration-and-hardening) task; "" clears the designation
+  workerId?: string             // caller (auto-injected by moe-proxy); recorded as the actor of EPIC_UPDATED, never stored on the epic
 }
 ```
 
@@ -1925,7 +1927,10 @@ cascade go through the same path.
 
 **Parameters:**
 ```typescript
-{ taskId: string }
+{
+  taskId: string,
+  workerId?: string   // caller (auto-injected by moe-proxy); recorded as the actor of TASK_DELETED
+}
 ```
 
 **Returns:**
@@ -1947,7 +1952,8 @@ Delete an epic and optionally its tasks.
 ```typescript
 {
   epicId: string,
-  cascadeDelete?: boolean  // If true, delete all tasks in epic. Default: false
+  cascadeDelete?: boolean, // If true, delete all tasks in epic. Default: false
+  workerId?: string        // caller (auto-injected by moe-proxy); recorded as the actor of EPIC_DELETED and each cascaded TASK_DELETED
 }
 ```
 

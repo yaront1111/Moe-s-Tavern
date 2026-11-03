@@ -40,16 +40,16 @@ export function updateEpicTool(_state: StateManager): ToolDefinition {
         finalTaskId: {
           type: 'string',
           description: "Designate the epic's final (integration-and-hardening) task by id. get_context isEpicFinal and the epicFinal quality-gate scope follow it whatever the board order. An empty string clears it, and the epic falls back to the highest order."
-        }
+        },
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as the actor of EPIC_UPDATED, never stored on the epic' }
       },
       required: ['epicId'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const raw = (args || {}) as Record<string, unknown>;
-      // Proxy auto-injects workerId from MOE_WORKER_ID env into every tools/call;
-      // update_epic doesn't use it, so drop it before strict-field validation.
-      delete raw.workerId;
+      // The proxy injects the caller's workerId into every tools/call: it is the
+      // EPIC_UPDATED actor, never an epic field, so split it off before the strict check.
+      const { workerId, ...raw } = (args || {}) as Record<string, unknown>;
       const allowedFields = new Set(['epicId', 'title', 'description', 'architectureNotes', 'epicRails', 'status', 'order', 'finalTaskId']);
       for (const field of Object.keys(raw)) {
         if (!allowedFields.has(field)) {
@@ -91,7 +91,7 @@ export function updateEpicTool(_state: StateManager): ToolDefinition {
       if (params.order !== undefined) updates.order = params.order;
       if (params.finalTaskId !== undefined) updates.finalTaskId = params.finalTaskId;
 
-      const epic = await state.updateEpic(params.epicId, updates);
+      const epic = await state.updateEpic(params.epicId, updates, workerId as string | undefined);
 
       return { success: true, epic };
     }

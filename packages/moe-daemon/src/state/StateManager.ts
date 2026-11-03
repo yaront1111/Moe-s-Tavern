@@ -671,8 +671,8 @@ export class StateManager {
     return updateTask(this, taskId, updates, event, actorWorkerId);
   }
 
-  async deleteTask(taskId: string): Promise<Task> {
-    return deleteTask(this, taskId);
+  async deleteTask(taskId: string, actorWorkerId?: string): Promise<Task> {
+    return deleteTask(this, taskId, actorWorkerId);
   }
 
   /**
@@ -1241,7 +1241,7 @@ export class StateManager {
 
   // ---- Team methods ----
 
-  async createEpic(input: Partial<Epic>): Promise<Epic> {
+  async createEpic(input: Partial<Epic>, actorWorkerId?: string): Promise<Epic> {
     if (!this.project) {
       throw new Error('Project not loaded');
     }
@@ -1276,13 +1276,15 @@ export class StateManager {
 
     await this.writeEntity('epics', epic.id, epic);
     this.epics.set(epic.id, epic);
-    this.appendActivity('EPIC_CREATED', epicCreatedActivityPayload(epic), undefined, undefined, undefined, epic);
+    // The actor is a parameter, never read from `input`: the board passes its raw /ws
+    // payload as `input`, and a payload must not name its own actor.
+    this.appendActivity('EPIC_CREATED', epicCreatedActivityPayload(epic), undefined, undefined, undefined, epic, actorWorkerId);
     this.emit({ type: 'EPIC_CREATED', payload: epic });
 
     return epic;
   }
 
-  async updateEpic(epicId: string, updates: Partial<Epic>): Promise<Epic> {
+  async updateEpic(epicId: string, updates: Partial<Epic>, actorWorkerId?: string): Promise<Epic> {
     const epic = this.epics.get(epicId);
     if (!epic) {
       throw new Error(`Epic not found: ${epicId}`);
@@ -1297,7 +1299,7 @@ export class StateManager {
 
     await this.writeEntity('epics', epicId, updated);
     this.epics.set(epicId, updated);
-    this.appendActivity('EPIC_UPDATED', epicUpdatedActivityPayload(updated, sanitizedUpdates), undefined, undefined, undefined, updated);
+    this.appendActivity('EPIC_UPDATED', epicUpdatedActivityPayload(updated, sanitizedUpdates), undefined, undefined, undefined, updated, actorWorkerId);
     this.emit({ type: 'EPIC_UPDATED', payload: updated });
     return updated;
   }
@@ -1307,7 +1309,7 @@ export class StateManager {
     return updateProjectSettings(this, settings);
   }
 
-  async deleteEpic(epicId: string): Promise<Epic> {
+  async deleteEpic(epicId: string, actorWorkerId?: string): Promise<Epic> {
     const epic = this.epics.get(epicId);
     if (!epic) {
       throw new Error(`Epic not found: ${epicId}`);
@@ -1316,7 +1318,7 @@ export class StateManager {
     // Delete all tasks in this epic
     const tasksToDelete = Array.from(this.tasks.values()).filter((t) => t.epicId === epicId);
     for (const task of tasksToDelete) {
-      await this.deleteTask(task.id);
+      await this.deleteTask(task.id, actorWorkerId);
     }
 
     // Delete epic file
@@ -1335,7 +1337,8 @@ export class StateManager {
     }
     this.epics.delete(epicId);
 
-    this.appendActivity('EPIC_DELETED' as ActivityEventType, { title: epic.title });
+    // No epic entity: EPIC_DELETED keeps its shape (no top-level epicId), only the actor is new.
+    this.appendActivity('EPIC_DELETED' as ActivityEventType, { title: epic.title }, undefined, undefined, undefined, undefined, actorWorkerId);
     this.emit({ type: 'EPIC_DELETED', payload: epic });
     return epic;
   }
