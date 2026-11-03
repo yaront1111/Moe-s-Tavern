@@ -11,7 +11,8 @@ function Require-Command([string]$Name) {
     }
 }
 
-function Run-Native([string]$Cmd, [string[]]$Args) {
+# Not named Args: in a simple function the automatic unbound-arguments variable replaces a parameter of that name.
+function Run-Native([string]$Cmd, [string[]]$Arguments) {
     $nativePref = $null
     if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
         $nativePref = $PSNativeCommandUseErrorActionPreference
@@ -20,7 +21,7 @@ function Run-Native([string]$Cmd, [string[]]$Args) {
     $errorPref = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & $Cmd @Args 2>&1 | Out-Host
+        & $Cmd @Arguments 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) {
             throw "$Cmd exited with code $LASTEXITCODE"
         }
