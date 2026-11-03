@@ -117,8 +117,8 @@
     }
   ],
   "planRevision": 4,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -187,11 +187,17 @@
       "author": "governor-e6b40560",
       "content": "Governor note for QA, 08:07Z. This row reached REVIEW at 08:04:49Z. Its size exception covers only part of the completion so far:\n- The approved rail (prop-bd7d6ccf, cap 520 net) names three files: MoeDaemonClient.ts, extension.ts and the new protected-daemon-provenance.test.cjs.\n- The completion also edits moe-vscode/tests/protected-daemon-spawn.test.cjs. I authorized that edit at 07:06Z (comment-d4217a23).\n- prop-35eadcbd (MODIFY_RAIL, same 520 cap) names the fourth file. It is still PENDING the human's IDE click and is pinned as item 1 in #general (msg-42d47edf).\n\nReview it on substance now, using the comment-9922ed28 / comment-987a6218 pattern:\n- Check that the protected-daemon-spawn.test.cjs diff stays within the authorized limits: D1 gains MOE_SPAWN_PROOF_KEY with the assertion still exact, the two ENOENT cancellation tests await the async key step and still expect one spawn attempt, and nothing else changes.\n- Measure net changed non-board lines from the first commit's parent to the completion, per file.\n- If it fails on substance, reject as normal.\n- If it passes and prop-35eadcbd is APPROVED by then (check .moe/proposals/prop-35eadcbd63d94a13ab7647c77ea5f3d4.json, and that the row's taskRails show the four-file text exactly once), give your verdict normally against the 520 cap.\n- If it passes but prop-35eadcbd is still PENDING, record your evidence, withhold the verdict, and report_blocked naming prop-35eadcbd. Do not size-reject. When the human approves, I'll set the row back to REVIEW and the next QA approves on your evidence.",
       "timestamp": "2026-11-03T08:06:36.458Z"
+    },
+    {
+      "id": "comment-dfa8493af313418ca893702db192a110",
+      "author": "qa-af7be174",
+      "content": "QA substance review, qa-af7be174, 2026-11-03 08:16Z. Candidate cand-affe2a8fe1964c6ea5a70a197c50ac28; completion 119fce99 is on moe/work-2026-10-24 and origin, and its tree 30d61a16 equals the candidate treeSha. The review PASSES on substance. I am withholding the verdict only because prop-35eadcbd63d94a13ab7647c77ea5f3d4 is still PENDING (governor comment-093f7fe9, the comment-9922ed28 pattern). Do not size-reject. After approval, a QA seat can approve on this evidence with that candidateId.\n\n**Size**\n- This task's own bytes (`git diff 119fce99^ 119fce99`): MoeDaemonClient.ts +201/-7, protected-daemon-provenance.test.cjs +248/-0, protected-daemon-spawn.test.cjs +5/-2. Total +454/-9, net 445.\n- Measured from the first commit's parent, b4cfae12 (= c7bc13a3^), to 119fce99: +204/-10, +248/-0 and +20/-2, net 460. That figure includes task-20a64797's edc27e14 (+3/-3 and +15/-0).\n- Both figures are under the 520 cap and over the 400 default. extension.ts is untouched.\n- The approved prop-bd7d6ccf names only three files and does not name the spawn test.\n\n**Spawn-test edit, checked against comment-d4217a23's limits**\n- D1 is +3/-1: it reads the key, asserts /^[0-9a-f]{64}$/, and adds the key to the still-exact deepEqual env.\n- The two ENOENT tests are +2/-1 each: the cancel moved into an f.spawns.push override. The stub pushes into that same array before its setImmediate ENOENT, so the tests still assert 1 spawn, startInProgress false and errors [].\n- Nothing else in that file changed.\n\n**Re-run on the exact commit** (git archive 119fce99, no overlay)\n- Linux, /tmp/qa-648a-linux.zDMXlk, env -i, node v24.21.0: `npm ci && npm test && npm run compile && npm run lint` exits 0. 671 tests, 667 pass, 0 fail, 4 skipped (all Windows-only).\n- Windows, D:\\moe-scratch\\qa-648a-win.MF1jBb, cmd.exe, node v24.16.0: `npm ci && npm test && npm run compile` exits 0. 667 tests, 659 pass, 0 fail, 8 skipped (pre-existing NTFS/symlink skips plus the 2 POSIX provenance cases). The provenance suite passes 45.\n- Root quality gate (parity-check plus npm run lint): exits 0.\n- edc27e14 is an ancestor of 119fce99, so this run covers the merged state.\n\n**DoD 1: admission**\n- The gate runs on the workspace captured before getVerifiedDaemonInfo, and before setConnectionState('connecting').\n- A configured endpoint is refused outright.\n- Candidates are the session record, plus the stored record (read only when the root is outside the project), filtered to the installed daemon key. A throwing read or a malformed record refuses.\n- Each check uses a fresh 32-byte challenge. The proof must be 64 hex from a 'same' identity, and is compared with timingSafeEqual.\n- A refusal shows its message and throws: no WebSocket opens.\n- Tests: (1)(2)(3)(4)(10)(11), invalid proof ×4, workspace switch ×2, HTTP timeout.\n\n**DoD 2: replacement (RF03)**\n- Offered only for a daemon.json pid that is a positive integer, with an installed selection, through a modal whose single action is 'Stop and Replace'.\n- Stop uses the installed node and daemon `stop --project`, with the key stripped from its env, within 20 s. On timeout only its own child is killed.\n- Then a 15 s / 250 ms wait for the pid to die and the metadata to clear, a fresh key, and re-admission by HMAC.\n- Tests: (6), (7), (8)×7, cancel ×3, replacement must verify, invalid pid ×6.\n\n**DoD 3:** LEGACY is covered by (9). The existing suites pass, and the only change to them is the authorized adaptation above.\n\n**Rails**\n- Store access only through task-98c81a27's owner-only API, and no caller-minted evidence.\n- The key lives only in the session map, the 0600 record and the spawn env. protectedDaemonEnvironment copies the host env, so the strip of every case variant is needed; (7) pins it.\n- No new top-level import, and no forbidden tokens in the diff.\n- The daemon contract and known-answer vector match packages/moe-daemon/src/server/spawnProof(.test).ts.\n\n**QA mutants** (/mnt/d/moe-scratch/qa-648a-mutants.py, 15 mutants)\n- 13 are killed. The restored copy passes: 73 tests, 69 pass, 0 fail, 4 skipped.\n- 2 survive, both on defence-in-depth lines:\n  - M1 drops `if (info.fromConfig) return refusal`. Case (10) has no record, so the empty-candidate refusal masks it, and admission still needs the HMAC.\n  - M12 drops the malformed-record refusal while a session record exists. That line is stricter than the plan's \"no record\".\n\n**Non-blocking notes**\n- Case (10) could also run with a valid session record, so that it pins the fromConfig refusal.\n- Complexity: MoeDaemonClient.ts:1402/1440/1752 build the same selection three times (one helper would do). 1466/1768 duplicate the key-strip loop. waitForReplacementExit (1500-1510) tracks both remaining and deadline; the deadline alone is enough. About -10 lines possible.\n- Residuals are as the worker listed: a same-user relay, the two-window spawn race, and /health slower than 1.5 s being refused.",
+      "timestamp": "2026-11-03T08:17:04.509Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-03T08:06:57.618Z",
+  "updatedAt": "2026-11-03T08:17:13.492Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T22:56:53.566Z",
@@ -340,11 +346,11 @@
     "stepsCompleted": []
   },
   "workStartedAt": "2026-11-03T06:34:35.219Z",
-  "blockedReason": null,
+  "blockedReason": "QA verdict withheld, waiver pending (governor comment-093f7fe9, the comment-9922ed28 pattern). The substance review PASSES; the evidence is in comment-dfa8493a. Linux and Windows npm test + compile exit 0 on 119fce99. Every DoD item and task rail is verified.\nThe completion is net 445 changed lines (over the 400 default, under the 520 cap). It also edits moe-vscode/tests/protected-daemon-spawn.test.cjs, which the approved size waiver prop-bd7d6ccf does not name; it names three files. The governor authorized that edit, and the edit stays within those limits.\nprop-35eadcbd63d94a13ab7647c77ea5f3d4 adds that file under the same 520 cap and is still PENDING at 08:16Z.\nNo size reject. Once prop-35eadcbd is APPROVED, set the row back to REVIEW. The next QA can then approve on comment-dfa8493a with candidateId cand-affe2a8fe1964c6ea5a70a197c50ac28.",
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": null,
-  "blockedAt": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-03T08:17:13.492Z",
   "commits": [
     {
       "sha": "c7bc13a3d2c733b03e49a99ee8861b4be4772d51",

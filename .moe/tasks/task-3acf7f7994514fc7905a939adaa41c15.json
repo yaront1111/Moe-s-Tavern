@@ -108,8 +108,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:41:12.507Z",
-  "updatedAt": "2026-11-03T08:04:02.096Z",
+  "updatedAt": "2026-11-03T08:17:11.858Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:57.870Z",
@@ -143,7 +143,9 @@
     "firstClaimAt": "2026-11-03T07:02:42.264Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-03T08:16:31.440Z",
+    "wallClockMs": 4429176
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -284,10 +286,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-33f67e5b@2026-11-03T07:50:35Z",
-    "at": "2026-11-03T08:03:25.083Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T08:03:31Z",
+    "at": "2026-11-03T08:17:11.858Z"
   },
   "reviewStartedAt": "2026-11-03T08:02:00.196Z",
   "verification": {
@@ -297,5 +300,9 @@
     "reportedAt": "2026-11-03T08:02:00.196Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, moe-agent.ps1 now rewrites PATH before its first bare-name command, keeping only the entries Find-MoeProtectedFile trusts. Both wrappers' worktree-launch and board-snapshot Node programs spawn only an absolute MOE_PROTECTED_GIT.\n\nDiff: 4 files, +198/-34, in approvedScope (checkpoint 40487c4d).\n- ps1: Find-MoeProtectedFile list mode (an empty -Name emits each trusted entry's untrimmed real path, in PATH order). An empty scrub refuses with the existing node MOE_PROTECTED_INTERPRETER_NOT_FOUND line, and PATH is never set to ''.\n- ps1: the WT-13 block becomes Assert-MoeWrapperNotInWorktree with the same body. Legacy calls it at its old spot (when $env:MOE_RUNTIME_PROTECTED -cne '1'); under the marker it runs right after the scrub.\n- ps1: MOE_PROTECTED_GIT is set in the node-pin block.\n- sh: the export goes in protected_pin_interpreters.\n- Both program pairs: the guard idiom (strict ? MOE_PROTECTED_GIT : 'git', isAbsolute throw). Each pair stays identical and ASCII, and the argv layout is unchanged.\n- ARCHITECTURE.md bullet updated.\n\nTests (appended after I2):\n- W3/W4 on PS 5.1 and PS 7, Windows: whole-exe-log check, legacy non-vacuous.\n- X2 on every engine.\n- X1 on Linux and Windows node.\n- RED on the HEAD bytes; GREEN now.\n\nGate: the joined step-6 command, rerun fresh in this resumed session, exit 0.\n- Linux: 206 / 173 pass / 0 fail / 33 skip.\n- Windows: 314 / 262 / 0 / 52.\n- ParseFile OK, parity PASS, lint OK.\n- Worktree harness: sh 6 ok / 0 failed; ps1 PS 5.1 3 ok / 0 failed.\n- W3, W4 and X2 ran unskipped on both PS engines (mut/wcontrol.win.tap, scripts/ byte-identical to the worktree).\n\nMutants M1-M9 + M6b: all KILLED by AssertionError, controls green (evidence in /mnt/d/moe-scratch/3acf7f79-work).\n\nAccepted residuals:\n- POSIX pwsh re-prepends the node dir on each reload pass (pre-existing).\n- X2 on Windows assumes no git.exe in TAIL.\n- Under Git Bash the variable relies on MSYS env conversion and fails closed when unconverted.\n- Unde"
+  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, moe-agent.ps1 now rewrites PATH before its first bare-name command, keeping only the entries Find-MoeProtectedFile trusts. Both wrappers' worktree-launch and board-snapshot Node programs spawn only an absolute MOE_PROTECTED_GIT.\n\nDiff: 4 files, +198/-34, in approvedScope (checkpoint 40487c4d).\n- ps1: Find-MoeProtectedFile list mode (an empty -Name emits each trusted entry's untrimmed real path, in PATH order). An empty scrub refuses with the existing node MOE_PROTECTED_INTERPRETER_NOT_FOUND line, and PATH is never set to ''.\n- ps1: the WT-13 block becomes Assert-MoeWrapperNotInWorktree with the same body. Legacy calls it at its old spot (when $env:MOE_RUNTIME_PROTECTED -cne '1'); under the marker it runs right after the scrub.\n- ps1: MOE_PROTECTED_GIT is set in the node-pin block.\n- sh: the export goes in protected_pin_interpreters.\n- Both program pairs: the guard idiom (strict ? MOE_PROTECTED_GIT : 'git', isAbsolute throw). Each pair stays identical and ASCII, and the argv layout is unchanged.\n- ARCHITECTURE.md bullet updated.\n\nTests (appended after I2):\n- W3/W4 on PS 5.1 and PS 7, Windows: whole-exe-log check, legacy non-vacuous.\n- X2 on every engine.\n- X1 on Linux and Windows node.\n- RED on the HEAD bytes; GREEN now.\n\nGate: the joined step-6 command, rerun fresh in this resumed session, exit 0.\n- Linux: 206 / 173 pass / 0 fail / 33 skip.\n- Windows: 314 / 262 / 0 / 52.\n- ParseFile OK, parity PASS, lint OK.\n- Worktree harness: sh 6 ok / 0 failed; ps1 PS 5.1 3 ok / 0 failed.\n- W3, W4 and X2 ran unskipped on both PS engines (mut/wcontrol.win.tap, scripts/ byte-identical to the worktree).\n\nMutants M1-M9 + M6b: all KILLED by AssertionError, controls green (evidence in /mnt/d/moe-scratch/3acf7f79-work).\n\nAccepted residuals:\n- POSIX pwsh re-prepends the node dir on each reload pass (pre-existing).\n- X2 on Windows assumes no git.exe in TAIL.\n- Under Git Bash the variable relies on MSYS env conversion and fails closed when unconverted.\n- Unde",
+  "completedAt": "2026-11-03T08:16:31.440Z",
+  "reviewCompletedAt": "2026-11-03T08:16:31.440Z",
+  "reviewSummary": "APPROVED. Completion 87609414 is pushed and contained in origin/moe/work-2026-10-24. Its tree c9cc2859 matches the candidate, and its patch equals checkpoint 40487c4d. 4 files in scope, +198/-34 (net 164).\n\nGate: task.verification re-run verbatim (tee added) from a scratch clone at 87609414, GATE_EXIT=0 at 08:15:07Z.\n- Linux: 206 tests / 173 pass / 0 fail / 33 skip.\n- Windows node.exe: 314 / 262 / 0 / 52.\n- ParseFile OK, parity PASS, lint OK. Worktree harness: sh 6/0, ps1 PS 5.1 3/0.\n- W3, W4 and X2 ran unskipped on PS 5.1 and PS 7. X1 passed on both node legs, X2 bash on Linux.\n\nDoD 1:\n- W3 covers the '.', relative and in-project entries, and its legacy leg reaches the plant.\n- My mutant removed only the PATH assignment. W3 killed it with an AssertionError (deepStrictEqual on the planted rows) on both engines.\n- I grepped ps1 lines 1-660: no bare-name command runs before the scrub. WT-13 runs after the scrub under the marker and at its old spot in legacy (-cne '1').\n- The worker's M1/M2/M3/M7 TAP: all killed.\n\nDoD 2:\n- The only Node spawns in the wrappers are tooling, board and the guard, and all three are strict.\n- X1 pins identical ASCII pairs, fail-closed when unset or relative, the absolute git under the marker, and 'git' in legacy. The worker's M4/M5/M6/M6b/M9 are killed.\n\nDoD 3: suites green on Linux and Windows. Legacy wt-guard, tooling and board pass on sh and PS 5.1.\n\nRails: BOM kept, LF only; no forbidden patterns; no new MOE_ code; no test weakened. ARCHITECTURE.md updated, and the architect comment is honored (list-mode reuse, rows after I2).\n\nNon-blocking: exeLogger duplicates G1's inline logger.\nAccepted residuals: the POSIX pwsh node-dir prepend on reload, the TAIL-has-no-git.exe assumption, and MSYS env conversion (fails closed).",
+  "requiredCheckAtDone": null
 }
