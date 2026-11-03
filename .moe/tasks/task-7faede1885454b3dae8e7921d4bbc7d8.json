@@ -12,10 +12,50 @@
   "taskRails": [
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first.\n\nSome cases cannot run on this Windows gate host. Symlinks are refused there (mklink: 'You do not have sufficient privilege', probed 2026-11-03) and FIFOs do not exist. So the link and FIFO cases assume-skip here, and they run in CI's ubuntu `./gradlew test` (ci.yml:141-185). Make those cases self-guarding, so a regression fails instead of hanging CI:\n- Assume that symlink() works, and that mkfifo works (ProcessBuilder(\"mkfifo\", path).start().waitFor() == 0).\n- Run each FIFO read inside CompletableFuture.supplyAsync and get it with a 5 s timeout.\n- In finally, unblock a stuck reader with RandomAccessFile(fifo, \"rw\").close(). Opening a FIFO O_RDWR never blocks on Linux or macOS.\n\nRuntimeSelectionPolicyTest.kt (the F and M prefixes are unused there):\n\nF1 `F1 a project json that is not a regular file reads as untrusted without being read`:\n- (a) Every OS: .moe/project.json is a directory. profile is PROTECTED and declaredProfile is UNTRUSTED. Nothing is pinned (rewriting it as legacy then reads LEGACY), and nothing is written to the store.\n- (b) Where symlink() works: a link to a regular file that declares legacy gives PROTECTED and UNTRUSTED. Today the read follows the link and gets LEGACY. A dangling link gives PROTECTED.\n- (c) POSIX: a link to a FIFO with no writer. profile and declaredProfile return within 5 s, as PROTECTED and UNTRUSTED. Today they block in open.\n- (d) POSIX: a link to /dev/null gives UNTRUSTED.\n\nM1 `M1 vm-control resolves through the installed artifact under the protected profile only`. It calls ManagedVmPanel.vmControlScript, which step 3 adds:\n- (a) Protected, installed root outside the project and holding scripts/local-runner/vm-control.mjs: the result is that file's real path.\n- (b) Protected, installed root inside the project (<project>/build/idea-sandbox/plugins/moe-jetbrains, the shape of runIde on this repo): null.\n- (c) Protected, script missing: null.\n- (d) Legacy: exactly the bundled lambda's file. The root lambda is never called; make it throw AssertionError.\n\nMoeDaemonSupervisorTest.kt:\n\nF1 `F1 a daemon json that is not a regular file reads as absent without being read`:\n- (a) Every OS: .moe/daemon.json is a directory. readDaemonInfo() is null.\n- (b) Where symlinks work: a link to a valid daemon.json gives null; today it returns the info. deleteDaemonInfoIfUnchanged(that info) is false, and both the link and its target remain.\n- (c) POSIX: a link to a FIFO. readDaemonInfo() returns null within 5 s.\n\nW40 `W40 a Windows restart that begins while a daemon start is in flight refuses before any stop or signal`:\n- Add a fixture hook `var onStart: () -> Unit = {}`. WinRestart's processStarter calls it before its error. The default is a no-op, so no other row changes.\n- With own(proc(S)) and stop = { 0 }, set onStart to record f.restart(null).\n- f.service.ensureDaemonRunning() is false. The recorded refusal is step 3's new start-in-progress message. f.stops is empty, and there is no kill: event.\n- Afterwards, f.restart(null) runs normally, with one stop.\n- Today the inner restart runs its stop and kills S.\n\nRED run, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). If the lease is busy, call moe.report_blocked with that resourceId, and release it on every path. From the worktree root:\nW=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --tests com.moe.services.MoeDaemonSupervisorTest --rerun\"\nLeave the --tests values unquoted (mem:gotcha-jetbrains-gradle-from-wsl). Expect a compile failure, because vmControlScript and the new message do not exist yet. Record it, and record which F cases ran and which assume-skipped.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Regular-file guards (DoD 1).\n\nRuntimeSelectionPolicy.declaresVerifiedLocal:\n- Keep the `notExists(NOFOLLOW_LINKS)` check that returns false.\n- Then `if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) throw UntrustedSetting(\"project.json is not a regular file\")`.\n- Open with `Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS)`.\n- Result: profile() fails closed to PROTECTED without pinning, declaredProfile answers UNTRUSTED, and 6d5d3db2's stillWeaker keeps the record.\n\nMoeDaemonSupervisor.parseDaemonInfo:\n- Replace `file.exists()` and `file.inputStream()` with `val path = file.toPath()`.\n- If `!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)`, return null. Log 'Ignoring .moe/daemon.json: not a regular file' only when something exists there (`Files.exists(path, NOFOLLOW_LINKS)`).\n- Read with `Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)`. Keep the size cap and the existing catch.\n- readDaemonInfo, deleteDaemonInfoIfUnchanged and ensureDaemonRunningImpl all go through it, so deleteDaemonInfoIfUnchanged never deletes a link.\n\nNOFOLLOW_LINKS applies to the last path element only, so a linked .moe directory, or a subst or junction ancestor, still works. Both reads stay profile-independent, as VS Code's readDaemonJsonText and its project.json read are. A regular file reads exactly as before, so LEGACY behaviour is unchanged for every file the daemon writes.\n\nError handling: the existing catch blocks still map any IOException to PROTECTED (project.json) or to null (daemon.json).\n\nResidual, to state in the KDoc: a racer that swaps the leaf for a FIFO between the check and the open can still block the read. Repository content is static, so this needs a live local process.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "(1) ManagedVmPanel (DoD 2).\n- Add a companion function `internal fun vmControlScript(basePath: String, isProtected: Boolean, root: () -> File? = { RuntimeSelectionPolicy.installedRoot() }, bundled: () -> File? = { TerminalAgentLauncher.resolveBundledPath(VM_CONTROL) }): File?`, with VM_CONTROL = \"scripts/local-runner/vm-control.mjs\".\n- LEGACY returns bundled(), unchanged.\n- PROTECTED returns the Accepted file of RuntimeSelectionPolicy.installedArtifact(root(), VM_CONTROL, basePath), else null. installedArtifact already logs a rejection's path.\n- In execute(): compute isProtected first, then the script (null gives the existing SCRIPT_MISSING report), then node as today.\n- Why: in a runIde sandbox opened on this repo, the installed plugin root is inside the project. Protected selection must not run that in-project copy, just as it already refuses the daemon and proxy there.\n\n(2) MoeDaemonSupervisor start/restart handshake (DoD 3). Add `private val startsInFlight = AtomicInteger()`.\n- ensureDaemonRunning(): increment first, inside a try/finally that decrements. Then run the existing `windowsRestartInFlight.get() || unresolvedWindowsTree != null` check and the rest, unchanged.\n- stopWindowsRestart(): right after its `windowsRestartInFlight.compareAndSet(false, true)` succeeds, add `if (startsInFlight.get() > 0) return START_IN_PROGRESS`. Put it inside the try, so the finally clears the flag.\n- Add a new constant beside RESTART_IN_PROGRESS: \"Restart Daemon did not run: Moe is starting the daemon. Wait for it to finish, then use Restart Daemon.\"\n- Why this is atomic: each side writes its own atomic, then reads the other's, and these operations are sequentially consistent. Whichever side goes second sees the first. A start never runs while a restart holds the flag, and a restart never stops while a start is in its body.\n- Concurrent starts stay concurrent, because it is a counter, not a lock. Apart from that, the LEGACY start path is unchanged. restartDaemon() publishes this refusal like any other.\n\nError handling: the decrement is in finally, so a throwing start cannot wedge restarts. The restart's early return keeps its existing finally.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once, before moe.complete_task (DoD 4).\n\nUnder the jetbrains-gradle lease, run the checkRef from the worktree root. It is byte for byte /mnt/d/moe-scratch/7faede18-plan/verify.sh, and in order it runs:\n- parity-check;\n- lint;\n- the DoD's `gradlew.bat test --rerun`, through cmd.exe in this worktree's moe-jetbrains (WSL has no JDK);\n- the JUnit XML totals, failing on any failure or error.\nIts fresh output is the complete_task evidence. Also list the new rows' skipped cases from build/test-results: the link and FIFO cases skip on this host, and CI's ubuntu `./gradlew test` runs them.\n\nRelease the lease on every path. Never run clean. Never pattern-kill a Gradle or Java process.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review: one pass over the diff. Check:\n(a) Concurrency. Interleave a restart and a start at every point: no order lets a stop run while a start body runs, or a start body run while a restart holds the flag. Two concurrent starts both run (LEGACY). A throwing start releases its count.\n(b) Every exit path, and the error handling of each read: NoSuchFileException, AccessDeniedException, a dangling link, a directory, a FIFO, a device. Each one fails closed (PROTECTED or null) without reading.\n(c) Windows: a regular file on a subst, mapped or junction ancestor still reads, because NOFOLLOW applies to the leaf only.\n(d) The vm-control refusal reaches the SCRIPT_MISSING report, and the legacy path is byte-identical.\n(e) The POSIX rows cannot hang: each has a 5 s future and an O_RDWR unblock.\n(f) Mutants, re-run under the lease with the two --tests classes:\n- remove the handshake check: W40 fails;\n- make vmControlScript's protected branch return bundled(): M1 fails;\n- drop the regular-file check: F1(b)/(c) fail only where links and FIFOs exist, which is CI. Say so in the summary.\nList the RED run, the mutants, and the skipped cases in the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -27,16 +67,95 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:06:02.725Z",
-  "updatedAt": "2026-11-03T03:04:35.578Z",
+  "updatedAt": "2026-11-03T03:10:49.152Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:16.532Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T03:04:30.974Z"
+    "firstClaimAt": "2026-11-03T03:04:30.974Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "dependsOn": [
+    "task-6d5d3db221dc422e90a7a3d5bc4d1e8f",
+    "task-fb0ab38223664830892c9babede84854"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T03:10:49.127Z",
+  "executionContract": {
+    "intendedBehavior": "Changes in JetBrains:\n- RuntimeSelectionPolicy.declaresVerifiedLocal and MoeDaemonSupervisor.parseDaemonInfo read only a regular file reached without a final link, and open it with NOFOLLOW_LINKS. A symlink, FIFO, directory or device at .moe/project.json reads as untrusted, which is PROTECTED. At .moe/daemon.json it reads as absent. Neither is ever opened.\n- Under the protected profile, ManagedVmPanel resolves scripts/local-runner/vm-control.mjs through RuntimeSelectionPolicy.installedArtifact, so an in-project or out-of-root copy is refused. LEGACY keeps the bundled path.\n- A daemon start and a Windows Restart Daemon exclude each other through a start counter and the restart flag. A restart that begins while a start is in flight refuses before any stop or signal.",
+    "acceptanceCriteria": [
+      "RuntimeSelectionPolicyTest F1 and MoeDaemonSupervisorTest F1 pin the directory case on every OS, the link cases where symlinks work, and the FIFO cases on POSIX (each returns within 5 s).",
+      "M1: protected resolution accepts only an installed script outside the project. Legacy returns the bundled file and never consults the installed root.",
+      "W40: a restart begun inside a start refuses with the start-in-progress message, with no stop and no kill; a later restart runs normally.",
+      "The checkRef exits 0. Existing rows are unchanged, including W14 and fb0ab382's W36-W39."
+    ],
+    "invariants": [
+      "profile() never throws, and a refused project.json never pins or writes.",
+      "A regular project.json or daemon.json reads exactly as before.",
+      "LEGACY vm-control resolution is unchanged.",
+      "A start and a Windows restart body never overlap."
+    ],
+    "compatibility": [
+      "MoeProjectService.restartDaemon publishes the new refusal like the others.",
+      "VS Code already guards both reads (readDaemonJsonText). This brings JetBrains to parity."
+    ],
+    "approvedScope": [
+      "RuntimeSelectionPolicy.declaresVerifiedLocal: a regular-file check and a NOFOLLOW open.",
+      "MoeDaemonSupervisor: parseDaemonInfo (regular-file check and NOFOLLOW open), startsInFlight, the ensureDaemonRunning claim, the stopWindowsRestart check, and the START_IN_PROGRESS constant.",
+      "ManagedVmPanel: a companion vmControlScript and the execute() reorder.",
+      "Tests: RuntimeSelectionPolicyTest F1/M1; MoeDaemonSupervisorTest F1/W40 and the WinRestart onStart hook (a no-op by default)."
+    ],
+    "reuse": [
+      "installedArtifact and installedRoot, the same selection the daemon, proxy and wrapper use.",
+      "The existing UntrustedSetting fail-closed path, and parseDaemonInfo's catch.",
+      "The WinRestart fixture, plus a no-op hook."
+    ],
+    "sourceAssumptions": [
+      "RuntimeSelectionPolicy.kt :187-205: declaresVerifiedLocal checks notExists(NOFOLLOW) and then calls Files.newInputStream(file), which follows links.",
+      "MoeDaemonSupervisor.kt :68-81: parseDaemonInfo uses file.exists() and file.inputStream(). :107-124: ensureDaemonRunning checks windowsRestartInFlight before it claims anything. :345-368: stopWindowsRestart claims windowsRestartInFlight by CAS. :958: RESTART_IN_PROGRESS.",
+      "ManagedVmPanel.kt :114 resolves vm-control through TerminalAgentLauncher.resolveBundledPath, before isProtected is computed (:117).",
+      "MoeProjectService.restartDaemon :760-780 disconnects, calls stopDaemonForRestart, publishes any refusal, then connect() -> ensureDaemonRunning.",
+      "This Windows host refuses symlink creation (mklink: insufficient privilege). CI runs ./gradlew test on ubuntu-latest (ci.yml:141-185)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- One lock around start and restart: rejected. It would serialize concurrent starts, which changes LEGACY, and would make a restart wait instead of refuse. The counter handshake keeps starts concurrent.\n- A restart that waits for in-flight starts: rejected. It adds a bounded wait loop, and refusing with a clear message is simpler.\n- Documenting that the bundled vm-control path is sufficient: rejected. A runIde sandbox root sits inside this repo, and the protected selection refuses the daemon and proxy there.\n- Making the guard apply only under protected: rejected. It would need a profile read inside parseDaemonInfo, and VS Code guards both profiles.\n- A docs edit: skipped to stay at 5 files. ARCHITECTURE already says an unreadable project.json reads protected, and the KDoc states the new rule.",
+    "codebaseInsights": "- No open task touches ManagedVmPanel.kt or MoeDaemonSupervisor.kt.\n- RuntimeSelectionPolicy.kt and its test are held by 6d5d3db2, and MoeDaemonSupervisorTest.kt by fb0ab382. This row dependsOn both, so W40 follows fb0ab382's W36-W39.\n- installedLayout() in RuntimeSelectionPolicyTest creates only the daemon, proxy and wrapper files, so M1 creates vm-control.mjs itself.",
+    "risks": "- The link and FIFO cases cannot run on this host, so the worker cannot show them red. They run in CI on ubuntu and must be hang-proof.\n- TOCTOU: a live racer can swap the leaf after the check. This is documented.\n- The UX trade-off: a Restart clicked during an auto-start refuses, and the user retries.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ba67fa972862b3a8ce1adfd318df0f611a0bba93",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T03:10:49.152Z",
+  "approvedPlanRevision": 1
 }

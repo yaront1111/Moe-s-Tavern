@@ -76,8 +76,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -108,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:31.431Z",
-  "updatedAt": "2026-11-03T03:05:23.806Z",
+  "updatedAt": "2026-11-03T03:13:35.604Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:17.160Z",
@@ -122,7 +122,9 @@
     "firstClaimAt": "2026-11-03T02:26:32.056Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T03:13:01.147Z",
+    "wallClockMs": 2789091
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -256,9 +258,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T02:53:38Z",
-    "at": "2026-11-03T03:04:55.381Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T03:05:11Z",
+    "at": "2026-11-03T03:13:35.604Z"
+  },
+  "completedAt": "2026-11-03T03:13:01.147Z",
+  "reviewCompletedAt": "2026-11-03T03:13:01.147Z",
+  "reviewSummary": "Reviewed completion 70ccc02d (pushed, on moe/work-2026-10-24 + origin). Diff 5 files +170/-36 (net 134), exactly approvedScope.\n\nRe-ran task.verification (joined checkRefs) in place, foreground: exit 0. Linux 199/171 pass/0 fail/28 skip; Windows 302/251/0/51; PS 5.1 ParseFile clean; parity PASS; lint OK.\n\nDoD1: moe-agent.sh lines 1-82 are builtins only. Moved normalize_path/protected_trusted_dir are byte-identical. The exact-marker pre-scan of -p/--project tokens covers the parser's value, and the scrub runs before SCRIPT_DIR dirname/git/sed. Re-scrub after npm/bin; hot reload re-execs via $BASH. moe-call.sh scrubs before find_node with a Bash-3.2-safe expansion and the existing 'node not found' refusal. W1 x4, W2, M2 x5, S3 green.\nDoD2: POSIX-only ps1 prepend right after Set-Alias node. PS 5.1 short-circuits, BOM kept, no CR. S2 is static as planned (no POSIX pwsh on this host).\nDoD3: exact '1' guard; legacy halves and all existing rows green.\n\nQA probes (scratch, removed):\n- Scrub under set -e survives a trailing rejected '.'/in-project/nonexistent entry and drops project symlinks.\n- Protected moe-call with a trailing '.' continues; PATH='.' or an unresolvable project refuses.\n- An independent mutant (early scrub disabled) fails W1-dot and W2 with 'project dirname'.\n\nNon-blocking:\n(a) The pre-scan's cd on a relative token honours an exported CDPATH, the same quirk as existing code; JetBrains passes an absolute --project.\n(b) The direct-exec env-bash shebang residual is filed as task-0d9ebe5b.\n(c) NODE_OPTIONS/NODE_PATH (comment-801bb755) is not in this DoD.\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
