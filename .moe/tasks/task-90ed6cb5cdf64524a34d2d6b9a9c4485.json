@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "Edit packages/moe-daemon/Dockerfile from ~:46 to the end. Reference: /mnt/d/moe-scratch/plan-90ed6cb5/ref/packages/moe-daemon/Dockerfile (all five references are diffed in reference-fix.diff).\n- Keep `ENV MOE_PROJECT_PATH=/project` as the default, so a run without MOE_PROJECT_PATH still serves /project as today. Reword its comment: mount the project at the absolute path it has on the host and set MOE_PROJECT_PATH to that path, because the daemon reports it in .moe/daemon.json and on /health, and moe-proxy and the IDE plugins refuse a daemon that reports another project's path.\n- Add the exact line `ENV MOE_BIND_HOST=0.0.0.0`; checkRef static greps it with -x. Its comment: a published port (-p) reaches the container's network interface, never its loopback; publish on host loopback only, because /mcp has no auth.\n- HEALTHCHECK: probe `http://127.0.0.1:9876/health` instead of localhost, and keep the timings. Observed in node:24-alpine: busybox wget tries localhost as [::1] first and gets 'Connection refused' from a 0.0.0.0 bind, so the fixed container would report unhealthy.\n- Set `CMD [\"start\"]`, so MOE_PROJECT_PATH names the project (index.ts parseArgs) instead of a hard-coded --project. Afterwards `grep -c -- '\"--project\", \"/project\"' packages/moe-daemon/Dockerfile` prints 0.\n- Leave the build stage, USER, EXPOSE, the /project mkdir and ENTRYPOINT unchanged. No daemon source changes.\n\nError handling: the daemon's own refusals are unchanged. A start without MOE_PROJECT_PATH falls back to /project, and `docker run <image> --version` still works because ENTRYPOINT is unchanged.\n\nEdit with the session's own editing tool (Edit on a Claude seat, apply_patch on a codex exec seat). Never use a shell write or a subagent.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/Dockerfile"
-      ]
+      ],
+      "startedAt": "2026-11-03T19:38:22.691Z"
     },
     {
       "stepId": "step-2",
@@ -58,7 +59,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-2dc72348",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -70,14 +71,15 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:11:21.835Z",
-  "updatedAt": "2026-11-03T19:36:40.180Z",
+  "updatedAt": "2026-11-03T19:38:22.691Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:15:40.612Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-2dc72348"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -159,5 +161,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T19:36:40.180Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T19:38:22.691Z"
 }

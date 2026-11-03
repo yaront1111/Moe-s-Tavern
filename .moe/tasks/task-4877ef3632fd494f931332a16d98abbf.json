@@ -71,15 +71,23 @@
     {
       "stepId": "step-5",
       "description": "Verification: run this one command, exactly, from the task worktree. It is the complete_task evidence, and the same command is checkRefs[0].\n\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/{chatWho,chatJoin,chatResync}.ts packages/moe-daemon/src/tools/{chatChannelRef,chatBudgets}.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatChannelRef.test.ts\",\"src/tools/chatBudgets.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{chatChannelRef,chatBudgets,chatRead.cursor,chatSystemFeed,chatDecision,workerType,registry}.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'`\n\nWhat it does: it snapshots HEAD plus the 5 owned files outside the shared checkout. The global rail forbids npm ci or test in place.\n\nExpected: `Test Files  7 passed (7)` and exit 0.\n\nMeasured while planning, on HEAD b5f40fee:\n- The full command exits 1 at `npx tsc -p tt.json` with chatChannelRef.test.ts(76,7) TS2322. Step 3 fixes that line.\n- Its vitest half alone passed 7 files and 123 tests.\n\nError handling for a red run: read the FAIL lines in ../v.log in the snapshot, fix the file of the step that owns it, and re-run the whole command. Never submit a narrowed subset as evidence.\n\nIf workerType.test.ts 'chat_who carries the type…' fails with NOT_FOUND chan-x, the prerequisite task-a4970220 has not landed. Stop and moe.report_blocked on task-a4970220. Do not edit workerType.test.ts: it is outside this row's files (DoD 3).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T19:36:49.241Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatChannelRef.test.ts"
+      ],
+      "note": "Ran the plan's exact snapshot gate: exit 0, Test Files 7 passed (7), Tests 137 passed (137). The first run was red at `tsc -p tt.json` on a second fixture error the plan did not list (Worker now requires teamId: TS2741 at chatChannelRef.test.ts:91); fixed with `teamId: null` (the chatWait.test.ts fixture's value) and re-ran the whole command. RED-at-base check: with HEAD's chatWho/chatJoin/chatResync in the snapshot, 12 of the 14 new cases fail; the 2 that pass are the omitted/empty-channel invariant and chat_join's NOT_FOUND on an unknown channel, both already correct at HEAD.",
+      "startedAt": "2026-11-03T19:36:49.241Z",
+      "completedAt": "2026-11-03T19:37:35.483Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this row's own diff. Load adversarial-self-review, then check:\n1. chat_who with an omitted, '' or null channel still lists every online seat. A non-string truthy channel is INVALID_INPUT, never a TypeError.\n2. An ambiguous name is refused NOT_FOUND, never silently resolved.\n3. chat_resync:\n   - a refused call mutates no cursor;\n   - one message larger than the budget is still returned alone;\n   - the all-channel branch is capped too;\n   - no cursor points past a message that was not returned.\n4. chat_join:\n   - the idempotency marker still matches a join that was made by id before this change;\n   - the reply's channel is the canonical id for id input and name input alike.\n5. Concurrency: two concurrent resyncs for one worker each derive cursors from their own returned window. No module-level state is added.\n6. Compatibility: no inputSchema property is added or removed (No breaking changes to MCP tool API contracts). Cursors stay keyed by canonical id, so existing .moe/workers files load unchanged.\n7. `git status --short` in the worktree lists only the 5 files (DoD 3).\nFix anything this finds before complete_task, and re-run the step 5 command.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review of the 5-file diff, no code change needed. (1) chat_who: omitted, '' or null channel is falsy so channelId stays undefined and every online seat is listed (tested); a truthy non-string is INVALID_INPUT before resolveChannelRef (tested for who, join, resync). (2) An ambiguous name makes resolveChannelRef return null, so all three tools refuse NOT_FOUND; the resolver's ambiguity case is tested via chat_wait, and I added no per-tool ambiguity test. (3) chat_resync: resolution precedes the first updateWorker (test spies zero writes and unchanged cursors on '#nope'); the cap runs after the fetch in both branches and before the cursor loop, on the reversed window, so cursors point at the newest returned message; the helper's keep-at-least-one rule covers an oversized message, but sendMessage caps a message at 10,240 bytes, so that state cannot occur and I did not test it. (4) chat_join: join-line text and marker unchanged, so earlier id joins still match (tested id then name then '#name' posts one line); reply channel is channel.id. (5) Handlers run under the global state mutex and add no module state, so concurrent resyncs derive cursors from their own windows. (6) No inputSchema property added or removed, only channel descriptions; cursors stay keyed by canonical id. (7) git status --short lists only the 5 files. Residual: chatChannelRef.test.ts is now over 300 lines; kept in one file because the row's FILES list names it.",
+      "startedAt": "2026-11-03T19:37:37.492Z",
+      "completedAt": "2026-11-03T19:38:03.273Z"
     }
   ],
   "planRevision": 1,
@@ -103,12 +111,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:10:57.784Z",
-  "updatedAt": "2026-11-03T19:36:49.241Z",
+  "updatedAt": "2026-11-03T19:38:03.273Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:12:59.296Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -125,7 +133,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:20:08.729Z",

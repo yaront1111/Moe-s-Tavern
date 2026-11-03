@@ -96,8 +96,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -112,12 +112,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:22:41.722Z",
-  "updatedAt": "2026-11-03T19:35:38.863Z",
+  "updatedAt": "2026-11-03T19:38:23.253Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:24:33.842Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T19:37:53.093Z",
+    "wallClockMs": 799251
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -235,9 +237,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T19:29:01Z",
-    "at": "2026-11-03T19:35:07.408Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T19:35:22Z",
+    "at": "2026-11-03T19:38:23.253Z"
+  },
+  "completedAt": "2026-11-03T19:37:53.093Z",
+  "reviewCompletedAt": "2026-11-03T19:37:53.093Z",
+  "reviewSummary": "Reviewed completion 499f80b4 (on moe/work-2026-10-24 and moe/control; 5 files, +129/-12, net 117 incl. tests; no size issue). Diff matches the plan: chatStore pinMessage passes pinnedBy as appendActivity's 7th arg (actor), unpinMessage + StateManager.unpinMessage gain a trailing optional actorWorkerId; chat_unpin gets an optional workerId (not in required, so additive), actor = workerId||'human', 'system' -> NOT_ALLOWED before the registry lookup, unknown id -> INVALID_INPUT, non-string -> INVALID_INPUT, all before resolveChannelRef and the store call. Payloads unchanged. /ws PIN_MESSAGE still records 'human' via pinnedBy; /ws UNPIN_MESSAGE still calls the 2-arg wrapper (records no actor, as before, covered by a6). Docs: only the chat_pin/chat_unpin sections of docs/MCP_SERVER.md.\nRe-ran: (1) git archive of 499f80b4, no overlay, tsc + tt.json clean, vitest chatPin + chat family + getActivityLog + registry + StateManager + WebSocketServer = 11 files / 388 tests passed. (2) The task's exact verification.command from the control checkout (HEAD had advanced to 5681b6db, a chat_wait commit that touches none of these files): exit 0, 11 files / 395 tests. (3) Six mutants in the snapshot, each killed by the intended case: PIN_CREATED actor dropped (a1,a3,a6), PIN_REMOVED actor dropped (a2,a3,a5), store call uses params.workerId (a5), 'system' branch removed (a4), unknown-sender guard removed (a4), actor added to PIN_REMOVED payload (a2). Files restored and cmp-checked, baseline 13/13.\nDoD: item 1 (actor on both events, get_activity_log { workerId } returns them, payload kept) = a1/a2/a3; item 2 (guard, human allowed, /ws paths work) = a4/a5/a6 + WebSocketServer.test.ts green; item 3 (regression test red before, green after) = worker's red-at-base 6 failed + my M1/M2 mutants. Non-blocking notes: explicit workerId \"\" on chat_unpin counts as omitted ('human') per plan, while chat_pin refuses \"\"; PIN_TOGGLED and /ws unpin still record no actor (out of scope).",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
