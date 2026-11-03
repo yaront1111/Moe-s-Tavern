@@ -78,8 +78,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -140,7 +140,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T04:54:29.471Z",
-  "updatedAt": "2026-11-03T00:30:44.330Z",
+  "updatedAt": "2026-11-03T01:59:55.162Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:42:11.681Z",
@@ -150,7 +150,9 @@
     "firstClaimAt": "2026-10-31T06:15:58.877Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T01:59:06.281Z",
+    "wallClockMs": 243787404
   },
   "contextFetchedBy": [
     "architect-66fd8127",
@@ -263,10 +265,15 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-02T22:25:14Z",
-    "at": "2026-11-02T23:58:14.065Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T00:30:11Z",
+    "at": "2026-11-03T01:59:55.162Z"
   },
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-03T01:59:06.281Z",
+  "reviewCompletedAt": "2026-11-03T01:59:06.281Z",
+  "reviewSummary": "Reviewed completion d94c095f: pushed; on moe/work-2026-10-24 and origin; parent and tree match the candidate (base 1b754809, tree e8bfed9c). +178/-8, net 170 LOC. diff --check clean, ps1 BOM intact.\n\nRe-ran in hash-checked git-archive snapshots of d94c095f, MOE_* scrubbed, set -m (SigIgn 0x5):\n- the exact verification command `bash -n … && env -i … postflight-safe.mjs bash && parity-check.sh`: EXIT 0, bash Z/NONE, PASS parity-check.sh, 23 min\n- Windows Node postflight-safe powershell: exit 0, Z/NONE, 42 min\n- Windows Node postflight-safe pwsh: exit 0, Z/NONE\n- pwsh parity-check.ps1: PASS\n- qualityGate (parity + lint): exit 0\n\nMutants on the cut-out sh arm: GREEN on the commit, and each mutant fails:\n- the poll back to a bare sleep: the seat dies with unexpected_exit:143\n- the reason forced to terminal_closed: the argv-refusal check fails\n- `|| true` dropped from the warning: the closed-stderr variant exits 1\n\nDoD 1: idle_wait guards the poll, backoff, taskless and both account-lease waits. The INT/TERM trap is unchanged, and arm (c) proves TERM gives exit 0, \"Agent stopped.\" and terminal_closed.\nDoD 2: cleanup_temp captures $? first and sends unexpected_exit:N for a non-zero status. wrapper_restart and the migration no-RPC path are kept. The daemon reason is a free string (slice 200), and no daemon logic keys on its value.\nDoD 3: new arms only, zero deleted test lines, all 3 engines green. ps1 is aligned: five in-loop exit-1 sites set the status, and the catch excludes PipelineStoppedException and rethrows. Its Start-Sleep waits are in-process, and the planned post-finally residual is disclosed.\n\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

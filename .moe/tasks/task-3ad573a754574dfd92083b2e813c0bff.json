@@ -61,20 +61,26 @@
     {
       "stepId": "step-5",
       "description": "VERIFY. Run this ONE command once, from the repo root, IN THE BACKGROUND: it takes about 15 min and the Bash tool's foreground cap is 10 min.\n\nR=$(pwd) && mkdir -p /mnt/d/moe-scratch && W=$(mktemp -d /mnt/d/moe-scratch/literal-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && cp scripts/moe-agent.ps1 scripts/moe-team.ps1 \"$W/scripts/\" && cp scripts/tests/literal-project-path.test.mjs \"$W/scripts/tests/\" && cd \"$W\" && node --test scripts/tests/literal-project-path.test.mjs && bash scripts/tests/parity-check.sh && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$W/scripts/tests/literal-project-path.test.mjs\")\" && WSLENV=\"$WSLENV:MOE_POSTFLIGHT_TIMEOUT_SEC\" MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$W/scripts/tests/postflight-safe.mjs\")\" powershell; rc=$?; cd \"$R\"; rm -rf \"$W\"; echo \"VERIFY_EXIT=$rc\"; [ \"$rc\" -eq 0 ]\n\nExpect:\n- Linux: the static tests pass and the Windows cases are skipped.\n- parity-check passes, which also checks the BOM.\n- Windows-native: every case passes, NONE skipped. pwsh is on PATH on this box, so a skipped pwsh case is not evidence.\n- postflight-safe prints {\"exit\":0,...,\"failureClass\":\"NONE\"}. That is the PS 5.1 regression harness over the whole edited wrapper.\n\nWhy this shape: the snapshot is HEAD's scripts plus your three files, so peers' dirty bytes stay out. The drive-letter cwd matters: from a /tmp (UNC) cwd, unrelated postflight scenarios fail.\n\nIf postflight-safe fails, rerun only its part on a pristine `git archive HEAD scripts` snapshot to classify the failure as pre-existing before touching code, and report both results. Submit this command, its exit code and its output tail as the complete_task verification.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T01:08:49.554Z"
+      "modifiedFiles": [
+        "scripts/tests/literal-project-path.test.mjs"
+      ],
+      "note": "VERIFY: I ran the task's verification command (the B=MERGE_HEAD||HEAD form, byte-identical to task.verification.command) from the worktree root, 01:09:48-01:53:31Z. It took the background-plus-foreground `tail --pid` polling.\n- There is no MERGE_HEAD, so B = HEAD 94d085e0, the sync of landed a0269bcd, plus the working-tree test file, last written 01:06:11Z, sha256 c3ee81a0….\n- Linux node --test: 3 pass / 5 Windows skips / 0 fail. That includes the new uninspected assertion and the reworked self-test.\n- PASS parity-check.sh.\n- Windows node v24: 8/8 pass, 0 skipped. These are the static tests (the lookbehind regex works on Windows node), PS 5.1 for claude, codex, gemini and grok, and pwsh 7 claude.\n- postflight-safe PS 5.1: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n- VERIFY_EXIT=0. The scratch W was removed.\n- The quality gate `bash scripts/tests/parity-check.sh && npm run lint` in the worktree: GATE_EXIT=0 (role docs 39/30/36 lines).",
+      "startedAt": "2026-11-03T01:08:49.554Z",
+      "completedAt": "2026-11-03T01:53:55.470Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW of your own diff.\n(1) `git diff -U0 -- scripts/moe-agent.ps1 scripts/moe-team.ps1` touches only path-binding parameters, the two comments and the Start-Process -WorkingDirectory arguments. Check: no reordered logic; no dropped -ErrorAction, -Encoding, -Raw, -NoNewline, -Force, -Recurse or -PathType; no converted Env: or New-Item calls.\n(2) moe-agent.ps1 still starts with the BOM and is LF only; moe-team.ps1 is still ASCII.\n(3) Relative -Project, `~`, -ProjectName, and paths with spaces, é, $ or ' behave as before. -LiteralPath still resolves relative paths, `..` and `~` (probed). Test-Path -LiteralPath reports illegal path characters exactly as -Path does (probed), so Resolve-CommandParts is unchanged for non-path -Command strings.\n(4) Mutation proof, in a /mnt/d/moe-scratch snapshot and never in the shared tree:\n- Revert all four of these at once: Resolve-Path $Project, Test-Path $moeDir, the daemon Start-Process -WorkingDirectory, and the GEMINI.md Set-Content. The Linux static test must fail, naming all four lines.\n- Then revert only Resolve-Path $Project. The Windows-native run must fail the PS 5.1 cases with 'Project path not found'.\n(5) The scanner self-test pins every rule branch: comment, command position, nesting, Env: and G2.\n(6) The test always cleans its temp roots and kills its fake daemon, even on assertion failure. There are no sleeps except the fake daemon's lifetime, and timeouts are generous for CI.\n(7) .github/workflows/ci.yml is also planned by task-4e412148 (CQ-I06, unassigned). Before completing, check moe.get_commit_scope peerDeclared. If the landing holds ci.yml as contested, follow the MOE_CONTESTED_HELD remedy; never hand-land it.\nFix anything you find, and rerun step 5 if code changed.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T01:57:26.917Z"
     }
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -105,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-03T01:08:49.555Z",
+  "updatedAt": "2026-11-03T01:57:26.917Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
@@ -119,13 +125,14 @@
     "firstClaimAt": "2026-10-30T16:38:29.657Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 10,
+    "executedStepCount": 11,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
     "worker-ed0f6a9e",
-    "qa-af7be174"
+    "qa-af7be174",
+    "worker-8cf0816c"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -135,7 +142,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [
     {
@@ -302,6 +310,21 @@
       "recordedAt": "2026-11-02T23:31:25.163Z",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "4ddd861ea40d1b4e791763e92ca32ecbeabdbd37",
+      "ref": "refs/heads/moe/task/task-3ad573a754574dfd92083b2e813c0bff",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T00:50:07Z",
+      "paths": [
+        "scripts/tests/literal-project-path.test.mjs"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T01:54:51.032Z",
+      "treeId": "e70a85260f8c1048d50a169516b594754b395397",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -313,11 +336,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-af7be174@2026-11-03T00:01:45Z",
-    "at": "2026-11-03T00:50:38.372Z"
+    "sessionId": "worker-ed0f6a9e@2026-11-03T00:50:07Z",
+    "at": "2026-11-03T01:54:51.032Z"
   },
   "workStartedAt": "2026-11-02T19:45:29.085Z",
   "blockedReason": null,
