@@ -161,7 +161,7 @@ export function readDaemonJsonText(filePath: string): string {
     return readCappedText(filePath, MAX_DAEMON_JSON_BYTES, 'daemon.json is larger than 64 KiB');
 }
 
-type DaemonIdentity = { kind: 'same' } | { kind: 'foreign'; projectPath: string } | { kind: 'unknown' };
+type DaemonIdentity = ({ kind: 'same' } | { kind: 'foreign'; projectPath: string } | { kind: 'unknown' }) & { spawnProof?: string };
 interface DaemonEndpoint {
     host: string;
     port: number;
@@ -170,20 +170,23 @@ interface DaemonEndpoint {
     startedAt?: string;
 }
 
-function classifyIdentity(status: number | undefined, body: string, projectPath: string): DaemonIdentity {
+function classifyIdentity(status: number | undefined, body: string, projectPath: string, withProof = false): DaemonIdentity {
     try {
         if (status !== 200 && status !== 503) return { kind: 'unknown' };
         const parsed: unknown = JSON.parse(body);
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'unknown' };
         const served = (parsed as Record<string, unknown>).projectPath;
         if (typeof served !== 'string' || !isAbsoluteAnyOs(served)) return { kind: 'unknown' };
-        return pathsMatch(served, projectPath) ? { kind: 'same' } : { kind: 'foreign', projectPath: served };
+        const identity: DaemonIdentity = pathsMatch(served, projectPath) ? { kind: 'same' } : { kind: 'foreign', projectPath: served };
+        const proof = (parsed as Record<string, unknown>).spawnProof;
+        if (withProof && typeof proof === 'string') { identity.spawnProof = proof; }
+        return identity;
     } catch { return { kind: 'unknown' }; }
 }
 
 /** Bounded overall deadline (including trickled headers/body); unknown preserves legacy adoption. */
 export function probeDaemonIdentity(host: string, port: number, projectPath: string,
-    { timeoutMs = 1500 }: { timeoutMs?: number } = {}): Promise<DaemonIdentity> {
+    { timeoutMs = 1500, challenge }: { timeoutMs?: number; challenge?: string } = {}): Promise<DaemonIdentity> {
     // Lazy builtins preserve existing single-file vm harness dependency maps.
     return Promise.all([import('http'), import('url')]).then(([http, { URL }]) => new Promise<DaemonIdentity>(resolve => {
         let done = false;
@@ -200,7 +203,8 @@ export function probeDaemonIdentity(host: string, port: number, projectPath: str
             // Parse exactly the URL WebSocket dials; do not forward userinfo or follow redirects.
             const url = new URL(`ws://${host}:${port}/ws`);
             const hostname = url.hostname.replace(/^\[|\]$/g, '');
-            req = http.request({ hostname, port: url.port || 80, path: '/health', method: 'GET', timeout: timeoutMs }, res => {
+            const healthPath = challenge === undefined ? '/health' : `/health?challenge=${encodeURIComponent(challenge)}`;
+            req = http.request({ hostname, port: url.port || 80, path: healthPath, method: 'GET', timeout: timeoutMs }, res => {
                 const chunks: Buffer[] = [];
                 let total = 0;
                 res.on('data', (chunk: Buffer) => {
@@ -209,7 +213,7 @@ export function probeDaemonIdentity(host: string, port: number, projectPath: str
                     if (total > MAX_DAEMON_JSON_BYTES) { finish({ kind: 'unknown' }); return; }
                     chunks.push(chunk);
                 });
-                res.on('end', () => finish(classifyIdentity(res.statusCode, Buffer.concat(chunks).toString('utf8'), projectPath)));
+                res.on('end', () => finish(classifyIdentity(res.statusCode, Buffer.concat(chunks).toString('utf8'), projectPath, challenge !== undefined)));
                 res.on('error', () => finish({ kind: 'unknown' }));
                 res.on('aborted', () => finish({ kind: 'unknown' }));
             });
@@ -384,6 +388,41 @@ export function writeProtectedState(name: string, text: string, basePath: string
         if (temp !== undefined) { try { fs.rmSync(temp, { force: true }); } catch (cleanup) { log(`Moe left a protected state temp file: ${errorText(cleanup)}`); } }
         return false;
     }
+}
+
+export const SPAWN_PROOF_ENV = 'MOE_SPAWN_PROOF_KEY';
+interface SpawnRecord { version: 1; project: string; key: string; daemon: string }
+const sessionSpawns = new Map<string, SpawnRecord>();
+const PROOF_HEX = /^[0-9a-f]{64}$/;
+
+function parseSpawnRecord(text: string, projectKey: string): SpawnRecord | undefined {
+    try {
+        let record: unknown;
+        // JSON.parse errors quote their input, which includes the secret; never log them.
+        try { record = JSON.parse(text); } catch { throw new Error('the spawn record is not JSON'); }
+        if (!isPlainObject(record) || Object.keys(record).sort().join() !== 'daemon,key,project,version') {
+            throw new Error('the spawn record does not hold exactly version, project, key and daemon');
+        }
+        if (record.version !== 1 || record.project !== projectKey) { throw new Error('the spawn record version or project differs'); }
+        if (typeof record.key !== 'string' || !PROOF_HEX.test(record.key) || typeof record.daemon !== 'string') {
+            throw new Error('the spawn record key or daemon is malformed');
+        }
+        return { version: 1, project: projectKey, key: record.key, daemon: record.daemon };
+    } catch (err) {
+        log(`Moe distrusts the persisted spawn record: ${errorText(err)}`);
+        return undefined;
+    }
+}
+
+export async function spawnProofHmac(key: string, challenge: string): Promise<string> {
+    const crypto = await import('crypto');
+    return crypto.createHmac('sha256', Buffer.from(key, 'hex')).update(challenge, 'ascii').digest('hex');
+}
+
+/** daemon.json is repository content: only a positive integer pid is shown, never its text. */
+function protectedProvenanceRefusal(pid?: number): string {
+    return `Protected execution profile: the running Moe daemon${Number.isInteger(pid) && Number(pid) > 0 ? ` (pid ${pid})` : ''} ` +
+        'was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.';
 }
 
 /** Never throws: an unreadable or untrusted `.moe/project.json` answers 'protected'. A confirmed protected project stays so across restarts (RF02). */
@@ -723,6 +762,9 @@ export class MoeDaemonClient implements vscode.Disposable {
     private pingInterval: NodeJS.Timeout | undefined;
     private startInProgress = false;
     private connectInProgress = false;
+    private readonly replaceStopTimeoutMs = 20000;
+    private readonly replaceExitTimeoutMs = 15000;
+    private readonly replacePollMs = 250;
     private readonly handshakeTimeoutMs = 15000;
     private reconnectAttempts = 0;
     private readonly maxReconnectAttempts = 10;
@@ -868,13 +910,30 @@ export class MoeDaemonClient implements vscode.Disposable {
                 log('Connect cancelled during daemon startup');
                 return;
             }
-            const daemonInfo = await this.getVerifiedDaemonInfo();
+            // The folder the identity check resolves against: one switched during the probe cannot skip the gate.
+            const project = this.getWorkspacePath();
+            let daemonInfo = await this.getVerifiedDaemonInfo();
             if (this.connectCancelled()) {
                 log('Connect cancelled during the daemon identity check');
                 return;
             }
             if (!daemonInfo) {
                 throw new Error('Daemon not running. Start daemon first.');
+            }
+            if (!project) { throw new Error('No workspace selected.'); }
+            if (runtimeProfile(project) === 'protected') {
+                const refusal = await this.protectedAdmissionRefusal(daemonInfo, project);
+                if (this.connectCancelled()) { return; }
+                if (refusal) {
+                    daemonInfo = await this.replaceUnverifiedDaemon(daemonInfo, project, refusal);
+                    if (this.connectCancelled()) { return; }
+                    if (!daemonInfo) {
+                        // JetBrains parity: a refused daemon gets no automatic retry; the refusal asks for a reconnect.
+                        this.manualDisconnect = true;
+                        vscode.window.showErrorMessage(refusal);
+                        throw new Error(refusal);
+                    }
+                }
             }
 
             const { host, port } = daemonInfo;
@@ -1330,6 +1389,128 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.sendMessage('REJECT_PROPOSAL', { proposalId });
     }
 
+    private async probeSpawnProof(info: DaemonEndpoint, project: string, challenge: string): Promise<string | undefined> {
+        const identity = await probeDaemonIdentity(info.host, info.port, project, { challenge });
+        return identity.kind === 'same' ? identity.spawnProof : undefined;
+    }
+
+    private async protectedAdmissionRefusal(info: DaemonEndpoint, project: string): Promise<string | null> {
+        const refusal = protectedProvenanceRefusal(info.pid);
+        try {
+            // Workspace settings may redirect either setting; do not adopt configured endpoints.
+            if (info.fromConfig) { return refusal; }
+            const home = process.env.HOME || process.env.USERPROFILE, windows = process.platform === 'win32';
+            const selection = protectedDaemonCommand(project, installedRoot(this.extensionPath),
+                protectedNodeCandidate(process.env, home, windows, project));
+            if ('refused' in selection) {
+                return `Protected execution profile: ${selection.refused}. Project and PATH copies of the Moe daemon are not used.`;
+            }
+            const daemon = projectStateKey(selection.ready.args[0]), projectKey = projectStateKey(project);
+            // The store's writer rejects project roots; its reader has no project argument.
+            const text = stateRoot !== undefined && isOutsideProject(stateRoot, project)
+                ? readProtectedState(protectedStateName('spawn', projectKey)) : undefined;
+            const stored = text === undefined ? undefined : parseSpawnRecord(text, projectKey);
+            if (text !== undefined && !stored) { return refusal; }
+            const candidates = new Map<string, SpawnRecord>();
+            for (const record of [sessionSpawns.get(projectKey), stored]) {
+                if (record?.daemon === daemon) { candidates.set(record.key, record); }
+            }
+            if (candidates.size === 0) { return refusal; }
+            const crypto = await import('crypto');
+            if (this.connectCancelled()) { return refusal; }
+            const challenge = crypto.randomBytes(32).toString('hex');
+            const proof = await this.probeSpawnProof(info, project, challenge);
+            if (this.connectCancelled() || typeof proof !== 'string' || !PROOF_HEX.test(proof)) { return refusal; }
+            for (const record of candidates.values()) {
+                const expected = Buffer.from(await spawnProofHmac(record.key, challenge), 'hex');
+                if (this.connectCancelled()) { return refusal; }
+                if (crypto.timingSafeEqual(Buffer.from(proof, 'hex'), expected)) {
+                    sessionSpawns.set(projectKey, record);
+                    return null;
+                }
+            }
+        } catch { log('Moe could not verify protected daemon provenance'); }
+        return refusal;
+    }
+
+    private async replaceUnverifiedDaemon(info: DaemonEndpoint, project: string, refusal: string): Promise<DaemonEndpoint | undefined> {
+        const pid = info.pid;
+        if (info.fromConfig || !Number.isInteger(pid) || pid === undefined || pid <= 0) { return undefined; }
+        try {
+            const home = process.env.HOME || process.env.USERPROFILE, windows = process.platform === 'win32';
+            const selection = protectedDaemonCommand(project, installedRoot(this.extensionPath),
+                protectedNodeCandidate(process.env, home, windows, project));
+            if ('refused' in selection) { return undefined; }
+            const choice = await vscode.window.showWarningMessage(refusal, { modal: true,
+                detail: 'Stop and Replace stops that daemon with the installed Moe CLI and starts the installed runtime.' }, 'Stop and Replace');
+            if (this.connectCancelled() || choice !== 'Stop and Replace') { return undefined; }
+            const stopped = await this.stopProtectedDaemon(project, selection.ready);
+            if (this.connectCancelled() || !stopped) { return undefined; }
+            const cleared = await this.waitForReplacementExit(pid, project);
+            if (this.connectCancelled() || !cleared) { return undefined; }
+            await this.startProtectedDaemon(project);
+            if (this.connectCancelled()) { return undefined; }
+            const replacement = await this.getDaemonInfo(false);
+            if (this.connectCancelled() || !replacement) { return undefined; }
+            const rejected = await this.protectedAdmissionRefusal(replacement, project);
+            if (!this.connectCancelled() && rejected === null) { return replacement; }
+        } catch { log('Moe could not replace the unverified daemon'); }
+        return undefined;
+    }
+
+    private async stopProtectedDaemon(project: string, command: { node: string; args: string[]; cwd: string }): Promise<boolean> {
+        try {
+            const { node, args, cwd } = command, windows = process.platform === 'win32';
+            const env = protectedDaemonEnvironment(process.env, project, node, windows, process.env.HOME || process.env.USERPROFILE);
+            for (const name of Object.keys(env)) {
+                if ((windows ? name.toUpperCase() : name) === SPAWN_PROOF_ENV) { delete env[name]; }
+            }
+            return await new Promise<boolean>(resolve => {
+                const child = spawn(node, [args[0], 'stop', '--project', project], { cwd, env, stdio: 'ignore', windowsHide: true });
+                let done = false;
+                const timer = setTimeout(() => {
+                    try { child.kill(); } catch { /* Only this stop child may be killed; retain the refusal. */ }
+                    finish(false);
+                }, this.replaceStopTimeoutMs);
+                function finish(success: boolean): void {
+                    if (done) { return; }
+                    done = true; clearTimeout(timer); resolve(success);
+                }
+                child.once('error', () => finish(false));
+                child.once('exit', code => finish(code === 0));
+            });
+        } catch { return false; }
+    }
+
+    private isPidAlive(pid: number): boolean {
+        try { process.kill(pid, 0); return true; } catch (err) { return errorCode(err) !== 'ESRCH'; }
+    }
+
+    private replacementMetadataCleared(project: string): boolean {
+        try {
+            const file = path.join(project, '.moe', 'daemon.json'), stats = lstatOrAbsent(file);
+            if (stats === undefined) { return true; }
+            if (!stats.isFile()) { return false; }
+            const record: unknown = JSON.parse(readDaemonJsonText(file));
+            return isPlainObject(record) && typeof record.pid === 'number' && Number.isInteger(record.pid)
+                && record.pid > 0 && !this.isPidAlive(record.pid);
+        } catch { return false; }
+    }
+
+    private async waitForReplacementExit(pid: number, project: string): Promise<boolean> {
+        let remaining = this.replaceExitTimeoutMs;
+        const deadline = Date.now() + remaining;
+        while (!this.connectCancelled()) {
+            if (!this.isPidAlive(pid) && this.replacementMetadataCleared(project)) { return true; }
+            remaining = Math.min(remaining, deadline - Date.now());
+            if (remaining <= 0) { return false; }
+            const delay = Math.min(this.replacePollMs, remaining);
+            await new Promise<void>(resolve => setTimeout(resolve, delay));
+            remaining -= delay;
+        }
+        return false;
+    }
+
     private async getVerifiedDaemonInfo(): Promise<DaemonEndpoint | undefined> {
         const info = await this.getDaemonInfo();
         const project = this.getWorkspacePath();
@@ -1567,6 +1748,7 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     private async startProtectedDaemon(projectPath: string): Promise<void> {
+        if (this.startInProgress || this.connectCancelled()) { return; }
         const home = process.env.HOME || process.env.USERPROFILE, windows = process.platform === 'win32';
         const selection = protectedDaemonCommand(projectPath, installedRoot(this.extensionPath),
             protectedNodeCandidate(process.env, home, windows, projectPath));
@@ -1580,6 +1762,18 @@ export class MoeDaemonClient implements vscode.Disposable {
         try {
             const { node, args, cwd } = selection.ready;
             const env = protectedDaemonEnvironment(process.env, projectPath, node, windows, home);
+            const key = (await import('crypto')).randomBytes(32).toString('hex');
+            if (this.connectCancelled()) { return; }
+            for (const name of Object.keys(env)) {
+                if ((windows ? name.toUpperCase() : name) === SPAWN_PROOF_ENV) { delete env[name]; }
+            }
+            env[SPAWN_PROOF_ENV] = key;
+            const project = projectStateKey(projectPath);
+            const record: SpawnRecord = { version: 1, project, key, daemon: projectStateKey(args[0]) };
+            sessionSpawns.set(project, record);
+            if (!writeProtectedState(protectedStateName('spawn', project), JSON.stringify(record), projectPath)) {
+                log('Moe spawn provenance stays in memory only');
+            }
             await new Promise<void>((resolve, reject) => {
                 const proc = spawn(node, args, { detached: true, stdio: 'ignore', windowsHide: true, cwd, env });
                 proc.once('error', reject);

@@ -54,9 +54,11 @@ function fixture(t, protectedProfile = true, fsApi = fs) {
 test('D1 protected init uses installed real paths, start, installed cwd and a sanitized environment copy', async t => {
     const f = fixture(t), before = { ...f.env };
     await Promise.all([f.client.startDaemon('init', f.project), f.client.startDaemon('init', f.project)]);
+    // task-648a5916: each protected spawn gets a fresh 64-hex spawn-proof key.
+    const key = f.spawns[0]?.[2]?.env?.MOE_SPAWN_PROOF_KEY; assert.match(key, /^[0-9a-f]{64}$/);
     assert.deepEqual(plain(f.spawns), [[real(f.node), [real(f.daemon), 'start', '--project', f.project], {
         detached: true, stdio: 'ignore', windowsHide: true, cwd: path.dirname(real(f.daemon)),
-        env: { HOME: f.home, MOE_NODE_COMMAND: f.node, PATH: [path.dirname(real(f.node)), f.outside].join(path.delimiter) }
+        env: { HOME: f.home, MOE_NODE_COMMAND: f.node, MOE_SPAWN_PROOF_KEY: key, PATH: [path.dirname(real(f.node)), f.outside].join(path.delimiter) }
     }]]);
     assert.deepEqual(f.env, before);
     assert.deepEqual(f.errors, []);
@@ -291,8 +293,9 @@ for (const code of ['ENOENT', 'EACCES']) {
 for (const how of ['disconnect', 'dispose']) {
     test(`protected async ENOENT after ${how} is logged without a notice`, async t => {
         const f = fixture(t); f.failure = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        // task-648a5916: the spawn now follows the async spawn-key step; cancel at the spawn, before its async ENOENT.
+        f.spawns.push = (...args) => { const count = Array.prototype.push.apply(f.spawns, args); f.client[how](); return count; };
         const startup = f.client.startDaemon('start', f.project);
-        f.client[how]();
         await startup;
         assert.equal(f.spawns.length, 1); assert.equal(f.client.startInProgress, false);
         assert.deepEqual(f.errors, []);
