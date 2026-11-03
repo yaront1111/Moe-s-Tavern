@@ -12,8 +12,8 @@ import type { RunnerIdentity } from './runnerChannel.js';
 
 // Rate limiter configuration (configurable via environment variables)
 const RATE_LIMIT_ENABLED = process.env.MOE_RATE_LIMIT_ENABLED !== 'false';
-const RATE_LIMIT_MAX_REQUESTS = parseInt(process.env.MOE_RATE_LIMIT_MAX_REQUESTS || '100', 10);
-const RATE_LIMIT_WINDOW_MS = parseInt(process.env.MOE_RATE_LIMIT_WINDOW_MS || '1000', 10);
+const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 100;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 1000;
 const DEFAULT_MCP_MAX_BATCH_SIZE = 25;
 
 function parsePositiveIntegerEnv(value: string | undefined, fallback: number, name: string): number {
@@ -25,6 +25,17 @@ function parsePositiveIntegerEnv(value: string | undefined, fallback: number, na
   logger.warn({ name, value, fallback }, 'Invalid numeric environment configuration; using fallback');
   return fallback;
 }
+
+const RATE_LIMIT_MAX_REQUESTS = parsePositiveIntegerEnv(
+  process.env.MOE_RATE_LIMIT_MAX_REQUESTS,
+  DEFAULT_RATE_LIMIT_MAX_REQUESTS,
+  'MOE_RATE_LIMIT_MAX_REQUESTS'
+);
+const RATE_LIMIT_WINDOW_MS = parsePositiveIntegerEnv(
+  process.env.MOE_RATE_LIMIT_WINDOW_MS,
+  DEFAULT_RATE_LIMIT_WINDOW_MS,
+  'MOE_RATE_LIMIT_WINDOW_MS'
+);
 
 export const MAX_MCP_BATCH_SIZE = parsePositiveIntegerEnv(
   process.env.MOE_MCP_MAX_BATCH_SIZE,
@@ -44,9 +55,9 @@ export class RateLimiter {
 
   constructor(maxRequests: number, windowMs: number) {
     const normalizedMaxRequests =
-      Number.isFinite(maxRequests) && maxRequests > 0 ? Math.floor(maxRequests) : 1;
+      Number.isFinite(maxRequests) && maxRequests > 0 ? Math.floor(maxRequests) : DEFAULT_RATE_LIMIT_MAX_REQUESTS;
     const normalizedWindowMs =
-      Number.isFinite(windowMs) && windowMs > 0 ? Math.floor(windowMs) : 1000;
+      Number.isFinite(windowMs) && windowMs > 0 ? Math.floor(windowMs) : DEFAULT_RATE_LIMIT_WINDOW_MS;
 
     if (normalizedMaxRequests !== maxRequests || normalizedWindowMs !== windowMs) {
       logger.warn(
