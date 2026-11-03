@@ -102,8 +102,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -128,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:30:36.691Z",
-  "updatedAt": "2026-11-03T15:20:13.786Z",
+  "updatedAt": "2026-11-03T16:21:20.630Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T13:08:08.665Z",
@@ -138,7 +138,9 @@
     "firstClaimAt": "2026-11-03T13:08:47.541Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T16:20:44.566Z",
+    "wallClockMs": 11517025
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -228,10 +230,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T13:34:15.653Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T13:32:37Z",
-    "at": "2026-11-03T15:19:47.547Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T15:20:01Z",
+    "at": "2026-11-03T16:21:20.630Z"
   },
   "reviewStartedAt": "2026-11-03T15:19:02.459Z",
   "verification": {
@@ -265,5 +268,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T16:20:44.566Z",
+  "reviewCompletedAt": "2026-11-03T16:20:44.566Z",
+  "reviewSummary": "Reviewed landed completion 2b934dce (tree = candidate 6912ba7a). 3 declared files, +85/-7 (78 net); diff --check clean; ps1 keeps its BOM.\n\nGate: I re-ran the step-5 components on 2b934dce in 2 fresh clones (blobs sha256-checked), as concurrent bash and Windows legs with the exact prelude. Both EXIT=0:\n- parity-check.sh and .ps1 PASS;\n- targeted sh and PS 5.1: 4 ok each;\n- worktree-landing.sh and .ps1: 18/18 each;\n- postflight-safe bash and powershell: exit 0, failureClass NONE;\n- lint OK; no scripts/ dirt after either run.\nThis covers the newer WT-19 parity-check in the landing parent 946358a8, which the worker's gate on base eaad2635 did not include.\n\nIndependent RED (new suite vs 946358a8's wrappers):\n- sh: wt-recover status=UNKNOWN, wt-hooks-sparse config-mismatch, wt-moe-post 0 diagnostics; wt-gate-interrupt passes.\n- ps1: wt-gate-interrupt (no CheckRun) and wt-moe-post fail.\n\nDoD:\n1. sh passes the safely parsed get_context task.status (the twin of ps1:9838-9840); this is the only call site.\n2. The ps1 gate-block finally mirrors finish_gate_observation on the local $frozen (Started && !Recorded): stop, infra-failure, CheckRun, each with a warn guard, before the lease release. Recorded prevents a double record.\n3. The sh worktree arm fails on an empty gitdir, sparse/read-tree failure or .moe, writes hooked-commit-worktree-failed, removes the scratch and returns before the signing check. The shared arm is unchanged.\n4. One identical presence-only warning in both post-flights; the landing is unchanged (§1.6).\n5. Green as above.\n\nRails: shared mode untouched, no .moe writes, the new tests are an isolated block, nothing weakened. Peer task-f9874361's checkpoint 5ae55687 hunks are at least 8 lines from these. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

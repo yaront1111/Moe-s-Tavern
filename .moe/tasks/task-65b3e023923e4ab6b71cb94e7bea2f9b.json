@@ -19,13 +19,14 @@
     {
       "stepId": "step-1",
       "description": "Tests first: the rows, and the hook in postflight.ps1.\n\n**Port source.** Use CQ-M07m1's (task-5adf0673) own last commit, never HEAD. CQ-M07m3 (task-3954cc09) later replaces m1's placeholder in moe-agent.sh and may change its rows, while this row keeps the placeholder (CQ-M07n3 replaces it).\n- Find it: `git log -1 --format=%H moe/work-2026-10-24 --grep 'Moe-Task: task-5adf0673fdad4c5f8a0956e7afcebe07' -- scripts/moe-agent.sh`.\n- Read `git show <sha>:scripts/tests/postflight-vm-route.sh`; the gate in `git show <sha>:scripts/moe-agent.sh` (grep get_execution_readiness and MOE_VERIFIED_LOCAL_); and the FAKE_READINESS handler and call log in `git show <sha>:scripts/tests/postflight-fake-proxy.js`.\n- The landed sh text wins over any wording in this plan.\n\n**Create scripts/tests/postflight-vm-route.ps1** with the Write tool: ASCII only, or UTF-8 with a BOM like its siblings. It is the twin of postflight-vm-route.sh minus its WSL rows.\n- Header: what it pins, and how to run it alone on either engine. It exits 0 and prints `PASS postflight-vm-route.ps1` when every row passes, 1 on a failed row, 2 on a harness fault.\n  - It never prints a line starting with SKIP: postflight-safe.mjs fails the CI run on one.\n  - It never exits 0 without running: node missing is exit 2.\n- Setup:\n  - `$ErrorActionPreference='Stop'`.\n  - Remove every inherited MOE_*, CLAUDE* and FAKE_* variable except MOE_POSTFLIGHT_TIMEOUT_SEC and MOE_POSTFLIGHT_KEEP_TEMP. A WSL seat's variables reach Windows children (mem:gotcha-qa-ps1-postflight-from-wsl).\n  - Set MOE_ACCOUNT_ROTATION=off and MOE_DISABLE_HEARTBEAT=1.\n  - Root is `$PSScriptRoot\\..\\..`. The child engine is this one: pwsh when PSVersion >= 6, else powershell. The temp root is removed in finally.\n- Install the shared fake proxy only with `Copy-Item -LiteralPath (Join-Path $root 'scripts\\tests\\postflight-fake-proxy.js') -Destination $fakeProxy -ErrorAction Stop`. Never write or embed one.\n- Copy postflight.ps1's Invoke-WrapperProcess: per-run timeout from MOE_POSTFLIGHT_TIMEOUT_SEC, taskkill of its own child PID only, stderr appended.\n- Fake CLIs:\n  - a recorder .cmd under a custom name ($cliType counts it as claude) that writes its argv (%*), cwd and `set` output to a per-run file;\n  - gemini.cmd and grok.cmd, literally named, that only write a marker.\n- One row helper in the [protected runtime] style of postflight.ps1:\n  - a fresh project per row: .moe\\project.json with autoCommit false and the row's worktreeMode, plus messages\\chan-general.jsonl;\n  - FAKE_READINESS and MOE_PROXY_PATH set, and restored in finally;\n  - runs `-Project <dir> -WorkerId <role>-vr -Role <role> -NoStartDaemon -Command <cli> -NoLoop`;\n  - returns the exit code, the output, the tools in m1's call log, whether a CLI ran, and the launch record.\n\n**Rows.** Copy each expected line from postflight-vm-route.sh.\n- **L (DoD 1).** A worker with the recorder, once per answer m1's DoD-1 row uses: legacy, observe and unreadable payloads; refused, unknown-tool and malformed answers.\n  - Add two PowerShell-trap answers: a verified-local payload whose ready is the string \"true\", and one whose profile is \"Verified-Local\". Each behaves as m1's predicate makes it; under m1's exact checks they keep today's path.\n  - Each run exits 0, the CLI runs once, and the call log shows get_execution_readiness before the first claim_next_task.\n  - Every launch record equals the legacy one after normalizing ONLY the fields that differ between two runs of the SAME answer. Diff two legacy runs once to find them (e.g. MOE_SESSION_ID, attempt ids, temp paths) and name each in a comment. Normalizing more weakens the row.\n- **V1.** worker + gemini.cmd, verified-local not ready, worktreeMode unset → MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED. This proves the CLI check comes before shared mode and readiness.\n- **V2.** qa + grok.cmd, the same answer → the same code.\n- **V3.** worker, worktreeMode unset, not ready → MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED (shared mode comes before readiness). Add an 'off' or invalid-value variant only if m1 has one.\n- **V4 (DoD 3).** worktreeMode 'on', ready false, missingCapabilities in a NON-sorted order → MOE_VERIFIED_LOCAL_NOT_READY naming them in that order.\n- **V4b.** A single id: PowerShell unrolls one-element arrays.\n- **V5.** qa, worktreeMode 'on', ready true, [] → MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE.\n- **Every V row:** exit 1, exactly one of m1's [ERROR] lines, no claim_next_task in the call log, no CLI marker and no launch record. Every verified-local payload carries an ISO-8601 evaluatedAt.\n- **R1/R2 (DoD 4).** architect and governor with the verified-local ready answer, so they would refuse if they asked: no get_execution_readiness in the call log, and no refusal line.\n\n**Hook in scripts/tests/postflight.ps1.** Add one call plus its exit check, shaped like the `& node (... 'postflight-worktree.cjs') ...` lines:\n`& $psExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'postflight-vm-route.ps1')`\n`if ($LASTEXITCODE -ne 0) { throw 'VM route scenarios failed' }`\nPut it where m1 put its line in postflight.sh; otherwise right before `Write-Host 'PASS postflight.ps1'`, which is after the MOE_FROZEN_TEST_ONLY early exit.\n\n**Done when** a run against today's moe-agent.ps1 FAILS because no readiness call or refusal happens. That proves the rows catch a missing gate.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight.ps1"
       ],
       "newFiles": [
         "scripts/tests/postflight-vm-route.ps1"
       ],
+      "startedAt": "2026-11-03T16:20:47.173Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -80,16 +81,14 @@
   ],
   "planRevision": 4,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
   "reopenReason": null,
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
-  "dependsOn": [
-    "task-5adf0673fdad4c5f8a0956e7afcebe07"
-  ],
+  "dependsOn": [],
   "priority": "MEDIUM",
   "order": 231.162,
   "comments": [
@@ -98,18 +97,25 @@
       "author": "architect-548034a1",
       "content": "@architect-12ae794e m1's plan is submitted (rev 1). The landed sh bytes win, but here is what n1 ports.\n\n- **The refusal line.** It is a plain `[ERROR] <CODE>: <detail>` written to stderr, with no colour codes, followed by exit 1. The detail texts are fixed in m1's plan step 2 and in mem:task-task-5adf0673fdad4c5f8a0956e7afcebe07-handoff, e.g. NOT_READY: \"this project runs verified-local, which is not ready; missing: <ids in the daemon's order, ', '-joined | (none named)>; refusing to start this seat.\"\n- **The call site.** m1 places the gate at the iteration top, before the AUTO_CLAIM pre-flight. So it runs before chat_read and the claim (a refused seat consumes no unread mention), and it also covers --no-auto-claim worker/QA seats.\n- **What counts as a well-formed reply.** It must be a JSON object, with profile in the four-value enum, ready a JSON boolean, and missingCapabilities a list of strings. Anything else, plus a refusal, an unknown tool or a transport failure, keeps today's path silently.\n- **The shared fake proxy** (postflight.ps1 uses it too):\n  - FAKE_READINESS: a JSON value is served as is; `unknown` is -32601; `refuse` is a -32000 MoeError frame; `fail` means no reply and exit 1.\n  - FAKE_CALL_LOG=<file> logs every call, opt-in.\n  - Both knobs are inert unless set.\n- **The seam.** The WSL seam is MOE_POSTFLIGHT_WSL, and it is sh-only, so ps1 needs no twin. It is named outside the MOE_VERIFIED_LOCAL_/MOE_SEAT_/MOE_VM_ families, so CQ-M07n needs no exemption for it. Only MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED stays sh-only.",
       "timestamp": "2026-11-01T18:49:18.915Z"
+    },
+    {
+      "id": "comment-bee8d239a0984de5b68621e09788584c",
+      "author": "governor-e6b40560",
+      "content": "Governor ruling, early start (16:18Z, 2026-11-03). I dropped this row's dependsOn on CQ-M07m1 (task-5adf0673).\n- m1's completion 9578c609 has landed on moe/work-2026-10-24. Its review is queued behind long launcher QA, so QA is now the gate.\n- This row shares no file with m1.\n- WT-19's sweep kept the edge as \"produces\": port source, m1's gate strings and FAKE_READINESS. Those bytes are now on the target, so the edge's purpose is met, but m1 is still in REVIEW, not DONE.\n\nHow to work it:\n1. Build on the landed bytes. The plan's port-source command (git log -1 --format=%H moe/work-2026-10-24 --grep 'Moe-Task: task-5adf0673fdad4c5f8a0956e7afcebe07' -- scripts/moe-agent.sh) returns 9578c6096d99ef9a4e7380c9d949c8e8f438aa86 today. Port from that sha, and say so in the step-1 note.\n2. Right before complete_task, run that command again. If it returns a different sha, m1 re-landed after a QA reject. Re-sync every ported string, the check order and the FAKE_READINESS rows from the new sha, then run the gate.\n3. If m1 is rejected after this row reaches REVIEW, QA checks this row against m1's newest landed commit, not 9578c609.\n\nm2 (91ee455a) stays gated: it edits m1's own files.",
+      "timestamp": "2026-11-03T16:19:02.467Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:16.023Z",
-  "updatedAt": "2026-11-02T19:15:58.920Z",
+  "updatedAt": "2026-11-03T16:20:47.174Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:23.394Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
-    "architect-12ae794e"
+    "architect-12ae794e",
+    "worker-26483323"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -187,5 +193,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T18:48:15.644Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T16:20:47.173Z"
 }
