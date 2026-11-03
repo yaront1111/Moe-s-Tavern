@@ -58,23 +58,32 @@
     {
       "stepId": "step-4",
       "description": "Contract text in docs/MCP_SERVER.md, the '### moe.chat_pin' and '### moe.chat_unpin' sections only. Edit with your seat's editor (Edit, or apply_patch on codex exec). Never use a shell write or Serena: the global rail on TOOL witnesses.\n\nchat_pin params:\n- channel: 'channel id, or name in either \"general\" or \"#general\" form'.\n- workerId: 'a registered worker or \"human\"; \"system\" is refused NOT_ALLOWED and an unregistered id INVALID_INPUT'. That rule landed with task-3064fd45, which left this file alone.\n\nchat_unpin params:\n- the same channel wording;\n- a new line `workerId?: string  // Optional: worker removing the pin, a registered worker or \"human\" (omitted: \"human\"); same refusals as chat_pin`.\n\nAdd one note under the two sections: PIN_CREATED and PIN_REMOVED record the caller as the activity event's workerId, so get_activity_log { workerId } finds them. Payloads are unchanged.\n\nPlacement: task-66108835 (chat_wait, in REVIEW at planning time) also declares docs/MCP_SERVER.md, for its own chat_wait section. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` first. Edit only these two sections: they are distinct hunks, and worktree-mode merge-tree lands distinct hunks cleanly.\n\nError handling: if a section header has moved, locate it by its '### moe.chat_unpin' heading. Never rewrite the whole file.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
       ],
-      "startedAt": "2026-11-03T19:32:13.563Z"
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Edited only the moe.chat_pin and moe.chat_unpin sections (channel wording, workerId rule/optional param, actor note) with the Edit tool; 66108835's chat_wait section untouched.",
+      "startedAt": "2026-11-03T19:32:13.563Z",
+      "completedAt": "2026-11-03T19:32:35.425Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification: run this one command, exactly, from the task worktree. It is the complete_task evidence, and the same command is checkRefs[0].\n\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/{chatStore,StateManager}.ts packages/moe-daemon/src/tools/{chatUnpin.ts,chatPin.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatPin.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/chatPin.test.ts src/tools/chat src/tools/getActivityLog.test.ts src/tools/registry.test.ts src/state/StateManager.test.ts src/server/WebSocketServer.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'`\n\nWhat it does: it snapshots HEAD plus the 5 owned files outside the shared checkout (the global rail forbids npm ci or test in place). It typechecks the daemon and the test file, then runs the narrow gate from the description, per ruling msg-bbf4f109.\n\nMeasured on HEAD f8b8d60c, without chatPin.test.ts (not landed yet): this filter set passed 10 files and 375 tests in about 25 s. Expect 11 or more files, all passing, and exit 0.\n\nError handling for a red run: read the FAIL lines in ../v.log in the snapshot, fix the file of the step that owns the failure, and re-run the whole command. Never submit a narrowed subset.\n\nIf `cp` fails on chatPin.test.ts, task-3064fd45 has not landed. Stop and moe.report_blocked on it; do not create the file yourself.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Plan gate (checkRefs[0]) fresh: tsc clean, tt.json clean, vitest 11 files / 388 tests passed, exit 0. Red-at-base (HEAD chatStore/StateManager/chatUnpin + new test): 6 failed (a1-a6) | 7 passed (p1-p7).",
+      "startedAt": "2026-11-03T19:32:36.345Z",
+      "completedAt": "2026-11-03T19:33:15.725Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this row's diff. Load adversarial-self-review, then check:\n1. 'system' is refused NOT_ALLOWED before the registry lookup, and 'human' (or an omitted workerId) skips the lookup.\n2. A refused unpin leaves the pin, the pins file and the activity log untouched.\n3. Payloads are unchanged: pinnedBy stays in PIN_CREATED, and nothing is added to PIN_REMOVED.\n4. The /ws pin path still records 'human'. The /ws unpin path still works, now with no actor, exactly as before.\n5. No inputSchema property is required that was not required before (No breaking changes to MCP tool API contracts).\n6. Concurrency: unpinMessage still runs inside state.mutex.runExclusive, and the actor is a value, not shared state.\n7. No added line contains any string from the project.json globalRails.forbiddenPatterns list.\n8. `git status --short` lists only the 5 files.\nFix anything this finds, then re-run the step 5 command before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T19:33:16.645Z"
     }
   ],
   "planRevision": 1,
@@ -94,12 +103,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:22:41.722Z",
-  "updatedAt": "2026-11-03T19:32:13.563Z",
+  "updatedAt": "2026-11-03T19:33:16.645Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:24:33.842Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -112,7 +121,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:28:15.039Z",
