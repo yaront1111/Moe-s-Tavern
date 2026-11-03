@@ -50,7 +50,9 @@ function loadClient(t, f) {
     const spawn = (...args) => {
         f.spawns.push(args);
         const child = new EventEmitter(); child.unref = () => {}; child.kill = () => { f.killed = true; };
-        setImmediate(() => {
+        // Deliver stop outcomes before the 25 ms deadline, even under event-loop load.
+        // Node also delivers spawn errors on nextTick; keep start events on setImmediate.
+        (args[1].includes('stop') ? process.nextTick : setImmediate)(() => {
             if (!args[1].includes('stop')) { f.daemonKey = args[2].env[ENV]; f.info(4243); child.emit('spawn'); return; }
             if (f.stopHang) return;
             if (f.stopError) { child.emit('error', Object.assign(new Error('missing stop'), { code: 'ENOENT' })); return; }
