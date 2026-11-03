@@ -3969,6 +3969,64 @@ else {
                 $scopeScenariosRun++
                 Write-Host '[scenario AB2] ok'
 
+                # Scenario AB3 (task-ecf78687) -- twin of postflight.sh: a seat's
+                # OWN message is never its mention. (a) The only unread message
+                # is one this seat sent, tagging itself, @all and its role group:
+                # the pre-wait probe must not count it (the wrapper-side wait
+                # runs) and the routed build must not list it (no
+                # notification-only session). (b) Contrast: another sender's
+                # @all + role-group tag still launches one.
+                Write-Host "[scenario AB3] a seat's own role-group/@all message never wakes it"
+                $scopeAB3Dir = Join-Path $tempRoot 'scope-ab3'
+                New-ScopeProject $scopeAB3Dir @()
+                $scopeAB3Out = Join-Path $tempRoot 'scope-ab3.out'
+                $env:FAKE_CLAIM_MODE = 'idle'
+                $env:FAKE_MENTION = 'self'
+                $env:MOE_TASKLESS_WAIT_SEC = '5'
+                try {
+                    Assert-ScopeRun 'AB3' (Invoke-GateWrapper $scopeAB3Dir $scopeAB3Out 'REVIEW' $createFileCmd 'worker' 'worker-scope-ab3') $scopeAB3Out
+                } finally {
+                    Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_MENTION -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_TASKLESS_WAIT_SEC -ErrorAction SilentlyContinue
+                }
+                $scopeAB3Chat = Get-Content -Raw -Path (Join-Path $scopeAB3Dir '.moe\messages\chan-general.jsonl') -ErrorAction SilentlyContinue
+                if (-not ($scopeAB3Chat -and $scopeAB3Chat.Contains('msg-fake-self'))) {
+                    throw "SCENARIO AB3 FAILED: fixture: the seat's own message was never served"
+                }
+                $scopeAB3Text = Get-Content -Raw -Path $scopeAB3Out
+                if (Test-Path (Join-Path $scopeAB3Dir 'session-new.txt')) {
+                    Write-Host $scopeAB3Text
+                    throw "SCENARIO AB3 FAILED: the seat's own message launched a notification-only session to answer itself"
+                }
+                if (-not $scopeAB3Text.Contains('[no-task] No claimable task for role worker; waiting up to 5s in the wrapper')) {
+                    Write-Host $scopeAB3Text
+                    throw "SCENARIO AB3 FAILED: the pre-wait probe counted the seat's own message, so the wrapper-side wait was skipped"
+                }
+                if (-not $scopeAB3Text.Contains('MOE_TASKLESS_NO_LAUNCH reason=idle role=worker worker=worker-scope-ab3')) {
+                    Write-Host $scopeAB3Text
+                    throw 'SCENARIO AB3 FAILED: the suppressed launch must be named, not silent'
+                }
+                $scopeAB3bDir = Join-Path $tempRoot 'scope-ab3b'
+                New-ScopeProject $scopeAB3bDir @()
+                $scopeAB3bOut = Join-Path $tempRoot 'scope-ab3b.out'
+                $env:FAKE_CLAIM_MODE = 'idle'
+                $env:FAKE_MENTION = 'group'
+                $env:MOE_TASKLESS_WAIT_SEC = '5'
+                try {
+                    Assert-ScopeRun 'AB3' (Invoke-GateWrapper $scopeAB3bDir $scopeAB3bOut 'REVIEW' $createFileCmd 'worker' 'worker-scope-ab3b') $scopeAB3bOut
+                } finally {
+                    Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_MENTION -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_TASKLESS_WAIT_SEC -ErrorAction SilentlyContinue
+                }
+                if (-not (Test-Path (Join-Path $scopeAB3bDir 'session-new.txt'))) {
+                    Get-Content $scopeAB3bOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw "SCENARIO AB3 FAILED: (b) another sender's @all/role-group tag must still launch a notification-only session"
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AB3] ok'
+
                 # Scenarios AC/AD — twin of postflight.sh: a file whose HEAD blob
                 # holds CRLF, under line-ending conversion. The snapshot's
                 # `hash-object` loads no index and normalizes CRLF to LF; `git add`
@@ -4938,10 +4996,10 @@ exit 0
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                $scopeExpectedRuns = 44
-                if ($symlinksOk) { $scopeExpectedRuns = 45 }
+                $scopeExpectedRuns = 45
+                if ($symlinksOk) { $scopeExpectedRuns = 46 }
                 if ($scopeScenariosRun -ne $scopeExpectedRuns) {
-                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $scopeScenariosRun"
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AB3, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

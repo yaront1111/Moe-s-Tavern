@@ -8764,6 +8764,7 @@ do {
         foreach ($unread in @($preflightGeneralUnread, $preflightRoutedUnread)) {
             foreach ($msg in @($unread.messages)) {
                 if (-not $msg -or -not $msg.mentions) { continue }
+                if ([string]$msg.sender -ceq $WorkerId) { continue }  # own message (task-ecf78687; same in moe-agent.sh)
                 foreach ($m in $msg.mentions) {
                     if ($m -eq $WorkerId -or $m -eq "all" -or ($roleGroupTag -and $m -eq $roleGroupTag)) { $preflightHasUnreadMention = $true; break }
                 }
@@ -9052,6 +9053,7 @@ do {
             foreach ($bucket in $buckets) {
                 foreach ($msg in $bucket) {
                     if (-not $msg -or -not $msg.mentions) { continue }
+                    if ([string]$msg.sender -ceq $WorkerId) { continue }  # own message (task-ecf78687; same in moe-agent.sh)
                     if ($msg.id -and $seenMentionIds.ContainsKey([string]$msg.id)) { continue }
                     $hit = $false
                     foreach ($m in $msg.mentions) {

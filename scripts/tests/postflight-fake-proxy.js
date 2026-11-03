@@ -426,8 +426,16 @@ switch (tool) {
     // FAKE_MENTION=1 models one unread message tagging the caller. The record
     // is also appended to the store the wrapper re-reads bodies from, so the
     // mention passes provenance instead of degrading to a delivery marker.
-    if (process.env.FAKE_MENTION === '1' && args.channel === 'chan-general') {
-      const msg = { id: 'msg-fake-1', channel: 'chan-general', sender: 'human', content: 'ping', mentions: [args.workerId || 'all'], timestamp: new Date().toISOString() };
+    // FAKE_MENTION=self (task-ecf78687) is the seat's OWN message tagging
+    // itself, @all and its role group: the wrappers must skip it. FAKE_MENTION=
+    // group is another sender's @all + role-group tag, which must still route.
+    const fm = process.env.FAKE_MENTION;
+    const m = fm === '1' ? { id: 'msg-fake-1', sender: 'human', mentions: [args.workerId || 'all'] }
+      : fm === 'self' ? { id: 'msg-fake-self', sender: args.workerId, mentions: [args.workerId, 'all', 'workers'] }
+      : fm === 'group' ? { id: 'msg-fake-group', sender: 'human', mentions: ['all', 'workers'] }
+      : null;
+    if (m && args.channel === 'chan-general') {
+      const msg = { id: m.id, channel: 'chan-general', sender: m.sender, content: 'ping', mentions: m.mentions, timestamp: new Date().toISOString() };
       const dir = path.join(moe, 'messages');
       ensureDir(dir);
       fs.appendFileSync(path.join(dir, 'chan-general.jsonl'), JSON.stringify(msg) + '\n');
