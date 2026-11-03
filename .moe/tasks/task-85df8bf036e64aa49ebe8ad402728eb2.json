@@ -9,10 +9,61 @@
     "The daemon test suite passes on a git-archive snapshot of the landed tree (never npm build/test in the shared checkout), with the exact command and its pass/fail counts in the completion evidence."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, in packages/moe-daemon/src/tools/completeStep.test.ts, inside the existing describe('moe.complete_step') block (ToolTestHarness h; task-1 with step-1 IN_PROGRESS).\n\nIMPORTANT, for this plan and for anything you write in chat: never type an at-sign directly followed by a name in prose, in a step note or in a chat message. This task exists because the daemon echoes step text into chat and parses tags out of it. In the TEST SOURCE, build every tag at runtime, e.g. const at = String.fromCharCode(64), then `${at}all`, `${at}workers`, `${at}worker-busy`.\n\nSetup for the new tests: before h.state.load(), create a busy seat h.createWorker({ id: 'worker-busy', status: 'CODING' }) and an idle seat 'worker-idle'. Give step-1 a description that spells all three tags (all-hands, the workers role group, the worker-busy id) inside ordinary prose, plus one inside an inline code span. Capture events with h.state.subscribe, keeping each MESSAGE_CREATED payload and its routingTargets.\n\n- E1 `the Step N completed notice echoes the text but addresses no seat` (DoD 1). Complete step-1 through completeStepTool.\n  - Exactly one MESSAGE_CREATED has content starting 'task-1: Step 1 completed: ' and equal to that prefix + the full description (assertEquals on the whole string; it stays readable).\n  - That event's routingTargets toEqual([]).\n  - The stored #general message (h.state.getMessages(<general id>)) has mentions toEqual([]).\n  - chatReadTool for worker-busy with no includeSystem returns no such message, so no seat is paged.\n- E2 `a system post without the option still routes its tags exactly as before` (DoD 2 guard). h.state.postSystemMessage('task-1', `${at}worker-busy please check`) records mentions ['worker-busy'] and routes to ['worker-busy'].\n- E3 `the option routes to no seat in a role channel too`. h.state.sendMessage({ channel: <the workers role channel id>, sender: 'system', content: `${at}all ${at}worker-busy x`, parseMentions: false }) returns routingTargets [] and a message with mentions []. Without the skip, a mention-less system line in a role channel would broadcast to busy seats, so this kills a fix that only clears the recorded mentions.\n\nRED: run `npx vitest run src/tools/completeStep.test.ts` in a snapshot (step 3's recipe, focused file only). E1 and E3 fail (E3 may fail at type-check: parseMentions is not an option yet). E2 passes. Record the names.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.test.ts"
+      ],
+      "note": "Added a new top-level describe 'moe.complete_step chat notice' (own ToolTestHarness, same file) with E1, E2, E3. Tags are built at runtime via String.fromCharCode. RED in a git-archive snapshot (vitest run src/tools/completeStep.test.ts): 2 failed, 23 passed. Failing: 'the Step N completed notice echoes the text but addresses no seat' (routingTargets was both seats, not empty) and 'the option routes to no seat in a role channel too' (the control assertion passed; parseMentions false is not yet honoured). 'a system post without the option still routes its tags exactly as before' passes. Description fixture puts a group tag mid-prose and at a line start, since group tokens only address at a line start.",
+      "startedAt": "2026-11-03T02:24:36.531Z",
+      "completedAt": "2026-11-03T02:25:58.960Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the opt-out and use it for the step notice. Edit tool only (GLOBAL rail 3).\n\n- packages/moe-daemon/src/state/chatStore.ts, sendMessage opts: add `parseMentions?: boolean`. Doc it: false means the content echoes text an agent wrote (a step description), so record no mentions and route to no seat; default true.\n  - When it is false, rawMentions = [] and routingTargets = [], and mentionRouter.route is NOT called. The router re-parses message.content itself (util/mentionRouter.ts route -> parseMentions), so clearing rawMentions alone is not enough.\n  - Everything else is unchanged: the size check, the append, the unread loop (empty) and the MESSAGE_CREATED emit with routingTargets [].\n- In the same file, export `type SystemPostOptions = { parseMentions?: boolean }`.\n  - postToGeneral(state, content, opts?) passes `parseMentions: false` to state.sendMessage ONLY when opts?.parseMentions === false. Otherwise the call object stays exactly { channel, sender: 'system', content }, so existing spies keep matching.\n  - postSystemMessage(state, entityId, content, opts?) forwards opts to state.postToGeneral only when opts is given, so a 1-arg call shape is unchanged.\n- packages/moe-daemon/src/state/StateManager.ts (~:853-878): add the same optional parameter to the sendMessage opts type, postSystemMessage(entityId, content, opts?) and postToGeneral(content, opts?), passing it through.\n- packages/moe-daemon/src/tools/completeStep.ts:140: post `Step ${stepNum} completed: ${completedDescription}` with { parseMentions: false }. Add a one-line comment: the description is agent-written plan text, and a tag it spells must not page seats (msg-ee54f9ed woke 4 idle seats).\n- docs/MCP_SERVER.md, the moe.complete_step bullet at ~:506 ('The chat line posted for the completion uses the full text…'): add one sentence. The line records no mentions, so a tag the step text spells (all-hands, a role group or a worker id) addresses no seat and pages nobody. Write the tags as words, not at-sign tokens.\n\nOut of scope; list them in the completion summary as follow-up candidates and leave them unchanged:\n- amendPlanStep's echo of amended step text;\n- qaReject's reason;\n- requestReplan's reason;\n- the claim notice's title;\n- reportBlocked, whose prefix tags are deliberate.\n\nError handling: postSystemMessage/postToGeneral stay best-effort (postToGeneral catches and logs). completeStep keeps its try/catch so a chat failure never blocks the tool.\n\nGREEN: rerun the focused file in the snapshot; E1-E3 and every existing completeStep test pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added the optional parseMentions flag to sendMessage in chatStore.ts. When it is false, rawMentions and routingTargets are both empty and the router is not called. Exported SystemPostOptions and threaded it through postSystemMessage and postToGeneral. postToGeneral adds parseMentions to the sendMessage call only when the option is false, and postSystemMessage forwards opts only when given, so existing call shapes are unchanged. The StateManager wrappers pass it through with the same conditional forwarding. completeStep.ts now posts the step notice with parseMentions false. docs/MCP_SERVER.md has one added sentence in the complete_step bullet. GREEN in a git-archive snapshot: tsc --noEmit exit 0, completeStep.test.ts 25 of 25 pass. Out-of-scope echo sites left unchanged, as follow-up candidates: amendPlanStep's amended-text echo, qaReject's reason, requestReplan's reason, the claim notice title; reportBlocked prefix tags are deliberate.",
+      "startedAt": "2026-11-03T02:26:01.124Z",
+      "completedAt": "2026-11-03T02:26:43.204Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run it ONCE, fresh, from the task worktree root, as ONE command: the executionContract's checkRefs[0], verbatim.\n\nWhat it runs:\n- It builds a git archive HEAD snapshot under mktemp and overlays this task's 5 files, cmp-checked.\n- Then, with nvm node v24.21.0 under env -i, it runs npm ci, tsc --noEmit and the focused files:\n  - completeStep, the new tests;\n  - chatSystemFeed and governanceFeatures, the file-collision heads-up;\n  - addComment, the comment mention relay;\n  - reportBlocked, the blocked notice's deliberate prefix tags.\n- Then it runs the FULL daemon suite (DoD 3; this row is the epic's highest-order task).\nNever run npm in the shared checkout or in the worktree's packages (GLOBAL rail 1).\n\nSubmit the command, exit code and tail to complete_task with both 'Test Files … Tests …' lines. The recent full-suite baseline was 229 files / 6943 passed / 20 skipped (task-d6ebe4ab, 2026-11-03).\n\nError handling for a red run:\n- A failure in a test this task did not touch: rerun that one file in the same snapshot. If it is a known flake, say so with both outputs. If it fails on HEAD without this task's files, comment on the owning task and report_blocked naming it. Never weaken a test.\n- The full run can take several minutes: use a 600000 ms timeout, or a detached runner with a recorded PID and a poll. Kill only your own PID (GLOBAL rail 2).\n- If this row is ever resumed with LANDING-CONFLICT/LANDING-RETRY, the resume prompt's rule replaces `git archive HEAD` with a copy of the worktree's tracked files. Say so in the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran checkRefs[0] verbatim from the worktree root, detached via a scratch runner outside the checkout (PID 390958, polled to completion). It used git archive HEAD overlaid with this task's 5 files, each cmp-checked, then npm ci and tsc --noEmit in the snapshot. Focused files: Test Files 5 passed (5), Tests 150 passed (150). Full suite: Test Files 229 passed (229), Tests 6946 passed | 20 skipped (6966). Exit 0. The baseline was 6943 passed, so the +3 are the new E1-E3 tests. No LANDING-RETRY resume applied.",
+      "startedAt": "2026-11-03T02:26:48.479Z",
+      "completedAt": "2026-11-03T02:28:04.937Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the diff, then complete_task.\n(a) DoD 1: with parseMentions false, nothing re-derives mentions from the content. No router call, no rawMentions, no unread increment. isSystemFeedMessage then also treats the #general line as feed. Check the wrapper side too: scripts/moe-agent.sh reads msg['mentions'] (around :9583 and :10093), so recorded mentions [] means no wake.\n(b) DoD 2: every other caller's call shape is byte-identical when the option is absent. The collision heads-up (claimNextTask collisionNotice via postToRoleChannel), the addComment relay and reportBlocked's prefix tags still route. Their tests pass unchanged in the full run.\n(c) The text stays readable: the content is stored unchanged, with no escaping or code-span wrapping.\n(d) Types: the optional parameters are additive, so no MCP tool contract changes (epic rail). StateManager wrappers pass opts through, and no test spy breaks on a new trailing undefined argument.\n(e) Re-read your own step notes and chat posts in this task: none may contain an at-sign directly followed by a name.\n(f) All 5 paths were written with the Edit tool and listed in complete_step.modifiedFiles.\nIf anything changes, rerun step 3's command fresh and submit THAT output.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T02:28:07.735Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-d6c1cb7a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,5 +75,92 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:35:53.599Z",
-  "updatedAt": "2026-11-03T00:35:53.599Z"
+  "updatedAt": "2026-11-03T02:28:07.735Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T02:19:02.854Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-d6c1cb7a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T02:23:35.691Z",
+  "executionContract": {
+    "intendedBehavior": "The daemon's 'Step N completed: <step text>' system notice echoes the step's full text but addresses no seat. It records no mentions and has no routing targets, so a tag spelled inside agent-written plan text (all-hands, a role group or a worker id) pages nobody and wakes no idle seat. The mechanism is an opt-in `parseMentions: false` on sendMessage, threaded through postToGeneral and postSystemMessage. Every other system notice, including those that intentionally tag seats (the file-collision heads-up, comment mention relays, the blocked notice's prefix), routes exactly as today.",
+    "acceptanceCriteria": [
+      "DoD 1: completing a step whose description spells the all-hands, role-group and worker-id tags posts one #general line equal to 'task-1: Step 1 completed: ' plus the full description, whose MESSAGE_CREATED routingTargets is [] and whose stored mentions is [], and which no agent chat read returns (E1). In a role channel the option also routes to no seat (E3).",
+      "DoD 2: a system post without the option still records and routes its tags (E2). The collision heads-up, addComment relay and reportBlocked tests pass unchanged (focused run plus the full suite).",
+      "DoD 3: the checkRefs[0] command exits 0. It covers tsc, the focused files and the full daemon suite in a git-archive snapshot with this task's files overlaid. The evidence carries the command and both pass/fail count lines."
+    ],
+    "invariants": [
+      "With the option absent, sendMessage, postToGeneral and postSystemMessage produce the same messages, routing and call shapes as before.",
+      "Message content is stored verbatim; nothing is escaped or wrapped.",
+      "Error handling: system posts stay best-effort and never block a tool.",
+      "No MCP tool's input or output contract changes."
+    ],
+    "compatibility": [
+      "The new parameters are optional and trailing; all existing call sites compile unchanged.",
+      "Stored ChatMessage shape is unchanged (mentions is simply []), so readers, plugins and wrappers need no change."
+    ],
+    "approvedScope": [
+      "chatStore.ts: sendMessage's parseMentions option, SystemPostOptions, and pass-through in postToGeneral and postSystemMessage.",
+      "StateManager.ts: the matching optional parameters on sendMessage, postSystemMessage and postToGeneral.",
+      "completeStep.ts: the step notice passes { parseMentions: false }.",
+      "completeStep.test.ts: tests E1-E3.",
+      "docs/MCP_SERVER.md: one sentence in the moe.complete_step bullet about the completion chat line."
+    ],
+    "reuse": [
+      "The existing #general feed rule (isSystemFeedMessage) and chatReadTool already hide a mention-less system line from agents; the fix makes the step notice mention-less instead of adding a new filter.",
+      "ToolTestHarness and the chatSystemFeed.test.ts patterns (createWorker with status CODING, getMessages, chatReadTool) for the new tests."
+    ],
+    "sourceAssumptions": [
+      "At planning (target 7379c2bc), completeStep.ts:140 calls state.postSystemMessage(task.id, `Step ${stepNum} completed: ${completedDescription}`) inside a try/catch. chatStore.ts:376-394: postSystemMessage prefixes the task id and calls state.postToGeneral, which calls state.sendMessage with { channel, sender: 'system', content }.",
+      "chatStore.ts sendMessage (~:170-240) computes rawMentions = parseRawMentions(content), then routingTargets = state.mentionRouter.route(tempMessage, ...).targets. MentionRouter.route re-parses message.content (routeSystemMessage -> parseMentions), and a mention-less system line routes to every non-IDLE, non-DEAD seat. isSystemFeedMessage (util/chatPayload.ts:54) zeroes routing only for a #general system line with no recorded mentions.",
+      "scripts/moe-agent.sh decides wakes from msg['mentions'] (~:9583, ~:10093), so recorded mentions [] stops the idle-seat wake.",
+      "Recent full daemon suite on HEAD: 229 files, 6943 passed, 20 skipped (task-d6ebe4ab, 2026-11-03)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/chatStore.ts packages/moe-daemon/src/state/StateManager.ts packages/moe-daemon/src/tools/completeStep.ts packages/moe-daemon/src/tools/completeStep.test.ts docs/MCP_SERVER.md; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/completeStep.test.ts src/tools/chatSystemFeed.test.ts src/tools/governanceFeatures.test.ts src/tools/addComment.test.ts src/tools/reportBlocked.test.ts && npx vitest run'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Wrapping the echoed text in a code span: rejected. parseRawMentions skips quoted spans, but step text contains backticks that would break the span, and it hurts readability.\n- Stripping or escaping the at-signs: rejected. It alters stored text, and DoD 1 wants it readable.\n- Making ALL system lines mention-less unless they pass explicit targets: rejected for this row. It is the right long-term shape, but it requires auditing every intentional-mention caller (collision heads-up, comment relays, blocked prefixes) and widens the blast radius past the DoD.\n- Chosen: an opt-in parseMentions:false for echoed text, applied only to the step notice. The same option can later be adopted by the other echo sites listed in step 2.",
+    "codebaseInsights": "- Two separate mention parsers matter. sendMessage records rawMentions, which the wrappers read to decide wakes, and MentionRouter.route re-parses content to compute routingTargets. A fix must skip both.\n- The #general feed rule (isSystemFeedMessage) already makes a mention-less system line invisible to agent reads and unrouted, so recording no mentions also puts the step notice back into the feed, where it belongs.\n- The test harness exposes createWorker with a status, sendMessage, getMessages and chatReadTool, which is enough to assert routingTargets, stored mentions and agent visibility.",
+    "risks": "1. The plan's own step text is echoed by the step notice until this fix lands. The plan therefore spells no at-tags, and the worker must not either, in notes or chat.\n2. A spy asserting exact call arguments could break if a trailing undefined is passed. Forward opts only when provided.\n3. The full suite takes several minutes; use a long timeout or a detached runner with a recorded PID.\n4. isEpicFinal is true only because this row has the highest order in the long-running Stability & Hardening bucket. The full daemon suite is the regression; there is no whole-epic sweep, and the self-review covers this diff.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/tools/completeStep.test.ts",
+      "packages/moe-daemon/src/util/mentionRouter.ts",
+      "packages/moe-daemon/src/util/chatPayload.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "78cfa1c16fdbf7bf46be97960388868e852dcbf4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T02:23:35.721Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T02:24:36.531Z"
 }
