@@ -62,8 +62,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,7 +88,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:22.068Z",
-  "updatedAt": "2026-11-03T22:50:59.170Z",
+  "updatedAt": "2026-11-03T22:52:18.618Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:34:31.384Z",
     "plannedStepCount": 4,
@@ -171,5 +171,46 @@
   },
   "planApprovedAt": "2026-11-03T22:43:24.998Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T22:45:14.505Z"
+  "workStartedAt": "2026-11-03T22:45:14.505Z",
+  "reviewStartedAt": "2026-11-03T22:51:15.141Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD | tar -x -C \"$S\" && cp --parents $P/tools/updateEpic.ts $P/tools/updateEpic.archive.test.ts $P/server/WebSocketServer.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run",
+    "exitCode": 0,
+    "outputTail": "npx tsc --noEmit: exit 0\n Test Files  267 passed (267)\n      Tests  7322 passed | 24 skipped (7346)\n   Start at  00:48:37\n   Duration  48.36s (tests 90%, transform 5%, import 4%)\n\nSupplemental RED checkRef: Tests  7 failed | 2 passed (9); RED-AT-BASE (exit 0)\nSupplemental new-test typecheck: ARCHIVE-TEST-TYPECHECK-OK (exit 0)\nQuality gate: PASS parity-check.sh; npm run lint role-doc caps OK (exit 0)",
+    "reportedAt": "2026-11-03T22:51:15.141Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/updateEpic.archive.test.ts",
+    "packages/moe-daemon/src/tools/updateEpic.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "MCP update_epic and /ws UPDATE_EPIC now share applyEpicUpdate: new ARCHIVED moves run archive_epic's in-flight, holder and finalizing guards, archive all tasks with TASK_ARCHIVED events, and apply prevalidated companion fields. Other status moves and already-ARCHIVED epics retain plain updates; reply shapes unchanged. ARCHIVED added to schema enum. Nine regression cases added (typed frames, no any). Synced only docs/MCP_SERVER.md's update_epic section per governor/filer comments; this intentionally corrects the plan's outdated docs deferral. GREEN: typecheck clean; 267 files passed, 7322 tests passed, 24 skipped. RED at f8b8d60c twice: exactly 7 failed | 2 passed (9), RED-AT-BASE. Explicit new-test typecheck and quality gate (parity + lint) passed in external snapshots. Adversarial review clean; no changes after verification. Companion-field archive intentionally emits two EPIC_UPDATED events plus per-new-task TASK_ARCHIVED. Handoff and gotcha memories recorded.",
+  "commits": [
+    {
+      "sha": "0952912256fcaad04d50d5a9f46c5b70fd412628",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T22:43:26Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/updateEpic.archive.test.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T22:52:18.618Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T22:43:26Z",
+    "at": "2026-11-03T22:52:18.618Z"
+  }
 }
