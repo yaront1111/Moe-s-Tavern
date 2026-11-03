@@ -1,0 +1,29 @@
+{
+  "id": "task-0c481aa9f18a45b4944c5be5a9b797d5",
+  "epicId": "epic-be924fb8",
+  "title": "bug: qa_reject, request_replan and release_task echo agent-written reasons into system chat lines with mention parsing on, so an at-token in a reason pages seats (task-85df8bf0 fixed only the step notice)",
+  "description": "This row follows up task-85df8bf0's QA review, which says: \"amendPlanStep, qaReject, requestReplan and the claim notice title can still echo agent text; the worker listed them as follow-ups\". The Serena memory gotcha-plan-step-text-at-tokens-echoed-as-mentions also lists these sites as STILL OPEN. The claim title is covered by task-df34243e. amend_plan_step is left out because its line carries a deliberate assignee tag and needs a split-post design.\n\nEvidence at HEAD 119fce99 (packages/moe-daemon/src/tools/):\n- qaReject.ts:368 posts `QA rejected: ${params.reason}` through state.postSystemMessage with no options.\n- requestReplan.ts:90 posts `Replan requested${stepHint}: ${reasonSummary}` the same way.\n- releaseTask.ts posts to both #general and #workers:\n  - :356-369: `🔓 <actor> released task: <title><reasonSuffix>`, plus the handoff's done/remains summaries;\n  - :251-254: the 🔧 auto-route line.\n\nHow such a line pages seats:\n- state/chatStore.ts:196 parses mentions unless the post passes parseMentions false.\n- A recorded at-token takes a #general line out of the feed (util/chatPayload.ts:54).\n- MentionRouter.routeSystemMessage (util/mentionRouter.ts:255-267) routes a line that has no KNOWN mention to every busy seat. A role tag pages its whole group.\n- A #workers line is never feed, so release_task's mention-less #workers copy already pages every busy seat on each release.\n\nSeen in .moe/messages:\n- qa_reject echoed a role tag twice (2026-07-31 'worker'; 2026-10-26 'governors' on task-7a0b1881).\n- release_task echoed 'governors' into three channels (2026-07-31 23:43:51Z).\nReasons routinely quote code, such as Kotlin/Java annotations and npm scopes, which parse as at-tokens.\n\nFix pattern: task-85df8bf0 added SystemPostOptions { parseMentions: false } (state/chatStore.ts:394-414), and completeStep.ts:143 uses it. None of these three sites has a deliberate tag of its own.\n\nFiles: qaReject.ts, requestReplan.ts, releaseTask.ts and one NEW test file under packages/moe-daemon/src/tools/. No open row's plan names any of them (checked at 119fce99).",
+  "definitionOfDone": [
+    "qa_reject's 'QA rejected: <reason>', request_replan's 'Replan requested…: <reason>' and release_task's released and auto-route lines (both #general and #workers copies) are posted with { parseMentions: false }: an at-token in a reason, title or handoff summary records mentions [] and routes to no seat.",
+    "The text of every posted line is byte-identical to today's, and no MCP tool response or contract changes.",
+    "A NEW test file under packages/moe-daemon/src/tools/ drives each of the three tools with an at-token in its free text (the at-sign built at runtime, never spelled in source) and asserts the posted messages carry mentions [] and empty routing targets; restoring today's call fails each case, and existing qaReject/releaseTask tests pass unchanged.",
+    "In a snapshot outside the shared checkout: cd packages/moe-daemon && npx vitest run src/tools/qaReject.test.ts src/tools/releaseTask.test.ts <new test file> && npx tsc --noEmit exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 354.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T08:34:23.746Z",
+  "updatedAt": "2026-11-03T08:34:23.746Z"
+}

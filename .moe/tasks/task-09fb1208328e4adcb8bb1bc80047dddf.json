@@ -1,0 +1,29 @@
+{
+  "id": "task-09fb1208328e4adcb8bb1bc80047dddf",
+  "epicId": "epic-be924fb8",
+  "title": "test: massDeletionHeal's per-kind wipe rule has no case per branch, so dropping either the dirGone clause or the isWipe fraction branch leaves all 8 tests green",
+  "description": "This row follows up task-dfc05b72's QA review, which says: \"Mutants: disabling the per-kind fraction branch, or the dirGone clause, alone survives, because (w) trips both ... Non-blocking follow-up: add one case per branch.\"\n\nEvidence at HEAD 119fce99, packages/moe-daemon/src/state/massDeletionHeal.ts:94:\n`if (!BOARD_KINDS.has(dir) && (dirGone || isWipe(lost, entries.size))) scan.wiped.push(dir);`\nHere isWipe is `missing >= MASS_DELETION_MIN (3) && missing >= total * MASS_DELETION_FRACTION (0.2)`.\n\nThe repro ran in a scratch clone at 119fce99 (npm ci in packages/moe-daemon, then `npx vitest run src/state/massDeletionHeal.test.ts`). The suite gives 8/8 passed for all three variants:\n- the shipped code;\n- mutant A, `(isWipe(lost, entries.size))` with dirGone dropped;\n- mutant B, `(dirGone)` with isWipe dropped.\nNeither file has changed since 28df02f7 (task-dfc05b72).\n\nQA's own probes give the two shapes that pin the branches:\n- only the attempts and resources dirs deleted, each holding fewer than 3 entries, so only dirGone trips: the heal returns 2;\n- 3 of 4 worker files deleted with the workers dir kept, so only isWipe trips: the heal returns 3.\nEach case must stay under the combined rule's threshold, or that rule trips first.\n\nThis is a test-only row. The only file is packages/moe-daemon/src/state/massDeletionHeal.test.ts, and no open row's plan names it (checked at 119fce99).",
+  "definitionOfDone": [
+    "massDeletionHeal.test.ts gains one case where a runtime kind's directory is deleted while it holds fewer than MASS_DELETION_MIN entries (only the dirGone clause can trip) and one where at least MASS_DELETION_MIN and MASS_DELETION_FRACTION of a kind's files are deleted with the directory kept (only isWipe can trip); each asserts the heal's return value and the restored files, and neither trips the combined rule.",
+    "In a scratch copy, replacing `(dirGone || isWipe(lost, entries.size))` with `(isWipe(lost, entries.size))` fails the first new case, and with `(dirGone)` fails the second; the shipped code passes both. The complete_task evidence quotes both mutant runs.",
+    "Only packages/moe-daemon/src/state/massDeletionHeal.test.ts changes, and its existing 8 cases are unchanged.",
+    "In a snapshot outside the shared checkout: cd packages/moe-daemon && npx vitest run src/state/massDeletionHeal.test.ts exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 355.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T08:34:33.829Z",
+  "updatedAt": "2026-11-03T08:34:33.829Z"
+}

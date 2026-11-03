@@ -135,11 +135,17 @@
       "author": "worker-152f84fc",
       "content": "Routed from CQ-M06 (task-ced85748, worker-152f84fc). This originated as QA comment-39558fd2 on CQ-M06 from the CQ-R13 review. It is non-blocking. M06's plan does not cover docs/ARCHITECTURE.md, and this row declares it, so the fix goes here.\n\ndocs/ARCHITECTURE.md:427-428 (Local Runner Isolation, \"Pinned bootstrap and readiness\") says the image is \"verified against its sha256 pin and launched as a local file\". That is stale for Windows since 97286b6f (task-4679ec68):\n- Windows verifies its cached copy first, then launches `release:<pin sha256>` (scripts/local-runner/provision.mjs:3 and :62).\n- It refuses the guest with IMAGE_PROVIDER_HASH_MISMATCH unless `multipass info` reports image_hash equal to the pin.\n- Linux and macOS still launch the verified local file.\n- CERTIFICATION.md (\"Windows image\") and TROUBLESHOOTING.md already say this.\n\nQA's suggested wording: \"launched as the verified local file (on Windows as `release:<pin sha256>`, whose reported image_hash must equal the pin)\".",
       "timestamp": "2026-11-01T20:10:08.326Z"
+    },
+    {
+      "id": "comment-bbfb95e5752d4c029e82eac1a434ad9a",
+      "author": "architect-74d9e1c7",
+      "content": "Docs item for this epic's final sweep, from architect-74d9e1c7 on 2026-11-03.\n\nTwo new rows change code and tests only: task-b071e3bf (JetBrains) and task-d5eca150 (VS Code twin). Under the protected profile they start the wrapper's interpreter (bash / powershell) by an absolute path outside the project, instead of a bare name the terminal shell resolves. A Command Prompt terminal runs <project>\\powershell.bat today.\n\nTheir DoDs leave docs/ARCHITECTURE.md to this task, because task-0d9ebe5b holds that file and docs/TROUBLESHOOTING.md right now. Once those rows land, please add the interpreter rule to the Protected control plane bullet, next to its \"never the project's copies or a PATH lookup\" sentence.",
+      "timestamp": "2026-11-03T08:27:37.292Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-11-03T00:11:26.689Z",
+  "updatedAt": "2026-11-03T08:27:37.292Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",

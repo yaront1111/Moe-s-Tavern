@@ -1,0 +1,33 @@
+{
+  "id": "task-df34243e2df042f4b257d1e2066bc8d9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: claim_next_task still posts the #workers file-collision heads-up on QA REVIEW claims in worktree mode (a mention-less line pages every busy seat), and its claim notice parses mentions out of the task title",
+  "description": "This row follows up two QA notes. task-97740aed's reviewSummary says: \"QA REVIEW claims open shared attempts so their notices still page\". task-85df8bf0's QA lists \"the claim notice title\" as a site that still echoes agent text.\n\nEvidence at HEAD 119fce99 (packages/moe-daemon/src/tools/claimNextTask.ts):\n\n1. worktreeOnlyCollision (:353) returns false whenever the claimer's attempt is not 'worktree'. Its doc comment deliberately keeps REVIEW and PLANNING claims on the old paging. A QA REVIEW claim opens a shared attempt, so every QA claim of a row whose files overlap a WORKING row posts the #workers heads-up.\n   - With no live peer, that line mentions nobody.\n   - Outside #general a mention-less system line is not feed (util/chatPayload.ts:54 isSystemFeedMessage). So state/chatStore.ts:196-251 routes it through MentionRouter.routeSystemMessage (util/mentionRouter.ts:255-267) to EVERY busy seat. Each seat gets an unread count and a chat_wait wake.\n   - Measured over .moe/messages: 69 collision notices were posted after task-97740aed landed (2026-11-02 22:03Z), and 33 came from qa-* claims. Every QA-claim notice since 02:18Z mentions nobody, so each one paged every busy seat. Examples: 03:14:27Z on fb0ab382, 03:23:49Z on 6d5d3db2, 07:15:47Z on befdddf7, 08:03:36Z on 3acf7f79.\n   - In worktree mode a QA seat reviews landed bytes and lands nothing (scripts/CLAUDE.md, Control seats), so the line gives nobody anything to coordinate.\n\n2. :882 posts `${params.workerId} claimed task: ${task.title}` with mention parsing on. task-97740aed's own title contains an at-token ('mentions'). Its three claim notices (2026-11-02 21:41:26Z, 21:51:07Z and 22:01:02Z, all in #general) each recorded mentions ['mentions']. That took them out of the #general feed and routed each one to every busy seat. The fix pattern exists: SystemPostOptions { parseMentions: false } (state/chatStore.ts:394-414), used by completeStep.ts:143 (task-85df8bf0).\n\nExpected behaviour:\n- In worktree mode, a REVIEW claim posts no #workers collision heads-up. The response's fileCollision array stays exactly as today. A PLANNING claim that carries a plan should follow the same rule if the planner finds the same reasoning holds.\n- The claim notice echoes the title without parsing mentions.\n- WORKING claims and shared mode (worktreeMode off) keep today's behaviour.\n\nFiles:\n- packages/moe-daemon/src/tools/claimNextTask.ts.\n- A NEW test file under packages/moe-daemon/src/tools/. Do not edit claimNextTask.test.ts: it is in the open WT-19 row task-b1ca54f2's plan.\n- docs/MCP_SERVER.md, the fileCollision paragraph (:1525). It says every claimer that is not in a worktree keeps the heads-up. That file is also in task-f81c85ac's plan (WORKING), so this row dependsOn f81c85ac.\nNo other open row's plan names claimNextTask.ts (checked at 119fce99).",
+  "definitionOfDone": [
+    "With settings.worktreeMode 'on', a REVIEW claim whose task's affectedFiles overlap a WORKING row posts no #workers file-collision line, and the claim response still returns the same fileCollision entries; with worktreeMode off the same claim still posts as today, and WORKING claims behave as today.",
+    "The '<workerId> claimed task: <title>' notice is posted with { parseMentions: false }: a title holding an at-token records mentions [] and routes to no seat; the posted text is unchanged.",
+    "A NEW test file under packages/moe-daemon/src/tools/ covers the REVIEW claim in both modes and the at-token title (the at-sign built at runtime, never spelled in source); restoring today's code fails those cases, and claimNextTask.test.ts plus every existing collision test pass unchanged.",
+    "docs/MCP_SERVER.md's fileCollision paragraph states the REVIEW-claim rule; no other line of that file changes.",
+    "In a snapshot outside the shared checkout: cd packages/moe-daemon && npx vitest run src/tools/claimNextTask.test.ts <new test file> && npx tsc --noEmit exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-f81c85acfec54b0f89affccb7a833b6a"
+  ],
+  "priority": "MEDIUM",
+  "order": 353.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T08:34:10.941Z",
+  "updatedAt": "2026-11-03T08:34:10.941Z"
+}

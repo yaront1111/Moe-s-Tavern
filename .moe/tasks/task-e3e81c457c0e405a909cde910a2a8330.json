@@ -17,7 +17,17 @@
       "status": "PENDING",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Prerequisite and contract. This row is the consumer half; it dependsOn task-c6a24053, which lands scripts/moe-serena-ignore.mjs and its unit suite scripts/tests/serena-ignore.test.mjs (read that row's description, its plan and its handoff memory `mem:task-task-c6a2405324174deda18c4f672747994f-handoff` first).\n\nThe script's contract (task-c6a24053 plan rev 1):\n- `node moe-serena-ignore.mjs <serena-root>` always exits 0 and prints exactly one line: `[OK] MOE_SERENA_IGNORE_OVERRIDE: ...`, `[info] MOE_SERENA_IGNORE_OVERRIDE: ... is up to date ...` or `[info] MOE_SERENA_IGNORE_SKIPPED: <reason>; ...`. The SKIPPED line ends `; Serena keeps its own .gitignore walk`, or `; the Moe block written earlier stays in <file>` when it could not touch a file that still holds an earlier block.\n- It turns Serena's startup .gitignore walk off in a Moe-managed block of <root>/.serena/project.local.yml. The block lists '/.git', project.yml's ignored_paths, then Serena-converted patterns from core.excludesFile, info/exclude and every .gitignore that git itself reads, found by a breadth-first walk pruned with `git check-ignore`, so a self-ignoring dir such as .venv/ keeps its pattern.\n- It writes only when Serena's .serena/project.yml exists, git ignores .serena/project.local.yml, and the bytes change. An opt-out, or a result it knows to be wrong (nested repo, cap, unreadable project.yml list), removes an earlier block. It fails open everywhere else.\n\nDo not edit the script or its suite here. If the contract does not hold, comment on task-c6a24053 and report_blocked.\n\nThen, in scripts/moe-agent.sh, add `serena_ignore_override() { # $1 = Serena's project root`.\n- It runs `\"$NODE_CMD\" \"$SCRIPT_DIR/moe-serena-ignore.mjs\" \"$1\"` and prints the one line it returns: [OK] in green; [info] and anything else plain.\n- Error handling: a missing script prints one `[WARN] MOE_SERENA_IGNORE_SKIPPED: moe-serena-ignore.mjs is missing next to this wrapper; Serena keeps its own .gitignore walk` line. A non-zero exit or no output prints a WARN with the same code. The launch always continues, and the helper is safe under `set -e` (no bare failing command).\n- Under hot reload, SCRIPT_DIR is still the checkout's scripts/, as for ACCOUNT_HELPER.\n\nCall it at two sites:\n- (a) In the MCP config function, inside the `if [ -n \"$SERENA_CMD\" ]` that prints '[OK] Serena MCP project:' (:1041), with \"$SERENA_PROJECT\".\n- (b) In prepare_worktree_launch, right after `case \"$mode\" in W) serena=\"$CLI_ROOT\" ...` (:3530), only when mode is W and SERENA_CMD is set, with \"$CLI_ROOT\". It must come after the tooling program, so W/.serena/project.yml already has WT-06's rewrite. KEEP was already handled at site (a).",
+          "reason": "The producer task-c6a24053 was planned (rev 1) with a refined discovery and skip contract. It now walks the directories git does not exclude rather than using a git ls-files listing, because that listing misses a self-ignoring .venv/ (probed). It also needs Serena's project.yml to exist and has two SKIPPED endings. This step's contract bullets now match, so the worker does not report_blocked on a mismatch that is only wording. Everything below the contract is unchanged.",
+          "amendedBy": "architect-24611a0a",
+          "amendedAt": "2026-11-03T08:29:31.656Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -64,7 +74,7 @@
       ]
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -78,7 +88,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:25:34.188Z",
-  "updatedAt": "2026-11-03T07:43:53.584Z",
+  "updatedAt": "2026-11-03T08:29:31.656Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:31:25.007Z",
     "plannedStepCount": 6,

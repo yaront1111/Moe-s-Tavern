@@ -1,0 +1,48 @@
+{
+  "id": "task-c6436215f31d4f47a3bd071a269b1508",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: postflight-worktree.cjs wt-resume pins neither half of the L2 marker-scan union, so three sh mutants of the completion's conflict check survive",
+  "description": "Problem: at a worktree completion, L2's marker check scans the union of `git diff --name-only --diff-filter=U` (unmerged paths) and `task.landingRetry.paths`. It scans whenever landingRetry is set, not only while MERGE_HEAD exists, and a marker left is MOE_WORKTREE_UNRESOLVED_CONFLICT. The wt-resume chain in scripts/tests/postflight-worktree.cjs has exactly one conflict path, src/a.txt, which is both a retry path and unmerged. So no case pins either half of the union, or the trigger, on its own.\n\nEvidence: QA comment-cf8ade2050f840a3bb2d6b15b0a05787 on task-b1ca54f2 (WT-19), from the WT-11 review (task-dd1ee586, approved at 7cd8e423). Three sh mutants survived the wt-resume case: (1) dropping the `--diff-filter=U` half of the union; (2) dropping the landingRetry.paths half; (3) scanning only while MERGE_HEAD exists. The mutant driver is D:\\moe-scratch\\qa-wt11\\mut\\run.sh, with details in Serena memory decision-worktree-pending-merge-checkpoint. The production code for all three is present and correct by inspection, so this is a test gap, not a wrapper defect.\n\nImpact: a later edit that drops either half, or narrows the trigger, passes the suite. A completion could then land conflict markers on the target: markers left on a path outside landingRetry.paths, or a retry path's markers after `merge --quit` has removed MERGE_HEAD.\n\nFix: add two cases to postflight-worktree.cjs and run each in both engines (sh and ps1):\n(a) a resume whose merge conflicts on a path outside landingRetry.paths; a completion that leaves markers there prints MOE_WORKTREE_UNRESOLVED_CONFLICT, lands nothing and routes conflict;\n(b) markers left in a landingRetry path with no MERGE_HEAD; the completion also refuses.\nProve each case kills its mutant: temporarily apply the mutant, see the case fail, then restore. Test files only; no wrapper change unless a case exposes a real defect, which then gets its own row.",
+  "definitionOfDone": [
+    "postflight-worktree.cjs has case (a): a conflict on a path outside landingRetry.paths, with markers left at completion, gives MOE_WORKTREE_UNRESOLVED_CONFLICT, nothing lands, and the route is conflict, on both the sh and ps1 engines",
+    "postflight-worktree.cjs has case (b): markers in a landingRetry path with no MERGE_HEAD refuse the completion the same way, on both engines",
+    "Each of the three mutants named in the description fails at least one new case (record the RED runs), and the restored wrapper passes",
+    "node scripts/tests/postflight-safe.mjs bash and postflight-safe.mjs powershell (Windows node) pass, with counts recorded; bash scripts/tests/parity-check.sh passes",
+    "No assertion in an existing case is weakened, and scripts/moe-agent.{sh,ps1} are unchanged"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-74d9e1c7",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's standing \"move from backlog\" (2026-11-02 21:00Z). This is a worker-filed WT-19 adversarial finding: a test-only gap in scripts/tests/postflight-worktree.cjs, evidenced by QA comment-cf8ade20 on task-b1ca54f2. It has no dependencies, and 3 coders are idle. The human can drag it back to veto.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 50,
+  "comments": [
+    {
+      "id": "comment-943c66290bb34c5dbd8dae77617eefee",
+      "author": "governor-e6b40560",
+      "content": "Governor note for the planner. The HIGH task-e3e81c45 (Serena ignore override, WORKING and gated on c6a24053) also plans new cases in scripts/tests/postflight-worktree.cjs.\n- No dependsOn edge: in worktree mode an overlap on a shared file lands by merge-tree, and WT-19's DoD 3 sweep drops file-only edges.\n- To keep the two landings from colliding, put cases (a) and (b) in their own block beside the existing wt-resume chain, not at the end of the file or the end of the case table, and edit with the Edit tool.\n- If the landing still conflicts, the conflict-resume path takes it back to the worker; don't serialize the rows ahead of time.\n- Keep the description's limits: scripts/moe-agent.{sh,ps1} unchanged, no existing assertion weakened, and each mutant's RED run recorded.",
+      "timestamp": "2026-11-03T08:32:57.477Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T08:27:57.048Z",
+  "updatedAt": "2026-11-03T08:34:38.927Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T08:32:52.349Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T08:34:35.147Z"
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ]
+}

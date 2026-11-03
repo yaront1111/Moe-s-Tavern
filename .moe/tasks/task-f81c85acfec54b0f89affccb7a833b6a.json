@@ -76,15 +76,20 @@
     {
       "stepId": "step-5",
       "description": "Run the gate once, from the task worktree, as the two legs below. Neither leg fits in one Bash call: launch each detached with job control and poll its log. mem:gotcha-qa-session-env-and-signals-leak-into-harness covers set -m, the SigIgn check, and keeping the Windows leg in its own call; also see mem:pattern-wrapper-harness-snapshot-verify-from-wsl.\n\nLINUX LEG:\nL=$(mktemp -d /tmp/moe-f81c-XXXXXX) && git archive HEAD | tar -x -C \"$L\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/CLAUDE.md docs/MCP_SERVER.md docs/CONFIGURATION.md docs/SCHEMA.md; do cp \"$f\" \"$L/$f\"; done && cd \"$L\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'bash scripts/tests/parity-check.sh && node scripts/tests/postflight-safe.mjs bash && node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund && NO_COLOR=1 npx vitest run'\n\nWINDOWS LEG:\nP=$(mktemp -d /mnt/d/moe-scratch/f81c-XXXXXX) && git archive HEAD | tar -x -C \"$P\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$P/$f\"; done && \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$P/scripts/tests/postflight-safe.mjs\")\" powershell\n\nOptional: run the same with pwsh if time allows; CI runs it.\n\nCOMPLETION EVIDENCE for complete_task verification:\n- command: both legs, exactly as run.\n- exitCode: 0.\n- outputTail: each engine's postflight-safe JSON line (failureClass NONE), the daemon vitest summary (it includes task-4ddbfb31's src/state/reloadHold.test.ts), and parity's last line.\n\nCoverage: the daemon suite proves DoD 1-2 and the restart purge/reattach half of DoD 4. postflight-safe on both engines proves DoD 3 and the existing hot-reload arms. If a test fails, rerun it on a pristine git archive HEAD before calling it yours.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T07:42:23.975Z"
+      "note": "I ran the gate once on the step-4 bytes. The previous session died with cli-exit=1 after launching both legs detached at 07:43Z. This session confirmed that both snapshots match the worktree byte for byte, adopted the two runs and polled them to the end. Neither leg was relaunched.\n\nLINUX (/tmp/moe-f81c-CpCbys: git archive HEAD plus the 7 files; env -i; node 24; MOE_POSTFLIGHT_TIMEOUT_SEC=240; SigIgn 0x5). GATE_EXIT=0.\n- PASS parity-check.sh.\n- postflight-safe bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n- account-trust-docs: 5/5 pass.\n- Daemon vitest: Test Files 230 passed (230), Tests 6974 passed | 20 skipped. That includes src/state/reloadHold.test.ts (25 tests).\n\nWINDOWS (D:\\moe-scratch\\f81c-J8HwTs, Windows PowerShell 5.1 through postflight-safe.mjs powershell). Exit 0 at about 10:32 local: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n\nTarget check: origin/moe/work-2026-10-24 has one newer commit on overlapping paths, 87609414, which touches moe-agent.{sh,ps1} PATH filtering. git merge-tree with HEAD is clean. 4ddbfb31 has no newer commit after a13eb354, so the mirrored shapes still match.",
+      "startedAt": "2026-11-03T07:42:23.975Z",
+      "completedAt": "2026-11-03T08:32:47.551Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this diff only. Check each of these:\n- Can the two seats' fake RPCs race on the holder file? Only a 'wx' create may make a holder, and only the holder's non-reload deregister may delete it.\n- Is either arm vacuous? The mutant fake from step 2 must fail it.\n- Did the peer really poll after the reload deregister, with every answer 'none'?\n- Do the six existing [hot reload*] arms and [stale offset] assert exactly what they did before (the reload-sequence.cjs and Get-ReloadSequence defaults)?\n- Is every PID the arm started killed on every exit path, including a failed assertion?\n- Does any harness line start with SKIP?\n- Do the docs match the landed daemon code: field names, reason strings, default, cap and sweep cadence?\n- Is scripts/moe-agent.{sh,ps1} untouched? Check with git diff --quiet HEAD -- scripts/moe-agent.sh scripts/moe-agent.ps1.\nFix any finding in its own file, re-run the affected leg, and say so in complete_step.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I reviewed only this task's diff (a13eb354..HEAD), adversarially. Nothing needed a fix and no file changed, so no leg was re-run.\n\n- Holder race: the only path that makes a holder is fs.writeFileSync with flag 'wx'. On EEXIST the claim re-reads the file. A file that is created but still empty reads as no holder, so a peer gets 'none'. Only the holder's deregister with a reason other than wrapper_restart deletes the file (rmSync force). In step 1, 8 parallel first claims gave exactly 1 claimed.\n- Not vacuous: the keepsHold=false mutant failed the sh arm at (b) (step 2) and the ps1 arm at (c) (step 3).\n- The peer did poll after the reload: when the first 'r' is seen, the peer's claim count is marked, and the arm requires a claim after that mark. Both the per-poll and the final checks require every peer answer to be 'none'.\n- Defaults unchanged: reload-sequence.cjs with no argv[3] and Get-ReloadSequence with '' let every row through the filter. The gate's postflight-safe returned failureClass NONE on bash and PS 5.1, which includes the existing 6 [hot reload*] arms and [stale offset]. Later ps1 arms reassign every $reload* variable the hold arm sets.\n- PIDs: sh kills only reload_pid and hold_peer_pid (kill -KILL by PID; both are in LIVE_PIDS for the EXIT trap). ps1 runs taskkill /T /F /PID on the two Start-Process objects in finally, guarded by HasExited on a held handle.\n  - Theoretical, left as is: after the sh kill and wait, a later assertion failure re-sends kill -KILL to the reaped PIDs. The existing [hot reload] arm has the same pattern, and pid_max is 4194304, so a reuse within the few ms before exit is not a practical risk.\n- No added line starts with SKIP, and no pkill/killall/pgrep/fuser was added.\n- Docs checked against a13eb354: wrapper_restart and reload_hold_expired; 120000 default, 1800000 cap, and non-finite or negative values give the default; the 60 s staleWorkerWatcher interval; Date.parse NaN expires; endReloadHold runs before alreadyAssigned and a failed clear propagates; heldTaskIds is always present and holdUntil only on a hold; the message strings; Worker.reloadHoldUntil.\n- git diff --quiet a13eb354 HEAD -- scripts/moe-agent.sh scripts/moe-agent.ps1 passes, so the wrappers are untouched.\n- npm run lint: OK.\n- Noted: the ps1 arm has no (e) RESUME-argv assertion. The plan made it optional, since cmd mangles quoted prompts, and the AC asks only for the sequence, answer and [resume] assertions.",
+      "startedAt": "2026-11-03T08:32:49.622Z",
+      "completedAt": "2026-11-03T08:34:13.554Z"
     }
   ],
   "planRevision": 1,
@@ -114,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:08:50.369Z",
-  "updatedAt": "2026-11-03T08:05:45.047Z",
+  "updatedAt": "2026-11-03T08:34:13.554Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:59.859Z",
@@ -124,7 +129,7 @@
     "firstClaimAt": "2026-11-03T06:33:01.893Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -143,7 +148,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T06:59:12.623Z",

@@ -8,10 +8,80 @@
     "Preserve supported Linux/macOS/Git Bash entry behavior and legacy compatibility; document any direct-invocation limitation."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Edit scripts/tests/moe-call.test.mjs only, with the Edit tool. Append a direct-execution block after the last protected row. Reuse runtimeLayout (:165), decoy (:153), nativePath/shellPath and the existing `bash` constant (:13: Git Bash on Windows, /bin/bash elsewhere). Leave every existing row untouched: they call `bash <helper>` explicitly and are the regression proving that explicit-bash callers are unchanged.\n\nHarness `directCall(layout, { marker, dot = true, via, extra = {} })`:\n- chmodSync(layout.helper, 0o755).\n- Plant executable `bash` and `sh` in `<dir>/scratch project` (the cwd), written with mode 0o755. Each is `#!/bin/sh`, appends `project <name>` to \"$MOE_CALL_RAN_LOG\" and exits 42.\n- Build env like callHelper (HOME, MOE_CALL_RAN_LOG, PROXY_PATH = the inherited decoy) and set MOE_PROXY_PATH = nativePath(proxies.named).\n- Delete MOE_RUNTIME_PROTECTED, MOE_CALL_BASH_ENTRY, POSIXLY_CORRECT and SHELLOPTS, then apply marker and extra.\n- On POSIX set PATH = [path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'). Windows keeps the inherited PATH, which Git Bash converts.\n- Without `via`: spawnSync(bash, ['-c', (dot ? 'PATH=\".:$PATH\"; export PATH; ' : '') + 'exec \"$0\" \"$@\"', shellPath(layout.helper), 'get_context', '{}', '--project', shellPath(project)], { cwd: project, env, timeout: 20_000 }). The shim only sets PATH and execs the file by path, so the kernel (or MSYS on Windows) reads the shebang: this is real direct execution.\n- With `via` (POSIX only): spawnSync(via, [layout.helper, 'get_context', '{}', '--project', project]) with a '.'-first PATH.\n- Call assert.ifError(result.error), so a hand-over loop fails as a timeout. Return status, stdout, stderr and the ran lines.\n\nRows, each labelled 'direct exec ...':\n- D1, every platform. With marker '1': status 0, ran ['named'], and JSON.parse(stdout) deep-equals {ran:'named', tool:'moe.get_context'}. Without the marker: status 42, ran ['project bash'], stdout ''. This legacy half is the non-vacuity control: legacy still finds bash by PATH.\n- D2, POSIX only. Skip on Windows, where Git Bash's /bin/sh is already bash in POSIX mode and D1 covers that branch. Use via = a symlink <dir>/shbin/sh pointing at /bin/bash. With the marker: named, no plant. Without it: status 42, ['project bash']. That proves a POSIX-mode bash hands over; running the body in place would reach 'named'.\n- D3, every platform, with extra POSIXLY_CORRECT='1'. Marker with dot: status 0, ['named']. No marker with dot=false: status 0, ['named']. A second hand-over would loop until the timeout.\n- D4, POSIX, only where /bin/dash or /usr/bin/dash exists (otherwise skip with a reason). Via dash with the marker: status 0, ['named']. Via dash with the marker plus extra MOE_CALL_BASH_ENTRY='1': status 1, stdout '', ran [], and stderr exactly 'Error: moe-call.sh must run under bash; refusing to start.\\n'.\n- D5, every platform. Write put('nobash/scripts/moe-call.sh', text.replaceAll('/bin/bash', '/nonexistent/moe-bash')) and assert the source had at least 2 occurrences, so the row is non-vacuous. chmod it, then direct-exec it with the marker and dot: status 1, stdout '', ran [], and stderr matches /^Error: MOE_PROTECTED_INTERPRETER_NOT_FOUND: \\/nonexistent\\/moe-bash is not executable/m. This proves there is no fallback to the PATH bash.\n\nProve RED before step 2. Run `node --test --test-name-pattern='direct exec' scripts/tests/moe-call.test.mjs` against the unchanged helper; every new row must fail:\n- D1 marker: 'project bash', exit 42.\n- D2 legacy: the body runs in place.\n- D3 marker: the plant runs.\n- D4: dash runs the body.\n- D5: there is no /bin/bash in the file.\nKeep that output for the completion summary. Test fixtures live only in tmpdir; never in the repo.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "note": "Added directCall harness (bash -c 'PATH=\".:$PATH\"; exec \"$0\" \"$@\"' shim, or `via` interpreter on POSIX), plant bash/sh in the scratch project, and rows D1-D5 ('direct exec'). runtimeLayout now also returns its `put` (used by D5); no existing row changed. RED on unchanged helper: Linux 5/5 fail (D1 marker 42 plant; D2 legacy 0 body-in-place; D3 marker 42 plant; D4 dash 'Illegal option -o pipefail' exit 2; D5 no /bin/bash in file). Windows node.exe: D1, D3, D5 fail the same way, D2/D4 skip on win32. Output: /mnt/d/moe-scratch/0d9ebe5b-work/red.{linux,win}.tap.",
+      "startedAt": "2026-11-03T08:24:33.505Z",
+      "completedAt": "2026-11-03T08:26:55.171Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implementation. Edit scripts/moe-call.sh only, in place, with the Edit tool. Keep mode 100755, LF line endings, and the body below the new block byte-identical.\n\nLine 1 becomes `#!/bin/sh`: the kernel (or MSYS) starts a fixed path, so no PATH entry chooses the interpreter. After the usage header and before `set -euo pipefail` (:13), insert a comment of at most 6 lines. It says why (task-0d9ebe5b), that the legacy hand-over keeps the old PATH lookup, and that MOE_CALL_BASH_ENTRY allows one hand-over. Then insert this block. It was prototyped and passed on dash, bash-as-sh, POSIXLY_CORRECT and Git Bash; the artifacts are in /mnt/d/moe-scratch/0d9ebe5b-arch.\n\nif [ -z \"${MOE_CALL_BASH_ENTRY:-}\" ]; then\n    if [ -z \"${BASH_VERSION:-}\" ] || case \":${SHELLOPTS:-}:\" in *:posix:*) true ;; *) false ;; esac; then\n        MOE_CALL_BASH_ENTRY=1; export MOE_CALL_BASH_ENTRY\n        if [ \"${MOE_RUNTIME_PROTECTED:-}\" = 1 ]; then\n            [ -x /bin/bash ] || { echo \"Error: MOE_PROTECTED_INTERPRETER_NOT_FOUND: /bin/bash is not executable; under MOE_RUNTIME_PROTECTED=1 run moe-call.sh as '<absolute path to bash> moe-call.sh'. Refusing to start.\" >&2; exit 1; }\n            exec /bin/bash \"$0\" \"$@\"\n        fi\n        exec bash \"$0\" \"$@\"\n    fi\nfi\nunset MOE_CALL_BASH_ENTRY\n[ -n \"${BASH_VERSION:-}\" ] || { echo \"Error: moe-call.sh must run under bash; refusing to start.\" >&2; exit 1; }\n\nRules:\n- Before bash runs, use builtins only: [, case, true, false, echo, export, unset, exec, exit. Under dash any other word, even `shopt`, is a PATH lookup that a project file could answer. So detect POSIX mode from SHELLOPTS (bash lists posix there when it runs as sh or under POSIXLY_CORRECT), never with shopt.\n- Under the marker, the only interpreters are /bin/sh and /bin/bash, with no fallback to `bash` by PATH.\n- Legacy keeps `bash` by PATH, exactly as `#!/usr/bin/env bash` did, with the same argv shape (`bash <script path> args`). So BASH_SOURCE and find_proxy are unchanged.\n- A non-POSIX-mode bash skips the block: no extra exec and unchanged behavior. That covers every `bash moe-call.sh` caller: the moe-agent.sh deregisters, the MOE_FALLBACK_CLI prompt, claudeHook.ts and baselineRun.ts.\n- The sentinel allows exactly one hand-over. A bash that still starts in POSIX mode (POSIXLY_CORRECT) then runs the body as the old shebang did and never loops. It is unset before the body, so node and the proxy never inherit it.\n- Error handling: the /bin/bash refusal, and the final bash check for a forged sentinel or a PATH `bash` that is not bash. So the body never runs in another shell.\n\nCheck that `bash -n scripts/moe-call.sh` passes. `dash -n` fails on the body's here-string by design: dash runs commands one at a time and execs before it reaches the body.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-call.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-call.sh"
+      ],
+      "note": "Line 1 is now #!/bin/sh; a 5-line comment plus the plan's builtins-only hand-over block sit before `set -euo pipefail` (sentinel MOE_CALL_BASH_ENTRY, /bin/bash under the exact marker with MOE_PROTECTED_INTERPRETER_NOT_FOUND refusal, legacy `exec bash`, unset, final bash check). Body below byte-identical; index mode 100755, LF, no CR. bash -n OK. Linux moe-call.test.mjs 46/46 pass; Windows node.exe direct-exec rows D1/D3/D5 pass, D2/D4 skip on win32.",
+      "startedAt": "2026-11-03T08:26:59.458Z",
+      "completedAt": "2026-11-03T08:27:41.850Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs: the DoD2 direct-invocation limitation. Use the Edit tool; change no other row or sentence.\n\n(a) docs/ARCHITECTURE.md, the Protected control plane bullet. Right after 'So neither they nor the agent CLI they start finds a tool through a `.`, relative or in-project entry.' (:482), add one or two sentences saying:\n- Run by path, `moe-call.sh` starts under `/bin/sh` and hands itself to bash using builtins only.\n- Under the marker that bash is exactly `/bin/bash`; a host without it refuses with `MOE_PROTECTED_INTERPRETER_NOT_FOUND`. Otherwise it is `bash` by PATH lookup, as with the old `#!/usr/bin/env bash`.\n- A caller that names the interpreter (`bash moe-call.sh`) chooses it. Under the marker such a caller must name an absolute bash, or run with the rewritten PATH as the wrappers do.\n\n(b) docs/TROUBLESHOOTING.md, the `MOE_PROTECTED_INTERPRETER_NOT_FOUND` row (:1141):\n- List `moe-call.sh` beside `moe-agent.{sh,ps1}`.\n- Add the cause: moe-call.sh was run by path under the marker and /bin/bash is not executable.\n- Add the fix: run it as `<absolute path to bash> scripts/moe-call.sh …`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "ARCHITECTURE.md Protected control plane bullet: 4 wrapped lines after the PATH-rewrite sentence (:482) on the /bin/sh entry, /bin/bash under the marker with the MOE_PROTECTED_INTERPRETER_NOT_FOUND refusal, legacy PATH bash, and the explicit-interpreter limitation. TROUBLESHOOTING.md MOE_PROTECTED_INTERPRETER_NOT_FOUND row: lists moe-call.sh, adds its cause and fix. No other row or sentence changed.",
+      "startedAt": "2026-11-03T08:27:44.228Z",
+      "completedAt": "2026-11-03T08:28:05.549Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification test gate, run once, fresh, from the task worktree after the last tracked edit. Its output is the complete_task evidence. Run exactly:\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-call.sh && node --test scripts/tests/moe-call.test.mjs scripts/tests/protected-agent-command.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/moe-call.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && bash scripts/tests/parity-check.sh && npm run lint\n\nExpected:\n- Linux node --test: fail 0. D4 runs, since this host has /bin/dash.\n- Windows node --test: fail 0. D2 and D4 skip on win32; D1, D3 and D5 run through Git Bash.\n- parity PASS, lint OK.\n\nThe protected-agent-command rows (M1, M2, N1, N5, S3) prove that the wrappers' explicit `bash moe-call.sh` path is unchanged. Put the step 1 RED output and the step 5 mutant results in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Exact step-4 command run fresh from the task worktree after the last tracked edit: GATE_EXIT=0 at 08:29:33Z. Linux node --test (moe-call + protected-agent-command): 133 tests / 102 pass / 0 fail / 31 skip; all five direct-exec rows D1-D5 ran unskipped (D4 via /bin/dash). Windows node.exe moe-call: 46 / 44 pass / 0 fail / 2 skip (D2, D4 skip on win32). parity PASS, lint OK. Log: /mnt/d/moe-scratch/0d9ebe5b-work/gate.log.",
+      "startedAt": "2026-11-03T08:28:10.216Z",
+      "completedAt": "2026-11-03T08:29:45.131Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff, read as an attacker. Work only in scratch: a git archive of the completion under /mnt/d/moe-scratch, never the shared checkout. Kill only PIDs you started yourself, never by pattern.\n\nMutants: each must turn a new row red, then revert it.\n- m1: shebang back to `#!/usr/bin/env bash` turns D1 red.\n- m2: protected `exec bash` in place of /bin/bash turns D1 red.\n- m3: dropping the sentinel test makes D3 time out.\n- m4: handing over only when BASH_VERSION is empty turns the D2 legacy half red.\n- m5: dropping the final bash check turns D4 red.\n- m6: dropping the `[ -x /bin/bash ]` refusal turns D5 red.\n- m7: legacy `exec /bin/bash` turns the D1 legacy half red.\nWhen you mutate sh, replace a deleted line with `:` and run bash -n on the mutant, so a row fails for the right reason.\n\nAlso check:\n- grep the block for any word that is not a builtin.\n- Confirm that empty args, spaces in paths, a relative $0 and --help pass through \"$@\" unchanged.\n- macOS reasoning: /bin/sh there is bash in POSIX mode (or dash or zsh), so it hands over, and /bin/bash 3.2 runs the 3.2-safe body. Optionally run `docker run --rm -v \"$PWD/scripts:/s:ro\" bash:3.2 bash -n /s/moe-call.sh` in the archive.\n- Concurrency: none. Each run is its own process and exec.\n\nIf the review changes any tracked byte, re-run step 4's exact command and use that output as the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "note": "Adversarial review in scratch (/mnt/d/moe-scratch/0d9ebe5b-work/mut, copies of the worktree bytes; mutate.sh replaces lines with ':' or edits in place, cmp + bash -n checked). Control green 5/5. All 7 mutants KILLED: m1 env shebang -> D1/D3/D5 red (42); m2 protected `exec bash` -> D1-D4 red (42); m3 no sentinel test -> D3 ETIMEDOUT (20 s) + D4; m4 BASH_VERSION-only -> D2 legacy red (0 vs 42); m5 no final bash check -> D4 red (dash 'Illegal option -o pipefail', 2 vs 1); m6 no [ -x /bin/bash ] -> D5 red (127 'not found'); m7 legacy exec /bin/bash -> D1/D2 legacy red. Checks: block words are only [ case true false echo export unset exec exit (dash with planted [ test true false echo export unset exec exit case if bash sh env node on '.': none ran, marker direct exec and POSIXLY_CORRECT exit 0). Old vs new helper identical on spaces/$/backticks, empty first arg, relative $0, --help, no args, under both marker and legacy; MOE_CALL_BASH_ENTRY never reaches the proxy. docker bash:3.2: bash -n OK; busybox sh, bash --posix and POSIXLY_CORRECT hand over; SHELLOPTS lists posix in 3.2; no /bin/bash + marker refuses. All Moe callers name bash explicitly (moe-agent.sh x2, fallback prompt, claudeHook.ts, baselineRun.ts); IDE plugins never invoke it. No tracked byte changed in this step, so step-4 gate output stands. No leftover processes.",
+      "startedAt": "2026-11-03T08:29:47.818Z",
+      "completedAt": "2026-11-03T08:32:42.451Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -19,30 +89,155 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-0b2ea5709415489ea9b6fef528bef5df"
+    "task-0b2ea5709415489ea9b6fef528bef5df",
+    "task-3acf7f7994514fc7905a939adaa41c15"
   ],
   "priority": "LOW",
   "order": 327.6,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T03:02:36.827Z",
-  "updatedAt": "2026-11-03T08:00:31.358Z",
+  "updatedAt": "2026-11-03T08:34:35.673Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T06:32:56.321Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-03T07:32:07.350Z"
+    "firstClaimAt": "2026-11-03T07:32:07.350Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
+    "architect-74d9e1c7",
+    "worker-ed0f6a9e"
   ],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T07:32:04Z",
-    "at": "2026-11-03T08:00:31.358Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T08:22:11Z",
+    "at": "2026-11-03T08:34:35.673Z"
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T08:22:01.263Z",
+  "executionContract": {
+    "intendedBehavior": "Run by path, scripts/moe-call.sh starts under /bin/sh. Using shell builtins only, it hands itself to bash once:\n- under MOE_RUNTIME_PROTECTED=1, to exactly /bin/bash, refusing with MOE_PROTECTED_INTERPRETER_NOT_FOUND when that file is not executable;\n- otherwise, to `bash` by PATH lookup, as the old `#!/usr/bin/env bash` did.\nUnder the marker, a project file named bash or sh on a '.', relative or in-project PATH entry never runs. A caller that runs `bash moe-call.sh` in a non-POSIX-mode bash sees no change.",
+    "acceptanceCriteria": [
+      "Direct exec with the marker, cwd = a project holding executable bash and sh plants, and PATH '.'-first: exit 0 and only the named proxy runs, on Linux and on Git Bash.",
+      "The same run without the marker still runs the PATH bash plant (exit 42).",
+      "A bash running as sh hands over: legacy reaches the PATH bash, and the marker uses /bin/bash.",
+      "POSIXLY_CORRECT=1 runs complete with no second hand-over, with and without the marker.",
+      "Via dash, the marker hands over. A preset MOE_CALL_BASH_ENTRY refuses with 'Error: moe-call.sh must run under bash; refusing to start.' and runs nothing.",
+      "With /bin/bash renamed in a copy, the marker refuses with MOE_PROTECTED_INTERPRETER_NOT_FOUND and runs nothing.",
+      "Every existing moe-call.test.mjs and protected-agent-command.test.mjs row stays green.",
+      "Each new row fails on the pre-change helper, and that RED is recorded."
+    ],
+    "invariants": [
+      "No word in the hand-over block is resolved by PATH: it uses builtins only.",
+      "Under the marker only /bin/sh and /bin/bash interpret the file, with no fallback to the PATH bash.",
+      "There is at most one hand-over per invocation, and the body never runs outside bash.",
+      "MOE_CALL_BASH_ENTRY never reaches the body's child processes."
+    ],
+    "compatibility": [
+      "Legacy direct exec resolves `bash` by PATH with argv `bash <script path> args`, so BASH_SOURCE and find_proxy are unchanged.",
+      "Explicit-bash callers are unchanged: moe-agent.sh deregisters, the MOE_FALLBACK_CLI prompt, packages/moe-daemon claudeHook.ts and baselineRun.ts.",
+      "Body output, exit codes and existing error lines are unchanged. MOE_RUNTIME_PROTECTED counts only when exactly '1'.",
+      "The file stays 100755, LF and Bash 3.2-safe."
+    ],
+    "approvedScope": [
+      "scripts/moe-call.sh: line 1 `#!/bin/sh`, the builtins-only hand-over block before `set -euo pipefail`, the internal sentinel MOE_CALL_BASH_ENTRY and two refusal lines. The body is unchanged.",
+      "scripts/tests/moe-call.test.mjs: the directCall harness and the 'direct exec' rows D1-D5.",
+      "docs/ARCHITECTURE.md: the moe-call.sh entry sentence(s) in the Protected control plane bullet.",
+      "docs/TROUBLESHOOTING.md: the MOE_PROTECTED_INTERPRETER_NOT_FOUND row."
+    ],
+    "reuse": [
+      "moe-call.test.mjs runtimeLayout, decoy, nativePath/shellPath and the `bash` constant.",
+      "The existing MOE_PROTECTED_INTERPRETER_NOT_FOUND code and its TROUBLESHOOTING row.",
+      "moe-agent.sh's `#!/bin/bash` as the precedent for /bin/bash as the fixed system bash."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-call.sh:1 is `#!/usr/bin/env bash`, :13 is `set -euo pipefail`, :107 is protected_trusted_dir (task-0b2ea570), and find_proxy uses ${BASH_SOURCE[0]} (:182).",
+      "scripts/moe-agent.sh line 1 is `#!/bin/bash`, and both deregisters run `bash \"$SCRIPT_DIR/moe-call.sh\"`.",
+      "scripts/tests/moe-call.test.mjs: `bash` constant :13, decoy :153, runtimeLayout :165, callHelper :186.",
+      "bash lists posix in SHELLOPTS when it runs as sh or under POSIXLY_CORRECT (verified on bash 5.2 here; SHELLOPTS exists since bash 2).",
+      "/bin/sh is dash on this host, and bash in POSIX mode on macOS, Fedora and Git Bash."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-call.sh && node --test scripts/tests/moe-call.test.mjs scripts/tests/protected-agent-command.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/moe-call.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) `#!/bin/bash`: one line, and it matches moe-agent.sh's own shebang. Rejected: legacy direct exec would stop resolving bash by PATH (Homebrew bash on macOS), and hosts without /bin/bash (NixOS, BSD) would lose direct exec. That contradicts the row's 'without changing legacy behavior' and the established legacy-half pattern (W1/M2 assert that legacy still reaches the PATH lookup).\n2) A guard in the body: impossible, because the shebang's interpreter runs before any body line.\n3) A POSIX-sh scan of trusted PATH directories for bash under the marker: rejected. It needs the project path, so the argument parsing would be duplicated in sh, plus a second scanner. /bin/bash is the fixed system bash that moe-agent.sh's shebang already uses.\n4) Always re-exec, with no POSIX-mode detection: rejected. It adds an exec and changes the interpreter for every explicit `bash moe-call.sh` caller.",
+    "codebaseInsights": "- Every Moe caller runs `bash moe-call.sh` explicitly: moe-agent.sh's two deregisters (after its PATH scrub), the MOE_FALLBACK_CLI prompt, packages/moe-daemon/src/util/claudeHook.ts and benchmarks/baselineRun.ts. Only humans and agents running it by path go through the shebang, as the docs show (`scripts/moe-call.sh get_context ...`).\n- /bin/sh here is dash, with no BASH_VERSION. On macOS, Fedora and Git Bash, /bin/sh is bash in POSIX mode: SHELLOPTS then contains posix. Verified here with a sh->bash symlink and with POSIXLY_CORRECT=1.\n- macOS /bin/sh also has xpg_echo, which would mangle `echo \"$REQUEST\"` JSON. So the body must never run in a POSIX-mode sh, and that is why the hand-over is needed rather than tolerated.\n- The prototype ran green: dash and bash-as-sh under both marker and legacy, POSIXLY_CORRECT with no loop, explicit bash unchanged, a forged sentinel refused, and a PATH bash that is really dash refused. Windows Node plus Git Bash direct exec of TEMP copies passed too: new bytes refuse the plant, old bytes run it. Artifacts: /mnt/d/moe-scratch/0d9ebe5b-arch (winprobe.mjs, orig.sh, the prototype moe-call.sh).\n- Read mem:gotcha-protected-moe-call-direct-exec-shebang and mem:gotcha-protected-interpreter-pin (the QA RED recipe and sh mutation tips).",
+    "risks": "(a) A POSIX-mode bash must hand over, but only once. With POSIXLY_CORRECT, a missing sentinel means an infinite exec loop; D3 catches it.\n(b) Under dash, any non-builtin word in the block is a PATH lookup.\n(c) Windows cannot exec a shebang script, so the Windows rows go through a Git Bash -c shim. MSYS treats `#!` files as executable (verified with Windows Node and TEMP copies).\n(d) A host with /tmp mounted noexec would fail the direct-exec rows. The existing harness already execs stubs from tmpdir.\n(e) `dash -n scripts/moe-call.sh` fails by design: do not add it to any gate.\n(f) The ps1 twin task-3acf7f79 also edited this ARCHITECTURE bullet; it is DONE and a declared dependency.",
+    "keyFiles": [
+      "scripts/moe-call.sh",
+      "scripts/tests/moe-call.test.mjs",
+      "scripts/tests/protected-agent-command.test.mjs",
+      "docs/ARCHITECTURE.md",
+      "docs/TROUBLESHOOTING.md",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "119fce99412b215f0d31e61045bd05a740a4f7b6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T08:22:01.296Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T08:24:33.505Z",
+  "reviewStartedAt": "2026-11-03T08:33:14.238Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-call.sh && node --test scripts/tests/moe-call.test.mjs scripts/tests/protected-agent-command.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/moe-call.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "✔ X1 the worktree-launch and board-snapshot programs spawn only MOE_PROTECTED_GIT under the marker, and git in legacy (379.660295ms)\nℹ tests 133\nℹ suites 0\nℹ pass 102\nℹ fail 0\nℹ cancelled 0\nℹ skipped 31\nℹ todo 0\nℹ duration_ms 39411.890695\n✔ direct exec D5: without /bin/bash the marker refuses and never falls back to the PATH bash (60.3668ms)\nℹ tests 46\nℹ suites 0\nℹ pass 44\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 26733.0868\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nGATE_EXIT=0 at 08:29:33Z",
+    "reportedAt": "2026-11-03T08:33:14.238Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/moe-call.test.mjs",
+    "scripts/moe-call.sh",
+    "docs/ARCHITECTURE.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completionSummary": "Run by path, scripts/moe-call.sh now starts under #!/bin/sh and hands itself to bash once using builtins only: under MOE_RUNTIME_PROTECTED=1 exactly /bin/bash (refusing MOE_PROTECTED_INTERPRETER_NOT_FOUND when not executable), else `bash` by PATH as the old env shebang did. Sentinel MOE_CALL_BASH_ENTRY bounds it to one hand-over and is unset before the body; a final check refuses a non-bash body ('must run under bash'). Non-POSIX-mode bash (every explicit `bash moe-call.sh` caller) skips the block. Body byte-identical, 100755, LF.\n\nDiff 4 files +116/-4 in approvedScope: moe-call.sh +19/-1, moe-call.test.mjs +92/-2 (directCall + D1-D5; runtimeLayout also returns `put`), ARCHITECTURE.md +4, TROUBLESHOOTING.md row +1/-1.\n\nRED on HEAD helper: Linux 5/5 fail (D1 42 plant, D2 legacy body in place, D3 42, D4 dash pipefail exit 2, D5 no /bin/bash); Windows D1/D3/D5 fail, D2/D4 skip on win32.\nGate (checkRefs[0]) fresh, exit 0: Linux 133/102 pass/0 fail/31 skip, all D1-D5 unskipped; Windows 46/44/0/2; parity PASS; lint OK.\n\nMutants m1-m7 all KILLED (control green): m1 env shebang, m2 protected exec bash, m3 no sentinel (D3 ETIMEDOUT), m4 BASH_VERSION-only (D2), m5 no final check (D4), m6 no -x refusal (D5), m7 legacy /bin/bash (D1/D2).\nAlso: dash with planted [ test true false echo export unset exec exit case if bash sh env node on '.': none ran. Old vs new identical on spaces, $/backticks, empty arg, relative $0, --help, no args; sentinel never reaches the proxy. docker bash:3.2: parse OK, busybox sh/--posix/POSIXLY_CORRECT hand over, no /bin/bash refuses.\n\nResiduals (documented): no /bin/bash host refuses protected direct exec; an explicit-interpreter caller picks its bash. Evidence /mnt/d/moe-scratch/0d9ebe5b-work.",
+  "commits": [
+    {
+      "sha": "8f3a262c9e74dbcee86e3e98538a6eadbf64013a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T08:22:11Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T08:34:35.673Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

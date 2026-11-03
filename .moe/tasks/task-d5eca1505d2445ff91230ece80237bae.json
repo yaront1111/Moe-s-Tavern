@@ -1,0 +1,37 @@
+{
+  "id": "task-d5eca1505d2445ff91230ece80237bae",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: VS Code protected seat launch resolves the wrapper's interpreter by name (win32 shellPath 'powershell.exe' plus a typed `powershell`; POSIX a typed `bash`) with cwd = the workspace (VS Code twin of task-b071e3bf)",
+  "description": "Found in the 2026-11-03 client hunt (governor msg-33787f69). This is the VS Code parity twin of task-b071e3bf; JetBrains goes first, so this row depends on it.\n\nUnder protected (AgentLauncher.ts:351: `runtimeProfile(workspacePath) === 'protected' || vmSeat`), resolved.envOverrides carry MOE_RUNTIME_PROTECTED=1 (:125) plus the installed daemon and proxy paths. The interpreter that runs the installed wrapper is still chosen by name:\n- win32: WINDOWS_SHELL = 'powershell.exe' (:30) is passed as createTerminal({ cwd: workspacePath, shellPath: WINDOWS_SHELL }) (:411-415). A bare shellPath is resolved through PATH, with relative entries joined to the cwd, and then falls back to <cwd>\\powershell.exe. Inside that shell the typed line (:287) starts `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ...`, which is another lookup by name on PATH.\n- POSIX: buildBashCommand (:307) types `<env> bash '<script>' --role ...` into the default profile shell with cwd = the workspace. So a '.', empty, relative or in-project PATH entry reaches <workspace>/bash, the task-0d9ebe5b repro shape.\n\nFix: apply the rule task-b071e3bf settles for JetBrains. Under protected only, use an absolute interpreter outside the workspace, both for shellPath and for the typed first word; a missing interpreter refuses before createTerminal. Legacy lines stay byte-identical. Read mem:gotcha-vscode-tests-need-full-repo-snapshot before planning the gate. Docs belong to the epic final task (task-f3f364a6).",
+  "definitionOfDone": [
+    "Under protected, the VS Code launch starts the wrapper's interpreter by an absolute path outside the workspace: the win32 shellPath, the typed PowerShell line and the POSIX bash line. No PATH or current-directory lookup can select a workspace file, and a missing interpreter refuses before any terminal is created.",
+    "Legacy launch lines and the legacy terminal options are byte-identical to today's, and the existing moe-vscode launcher tests stay green unchanged.",
+    "New moe-vscode tests pin the protected interpreter on both platforms and fail on today's bytes (RED recorded). `npm test && npm run compile` for moe-vscode is green in a snapshot run, per the live-runtime rail."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b071e3bfa4a642c2bea91bec16bd8e49"
+  ],
+  "priority": "LOW",
+  "order": 332.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T08:27:28.153Z",
+  "updatedAt": "2026-11-03T08:30:38.791Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T08:30:35.858Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}
