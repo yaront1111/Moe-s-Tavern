@@ -518,9 +518,9 @@ object MoeJson {
             if (!el.isJsonObject) return@mapNotNull null
             val h = el.asJsonObject
             HandoffNote(
-                from = h.getStringOrNull("from"),
-                to = h.getStringOrNull("to"),
-                createdAt = h.getStringOrNull("createdAt"),
+                releasedBy = h.getStringOrNull("releasedBy"),
+                releasedAt = h.getStringOrNull("releasedAt"),
+                reason = h.getStringOrNull("reason"),
                 whatIsDone = h.getStringOrNull("whatIsDone"),
                 whatRemains = h.getStringOrNull("whatRemains"),
                 pitfalls = h.getStringOrNull("pitfalls"),

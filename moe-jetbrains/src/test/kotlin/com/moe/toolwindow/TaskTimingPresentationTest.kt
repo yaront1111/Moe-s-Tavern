@@ -174,7 +174,7 @@ class TaskTimingPresentationTest {
             "\"reviewSummary\":\"ran the gate\"",
             "\"verification\":{\"command\":\"gradlew test\",\"exitCode\":0}",
             "\"failedDodItems\":[{\"item\":\"tests\"}]",
-            "\"priorHandoffs\":[{\"from\":\"w1\",\"to\":\"w2\"}]",
+            "\"priorHandoffs\":[{\"releasedBy\":\"w1\",\"releasedAt\":\"2026-09-11T09:30:00Z\"}]",
             "\"planCritiqueResult\":{\"verdict\":\"pass\",\"concerns\":[\"tight\"]}"
         )
         val expected = detail(task(*rich))
@@ -302,11 +302,12 @@ class TaskTimingPresentationTest {
             detail(task("\"failedDodItems\":[{\"item\":\"tests missing\"}]"))?.failedDodLines
         )
         val handoff = detail(
-            task("\"priorHandoffs\":[{\"from\":\"w1\",\"to\":\"w2\",\"createdAt\":\"2026-09-11T09:30:00Z\"," +
+            task("\"priorHandoffs\":[{\"releasedBy\":\"w1\",\"releasedAt\":\"2026-09-11T09:30:00Z\"," +
+                "\"reason\":\"context budget\"," +
                 "\"whatIsDone\":\"parser\",\"whatRemains\":\"ui\",\"pitfalls\":\"caches\"," +
                 "\"openQuestions\":\"none\"}]")
         )?.handoffs?.single()
-        assertEquals("#1 from w1 → w2  (2026-09-11T09:30:00Z)", handoff?.header)
+        assertEquals("#1 released by w1 (2026-09-11T09:30:00Z): context budget", handoff?.header)
         assertEquals("parser", handoff?.whatIsDone)
         assertEquals("ui", handoff?.whatRemains)
         assertEquals("caches", handoff?.pitfalls)
@@ -330,9 +331,10 @@ class TaskTimingPresentationTest {
     @Test
     fun `handoffs keep their supplied order and number from one`() {
         val headers = detail(
-            task("\"priorHandoffs\":[{\"from\":\"a\"},{\"to\":\"b\"},{\"createdAt\":\"ts\"},{}]")
+            task("\"priorHandoffs\":[{\"releasedBy\":\"a\"},{\"releasedAt\":\"ts\"},{\"reason\":\"why\"}," +
+                "{},{\"from\":\"x\",\"to\":\"y\",\"createdAt\":\"z\"}]")
         )?.handoffs?.map { it.header }
-        assertEquals(listOf("#1 from a", "#2 → b", "#3  (ts)", "#4"), headers)
+        assertEquals(listOf("#1 released by a", "#2 (ts)", "#3: why", "#4", "#5"), headers)
     }
 
     @Test
@@ -345,7 +347,7 @@ class TaskTimingPresentationTest {
                 "\"verification\":{\"command\":\"gradlew test\"}",
                 "\"reviewSummary\":\"checked\"",
                 "\"failedDodItems\":[{\"item\":\"tests\"}]",
-                "\"priorHandoffs\":[{\"from\":\"w1\"}]",
+                "\"priorHandoffs\":[{\"releasedBy\":\"w1\"}]",
                 "\"budget\":{\"wallClockMs\":1000,\"warnedAt\":\"2026-09-11T10:05:00Z\"}"
             )
         )
@@ -359,7 +361,7 @@ class TaskTimingPresentationTest {
         assertEquals("$ gradlew test", presentation?.verificationBody)
         assertEquals("checked", presentation?.reviewSummary)
         assertEquals(listOf("• tests"), presentation?.failedDodLines)
-        assertEquals(listOf("#1 from w1"), presentation?.handoffs?.map { it.header })
+        assertEquals(listOf("#1 released by w1"), presentation?.handoffs?.map { it.header })
     }
 
     @Test

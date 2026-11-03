@@ -919,9 +919,9 @@ class TaskDetailDialog(
                 HandoffBlock(
                     header = buildString {
                         append("#").append(i + 1)
-                        if (!h.from.isNullOrBlank()) append(" from ").append(h.from)
-                        if (!h.to.isNullOrBlank()) append(" → ").append(h.to)
-                        if (!h.createdAt.isNullOrBlank()) append("  (").append(h.createdAt).append(")")
+                        if (!h.releasedBy.isNullOrBlank()) append(" released by ").append(h.releasedBy)
+                        if (!h.releasedAt.isNullOrBlank()) append(" (").append(h.releasedAt).append(")")
+                        if (!h.reason.isNullOrBlank()) append(": ").append(h.reason)
                     },
                     whatIsDone = h.whatIsDone,
                     whatRemains = h.whatRemains,

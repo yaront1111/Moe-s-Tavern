@@ -164,10 +164,11 @@ data class TaskVerification(
     val reportedAt: String? = null
 )
 
+/** release_task hand-off note, keyed as HandoffNote in packages/moe-daemon/src/types/schema.ts. */
 data class HandoffNote(
-    val from: String? = null,
-    val to: String? = null,
-    val createdAt: String? = null,
+    val releasedBy: String? = null,
+    val releasedAt: String? = null,
+    val reason: String? = null,
     val whatIsDone: String? = null,
     val whatRemains: String? = null,
     val pitfalls: String? = null,

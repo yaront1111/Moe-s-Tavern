@@ -508,9 +508,9 @@ class MoeJsonTest {
           },
           "priorHandoffs": [
             {
-              "from": "worker-1",
-              "to": "qa-1",
-              "createdAt": "2026-09-11T10:09:00.000Z",
+              "releasedBy": "worker-1",
+              "releasedAt": "2026-09-11T10:09:00.000Z",
+              "reason": "context budget",
               "whatIsDone": "parser",
               "whatRemains": "review",
               "pitfalls": "two call sites",
@@ -661,11 +661,44 @@ class MoeJsonTest {
 
             assertEquals("approve", requireNotNull(task.planCritiqueResult).verdict)
             assertEquals("dod-2", requireNotNull(task.failedDodItems).single().item)
-            assertEquals("qa-1", requireNotNull(task.priorHandoffs).single().to)
+            assertEquals(
+                com.moe.model.HandoffNote(
+                    releasedBy = "worker-1", releasedAt = "2026-09-11T10:09:00.000Z",
+                    reason = "context budget", whatIsDone = "parser", whatRemains = "review",
+                    pitfalls = "two call sites", openQuestions = "none"
+                ),
+                requireNotNull(task.priorHandoffs).single()
+            )
             assertEquals(listOf("6 steps"), task.planSizeWarnings)
             assertEquals(0, requireNotNull(task.verification).exitCode)
             assertEquals("verified", task.reviewSummary)
         }
+    }
+
+    @Test
+    fun `prior handoffs read the daemon's releasedBy, releasedAt and reason, never from, to or createdAt`() {
+        val json = """
+            {"id": "task-h", "epicId": "epic-h", "priorHandoffs": [
+              {
+                "releasedBy": "worker-1", "releasedAt": "2026-11-03T10:00:00.000Z",
+                "reason": "context budget", "whatIsDone": "parser", "whatRemains": "ui",
+                "from": "decoy-from", "to": "decoy-to", "createdAt": "decoy-created"
+              },
+              {
+                "from": "w1", "to": "w2", "createdAt": "2026-09-11T09:30:00Z",
+                "whatIsDone": "legacy only", "whatRemains": "x"
+              }
+            ]}
+        """.trimIndent()
+        val expected = listOf(
+            com.moe.model.HandoffNote(
+                releasedBy = "worker-1", releasedAt = "2026-11-03T10:00:00.000Z",
+                reason = "context budget", whatIsDone = "parser", whatRemains = "ui"
+            ),
+            com.moe.model.HandoffNote(whatIsDone = "legacy only", whatRemains = "x")
+        )
+        assertEquals(expected, parseTask(json).priorHandoffs)
+        assertEquals(expected, parseSnapshotTask(json).priorHandoffs)
     }
 
     @Test
