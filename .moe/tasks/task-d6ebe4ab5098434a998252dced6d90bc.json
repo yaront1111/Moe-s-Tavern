@@ -15,10 +15,11 @@
     {
       "stepId": "step-1",
       "description": "Tests first, RED before step 2 (test-driven-development). File: packages/moe-daemon/src/index.test.ts, edited in your task worktree with the Edit tool. A prototype of every row, which passed against the step-2 code, is at /mnt/d/moe-scratch/d6ebe4ab-plan/bindhost.proto.test.ts (D:\\moe-scratch\\d6ebe4ab-plan on Windows). Port its rows onto the file's existing helpers; do not copy its local helpers.\n(a) Add `import dns from 'dns';`.\n(b) In describe 'daemon.json across the WSL boundary', give writeDaemonFiles an optional 4th parameter `extra: Partial<DaemonInfo> = {}`, spread into daemonInfo({ port, pid, projectPath, ...extra }). Existing callers stay as they are.\n(c) Inside that describe, add describe('a daemon.json bindHost is dialed only when it names this machine (task-d6ebe4ab)'). The outer describe already owns otherSide, killSpyWithoutSignals, writeDaemonFiles, jsonPath/lockPath/stopPath, DEAD_PID and the process.exitCode save/restore.\n- Constants: OFF = '192.0.2.10' (RFC 5737 TEST-NET-1) and NAME = 'moe-bindhost.test'.\n- Two os.networkInterfaces fixtures: loopback only (lo 127.0.0.1), and loopback plus eth0 holding OFF.\n- beforeEach, part 1: set `dialed = []`, then vi.spyOn(http, 'request'). The spy pushes options.hostname into `dialed` and forwards the call to the real http.request with hostname '127.0.0.1'. Every address then answers like the healthy fake daemon, so only the new rule can withhold a signal.\n- beforeEach, part 2: vi.spyOn(dns.promises, 'lookup'). NAME returns { address: OFF, family: 4 }; anything else throws ENOTFOUND (the stubDns pattern of src/server/healthHost.test.ts C).\n- Each row spies os.networkInterfaces itself.\nRows:\n- B1: it.each over [OFF, NAME], loopback-only interfaces, writeDaemonFiles(await healthServer(testDir, process.pid), process.pid, testDir, { bindHost }).\n  - validateDaemonInfoForProject(testDir, info) toEqual { valid: false, reason: 'bindHost not local' }.\n  - probeDaemonHealth(info, testDir, 2000) is false.\n  - Then run statusDaemon and stopDaemon, and assert: dialed toEqual []; the kill spy recorded no signal other than 0; daemon.json and daemon.lock bytes are unchanged and there is no daemon.stop; process.exitCode is 1.\n  - The fields of the 'Daemon status' log call toMatchObject [{ status: 'stopped', reason: 'bindHost not local', pid: process.pid }].\n- B2: it.each over [OFF, NAME], interfaces with eth0 = OFF.\n  - validate toEqual { valid: true, info }.\n  - stopDaemon's non-zero signals toEqual [[process.pid, 'SIGTERM']], and daemon.stop exists.\n  - dialed toEqual [OFF, OFF]: the literal, never the name.\n  - dns lookup is called 2 times for NAME and 0 times for the literal: one resolution per validation.\n- B3: it.each over bindHost [absent, '127.0.1.1', '::1', '::ffff:127.0.0.1', '0.0.0.0', '::', 'wsl'], with os.networkInterfaces throwing. validate is valid, and stopDaemon sends exactly one SIGTERM to process.pid.\n- B4: OFF with os.networkInterfaces throwing gives { valid: false, reason: 'bindHost not local' } and dialed [].\n- B5: under otherSide, pid DEAD_PID, healthServer(testDir, DEAD_PID), bindHost OFF.\n  - Loopback-only interfaces: toEqual { valid: false, reason: 'foreign daemon unreachable', foreign: true }, with dialed [].\n  - Interfaces with eth0 = OFF: { valid: true, info, foreign: true }, with dialed [OFF].\nInstall killSpyWithoutSignals BEFORE every stopDaemon call. Without it, a passing validation SIGTERMs the vitest worker.\nRun `npx vitest run src/index.test.ts` against the unchanged index.ts, in a snapshot built like step 4's (mem:gotcha-daemon-linux-snapshot-gate). Both B1 rows, B4 and B5 must fail with 'expected { valid: true, …': today's code trusts the off-host answer. B2 and B3 already pass. Paste that RED test output tail into this step's notes.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/index.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-03T00:20:38.054Z"
     },
     {
       "stepId": "step-2",
@@ -64,7 +65,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:05:43.620Z",
-  "updatedAt": "2026-11-03T00:19:14.083Z",
+  "updatedAt": "2026-11-03T00:20:38.054Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:22:14.940Z",
@@ -157,5 +158,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T00:18:53.010Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T00:20:38.054Z"
 }

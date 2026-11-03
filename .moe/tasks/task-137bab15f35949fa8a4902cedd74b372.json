@@ -113,8 +113,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -139,12 +139,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:46:45.444Z",
-  "updatedAt": "2026-11-03T00:19:30.075Z",
+  "updatedAt": "2026-11-03T00:22:35.392Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T22:49:35.189Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T00:22:02.897Z",
+    "wallClockMs": 5547708
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -265,10 +267,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-02T22:58:52Z",
-    "at": "2026-11-02T23:02:32.150Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T00:19:17Z",
+    "at": "2026-11-03T00:22:35.392Z"
   },
   "priorBlockedReason": "Required full daemon suite is reproducibly red on pre-existing heartbeatStop.test.ts:77: pending Bash sidecar fixture runs new wrapper_pin_drop without a stub, exiting127. Existing bug task-f6d9c532ace64c8faafad51894a7f233 tracks it. Snapshot gate exit1: 1 failed | 228 passed files; 1 failed | 6920 passed | 20 skipped tests; narrow repro 1 failed | 5 passed | 3 skipped. Baseline fixture and wrapper identical to HEAD; no task changes touch them. Task implementation/docs and RED-first 36 new tests, tsc/build, live supervisor HMAC smoke, three killed mutants and parity/lint are complete/green, but cannot honestly complete_task without mandatory full suite exit0. Steps1–4 completed; step5 in progress, step6 formally pending; handoff/evidence recorded. No inline out-of-scope fix.",
   "reviewStartedAt": "2026-11-02T23:01:42.675Z",
@@ -279,5 +282,9 @@
     "reportedAt": "2026-11-02T23:01:42.675Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Daemon `_run` reads MOE_SPAWN_PROOF_KEY once (exactly 64 hex, else ignored with a value-free warning), deletes it from process.env, and keeps it in closure memory. GET /health?challenge=<64 lowercase hex> adds spawnProof (HMAC-SHA256 over the challenge ASCII) only when a key is held; any other query/no key gives the unchanged body; Host guard first; other paths 426. New spawnProof.ts + 36-test spawnProof.test.ts (RED first, known-answer vector pinned), index.ts wiring, one ARCHITECTURE.md sentence + one CONFIGURATION.md row. Disclosed exclusion: full suite is red only on pre-existing src/util/heartbeatStop.test.ts:77 (wrapper_pin_drop exit 127; from 373dc3d4/task-69c02444, fixed by task-f6d9c532); that file excluded the run is green."
+  "completionSummary": "Daemon `_run` reads MOE_SPAWN_PROOF_KEY once (exactly 64 hex, else ignored with a value-free warning), deletes it from process.env, and keeps it in closure memory. GET /health?challenge=<64 lowercase hex> adds spawnProof (HMAC-SHA256 over the challenge ASCII) only when a key is held; any other query/no key gives the unchanged body; Host guard first; other paths 426. New spawnProof.ts + 36-test spawnProof.test.ts (RED first, known-answer vector pinned), index.ts wiring, one ARCHITECTURE.md sentence + one CONFIGURATION.md row. Disclosed exclusion: full suite is red only on pre-existing src/util/heartbeatStop.test.ts:77 (wrapper_pin_drop exit 127; from 373dc3d4/task-69c02444, fixed by task-f6d9c532); that file excluded the run is green.",
+  "completedAt": "2026-11-03T00:22:02.897Z",
+  "reviewCompletedAt": "2026-11-03T00:22:02.897Z",
+  "reviewSummary": "Reviewed completion c5355541 (on moe/work-2026-10-24, contained in control HEAD 5c5b3706; 5 owned files, 139 net lines, no scope drift). Verified in a clean whole-repo git-archive snapshot of HEAD 5c5b3706, with npm ci under env -i on node 24.21. The task's index.ts, spawnProof.ts and test are byte-equal to c5355541.\n- Plan command `npx vitest run`, with no exclusion, exits 0: 229 files, 6921 passed, 20 skipped. The worker's heartbeatStop exclusion is moot, since 717c4019 fixed that test.\n- spawnProof.test.ts passes 36/36; `tsc --noEmit` and `npm run build` exit 0; parity-check and `npm run lint` exit 0.\n- Live smoke, supervisor `init` with the known-answer key: `/health?challenge=ab*32` returned spawnProof 583630234f7e60ecfa2a6ae2e98ee37876e3ff6344457723cb4b42fcf77f7fc0, which matches the pinned vector. Plain `/health` has no spawnProof field. An uppercase challenge and an extra query parameter return the plain body. `/x` gives 426. A bad Host gives 403 before any proof work. The key is absent from the whole scratch dir (.moe, logs, daemon.out). The daemon was stopped via recorded PIDs.\n- Mutants killed: drop env delete (7 failures), ascii to hex (2), accept an uppercase challenge (1), drop the param-count check (2), prefix path match (2). Dropping the explicit `length === 64` check survives, which is correct: JS `$` without the m flag already rejects a trailing newline, so that check is redundant defense in depth.\nDoD: key read once in `_run` only (startDaemon), env deleted, never logged (warn carries fixed text); route and proof contract met; the supervisor leaves process.env untouched; docs are one ARCHITECTURE sentence and one CONFIGURATION row. RED-first output is quoted in the step-1 note.\nComplexity note, non-blocking: the two `length === 64` guards are redundant, and the worker's gotcha memory wrongly says `$` accepts a final newline.",
+  "requiredCheckAtDone": null
 }
