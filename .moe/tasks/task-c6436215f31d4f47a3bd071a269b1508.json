@@ -79,8 +79,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-af7be174",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:57.048Z",
-  "updatedAt": "2026-11-03T13:03:06.245Z",
+  "updatedAt": "2026-11-03T13:04:44.115Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:32:52.349Z",
@@ -203,6 +203,20 @@
       "treeId": "c0f25168fe7b191882cb461bc061c16115d9a8ba",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "99cae90a1e7faa070f7996f5ddacf9a6121a3327",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T12:39:45Z",
+      "paths": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T13:04:38.621Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -210,10 +224,18 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-c9368191@2026-11-03T10:29:33Z",
-    "at": "2026-11-03T12:39:40.322Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T12:39:45Z",
+    "at": "2026-11-03T13:04:38.621Z"
+  },
+  "reviewStartedAt": "2026-11-03T13:03:43.264Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && S=$(mktemp -d /mnt/d/moe-scratch/c6436215-v.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fake-proxy.js\" && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_ACCOUNT_ROTATION=off MOE_WORKTREE_ONLY=wt-resume,wt-resume-unmerged,wt-resume-retry-path,marker-scan node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fake-proxy.js\" \"$S\" \"$(command -v bash)\" && MOE_WORKTREE_ONLY=wt-resume,wt-resume-unmerged,wt-resume-retry-path WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') node scripts/tests/postflight-safe.mjs bash && \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell",
+    "exitCode": 0,
+    "outputTail": "START=2026-11-03T11:32:04Z\nPASS parity-check.sh\n[worktree] wt-resume ok\n[worktree] wt-resume-unmerged ok\n[worktree] wt-resume-retry-path ok\n[worktree] marker-scan ok\n[worktree] 4 ok, 0 failed\n[worktree] wt-resume ok\n[worktree] wt-resume-unmerged ok\n[worktree] wt-resume-retry-path ok\n[worktree] 3 ok, 0 failed\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nEND=2026-11-03T13:02:40Z\nEXIT=0",
+    "reportedAt": "2026-11-03T13:03:43.264Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "This is a test-only change: +41/-1 in scripts/tests/postflight-worktree.cjs. scripts/moe-agent.{sh,ps1} and postflight-fake-proxy.js are byte-identical to the target. It adds two cases, placed right after wtResume and registered right after 'wt-resume'.\n(a) wt-resume-unmerged: a gate-routed unlanded completion stores retry paths ['gate', []] (asserted). Main then changes src/a.txt. The resume's merge conflicts outside landingRetry.paths, and the completion that keeps the markers is checked for: the LANDING-CONFLICT: src/a.txt prompt, main unmoved, MERGE_HEAD==B, markers kept, [WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT, unlanded/conflict/['src/a.txt'], stored paths ['src/a.txt'], and no gate run.\n(b) wt-resume-retry-path: the conflict resume's merge is committed by hand. Before the completion the case asserts: no MERGE_HEAD, markers kept, `ls-files -u` empty, retry paths ['src/a.txt'], and B an ancestor of W HEAD. The completion is then checked for: the LANDING-RETRY: conflict prompt, main unmoved, no MERGE_HEAD, MOE_WORKTREE_UNRESOLVED_CONFLICT, unlanded/conflict, and no landed finalize.\nRED runs, on scratch copies of scripts/ with one swap each and the BOM kept:\n- M1 (sh, drop --diff-filter=U) and P1 (ps1) failed wt-resume-unmerged: `AssertionError: wt-resume-unmerged-2: ...`.\n- M2 (drop the retry-paths half), M3 (MERGE_HEAD-only trigger), P2 and P3 failed wt-resume-retry-path: `AssertionError: wt-resume-retry-path-3: ...`.\n- In each kill a 'landed' finalize replaced 'unlanded', so the markers reached main.\n- The unmutated controls gave 3 ok, 0 failed on both sh and PS 5.1.\nGate: the plan's exact command, run once against the unchanged HEAD 09b5c80e (clean tree), 11:32:04Z to 13:02:40Z, EXIT=0. A prior session of this seat started it; this session waited for it to finish and confirmed the tree was unchanged. Log: D:\\moe-scratch\\c6436215-gate\\log. Results:\n- PASS parity-check.sh;\n- sh [worktree] 4 ok, 0 failed;\n- ps1 (PS 5.1) [worktree] 3 ok, 0 failed;\n- postflight-saf"
 }
