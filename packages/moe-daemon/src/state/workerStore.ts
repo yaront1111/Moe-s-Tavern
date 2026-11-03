@@ -207,22 +207,29 @@ export async function updateWorker(state: StateManager, workerId: string, update
 /**
  * Atomically merge cursor updates into a worker's chatCursors.
  * Reads current cursors, merges, and writes back within the mutex.
+ *
+ * A DEAD record still gets its merged cursor persisted (join_team revives it
+ * with its cursors kept, so the revived seat is not re-delivered what its old
+ * session read), but, like touchWorker and updateWorker's DEAD arm, it keeps
+ * its lastActivityAt (the prune clock) and is never re-published as
+ * WORKER_UPDATED (which would put the deregistered seat back on the boards).
  */
 export async function updateWorkerCursors(state: StateManager, workerId: string, cursorUpdates: Record<string, string>): Promise<void> {
   await state.mutex.runExclusive(async () => {
     const worker = state.workers.get(workerId);
     if (!worker) return; // Silently skip if worker doesn't exist
 
+    const dead = worker.status === 'DEAD';
     const merged = { ...(worker.chatCursors || {}), ...cursorUpdates };
     const updated: Worker = {
       ...worker,
       chatCursors: merged,
-      lastActivityAt: new Date().toISOString()
+      lastActivityAt: dead ? worker.lastActivityAt : new Date().toISOString()
     };
 
     await state.writeEntity('workers', workerId, updated);
     state.workers.set(workerId, updated);
-    state.emit({ type: 'WORKER_UPDATED', payload: updated });
+    if (!dead) state.emit({ type: 'WORKER_UPDATED', payload: updated });
   });
 }
 
