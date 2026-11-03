@@ -64,7 +64,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,7 +81,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T21:02:46.344Z",
-  "updatedAt": "2026-11-03T22:38:48.272Z",
+  "updatedAt": "2026-11-03T22:40:53.428Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:05:47.251Z",
@@ -91,11 +91,14 @@
     "firstClaimAt": "2026-11-03T22:29:29.371Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:40:53.425Z",
+    "wallClockMs": 684054
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -205,5 +208,9 @@
     "kind": "completion",
     "sessionId": "worker-33f67e5b@2026-11-03T22:34:10Z",
     "at": "2026-11-03T22:38:48.272Z"
-  }
+  },
+  "completedAt": "2026-11-03T22:40:53.425Z",
+  "reviewCompletedAt": "2026-11-03T22:40:53.425Z",
+  "reviewSummary": "Reviewed completion 3441d183 (on moe/work-2026-10-24, equals HEAD; +22/-3 across rails.ts, submitPlan.test.ts and one MCP_SERVER.md bullet; far under the size cap). Re-ran task.verification verbatim in a fresh /tmp snapshot (git archive HEAD, npm ci): docs grep ok, tsc --noEmit clean, vitest Test Files 6 passed (6), Tests 175 passed (175), rc=0. Re-ran the RED checkRef against fa405c59's rails.ts: Tests 3 failed | 92 skipped (95), all three it.each cases fail, RED-AT-BASE. Snapshots removed. DoD1: the refusal now offers only moe.propose_rail { proposalType: MODIFY_RAIL | REMOVE_RAIL, targetScope: GLOBAL, taskId, currentValue: <JSON-quoted entry>, ... } plus 'Only that GLOBAL change can lift this refusal'; EPIC/TASK/ADD_RAIL are gone. The wire test pins the exact hatch text and not.toMatch(/EPIC|TASK|ADD_RAIL/) for all 3 cases; existing assertions still pin -32003, the 'Rail violation: ... Default action: ' prefix and data { tool, codeName }. MoeError code, codeName and context are untouched (diff shows only the message block). The builder cannot throw: an odd violation gets a placeholder currentValue, and the regex is anchored on the label so patterns containing ': ' stay intact. Verified in railChange.ts that GLOBAL ADD_RAIL appends to customRules only. DoD2: the MCP_SERVER.md Rail refusal bullet contains 'Only a GLOBAL proposal can lift a rail refusal'; only that bullet changed. No forbidden patterns added; no tests deleted or weakened. Non-blocking note for governor (worker flagged it too): docs/roles/{architect,worker,governor}.reference.md 'Rail Proposals (escape hatch)' still lists every scope, valid for guidance rails but not for a refused plan. The MCP_SERVER.md file-collision mention (task-7cef0861) was acked in chat; this commit touches only its own bullet.",
+  "requiredCheckAtDone": null
 }

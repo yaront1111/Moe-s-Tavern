@@ -60,8 +60,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -76,7 +76,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:52:12.386Z",
-  "updatedAt": "2026-11-03T22:30:47.036Z",
+  "updatedAt": "2026-11-03T22:40:48.224Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T20:43:51.548Z",
@@ -86,7 +86,9 @@
     "firstClaimAt": "2026-11-03T21:27:43.047Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:40:06.393Z",
+    "wallClockMs": 4343346
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -199,9 +201,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T22:15:51Z",
-    "at": "2026-11-03T22:29:59.767Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:30:18Z",
+    "at": "2026-11-03T22:40:48.224Z"
+  },
+  "completedAt": "2026-11-03T22:40:06.393Z",
+  "reviewCompletedAt": "2026-11-03T22:40:06.393Z",
+  "reviewSummary": "Reviewed landed completion 3586957f (on moe/work-2026-10-24; worktree files byte-identical). +43/-7, only the 2 declared files; ps1 untouched.\n\nRe-ran task.verification on a git-archive snapshot of 3586957f outside the repo (env -i, Node 24, job control, SigIgn 0x5): bash -n, parity-check PASS, postflight-vm-route PASS, EXIT=0, including the new T-taskless rows and '[seat job] PASS ... taskless, taskless-teamless, taskless-idle, reload'.\n\nMutant check (worker skipped it): the committed harness against the PRE-fix wrapper (3586957f^) turns VR-taskless red with the exact defect, vm-route then idle, 'saw 2'. T-taskless-idle and T-taskless-mention pass on both wrappers, so legacy taskless output is unchanged.\n\nCode audit: VM_TASKLESS_SKIP is a plain unexported non-MOE_ variable, reset beside MOE_SKIP_LAUNCH=false each iteration, set only in the VM_ROUTE block, read only in the no-launch chain (no other use, no set -u hazard). The vm-route text is byte-identical, now the first branch; claim-failed, teamless and idle follow. VM_ROUTE=false never sets the flag. No argv or env change.\n\nDoD 1 (one accurate reason, no host CLI): VR-taskless, VR-taskless-idle, VR-reload count and vmj_rows taskless (seat-start, seat-stop, no host CLI, no token). DoD 2: legacy lines unchanged; focused rows and parity pass.\n\nAccepted deviation: the criterion expected vm-route for VR-taskless-teamless. I checked moe-agent.sh ~:9965-9975 and :10060: while the join fails SEAT_REGISTERED is false, no chat is read and the mention count stays 0, so the legacy teamless rule skips first. The one accurate line is reason=teamless.\n\nUnverified, not defects: claim-failed or NO_TEAM_MEMBERSHIP-after-join seats with mentions and the unparseable-claim fallback print vm-route by construction but have no fixture. The carried-over outage still prints MOE_LAUNCH_PROBE (task-cc4213c0). The ps1 twin is M07n/M07n3; the PS harness was not run (not in DoD).",
+  "requiredCheckAtDone": null
 }
