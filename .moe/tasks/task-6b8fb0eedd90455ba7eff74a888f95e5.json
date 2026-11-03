@@ -1,0 +1,34 @@
+{
+  "id": "task-6b8fb0eedd90455ba7eff74a888f95e5",
+  "epicId": "epic-be924fb8",
+  "title": "bug: both launchers drop a deleted team's id only when the join_team refusal starts with \"Team not found: \", but the daemon's coded refusal reads \"[NOT_FOUND] Team not found: <id>\", so a seat whose team was deleted keeps retrying the dead id and stays teamless until relaunched (the test fixture refuses unprefixed, so its \"gone\" case passes falsely)",
+  "description": "Found by architect-24611a0a while planning task-3962d9a0 (msg-565108d0, 20:24Z on 2026-11-03). The governor re-checked every line at 677d051a.\n\nPROBLEM. When a seat's team id no longer exists (a team deleted through /ws DELETE_TEAM), both launchers mean to drop the id so the next retry re-creates the team by name. The branch never fires, because it matches a prefix the daemon never sends. The seat retries the dead id on every pre-flight and stays teamless until a human relaunches it.\n\nEVIDENCE (at 677d051a):\n- scripts/moe-agent.sh:2571 `case \"$failure\" in \"Team not found: \"*) TEAM_ID=\"\" ;; esac`. $failure is the RPC error's `message`, verbatim (the python reader just above, about :2556).\n- scripts/moe-agent.ps1:2006 `if ($failure.StartsWith('Team not found: ')) { $script:teamId = '' }`.\n- packages/moe-daemon/src/tools/joinTeam.ts:68 `throw notFound('Team', params.teamId)`. util/errors.ts:112-116 builds the message \"Team not found: <id>\". The MoeError constructor (errors.ts about :71-73) prefixes it to \"[NOT_FOUND] Team not found: <id>\": TEAM_NOT_FOUND is not in SPECIFIC_NOT_FOUND_CODE_NAMES (:44-49), so codeName is NOT_FOUND. McpAdapter.ts:318-323 sends toolError.message unchanged, with data { tool, codeName }.\n- scripts/tests/seat-registration.test.mjs:56: the fake proxy's 'gone' outcome refuses with the unprefixed 'Team not found: ' + teamId, so the case at :272 (joins ['gone','ok']) passes against the broken match.\n\nFIX DIRECTION. In both twins, match the real refusal. Prefer error.data.codeName NOT_FOUND on join_team if the RPC helper exposes it; otherwise a substring match on \"Team not found: \". Make the fixture refuse with the daemon's real coded shape: the message \"[NOT_FOUND] Team not found: <id>\", plus data.codeName if the helper reads it.\n\nPLACEMENT (worktree mode, no dependsOn). The CQ-M07 VM lane also has moe-agent.{sh,ps1} open: n3 23c803d2 is WORKING, then n2 d861f3de and n 62ec51f1. Its hunks sit at ps1 line 3195 and later and sh line 9497 and later, over 1000 lines from :2006 and :2571, so a minimal edit lands cleanly by merge-tree.\n- Keep the edit to the two match branches and the fixture. Don't reflow nearby code.\n- Edit with the seat's own editor (Claude Edit/Write, or apply_patch on a codex exec seat), never a temp file plus mv.\n- Gate: `node scripts/tests/seat-registration.test.mjs` (it drives the real bash, PowerShell 5.1 and PowerShell 7 pre-flight segments), plus `bash -n scripts/moe-agent.sh`, the ParseFile check on moe-agent.ps1, and scripts/tests/parity-check.sh. There is no full postflight run.",
+  "definitionOfDone": [
+    "In both scripts/moe-agent.sh and scripts/moe-agent.ps1, the drop-the-team-id branch fires on the daemon's real join_team refusal (\"[NOT_FOUND] Team not found: <id>\", or error.data.codeName NOT_FOUND), so a seat whose team was deleted re-creates the team by name on its next retry.",
+    "scripts/tests/seat-registration.test.mjs's fake proxy refuses 'gone' with the real coded shape. Its 'gone' case passes on the fixed wrappers and fails on 677d051a's wrappers (a negative control is shown), for bash and every PowerShell engine available on the gate host.",
+    "bash -n scripts/moe-agent.sh, the ParseFile check on scripts/moe-agent.ps1 and scripts/tests/parity-check.sh pass, and the wrapper diff stays inside the two match branches (the fixture is the only other file)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 420.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:26:29.022Z",
+  "updatedAt": "2026-11-03T20:27:45.788Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T20:27:12.270Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}
