@@ -53,17 +53,23 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's diff (adversarial-self-review skill), then run checkRef 3. It checks scope: exactly packages/moe-daemon/src/index.test.ts and packages/moe-daemon/src/index.ts changed against the merge base, and no forbidden pattern added. Checklist: (1) the '.moe/ missing' gate runs before existingDaemonBlocksStart in both startDaemon and superviseDaemon, and creates nothing (N1, N2). (2) 'Another process is starting the daemon' is logged only after a non-stale EEXIST (N1, N4). (3) Error handling: every refusal sets exitCode 1 and returns, with no process.exit(). (4) A .moe that is a regular file or a dangling symlink refuses at the gate. A .moe/ the daemon cannot write (EACCES) passes the gate and refuses at acquireLock ('Could not create the daemon lock', exit 1). (5) A genuine lock race: the losing `start`'s _run now exits 1, so its supervisor runs its bounded crash-restart (1 s, 2 s, 4 s..., at most 5 in 60 s). It exits 0 once the winner answers 'Moe daemon already running', else 1 'Too many restarts'. That is intended (the task's FIX DIRECTION), not a regression. (6) A .moe/ removed after the supervisor started is caught by _run's own gate: exit 1, bounded restarts. That is acceptable; add no supervisor recheck. (7) Tests: the scrubbed env leaks no MOE_* variable; scratch dirs are removed in afterEach; freePort avoids port collisions; nothing relies on the 2000 ms default wait. Kill only PIDs your own session started, never by pattern (project rail).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts",
         "packages/moe-daemon/src/index.test.ts"
       ],
-      "startedAt": "2026-11-03T18:10:39.290Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Self-review done; scope checkRef 3 passed (exactly index.ts + index.test.ts, no forbidden patterns). Gate creates nothing and runs before existingDaemonBlocksStart in both entry points; all refusals set exitCode=1 and return. Lost genuine lock race now goes through bounded supervisor restart (intended). EACCES refuses at acquireLock.",
+      "startedAt": "2026-11-03T18:10:39.290Z",
+      "completedAt": "2026-11-03T18:10:55.899Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,12 +81,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:32:30.999Z",
-  "updatedAt": "2026-11-03T18:10:39.290Z",
+  "updatedAt": "2026-11-03T18:12:16.357Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:51:32.076Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -93,7 +99,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T18:07:55.202Z",
@@ -162,5 +169,42 @@
   },
   "planApprovedAt": "2026-11-03T18:07:55.235Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T18:09:15.755Z"
+  "workStartedAt": "2026-11-03T18:09:15.755Z",
+  "reviewStartedAt": "2026-11-03T18:11:01.436Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/m8867.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && cp \"$R\"/packages/moe-daemon/src/index{,.test}.ts src/ && echo '{\"extends\":\"./tsconfig.json\",\"include\":[\"src/index.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json --noEmit && npx vitest run src/index.test.ts --reporter=verbose > ../v.log 2>&1 && npx vitest run src/util/atomicWrite.test.ts > ../a.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log ../a.log; G=$(grep -ac '✓ src/index.test.ts > no-moe start > N[1-5]: ' ../v.log); echo \"no-moe rows passed: $G\"; [ $E = 0 ] && [ \"$G\" = 5 ] || { echo \"FAIL $S\"; tail -30 ../v.log ../a.log; exit 1; } )",
+    "exitCode": 0,
+    "outputTail": "../a.log: Test Files  1 passed (1)\n../a.log:      Tests  18 passed (18)\n../v.log: Test Files  1 passed (1)\n../v.log:      Tests  73 passed | 1 skipped (74)\nno-moe rows passed: 5\nrc=0",
+    "reportedAt": "2026-11-03T18:11:01.436Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts"
+  ],
+  "completionSummary": "moe-daemon start/init/_run on a project without .moe/ now logs one '.moe/ missing at <dir>; run moe-daemon init --project <dir>' error and exits 1 before any lock, spawn or restart (new missingMoeDirBlocksStart gate in startDaemon and superviseDaemon, ahead of existingDaemonBlocksStart). acquireLock throws non-EEXIST create errors (startDaemon logs 'Could not create the daemon lock', exit 1) so 'Another process is starting' is logged only for EEXIST. A lock wait ending with no daemon now exits 1. Tests: describe('no-moe start') N1-N5 in index.test.ts; RED at merge-base (5 failed|68 passed), GREEN with fix (73 passed|1 skipped; atomicWrite 18 passed).",
+  "commits": [
+    {
+      "sha": "e9f6e21fdf42a735f4a0ed13e751acdd5a1f918a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T18:08:02Z",
+      "paths": [
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T18:12:16.357Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-03T18:08:02Z",
+    "at": "2026-11-03T18:12:16.357Z"
+  }
 }
