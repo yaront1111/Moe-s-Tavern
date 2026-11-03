@@ -22,6 +22,7 @@ $calls = Join-Path $tempRoot 'calls.jsonl'
 $out = Join-Path $tempRoot 'wrapper.out'
 $fakeProxy = Join-Path $tempRoot 'fake-proxy.js'
 $wrapperTimeoutSec = 60
+$script:VmjExtraArgs = @()
 if ($env:MOE_POSTFLIGHT_TIMEOUT_SEC -match '^\d+$') { $wrapperTimeoutSec = [int]$env:MOE_POSTFLIGHT_TIMEOUT_SEC }
 
 # Same timeout/owned-PID cleanup and 5.1 exit-code handling as postflight.ps1.
@@ -30,6 +31,16 @@ function Invoke-WrapperProcess([string[]]$WrapperArgs, [string]$OutFile, [int]$T
     $quoted = @('-NoProfile', '-File', ('"' + $wrapper + '"'))
     foreach ($a in $WrapperArgs) {
         if ($a -match '[\s"]') { $quoted += ('"' + ($a -replace '"', '\"') + '"') } else { $quoted += $a }
+    }
+    if ($WrapperArgs -contains '-AutoClaim:$false') {
+        # 5.1 -File cannot bind an explicit false switch; use a literal command.
+        $words = @($wrapper) + @($WrapperArgs | Where-Object { $_ -cne '-AutoClaim:$false' })
+        $invoke = '& ' + (($words | ForEach-Object { if ($_ -match '^-[A-Za-z]+$') { $_ } else { "'" + $_.Replace("'", "''") + "'" } }) -join ' ') + ' -AutoClaim:$false; exit $LASTEXITCODE'
+        $quoted = @('-NoProfile', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($invoke)))
+    }
+    if ($script:VmjInterrupt) {
+        [IO.File]::WriteAllText((Join-Path $tempRoot 'signal-args.json'), (ConvertTo-Json $quoted))
+        $quoted = @('-NoProfile', '-File', ('"' + (Join-Path $tempRoot 'signal.ps1') + '"'), '-Engine', $psExe, '-Root', ('"' + $tempRoot + '"'))
     }
     $errFile = "$OutFile.err"
     Remove-Item -LiteralPath $OutFile, $errFile -Force -ErrorAction SilentlyContinue
@@ -63,9 +74,11 @@ function Invoke-VmrRow([string]$Row, [string]$Role, [string]$Cli, [string]$Readi
     $env:FAKE_READINESS = $Readiness; $env:FAKE_CALL_LOG = $calls; $env:MOE_PROXY_PATH = $fakeProxy
     $env:MOE_DISABLE_HEARTBEAT = '1'; $env:MOE_TASKLESS_WAIT_SEC = '5'
     $env:USERPROFILE = $homeDir; $env:TEMP = $runTmp; $env:TMP = $runTmp
+    if ($script:VmrSetup) { & $script:VmrSetup }
     Push-Location $project
     try {
-        $code = Invoke-WrapperProcess @('-Project', $project, '-WorkerId', "$Role-vmr", '-Role', $Role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', (Join-Path $tempRoot "$Cli.cmd"), '-NoLoop', '-PollInterval', '0') $out
+        $command = if ($env:MOE_RUNTIME_PROTECTED -eq '1') { $Cli } else { Join-Path $tempRoot "$Cli.cmd" }
+        $code = Invoke-WrapperProcess (@('-Project', $project, '-WorkerId', "$Role-vmr", '-Role', $Role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $command, '-NoLoop', '-PollInterval', '0') + $script:VmjExtraArgs) $out
     } finally { Pop-Location }
     $tools = @(if (Test-Path -LiteralPath $calls) { Get-Content -LiteralPath $calls | ForEach-Object { ($_ | ConvertFrom-Json).tool } })
     [pscustomobject]@{ Row = $Row; Code = $code; Text = [IO.File]::ReadAllText($out); Tools = $tools; Ran = (Test-Path -LiteralPath $rec) }
@@ -98,6 +111,195 @@ function Get-VmrNormalized {
     $normalized = & node $recorder normalize $rec $runTmp
     if ($LASTEXITCODE -ne 0) { throw 'record normalization failed' }
     return ($normalized -join "`n")
+}
+
+# --- [vm seat] CQ-M07n3: port of af8ca2bb's seat-job rows; shared stub only. ---
+function Initialize-VmjFixture {
+    New-Item -ItemType Directory -Force -Path "$tempRoot\accounts\claude-vm-tokens", "$tempRoot\accounts\acct-1" | Out-Null
+    [IO.File]::WriteAllText("$tempRoot\accounts\claude-vm-tokens\acct-1.token", $vmjToken)
+    [IO.File]::WriteAllText("$project\.gitignore", ".moe/`n.worktrees/`n.mcp.json`n")
+    [IO.File]::WriteAllText("$project\seed.txt", "seed`n")
+    Invoke-VmcGit $project @('init', '-q', '-b', 'main') | Out-Null
+    Invoke-VmcGit $project @('add', '.gitignore', 'seed.txt') | Out-Null
+    Invoke-VmcGit $project @('commit', '-qm', 'seed') | Out-Null
+    Invoke-VmcGit $project @('checkout', '-qb', 'moe/control') | Out-Null
+    $script:VmjBase = Invoke-VmcGit $project @('rev-parse', 'HEAD')
+    $p = Get-Content -Raw "$project\.moe\project.json" | ConvertFrom-Json
+    $p.settings.autoCommit = $true
+    $p.settings | Add-Member -NotePropertyName checkpointPush -NotePropertyValue $false
+    $p.settings | Add-Member -NotePropertyName commitBoardState -NotePropertyValue $false
+    [IO.File]::WriteAllText("$project\.moe\project.json", ($p | ConvertTo-Json -Depth 8))
+    $env:FAKE_CLAIM_WORKSPACE = @{ mode = $script:VmjWorkspace; target = 'main' } | ConvertTo-Json -Compress
+    $env:FAKE_CTX_LANDING = @{ lastCompletion = @{ sha = $script:VmjBase } } | ConvertTo-Json -Compress
+}
+function Assert-VmjRows($R, [string]$Mode) {
+    $raw = if (Test-Path "$project\.moe\evidence-rpcs.jsonl") { [IO.File]::ReadAllText("$project\.moe\evidence-rpcs.jsonl") } else { '' }
+    $rows = @($raw -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
+    $seats = @($rows | Where-Object { $_.tool -ceq 'agent-seat' }); $claims = @($rows | Where-Object { $_.tool -ceq 'claim_next_task' })
+    if ($R.Ran -or $raw.Contains($vmjToken) -or $R.Text.Contains($vmjToken)) { Stop-Vmr $R 'host CLI ran or token escaped stdin' }
+    $expected = if ($Mode -eq 'none') { '' } elseif ($Mode -in @('shared', 'taskless')) { 'seat-start,seat-stop' } else { 'seat-start,seat-job,seat-stop' }
+    if (($seats.args.cmd -join ',') -cne $expected) { Stop-Vmr $R ('seat order: ' + ($seats.args.cmd -join ',')) }
+    foreach ($s in $seats) { foreach ($n in $vmjCredentials) {
+        if ($s.args.env.PSObject.Properties.Name -ccontains $n) { Stop-Vmr $R "credential environment leaked: $n" }
+    } }
+    if ($Mode -eq 'none') { if ($claims.Count) { Stop-Vmr $R 'claimed before refusal' }; return }
+    if (-not $claims.Count -or @($claims | Where-Object { $_.args.executionRoute -cne 'vm' }).Count) { Stop-Vmr $R 'unmarked claim' }
+    $deregister = @($rows | Where-Object { $_.tool -ceq 'deregister_worker' })
+    if ([Array]::IndexOf($rows, $seats[0]) -ge [Array]::IndexOf($rows, $claims[0]) -or -not $deregister.Count -or
+        [Array]::IndexOf($rows, $seats[-1]) -ge [Array]::IndexOf($rows, $deregister[0])) { Stop-Vmr $R 'start/claim/stop/deregister order' }
+    $job = $seats | Where-Object { $_.args.cmd -ceq 'seat-job' }
+    if (-not $job) { return }
+    $role = if ($Mode -eq 'qa') { 'qa' } else { 'worker' }
+    $checkout = if ($role -eq 'qa') { $project } else { (Join-Path $project '.worktrees\task-postflight').Replace('\', '/') }
+    $id = $claims[0].args
+    $argv = @('seat-job', '--project', $project, '--worker', "$role-vmr", '--runner', $id.processStartedAt, '--host', $id.host,
+        '--instance', $seats[0].args.instance, '--role', $role, '--task', 'task-postflight', '--attempt', 'attempt-postflight', '--generation', '7',
+        '--checkout', $checkout, '--commit', $script:VmjBase, '--cli', 'claude')
+    if (($job.args.argv -join "`0") -cne ($argv -join "`0") -or -not $R.Text.Contains("Runner identity: processStartedAt=$($id.processStartedAt) host=$($id.host)")) { Stop-Vmr $R 'job argv/runner identity mismatch' }
+    if ($job.args.stdinName -cne 'CLAUDE_CODE_OAUTH_TOKEN' -or $job.args.stdinSha256 -cne $vmjHash) { Stop-Vmr $R 'stdin token mismatch' }
+    if ($role -eq 'worker' -and $job.args.clean -ne $true) { Stop-Vmr $R 'host tooling dirtied W' }
+    if ($Mode -in @('happy', 'nonzero')) {
+        $tip = Invoke-VmcGit $project @('rev-parse', 'moe/task/task-postflight')
+        if ((Invoke-VmcGit $project @('rev-parse', "$tip^")) -cne $script:VmjBase -or
+            (Invoke-VmcGit $project @('rev-parse', "$tip^{tree}")) -cne $job.args.tree) { Stop-Vmr $R 'candidate tree/parent mismatch' }
+        $exit = if ($Mode -eq 'nonzero') { 17 } else { 0 }
+        if (-not (Invoke-VmcGit $project @('log', '-1', '--format=%B', $tip)).Contains("cli-exit=$exit") -or
+            @($rows | Where-Object { $_.tool -ceq 'record_commit' -and $_.args.outcome -ceq 'committed' }).Count -ne 1 -or
+            -not $R.Text.Contains('guest stdout') -or -not $R.Text.Contains('guest stderr') -or
+            ([regex]::Matches($R.Text, 'MOE_VM_CANDIDATE_COMMITTED')).Count -ne 1 -or $R.Text.Contains('Committed checkpoint')) { Stop-Vmr $R 'candidate/relay evidence mismatch' }
+    } elseif ($Mode -eq 'qa' -and (Invoke-VmcGit $project @('rev-parse', '--verify', 'moe/task/task-postflight') -NoThrow)) { Stop-Vmr $R 'QA landed a commit' }
+}
+function Test-VmjOutcome {
+    $ast = [Management.Automation.Language.Parser]::ParseFile($wrapper, [ref]$null, [ref]$null)
+    foreach ($fn in $ast.FindAll({ param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -cin @('Get-MoeSeatJobOutcome', 'ConvertFrom-MoeSeatReply') }, $true)) { . ([scriptblock]::Create($fn.Extent.Text)) }
+    $Role = 'worker'; $commit = 'a' * 40
+    $good = @{ seatJob = 1; ok = $true; role = $Role; commit = $commit; baseTree = ('b' * 40); tree = ('c' * 40); exitCode = 0 }
+    foreach ($line in @('[]', 'null', ('[' + ($good | ConvertTo-Json -Compress) + ']'), 'not JSON')) {
+        if (Get-MoeSeatJobOutcome $line $commit) { throw 'VM ROUTE FAILED (outcome): non-object accepted' }
+    }
+    foreach ($patch in @(@{}, @{seatJob=$true}, @{seatJob=0}, @{ok='true'}, @{role=@('worker')}, @{commit=@($commit)}, @{tree='bad'})) {
+        $o = $good.Clone(); foreach ($n in $patch.Keys) { $o[$n] = $patch[$n] }
+        $got = Get-MoeSeatJobOutcome ($o | ConvertTo-Json -Compress) $commit
+        if ([bool]$got -ne ($patch.Count -eq 0)) { throw 'VM ROUTE FAILED (outcome): marker/types mismatch' }
+    }
+    foreach ($exit in @($null, -1, 256, $true, 1.5)) {
+        $o = $good.Clone(); $o.exitCode = $exit
+        if ((Get-MoeSeatJobOutcome ($o | ConvertTo-Json -Compress) $commit).exitCode -ne 1) { throw 'VM ROUTE FAILED (outcome): bad exit not clamped' }
+    }
+    $o = $good.Clone(); $o.Remove('exitCode')
+    if ((Get-MoeSeatJobOutcome ($o | ConvertTo-Json -Compress) $commit).exitCode -ne 1) { throw 'VM ROUTE FAILED (outcome): missing exit not clamped' }
+}
+function Test-VmjEnvironment {
+    $ast = [Management.Automation.Language.Parser]::ParseFile($wrapper, [ref]$null, [ref]$null)
+    foreach ($fn in $ast.FindAll({ param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $a.Name -cin @('Invoke-MoeSeatCli', 'ConvertTo-MoeArgumentLine', 'Stop-MoeSeatVm', 'Get-MoeSeatResultCode', 'ConvertFrom-MoeSeatReply') }, $true)) { . ([scriptblock]::Create($fn.Extent.Text)) }
+    $script:AgentSeatCli = $env:MOE_AGENT_SEAT_PATH; $projectPath = $project; $WorkerId = 'worker-vmr'
+    $script:MoeProcessStartedAt = '123@runner token with spaces'; $script:MoeHost = 'host'
+    $script:SeatVmInstance = 'moe-vm-00000000000000000001'
+    Invoke-MoeSeatCli -SeatArgs @('seat-stop', '--project', $project) | Out-Null
+    foreach ($n in $vmjCredentials) { if ([Environment]::GetEnvironmentVariable($n) -cne "outer-$n") { throw "VM ROUTE FAILED (env): $n not restored" } }
+    $before = @(Get-Content "$project\.moe\evidence-rpcs.jsonl").Count
+    Stop-MoeSeatVm; Stop-MoeSeatVm
+    $rows = @(Get-Content "$project\.moe\evidence-rpcs.jsonl")
+    $last = $rows[-1] | ConvertFrom-Json
+    if ($rows.Count -ne $before + 1 -or $last.args.argv[6] -cne $script:MoeProcessStartedAt -or $script:SeatVmInstance) { throw 'VM ROUTE FAILED (stop): idempotence/runner argv' }
+    foreach ($n in $vmjCredentials) { if ($last.args.env.PSObject.Properties.Name -ccontains $n -or [Environment]::GetEnvironmentVariable($n) -cne "outer-$n") { throw "VM ROUTE FAILED (env): background $n" } }
+    Remove-Item Env:\OPENAI_API_KEY
+    $threw = $false; $node = $script:MoeNode; $script:MoeNode = "$tempRoot\no-such-node.exe"
+    try { Invoke-MoeSeatCli -BackgroundOut "$tempRoot\absent-node.out" -SeatArgs @('seat-stop', '--project', $project) | Out-Null } catch { $threw = $true } finally { $script:MoeNode = $node }
+    if (-not $threw -or (Test-Path Env:\OPENAI_API_KEY)) { throw 'VM ROUTE FAILED (env): absent variable/error restoration' }
+    $env:OPENAI_API_KEY = 'outer-OPENAI_API_KEY'
+    foreach ($n in $vmjCredentials) { if ([Environment]::GetEnvironmentVariable($n) -cne "outer-$n") { throw "VM ROUTE FAILED (env): error $n" } }
+}
+function Invoke-VmjSections {
+    $saved = @{}; Get-ChildItem Env: | ForEach-Object { $saved[$_.Name] = $_.Value }
+    $vmjCredentials = @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY')
+    $vmjToken = 'sk-ant-oat01-vmCanaryMustNeverEscapePipes0123456789'
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $vmjHash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($vmjToken)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    $gcfg = Join-Path $tempRoot 'seat.gitconfig'
+    [IO.File]::WriteAllText($gcfg, "[user]`n name = vmj`n email = vmj@example.invalid`n[core]`n autocrlf = false`n")
+    $ready = '{"profile":"verified-local","ready":true,"missingCapabilities":[]}'
+    $script:VmrSetup = { Initialize-VmjFixture }; $script:VmjWorkspace = 'worktree'
+    try {
+        Test-VmjOutcome
+        Copy-Item (Join-Path $root 'scripts\tests\postflight-fake-agent-seat.js') "$tempRoot\seat.cjs"
+        $env:MOE_AGENT_SEAT_PATH = "$tempRoot\seat.cjs"; $env:MOE_ACCOUNT_ROTATION = 'on'
+        $env:MOE_ACCOUNTS_FILE = "$tempRoot\accounts\claude-accounts.json"; $env:FAKE_ACCOUNT_HOME = "$tempRoot\accounts"
+        $env:GIT_CONFIG_GLOBAL = $gcfg; $env:GIT_CONFIG_NOSYSTEM = '1'; $env:PATH = "$tempRoot;$env:PATH"
+        foreach ($n in $vmjCredentials) { Set-Item "Env:\$n" "outer-$n" }
+        foreach ($mode in @('happy', 'nonzero')) {
+            $env:FAKE_SEAT_EXIT_CODE = if ($mode -eq 'nonzero') { '17' } else { '0' }
+            $r = Invoke-VmrRow "VR-$mode" worker claude $ready on
+            if ($mode -eq 'happy' -and $r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r $mode
+            if ($mode -eq 'happy') { Test-VmjEnvironment }
+        }
+        Remove-Item Env:\FAKE_SEAT_EXIT_CODE
+        $r = Invoke-VmrRow R2 qa codex $ready on; Assert-VmjRows $r none
+        if ($r.Code -ne 1 -or -not $r.Text.Contains('MOE_VM_CREDENTIAL_UNAVAILABLE')) { Stop-Vmr $r 'codex not refused' }
+        $script:VmjExtraArgs = @('-AutoClaim:$false')
+        $r = Invoke-VmrRow VR-noclaim worker claude $ready on; Assert-VmjRows $r none
+        if ($r.Code -ne 1 -or -not $r.Text.Contains('MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM')) { Stop-Vmr $r 'no-auto-claim not refused' }
+        $script:VmjExtraArgs = @()
+        $r = Invoke-VmrRow VR-qa-shared qa claude $ready off; Assert-VmjRows $r none
+        if ($r.Code -ne 1 -or -not $r.Text.Contains('MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED')) { Stop-Vmr $r 'QA settings not refused' }
+        $env:MOE_RUNTIME_PROTECTED = '1'; $env:MOE_DAEMON_PATH = "$tempRoot\daemon.cjs"
+        [IO.File]::WriteAllText($env:MOE_DAEMON_PATH, '// never invoked')
+        $r = Invoke-VmrRow VR-protected worker claude '{"profile":"verified-local","ready":false,"missingCapabilities":[]}' on
+        Assert-VmjRows $r none
+        if ($r.Code -ne 1 -or ([regex]::Matches($r.Text, 'MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED')).Count -ne 1 -or $r.Text.Contains($env:MOE_AGENT_SEAT_PATH)) { Stop-Vmr $r 'protected seam not ignored' }
+        Remove-Item Env:\MOE_RUNTIME_PROTECTED, Env:\MOE_DAEMON_PATH
+        $script:VmjWorkspace = 'shared'
+        $r = Invoke-VmrRow VR-shared worker claude $ready on; Assert-VmjRows $r shared
+        if ($r.Code -ne 1 -or ([regex]::Matches($r.Text, 'MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED')).Count -ne 1) { Stop-Vmr $r 'worker backstop not refused' }
+        $env:FAKE_TASK_STATUS = 'REVIEW'
+        $r = Invoke-VmrRow VR-qa qa claude $ready on; Assert-VmjRows $r qa
+        if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }
+        Remove-Item Env:\FAKE_TASK_STATUS; $script:VmjWorkspace = 'worktree'
+        # Separate supervisor owns the wrapper's console; signal only that child.
+        [IO.File]::WriteAllText("$tempRoot\signal.ps1", @'
+param($Engine,$Root)
+$ErrorActionPreference='Stop'
+$argsList=Get-Content -Raw "$Root\signal-args.json" | ConvertFrom-Json
+$log="$Root\signal.log"; $p=Start-Process $Engine -ArgumentList $argsList -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+$null=$p.Handle
+try {
+    $until=[DateTime]::UtcNow.AddSeconds(120); $ready=$false
+    while(-not $ready) {
+        $ready=@(Get-Content "$Root\project\.moe\evidence-rpcs.jsonl" -ErrorAction SilentlyContinue | Where-Object { $_ -match '"cmd":"seat-job"' }).Count -gt 0
+        if($p.HasExited -or [DateTime]::UtcNow -gt $until){throw 'seat-job readiness failed'}
+        if(-not $ready){Start-Sleep -Milliseconds 100}
+    }
+    Add-Type 'using System; using System.Runtime.InteropServices; public static class SeatSignal {
+      [DllImport("kernel32.dll")] public static extern bool FreeConsole();
+      [DllImport("kernel32.dll")] public static extern bool AttachConsole(uint pid);
+      [DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(IntPtr h,bool add);
+      [DllImport("kernel32.dll")] public static extern bool GenerateConsoleCtrlEvent(uint code,uint group);
+    }'
+    [SeatSignal]::FreeConsole()|Out-Null
+    if(-not [SeatSignal]::AttachConsole($p.Id)){throw 'AttachConsole failed'}
+    [SeatSignal]::SetConsoleCtrlHandler([IntPtr]::Zero,$true)|Out-Null
+    if(-not [SeatSignal]::GenerateConsoleCtrlEvent(0,0)){throw 'Ctrl+C failed'}
+    if(-not $p.WaitForExit(120000)){throw 'seat cancellation timed out'}
+    exit $p.ExitCode
+} finally {
+    if(-not $p.HasExited){& taskkill /T /F /PID $p.Id|Out-Null; $p.WaitForExit(5000)|Out-Null}
+    Get-Content $log; Get-Content "$log.err"
+}
+'@)
+        $env:FAKE_SEAT_JOB_SLEEP = '3'; $script:VmjInterrupt = $true
+        $r = Invoke-VmrRow VR-sigint worker claude $ready on; Assert-VmjRows $r sigint
+        if ($r.Code -notin @(0, 130)) { Stop-Vmr $r "interrupt exit $($r.Code)" }
+        Remove-Item Env:\FAKE_SEAT_JOB_SLEEP; $script:VmjInterrupt = $false
+        $env:FAKE_CLAIM_MODE = 'idle'; $env:FAKE_MENTION = '1'
+        $r = Invoke-VmrRow VR-taskless worker claude $ready on; Assert-VmjRows $r taskless
+        if (-not $r.Text.Contains('MOE_TASKLESS_NO_LAUNCH reason=vm-route')) { Stop-Vmr $r 'taskless VM route launched' }
+        Write-Host '[vm seat] PASS happy, nonzero, codex, noclaim, qa-shared, protected, shared, qa, sigint, taskless'
+    } finally {
+        $script:VmrSetup = $null; $script:VmjInterrupt = $false; $script:VmjExtraArgs = @()
+        Get-ChildItem Env: | Where-Object { -not $saved.ContainsKey($_.Name) } | Remove-Item
+        foreach ($n in $saved.Keys) { Set-Item "Env:\$n" $saved[$n] }
+    }
 }
 
 # --- [vm candidate] CQ-M07n2: Invoke-MoeVmCandidateLanding turns a VM job's
@@ -438,8 +640,10 @@ if (cli !== 'normalize') {
     $bytes = [IO.File]::ReadAllBytes($wrapper)
     if ($bytes[0] -ne 239 -or $bytes[1] -ne 187 -or $bytes[2] -ne 191) { throw 'wrapper lost its UTF-8 BOM' }
     Invoke-VmcSections
+    Invoke-VmjSections
     $legacy = '{"profile":"legacy","ready":true,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
     $r = Invoke-VmrRow T-legacy worker claude $legacy '-'; Assert-VmrLaunched $r
+    if (@(Get-Content "$project\.moe\evidence-rpcs.jsonl" | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.tool -eq 'claim_next_task' -and $_.args.PSObject.Properties.Name -contains 'executionRoute' }).Count) { Stop-Vmr $r 'legacy claim marked vm' }
     $raw = Get-Content -Raw -LiteralPath $rec | ConvertFrom-Json
     $context = if (Test-Path -LiteralPath "$rec.context") { [IO.File]::ReadAllText("$rec.context") } else { '' }
     if ((-not ($raw.argv -match 'task-postflight') -and -not $context.Contains('task-postflight')) -or $raw.env.MOE_WORKER_ID -cne 'worker-vmr') { Stop-Vmr $r 'record lacks task and worker identity' }
@@ -489,16 +693,14 @@ if (cli !== 'normalize') {
         ('N1|worker|codex|{"profile":"verified-local","ready":false,"missingCapabilities":["revision-bound-local-delivery","isolated-check-vm","authenticated-runner-evidence"],"evaluatedAt":"2026-11-01T00:00:00.000Z"}|on|NOT_READY|' + "$notReady revision-bound-local-delivery, isolated-check-vm, authenticated-runner-evidence; refusing to start this seat."),
         ('N2|worker|claude|{"profile":"verified-local","ready":false,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}|on|NOT_READY|' + "$notReady (none named); refusing to start this seat."),
         "N3|worker|claude|$vlFalse|on|NOT_READY|$notReady isolated-check-vm; refusing to start this seat.",
-        ('N4|worker|claude|{"profile":"verified-local","ready":false,"missingCapabilities":["line\n\t\u00a0end","ok"],"evaluatedAt":"2026-11-01T00:00:00.000Z"}|on|NOT_READY|' + "$notReady line???end, ok; refusing to start this seat."),
-        "R1|worker|claude|$vlTrue|on|VM_ROUTE_UNAVAILABLE|$vl and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat.",
-        "R2|qa|codex|$vlTrue|on|VM_ROUTE_UNAVAILABLE|$vl and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat."
+        ('N4|worker|claude|{"profile":"verified-local","ready":false,"missingCapabilities":["line\n\t\u00a0end","ok"],"evaluatedAt":"2026-11-01T00:00:00.000Z"}|on|NOT_READY|' + "$notReady line???end, ok; refusing to start this seat.")
     )
     foreach ($row in $rows) {
         $a = $row -split '\|', 7
         $r = Invoke-VmrRow $a[0] $a[1] $a[2] $a[3] $a[4]
         Assert-VmrRefused $r "MOE_VERIFIED_LOCAL_$($a[5])" $a[6]
     }
-    Write-Host '[vm route] ok refusals (C1/C2, S1-S6, N1-N4, R1/R2)'
+    Write-Host '[vm route] ok refusals (C1/C2, S1-S6, N1-N4; R1/R2 in vm seat)'
     foreach ($seat in @('A1|architect', 'G1|governor')) {
         $a = $seat -split '\|'
         $r = Invoke-VmrRow $a[0] $a[1] claude $vlFalse off
