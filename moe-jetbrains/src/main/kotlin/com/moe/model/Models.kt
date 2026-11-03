@@ -89,6 +89,15 @@ data class TaskComment(
     val timestamp: String
 )
 
+/** One moe.amend_plan_step revision of a step's text. Read-only display data. */
+data class StepAmendment(
+    val amendmentId: String,
+    val description: String,
+    val reason: String? = null,
+    val amendedBy: String? = null,
+    val amendedAt: String? = null
+)
+
 data class ImplementationStep(
     val stepId: String,
     val description: String,
@@ -97,8 +106,28 @@ data class ImplementationStep(
     val modifiedFiles: List<String>? = null,
     val note: String? = null,
     val startedAt: String? = null,
-    val completedAt: String? = null
-)
+    val completedAt: String? = null,
+    val amendments: List<StepAmendment> = emptyList(),
+    val activeAmendmentId: String? = null
+) {
+    /**
+     * The amendment in force: the entry [activeAmendmentId] names, never simply the latest.
+     * A blank or dangling id resolves to null. Mirrors the daemon's
+     * packages/moe-daemon/src/util/planAmendments.ts `activeAmendment`.
+     */
+    val activeAmendment: StepAmendment?
+        get() {
+            val id = activeAmendmentId?.takeIf { it.isNotEmpty() } ?: return null
+            return amendments.firstOrNull { it.amendmentId == id }
+        }
+
+    /**
+     * The step's instructions as they stand: the active amendment's text, else [description].
+     * The one rule every renderer uses; mirrors planAmendments.ts `effectiveStepDescription`.
+     */
+    val effectiveDescription: String
+        get() = activeAmendment?.description ?: description
+}
 
 data class TaskMetrics(
     val plannedStepCount: Int? = null,

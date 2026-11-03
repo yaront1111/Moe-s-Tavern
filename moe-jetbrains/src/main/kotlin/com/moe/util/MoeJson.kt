@@ -22,6 +22,7 @@ import com.moe.model.PlanCritiqueResult
 import com.moe.model.Project
 import com.moe.model.ProjectSettings
 import com.moe.model.RailProposal
+import com.moe.model.StepAmendment
 import com.moe.model.Task
 import com.moe.model.TaskComment
 import com.moe.model.TaskMetrics
@@ -601,8 +602,30 @@ object MoeJson {
             modifiedFiles = obj.getStringListOrNull("modifiedFiles"),
             note = obj.getStringOrNull("note"),
             startedAt = obj.getStringOrNull("startedAt"),
-            completedAt = obj.getStringOrNull("completedAt")
+            completedAt = obj.getStringOrNull("completedAt"),
+            amendments = parseStepAmendments(obj),
+            activeAmendmentId = obj.getStrictStringOrNull("activeAmendmentId")
         )
+    }
+
+    /**
+     * A step's amendment history. .moe/tasks is hand-editable, so a non-array holder yields
+     * an empty list and an entry that is not an object, or whose amendmentId or description
+     * is not a real JSON string, is skipped; nothing here throws or drops the step.
+     */
+    private fun parseStepAmendments(obj: JsonObject): List<StepAmendment> {
+        val holder = obj.get("amendments")?.takeIf { it.isJsonArray } ?: return emptyList()
+        return holder.asJsonArray.mapNotNull { entry ->
+            if (!entry.isJsonObject) return@mapNotNull null
+            val a = entry.asJsonObject
+            StepAmendment(
+                amendmentId = a.getStrictStringOrNull("amendmentId") ?: return@mapNotNull null,
+                description = a.getStrictStringOrNull("description") ?: return@mapNotNull null,
+                reason = a.getStrictStringOrNull("reason"),
+                amendedBy = a.getStrictStringOrNull("amendedBy"),
+                amendedAt = a.getStrictStringOrNull("amendedAt")
+            )
+        }
     }
 
     fun parseTask(obj: JsonObject): Task {

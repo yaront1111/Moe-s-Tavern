@@ -389,7 +389,15 @@ class PlanReviewDialog(
                     font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
                 })
 
-                val descArea = JTextArea(step.description).apply {
+                // The approval binds to the amended revision, so show the text it approves.
+                step.activeAmendment?.let { amendment ->
+                    stepPanel.add(JBLabel(MoeBundle.message("moe.message.stepAmended", amendment.amendedBy ?: "unknown")).apply {
+                        font = JBUI.Fonts.smallFont()
+                        toolTipText = MoeBundle.message("moe.message.stepAmendedOriginal", step.description)
+                    })
+                }
+
+                val descArea = JTextArea(step.effectiveDescription).apply {
                     lineWrap = true
                     wrapStyleWord = true
                     isEditable = false

@@ -449,7 +449,7 @@ class TaskDetailDialog(
         }
         leftPanel.add(iconLabel)
 
-        val descLabel = JBLabel("$stepNumber. ${step.description}").apply {
+        val descLabel = JBLabel("$stepNumber. ${step.effectiveDescription}").apply {
             if (step.status == "IN_PROGRESS") {
                 foreground = statusColor
                 font = font.deriveFont(Font.BOLD)
@@ -458,6 +458,13 @@ class TaskDetailDialog(
             }
         }
         leftPanel.add(descLabel)
+        step.activeAmendment?.let { amendment ->
+            leftPanel.add(JBLabel(MoeBundle.message("moe.message.stepAmended", amendment.amendedBy ?: "unknown")).apply {
+                foreground = JBColor.GRAY
+                font = font.deriveFont(font.size - 1f)
+                toolTipText = MoeBundle.message("moe.message.stepAmendedOriginal", step.description)
+            })
+        }
 
         row.add(leftPanel, BorderLayout.CENTER)
 

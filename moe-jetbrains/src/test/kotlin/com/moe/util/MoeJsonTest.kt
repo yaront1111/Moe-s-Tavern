@@ -358,6 +358,59 @@ class MoeJsonTest {
         assertEquals("2026-04-28T02:00:00.000Z", step.completedAt)
     }
 
+    @Test
+    fun `an amended step reads as its active amendment through both parse paths`() {
+        val original = "ORIGINAL: delete nothing"
+        val amended = "AMENDED: delete src/a.ts"
+        val amend1 = """{"amendmentId":"amend-1","description":"$amended","reason":"r","amendedBy":"architect-1","amendedAt":"2026-11-03T15:37:48.020Z"}"""
+        fun steps(members: String) = """{"id":"task-amend","epicId":"epic-1","status":"AWAITING_APPROVAL","implementationPlan":[
+            {"stepId":"step-1","description":"$original","status":"PENDING","affectedFiles":["src/a.ts"]$members}]}""".let { json ->
+            listOf("parseTask" to parseTask(json), "parseState" to parseSnapshotTask(json)).map { (path, task) ->
+                assertEquals("$path kept the task", "task-amend", task.id)
+                path to task.implementationPlan.single()
+            }
+        }
+
+        // The hunt's F1 wire step (task-2597ac6f): the description on the wire is still the original text.
+        for ((path, step) in steps(""","amendments":[$amend1],"activeAmendmentId":"amend-1"""")) {
+            assertEquals(path, amended, step.effectiveDescription)
+            assertEquals(path, original, step.description)
+            assertEquals(path, "architect-1", step.activeAmendment?.amendedBy)
+            assertEquals(path, "r", step.activeAmendment?.reason)
+            assertEquals(path, "2026-11-03T15:37:48.020Z", step.activeAmendment?.amendedAt)
+        }
+        // The ACTIVE amendment wins, not the latest; junk entries are skipped without dropping real ones.
+        val latest = """{"amendmentId":"amend-2","description":"LATEST: not active"}"""
+        for ((path, step) in steps(""","amendments":[7,"x",null,$amend1,$latest],"activeAmendmentId":"amend-1"""")) {
+            assertEquals(path, amended, step.effectiveDescription)
+            assertEquals(path, listOf("amend-1", "amend-2"), step.amendments.map { it.amendmentId })
+        }
+        // A dangling, blank, non-string or wrongly shaped amendment degrades to the original text.
+        val degraded = listOf(
+            ""","amendments":[$amend1],"activeAmendmentId":"amend-9"""",
+            ""","amendments":[{"amendmentId":"","description":"BLANK"}],"activeAmendmentId":""""",
+            ""","amendments":{"amend-1":$amend1},"activeAmendmentId":"amend-1"""",
+            ""","amendments":["amend-1",7,null],"activeAmendmentId":"amend-1"""",
+            ""","amendments":[{"amendmentId":"amend-1","description":42}],"activeAmendmentId":"amend-1"""",
+            ""","amendments":[{"description":"NO ID"}],"activeAmendmentId":"amend-1"""",
+            ""","amendments":[{"amendmentId":"1","description":"NUMERIC ACTIVE ID"}],"activeAmendmentId":1""",
+            ""","amendments":null,"activeAmendmentId":null""",
+            ""
+        )
+        for (members in degraded) {
+            for ((path, step) in steps(members)) {
+                assertEquals("$path $members", original, step.effectiveDescription)
+                assertEquals("$path $members", original, step.description)
+                assertNull("$path $members", step.activeAmendment)
+            }
+        }
+        // A legacy step with no amendment keys parses exactly as before.
+        for ((path, step) in steps("")) {
+            assertTrue(path, step.amendments.isEmpty())
+            assertNull(path, step.activeAmendmentId)
+        }
+    }
+
     private fun parseTask(taskJson: String) =
         MoeJson.parseTask(JsonParser.parseString(taskJson).asJsonObject)
 
