@@ -1906,6 +1906,18 @@ The `nextAction` steers the architect into the slicing pass (`moe-epic-breakdown
 
 Update an existing epic.
 
+Setting `status: "ARCHIVED"` on an epic that is not already archived follows
+`moe.archive_epic`: refuse while any task is PLANNING, AWAITING_APPROVAL or
+WORKING, or, for a caller with a `workerId`, while another worker holds a BLOCKED
+task. Finalizing attempts also hold the archive. Companion fields are validated
+before any write; on success every task is archived (one `TASK_ARCHIVED` event
+per newly archived task), then the companion fields are applied. A refused
+archive changes nothing. The board's `/ws UPDATE_EPIC` uses this same path and
+returns the usual `ERROR` frame on refusal.
+
+Other status changes, un-archiving, and updates to an already-ARCHIVED epic stay
+plain epic updates; an already-ARCHIVED epic's tasks are left alone.
+
 **Parameters:**
 ```typescript
 {
@@ -1914,7 +1926,7 @@ Update an existing epic.
   description?: string,
   architectureNotes?: string,
   epicRails?: string[],
-  status?: "ACTIVE" | "COMPLETED" | "ARCHIVED",
+  status?: "PLANNED" | "ACTIVE" | "COMPLETED" | "ARCHIVED",
   order?: number,
   finalTaskId?: string,         // the epic's final (integration-and-hardening) task; "" clears the designation
   workerId?: string             // caller (auto-injected by moe-proxy); recorded as the actor of EPIC_UPDATED, never stored on the epic
@@ -1932,6 +1944,7 @@ Update an existing epic.
 - `Invalid finalTaskId: names no task: <id>` - if no task has that id
 - `Invalid finalTaskId: task <id> belongs to epic <other>, not <epicId>` - if the task is in another epic
 - `Invalid finalTaskId: task <id> is ARCHIVED and can never be epic-final` - if the task is ARCHIVED
+- `NOT_ALLOWED` - if a move to ARCHIVED is refused by the in-flight or holder rule above
 
 ---
 

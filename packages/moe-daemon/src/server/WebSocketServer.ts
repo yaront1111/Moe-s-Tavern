@@ -19,6 +19,7 @@ import { activeResourceWaiters } from '../tools/waitForResource.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
 import { readExecutionReadiness, type ExecutionReadinessPayload } from '../tools/getExecutionReadiness.js';
 import { releaseTaskTool } from '../tools/releaseTask.js';
+import { applyEpicUpdate } from '../tools/updateEpic.js';
 import { deregisterWorkerTool } from '../tools/deregisterWorker.js';
 import {
   ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS,
@@ -671,7 +672,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
             return;
           }
-          const epic = await this.withMutex(() => this.state.updateEpic(epicId, updates as Record<string, unknown>));
+          // moe.update_epic's path: a move to ARCHIVED follows moe.archive_epic
+          // (in-flight refusal, every task archived); a refusal is the ERROR frame.
+          const epic = await this.withMutex(() => applyEpicUpdate(this.state, epicId, updates as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_UPDATED', payload: epic }));
           return;
         }
