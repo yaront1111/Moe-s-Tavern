@@ -7086,11 +7086,23 @@ function Set-MoeJournalPushResult([string]$Path, [string]$Result) {
     } catch {}
 }
 
+# The ONE re-check after a [remote rejected] answer (a remote can refuse after it
+# applied the update): $true only when a fresh fetch (Invoke-MoeLandFetch, its 3
+# tries) shows origin's $T holding $C; a failed fetch or any other answer is $false.
+# It never pushes. Twin: wt_remote_holds.
+function Test-MoeRemoteHolds([string]$Top, [string]$T, [string]$C) {
+    if (-not (Invoke-MoeLandFetch $Top $T)) { return $false }
+    return (Invoke-MoeGit -Top $Top -GitArgs @('merge-base', '--is-ancestor', $C, "refs/remotes/origin/$T^{commit}")).Rc -eq 0
+}
+
 # L9 (design §2.2): ONE non-forced push of $C, never via Push-MoeBranch (so no
 # MOE_PUSH_REBASE), read from the porcelain line for the target whatever git's exit
-# code; no definite answer goes to Resolve-MoePushOutcome. 0 published; 1
-# [rejected]; 2 [remote rejected]; 3 reconciled as never applying; 4 unknown (§2.6).
-# 2 and 4 set $script:MoePushDetail. It moves no local ref. Twin: wt_push_target.
+# code; no definite answer goes to Resolve-MoePushOutcome. 0 published, or [remote
+# rejected] while Test-MoeRemoteHolds proves origin's $T holds $C
+# (MOE_PUSH_REMOTE_REJECTED_APPLIED); 1 [rejected]; 2 [remote rejected] with no such
+# proof ($C absent, or the re-check fetch failed); 3 reconciled as never applying;
+# 4 unknown (§2.6). 2 and 4 set $script:MoePushDetail. It moves no local ref (the
+# re-check only fetches). Twin: wt_push_target.
 function Send-MoeLandPush([string]$Top, [string]$T, [string]$B, [string]$C) {
     $ref = "refs/heads/$T"
     foreach ($line in @((Invoke-MoeGit -Top $Top -GitArgs @('push', '--porcelain', 'origin', "${C}:$ref")).Out)) {
@@ -7098,7 +7110,14 @@ function Send-MoeLandPush([string]$Top, [string]$T, [string]$B, [string]$C) {
         if ($f.Count -lt 2 -or $f[1].Substring($f[1].LastIndexOf([char]':') + 1) -cne $ref) { continue }
         $sum = if ($f.Count -gt 2) { $f[2] } else { '' }; $k = $f[0] + $sum
         if ($k -cmatch '^[ *=]') { return 0 } elseif ($k -cmatch '^!\[rejected\]') { return 1 }
-        elseif ($k -cmatch '^!\[remote rejected\]') { $script:MoePushDetail = "origin refused ${C}: $sum"; return 2 }
+        elseif ($k -cmatch '^!\[remote rejected\]') {
+            $script:MoePushDetail = "origin refused ${C}: $sum"
+            if (Test-MoeRemoteHolds $Top $T $C) {
+                Write-Host "[WARN] MOE_PUSH_REMOTE_REJECTED_APPLIED: origin answered [remote rejected] for $C, but origin's $T holds it; the push counts as published." -ForegroundColor Yellow
+                return 0
+            }
+            return 2
+        }
         break
     }
     $rc = Resolve-MoePushOutcome $Top $T $B $C
@@ -7106,7 +7125,8 @@ function Send-MoeLandPush([string]$Top, [string]$T, [string]$B, [string]$C) {
     return $rc
 }
 # L9 through Send-MoeLandPush. 0 published (the journal says 'pushed …', L10
-# mirrored $C); 1 the round ends; 2 final: [remote rejected] (MOE_PUSH_FAILED), or
+# mirrored $C; a [remote rejected] origin proved to hold $C included); 1 the round
+# ends; 2 final: [remote rejected] with no proof origin holds $C (MOE_PUSH_FAILED), or
 # unknown (§2.6): the journal kept as 'push unknown: …', $C on a push-unknown
 # rescue ref, and no row or finalize. Twin: wt_publish.
 function Publish-MoeWorktreeLanding([hashtable]$Git, [string]$Journal, [hashtable]$Res, [hashtable]$L, [hashtable]$M, [string]$B, [string]$C) {
