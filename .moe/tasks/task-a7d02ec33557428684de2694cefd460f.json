@@ -47,25 +47,37 @@
     {
       "stepId": "step-3",
       "description": "ps1 twin (DoD 1, both twins or neither). Edit scripts/moe-agent.ps1 in place with your TOOL-witnessed editor, keeping its UTF-8 BOM. Reference: /mnt/d/moe-scratch/plan-a7d0/ref/moe-agent.ps1.ref (sha256 c502f17a9d16c20ef14d7d2618549ae22f0c4156a271cfc2bda8f49a29b71bcf). +26 lines, inserts only. The description's ps1 line numbers are ~88 lines stale; these are current at 19d5e67a.\n(1) Get-MoeAccountLease (8853):\n- `$script:AccountLeaseWaited = $false` as its first line;\n- `$script:AccountLeaseWaited = $true` before `Start-Sleep -Seconds $trustSec` (8903);\n- `$script:AccountLeaseWaited = $true` before `Start-Sleep -Seconds $waitSec` (8910).\n(2) A new function `Test-MoeAccountWaitAttempt`, with its comment block, between Get-MoeAccountLease's closing `}` and `# Process-scoped Git hooks...` (8923). It does the following, in order:\n- return $true when `-not $script:AccountLeaseWaited`, or when `$script:MoeAttemptId` is empty or `$script:MoeAttemptGeneration` is $null;\n- return $true when `Read-MoeAttempt $preflightTaskId $script:MoeAttemptId $script:MoeAttemptGeneration` returns a record. On failure it prints its own `[WARN] Attempt identity unavailable: ...` and sets $script:MoeAttemptReadError;\n- otherwise Write-Host -ForegroundColor Yellow exactly `[account] MOE_ACCOUNT_WAIT_STALE_ATTEMPT task=$preflightTaskId attempt=$($script:MoeAttemptId) generation=$($script:MoeAttemptGeneration) ($($script:MoeAttemptReadError)) - the claim ended while this seat waited for an account; not launching the pre-wait prompt, re-running pre-flight now.` This is byte-identical to the sh line for the same state; the test asserts the same text on every engine;\n- then `if ($moeGit) { Remove-MoeLiveMarker $moeGit.GitDir $preflightTaskId }`, `Clear-MoeAccountLease`, `if ($script:ResumeAttempts -gt 0) { $script:ResumeAttempts-- }`, `$script:AccountRelaunch = $true`, and `return $false`.\n(3) At the call site (10155), right after `        Get-MoeAccountLease`: `        if (-not (Test-MoeAccountWaitAttempt)) { continue }`.\nPowerShell traps:\n- `continue` inside the main `do { } while (...)` jumps to its condition (11329). Under -NoLoop, $loopEnabled is false, so `$script:AccountRelaunch = $true` is what keeps the loop running. The dry-run mutant without it ended the run with no launch on powershell.exe and pwsh.exe.\n- Never put `continue` inside the function: PowerShell propagates break/continue out of functions dynamically.\n- Use Write-Host only. Any stray pipeline output would join the return value and flip `-not (...)`.\n- The worktree-mode Push-Location just before the lease is popped at the next iteration's top (9296), so `continue` needs no Pop-Location.\nError handling: a Read-MoeAttempt throw is already caught inside it and returns $null, which counts as not current. The seat launches nothing and re-runs pre-flight, and is never ended or deregistered.\nCheck: ParseFile under powershell.exe (5.1). The dry run also parsed it under pwsh 7.6.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-03T17:56:06.684Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "scripts/moe-agent.ps1 changes (+26, inserts only, BOM kept):\n- Get-MoeAccountLease: an $script:AccountLeaseWaited reset plus two sets.\n- New Test-MoeAccountWaitAttempt.\n- `if (-not (Test-MoeAccountWaitAttempt)) { continue }` after the lease call.\n\nThe +/- lines match the reference fix.diff exactly. HEAD carries 6d6bdc51's ps1 edits, so the whole file differs from the .ref, which was cut at 19d5e67a.\n\nChecks:\n- PS 5.1 ParseFile OK.\n- The Pop-Location for cliRootPushed sits at the iteration top (line 9321).\n- Windows node.exe account-wait-attempt.test.mjs: 12/12 pass on powershell.exe, pwsh.exe and Git Bash.",
+      "startedAt": "2026-11-03T17:56:06.684Z",
+      "completedAt": "2026-11-03T17:56:53.750Z"
     },
     {
       "stepId": "step-4",
       "description": "Document the behavior in scripts/CLAUDE.md, in the **Claude account rotation** bullet. Use the exact text from fix.diff's scripts/CLAUDE.md hunk.\n(1) Right after the sentence ending \"so the REVIEW self-heal leaves a waiting QA seat's row held.\", insert one sentence:\nA wait can still outlive the claim (a release or a peer's claim while the seat sleeps), so after any wait in the lease loop (this one or `MOE_ACCOUNT_UNTRUSTED` below) the wrapper re-reads the attempt it pinned at pre-flight before launching (`account_wait_recheck` / `Test-MoeAccountWaitAttempt`): a closed or superseded one launches nothing (`MOE_ACCOUNT_WAIT_STALE_ATTEMPT`), and the seat drops its live-session marker, gives the resume attempt back and re-runs pre-flight at once, even under `--no-loop`, for a fresh claim, context and pin; a lease that did not wait launches as before.\n(2) In that bullet's Tests list, right after the moe-account-lease.test.mjs entry, add:\n`scripts/tests/account-wait-attempt.test.mjs` (the post-wait attempt re-check of both launchers on every engine),\nNo other doc changes. docs/MCP_SERVER.md's lease_account section describes the daemon's side, which is unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/CLAUDE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md"
+      ],
+      "note": "scripts/CLAUDE.md, Claude account rotation bullet: added the post-wait re-check sentence, plus the account-wait-attempt.test.mjs entry in its Tests list. The +/- lines match the reference fix.diff exactly. All 6 changed files now match the reference hunks.",
+      "startedAt": "2026-11-03T17:56:54.608Z",
+      "completedAt": "2026-11-03T17:57:18.749Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification (DoD 1-3). Run the checkRef ONCE from the worktree root, exactly as written; copy also in /mnt/d/moe-scratch/plan-a7d0/ref/checkref.txt, sha256 5d33bc72f34fafc4bb6b2899c5bcfad5a65df3a28275abc4d38ded8ea770f2b1. It chains:\n- `bash -n scripts/moe-agent.sh`;\n- a PS 5.1 ParseFile of scripts/moe-agent.ps1, which prints `ParseFile OK`;\n- `bash scripts/tests/parity-check.sh`, with MOE_* scrubbed. It compares the MOE_ACCOUNT_ code family, so MOE_ACCOUNT_WAIT_STALE_ATTEMPT must be in both twins;\n- WSL node 24 `--test` of account-wait-attempt + moe-account-lease;\n- Windows node.exe `--test` of the same two files. Your worktree is on D:, so Windows can reach it (mem:gotcha-launcher-ps1-rows-from-wsl).\nThe architect's run on the patched tree exited 0: ParseFile OK; PASS parity-check.sh; WSL `tests 45 pass 44 fail 0 skipped 1`; Windows `tests 67 pass 65 fail 0 skipped 2`. Total about 3 min.\nError handling for a red run:\n- `idle_wait: command not found` means step 1(b) is missing.\n- A `missing boundaries:` assertion means a wrapper edit moved a cut anchor; restore the anchor.\n- A Windows-only failure with no assertion output: re-run that file alone through node.exe and read its first failing row.\n- Never weaken a row or a skip to get green.\nThat run's fresh output is the complete_task evidence. The landing's qualityGate (parity-check + npm run lint) runs again at completion.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T17:57:19.591Z"
     },
     {
       "stepId": "step-6",
@@ -95,12 +107,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:18:14.949Z",
-  "updatedAt": "2026-11-03T17:56:06.684Z",
+  "updatedAt": "2026-11-03T17:57:19.591Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:27:41.811Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -115,7 +127,9 @@
   ],
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:50:54.390Z",
