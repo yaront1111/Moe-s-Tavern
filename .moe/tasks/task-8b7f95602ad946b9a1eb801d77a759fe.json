@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "RED test first. Create moe-vscode/tests/board-confirmations.test.cjs with the Write tool, byte for byte from the reference /mnt/d/moe-scratch/plan-8b7f9560/board-confirmations.test.cjs (sha256 d6a93a584bce5ba51c509dd4f0cae10952151524d684efda6beeeb4ce92c636f). Rail: tracked files are written only through Edit/Write, never cp or git apply.\n\nHow the test loads things:\n- It runs the PRODUCTION media/board.js raw under node:vm. Its window.confirm and prompt answer false and null, as a VS Code webview sandbox does (mem:gotcha-vscode-webview-modals-blocked).\n- It runs the real BoardViewProvider and MoeDaemonClient transpiled, the way tests/approval-paths.test.cjs does. The client sits on a fake socket that records every daemon frame, and showWarningMessage answers with a scripted button.\n\nThe 10 rows are all named 'board-confirm <id>: ...'. Steps 4 and 5 count that prefix, so keep the names.\n- W1: the card-menu Delete posts {type:'deleteTask', taskId} and calls no page dialog.\n- W2: with the search 'alpha' hiding two of the three Done cards, the clear posts {type:'archiveDoneTasks'}.\n- W3: with epic-1 selected, the clear posts epicId 'epic-1'.\n- H1: Delete shows 'Delete \"Ship it alpha\"? This cannot be undone.' with {modal:true} and 'Delete', and sends DELETE_TASK only for 'Delete'.\n- H2: a dismissed Delete sends nothing.\n- H3: the clear quotes 'Archive 3 completed task(s)? They will be hidden from the board but remain on disk.' with 'Archive', then sends ARCHIVE_DONE_TASKS {}.\n- H4: an epic-1 clear quotes 2 and sends {epicId:'epic-1'}.\n- H5: a dismissed clear sends nothing.\n- H6: 0 DONE tasks in scope means no modal and no frame.\n- E1: the page's own post fed to the host, while the search shows 1 Done card, quotes 3.\n\nQuick test run from the worktree root. The worktree has no node_modules, so read the control checkout's TS6 JS typescript, read-only:\n`cd moe-vscode && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/board-confirmations.test.cjs`\nIt must be RED now: `# fail 10`, `# pass 0`.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/board-confirmations.test.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T17:53:20.630Z"
     },
     {
       "stepId": "step-2",
@@ -63,7 +64,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:27:25.325Z",
-  "updatedAt": "2026-11-03T17:51:43.982Z",
+  "updatedAt": "2026-11-03T17:53:20.630Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:42:52.615Z",
     "plannedStepCount": 5,
@@ -148,5 +149,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T17:51:06.922Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:53:20.630Z"
 }

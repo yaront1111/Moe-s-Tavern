@@ -67,9 +67,17 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's diff. Load the adversarial-self-review skill first.\nChecklist:\n- Every target either control can send is in setTaskStatus.ts VALID_TRANSITIONS[from]; PM7 proves it.\n- BLOCKED, BACKLOG, ARCHIVED and unknown cards have no left arrow and send nothing.\n- The AWAITING_APPROVAL -> WORKING approval guard in BoardViewProvider.updateTaskStatus and the next arrow are unchanged.\n- No prompt() is left in board.js.\n- The reopen reason never comes from the webview. A blank or Esc answer sends nothing, and a rejected input box is surfaced, not swallowed.\n- What happens if the task moved between render and click? The board reads currentState, and the daemon still refuses an illegal move.\n- Two quick clicks open two input boxes. Each sends at most one REOPEN_TASK, and the daemon's reopen is idempotent per status.\n- No added line contains a project.json globalRails.forbiddenPatterns string. Only the intended hunks changed (git diff), and the sibling rows' hunks (task-8b7f9560, task-e9a25fbf) are untouched.\nIf you find something, fix it inside the same 4 files and re-run step 4's command before complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T17:52:07.579Z"
+      "modifiedFiles": [
+        "moe-vscode/tests/board-previous-move.test.cjs",
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "note": "Loaded adversarial-self-review and read the complete scoped production/new-test diff. No further changes required. PM1/PM2/PM5/PM7 cover visibility, no-op statuses and daemon-legal targets; next/approval guards and both siblings' hunks are untouched. Confirmed no board prompt call, no added forbidden pattern and git diff --check is clean. IDs are validated, webview reasons ignored, blank/Esc no-op, rejected input shown and disconnect warns (PM4); reason text only travels as JSON, no evaluation. Stale board clicks read currentState, daemon validates again; detail retains the existing rendered-status behavior and daemon validation. Concurrent input boxes each send at most once; /ws serializes reopens under its mutex and taskStore rejects a duplicate once the first moves it to BACKLOG (effect-once, not a second success). No new resource lifetime or persistence side effects. Fresh step-4 joined checks remain unchanged/green: 703 tests, 693 pass, 0 fail, 10 skipped, exact six base failures; qualityGate also exit 0.",
+      "startedAt": "2026-11-03T17:52:07.579Z",
+      "completedAt": "2026-11-03T17:53:09.437Z"
     }
   ],
   "planRevision": 1,
@@ -93,12 +101,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:27:05.532Z",
-  "updatedAt": "2026-11-03T17:52:07.579Z",
+  "updatedAt": "2026-11-03T17:53:09.437Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:37:25.780Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -112,7 +120,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:45:18.939Z",
