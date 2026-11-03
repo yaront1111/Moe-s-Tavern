@@ -102,7 +102,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:46:19.358Z",
-  "updatedAt": "2026-11-03T23:12:22.431Z",
+  "updatedAt": "2026-11-03T23:23:28.251Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:46:37.166Z",
     "plannedStepCount": 5,
@@ -198,11 +198,10 @@
   "planApprovedAt": "2026-11-03T23:08:49.738Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T22:46:33Z",
-    "at": "2026-11-03T23:10:08.549Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T23:09:32Z",
+    "at": "2026-11-03T23:23:28.251Z"
   },
   "workStartedAt": "2026-11-03T23:10:45.169Z",
   "reviewStartedAt": "2026-11-03T23:12:22.429Z",
@@ -220,5 +219,26 @@
     "packages/moe-daemon/src/server/McpAdapter.ts",
     "packages/moe-daemon/CLAUDE.md"
   ],
-  "completionSummary": "Marked moe.claim_next_task and moe.release_task `blocking: true` (submit_plan precedent), so McpAdapter no longer holds the global state mutex across release_task's handoff disk-state capture or claim_next_task's stale-handoff recompute (git status, up to 3 s). Handlers are unchanged; every claim/release gate and write still runs inside the tool's own state.runExclusive. Updated the McpAdapter dispatch comment and packages/moe-daemon/CLAUDE.md first bullet to name both tools. New src/tools/diskStateDispatch.test.ts (d1, d2) drives both through McpAdapter.handle: mutex not held during the mocked capture, a bystander list_tasks answers before the capture ends, and all updateTask/updateWorker writes run under the mutex. Evidence: GREEN checkRef exit 0 (tsc + tt.json clean, Test Files 34 passed (34), Tests 1643 passed (1643)). RED checkRef at base 09529122 printed both FAIL lines, `Tests 2 failed (2)` and RED-AT-BASE (run before the fix; the test file has not changed since, so I did not re-run it). Known residual by design: release_task's force role check runs before the lock, as it already does on /ws RELEASE_TASK."
+  "completionSummary": "Marked moe.claim_next_task and moe.release_task `blocking: true` (submit_plan precedent), so McpAdapter no longer holds the global state mutex across release_task's handoff disk-state capture or claim_next_task's stale-handoff recompute (git status, up to 3 s). Handlers are unchanged; every claim/release gate and write still runs inside the tool's own state.runExclusive. Updated the McpAdapter dispatch comment and packages/moe-daemon/CLAUDE.md first bullet to name both tools. New src/tools/diskStateDispatch.test.ts (d1, d2) drives both through McpAdapter.handle: mutex not held during the mocked capture, a bystander list_tasks answers before the capture ends, and all updateTask/updateWorker writes run under the mutex. Evidence: GREEN checkRef exit 0 (tsc + tt.json clean, Test Files 34 passed (34), Tests 1643 passed (1643)). RED checkRef at base 09529122 printed both FAIL lines, `Tests 2 failed (2)` and RED-AT-BASE (run before the fix; the test file has not changed since, so I did not re-run it). Known residual by design: release_task's force role check runs before the lock, as it already does on /ws RELEASE_TASK.",
+  "commits": [
+    {
+      "sha": "d5431577a5e4e4e823811e30cb4f92cc4dcdc341",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T23:09:32Z",
+      "paths": [
+        "packages/moe-daemon/CLAUDE.md",
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/diskStateDispatch.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "recordedBy": "architect-24611a0a",
+      "recordedAt": "2026-11-03T23:23:28.251Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

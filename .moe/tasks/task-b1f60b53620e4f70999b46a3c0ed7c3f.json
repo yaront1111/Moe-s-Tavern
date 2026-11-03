@@ -59,7 +59,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -72,16 +72,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:48:44.894Z",
-  "updatedAt": "2026-11-03T23:18:55.660Z",
+  "updatedAt": "2026-11-03T23:23:26.993Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:04:32.009Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T23:23:26.990Z",
+    "wallClockMs": 1134981
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "medium",
@@ -184,5 +187,9 @@
     "kind": "completion",
     "sessionId": "worker-33f67e5b@2026-11-03T23:06:21Z",
     "at": "2026-11-03T23:18:55.660Z"
-  }
+  },
+  "completedAt": "2026-11-03T23:23:26.990Z",
+  "reviewCompletedAt": "2026-11-03T23:23:26.990Z",
+  "reviewSummary": "Reviewed completion 8f33694c (on moe/work-2026-10-24). Diff is +2/-0, docs/MCP_SERVER.md only; the two hunks (new lines 536 and 3162) sit under `### moe.amend_plan_step` and `### moe.get_activity_log` and nowhere else. No code touched; net 2 LOC. Re-ran task.verification myself: the section greps ('introduces', '[CONSTRAINT_VIOLATION] Rail violation', 'neither blocks', 'unknownEventTypes: string[]', 'only when non-empty') plus `npm run lint` at repo root all passed, exit 0.\n\nClaims checked against landed code. (1) amendPlanStep.ts:97-112 rail-checks the replacement in the step's place over every step's effective text plus affectedFiles/newFiles, refuses only the first violation not already in the plan (`already` vs `introduced`) via assertPlanRails before any write, with the quoted default action; util/rails.ts checks forbiddenPatterns then requiredPatterns, case-insensitive substring; the throw is CONSTRAINT_VIOLATION -32003 with a \"Rail violation:\" message. The bullet links submit_plan's Rail refusal note (line 380) rather than restating it, and makes no error.data claim. (2) getActivityLog.ts:145 computes distinct eventTypes not in ACTIVITY_EVENT_TYPES and :162 spreads unknownEventTypes into the reply only when non-empty; the bullet matches, incl. never refused and additive.\n\nAll DoD items and executionContract acceptance criteria met. Complexity pass: nothing to cut. Docs-only row, so lint plus section greps are the plan's test evidence. Nothing deferred or unverified.",
+  "requiredCheckAtDone": null
 }
