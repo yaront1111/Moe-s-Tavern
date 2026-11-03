@@ -1,0 +1,28 @@
+{
+  "id": "task-6a6d37822fa441c7afbdcf0178fd7b05",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains board shows a ▶ (move forward) on BLOCKED cards in the Working column that does nothing, because TaskColumn passes onNext to every card and getNextStatus(\"BLOCKED\") is null (onPrevious is already filtered by BoardMoves.hasPrevious)",
+  "description": "Held-back finding from defect hunt #4 (task-130a6a5c, architect-1dd28c7c, msg-eea862e7). It was held until task-0f2e958f, which shared MoeToolWindowPanel.kt, was DONE (17:41Z). The governor re-checked it at moe/work-2026-10-24 ff652048 at 17:42Z on 2026-11-03.\n\nPROBLEM (moe-jetbrains/src/main/kotlin/com/moe/toolwindow/):\n- MoeToolWindowPanel.kt:665 gives every column except Done `onNext = { task -> handleNext(task) }`. BLOCKED is display-mapped into the Working column.\n- board/TaskColumn.kt:175 passes `onNext = onNext` to every TaskCard unfiltered. The sibling onPrevious is filtered per card: `onPrevious?.takeIf { BoardMoves.hasPrevious(task.status) }`.\n- board/TaskCard.kt:266-275 renders the ▶ label whenever onNext != null.\n- handleNext (MoeToolWindowPanel.kt:538-545) starts with `getNextStatus(task.status) ?: return`. getNextStatus (:533-536) indexes workflowOrder, which has no \"BLOCKED\", so it returns null.\n- So a BLOCKED card offers a ▶ that silently does nothing. The board's way out of BLOCKED is unblock_worker resolveBlocks / set_task_status, not a forward move.\n\nFIX DIRECTION (the planner decides): filter onNext per card the way onPrevious is filtered, e.g. a BoardMoves.hasNext(status) that is false for DONE and BLOCKED (and any status getNextStatus maps to null), used at TaskColumn.kt:175. Keep the AWAITING_APPROVAL ▶, which routes to BoardApproval.approveRendered. Add JUnit 4 cases to the existing BoardMovesTest.kt. Note: BoardMovesTest.kt:13 still copies an old transition table (BACKLOG without REVIEW); fix that only if the new cases depend on it.\n\nNarrow row: the JetBrains gate is `gradlew.bat test` under the jetbrains-gradle lease, labelled Windows. No daemon or launcher suite. epic-be924fb8 isEpicFinal is the max-order fallback (ruling msg-bbf4f109).",
+  "definitionOfDone": [
+    "A BLOCKED card (and any card whose status has no forward move) renders no ▶. Cards in BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING and REVIEW keep their ▶ and current behavior.",
+    "A JUnit 4 test in moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ pins the per-status forward-move predicate, including BLOCKED and DONE returning false. It fails on ff652048 or does not compile there (RED evidence in a task comment).",
+    "`gradlew.bat test` passes under the jetbrains-gradle lease (Windows), with the command and output tail in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 396.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:42:21.168Z",
+  "updatedAt": "2026-11-03T17:42:21.168Z"
+}
