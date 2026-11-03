@@ -80,8 +80,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -93,7 +93,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:35:47.158Z",
-  "updatedAt": "2026-11-03T01:44:03.791Z",
+  "updatedAt": "2026-11-03T01:51:40.040Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:12.733Z",
@@ -103,7 +103,9 @@
     "firstClaimAt": "2026-11-03T00:19:24.858Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T01:51:10.680Z",
+    "wallClockMs": 5505822
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -233,10 +235,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T01:22:28Z",
-    "at": "2026-11-03T01:43:41.516Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T01:43:49Z",
+    "at": "2026-11-03T01:51:40.040Z"
   },
   "reviewStartedAt": "2026-11-03T01:42:28.850Z",
   "verification": {
@@ -246,5 +249,9 @@
     "reportedAt": "2026-11-03T01:42:28.850Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, the agent Git guard's Node program spawns git only by the absolute path the wrapper resolves, and on Windows powershell.exe only as %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe.\nChanges (+106/-16, 4 files):\n- Guard program, byte-identical and ASCII in both twins (5299 chars): a gitCmd 3rd argument and a strict marker check. Under strict it refuses a non-absolute git or powershell.\n- moe-agent.ps1: $guardGit = Find-MoeProtectedFile 'git' (.exe); no trusted git throws MOE_AGENT_GIT_GUARD_FAILED.\n- moe-agent.sh: guard_git = protected_path_lookup git <project> .exe, || return 1, so :10139 prints MOE_AGENT_GIT_GUARD_FAILED.\n- Legacy passes 'git' and spawns 'powershell.exe' as before.\n- Both NoDefaultCurrentDirectoryInExePath comments and the ARCHITECTURE.md Protected control plane bullet now give the corrected libuv 1.48+ fact. The bullet names the agent CLI's own bare-name spawns as the residual, plus the open lookups (0b2ea570 sh, 3acf7f79 ps1).\nTests: G1 (PS5.1+PS7, Windows) and G2 (bash). RED on 12d7bb62: G1 '.' run actual ['git.exe']; G2 parents 'bash,node'. Now GREEN.\nGate: the joined checkRefs, run fresh on the final bytes, GATE_EXIT=0. Linux 187/159 pass/0 fail/28 skip; Windows 249/208/0/41; ParseFile OK; parity PASS; lint OK.\nMutants, in a scratch copy with a control run first:\n- M1 (ps1 'git'), M2 (sh git) and M3 (bare powershell.exe): KILLED on the exit-code assertion, because the strict check or the failed plant refuses.\n- M1+M5: KILLED, ['git.exe']. M2+M5: KILLED, 'bash,node'.\n- M4 (Get-Command git): KILLED, ['git.exe'].\n- M5 (both strict checks removed): SURVIVES, as expected for defense in depth.\nResiduals:\n- A planted powershell.exe (a node.exe copy) exits on -NoProfile before the --require logger loads. G1 sees it only as a failed launch, and the test comment now says so.\n- The sh twin under Git Bash is not exercised (suite limitation). It relies on MSYS path conversion.\n- Find-MoeProtectedFile alias forms: t"
+  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, the agent Git guard's Node program spawns git only by the absolute path the wrapper resolves, and on Windows powershell.exe only as %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe.\nChanges (+106/-16, 4 files):\n- Guard program, byte-identical and ASCII in both twins (5299 chars): a gitCmd 3rd argument and a strict marker check. Under strict it refuses a non-absolute git or powershell.\n- moe-agent.ps1: $guardGit = Find-MoeProtectedFile 'git' (.exe); no trusted git throws MOE_AGENT_GIT_GUARD_FAILED.\n- moe-agent.sh: guard_git = protected_path_lookup git <project> .exe, || return 1, so :10139 prints MOE_AGENT_GIT_GUARD_FAILED.\n- Legacy passes 'git' and spawns 'powershell.exe' as before.\n- Both NoDefaultCurrentDirectoryInExePath comments and the ARCHITECTURE.md Protected control plane bullet now give the corrected libuv 1.48+ fact. The bullet names the agent CLI's own bare-name spawns as the residual, plus the open lookups (0b2ea570 sh, 3acf7f79 ps1).\nTests: G1 (PS5.1+PS7, Windows) and G2 (bash). RED on 12d7bb62: G1 '.' run actual ['git.exe']; G2 parents 'bash,node'. Now GREEN.\nGate: the joined checkRefs, run fresh on the final bytes, GATE_EXIT=0. Linux 187/159 pass/0 fail/28 skip; Windows 249/208/0/41; ParseFile OK; parity PASS; lint OK.\nMutants, in a scratch copy with a control run first:\n- M1 (ps1 'git'), M2 (sh git) and M3 (bare powershell.exe): KILLED on the exit-code assertion, because the strict check or the failed plant refuses.\n- M1+M5: KILLED, ['git.exe']. M2+M5: KILLED, 'bash,node'.\n- M4 (Get-Command git): KILLED, ['git.exe'].\n- M5 (both strict checks removed): SURVIVES, as expected for defense in depth.\nResiduals:\n- A planted powershell.exe (a node.exe copy) exits on -NoProfile before the --require logger loads. G1 sees it only as a failed launch, and the test comment now says so.\n- The sh twin under Git Bash is not exercised (suite limitation). It relies on MSYS path conversion.\n- Find-MoeProtectedFile alias forms: t",
+  "completedAt": "2026-11-03T01:51:10.680Z",
+  "reviewCompletedAt": "2026-11-03T01:51:10.680Z",
+  "reviewSummary": "Reviewed completion 01e24e87 (on moe/work-2026-10-24 and origin). Diff: 4 files, +106/-16, net 90, within approvedScope.\nRe-ran task.verification on a git archive snapshot of 01e24e87:\n- Linux leg (env -i): 187 tests, 159 pass, 0 fail, 28 skip.\n- Windows node.exe leg: 249/208/0/41.\n- G1 PS5.1+PS7, G2 bash, C1 and C2 green. ParseFile exit 0, parity PASS, lint OK.\nDoD 1:\n- Under the marker the guard program spawns only the absolute git the wrapper passes, and %SystemRoot%'s powershell.exe; a non-absolute one is refused.\n- G1 under the marker (with and without '.'): no planted guard child. Legacy: ['git.exe'] (non-vacuous).\n- My mutants: M2+M5 (sh bare git, strict check removed) fails G2 'bash,node'. M1+M5 (ps1 'git') fails G1 on both PS with ['git.exe'].\n- sh twin under Git Bash, probed directly: /mingw64/bin/git becomes 'C:/Program Files/Git/mingw64/bin/git' via MSYS conversion; isAbsolute is true and spawnSync runs the real git.\nDoD 2:\n- Legacy passes 'git' and spawns 'powershell.exe' unchanged. agent-git-guard.test.mjs is green on both legs.\n- Twin programs equal (5299 chars) and ASCII. ps1 BOM kept, 0 CR.\n- No new MOE_ code; missing git takes the existing MOE_AGENT_GIT_GUARD_FAILED path.\nDoD 3: the ARCHITECTURE bullet corrects the libuv claim and names the agent CLI's own bare-name spawns as the residual. No NEVER_RUNS_GIT phrase.\nPonytail: nothing to cut ($gitExtensions repeats $nodeExtensions, taste only).\nAccepted residuals: a planted powershell.exe is caught only via the exit code; '.' lookups stay open in task-0b2ea570 and task-3acf7f79.",
+  "requiredCheckAtDone": null
 }
