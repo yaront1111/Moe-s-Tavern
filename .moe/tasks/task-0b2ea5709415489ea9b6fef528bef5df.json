@@ -9,10 +9,49 @@
     "Legacy seats are unchanged; parity-check.sh and the launcher suites exit 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Append after the G2 row of scripts/tests/protected-agent-command.test.mjs, reusing its helpers (fixture, run, launch, cliStub, plantInterpreters, plantedEntries, assertRefused, assertRuntime, interpreterNotFound, show, CALL, TAIL, SEP, nodeBin). Read mem:gotcha-protected-agent-command-reaching-the-cli: only a governor seat launches the CLI against the inert runtime.\n(a) TOOLS = dirname, git, sed, mktemp, basename, uname, grep, tr, wc, cat, rm, mkdir, date and bash, each kept only when a TAIL dir holds it. plantTools(fx) writes one stub per tool into fx.project and into fx.project/bin, mode 0o755, with these lines:\n- `#!/bin/sh`\n- `echo 'project <tool>' >> '<fx.ran>'`\n- `exec '<that TAIL file>' \"$@\"`\nThe stubs forward to the real tool, so a legacy run still works and proves the plant is reachable.\n(b) W1, one row per plantedEntries label.\n- Setup: plantTools, then cliStub(fx, fx.trusted, 'claude', 'trusted').\n- For marker '1' and for null, run(sh, fx, { command: 'claude', marker, role: 'governor', pathEntries: [entry(fx), nodeBin(fx), fx.trusted, ...TAIL], env: { MOE_NODE_COMMAND: undefined } }).\n- Both runs exit 0 with 'trusted claude' in ran.log.\n- Under the marker, no ran.log line starts with 'project '.\n- The legacy run, in the same fixture, logs 'project dirname'.\n(c) W2: plantTools, pathEntries ['.'] with nodeDir: false, a governor seat and marker '1'. Assert assertRefused(sh, fx, r, interpreterNotFound('python3')): exit 1, that one line, and no tool, CLI, runtime call or MCP config.\n(d) M2, one row per plantedEntries label, plus an 'only a dot' row whose PATH is exactly '.'.\n- Setup: plantInterpreters, then .moe/daemon.json containing '{}'.\n- Run moe-call.sh standalone, built like M1: the process env without MOE_/CLAUDE/FAKE_ keys, HOME fx.home, MOE_PROXY_PATH fx.runtime, and launch(sh.exe, [CALL, 'get_context', '{}', '--project', fx.project], fx, env).\n- Marker '1' with a label: exit 1, stderr exactly 'Error: no response from daemon\\n', and assertRuntime(fx, r).\n- Marker '1' with only '.': exit 1, stderr exactly 'Error: node not found\\n', no rpc.log and no ran.log.\n- Marker unset: some ran.log line starts with 'project ' (the planted python3 or node ran).\n(e) S2, a static check that runs on every OS. Strip the PS1 comment lines the way S1 does. The result contains this statement exactly once: `if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) { $env:PATH = [IO.Path]::GetDirectoryName($script:MoeNode) + [IO.Path]::PathSeparator + $env:PATH }`. It must sit after `Set-Alias -Name node -Value $script:MoeNode -Scope Script` and before `$script:MoeProtectedCli = $null`.\n(f) S3, static: the text from `protected_trusted_dir() {` through its first `\\n}\\n` is non-empty and byte-identical in scripts/moe-agent.sh and scripts/moe-call.sh.\nRecord RED on the unfixed bytes before step 2. The prototype of (b) to (d), /mnt/d/moe-scratch/0b2ea570-plan/proto-rows.mjs, failed 10 of 10 on f7b077f7; base-red.log there shows the planted dirname, mktemp, basename, sed, git and bash running. The same rows passed with the prototype fix.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 1, sh wrapper. Under MOE_RUNTIME_PROTECTED=1, scripts/moe-agent.sh rewrites PATH before its first bare-name command. That first command is the dirname on the SCRIPT_DIR line. git and sed (in moe_wrapper_in_worktree) and the ROOT_DIR dirname also run today before the marker is read.\n(1) Move normalize_path (with its two comment lines) and protected_trusted_dir (with its comment line) up to just after the colour variables, byte for byte, so the early block can call them. Both use builtins only.\n(2) Add protected_scrub_path, with a comment naming task-0b2ea570.\n- Its arguments are project real paths. With none, use one empty project: protected_trusted_dir then still drops empty, '.', relative and nonexistent entries.\n- Split PATH with `IFS=: read -r -a`.\n- Keep an entry only when protected_trusted_dir accepts it for every project. Keep the real path it prints, in order; duplicates may stay.\n- If nothing is kept, print the existing python3 MOE_PROTECTED_INTERPRETER_NOT_FOUND line to stderr and exit 1. That line is always true here, because python3 is pinned only from PATH.\n- Otherwise export PATH.\n- Never export an empty PATH: bash then searches the current directory, which is the project. Probed on bash 5.2: `env PATH= bash -c dirname` runs ./dirname, and so does `unset PATH` inside bash.\n(3) Directly after the function, add a block guarded by `[ \"${MOE_RUNTIME_PROTECTED:-}\" = 1 ]`. Use that guard because RUNTIME_PROTECTED is set lower down.\n- Into a global array MOE_PROTECTED_PROJECTS, collect the real path, `cd -- \"$(normalize_path \"$tok\")\" && pwd -P`, of every token that follows a -p or --project token in \"$@\". The parser keeps the last such value, and every value it can take is such a token.\n- Skip a token that does not resolve. protected_pin_interpreters refuses that seat before any helper or CLI runs.\n- Then call the scrub.\n(4) Call the scrub again right after the $HOME/.local/share/moe/npm/bin append: `[ \"$RUNTIME_PROTECTED\" != 1 ] || protected_scrub_path \"${MOE_PROTECTED_PROJECTS[@]}\"`. The wrapper's only other PATH write is use_node's pinned directory, which is already trusted.\nError handling:\n- An unresolvable candidate is skipped.\n- When no entry survives, the refusal exits 1 before the EXIT trap and create_secure_temp exist, so there is nothing to deregister or clean.\n- When a tool is missing from every trusted entry, the existing ROOT_DIR dirname assignment fails under set -e (exit 127) before any helper runs. Probed.\nConstraints:\n- Builtins only, up to and including the scrub.\n- Bash 3.2 must parse and run it: CI parses this file with macOS /bin/bash 3.2, and JetBrains runs Mac seats through it. So no mapfile, no declare -A, no new ${x,,}, and no quoted heredoc inside $( ).\n- No new MOE_ code, because parity-check compares the code sets.\n- Legacy (the marker unset or not exactly '1') runs none of this.\n- Leave the NoDefaultCurrentDirectoryInExePath comment and its ps1 twin as they are.\nReference: /mnt/d/moe-scratch/0b2ea570-plan/proto-moe-agent.sh.diff; the suite run with it gave 119 tests, 93 pass, 0 fail, 26 skip. Edit with the Edit tool, then run `bash -n`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 1 for moe-call.sh, DoD 2, and the doc.\n(1) scripts/moe-call.sh.\n- Define a byte-identical copy of protected_trusted_dir, with its comment line, just above the existing `if [ \"${MOE_RUNTIME_PROTECTED:-}\" = 1 ]` block. S3 pins the copy.\n- In that branch, after PYTHON_CMD=\"\", resolve PROJECT's real path with `cd -- \"$PROJECT\" && pwd -P`. A failure leaves it empty.\n- Keep each PATH entry protected_trusted_dir accepts, and only when the project resolved: without a real path, no entry can be proven outside the project. Keep the real paths in order.\n- If nothing is kept, run `echo \"Error: node not found\" >&2; exit 1`, the existing line. Otherwise export PATH.\n- All of this runs before find_node and before the first node exec.\n- The file runs under set -euo pipefail, and macOS CI runs moe-call.test.mjs with /bin/bash 3.2. So expand the array as ${a[@]+\"${a[@]}\"} and keep every test that can fail inside an && list.\n- Reference: /mnt/d/moe-scratch/0b2ea570-plan/proto-moe-call.sh.diff.\n(2) scripts/moe-agent.ps1: right after `Set-Alias -Name node -Value $script:MoeNode -Scope Script` in the protected block, add a two-line comment and exactly the S2 statement. Change nothing else, and keep the BOM and LF endings.\n- Why POSIX: there the agent CLI's `#!/usr/bin/env node` shebang, and every other child, finds node by name. sh's use_node prepends for the same reason.\n- Why not Windows: there the .cmd shim's node lookup is cmd.exe's, which NoDefaultCurrentDirectoryInExePath covers (row C2). A Windows prepend would also put the node folder ahead of fx.trusted in rows A1 and T3 on hosts whose npm prefix is that folder. Windows '.', relative and in-project entries stay with task-3acf7f79.\n(3) docs/ARCHITECTURE.md, Protected control plane bullet. Replace \"The launchers' own lookups through such PATH entries are open: task-0b2ea570 (sh) and task-3acf7f79 (ps1).\" with these facts, keeping the bullet's ~120-column wrap:\n- Under the marker, moe-agent.sh and moe-call.sh rewrite PATH, before their first bare-name command, to its absolute entries outside the project.\n- A rewrite that keeps no entry refuses, because an empty PATH makes bash search the current directory.\n- So neither they nor the agent CLI they start finds a tool through a '.', relative or in-project entry.\n- The ps1 launcher's own lookups stay open (task-3acf7f79). On POSIX it puts the pinned node's directory first.\nError handling: both sh refusals exit 1 with an existing line. The ps1 statement runs only after a successful pin; Stop-MoeProtectedAgent already exits on a failed one.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/moe-agent.ps1",
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once, before moe.complete_task. From the task worktree root, run the three checkRefs joined with ' && ' as one command. It must be byte for byte the string in /mnt/d/moe-scratch/0b2ea570-plan/joined.sh (sha256 in SHA256SUMS there). Its fresh output is the complete_task verification evidence: command, exitCode and outputTail.\n- r0 (Linux, env -i): bash -n on both sh files, then node --test on protected-agent-command, moe-call, agent-git-guard, agent-runtime, prompt-cache-launcher and usage-launcher.\n- r1 (Windows node.exe, run from a normal WSL shell, because env -i loses git and where.exe; mem:gotcha-protected-agent-command-reaching-the-cli): the same suites without agent-runtime. This covers moe-call.sh under Git Bash and the PS 5.1 and PS 7 rows.\n- r2: moe-agent.ps1 ParseFile, then parity-check.sh, then npm run lint.\nBaselines:\n- Windows moe-call.test.mjs: 41/41 on f7b077f7.\n- The prototype's Linux protected and moe-call run: 119 tests, 93 pass, 0 fail, 26 skip.\n- 52555102's gate on 01e24e87: Linux 187/159/0/28, Windows 249/208/0/41.\nRules:\n- These harnesses may run in place.\n- Never run npm install, build or test in the shared checkout's packages.\n- Never pattern-kill processes; kill only PIDs your session started.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review: one pass over this task's diff before complete_task, using the adversarial-self-review skill. Check:\n(a) No bare-name command runs above the early scrub. List every line above it; each must be a builtin.\n(b) PATH can never end up empty after a scrub.\n(c) Every -p or --project value the parser takes is a token the pre-scan reads. Check against the parser's case list; --project=x is an Unknown option.\n(d) A hot-reload exec of the pinned copy re-runs the scrub idempotently.\n(e) Git Bash path forms and the slow MSYS fork are exercised by r1's moe-call.test.mjs.\n(f) Legacy bytes are untouched: the W1 and M2 legacy halves, L1, L2, C1 and G2's legacy half.\n(g) Concurrency: the scrub changes only the process environment, so there is no shared state.\n(h) A huge PATH costs one subshell per entry.\n(i) No bash-4-only construct is reachable on a stock Mac seat.\n(j) The error handling of every exit path.\n(k) Mutants, in a scratch copy: a git archive of the worktree HEAD's scripts plus your overlay, with a control run first. Each must fail:\n- the scrub moved below ROOT_DIR, or after the parser: W1;\n- the in-project test dropped: the absolute in-project W1 and M2 rows;\n- an empty PATH exported instead of the refusal: W2;\n- the moe-call scrub removed: M2;\n- the ps1 statement removed, or its condition flipped: S2;\n- the moe-call copy of protected_trusted_dir edited: S3.\nList killed and surviving mutants in the completion summary, with the RED evidence from step 1.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -43,7 +82,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:31.431Z",
-  "updatedAt": "2026-11-03T02:26:34.334Z",
+  "updatedAt": "2026-11-03T02:53:50.588Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:17.160Z",
@@ -54,9 +93,94 @@
     "task-525551023b9d4931a1cf983ce02a6cfb"
   ],
   "metrics": {
-    "firstClaimAt": "2026-11-03T02:26:32.056Z"
+    "firstClaimAt": "2026-11-03T02:26:32.056Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-26483323"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T02:53:39.555Z",
+  "executionContract": {
+    "intendedBehavior": "Under MOE_RUNTIME_PROTECTED=1 (exactly '1'), scripts/moe-agent.sh and scripts/moe-call.sh rewrite PATH to its absolute, existing entries whose real path is outside the project. They keep the real paths in their original order. moe-agent.sh does this before its first bare-name command and again after its npm/bin append; moe-call.sh does it before node. So no empty, '.', relative or in-project entry reaches a project-planted dirname, git, sed, mktemp, basename, bash or node, whether the wrapper or the agent CLI it starts looks the name up. A rewrite that keeps nothing refuses, exiting 1 with an existing line, instead of exporting an empty PATH. On POSIX pwsh, moe-agent.ps1 puts the pinned node's directory first on PATH. Legacy runs (the marker unset or not exactly '1') are unchanged.",
+    "acceptanceCriteria": [
+      "W1 (4 labels): under the marker no planted tool runs, and the trusted CLI launches (exit 0). The legacy half of the row runs the planted dirname.",
+      "W2: a PATH of only '.' refuses with the python3 MOE_PROTECTED_INTERPRETER_NOT_FOUND line before any planted tool runs.",
+      "M2 (4 labels plus only '.'): a protected standalone moe-call.sh never runs a planted node. With no trusted entry it prints 'Error: node not found' and exits 1. Legacy reaches the plant.",
+      "S2: moe-agent.ps1 prepends the pinned node's directory on POSIX pwsh only, right after the protected Set-Alias node.",
+      "S3: protected_trusted_dir is byte-identical in moe-agent.sh and moe-call.sh.",
+      "The joined checkRefs exit 0: the Linux and Windows suites, the ps1 ParseFile, parity-check and lint."
+    ],
+    "invariants": [
+      "Under the marker, no bare-name command executes in moe-agent.sh before the early scrub.",
+      "A scrub never exports an empty PATH.",
+      "No new MOE_ code; the refusals reuse existing lines.",
+      "Legacy (the marker not exactly '1') runs none of the new code.",
+      "protected_trusted_dir stays byte-identical across moe-agent.sh and moe-call.sh."
+    ],
+    "compatibility": [
+      "The existing rows stay green on Linux, on Windows Git Bash, and under PS 5.1 and PS 7: N0-N5, P1, M1, L1, L2, R1, R2, A1, T1/T2, T3, C1, C2, G1, G2, S1, and every moe-call.test.mjs row.",
+      "JetBrains passes --project for bash launches (TerminalAgentLauncher.kt:738), so a protected sh seat always names its project.",
+      "A protected seat started with --project-name only keeps today's refusal at interpreter pinning."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: normalize_path and protected_trusted_dir moved up unchanged; the new protected_scrub_path and MOE_PROTECTED_PROJECTS; the early marker block; one call after the npm/bin append.",
+      "scripts/moe-call.sh: a twin protected_trusted_dir, and the scrub inside the existing marker branch.",
+      "scripts/moe-agent.ps1: one POSIX-only $env:PATH statement and a two-line comment after the protected Set-Alias node.",
+      "docs/ARCHITECTURE.md: the open-lookups sentence of the Protected control plane bullet.",
+      "scripts/tests/protected-agent-command.test.mjs: TOOLS, plantTools, ranLines and rows W1, W2, M2, S2 and S3, after G2."
+    ],
+    "reuse": [
+      "protected_trusted_dir, the -ef walk protected_path_lookup already trusts: moved up, and copied into moe-call.sh.",
+      "normalize_path for the -p token, as the final project resolution already uses it.",
+      "The python3 MOE_PROTECTED_INTERPRETER_NOT_FOUND line, and moe-call.sh's 'Error: node not found', as the refusals.",
+      "The suite's helpers, and the M1, N5 and G2 row patterns."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh at f7b077f7: dirname at :23 (SCRIPT_DIR), git and sed in moe_wrapper_in_worktree (:30-37, called at :42) and dirname at :46 (ROOT_DIR) all run before the marker is read at :51. The parser (:293-417) is builtins only, and create_secure_temp (mktemp) runs after it.",
+      "normalize_path (:258-275) and protected_trusted_dir (:527-538) use builtins only. protected_pin_interpreters runs at :710, before the registry lookup at :795.",
+      "The only PATH writes in moe-agent.sh are the npm/bin append (:68-73) and use_node (:133).",
+      "scripts/moe-call.sh: under the marker, Python is skipped (:104). find_node uses command -v and an ls|sort|tail nvm fallback, and node first executes when the request is built.",
+      "moe-agent.ps1 :562-569 pins node with Find-MoeProtectedFile and a script-scope Set-Alias, and never writes $env:PATH.",
+      "ci.yml parses moe-agent.sh with macOS /bin/bash 3.2 (:209-215), and runs moe-call.test.mjs on ubuntu, windows (Git Bash) and macOS (/bin/bash) (:263-264)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && bash -n scripts/moe-call.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}'",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; }",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$R/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Scrub after the project is resolved: rejected, because dirname, git, sed, mktemp and basename run before then. (2) A $PWD fallback candidate: rejected, because it drops $HOME entries when the cwd is not the project. (3) PATH=/dev/null when no entry survives: rejected for the wrapper, which then dies at ROOT_DIR with exit 127 and 'dirname: command not found'; a refusal with an existing line is clearer. (4) Make moe-call.sh refuse under the marker without a pinned node: rejected, because a standalone protected call has no pin to check, and the scrub gives the same guarantee. (5) Strip NODE_OPTIONS/NODE_PATH (comment-801bb755): out of scope. It is not in the DoD, and it changes the agent CLI's own environment, such as a user's --max-old-space-size. Decide it for both twins with task-3acf7f79. (6) Prepend the ps1 node dir on Windows too: rejected, for the reasons in step 3. (7) A dynamic POSIX pwsh row: it would be skipped on this host (no pwsh in WSL) and on Windows. So S2 pins the statement statically, as S1 does for the other ps1 node pins.",
+    "codebaseInsights": "The first bare-name command is the SCRIPT_DIR dirname, which runs before the marker is read. The parser uses builtins only. protected_pin_interpreters runs before the registry lookup, so a --project-name-only protected seat already refuses. The only PATH writes are the npm/bin append and use_node. CI parses moe-agent.sh with macOS bash 3.2, and JetBrains runs Mac seats through it. moe-call.test.mjs runs on 3 OSes, with /bin/bash 3.2 on macOS; it passes 41/41 under Windows Git Bash today. The prototype (/mnt/d/moe-scratch/0b2ea570-plan) kept every existing protected row green with real-path PATHs, and made the new rows go from 10/10 red to green.",
+    "risks": "Bash 3.2 runtime on Mac seats cannot be run here, so keep to constructs protected_path_lookup already uses. Git Bash forks one subshell per PATH entry, which adds seconds to each protected moe-call.sh on Windows. A literal '~' entry is not absolute and is dropped, the same way protected_path_lookup already skips it. Other epics' open rows touch other regions of moe-agent.sh/.ps1 (CQ-M07m/n, WT-14, b5c8fd34, 3ad573a7); landing merges those. Moving the two helpers creates two mid-file hunks. task-89579137 now dependsOn this row, because both touch the same test-file tail and ps1.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-call.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/protected-agent-command.test.mjs",
+      "docs/ARCHITECTURE.md",
+      "/mnt/d/moe-scratch/0b2ea570-plan/README.txt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "f7b077f77fbc3e00c8dc3c85c3a88dff60e6d884",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T02:53:39.584Z",
+  "approvedPlanRevision": 1
 }

@@ -73,14 +73,19 @@
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW of your own diff.\n(1) `git diff -U0 -- scripts/moe-agent.ps1 scripts/moe-team.ps1` touches only path-binding parameters, the two comments and the Start-Process -WorkingDirectory arguments. Check: no reordered logic; no dropped -ErrorAction, -Encoding, -Raw, -NoNewline, -Force, -Recurse or -PathType; no converted Env: or New-Item calls.\n(2) moe-agent.ps1 still starts with the BOM and is LF only; moe-team.ps1 is still ASCII.\n(3) Relative -Project, `~`, -ProjectName, and paths with spaces, é, $ or ' behave as before. -LiteralPath still resolves relative paths, `..` and `~` (probed). Test-Path -LiteralPath reports illegal path characters exactly as -Path does (probed), so Resolve-CommandParts is unchanged for non-path -Command strings.\n(4) Mutation proof, in a /mnt/d/moe-scratch snapshot and never in the shared tree:\n- Revert all four of these at once: Resolve-Path $Project, Test-Path $moeDir, the daemon Start-Process -WorkingDirectory, and the GEMINI.md Set-Content. The Linux static test must fail, naming all four lines.\n- Then revert only Resolve-Path $Project. The Windows-native run must fail the PS 5.1 cases with 'Project path not found'.\n(5) The scanner self-test pins every rule branch: comment, command position, nesting, Env: and G2.\n(6) The test always cleans its temp roots and kills its fake daemon, even on assertion failure. There are no sleeps except the fake daemon's lifetime, and timeouts are generous for CI.\n(7) .github/workflows/ci.yml is also planned by task-4e412148 (CQ-I06, unassigned). Before completing, check moe.get_commit_scope peerDeclared. If the landing holds ci.yml as contested, follow the MOE_CONTESTED_HELD remedy; never hand-land it.\nFix anything you find, and rerun step 5 if code changed.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T01:57:26.917Z"
+      "modifiedFiles": [
+        "scripts/tests/literal-project-path.test.mjs"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW. It found 3 more fail-open holes in the static guard, the same class as QA's reject. All 3 pass the reworked scanner at 4ddd861e (proven with launcher mutants in scratch). Fixed test-only: scripts/tests/literal-project-path.test.mjs +17/-8 vs 4ddd861e, 232 lines, sha 723c8cf0. The launchers, ci.yml and daemon-json-cap are byte-identical to the landed a0269bcd.\n\nHoles and fixes:\n1. Env: exemption matched any top-level original text, so trailing comments and string args counted.\n   - Mutants: `Remove-Item $mcpConfigFile -Force ... # also drops stale Env: copies` (L10674) and `Set-Content $probeFile \"Env:PATH=$env:PATH\"` were exempt.\n   - Fix: anchor it to the operand, `^\\s*(?:-Path\\s+)?[\"']?Env:`. All 10 launcher Env: uses fit.\n2. G2 accepted any `WildcardPattern]::Escape(` in the segment.\n   - Mutant: team L100 `-ArgumentList ...([...]::Escape($workerCmd)) -WorkingDirectory (Get-Location ...).ProviderPath` passed.\n   - Fix: the escape must be -WorkingDirectory's own value (escapedDirectory); the top-level -WorkingDirectory check stays. All 4 Start-Process calls fit.\n3. The coverage view masked expandable @\" here-strings.\n   - Mutant: `$(Get-Content $knownIssuesPath -Raw)` inside the L9211 here-string was neither inspected nor reported.\n   - Fix: mask only literal @' here-strings. None of the 10 expandable here-strings names a listed cmdlet today.\n\nSelf-test: +4 samples, each pinning one rule. Violations [0,2,3,7,8,16,18,20,21,22,26,27,28,29]; uninspected [5,14,31]. RED on the old scanner: samples 27-29 were missed.\n\nMutation proof (scratch only):\n- Launcher mutants: clean 0/0. QA's 3 sites flagged. L450 control flagged. The plan's 4-site revert flags exactly L435, L450, L914 and L9342. E1, E2 and G2 flagged; H1 reported uninspected.\n- Scanner mutants S1-S12 all killed: old masker; ) or quotes dropped from the # boundary; every # a comment; coverage masking strings; coverage dropping here-strings; Env: unanchored; G2 escape anywhere; coverage masking @\"; no top-level -WorkingDirectory check; no Env: exemption; -LiteralPath anywhere.\n- Windows, item (4): with only Resolve-Path -LiteralPath $Project reverted, the 4 PS 5.1 cases fail with 'Project path not found' (4 hits).\n\nItems:\n- (1) vs 717c4019, the 77 removed and 77 added non-comment launcher lines are identical once path binding and the escaped -WorkingDirectory are normalized out; the flag multiset is identical.\n- (2) BOM ef bb bf, 0 CR; moe-team.ps1 ASCII.\n- (3) Launcher bytes are unchanged since QA verified them.\n- (6) The t.after cleanup is unchanged.\n- (7) get_commit_scope: none of the 50 peerDeclared entries names the test file, and ci.yml is not dirty.\n\nKnown limits, not fixed:\n- Aliases (rm/cd/gc) are not listed. Listing them would flag hashtable keys such as `type =`; the AST shows 0 alias invocations.\n- A mixed `Remove-Item Env:X, $file` list.\n\nVerification: the task.verification command ran verbatim, 02:10:54-02:51:53Z, VERIFY_EXIT=0.\n- Linux 3 pass / 5 skip.\n- PASS parity.\n- Windows 8/8, 0 skip.\n- postflight-safe PS 5.1: exit 0, NONE.\nGate (parity + lint): 0.",
+      "startedAt": "2026-11-03T01:57:26.917Z",
+      "completedAt": "2026-11-03T02:52:21.491Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8cf0816c",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -111,7 +116,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-03T01:57:26.917Z",
+  "updatedAt": "2026-11-03T02:54:13.918Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
@@ -125,7 +130,7 @@
     "firstClaimAt": "2026-10-30T16:38:29.657Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 11,
+    "executedStepCount": 12,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -143,7 +148,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [
     {
@@ -325,21 +331,33 @@
       "treeId": "e70a85260f8c1048d50a169516b594754b395397",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "384f0c555fb49c9afc6aa85f60fc701c46b37a3e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T01:55:25Z",
+      "paths": [
+        "scripts/tests/literal-project-path.test.mjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T02:54:13.918Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/literal-project-path.test.mjs",
-    ".github/workflows/ci.yml",
     "scripts/moe-agent.ps1",
-    "scripts/moe-team.ps1",
-    "scripts/tests/daemon-json-cap.test.mjs"
+    "scripts/moe-team.ps1"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T00:50:07Z",
-    "at": "2026-11-03T01:54:51.032Z"
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-03T01:55:25Z",
+    "at": "2026-11-03T02:54:13.918Z"
   },
   "workStartedAt": "2026-11-02T19:45:29.085Z",
   "blockedReason": null,
@@ -347,15 +365,15 @@
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "reviewStartedAt": "2026-11-02T23:29:59.550Z",
+  "reviewStartedAt": "2026-11-03T02:53:13.350Z",
   "verification": {
     "command": "R=$(pwd) && mkdir -p /mnt/d/moe-scratch && W=$(mktemp -d /mnt/d/moe-scratch/literal-XXXX) && B=$(git rev-parse -q --verify MERGE_HEAD || echo HEAD) && git archive \"$B\" scripts | tar -x -C \"$W\" && cp scripts/moe-agent.ps1 scripts/moe-team.ps1 \"$W/scripts/\" && cp scripts/tests/literal-project-path.test.mjs scripts/tests/daemon-json-cap.test.mjs \"$W/scripts/tests/\" && cd \"$W\" && node --test scripts/tests/literal-project-path.test.mjs && bash scripts/tests/parity-check.sh && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$W/scripts/tests/literal-project-path.test.mjs\")\" && WSLENV=\"$WSLENV:MOE_POSTFLIGHT_TIMEOUT_SEC\" MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$W/scripts/tests/postflight-safe.mjs\")\" powershell; rc=$?; cd \"$R\"; rm -rf \"$W\"; echo \"VERIFY_EXIT=$rc\"; [ \"$rc\" -eq 0 ]",
     "exitCode": 0,
-    "outputTail": "ℹ tests 8\nℹ pass 3\nℹ fail 0\nℹ skipped 5\nPASS parity-check.sh\n✔ moe-agent.ps1: G1 literal filesystem paths; G2 escaped process working directory (68.9561ms)\n✔ moe-team.ps1: G1 literal filesystem paths; G2 escaped process working directory (0.9718ms)\n✔ scanner pins the exact flags, including nested arguments and exemptions (0.409ms)\n✔ powershell.exe claude: literal project launch and completion (8228.6404ms)\n✔ powershell.exe codex: literal project launch and completion (8503.0493ms)\n✔ powershell.exe gemini: literal project launch and completion (6371.8024ms)\n✔ powershell.exe grok: literal project launch and completion (6091.9865ms)\n✔ pwsh.exe claude: literal project launch and completion (7628.8324ms)\nℹ tests 8\nℹ pass 8\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ duration_ms 37027.6861\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nVERIFY_EXIT=0",
-    "reportedAt": "2026-11-02T23:29:59.550Z",
+    "outputTail": "ℹ tests 8\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 5\nℹ duration_ms 122.788982\nPASS parity-check.sh\n✔ moe-agent.ps1: G1 literal filesystem paths; G2 escaped process working directory (28.4248ms)\n✔ moe-team.ps1: G1 literal filesystem paths; G2 escaped process working directory (0.5235ms)\n✔ scanner pins the exact flags, including comments, nesting and exemptions (0.2613ms)\n✔ powershell.exe claude: literal project launch and completion (6248.4831ms)\n✔ powershell.exe codex: literal project launch and completion (4576.29ms)\n✔ powershell.exe gemini: literal project launch and completion (4341.7076ms)\n✔ powershell.exe grok: literal project launch and completion (4499.7293ms)\n✔ pwsh.exe claude: literal project launch and completion (5819.8837ms)\nℹ tests 8\nℹ pass 8\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ duration_ms 25609.2092\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nVERIFY_EXIT=0",
+    "reportedAt": "2026-11-03T02:53:13.350Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Landing-conflict resolution for the literal project-path fix. The earlier completion is unchanged; this session only resolved the merge.\n\nThe wrapper merged origin/moe/work-2026-10-24 (MERGE_HEAD 603b46bb) into the worktree, leaving 3 conflict hunks in scripts/moe-agent.ps1. All 3 come from the same overlap with task-69c02444's daemon-root change: this task changed `Resolve-Path (Join-Path $PSScriptRoot \"..\")` to -LiteralPath, while the target changed $PSScriptRoot to $script:MoeScriptRoot. I resolved each with the Edit tool, keeping both changes: `Resolve-Path -LiteralPath (Join-Path $script:MoeScriptRoot \"..\")`. That covers the proxy root, the daemon root and $pluginRoot, which keeps its -ErrorAction SilentlyContinue. No other byte changed and no git command was run. The task's files have no conflict markers, the BOM is kept with 0 CR, and git diff --check against MERGE_HEAD is clean.\n\nDiff against the target tip 603b46bb:\n- moe-agent.ps1 +72/-70: 70 -LiteralPath, 2 comments, 1 escaped -WorkingDirectory. Flag multiset unchanged otherwise.\n- moe-team.ps1 +7/-7.\n- ci.yml +3 (one new step).\n- daemon-json-cap.test.mjs: 1 anchor line.\n- New literal-project-path.test.mjs.\nThe static guard passes on the merged bytes, so the target's new code added no non-literal path cmdlets.\n\nFresh verification, the plan recipe archiving MERGE_HEAD plus this task's files (22:43-23:29Z):\n- Linux node --test: 3 pass / 5 Windows skips / 0 fail.\n- parity PASS.\n- Windows node: 8/8 pass, 0 skip (PS 5.1 x claude/codex/gemini/grok, pwsh 7 claude).\n- postflight-safe PS 5.1: exit 0, failureClass NONE.\n- VERIFY_EXIT=0.\n- Quality gate `parity-check && npm run lint`: exit 0.\n\nThe earlier RED and mutant evidence still holds; see the step-5/6 notes.",
+  "completionSummary": "QA reject-1 rework, test-only. Only scripts/tests/literal-project-path.test.mjs changed: +41/-12 vs a0269bcd, 232 lines, sha 723c8cf0. Launchers, ci.yml and daemon-json-cap match a0269bcd byte for byte.\n\nQA items:\n1. codeOnly() masks a token-boundary # outside strings: (?<![^\\s;(){}|,'\"])#. L5564, L7720 and L7731 are now inspected. Reverting them flags exactly those 3; the L450 control is flagged.\n2. Samples `$n = 1 # it's a note` then `Test-Path $y`, and `Write-Host 'a # b'; Test-Path $z`: both flagged. Exact sets updated.\n3. scan() returns `uninspected`: listed cmdlet names the scanner skipped outside full-line comments, <# #> blocks and literal here-strings. The launcher tests assert []. PS 5.1 AST CommandAst set = the scanner's (206+7).\n4. Optional moe-team.ps1 hoist declined: G2 needs the escape as each Start-Process's own -WorkingDirectory value.\n\nStep-6 found 3 more fail-open holes of the same class; each is fixed and pinned:\n- The Env: exemption also matched comments and string args; it is now anchored to the operand.\n- G2 accepted Escape( anywhere in the segment; it must now be the -WorkingDirectory value.\n- The coverage view masked expandable @\" here-strings, whose $(...) is code.\n\nMutation proof:\n- Scanner mutants S1-S12 all killed.\n- The plan's 4-site launcher revert flags L435, L450, L914 and L9342.\n- On Windows, reverting only Resolve-Path fails all 4 PS 5.1 cases with 'Project path not found'.\n\nVerification, the command verbatim, 02:10:54-02:51:53Z:\n- Linux 3 pass / 5 skip.\n- parity PASS.\n- Windows node 8/8, 0 skip (PS 5.1 x claude/codex/gemini/grok, pwsh 7 claude).\n- postflight-safe PS 5.1 exit 0, NONE.\n- VERIFY_EXIT=0.\nGate (parity + lint): 0. get_commit_scope: no peer declares the test file.",
   "landingRetry": null,
   "reviewCompletedAt": "2026-11-03T00:49:56.417Z",
   "rejectionDetails": {
