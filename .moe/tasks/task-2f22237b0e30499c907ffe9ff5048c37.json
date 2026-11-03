@@ -126,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:23.628Z",
-  "updatedAt": "2026-11-03T00:01:09.444Z",
+  "updatedAt": "2026-11-03T00:02:15.749Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:12.756Z",
@@ -224,5 +224,31 @@
     "scripts/moe-agent.sh",
     "docs/ARCHITECTURE.md"
   ],
-  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, both wrappers now export NoDefaultCurrentDirectoryInExePath=1 directly after reading the marker.\n- moe-agent.ps1 :470-473 and moe-agent.sh :52-55 each get one line plus three comment lines.\n- On Windows, cmd.exe then never looks a bare name up in the current directory, which is the project. This covers an npm .cmd CLI shim such as claude.cmd and any cmd.exe child of the seat. A planted <project>\\node.exe or helper .cmd does not run; the copy on PATH runs instead.\n- Legacy seats (marker unset, or not exactly '1') never set the variable and never clear it.\n- There is no new MOE_ code and no new exit path. The ps1 file keeps its BOM and LF endings.\n- docs/ARCHITECTURE.md gets three lines naming the remaining gap: Node/libuv spawns still search the current directory. That stays with task-52555102.\n\nTests (protected-agent-command.test.mjs):\n- run() gains a `role` option (default 'worker', so existing ids are unchanged) and a widened env filter.\n- GIT_DIR comes from `where.exe git` on Windows.\n- C1 (bash) checks the CLI's environment: '1' under the marker, unset when the marker is unset or '01'.\n- C2 runs on PS 5.1 and PS 7 through Windows node.exe. Under the marker the npm-shaped claude.cmd runs the PATH node and the trusted moehelper. A legacy run in the same fixture runs the planted copies, which proves the row is not vacuous.\n\nRED before the fix: C1 got 'env [unset]'; C2 failed 0/2, running the project node.exe and 'project moehelper'.\n\nMutants in scratch copies, all failing as expected:\n- (a) ps1 line dropped: C2 fails 0/2.\n- (b) sh line dropped: C1 fails.\n- (c) variable set unconditionally: the legacy halves of C1 and C2 fail.\n- (d) legacy half removed with the fix absent: C2 still fails.\n\nVerification passed: Linux 157 tests (130 pass, 0 fail); Windows 217 tests (177 pass, 0 fail); parity-check PASS; lint OK. Logs are in /mnt/d/moe-scratch/2f22237b-work/."
+  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, both wrappers now export NoDefaultCurrentDirectoryInExePath=1 directly after reading the marker.\n- moe-agent.ps1 :470-473 and moe-agent.sh :52-55 each get one line plus three comment lines.\n- On Windows, cmd.exe then never looks a bare name up in the current directory, which is the project. This covers an npm .cmd CLI shim such as claude.cmd and any cmd.exe child of the seat. A planted <project>\\node.exe or helper .cmd does not run; the copy on PATH runs instead.\n- Legacy seats (marker unset, or not exactly '1') never set the variable and never clear it.\n- There is no new MOE_ code and no new exit path. The ps1 file keeps its BOM and LF endings.\n- docs/ARCHITECTURE.md gets three lines naming the remaining gap: Node/libuv spawns still search the current directory. That stays with task-52555102.\n\nTests (protected-agent-command.test.mjs):\n- run() gains a `role` option (default 'worker', so existing ids are unchanged) and a widened env filter.\n- GIT_DIR comes from `where.exe git` on Windows.\n- C1 (bash) checks the CLI's environment: '1' under the marker, unset when the marker is unset or '01'.\n- C2 runs on PS 5.1 and PS 7 through Windows node.exe. Under the marker the npm-shaped claude.cmd runs the PATH node and the trusted moehelper. A legacy run in the same fixture runs the planted copies, which proves the row is not vacuous.\n\nRED before the fix: C1 got 'env [unset]'; C2 failed 0/2, running the project node.exe and 'project moehelper'.\n\nMutants in scratch copies, all failing as expected:\n- (a) ps1 line dropped: C2 fails 0/2.\n- (b) sh line dropped: C1 fails.\n- (c) variable set unconditionally: the legacy halves of C1 and C2 fail.\n- (d) legacy half removed with the fix absent: C2 still fails.\n\nVerification passed: Linux 157 tests (130 pass, 0 fail); Windows 217 tests (177 pass, 0 fail); parity-check PASS; lint OK. Logs are in /mnt/d/moe-scratch/2f22237b-work/.",
+  "commits": [
+    {
+      "sha": "5c5b3706f3ddc37c464ea09638a61110ad5db9c0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-02T23:50:26Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T00:02:15.529Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-02T23:50:26Z",
+    "at": "2026-11-03T00:02:15.749Z"
+  }
 }
