@@ -78,8 +78,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,12 +91,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:16.141Z",
-  "updatedAt": "2026-11-03T08:46:56.310Z",
+  "updatedAt": "2026-11-03T08:52:33.444Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T08:27:39.931Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T08:51:39.872Z",
+    "wallClockMs": 1439941
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -215,9 +217,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T08:34:16Z",
-    "at": "2026-11-03T08:46:04.414Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T08:46:26Z",
+    "at": "2026-11-03T08:52:33.444Z"
+  },
+  "completedAt": "2026-11-03T08:51:39.872Z",
+  "reviewCompletedAt": "2026-11-03T08:51:39.872Z",
+  "reviewSummary": "Completion 68d51927 (tree 0f839f48 = candidate) is pushed to moe/work-2026-10-24 and origin. Diff: 2 files, +205/-21, net 184. Test file +119/-0, so nothing deleted or weakened.\n\nRe-ran task.verification in place under the jetbrains-gradle lease (moe-jetbrains/src identical to the commit):\n- parity and lint pass; Windows gradlew.bat test --rerun BUILD SUCCESSFUL.\n- 617 tests, 5 skipped, 0 failures/errors.\n- TerminalAgentLauncherTest 52/52, 0 skipped: all 8 P1-P3 rows ran, P2 included.\n- RuntimeSelectionPolicyTest 80 (3 skipped), VerifiedLocalLaunchTest 8/8.\n\nDoD1:\n- protectedInterpreter yields the real outside /bin/bash (shQuoted) on POSIX, the forward-slash System32 powershell.exe on Windows (regex-typable), and /bin/bash or the /mnt powershell.exe under WSL. Every other combination refuses.\n- On refusal resolveContext shows one dialog and returns before resolveTerminalManager. startAgent, startAgents and VM seats all use resolveContext.\n- Probe in a dir planted with powershell.bat and bash: bare `powershell` in cmd ran the plant, but the forward-slash word ran the real PowerShell in cmd, PowerShell 5.1 and Git Bash (PATH=.:). Under WSL with PATH=.:, bare bash ran the plant, while '/bin/bash' and the /mnt powershell.exe word ran the real interpreters.\n\nDoD2: a null interpreter keeps the bare `bash`/`powershell` words. The default exe reproduces POWERSHELL_LINE_PREFIX, bashWrapPowerShell is unchanged, and PINNED_LEGACY plus all existing rows pass untouched.\n\nDoD3: RED was a compile failure, as planned, and the worker's mutants m1/m2 were killed by P3/P2.\n\nScope matches the plan: RuntimeSelectionPolicy and Selected unchanged, no docs (the epic final owns them), Accounts residual is task-26d9dc26.\n\nNon-blocking: the POSIX word skips requireSafeArg, but it is a trusted host path. The Regex could be a constant.",
+  "requiredCheckAtDone": null
 }
