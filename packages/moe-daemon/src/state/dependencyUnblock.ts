@@ -202,6 +202,30 @@ export function formatDependencyCycle(taskId: string, pathFromDep: string[]): st
 const scanning = new WeakSet<StateManager>();
 
 /**
+ * Un-park the worker of a still-assigned hold just restored onto it — the twin
+ * of the seat repair in grantNextLeases (07af3ca5). Without it list_workers
+ * shows a BLOCKED seat on a WORKING task, and runBlockedTimeoutSweep times the
+ * seat out and parks the resumed row to BACKLOG. lastActivityAt is passed
+ * through unchanged: an unblock is not a heartbeat. Best-effort and isolated:
+ * a failed write never undoes the task restore, and there is no retry (the row
+ * is no longer BLOCKED, so later scans skip it; the seat's next moe call
+ * refreshes it).
+ */
+async function repairParkedSeat(state: StateManager, workerId: string, taskId: string): Promise<void> {
+  const seat = state.getWorker(workerId);
+  if (!seat || seat.status !== 'BLOCKED' || seat.currentTaskId !== taskId) return;
+  try {
+    await state.updateWorker(
+      seat.id,
+      { status: 'READING_CONTEXT', lastError: null, lastActivityAt: seat.lastActivityAt },
+      'WORKER_UNBLOCKED'
+    );
+  } catch (err) {
+    logger.warn({ taskId, workerId: seat.id, error: err }, 'dependencyUnblock: failed to un-block worker');
+  }
+}
+
+/**
  * Scan every BLOCKED task carrying blockedOnTaskIds (and no blockedResourceId)
  * and restore the ones whose dependencies are now ALL satisfied. Returns the
  * ids of the tasks that were unblocked. Never throws — one bad row must not
@@ -252,6 +276,7 @@ export async function runDependencyUnblock(state: StateManager, triggerTaskId?: 
           blockedAt: null,
         }, 'TASK_UNBLOCKED');
         unblocked.push(task.id);
+        if (restoreTo) await repairParkedSeat(state, restoreTo, task.id);
         const via = triggerTaskId ? ` (${triggerTaskId} landed)` : ' (dependency sweep)';
         const msg = `🟢 ${task.id} un-blocked → ${safeRestored}: all blockedOnTaskIds [${ids.join(', ')}] are DONE/ARCHIVED${via}.`;
         try { await state.postToGeneral(msg); } catch { /* best-effort */ }

@@ -152,14 +152,93 @@ describe('dependencyUnblock', () => {
     it('a still-assigned hold returns to its parked worker (grantNextLeases parity)', async () => {
       h.createTask({ id: 'task-p4e4eq', status: 'REVIEW' });
       blockedRow('task-1egacy', ['task-p4e4eq'], { assignedWorkerId: 'worker-parked' });
-      h.createWorker({ id: 'worker-parked', status: 'BLOCKED', currentTaskId: 'task-1egacy' });
+      const lastActivityAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      h.createWorker({
+        id: 'worker-parked', status: 'BLOCKED', currentTaskId: 'task-1egacy',
+        lastError: 'waiting on task-p4e4eq', lastActivityAt,
+      });
       await h.state.load();
+      const updateWorker = vi.spyOn(h.state, 'updateWorker');
 
       await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
 
       const restored = h.state.getTask('task-1egacy')!;
       expect(restored.status).toBe('WORKING');
       expect(restored.assignedWorkerId).toBe('worker-parked');
+      // The seat is repaired the way grantNextLeases repairs it: resumed, error
+      // cleared, presence untouched (an unblock is not a heartbeat).
+      expect(h.state.getWorker('worker-parked')).toMatchObject({
+        status: 'READING_CONTEXT', lastError: null, lastActivityAt, currentTaskId: 'task-1egacy',
+      });
+      expect(updateWorker).toHaveBeenCalledWith(
+        'worker-parked',
+        { status: 'READING_CONTEXT', lastError: null, lastActivityAt },
+        'WORKER_UNBLOCKED'
+      );
+    });
+
+    it('a restored seat is not timed out by the blocked-timeout sweep', async () => {
+      const staleTs = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      h.createTask({ id: 'task-p4e4eq', status: 'REVIEW' });
+      blockedRow('task-1egacy', ['task-p4e4eq'], { assignedWorkerId: 'worker-parked', blockedAt: staleTs });
+      h.createWorker({
+        id: 'worker-parked', status: 'BLOCKED', currentTaskId: 'task-1egacy',
+        lastError: 'waiting on task-p4e4eq', lastActivityAt: staleTs,
+      });
+      await h.state.load();
+
+      await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
+      await h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state));
+
+      const task = h.state.getTask('task-1egacy')!;
+      expect(task.status).toBe('WORKING');
+      expect(task.assignedWorkerId).toBe('worker-parked');
+      expect(h.state.getWorker('worker-parked')).toMatchObject({
+        status: 'READING_CONTEXT', currentTaskId: 'task-1egacy',
+      });
+    });
+
+    it('seats that are not a parked hold on this row are left untouched', async () => {
+      h.createTask({ id: 'task-p4e4eq', status: 'REVIEW' });
+      blockedRow('task-c0d1ng', ['task-p4e4eq'], { assignedWorkerId: 'worker-coding' });
+      blockedRow('task-else01', ['task-p4e4eq'], { assignedWorkerId: 'worker-elsewhere' });
+      blockedRow('task-dead02', ['task-p4e4eq'], { assignedWorkerId: 'worker-dead' });
+      h.createWorker({
+        id: 'worker-coding', status: 'CODING', currentTaskId: 'task-c0d1ng', lastError: 'old error',
+      });
+      h.createWorker({
+        id: 'worker-elsewhere', status: 'BLOCKED', currentTaskId: 'task-other9', lastError: 'waiting elsewhere',
+      });
+      h.createWorker({
+        id: 'worker-dead', status: 'DEAD', currentTaskId: 'task-dead02', lastError: 'gone',
+      });
+      await h.state.load();
+      const ids = ['worker-coding', 'worker-elsewhere', 'worker-dead'];
+      const before = ids.map((id) => structuredClone(h.state.getWorker(id)));
+
+      await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
+
+      expect(h.state.getTask('task-c0d1ng')!.assignedWorkerId).toBe('worker-coding');
+      expect(h.state.getTask('task-else01')!.assignedWorkerId).toBeNull();
+      expect(h.state.getTask('task-dead02')!.assignedWorkerId).toBeNull();
+      ids.forEach((id, i) => expect(h.state.getWorker(id)).toEqual(before[i]));
+    });
+
+    it('a failed worker write is logged and never undoes the restore', async () => {
+      h.createTask({ id: 'task-p4e4eq', status: 'REVIEW' });
+      blockedRow('task-f1rst1', ['task-p4e4eq'], { assignedWorkerId: 'worker-first' });
+      blockedRow('task-s3cnd1', ['task-p4e4eq'], { assignedWorkerId: 'worker-second' });
+      h.createWorker({ id: 'worker-first', status: 'BLOCKED', currentTaskId: 'task-f1rst1', lastError: 'e1' });
+      h.createWorker({ id: 'worker-second', status: 'BLOCKED', currentTaskId: 'task-s3cnd1', lastError: 'e2' });
+      await h.state.load();
+      vi.spyOn(h.state, 'updateWorker').mockRejectedValueOnce(new Error('worker write failed'));
+
+      await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
+
+      expect(h.state.getTask('task-f1rst1')).toMatchObject({ status: 'WORKING', assignedWorkerId: 'worker-first' });
+      expect(h.state.getTask('task-s3cnd1')).toMatchObject({ status: 'WORKING', assignedWorkerId: 'worker-second' });
+      expect(h.state.getWorker('worker-first')!.status).toBe('BLOCKED');
+      expect(h.state.getWorker('worker-second')!.status).toBe('READING_CONTEXT');
     });
 
     it('a still-assigned hold whose owner is DEAD, IDLE-with-no-pointer, or missing returns UNASSIGNED', async () => {
