@@ -27,12 +27,17 @@
     {
       "stepId": "step-2",
       "description": "DoD 1-3. New test file packages/moe-daemon/src/tools/waitForResource.reentry.test.ts.\n\nPort /mnt/d/moe-scratch/hunt-cc441586/B/resourceWaiterReentry.test.ts. Its setup:\n- ToolTestHarness with task-holder holding lease 'box' and task-waiter owned by worker-waiter;\n- McpAdapter.handle tools/call moe.wait_for_resource, passing an onWaiterRegistered context that records owners;\n- an afterEach that drains activeResourceWaiters.\nReplace the fixed sleeps with `vi.waitFor` polling so the file is load-tolerant.\n\nCases:\n- (a) Two overlapping calls (call 1 timeoutMs 60000, call 2 timeoutMs 60000, both started without awaiting): once both registered, call 1 resolves exactly `{ granted: false, cancelled: true }`, call 2 is still parked, and `activeResourceWaiters.get('worker-waiter')` is defined.\n- (b) After call 1's cleanup has run (it has resolved), run the same disconnect sequence WebSocketServer.ts:1392-1397 uses on the registry entry: get, clearTimeout, unsubscribe, resolve cancelled, delete. Call 2 must resolve `{ granted: false, cancelled: true }` and the registry must be empty. Without the fix the entry is gone and call 2 stays parked.\n- (c) A replaced waiter's own timer does not remove the live entry: call 1 timeoutMs 1000, call 2 timeoutMs 60000; wait past 1 s (vi.waitFor on call 1's result) and assert the registry still holds call 2's entry.\n- (d) Sequential re-entry is unchanged: one call parks, a second call after it registers cancels it (mirror the existing waitForResource.test.ts:88 case; keep it short).\n\nRed first: (a)-(c) must fail against HEAD's waitForResource.ts. Record that in the completion summary. Error handling: every assertion uses toEqual/toBe on exact shapes; no bare truthiness.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts"
       ],
-      "startedAt": "2026-11-03T23:06:34.695Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts"
+      ],
+      "note": "New reentry test, 4 cases, written before the step was formally started (steps 2 and 3 ran out of order). Red at HEAD (a-c fail, d passes), green with fix, in a git-archive snapshot.",
+      "startedAt": "2026-11-03T23:06:34.695Z",
+      "completedAt": "2026-11-03T23:06:37.319Z"
     },
     {
       "stepId": "step-3",
@@ -51,18 +56,22 @@
     {
       "stepId": "step-4",
       "description": "Verification: run this once, fresh, before complete_task, on a snapshot outside the shared checkout (DoD 3):\n\n`cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'whichever call parks last' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents $P/tools/waitForResource.ts $P/tools/waitForResource.reentry.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/waitForResource.reentry.test.ts src/tools/waitForResource.test.ts src/tools/acquireResource.test.ts src/tools/releaseResource.generation.test.ts src/server/WebSocketServer.test.ts'`\n\nWebSocketServer.test.ts covers the disconnect cleanup that reads the registry. Submit the exit code and output tail as complete_task evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh snapshot run: exit 0, tsc clean, 5 files / 151 tests passed.",
+      "startedAt": "2026-11-03T23:06:38.484Z",
+      "completedAt": "2026-11-03T23:07:08.839Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (final step, adversarial-self-review skill), scoped to this diff (3 files). Check each item below.\n\n(a) There is no await between the pre-set re-check and activeResourceWaiters.set, and the executor itself has none.\n\n(b) A grant that arrives for call 1 just before call 2 registers: call 1 resolves granted, its cleanup deletes only its own entry, and call 2 parks or returns granted immediately from acquireResource. The task-keyed lease is unaffected, so no double grant.\n\n(c) cleanupStaleResourceWaiters and the WebSocketServer disconnect path still delete the entry they cancel.\n\n(d) The subscribe-failure path deletes nothing it does not own.\n\n(e) Mutant proof: the new tests are red at HEAD.\n\n(f) Error handling: the helper never throws out of the handler.\n\nIf anything changes, re-run step 4's command and submit that fresh output as the test evidence.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/waitForResource.ts",
         "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "startedAt": "2026-11-03T23:07:09.963Z"
     }
   ],
   "planRevision": 1,
@@ -79,12 +88,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:46:48.919Z",
-  "updatedAt": "2026-11-03T23:06:34.695Z",
+  "updatedAt": "2026-11-03T23:07:09.963Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:02:41.189Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -96,7 +105,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-3"
+    "step-3",
+    "step-2",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T23:04:23.678Z",
