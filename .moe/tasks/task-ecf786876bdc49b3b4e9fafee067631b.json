@@ -81,13 +81,16 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) Parity: all four sites skip the sender. sh `==` / `!=` and ps1 `-ceq` agree on a missing sender (not skipped) and on a case-only difference (not skipped).\n  - Prove the sh half with a two-line python check of the probe expression: a sender of None, 'worker-x' and 'WORKER-X' against worker_id 'worker-x'.\n  - Prove the ps1 half with a `powershell.exe -NoProfile -Command` probe of `[string]$null -ceq 'worker-x'` and `'WORKER-X' -ceq 'worker-x'`.\n(b) RED already proves both arms kill the unfixed wrappers. Name which assertion fired in each.\n(c) The FAKE_MENTION=1 message is byte-identical to before, and AA, AB and AB2 still pass.\n(d) The contrast run (group) proves another sender's @all or role-group tag still launches.\n(e) Out of scope, note only: a peer's message that only quotes @all is still a mention by design, and the daemon decides routing.\n(f) Process safety: background runs are killed only by their recorded PID, never by name or pattern.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
       ],
+      "note": "Adversarial self-review of git diff 1b754809..HEAD over the five files. It is clean: no code change in this step.\n(a) Parity: all four sites skip the sender.\n- sh probe :9143-9144 and build :9651.\n- ps1 probe :8767 and build :9056.\n- A grep for \"all\" in both wrappers finds only these mention filters.\n- Fresh python probe of the exact sh expression (worker_id 'worker-x'): None -> counted, 'worker-x' -> skipped, 'WORKER-X' -> counted, 'human' -> counted.\n- Fresh powershell.exe 5.1.26100.9711 probe: [string]$null -ceq 'worker-x' False; 'worker-x' True; 'WORKER-X' False; [string]@('worker-x','y') False.\n- So a missing sender and a case-only difference are both not skipped, in both wrappers.\n(b) RED fired the session-new.txt assertion ('launched a notification-only session to answer itself') in both the postflight.sh and postflight.ps1 full runs against the unfixed wrappers. In the trimmed sh harness, dropping either site alone also fails AB3, so each site is pinned separately.\n(c) FAKE_MENTION=1 still builds the same message (id msg-fake-1, sender human, mentions [workerId||all]). AA, AB and AB2 are ok in both legs of the step-4 run.\n(d) The group contrast (AB3b) passes in both legs: another sender's [at]all or role-group tag still launches.\n(e) Out of scope, note only:\n- A peer's message that only quotes [at]all is still a mention by design; the daemon decides routing.\n- A theoretical edge: if the worker id were empty, the ps1 cast '' -ceq '' would skip a sender-less message. It is unreachable, because both wrappers generate a worker id before the loop (ps1 :456-460, sh :867-871).\n- A forged sender equal to another seat's id now suppresses that seat's mention. The daemon's unread counter already skips on the sender the same way (chatStore.ts:236), so the trust model is unchanged.\n(f) Process safety: background runs were detached under recorded PIDs (RED 680407/680409, verify 1569531). Nothing was killed by name or pattern.\nFresh now: bash -n, parity-check.sh and npm run lint exit 0. The step-4 snapshot v-ecf78687.bxphTX is byte-identical (cmp) to HEAD 062c1914 for all five files.",
+      "startedAt": "2026-11-03T01:46:18.486Z",
+      "completedAt": "2026-11-03T01:48:34.608Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -101,8 +104,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8cf0816c",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -114,7 +117,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:23:35.850Z",
-  "updatedAt": "2026-11-03T01:43:31.393Z",
+  "updatedAt": "2026-11-03T01:49:53.867Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:11.284Z",
@@ -124,7 +127,7 @@
     "firstClaimAt": "2026-11-02T23:43:38.052Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -138,7 +141,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T23:49:49.774Z",
@@ -196,5 +200,67 @@
   },
   "planApprovedAt": "2026-11-02T23:49:49.803Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T23:51:41.362Z"
+  "workStartedAt": "2026-11-02T23:51:41.362Z",
+  "commits": [
+    {
+      "sha": "062c19141d1c20ef2cd6f4eab937e9f01042524d",
+      "ref": "refs/heads/moe/task/task-ecf786876bdc49b3b4e9fafee067631b",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-02T23:49:55Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T01:44:20.599Z",
+      "treeId": "4732e9f1e1ec1406c2e1d451e3e8181188e50ac6",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "d7c5e815fe2303b0005590dd4ada9dd7b6d0d0d2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T01:44:58Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T01:49:52.948Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-03T01:44:58Z",
+    "at": "2026-11-03T01:49:53.867Z"
+  },
+  "reviewStartedAt": "2026-11-03T01:49:08.203Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-ecf78687.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\" && cd \"$R\" && npm run lint",
+    "exitCode": 0,
+    "outputTail": "[earlier in log: PASS parity-check.sh; postflight.sh '[scenario AB3] ok', 'commit-scope scenarios run: 46', PASS postflight.sh]\n[scenario AH] ok\n[scenario AI] a held contested path reaches record_commit on both nothing landings\n[scenario AI] ok\n[scenario AJ] peel failures and rescue records retain held contested paths\n[scenario AJ1] ok\n[scenario AJ2] ok\n[scenario AJ] ok\n[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named\n[scenario AK] ok\n[scenario AL] a contested hold names the peer that caused it: editing, then active, then idle\n[scenario AL] ok\n[scenario AM] a codex exec seat's completed file_change or Serena edit witnesses its path; a failed or outside one does not\n[scenario AM] ok\ncommit-scope scenarios run: 45\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\n[worktree reuse] a half-made W is finished, an emptied index is kept, a failed budget probe refuses\n[worktree reuse] ok\n[protected runtime] a protected launch runs the exact runtime paths or refuses\n[protected runtime] ok\nPASS postflight.ps1\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nEXIT=0",
+    "reportedAt": "2026-11-03T01:49:08.203Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Both wrappers now ignore a chat message whose sender is the seat's own worker id, at all four mention filters. The comparison is exact: sh == / !=, and ps1 [string] -ceq. A sender-less message is never skipped.\n- scripts/moe-agent.sh: pre-wait probe :9143-9144 and routed-mention build :9651.\n- scripts/moe-agent.ps1: probe :8767 and build :9056.\n- A seat's own self-, [at]all- or role-group-tagged message no longer skips the wrapper-side wait, appears in routed_mentions, or launches a notification-only session.\n- Other senders route as before. Same rule as the daemon's unread counter (chatStore.ts:236). No daemon or MCP change.\n\nTests:\n- postflight-fake-proxy.js FAKE_MENTION gains 'self' and 'group'; '1' is byte-identical.\n- New Scenario AB3 in postflight.sh and postflight.ps1. AB3a (own message): exit 0, no session-new.txt, the '[no-task] ... waiting up to 5s' line and 'MOE_TASKLESS_NO_LAUNCH reason=idle'. AB3b (another sender's [at]all plus role group) still launches.\n- Expected counts: sh 46/45, ps1 45/46.\n- RED: both full harnesses failed AB3 against the unfixed wrappers (session-new.txt assertion). Dropping either site alone also fails AB3.\n\nVerification: the plan's step-4 command (run once, per the plan). It ran 00:31Z-01:43Z this attempt (log /mnt/d/moe-scratch/v-ecf78687.log, EXIT=0):\n- PASS parity-check.sh.\n- postflight.sh: AA/AB/AB2/AB3 ok, 'commit-scope scenarios run: 46', PASS.\n- postflight.ps1 under PS 5.1.26100: AA/AB/AB2/AB3 ok, 'commit-scope scenarios run: 45', PASS.\n- npm run lint OK.\nIts snapshot is cmp-identical to HEAD 062c1914 for all five files. bash -n, parity-check.sh and npm run lint were re-run fresh at 01:48Z: exit 0. CI's pwsh 7 leg was not run locally."
 }
