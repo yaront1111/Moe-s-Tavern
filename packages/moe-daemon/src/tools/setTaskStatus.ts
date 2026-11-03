@@ -23,8 +23,10 @@ const VALID_STATUSES: TaskStatus[] = [
 /**
  * Defines valid state transitions for tasks.
  * Key is current status, value is array of valid target statuses.
+ * The one table: the /ws UPDATE_TASK board-move handler (server/WebSocketServer.ts)
+ * imports it too, so the board and this tool cannot drift apart again.
  */
-const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+export const VALID_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   // ARCHIVED is reachable from any *resting* status (BACKLOG / REVIEW / DONE) so
   // stale tickets can be shelved out of context — not from in-flight states
   // (PLANNING / AWAITING_APPROVAL / WORKING) where a worker may own the task;

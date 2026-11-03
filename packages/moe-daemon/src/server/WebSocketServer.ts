@@ -4,7 +4,8 @@
 
 import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
 import { deliveryProjection, type TaskDelivery } from '../state/deliveryProjection.js';
-import type { Task } from '../types/schema.js';
+import type { Task, TaskStatus } from '../types/schema.js';
+import { VALID_TRANSITIONS } from '../tools/setTaskStatus.js';
 import { WebSocketServer as WSS, WebSocket } from 'ws';
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { StateManager, StateChangeEvent } from '../state/StateManager.js';
@@ -492,20 +493,11 @@ export class MoeWebSocketServer {
             if ('status' in safeUpdates) {
               const existing = this.state.getTask(taskId);
               if (existing) {
-                // Keep in sync with VALID_TRANSITIONS in src/tools/setTaskStatus.ts.
-                // ARCHIVED is reachable from resting statuses (BACKLOG / REVIEW / DONE)
-                // and, as a shelf for rows that need no work, from PLANNING and BLOCKED.
-                const VALID_TRANSITIONS: Record<string, string[]> = {
-                  BACKLOG: ['PLANNING', 'WORKING', 'ARCHIVED'],
-                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG', 'BLOCKED', 'ARCHIVED'],
-                  AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
-                  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED'],
-                  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED', 'BLOCKED'],
-                  BLOCKED: ['WORKING', 'PLANNING', 'REVIEW', 'BACKLOG', 'ARCHIVED'],
-                  DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
-                  ARCHIVED: ['BACKLOG', 'WORKING']
-                };
-                const newStatus = safeUpdates.status as string;
+                // VALID_TRANSITIONS is moe.set_task_status's own table
+                // (src/tools/setTaskStatus.ts), so the board cannot drift from it.
+                // newStatus is an unvalidated client string: the table lookup
+                // below refuses anything it does not list.
+                const newStatus = safeUpdates.status as TaskStatus;
                 if (newStatus !== existing.status) {
                   const allowed = VALID_TRANSITIONS[existing.status];
                   if (!allowed || !allowed.includes(newStatus)) {
@@ -554,6 +546,14 @@ export class MoeWebSocketServer {
                       ...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {}),
                     };
                     unblockedFromBoard = true;
+                  }
+                  // Mirrors set_task_status: a human putting a row parked for
+                  // human review back into REVIEW IS that review. Left set, the
+                  // flag fences the row out of every QA claim while the board
+                  // shows a normal REVIEW card. Reachable on /ws by BACKLOG -> REVIEW
+                  // and BLOCKED -> REVIEW; reopening moves clear it below.
+                  if (newStatus === 'REVIEW' && existing.needsHumanReview === true) {
+                    safeUpdates = { ...safeUpdates, needsHumanReview: false };
                   }
                   // Entering BLOCKED from the board parks the task in place:
                   // record the restore target and keep the assignee.
