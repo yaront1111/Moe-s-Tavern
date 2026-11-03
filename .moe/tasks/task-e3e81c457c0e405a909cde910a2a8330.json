@@ -110,8 +110,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -130,7 +130,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:25:34.188Z",
-  "updatedAt": "2026-11-03T11:36:39.731Z",
+  "updatedAt": "2026-11-03T13:03:12.726Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:31:25.007Z",
     "plannedStepCount": 6,
@@ -249,21 +249,64 @@
       "treeId": "415b5c085b8ebc772cb6bb19d480e68a8a13336a",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "25d88eb9580196789d110fbe84ec8991746925e9",
+      "ref": "refs/heads/moe/task/task-e3e81c457c0e405a909cde910a2a8330",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T09:45:55Z",
+      "paths": [
+        "docs/MEMORY.md"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T12:34:44.570Z",
+      "treeId": "330f2afcb33892bdb8dc7f2ab930242938fa9e9f",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "3a0bf93050a514c8388e337b5eacb871a3d54057",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T12:34:49Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "docs/MEMORY.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "qa-af7be174",
+      "recordedAt": "2026-11-03T13:03:12.726Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "docs/CONFIGURATION.md",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-worktree.cjs",
     "docs/MEMORY.md",
     "scripts/CLAUDE.md",
-    "scripts/moe-agent.ps1",
-    "scripts/moe-agent.sh",
-    "scripts/tests/postflight-worktree.cjs"
+    "docs/CONFIGURATION.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-33f67e5b@2026-11-03T09:14:24Z",
-    "at": "2026-11-03T09:45:50.085Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T12:34:49Z",
+    "at": "2026-11-03T13:03:12.726Z"
+  },
+  "reviewStartedAt": "2026-11-03T13:02:28.645Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-e3e81c45.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && node --test scripts/tests/serena-ignore.test.mjs && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\" && cd \"$R\" && npm run lint",
+    "exitCode": 0,
+    "outputTail": "Verification snapshot: /mnt/d/moe-scratch/v-e3e81c45.HU9KJA\nPASS parity-check.sh\n(serena-ignore.test.mjs: all ok)\nPASS frozen candidate scenarios: 106\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 12\n[worktree] serena-ignore ok\n[worktree] serena-ignore-off ok\n[worktree] serena-ignore-wt ok\nPASS postflight.sh\nPASS frozen candidate scenarios: 106\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 11\n[worktree] serena-ignore ok\n[worktree] serena-ignore-off ok\n[worktree] serena-ignore-wt ok\n[WT-14] ok: 11 scenarios\n[protected runtime] a protected launch runs the exact runtime paths or refuses\n[protected runtime] ok\nPASS postflight.ps1\nnpm notice run lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n(exit=0; 0 FAILED / not ok lines in 829-line log /mnt/d/moe-scratch/e3e81c45-work/gate2/out)",
+    "reportedAt": "2026-11-03T13:02:28.645Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Both launchers now run scripts/moe-serena-ignore.mjs (from task-c6a24053) on Serena's final project root. That is the shared root after the '[OK] Serena MCP' line, and the worktree W after WT-06's project.yml rewrite. Serena then gets git's own ignore set, with its startup .gitignore walk turned off.\n- sh: serena_ignore_override (set -e safe).\n- ps1: Invoke-MoeSerenaIgnoreOverride (local EAP Continue; try/catch/finally restores EAP and LASTEXITCODE).\n- Both print the script's one line. A missing or failing script gives a byte-identical [WARN] MOE_SERENA_IGNORE_SKIPPED line and never fails the launch.\n- Tests: postflight-worktree.cjs adds serena-ignore (literal file text, plus a second run that keeps bytes and inode), serena-ignore-off (no Serena / opt-out / plain dir / broken repo) and serena-ignore-wt. 'codes' now compares the MOE_SERENA_IGNORE_ family across the wrappers.\n- Docs: docs/MEMORY.md has a Caveats subsection, scripts/CLAUDE.md the MCP-servers bullet, and docs/CONFIGURATION.md a MOE_SERENA_IGNORE_OVERRIDE row.\n- Verification (gate2): run after the last edit on snapshot v-e3e81c45.HU9KJA, whose scripts tree is byte-identical to HEAD 25d88eb9. Exit 0: parity PASS, producer suite ok, postflight.sh PASS and postflight.ps1 PASS (frozen 106/106, owner guard 16/16 each), the three new cases ok on both engines, lint OK.\n- Mutants: M1-M6 plus the ps1 twins M5p/M6p, 8 in all, every one killed; the controls pass (D:/moe-scratch/e3e81c45-work/mut, review.md).\n- Known limit: the ps1 wrapper does not export MOE_PROTECTED_GIT, so a protected ps1 seat skips fail-open."
 }

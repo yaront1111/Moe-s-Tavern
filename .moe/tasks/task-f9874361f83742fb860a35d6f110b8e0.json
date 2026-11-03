@@ -1,0 +1,28 @@
+{
+  "id": "task-f9874361f83742fb860a35d6f110b8e0",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: a worktree completion lands on main with no qualityGate when post-flight cannot read .moe/project.json (both wrappers fail open)",
+  "description": "Filed by WT-19's whole-epic adversarial review (task-b1ca54f2716442be889a14623eb59983, step 7).\n\nPROBLEM. A worktree completion takes its target and its qualityGate from the wrapper's own post-flight read of .moe/project.json, and that read fails open. A file that is missing, half-written or malformed leaves the defaults in place:\n- consolidationBranch '' becomes target main;\n- qualityGate '' means no L6 gate;\n- the lease follows as git-land-main.\nThe wrapper never consults the attempt's pinned workspace.target from claim/get_context.\n\nEVIDENCE. Checked on merged tree 88e507e5, which is moe/work-2026-10-24 at 1558f141 plus task-b1ca54f2716442be889a14623eb59983.\n- sh: scripts/moe-agent.sh:3087-3088 in read_commit_settings: `except Exception: s = {}`, and `|| parsed=\"\"` after the python call.\n- sh: :7729-7730 in land_worktree_completion: `target=\"${CS_CONSOLIDATION_BRANCH:-main}\"` and `QUALITY_GATE=\"${CS_QUALITY_GATE:-}\"`.\n- ps1: scripts/moe-agent.ps1:2924, where a missing file skips the read, and :2954-2956, `catch { # Malformed project.json - defaults stand. }`.\n- ps1: :7217-7218 in Invoke-MoeWorktreeCompletion, where the target falls back to 'main'.\n- The MOE_DISABLE_QUALITY_GATE=1 refusal keys on the configured gate. That gate is also '' after the misread, so the refusal cannot fire.\n\nIMPACT. One bad read breaks rail 1, \"with a qualityGate set, no worktree landing skips L6\". The completion squash-lands:\n- ungated;\n- on main instead of the consolidation branch;\n- under the wrong lease, so it is not excluded against peers landing on the real target.\nThe move is still CAS or a non-forced push, so nothing is rewritten. But main in this repo is PR-only (human decision of 2026-11-02), so an ungated landing there needs a human revert. Likelihood is low, but nothing bounds it: a hand edit, a partial write or a read error is enough.\n\nFIX DIRECTION. Change both twins:\n- In worktree mode, take the target from the attempt's pinned workspace.target.\n- Fail closed. When project.json is missing or unparseable at post-flight, refuse the completion landing with a named code; the bytes stay on moe/task/&lt;taskId&gt; and the next session retries.\n- Tell \"key absent\" (defaults apply) apart from \"file unreadable\" (refuse).\n- Add a scenario for each engine.",
+  "definitionOfDone": [
+    "With .moe/project.json missing or malformed at post-flight, both wrappers refuse the worktree completion landing with a named code: no merge, no push, no git-land-* lease taken, and the bytes stay on moe/task/<taskId>.",
+    "The completion target is the attempt's pinned workspace.target when present; a settings value that disagrees is refused or warned, never silently replaced by main.",
+    "A postflight-worktree or worktree-landing scenario per engine (sh and ps1) covers the unreadable-settings case, and parity-check.sh / parity-check.ps1 both exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 51,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T12:30:24.086Z",
+  "updatedAt": "2026-11-03T12:30:24.086Z"
+}

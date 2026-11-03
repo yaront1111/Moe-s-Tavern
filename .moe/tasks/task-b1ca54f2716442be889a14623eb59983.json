@@ -107,15 +107,20 @@
     {
       "stepId": "step-6",
       "description": "Full regression, run once, fresh, after steps 1-5 (DoD 4). It also re-proves DoD 1, 2 and 5.\n\nCanonical POSIX gate, from the repo root of a HEAD snapshot:\n```\n(cd packages/moe-daemon && npx vitest run src/state/validators.test.ts src/tools/claimNextTask.test.ts && npm test) && (cd packages/moe-proxy && npm test) && (cd packages/moe-claude-plugin && npm test) && bash scripts/tests/parity-check.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && node scripts/tests/worktree-e2e.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d)\" \"$(command -v bash)\" && npm run lint\n```\nIts exit code and output tail are the complete_task verification.\n\nWindows legs, with counts recorded:\n- `node.exe scripts/tests/postflight-safe.mjs powershell`;\n- parity-check.ps1 and worktree-landing.ps1 under Windows PowerShell 5.1;\n- the worktree-e2e.cjs ps1 engine leg;\n- `cmd.exe /d /c \"cd /d <snapshot>\\moe-jetbrains && .\\gradlew.bat test --rerun\"`, run while holding the jetbrains-gradle lease. Take it with moe.acquire_resource {resourceId:'jetbrains-gradle'} and release it on every path (Serena convention-jetbrains-gradle-lease and gotcha-jetbrains-gradle-from-wsl).\n\nEnvironment notes (WSL):\n- Run against a HEAD snapshot with this task's files copied over and cmp-checked, so peers' unlanded bytes can't leak in (mem:gotcha-gate-hermetic-snapshot-from-wsl).\n- Scrub MOE_* and CLAUDE* from the env of the bash legs, so this seat's MOE_WORKER_ID and session id never reach the wrappers under test.\n- The shared checkout's node_modules are Windows installs. For the three npm test legs, use a native Linux node_modules that matches HEAD's lockfiles (mem:gotcha-linux-vitest-reuse-native-node-modules), or run them under Windows node.\n- Never run npm install or npm run build in the shared checkout.\n- Each harness takes tens of minutes. Run it in the foreground, or poll a nohup run until it finishes.\n\nError handling:\n- A failure in this task's files: fix it, then re-run the whole gate.\n- A failure that also reproduces on a clean HEAD snapshot is pre-existing: report it with that evidence, and never weaken an assertion.\n- A slice defect found here becomes a bug: task, filed in step 7.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T08:17:17.112Z"
+      "note": "Step 6, full regression, run fresh by this RESUME session. Every leg passed.\n\nTree tested: the merged tree 88e507e5, which is this task's HEAD e71aaeef plus the target moe/work-2026-10-24 at 1558f141. The merge is clean. The snapshot is /tmp/wt19-g3.oshnM2/snap, built from a --shared scratch clone, so nothing was written to the shared repo or its refs. The task files were cmp-checked against the merge.\n\nLINUX lane, the canonical POSIX gate, rc=0 (11:35:14Z to 12:05:15Z):\n- validators + claimNextTask: 2 files, 174 passed.\n- daemon npm test: 232 files, 7010 passed, 20 skipped (7030).\n- proxy npm test: 9 files, 335 passed.\n- claude-plugin npm test: 2 files, 18 passed.\n- parity-check.sh: PASS.\n- postflight-safe bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n- worktree-landing.sh: 18 passed, 0 failed, 0 errors.\n- worktree-e2e sh: parallel ok (10.8 s), conflict-resume ok (11.7 s); 2 ok, 0 failed.\n- npm run lint: OK (architect 39 lines, worker 30, qa 36).\n\nWINDOWS lane, same snapshot bytes (D:\\moe-scratch\\wt19-b1ca\\gate3-win.WtkLTK):\n- parity-check.ps1: PASS, exit 0.\n- worktree-landing.ps1: 18 passed, 0 failed, 0 errors; exit 0.\n- worktree-e2e ps1: parallel ok (17.2 s), conflict-resume ok (20.3 s); 2 ok, exit 0.\n- postflight-safe powershell: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}, exit 0 (11:39Z to 12:28Z).\n\nJETBRAINS: ./gradlew test ran under the jetbrains-gradle lease, which was acquired and then released. 625 tests, 0 failures, 0 errors, 6 skipped, 39 classes; BUILD SUCCESSFUL; GRADLE_EXIT=0.\n\nOne harness note. Gate2's ps1 e2e failure, mkdtemp ENOENT, was a slip in how the harness was called: the parent dir was missing. That dir is now pre-created, and no code changed.\n\nNo files were modified in this step.",
+      "startedAt": "2026-11-03T08:17:17.112Z",
+      "completedAt": "2026-11-03T12:29:26.683Z"
     },
     {
       "stepId": "step-7",
       "description": "Whole-epic adversarial review (DoD 6, first half), once, as the final step. Load adversarial-self-review.\n\nThe diff: `git diff a1f971f5^..HEAD` (WT-S's first checkpoint is the epic base), limited to the epic's files:\n- both wrappers;\n- the daemon tools and state of WT-01, WT-02, WT-03, WT-03b and WT-16;\n- WT-10P's proxy change;\n- WT-15's JetBrains exclusion;\n- the suites;\n- the docs of WT-17, WT-18 and WT-18b.\n\nCheck each item against the design doc's §1-§8:\n1. Producer/consumer drift:\n   - the claim and get_context `workspace` {mode, path, branch, target};\n   - finalize_attempt 'unlanded' with unlandedReason, conflictPaths and rescueRef;\n   - Task.landingRetry {reason, paths, rescueRef, targetTip, count, at};\n   - the complete_task worktree branch policy;\n   - every resolveWorktreeMode caller (claimNextTask.ts, and WT-16's doctor) passes the WHOLE settings object, so the gate-aware default reaches it. Grep the callers.\n2. sh/ps1 twin drift that parity-check's families can't see: guard order, refusal routes, detail text.\n3. Codes that WT-17 documents but nothing emits, and codes that are emitted but undocumented.\n4. In remote mode, no path moves the local target without remote confirmation (§2.3).\n5. No worktree materializes .moe: not W, not the gate worktree (WT-10G), not the hook worktree (rail 3).\n6. Rail 1:\n   - main moves only by a CAS after the gate, never by force;\n   - with a qualityGate set, no worktree landing skips L6, including a seat that runs with MOE_DISABLE_QUALITY_GATE=1.\n7. Rail 4: 'off', and unset with no gate, keep today's shared mode.\n8. WT-03b's two fixes are present: landingRetry is denylisted, and a release keeps a retrying row WORKING.\n9. WT-18b landed: in worktree mode, QA never self-lands in the control checkout.\n\nError handling for findings:\n- Fix a finding that sits inside this task's files, then re-run step 6's gate and submit THAT output.\n- Anything else becomes a `bug:` task in this epic via moe.create_task: a four-part description, a DoD and the evidence, in BACKLOG at an order below this row. Ask a governor to promote it.\n\nThen call complete_task with:\n- step 6's evidence, with the pass counts per leg;\n- the human go, quoted with its id;\n- the sweep list;\n- the ids of any bug tasks filed;\n- the runbook message id;\n- each DoD item mapped to its evidence. DoD 1 reads 'defaults to on'; cite the approved (b) as its scope.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Step 7 is the whole-epic adversarial review (adversarial-self-review loaded). It ran on merged tree 88e507e5, which is the epic diff a1f971f5^..HEAD plus the target at 1558f141. Every check passed except the findings filed below.\n\n1. Producer/consumer drift: PASS.\n- workspace {mode, path, branch, target} is produced by claim and get_context, and both wrappers consume it.\n- finalize_attempt 'unlanded' carries {unlandedReason, conflictPaths, rescueRef}.\n- Task.landingRetry {reason, paths, rescueRef, targetTip, count, at} is consistent.\n- The complete_task worktree branch rule is moe/task/<taskId>.\n- Every resolveWorktreeMode caller passes the WHOLE settings object: claimNextTask.ts:158 and :375, and doctorWorktree.ts:43.\n- One gap: the wrapper completion ignores the pinned workspace.target. See bug 1.\n\n2. sh/ps1 twin drift: 4 label/diagnostic drifts, filed as bug 2.\n\n3. Codes: everything documented is emitted, and everything emitted is documented. One exception: design §1.6 has the post-flight print MOE_WORKTREE_MOE_PRESENT, and none does (bug 2, item d).\n\n4. Remote mode never moves the local target without remote confirmation: PASS. worktree-landing.{sh,ps1} ran all 10 remote scenarios green on both engines.\n\n5. No .moe in any worktree: PASS.\n- W: the pre-flight guard (sh:3439, ps1:3317) and DENY.\n- The gate worktree.\n- The hook worktree: sparse '!/.moe/' plus an existence check (sh:5484-5487, ps1:5048-5050).\n\n6. Rail 1: PASS, apart from bug 1.\n- The target moves only by CAS or a non-forced push after the gate (cas-contains-c, push-first-no-force).\n- MOE_DISABLE_QUALITY_GATE=1 never skips a worktree gate on either twin.\n\n7. Rail 4: PASS. 'off', and unset with no gate, both stay shared. validators.test.ts covers it (174 pass).\n\n8. WT-03b: PASS. landingRetry is on the WebSocketServer.ts:97 denylist, and a release keeps a retrying row WORKING (workerLifecycle.ts:111).\n\n9. WT-18b: PASS. QA never self-lands in worktree mode:\n- sh: qa_control_preflight :7005 and qa_landed_gate :7023;\n- ps1: Invoke-MoeQaControlPreflight :6369 and Assert-MoeQaLandedCommit :6391;\n- the QA role doc says \"No self-landing, in either mode\".\n\nFILED. Every finding sits in the wrappers or in docs outside this task's files, so none is fixed here. All are in BACKLOG, and the governor was asked to promote them in msg-45ae900d and pinged in msg-1c1d48f6.\n- Bug 1: task-f9874361f83742fb860a35d6f110b8e0, HIGH, order 51. The post-flight settings read fails open, so the completion lands on main with no gate.\n- Bug 2: task-d2d6ac4b11644fbe9a4cf0777ad68301, LOW, order 52. Four twin drifts.\n- Bug 3: task-1765335a56ef405a87139d3d5b0c9c10, LOW, order 53. MCP_SERVER.md:587 and moe-qa-loop SKILL.md:26 describe shared mode only.\n\nAlready tracked elsewhere: task-c6436215f31d4f47a3bd071a269b1508 (marker-scan mutants) and task-347dde8560ac467aaa9c02a1d1532b74 (stale default docs).\n\nTHIS TASK'S OWN DIFF. resolveWorktreeMode is pure, and the mode is pinned per attempt at claim, so a settings edit never flips a running attempt. Inputs:\n- null or undefined settings, a non-string gate, or a whitespace-only gate resolve to 'off';\n- an explicit invalid mode is INVALID_INPUT;\n- all of these are tested.\nA gate-set project with no worktreeMode key flips on at its next claim. That is intended (approved (b)), and the 'off' rollback is in CONFIGURATION.md.\n\nNo files were modified in this step.",
+      "startedAt": "2026-11-03T12:29:29.493Z",
+      "completedAt": "2026-11-03T12:31:53.931Z"
     }
   ],
   "planRevision": 3,
@@ -268,7 +273,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-11-03T10:17:01.696Z",
+  "updatedAt": "2026-11-03T12:33:26.290Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",
@@ -278,7 +283,7 @@
     "firstClaimAt": "2026-10-30T13:36:47.832Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 5
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -297,7 +302,9 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:46:16.161Z",
@@ -433,7 +440,7 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-8cf0816c@2026-11-03T09:18:16Z",
-    "at": "2026-11-03T10:17:01.696Z"
+    "sessionId": "worker-8cf0816c@2026-11-03T10:17:06Z",
+    "at": "2026-11-03T12:33:26.289Z"
   }
 }

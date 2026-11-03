@@ -57,17 +57,25 @@
     {
       "stepId": "step-4",
       "description": "Verification test gate, once, fresh, from the task worktree after the last tracked edit. Its output is the complete_task evidence. Run exactly (about 70+ min: run it as one background job, wait for its exit, then paste the tail):\ncd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && S=$(mktemp -d /mnt/d/moe-scratch/c6436215-v.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fake-proxy.js\" && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_ACCOUNT_ROTATION=off MOE_WORKTREE_ONLY=wt-resume,wt-resume-unmerged,wt-resume-retry-path,marker-scan node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fake-proxy.js\" \"$S\" \"$(command -v bash)\" && MOE_WORKTREE_ONLY=wt-resume,wt-resume-unmerged,wt-resume-retry-path WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') node scripts/tests/postflight-safe.mjs bash && \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell\n\nExpected:\n- PASS parity-check.sh.\n- The sh targeted run prints `[worktree] 4 ok, 0 failed` and the ps1 targeted run `[worktree] 3 ok, 0 failed`. These are the DoD 4 counts.\n- Both postflight-safe lines are `{\"engine\":...,\"exit\":0,...,\"failureClass\":\"NONE\",...}`.\n\nA second targeted run uses the same $S parent, so wait for the first to finish. Delete $S afterwards. Kill only PIDs you started yourself, never by pattern.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T08:58:47.298Z"
+      "note": "I ran step 4's exact command once, from the task worktree. The tree was clean at checkpoint 09b5c80e, committed 10:29:24Z, before the run. The run was D:\\moe-scratch\\c6436215-gate\\run.sh, started 11:32:04Z and ended 13:02:40Z, EXIT=0. A prior session of this seat started it; it kept running across that session's exit, and this session waited for it to finish and checked that the tree was unchanged afterwards (HEAD 09b5c80e, status clean). Results: PASS parity-check.sh; sh targeted [worktree] 4 ok, 0 failed (wt-resume, wt-resume-unmerged, wt-resume-retry-path, marker-scan); ps1 targeted (PS 5.1) [worktree] 3 ok, 0 failed; postflight-safe bash {\"exit\":0,\"failureClass\":\"NONE\"}; postflight-safe powershell {\"exit\":0,\"failureClass\":\"NONE\"}. Its $S scratch dir is deleted. The log is kept at D:\\moe-scratch\\c6436215-gate\\log.",
+      "startedAt": "2026-11-03T08:58:47.298Z",
+      "completedAt": "2026-11-03T13:02:56.136Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this test-only diff (adversarial-self-review skill).\n\nCheck:\n- `git diff` shows changes to scripts/tests/postflight-worktree.cjs only, and scripts/moe-agent.{sh,ps1} are byte-identical to the target.\n- No existing case, helper or assertion changed: only the two new functions and two new table entries. The new code sits beside wt-resume, not at the end of the file or of the table.\n- Each case asserts its own non-vacuity before the completion:\n  - (a): retry paths [] and the LANDING-CONFLICT prompt;\n  - (b): no MERGE_HEAD, no unmerged stages, the LANDING-RETRY prompt.\n- Each case kills its mutants on both engines (step 3 results).\n- Concurrency: none. The cases use their own repo() fixture names and gate log.\n- Windows: CRLF safety of the marker checks (the existing marker regex), and the git commit in W needs no hooks or identity beyond repo()'s config.\n\nIf the review changes any tracked byte, re-run step 4's exact command and use that output as the evidence.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "I reviewed the diff adversarially and changed no tracked byte, so step 4's evidence still stands.\n- Scope: `git diff 9657a30c HEAD` has +41/-1 in scripts/tests/postflight-worktree.cjs only. The one removed line is the case-table line, re-added with 'wt-resume-unmerged' and 'wt-resume-retry-path' right after 'wt-resume'. scripts/moe-agent.{sh,ps1} and postflight-fake-proxy.js are byte-identical to target 13683b4e (git diff --quiet). `git merge-tree --write-tree` onto the target is clean, and task-e3e81c45's cases have not landed in this file yet.\n- No existing case, helper or assertion changed. The two functions sit between wtResume and the markerScan comment.\n- Non-vacuity: (a) asserts MOE_COMMIT_FAILED_GATE, 1 gate run, retry ['gate', []] and then the LANDING-CONFLICT prompt. (b) asserts no MERGE_HEAD, markers kept, `ls-files -u` empty, retry paths ['src/a.txt'], B an ancestor of W HEAD and main==B, then the LANDING-RETRY: conflict prompt.\n- Mutant kills (step 3): M1/P1 kill (a); M2, M3, P2 and P3 kill (b), each with an AssertionError on its target case. The controls are green on both engines.\n- Inputs and robustness: retryOf null is guarded, so a failure is an AssertionError, not a TypeError. promptOf, rows and readOr tolerate a missing file.\n- Concurrency: none. The fixture names, gate log and CLI record paths are unique.\n- Windows: the marker regex /^<<<<<<< /m is CRLF-safe. repo() sets user.name/email and core.autocrlf=false, and the hand commit uses --no-verify. Both cases pass on PS 5.1.",
+      "startedAt": "2026-11-03T13:02:58.424Z",
+      "completedAt": "2026-11-03T13:03:06.245Z"
     }
   ],
   "planRevision": 1,
@@ -91,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T08:27:57.048Z",
-  "updatedAt": "2026-11-03T10:29:28.202Z",
+  "updatedAt": "2026-11-03T13:03:06.245Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T08:32:52.349Z",
@@ -101,7 +109,7 @@
     "firstClaimAt": "2026-11-03T08:34:35.147Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -115,7 +123,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T08:40:32.867Z",
@@ -200,9 +210,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
+    "outcome": "nothing",
     "kind": "checkpoint",
-    "sessionId": "worker-c9368191@2026-11-03T08:40:36Z",
-    "at": "2026-11-03T10:29:28.202Z"
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "worker-c9368191@2026-11-03T10:29:33Z",
+    "at": "2026-11-03T12:39:40.322Z"
   }
 }

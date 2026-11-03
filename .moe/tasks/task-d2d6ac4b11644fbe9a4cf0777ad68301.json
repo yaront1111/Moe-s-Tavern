@@ -1,0 +1,30 @@
+{
+  "id": "task-d2d6ac4b11644fbe9a4cf0777ad68301",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: worktree-mode sh/ps1 twin drift in labels and diagnostics (recovery-checkpoint status, interrupted-gate CheckRun, hooked-commit reason, post-flight MOE_WORKTREE_MOE_PRESENT)",
+  "description": "Filed by WT-19's whole-epic adversarial review (task-b1ca54f2716442be889a14623eb59983, step 7).\n\nPROBLEM. There are four small sh/ps1 drifts in worktree mode, and parity-check's string families cannot see them. Each changes only a label, a diagnostic or an evidence row. None moves a branch, and none records a false pass.\n(a) On a fresh claim, sh labels a recovery checkpoint status=UNKNOWN.\n(b) ps1 records no infra-failure CheckRun for an interrupted worktree-mode gate.\n(c) sh misreports why a hooked commit's sparse helper failed.\n(d) No landing post-flight prints MOE_WORKTREE_MOE_PRESENT, which design §1.6 requires.\n\nEVIDENCE. Checked on merged tree 88e507e5, which is moe/work-2026-10-24 at 1558f141 plus the WT-19 task.\n(a) scripts/moe-agent.sh:10512 calls worktree_preflight with \"${RESUME_TASK_STATUS:-}\", which is empty unless the session is a resume. So sh:7868 sets LAND_STATUS=\"${3:-UNKNOWN}\". scripts/moe-agent.ps1:9789-9791 passes the preflight context's task.status instead.\n(b) The sh EXIT trap (sh:269) calls finish_gate_observation (sh:5890-5897), which records any gate that started but was never recorded as infra-failure. ps1 does that only in the shared landing's finally (ps1:6216-6230). In worktree mode:\n- Invoke-MoeWorktreeCompletion's catch/finally (ps1:7264-7271) only warns and releases the lease;\n- the outer finally (ps1:11188) only stops the gate child.\n(c) The sh hooked-commit worktree arm empties private_git when sparse-checkout or read-tree fails (sh:5484-5487). The signing-config comparison then runs with GIT_DIR='' and writes 'hooked-commit-config-mismatch' (sh:5514-5515). ps1 throws 'hooked-commit-worktree-failed' (ps1:5048-5050).\n(d) docs/plans/2026-10-30-per-task-worktrees.md:69 says \"A post-flight that finds it still lands ... and prints the code\". The only emitters are:\n- pre-flight: sh:3439, ps1:3317;\n- removal: sh:8199 and :8248, ps1:7726 and :7782;\n- the sweep: sh:8405, ps1:7931.\n\nIMPACT.\n(a) The same recovery gets a different commit subject and ledger status on each engine.\n(b) On Windows the ledger loses the interrupted gate attempt. No landing happens, but the rail-1 audit gets harder.\n(c) An operator chases a signing mismatch that does not exist.\n(d) A W that grew .moe is reported only at the next pre-flight.\n\nFIX DIRECTION. Mirror whichever twin is right:\n(a) sh passes the preflight context's task status.\n(b) ps1 records the infra-failure CheckRun in the worktree completion's finally, or in the outer finally, when MoeGate.Started is set and MoeGate.Recorded is not.\n(c) sh writes 'hooked-commit-worktree-failed' and returns when the sparse helper fails.\n(d) Both landing post-flights check W/.moe, print MOE_WORKTREE_MOE_PRESENT, and still land, as §1.6 says.",
+  "definitionOfDone": [
+    "On a fresh claim, sh labels a worktree recovery checkpoint with the task's real status, as ps1 does.",
+    "ps1 records an infra-failure CheckRun for an interrupted worktree-mode gate on the exit paths sh's finish_gate_observation covers.",
+    "When the hooked-commit sparse-checkout/read-tree helper fails, both twins report 'hooked-commit-worktree-failed'.",
+    "Both landing post-flights print MOE_WORKTREE_MOE_PRESENT when W/.moe exists and still land, per design §1.6.",
+    "parity-check.sh/.ps1, worktree-landing.sh/.ps1 and postflight-safe (bash and powershell) all pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 52,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T12:30:36.691Z",
+  "updatedAt": "2026-11-03T12:30:36.691Z"
+}
