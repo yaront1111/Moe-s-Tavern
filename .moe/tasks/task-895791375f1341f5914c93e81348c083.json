@@ -56,17 +56,23 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's diff only. Load adversarial-self-review; keep evidence in /mnt/d/moe-scratch/89579137-work.\n1. Run I1 and I2 alone through Windows node.exe with --test-reporter=tap. Confirm the 8.3, \\\\?\\+8.3 and all three subst forms ran, with no 'not reachable' diagnostic: the DoD needs the 8.3 and subst forms proved on Windows.\n2. Mutants, each in a git archive copy of your final bytes, never in the worktree, and each must be KILLED:\n   - (m1) drop the final-path check from the loop: I1 fails on both engines;\n   - (m2) let a \\\\?\\UNC\\ final path through: the I1 UNC form and I2 fail;\n   - (m3) skip only a final path equal to the project, not one under it: I1 fails;\n   - (m4) swap in the volume-serial plus file-index parent walk from proto-identity-walk.ps1.diff.rejected: the subst-of-project\\bin form fails.\n   Record each outcome.\n3. Re-read:\n   - the handle is disposed on every path;\n   - a second call in one process reuses the compiled type;\n   - the WARN path returns before the loop and cannot match the protectedLines filter;\n   - a drive-root project key ('\\\\?\\D:\\') puts every D: entry in the project, which is correct;\n   - the case-insensitive compare only over-skips;\n   - legacy (marker unset or '01') never compiles the type: grep the Find-MoeProtectedFile call sites;\n   - there is no new MOE_ code, and the BOM is kept with no CR.\n4. Note the accepted fail-closed residuals: a PATH folder whose final path cannot be read is skipped, and so is every network or mapped-drive entry.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/protected-agent-command.test.mjs"
       ],
-      "startedAt": "2026-11-03T03:48:52.699Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "1. I1/I2 alone via Windows node.exe TAP (green.log + control copy): on PS 5.1 and PS 7 all 7 forms ran and were skipped (8.3, \\\\?\\+8.3, subst of root Z:, subst of project Y:, subst of project\\bin X:\\, \\\\?\\, \\\\localhost\\C$). No 'not reachable' line; subst control resolved.\n2. Mutants in git-archive copies under C:\\...\\Temp (control 4/4 green first). All were KILLED:\n- m1 (loop check disabled): I1 fails at \\\\?\\+8.3 and I2 fails, both engines.\n- m2 (UNC let through): I1 fails at the UNC form, and I2 fails.\n- m3 (Equals, not StartsWith): I1 fails at \\\\?\\+8.3. I2 passes, as expected.\n- m4 (rejected identity walk): I1 fails at the subst of project\\bin (X:\\), and I2 fails.\nLogs: /mnt/d/moe-scratch/89579137-work/mut-*.log. Copies were removed and no subst mapping was left.\n3. Re-read:\n- SafeFileHandle is in a using on every path.\n- The -as [type] gate compiles once per source hash.\n- The WARN returns before the loop and has no MOE_PROTECTED_ token.\n- Key \\\\?\\D:\\ puts every D: entry in the project (correct). OrdinalIgnoreCase only over-skips (case-sensitive NTFS dirs).\n- All 3 Find-MoeProtectedFile call sites (:610 via Resolve-MoeProtectedCli, :618, :8815) are under $script:MoeRuntimeProtected (-ceq '1'), so legacy never compiles the type.\n- No new MOE_ code; BOM kept; 0 CR.\n4. Accepted fail-closed residuals:\n- A PATH folder whose final path cannot be read is skipped. So is every network or mapped-drive entry (\\\\?\\UNC\\).\n- A project on a share now refuses under the marker, with WARN plus the caller's existing refusal.\n- A file-level link inside a trusted dir is still not followed (pre-existing ponytail).\n- A same-user subst or junction swap between the check and the spawn is out of the threat model, as before.",
+      "startedAt": "2026-11-03T03:48:52.699Z",
+      "completedAt": "2026-11-03T03:51:11.110Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8cf0816c",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,7 +97,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:35:38.591Z",
-  "updatedAt": "2026-11-03T03:48:52.699Z",
+  "updatedAt": "2026-11-03T03:52:41.208Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:14.066Z",
@@ -105,7 +111,7 @@
     "firstClaimAt": "2026-11-03T03:11:13.891Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -118,7 +124,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T03:38:01.431Z",
@@ -184,5 +191,42 @@
   },
   "planApprovedAt": "2026-11-03T03:38:01.456Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T03:39:47.403Z"
+  "workStartedAt": "2026-11-03T03:39:47.403Z",
+  "reviewStartedAt": "2026-11-03T03:51:49.461Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && bash -n scripts/moe-call.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && R=$(git rev-parse --show-toplevel) && cd \"$R\" && { \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/moe-call.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]; } && R=$(git rev-parse --show-toplevel) && cd \"$R\" && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$R/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "✔ /bin/bash: Codex launch without a hint keeps the default argv (191.889829ms)\nℹ tests 201\nℹ suites 0\nℹ pass 171\nℹ fail 0\nℹ cancelled 0\nℹ skipped 30\nℹ todo 0\nℹ duration_ms 71891.045504\n✔ C:/Program Files/Git/bin/bash.exe: Codex launch without a hint keeps the default argv (362.8962ms)\nℹ tests 306\nℹ suites 0\nℹ pass 255\nℹ fail 0\nℹ cancelled 0\nℹ skipped 51\nℹ todo 0\nℹ duration_ms 167029.2801\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nGATE_EXIT=0 start=03:44:43 end=03:48:45",
+    "reportedAt": "2026-11-03T03:51:49.461Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/protected-agent-command.test.mjs",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1 on Windows, Find-MoeProtectedFile compares each PATH entry's final path (GetFinalPathNameByHandleW, flags 0) with the project's. An 8.3, \\\\?\\, subst (root, project or descendant), junction or mount-point spelling of the project is now skipped. A \\\\?\\UNC\\ entry (UNC, admin share, mapped drive) is never trusted.\nA project whose final path is unreadable or on a share gets one [WARN] line and the caller's existing refusal.\n\nDiff (+123/-12, 2 files, approvedScope):\n- moe-agent.ps1: Get-MoeSha256Hex moved byte-identical above Find-MoeProtectedFile. New MoeFinalPath C# type (source-hash name) and Get-MoeFinalPath. Windows-only compare, with comment.\n- Test: shortPath, substDrive, I1 and I2 per ps1 engine.\n\nBOM kept, 0 CR, no new MOE_ code. Legacy is untouched: all 3 call sites sit under -ceq '1'. POSIX pwsh is unchanged.\n\nRED on HEAD: I1/I2 4/4 fail. PS 5.1 and PS 7 pin \\\\?\\+8.3; I2 resolves the UNC claude.\nGREEN: on both engines all 7 forms ran and were skipped, and the subst control resolves.\n\nGate (joined checkRefs), fresh on the final bytes, exit 0:\n- Linux: 201 tests / 171 pass / 0 fail / 30 skip.\n- Windows: 306 / 255 / 0 / 51.\n- ParseFile OK, parity PASS, lint OK.\n\nMutants in archive copies (control green) were all KILLED:\n- m1, loop check off: I1 and I2 fail.\n- m2, UNC let through: I1 fails at the UNC form, and I2 fails.\n- m3, Equals instead of StartsWith: I1 fails.\n- m4, the rejected identity walk: I1 fails at the subst of project\\bin (X:\\), and I2 fails.\n\nAccepted fail-closed residuals:\n- An unreadable final path, and every network or mapped-drive entry, is skipped.\n- A project on a share now refuses under the marker.\n- A file-level link inside a trusted dir is still not followed.\n\nEvidence: /mnt/d/moe-scratch/89579137-work.",
+  "commits": [
+    {
+      "sha": "b4cfae121cbc0f8375b664db65f65aafc2830f13",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T03:38:07Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T03:52:40.740Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-03T03:38:07Z",
+    "at": "2026-11-03T03:52:41.208Z"
+  }
 }
