@@ -73,8 +73,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -93,12 +93,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:43:02.522Z",
-  "updatedAt": "2026-11-03T16:12:32.658Z",
+  "updatedAt": "2026-11-03T16:17:31.587Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:44:38.033Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:16:47.645Z",
+    "wallClockMs": 1929612
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -201,9 +203,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T15:51:36Z",
-    "at": "2026-11-03T16:12:01.848Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:12:19Z",
+    "at": "2026-11-03T16:17:31.587Z"
+  },
+  "completedAt": "2026-11-03T16:16:47.645Z",
+  "reviewCompletedAt": "2026-11-03T16:16:47.645Z",
+  "reviewSummary": "Reviewed landed completion 3b56ee35 (base ef5c7101). It is on origin/moe/work-2026-10-24, its tree d19786bd equals the candidate's, and it has 6 files, +127/-5 (net 122), all within the declared paths.\nDoD1: StepAmendment plus defaulted amendments/activeAmendmentId. activeAmendment (non-empty id, firstOrNull) and effectiveDescription mirror planAmendments.ts. parseStepAmendments never throws: non-array gives [], and a non-object or non-string id/description is skipped. The new MoeJsonTest method covers both parseTask and parseState: the F1 step (\"AMENDED: delete src/a.ts\", original kept, architect-1), active-not-latest, junk entries, 9 degraded shapes and a legacy step, all with exact asserts.\nDoD2: both dialogs render effectiveDescription, with an \"Amended by X\" marker and an \"Original step:\" tooltip. step.description remains only as the tooltip argument. onRendered and the fail-closed catch are untouched, TaskDetailDialog rebuilds the plan on every state update, and no label starts with agent text. No main-code Gson deserializes Task.\nDoD3: ran gradlew.bat test --rerun in the task worktree under the jetbrains-gradle lease. Its moe-jetbrains tree is identical to 3b56ee35. EXIT 0. XML: 40 classes, 633 tests, 6 skipped (pre-existing), 0 failures, 0 errors, timestamps 16:14:29Z..16:14:54Z (this run). MoeJsonTest tests=34 and includes the new method. RED: effectiveDescription is absent at 946358a8 (git grep, 0 hits), so the test cannot compile there.\nqualityGate: parity-check EXIT 0, lint EXIT 0.\nPlacement: none of ProjectSettings, HandoffNote, parseHandoffs or handoffBlocks is touched, so task-40813cc1 and task-ac587df5 should squash cleanly.\nPonytail: the ~5-line marker block is duplicated in the two dialogs. Not blocking.",
+  "requiredCheckAtDone": null
 }
