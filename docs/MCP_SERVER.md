@@ -1633,17 +1633,19 @@ Set task status (optionally with a reopen reason).
 ```
 
 The valid transitions allow `ARCHIVED` from any resting status — `BACKLOG`,
-`REVIEW`, or `DONE` — and `ARCHIVED → BACKLOG/WORKING` to un-archive.
+`REVIEW`, or `DONE` — and from `PLANNING` and `BLOCKED`, to shelve a row that
+needs no work (its DoD was met by a sibling, or a dead park nobody will
+revive). `ARCHIVED → BACKLOG/WORKING` un-archives.
 `BACKLOG → PLANNING/WORKING/REVIEW` are all legal: `set_task_status` is the
 un-park path for tasks the blocked-timeout sweep routed to `BACKLOG` (including
-parked reviews, hence `BACKLOG → REVIEW`). In-flight
-states (`PLANNING`/`AWAITING_APPROVAL`/`WORKING`) cannot go straight to
-`ARCHIVED`. For archiving, prefer the dedicated `moe.archive_task` /
+parked reviews, hence `BACKLOG → REVIEW`). `AWAITING_APPROVAL` and `WORKING`
+cannot go straight to `ARCHIVED`, because a worker may own the task: move it to
+`BACKLOG` first. For archiving, prefer the dedicated `moe.archive_task` /
 `moe.archive_epic` tools below.
 
 **BLOCKED transitions:** `BLOCKED` is reachable from each agent-claimable
 column (`PLANNING`/`WORKING`/`REVIEW` → `BLOCKED`) and exits back to any of
-them or to `BACKLOG` (manual park). It is deliberately **not** reachable from
+them, to `BACKLOG` (manual park), or to `ARCHIVED` (shelving a dead park). It is deliberately **not** reachable from
 the human-gated columns (`BACKLOG`/`AWAITING_APPROVAL`) — nothing is running
 there to block. Block bookkeeping is handled by this tool: entering `BLOCKED`
 here (the human/board path — agents use `moe.report_blocked`) records
@@ -1662,6 +1664,8 @@ Exits are additionally judged against **`blockedFromStatus`**: leaving
 `BLOCKED` to any status other than the one the task was blocked from requires
 that `blockedFromStatus → target` be itself a legal transition — a two-hop
 `PLANNING → BLOCKED → WORKING` must not launder past the plan-approval gate.
+`ARCHIVED` is the exception: a dead park may be shelved whatever it was
+blocked from.
 Reopen accounting also keys on `blockedFromStatus` (a blocked `REVIEW` task
 sent to `WORKING` increments `reopenCount` and scrubs completion signals like
 a direct `REVIEW → WORKING` would). Assignment: entering `BLOCKED` and
@@ -1749,14 +1753,24 @@ Governor lever on claim order: change a task's `priority` after `moe.create_task
 
 Archive a single ticket so it drops out of agent context — `list_tasks` and
 `search_tasks` hide `ARCHIVED` by default. Allowed from `BACKLOG`, `REVIEW`, or
-`DONE`; rejected for in-flight tasks (move to `BACKLOG` or release first), and
+`DONE`, and from `PLANNING` or `BLOCKED` for a row with nothing left to do.
+A held `PLANNING`/`BLOCKED` row may be archived only by its holder: a caller
+whose `workerId` names another worker is refused `-32003` / `NOT_ALLOWED`. An
+unassigned row, or a caller with no `workerId` (a human), may archive it.
+`AWAITING_APPROVAL` and `WORKING` are refused `-32003` / `NOT_ALLOWED`, because a
+worker may own the task: move it to `BACKLOG` first with `moe.set_task_status`
+(`moe.release_task` keeps a `WORKING` task in `WORKING`). A move is also
 refused with retryable `-32002` / `ATTEMPT_FINALIZING` while the task has a
-`finalizing` attempt (see `moe.set_task_status`).
+`finalizing` attempt (see `moe.set_task_status`). Archiving a `BLOCKED` row
+clears its block bookkeeping and keeps the reason as `priorBlockedReason`.
 Idempotent. Un-archive with `set_task_status` `ARCHIVED → BACKLOG`.
 
 **Parameters:**
 ```typescript
-{ taskId: string }
+{
+  taskId: string,
+  workerId?: string   // Caller (auto-injected by moe-proxy); a held PLANNING/BLOCKED row may only be archived by its holder
+}
 ```
 
 **Returns:**
@@ -2507,12 +2521,16 @@ Send a chat message to a channel. Parses @mentions and returns routing info.
 
 **Returns:**
 ```typescript
-{ success: true, messageId, channel, timestamp, routed: string[] }
+{ success: true, messageId, channel, timestamp, routingTargets: string[] }
 ```
 
 **Notes:**
 - @mentions are parsed from content (e.g., `@worker-abc123`)
-- `routed` array contains all mentioned worker IDs
+- `routingTargets` lists the worker IDs the message is routed to, after group
+  expansion (`@all`, `@architects`, `@workers`, `@qa`, `@governors`). An agent's
+  message routes only to the seats it mentions other than itself, and to nobody
+  while the loop guard has the channel paused. A human message with no mention
+  routes to every online seat (not `IDLE` or `DEAD`).
 
 ---
 
