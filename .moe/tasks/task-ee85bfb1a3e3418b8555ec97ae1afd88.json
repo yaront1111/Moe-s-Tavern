@@ -1,0 +1,31 @@
+{
+  "id": "task-ee85bfb1a3e3418b8555ec97ae1afd88",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "docs: the worker.reference.md LANDING rule still says \"use no git command\"; align it with task-b5c8fd34's resume prompt (read-only git allowlist, merged-tree verification)",
+  "description": "Follow-up to task-b5c8fd341d4f48f89f5056b176622428. That task rewrites the LANDING-CONFLICT/LANDING-RETRY resume prompt in scripts/moe-agent.{sh,ps1}. It drops \"no git commands\" and appends one identical rule (sh `resume_rule`, ps1 `$resumeRule`) to both lines:\n- HEAD can lack the merged target.\n- A verification snapshot built from HEAD (`git archive HEAD`, or a clone checked out at HEAD) is built from the worktree's tracked files instead.\n- Git stays read-only: only git status, git diff, git log, git show, git ls-files and git rev-parse may run. Every git write stays forbidden.\n\ndocs/roles/worker.reference.md :97 (the LANDING rule) still says \"Edit files only: use no git command (commit, merge, reset, checkout, abort) ... Then re-run the plan's verification command\". That now contradicts the prompt. A worker who reads the reference gets the same mixed signal that stalled WT-14's resume (msg-c9029b23).\n\nThis row only aligns the docs with the landed wrapper text: read the landed `resume_rule` line, never a planned copy. The doc is vendored, so packages/moe-daemon/src/generated/initFiles.ts must be regenerated in a clone with history and applied with the Edit tool (Serena convention-role-doc-edits-regenerate-initfiles). worker.md's pointer \"(edit files only; leave git to the wrapper)\" still holds for git writes and may stay unchanged. The dated design record docs/plans/2026-10-30-per-task-worktrees.md stays out of scope.",
+  "definitionOfDone": [
+    "docs/roles/worker.reference.md's LANDING rule no longer says \"use no git command\"; it names the same read-only allowlist as the landed resume rule (git status, git diff, git log, git show, git ls-files, git rev-parse), keeps every git write forbidden, and tells the worker to build a HEAD-based verification snapshot from the worktree's tracked files.",
+    "packages/moe-daemon/src/generated/initFiles.ts is regenerated from the edited doc in a clone with history (marker sha and SHIPPED_ROLE_BODY_SHAS), and its diff touches only the worker.reference.md entry.",
+    "npm run lint passes, and packages/moe-daemon src/util/initFiles.test.ts, src/util/targetedContextGuidance.test.ts and src/util/qaCommitPolicy.test.ts pass in a Linux snapshot, with the exact commands and counts in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b5c8fd341d4f48f89f5056b176622428"
+  ],
+  "priority": "MEDIUM",
+  "order": 48,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T01:10:19.060Z",
+  "updatedAt": "2026-11-03T01:10:19.060Z"
+}

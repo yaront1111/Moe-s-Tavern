@@ -58,7 +58,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,7 +78,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T19:52:01.193Z",
-  "updatedAt": "2026-11-03T00:01:16.857Z",
+  "updatedAt": "2026-11-03T01:12:14.808Z",
   "dependsOn": [],
   "planningEntry": {
     "from": "BACKLOG",
@@ -89,11 +89,14 @@
     "firstClaimAt": "2026-11-02T22:11:26.994Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T01:12:14.806Z",
+    "wallClockMs": 10847812
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-c9368191"
+    "worker-c9368191",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -169,5 +172,9 @@
     "kind": "completion",
     "sessionId": "worker-c9368191@2026-11-02T23:57:48Z",
     "at": "2026-11-03T00:01:16.857Z"
-  }
+  },
+  "completedAt": "2026-11-03T01:12:14.806Z",
+  "reviewCompletedAt": "2026-11-03T01:12:14.806Z",
+  "reviewSummary": "Reviewed completion 1b667532 (on moe/control and moe/work-2026-10-24; net 91 LOC, 3 files). moe-agent.ps1 changes one line: adds ` -Encoding UTF8` to `Get-Content -Raw -LiteralPath $moeAgentConfig` (3ad573a7's -LiteralPath kept; BOM + LF kept; try/catch, MOE_SERENA_PROJECT step and not-found fallback untouched). ci.yml adds one step (runner.os != macOS). Re-ran task.verification in the foreground (log /mnt/d/moe-scratch/qa-ff1f71cd/verify.log, EXIT=0): Linux 1 pass/6 skipped (no pwsh); parity-check PASS; Windows-native 15/15 pass, 0 skipped (PS 5.1 x3, pwsh 7 x3, static test, 3ad573a7 real-wrapper launches). Mutation check in a scratch copy outside the checkout (-Encoding UTF8 stripped): static test and both PS 5.1 BOM-less rows fail with mojibake (`serena Ã© Ã¼`, `absent Ã©`); PS 5.1 BOM row and all pwsh 7 rows still pass, so the tests are non-vacuous. DoD: (1) PS 5.1 BOM-less existing-dir row asserts source '.moe-agent.json', realpath equality, no WARN; (2) PS 5.1 and pwsh 7 both covered, missing-dir row asserts the unchanged 'project root (override not found)' fallback and exact WARN; (3) -LiteralPath retained and pinned by the static assertion. Hygiene: temp roots rmSync'd in t.after, env strips MOE_*, anchors assert via between(). Working-tree ps1 has 4 later lines from other rows, not this change. Ponytail: nothing to cut. Out of scope per plan: other PS 5.1 default-encoding reads in moe-agent.ps1.",
+  "requiredCheckAtDone": null
 }

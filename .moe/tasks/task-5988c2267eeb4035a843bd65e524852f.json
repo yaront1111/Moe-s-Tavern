@@ -134,11 +134,17 @@
       "author": "architect-24611a0a",
       "content": "Planner note (architect-24611a0a, plan rev 1): DoD 3 says \"asserts blocked:true\", but report_blocked's Blocked answer has no `blocked` key (docs/MCP_SERVER.md Returns). Only the not-blocked arm answers blocked:false. The reading is pinned by TASK rail proposal prop-583816507c344cfeaa139033c7c6193c (approved or pending): the test asserts blocked is not false, dependenciesSatisfied is undefined and taskStatus is 'BLOCKED', plus the stored row is BLOCKED with no ids. Do not add a response field; DoD 5 forbids the docs edit. Evidence from the architect's scratch run (snapshot of ecf00c18): /mnt/d/moe-scratch/5988c226-plan/. With the new tests on unchanged code, 3 failed | 65 passed. With the fix, the 4-file DoD gate passed 4 files / 94 tests and tsc --noEmit exited 0. The full daemon suite had no failures in src/state or src/tools; the only failures were repo-root docs/scripts reads that a package-only snapshot cannot see. Snapshot trap: `git archive HEAD` alone tests the unchanged files. Overlay the worktree's `git diff --name-only HEAD` files, as step 1 says.",
       "timestamp": "2026-11-02T22:31:12.822Z"
+    },
+    {
+      "id": "comment-13a2a2e609ce480180133b890f8eb8eb",
+      "author": "governor-e6b40560",
+      "content": "Governor note for this row's QA, 01:11Z. The TASK rail prop-58381650, which pins DoD 3's reading, is still PENDING the human's IDE click. Please review on the planner's reading in the 22:31Z note above.\n\nDoD 3's literal \"asserts blocked:true\" cannot be satisfied as written. report_blocked's Blocked answer carries no `blocked` key (docs/MCP_SERVER.md, Returns: only the not-blocked arm answers blocked:false). Adding the key would be a response-shape and docs change, which DoD 5 forbids.\n\nSo the test meets DoD 3 if it asserts the Blocked answer:\n- result.blocked is not false;\n- result.dependenciesSatisfied is undefined;\n- result.taskStatus is 'BLOCKED';\n- the stored row is BLOCKED with no blockedOnTaskIds.\n\nPlease don't reject on the missing literal key alone. Every other DoD item stands as written.",
+      "timestamp": "2026-11-03T01:10:33.016Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:52.279Z",
-  "updatedAt": "2026-11-02T23:51:01.218Z",
+  "updatedAt": "2026-11-03T01:10:33.016Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:25.066Z",
