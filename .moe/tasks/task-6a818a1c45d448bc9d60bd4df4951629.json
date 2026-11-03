@@ -1,0 +1,29 @@
+{
+  "id": "task-6a818a1c45d448bc9d60bd4df4951629",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the board's /ws UPDATE_TASK refuses BACKLOG to REVIEW, which set_task_status and MCP_SERVER.md allow, so a sweep-parked review dragged from Backlog to Review on the VS Code board gets an ERROR frame and stays in BACKLOG (the /ws copy of VALID_TRANSITIONS drifted in 53271caf)",
+  "description": "Filed by defect hunt 11-03 #3 (task-859eff80). This is contract drift between the two copies of the status-transition table.\n\nPROBLEM\n- packages/moe-daemon/src/server/WebSocketServer.ts:495-508 is the /ws UPDATE_TASK board-move handler. Its comment says \"Keep in sync with VALID_TRANSITIONS in src/tools/setTaskStatus.ts\", but its table has `BACKLOG: ['PLANNING', 'WORKING', 'ARCHIVED']`.\n- packages/moe-daemon/src/tools/setTaskStatus.ts:46 has `BACKLOG: ['PLANNING', 'WORKING', 'REVIEW', 'ARCHIVED']`. Its comment at :37-39 explains why: \"BACKLOG → REVIEW is the un-park path: the blocked-timeout sweep parks in-flight tasks (including REVIEW) in BACKLOG, and a human restoring a parked review must be able to send it straight back to the QA queue\".\n- Every other row of the two tables is identical.\n- History: 53271caf (2026-07-23) added REVIEW to setTaskStatus.ts only. The /ws copy has not changed since 0aab4d36. This is drift, not a choice.\n- docs/MCP_SERVER.md:1637-1639 says `BACKLOG → PLANNING/WORKING/REVIEW` are all legal, and :1670 says \"The plugin `/ws` board-move handler enforces the same rules\".\n- Who hits it:\n  - VS Code: the board drag (moe-vscode/media/board.js:1068-1111, onDrop → moveMessage) sends UPDATE_TASK {status:'REVIEW'} for a Backlog card dropped on Review.\n  - JetBrains: the board has no direct BACKLOG→REVIEW path (BoardMoves.kt mirrors the /ws table), so a human there must use MCP.\n  - No other /ws route restores a parked review: REOPEN_TASK goes to PLANNING.\n\nEVIDENCE\n- Repro on HEAD ef5c7101. A hunt subagent wrote it in /tmp/hunt-859e-B; I re-ran it myself in /tmp/hunt-859e-snap (git archive with Linux node_modules). Persisted copies: /mnt/d/moe-scratch/hunt-859e/B/zzHuntBWsBacklogReview.test.ts and zzHuntBWsBacklogReview.output.txt.\n- Command: `cd packages/moe-daemon && LOG_LEVEL=fatal npx vitest run src/server/zzHuntBWsBacklogReview.test.ts`. Result: 1 failed.\n  - `MCP set_task_status BACKLOG->REVIEW => {\"success\":true,\"taskId\":\"task-mcp\",\"status\":\"REVIEW\",...}`\n  - `/ws UPDATE_TASK BACKLOG->REVIEW => [{\"type\":\"ERROR\",\"message\":\"Cannot move task from BACKLOG to REVIEW. Allowed: PLANNING, WORKING, ARCHIVED\"}] stored status = BACKLOG`\n  - `AssertionError: expected 'BACKLOG' to be 'REVIEW'`\n\nFIX DIRECTION\n- Make the two tables one:\n  - export VALID_TRANSITIONS from tools/setTaskStatus.ts (or move it to a small shared module if the import would cycle);\n  - use it in the /ws handler in place of the inline copy, keeping the \"Allowed: …\" error text format;\n  - keep the existing gates, including the upward-move execution-profile check.\n- Check that the /ws path applies set_task_status's side effects for a move into REVIEW where they matter, e.g. the needsHumanReview clear at setTaskStatus.ts:217-226. The /ws handler clears it only on reopening moves, through buildReopenClearingUpdates. If the new move needs it, mirror it; otherwise say why in the plan.\n- No MCP or /ws message shape changes, and no doc change: the code catches up with MCP_SERVER.md.\n\nFILES: packages/moe-daemon/src/server/WebSocketServer.ts and packages/moe-daemon/src/tools/setTaskStatus.ts, plus one NEW test file under packages/moe-daemon/src/server/ (shape: the repro above, which drives a real WebSocketServer UPDATE_TASK frame). None is held by an open row (lanes.js at 16:26Z).",
+  "definitionOfDone": [
+    "A /ws UPDATE_TASK that moves a BACKLOG task to REVIEW succeeds: the stored status is REVIEW and the move is broadcast. An illegal move such as BACKLOG to DONE is still refused with the same 'Cannot move task from X to Y. Allowed: …' ERROR text.",
+    "The /ws handler and set_task_status read one shared transition table, so no inline copy remains in WebSocketServer.ts. A NEW test asserts that every (from, to) pair the shared table allows or refuses gets the same verdict from /ws UPDATE_TASK as from moe.set_task_status. Restoring today's inline /ws table fails it.",
+    "The existing WebSocketServer and setTaskStatus tests pass unchanged.",
+    "Verification, in a snapshot outside the shared checkout: `cd packages/moe-daemon && npx vitest run src/server/<new test file> src/server/WebSocketServer.test.ts src/tools/setTaskStatus.test.ts && npx tsc --noEmit` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 375.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:26:32.139Z",
+  "updatedAt": "2026-11-03T16:26:32.139Z"
+}

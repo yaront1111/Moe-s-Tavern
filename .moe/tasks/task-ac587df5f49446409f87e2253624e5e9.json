@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,16 +79,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:47:05.199Z",
-  "updatedAt": "2026-11-03T16:23:41.226Z",
+  "updatedAt": "2026-11-03T16:26:40.734Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:57:50.997Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:26:16.098Z",
+    "wallClockMs": 1705101
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -208,9 +211,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-03T16:06:10Z",
-    "at": "2026-11-03T16:23:41.226Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:24:43Z",
+    "at": "2026-11-03T16:26:40.734Z"
+  },
+  "completedAt": "2026-11-03T16:26:16.098Z",
+  "reviewCompletedAt": "2026-11-03T16:26:16.098Z",
+  "reviewSummary": "Reviewed completion d5f36e82 (task.commits completion, pushed, on moe/work-2026-10-24; control checkout HEAD == d5f36e82, moe-jetbrains tree identical and clean). Diff is +56/-20 across exactly the 5 planned moe-jetbrains files (Models.kt, MoeJson.kt, TaskDetailDialog.kt, MoeJsonTest.kt, TaskTimingPresentationTest.kt); moe-vscode, daemon and MoeBundle untouched. DoD 1: HandoffNote now holds releasedBy/releasedAt/reason (matches schema.ts HandoffNote:553-571); parseHandoffs reads them via the lenient getStringOrNull and still skips non-object entries; handoffBlocks header is '#N released by <by> (<at>): <reason>', each fragment guarded by isNullOrBlank, so an empty or legacy-only note renders '#N'. No other reader of from/to/createdAt exists (TaskCard only uses priorHandoffs.size). DoD 2: liveTaskJson fixture moved to the daemon shape and the :573 assertion is a whole-data-class equality; the new decoy test feeds releasedBy plus from/to/createdAt decoys and a legacy-only note, asserted through both parseTask and parseSnapshotTask, so it fails if the parser reads from/to/createdAt again. Header tests pin full, releaser-only, timestamp-only, reason-only, empty and legacy-only notes. Re-ran the exact task.verification command under the jetbrains-gradle lease: BUILD SUCCESSFUL in 31s, exit 0, xml tests=635 skipped=6 failures=0 errors=0. The count is 2 above the worker's 633 because HEAD also carries peer landings. MoeJsonTest 36/0 failures with the new decoy case present, TaskTimingPresentationTest 22/0 failures. Lease released. Root parity/lint gate not re-run because the diff touches no scripts or docs, and the worker reported it green. The worker's scratch M2/M3 mutants are recorded as killed, and I relied on that rather than repeating them. Complexity pass: nothing to cut, 3 one-for-one field swaps plus tests. Size 36 net LOC, well under the 400 cap.",
+  "requiredCheckAtDone": null
 }
