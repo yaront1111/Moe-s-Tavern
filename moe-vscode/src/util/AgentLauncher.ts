@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { declaredProfile, installedArtifact, installedRoot, runtimeProfile } from '../services/MoeDaemonClient';
-import type { DeclaredProfile, ReadinessFailure, ReadinessReply } from '../services/MoeDaemonClient';
+import { declaredProfile, defaultFoldCase, installedArtifact, installedExecutable, installedRoot, runtimeProfile } from '../services/MoeDaemonClient';
+import type { ArtifactSelection, DeclaredProfile, ReadinessFailure, ReadinessReply } from '../services/MoeDaemonClient';
 
 export type AgentProvider = 'claude' | 'codex' | 'gemini' | 'grok' | 'custom';
 export type AgentRole = 'architect' | 'worker' | 'qa' | 'governor';
@@ -28,6 +28,21 @@ interface ResolvedScript {
  * default profile (Command Prompt, Git Bash, WSL). No shellArgs: the profile can still set PATH for node and claude.
  */
 const WINDOWS_SHELL = 'powershell.exe';
+
+/** Pin the protected wrapper's interpreter outside the project (task-d5eca150; JetBrains twin task-b071e3bf). */
+export function protectedInterpreter(
+    basePath: string,
+    windows = process.platform === 'win32',
+    env: NodeJS.ProcessEnv = process.env,
+    posixBash = '/bin/bash'
+): ArtifactSelection {
+    const candidate = windows
+        ? (env.SystemRoot ? path.win32.join(env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : undefined)
+        : posixBash;
+    const label = windows ? 'wrapper interpreter %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+        : `wrapper interpreter ${posixBash}`;
+    return installedExecutable(candidate, basePath, defaultFoldCase, label);
+}
 
 const TERMINAL_NAMES: Record<AgentRole, string> = {
     architect: 'Moe Planner',
@@ -236,12 +251,16 @@ function assertSafeLaunchArgs(
     workerId: string,
     command: string,
     envOverrides?: Record<string, string>,
-    teamName?: string
+    teamName?: string,
+    interpreter?: string
 ): void {
     assertSafeArg('script path', scriptPath);
     assertSafeArg('workspace path', workspacePath);
     assertSafeArg('worker id', workerId);
     assertSafeArg('command', command);
+    if (interpreter !== undefined) {
+        assertSafeArg('interpreter', interpreter);
+    }
     if (teamName) {
         assertSafeArg('team name', teamName);
     }
@@ -262,9 +281,10 @@ function buildPowerShellCommand(
     workerId: string,
     command: string,
     envOverrides?: Record<string, string>,
-    teamName?: string
+    teamName?: string,
+    interpreter?: string
 ): string {
-    assertSafeLaunchArgs(scriptPath, workspacePath, workerId, command, envOverrides, teamName);
+    assertSafeLaunchArgs(scriptPath, workspacePath, workerId, command, envOverrides, teamName, interpreter);
 
     let prefix = '';
     if (envOverrides) {
@@ -284,7 +304,7 @@ function buildPowerShellCommand(
     // double-quoted wrapper and inject arbitrary commands. Base64 has no shell
     // metacharacters, so no value can break out.
     const encoded = Buffer.from(inner, 'utf16le').toString('base64');
-    return `${prefix}powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`;
+    return `${prefix}${interpreter ? `& ${psQuote(interpreter)}` : 'powershell'} -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`;
 }
 
 function buildBashCommand(
@@ -294,9 +314,10 @@ function buildBashCommand(
     workerId: string,
     command: string,
     envOverrides?: Record<string, string>,
-    teamName?: string
+    teamName?: string,
+    interpreter?: string
 ): string {
-    assertSafeLaunchArgs(scriptPath, workspacePath, workerId, command, envOverrides, teamName);
+    assertSafeLaunchArgs(scriptPath, workspacePath, workerId, command, envOverrides, teamName, interpreter);
 
     let prefix = '';
     if (envOverrides) {
@@ -306,7 +327,7 @@ function buildBashCommand(
     }
 
     let cmd =
-        `${prefix}bash ${shQuote(scriptPath)} --role ${role} --project ${shQuote(workspacePath)} ` +
+        `${prefix}${interpreter ? shQuote(interpreter) : 'bash'} ${shQuote(scriptPath)} --role ${role} --project ${shQuote(workspacePath)} ` +
         `--worker-id ${shQuote(workerId)} --command ${shQuote(command)}`;
 
     if (teamName) {
@@ -348,7 +369,8 @@ async function launchRole(
         const vmSeat = shared !== undefined || isVmSeat(role, declaredProfile(workspacePath));
 
         // runtimeProfile still runs first (it pins); a VM seat takes only the installed runtime whatever it reads.
-        const resolved = runtimeProfile(workspacePath) === 'protected' || vmSeat
+        const protectedRun = runtimeProfile(workspacePath) === 'protected' || vmSeat;
+        const resolved = protectedRun
             ? selectProtectedAgentRuntime(workspacePath, installedRoot(extensionPath))
             : resolveAgentScript(extensionPath, workspacePath);
         if (resolved && 'refused' in resolved) {
@@ -363,6 +385,19 @@ async function launchRole(
                 'Moe agent script not found. Ensure scripts/moe-agent exists in the workspace, extension bundle, or global install.'
             );
             return;
+        }
+
+        let interpreter: string | undefined;
+        if (protectedRun) {
+            const selection = protectedInterpreter(workspacePath);
+            if ('rejected' in selection) {
+                vscode.window.showErrorMessage(
+                    `Protected execution profile: ${selection.rejected}. ` +
+                    'Moe starts the agent wrapper only with an interpreter outside the project.'
+                );
+                return;
+            }
+            interpreter = selection.accepted;
         }
 
         const workerId = `${role}-${randomHex8()}`;
@@ -394,7 +429,8 @@ async function launchRole(
                 workerId,
                 command,
                 resolved.envOverrides,
-                options?.teamName
+                options?.teamName,
+                interpreter
             );
         } else {
             terminalCommand = buildBashCommand(
@@ -404,14 +440,15 @@ async function launchRole(
                 workerId,
                 command,
                 resolved.envOverrides,
-                options?.teamName
+                options?.teamName,
+                interpreter
             );
         }
 
         const terminal = vscode.window.createTerminal({
             name: terminalName,
             cwd: workspacePath,
-            ...(isWin ? { shellPath: WINDOWS_SHELL } : {}),
+            ...(isWin ? { shellPath: interpreter ?? WINDOWS_SHELL } : {}),
         });
         if (options?.onLaunched) {
             // A tracking failure never stops a launch: the seat still starts, and the user is told once.

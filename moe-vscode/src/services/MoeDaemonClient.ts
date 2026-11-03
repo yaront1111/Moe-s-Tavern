@@ -579,10 +579,10 @@ export function installedArtifact(root: string, relative: string, basePath: stri
 }
 
 /** A bare name is never resolved by spawn; the first selected candidate must pass these checks. */
-export function installedExecutable(p: string | undefined, basePath: string, foldCase = defaultFoldCase): ArtifactSelection {
-    if (!p?.trim()) { return { rejected: 'node executable not found' }; }
-    if (!isFullyQualified(p)) { return { rejected: 'node executable is not an absolute path' }; }
-    return selectInstalledFile(p, 'node executable', basePath, foldCase);
+export function installedExecutable(p: string | undefined, basePath: string, foldCase = defaultFoldCase, label = 'node executable'): ArtifactSelection {
+    if (!p?.trim()) { return { rejected: `${label} not found` }; }
+    if (!isFullyQualified(p)) { return { rejected: `${label} is not an absolute path` }; }
+    return selectInstalledFile(p, label, basePath, foldCase);
 }
 
 function selectInstalledFile(file: string, label: string, basePath: string, foldCase: boolean, realRoot?: string): ArtifactSelection {

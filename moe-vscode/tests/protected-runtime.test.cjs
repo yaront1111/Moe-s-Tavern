@@ -40,7 +40,7 @@ function loadClient() {
     return { exports, failClosed };
 }
 
-function loadLauncher(projectPath) {
+function loadLauncher(projectPath, clientOverrides = {}) {
     const [terminals, errors] = [[], []];
     const createTerminal = options => {
         const terminal = { options, texts: [], sendText: text => terminal.texts.push(text), show() {} };
@@ -49,7 +49,9 @@ function loadLauncher(projectPath) {
     };
     const window = { createTerminal, showErrorMessage: message => { errors.push(message); } };
     const vscode = { workspace: { workspaceFolders: [{ uri: { fsPath: projectPath } }] }, window };
-    const launcher = run(launcherSource, 'AgentLauncher.ts', vscode, { '../services/MoeDaemonClient': loadClient().exports });
+    const launcher = run(launcherSource, 'AgentLauncher.ts', vscode, {
+        '../services/MoeDaemonClient': { ...loadClient().exports, ...clientOverrides }
+    });
     return { launcher, terminals, errors };
 }
 
@@ -213,15 +215,18 @@ function launchedCommand(f, projectPath) {
         .replace(/worker-[0-9a-f]{8}/, 'worker-ID');
 }
 
-function expectedCommand(env, wrapper, projectPath) {
+const interp = () => fs.realpathSync.native(WIN
+    ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : '/bin/bash');
+
+function expectedCommand(env, wrapper, projectPath, interpreter) {
     const entries = Object.entries(env);
     if (WIN) {
         return entries.map(([key, value]) => `$env:${key}=${psQuote(value)}; `).join('') +
-            `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand [& ${psQuote(wrapper)} -Role worker ` +
+            `${interpreter ? `& ${psQuote(interpreter)}` : 'powershell'} -NoProfile -ExecutionPolicy Bypass -EncodedCommand [& ${psQuote(wrapper)} -Role worker ` +
             `-Project ${psQuote(projectPath)} -WorkerId 'worker-ID' -Command 'claude']`;
     }
     return entries.map(([key, value]) => `${key}=${shQuote(value)} `).join('') +
-        `bash ${shQuote(wrapper)} --role worker --project ${shQuote(projectPath)} --worker-id 'worker-ID' --command 'claude'`;
+        `${interpreter ? shQuote(interpreter) : 'bash'} ${shQuote(wrapper)} --role worker --project ${shQuote(projectPath)} --worker-id 'worker-ID' --command 'claude'`;
 }
 
 test('L1 a protected launch uses only the installed wrapper, daemon and proxy, plus the marker', async () => {
@@ -231,7 +236,8 @@ test('L1 a protected launch uses only the installed wrapper, daemon and proxy, p
     const readiness = async () => ({ answered: { profile: 'verified-local', ready: true, missingCapabilities: [], evaluatedAt: null } });
     await f.launcher.launchAgent('worker', 'claude', ext, { readiness });
     const bundled = path.join(ext, 'bundled');
-    assert.equal(launchedCommand(f, dir), expectedCommand(installedEnv(bundled), path.join(bundled, WRAPPER), dir));
+    assert.equal(launchedCommand(f, dir), expectedCommand(installedEnv(bundled), path.join(bundled, WRAPPER), dir, interp()));
+    assert.deepEqual({ ...f.terminals[0].options }, { name: 'Moe Coder', cwd: dir, ...(WIN ? { shellPath: interp() } : {}) });
 });
 
 for (const [row, missing] of [['L2', 'proxy/index.js'], ['L3', WRAPPER]]) {
@@ -250,3 +256,73 @@ test('L4 a legacy launch keeps the project script first and carries no marker', 
     f.launcher.launchAgent('worker', 'claude', extension());
     assert.equal(launchedCommand(f, dir), expectedCommand({}, path.join(dir, WRAPPER), dir));
 });
+
+const WIN_INTERPRETER = 'wrapper interpreter %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+const psFile = root => path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+for (const [windows, name, fixture] of [
+    [false, 'default bash', () => [[], { accepted: interp() }]],
+    [false, 'missing bash', () => [[false, {}, '/nonexistent/bash'], { rejected: 'wrapper interpreter /nonexistent/bash not found' }]],
+    [false, 'relative bash', () => [[false, {}, 'bash'], { rejected: 'wrapper interpreter bash is not an absolute path' }]],
+    [false, 'project bash', dir => {
+        const file = write(path.join(dir, 'bash'));
+        return [[false, {}, file], { rejected: `wrapper interpreter ${file} resolves inside the project` }];
+    }],
+    [true, 'system PowerShell', () => [[true, { SystemRoot: process.env.SystemRoot }], { accepted: interp() }]],
+    [true, 'unset SystemRoot', () => [[true, {}], { rejected: `${WIN_INTERPRETER} not found` }]],
+    [true, 'relative SystemRoot', () => [[true, { SystemRoot: 'Windows' }], { rejected: `${WIN_INTERPRETER} is not an absolute path` }]],
+    [true, 'missing PowerShell', () => [[true, { SystemRoot: tempDir() }], { rejected: `${WIN_INTERPRETER} not found` }]],
+    [true, 'project PowerShell', dir => {
+        write(psFile(dir));
+        return [[true, { SystemRoot: dir }], { rejected: `${WIN_INTERPRETER} resolves inside the project` }];
+    }]
+]) {
+    test(`L5 ${name}`, { skip: windows !== WIN }, () => {
+        const dir = project();
+        const [args, expected] = fixture(dir);
+        const { protectedInterpreter } = loadLauncher(dir).launcher;
+        assert.equal(typeof protectedInterpreter, 'function');
+        assert.deepEqual({ ...protectedInterpreter(dir, ...args) }, expected);
+    });
+}
+
+for (const protectedRun of [true, false]) {
+    test(`L6 ${protectedRun ? 'a refused interpreter creates no terminal' : 'legacy never checks the interpreter'}`, async () => {
+        const dir = project(protectedRun ? declare('verified-local') : undefined, true);
+        let checks = 0, readinessCalls = 0;
+        const f = loadLauncher(dir, { installedExecutable: () => {
+            checks++;
+            return { rejected: 'wrapper interpreter X not found' };
+        } });
+        await f.launcher.launchAgent('worker', 'claude', extension(), { readiness: async () => {
+            readinessCalls++;
+            return { answered: { profile: 'verified-local', ready: true, missingCapabilities: [], evaluatedAt: null } };
+        } });
+        assert.equal(checks, protectedRun ? 1 : 0);
+        assert.equal(readinessCalls, 0);
+        if (protectedRun) {
+            assert.deepEqual(f.errors, ['Protected execution profile: wrapper interpreter X not found. ' +
+                'Moe starts the agent wrapper only with an interpreter outside the project.']);
+            assert.equal(f.terminals.length, 0);
+        } else {
+            assert.equal(launchedCommand(f, dir), expectedCommand({}, path.join(dir, WRAPPER), dir));
+        }
+    });
+}
+
+for (const [name, suffix, refused] of [['quote', "'shell", false], ['newline', '\n', true], ['DEL', '\x7f', true]]) {
+    test(`L7 interpreter ${name} is ${refused ? 'refused before terminal creation' : 'quoted'}`, async () => {
+        const dir = project(declare('verified-local'));
+        const ext = extension(), interpreter = interp() + suffix;
+        const f = loadLauncher(dir, { installedExecutable: () => ({ accepted: interpreter }) });
+        await f.launcher.launchAgent('worker', 'claude', ext, { readiness: async () => ({
+            answered: { profile: 'verified-local', ready: true, missingCapabilities: [], evaluatedAt: null }
+        }) });
+        if (refused) {
+            assert.deepEqual(f.errors, ['Failed to launch worker agent: Invalid interpreter: contains control characters']);
+            assert.equal(f.terminals.length, 0);
+        } else {
+            const bundled = path.join(ext, 'bundled');
+            assert.equal(launchedCommand(f, dir), expectedCommand(installedEnv(bundled), path.join(bundled, WRAPPER), dir, interpreter));
+        }
+    });
+}

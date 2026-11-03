@@ -201,17 +201,19 @@ const bundledEnv = (ext, marker) => ({ MOE_DAEMON_PATH: path.join(ext, 'bundled'
 
 const shQuote = value => `'${value.replace(/'/g, `'\\''`)}'`;
 const psQuote = value => `'${value.replace(/'/g, "''")}'`;
+const interp = () => fs.realpathSync.native(WIN
+    ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : '/bin/bash');
 
 /** Today's command shape for the bundled wrapper, -EncodedCommand decoded and the random worker id fixed. */
 function expectedCommand(role, ext, dir, marker, command = 'claude') {
     const [env, wrapper] = [Object.entries(bundledEnv(ext, marker)), path.join(ext, 'bundled', WRAPPER)];
     if (WIN) {
         return env.map(([key, value]) => `$env:${key}=${psQuote(value)}; `).join('') +
-            `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand [& ${psQuote(wrapper)} -Role ${role} ` +
+            `${marker ? `& ${psQuote(interp())}` : 'powershell'} -NoProfile -ExecutionPolicy Bypass -EncodedCommand [& ${psQuote(wrapper)} -Role ${role} ` +
             `-Project ${psQuote(dir)} -WorkerId '${role}-ID' -Command '${command}']`;
     }
     return env.map(([key, value]) => `${key}=${shQuote(value)} `).join('') +
-        `bash ${shQuote(wrapper)} --role ${role} --project ${shQuote(dir)} --worker-id '${role}-ID' --command '${command}'`;
+        `${marker ? shQuote(interp()) : 'bash'} ${shQuote(wrapper)} --role ${role} --project ${shQuote(dir)} --worker-id '${role}-ID' --command '${command}'`;
 }
 
 const decode = text => text
