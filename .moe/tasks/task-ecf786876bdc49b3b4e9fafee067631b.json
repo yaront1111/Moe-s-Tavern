@@ -104,8 +104,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -117,7 +117,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:23:35.850Z",
-  "updatedAt": "2026-11-03T01:50:18.716Z",
+  "updatedAt": "2026-11-03T02:35:08.536Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:11.284Z",
@@ -127,7 +127,9 @@
     "firstClaimAt": "2026-11-02T23:43:38.052Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T02:34:35.722Z",
+    "wallClockMs": 10257670
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -250,10 +252,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T01:44:58Z",
-    "at": "2026-11-03T01:49:53.867Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T01:50:07Z",
+    "at": "2026-11-03T02:35:08.536Z"
   },
   "reviewStartedAt": "2026-11-03T01:49:08.203Z",
   "verification": {
@@ -263,5 +266,9 @@
     "reportedAt": "2026-11-03T01:49:08.203Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Both wrappers now ignore a chat message whose sender is the seat's own worker id, at all four mention filters. The comparison is exact: sh == / !=, and ps1 [string] -ceq. A sender-less message is never skipped.\n- scripts/moe-agent.sh: pre-wait probe :9143-9144 and routed-mention build :9651.\n- scripts/moe-agent.ps1: probe :8767 and build :9056.\n- A seat's own self-, [at]all- or role-group-tagged message no longer skips the wrapper-side wait, appears in routed_mentions, or launches a notification-only session.\n- Other senders route as before. Same rule as the daemon's unread counter (chatStore.ts:236). No daemon or MCP change.\n\nTests:\n- postflight-fake-proxy.js FAKE_MENTION gains 'self' and 'group'; '1' is byte-identical.\n- New Scenario AB3 in postflight.sh and postflight.ps1. AB3a (own message): exit 0, no session-new.txt, the '[no-task] ... waiting up to 5s' line and 'MOE_TASKLESS_NO_LAUNCH reason=idle'. AB3b (another sender's [at]all plus role group) still launches.\n- Expected counts: sh 46/45, ps1 45/46.\n- RED: both full harnesses failed AB3 against the unfixed wrappers (session-new.txt assertion). Dropping either site alone also fails AB3.\n\nVerification: the plan's step-4 command (run once, per the plan). It ran 00:31Z-01:43Z this attempt (log /mnt/d/moe-scratch/v-ecf78687.log, EXIT=0):\n- PASS parity-check.sh.\n- postflight.sh: AA/AB/AB2/AB3 ok, 'commit-scope scenarios run: 46', PASS.\n- postflight.ps1 under PS 5.1.26100: AA/AB/AB2/AB3 ok, 'commit-scope scenarios run: 45', PASS.\n- npm run lint OK.\nIts snapshot is cmp-identical to HEAD 062c1914 for all five files. bash -n, parity-check.sh and npm run lint were re-run fresh at 01:48Z: exit 0. CI's pwsh 7 leg was not run locally."
+  "completionSummary": "Both wrappers now ignore a chat message whose sender is the seat's own worker id, at all four mention filters. The comparison is exact: sh == / !=, and ps1 [string] -ceq. A sender-less message is never skipped.\n- scripts/moe-agent.sh: pre-wait probe :9143-9144 and routed-mention build :9651.\n- scripts/moe-agent.ps1: probe :8767 and build :9056.\n- A seat's own self-, [at]all- or role-group-tagged message no longer skips the wrapper-side wait, appears in routed_mentions, or launches a notification-only session.\n- Other senders route as before. Same rule as the daemon's unread counter (chatStore.ts:236). No daemon or MCP change.\n\nTests:\n- postflight-fake-proxy.js FAKE_MENTION gains 'self' and 'group'; '1' is byte-identical.\n- New Scenario AB3 in postflight.sh and postflight.ps1. AB3a (own message): exit 0, no session-new.txt, the '[no-task] ... waiting up to 5s' line and 'MOE_TASKLESS_NO_LAUNCH reason=idle'. AB3b (another sender's [at]all plus role group) still launches.\n- Expected counts: sh 46/45, ps1 45/46.\n- RED: both full harnesses failed AB3 against the unfixed wrappers (session-new.txt assertion). Dropping either site alone also fails AB3.\n\nVerification: the plan's step-4 command (run once, per the plan). It ran 00:31Z-01:43Z this attempt (log /mnt/d/moe-scratch/v-ecf78687.log, EXIT=0):\n- PASS parity-check.sh.\n- postflight.sh: AA/AB/AB2/AB3 ok, 'commit-scope scenarios run: 46', PASS.\n- postflight.ps1 under PS 5.1.26100: AA/AB/AB2/AB3 ok, 'commit-scope scenarios run: 45', PASS.\n- npm run lint OK.\nIts snapshot is cmp-identical to HEAD 062c1914 for all five files. bash -n, parity-check.sh and npm run lint were re-run fresh at 01:48Z: exit 0. CI's pwsh 7 leg was not run locally.",
+  "completedAt": "2026-11-03T02:34:35.722Z",
+  "reviewCompletedAt": "2026-11-03T02:34:35.722Z",
+  "reviewSummary": "Reviewed completion d7c5e815 (on moe/work-2026-10-24 + origin): 5 files, +117/-9, net 108, all in approvedScope. Its hunks match checkpoint 062c1914, but the base moved 1b754809->01e24e87 (4 commits on these files), so I re-ran the gate on the landed bytes. Snapshots: git archive d7c5e815 on /mnt/d, blobs hash-verified, MOE_*/CLAUDE* scrubbed.\n- sh: bash -n OK; PASS parity-check.sh; postflight.sh (timeout 180) [scenario AA/AB/AB2/AB3] ok, 'commit-scope scenarios run: 46', PASS; npm run lint OK. EXIT=0.\n- ps1: PS 5.1.26100.9711, AA/AB/AB2/AB3 ok, 'commit-scope scenarios run: 45', '[worktree] 66 ok, 0 failed', PASS postflight.ps1. EXIT=0.\nDoD1: a sender skip sits at all 4 filters (sh :9177 probe, :9684 build; ps1 :8788, :9077), and grep finds no other filter. The comparisons are exact; a missing sender is not skipped. My mutants, trimmed AB3 harness: dropping the sh probe skip fails AB3 at the wait-line check; dropping the build skip fails it at the session-launch check. The ps1 RED is the worker's full-harness run.\nDoD2: AB3b (another sender's [at]all + role group) still launches in both harnesses. FAKE_MENTION=1 builds the same object. agent-git-guard.test.mjs (the other FAKE_MENTION=1 user) passes 28/28 at d7c5e815.\nDoD3: AB3 is in both harnesses with the counts bumped; parity-check PASS.\nInvariants: BOM kept on both .ps1, 0 CR in all 5 files, no daemon/MCP change. The complexity pass found nothing to cut.\nNot run locally: CI's pwsh 7 leg. Non-blocking: ps1 [string] coerces a 1-element array sender, while the daemon only sends strings.",
+  "requiredCheckAtDone": null
 }
