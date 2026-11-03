@@ -28,29 +28,47 @@
     {
       "stepId": "step-2",
       "description": "Fix and docs (DoD 1, 2).\n\npackages/moe-daemon/src/server/McpAdapter.ts. Edit only the env reads (~:13-17) and the RateLimiter constructor fallback (~:46-49). task-5158e85b owns the dispatch comment hunk at ~:301-303: stay out of it, so merge-tree lands both rows.\n- Add `const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 100;` and `const DEFAULT_RATE_LIMIT_WINDOW_MS = 1000;` beside DEFAULT_MCP_MAX_BATCH_SIZE.\n- Replace the two bare parseInt reads:\n  - `parsePositiveIntegerEnv(process.env.MOE_RATE_LIMIT_MAX_REQUESTS, DEFAULT_RATE_LIMIT_MAX_REQUESTS, 'MOE_RATE_LIMIT_MAX_REQUESTS')`, and the same for MOE_RATE_LIMIT_WINDOW_MS.\n  - Place them after the function, next to MAX_MCP_BATCH_SIZE. The function declaration is hoisted; the constants it reads are not.\n- Its existing warn, `{ name, value, fallback }`, already names the variable and the value used (DoD 1). Add no second message.\n  - An unset variable stays silent (`value === undefined`).\n  - An empty string now warns and falls back, as MOE_MCP_MAX_BATCH_SIZE does today. That is intended.\n- RateLimiter constructor: replace the fallback `1` with DEFAULT_RATE_LIMIT_MAX_REQUESTS and `1000` with DEFAULT_RATE_LIMIT_WINDOW_MS, so its 'using safe defaults' warning is true.\n- Leave MOE_RATE_LIMIT_ENABLED (`!== 'false'`) alone.\n\nError handling: no new throw path. Every bad value degrades to the default with one warning, and a valid override applies as before.\n\ndocs/CONFIGURATION.md:26 (free at planning: no open row declares it). Rewrite only the clause\n\"rate limiting `MOE_RATE_LIMIT_ENABLED`, `MOE_RATE_LIMIT_WINDOW_MS`, `MOE_RATE_LIMIT_MAX_REQUESTS`;\"\nto\n\"rate limiting `MOE_RATE_LIMIT_ENABLED` (`false` turns it off), `MOE_RATE_LIMIT_WINDOW_MS` (default 1000) and `MOE_RATE_LIMIT_MAX_REQUESTS` (default 100), one limiter shared by every MCP client, where a non-numeric, zero or negative value falls back to the default with a warning, as `MOE_MCP_MAX_BATCH_SIZE` does;\"\nTouch nothing else on that line. Use your TOOL-witnessed editor for both files.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/server/McpAdapter.ts",
         "docs/CONFIGURATION.md"
       ],
-      "startedAt": "2026-11-03T23:10:48.324Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts"
+      ],
+      "note": "Reused parsePositiveIntegerEnv for both env reads, added shared 100/1000 constants and aligned constructor fallbacks. Changed only approved env/constructor McpAdapter hunks and CONFIGURATION rate-limit clause. Test hygiene: stub NODE_ENV=production to avoid creating a pino-pretty transport worker/exit listener on every fresh import (observed MaxListeners warning in RED); restored with all other envs. Green verification deferred to next approved step.",
+      "startedAt": "2026-11-03T23:10:48.324Z",
+      "completedAt": "2026-11-03T23:11:24.085Z"
     },
     {
       "stepId": "step-3",
       "description": "Verify once (DoD 3), from the worktree root, after the last edit:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/McpAdapter.ts packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts docs/CONFIGURATION.md \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/server/McpAdapter src/util/daemonGitDocs src/util/executionContractDocs src/util/taskTimeBudgetDocs`\n\nIts fresh output is the complete_task evidence.\n- It runs all three McpAdapter test files and the three docs tests that read CONFIGURATION.md.\n- They read docs/ and scripts/, so the archive is the whole tree (mem:gotcha-harness-snapshot-needs-full-archive).\n- QA can run the same text in the control checkout after landing.\n\nError handling for a red run:\n- If an existing test fails, first run the same command without the cp --parents overlay, which tests HEAD's bytes.\n- A failure that persists there is pre-existing: report it, and don't edit that test.\n- Otherwise fix the cause in step 1's or step 2's file and re-run the whole command.\n- Kill only PIDs your session recorded.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the exact approved whole-tree archive + three-file overlay + npm ci + tsc --noEmit + targeted vitest command fresh in /tmp/tmp.WjElmFitC9: exit 0; 6 files passed, 81 tests passed. All npm package verification stayed outside checkout; no source edits during verification.",
+      "startedAt": "2026-11-03T23:11:24.115Z",
+      "completedAt": "2026-11-03T23:11:48.599Z"
     },
     {
       "stepId": "step-4",
       "description": "Last: an adversarial self-review of the 3-file diff. Check that:\n- every bad value of either variable ('abc', '0', '-5', '') ends at the default with exactly one warn naming the variable, and an unset variable logs nothing;\n- a valid override (5 requests, 2000 ms) applies and logs no warn;\n- MOE_RATE_LIMIT_ENABLED=false still leaves the limiter null;\n- McpAdapter.ts changes only the env-read hunk and the constructor fallback, and not the dispatch comment at ~:301-303 (task-5158e85b);\n- the test asserts exact values, not truthiness, and afterEach restores the env, Date.now and the module registry;\n- the docs clause states what the code does (the defaults and the fallback rule).\n\nIf the review changes any byte, re-run step 3 and submit that fresh output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Adversarially reviewed all three paths including untracked test: invalid/empty exact defaults + exactly one named warning, unset silent, 5/2000 overrides and parseInt-prefix compatibility, false disables, cleanup restores env/mocks/modules, one limiter and error shape unchanged. No concurrent-state/IO changes or dispatch-comment edits; docs match. No review edits. Fresh step-3 verification: 81/81 across 6 files; supplemental test-inclusive tsc passed. Worktree qualityGate parity-check.sh && npm run lint exit 0. git diff --check clean. Handoff and fresh-logger gotcha saved in Serena.",
+      "startedAt": "2026-11-03T23:11:48.634Z",
+      "completedAt": "2026-11-03T23:12:14.896Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -69,12 +87,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:47:03.896Z",
-  "updatedAt": "2026-11-03T23:10:48.324Z",
+  "updatedAt": "2026-11-03T23:13:24.110Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:02:48.409Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -85,7 +103,10 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T23:08:03.917Z",
@@ -156,5 +177,44 @@
   },
   "planApprovedAt": "2026-11-03T23:08:03.946Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T23:09:36.472Z"
+  "workStartedAt": "2026-11-03T23:09:36.472Z",
+  "reviewStartedAt": "2026-11-03T23:12:22.746Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/McpAdapter.ts packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts docs/CONFIGURATION.md \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/server/McpAdapter src/util/daemonGitDocs src/util/executionContractDocs src/util/taskTimeBudgetDocs",
+    "exitCode": 0,
+    "outputTail": "npx tsc --noEmit: exit 0\nTest Files  6 passed (6)\nTests  81 passed (81)\nStart at  01:11:36\nDuration  1.77s\nExternal snapshot: /tmp/tmp.WjElmFitC9\nSupplemental new-test-inclusive tsc: exit 0\nQuality gate: PASS parity-check.sh; npm run lint OK (architect 39, worker 30, qa 36 lines).",
+    "reportedAt": "2026-11-03T23:12:22.746Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts",
+    "packages/moe-daemon/src/server/McpAdapter.ts",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "Both rate-limit env settings now reuse the existing positive-integer parser with 100 requests/1000ms defaults and one warning naming invalid values/fallbacks. Constructor fallbacks match; literal false disabling and MCP error contract preserved. Added 14 regression cases and documented defaults/fallbacks. RED: 9 expected failures/5 passes before implementation. GREEN: 81/81 targeted tests in 6 files, production and new-test TypeScript checks passed; parity/docs quality gate passed. Adversarial review clean; sibling dispatch hunk untouched. Serena handoff recorded.",
+  "commits": [
+    {
+      "sha": "b796ea481db8d7a1d8522eda608677eb04edcd0e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T23:08:03Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts",
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T23:13:24.110Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T23:08:03Z",
+    "at": "2026-11-03T23:13:24.110Z"
+  }
 }
