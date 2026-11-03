@@ -47,20 +47,25 @@
     {
       "stepId": "step-3",
       "description": "Verification gate, run ONCE after steps 1-2, from the task worktree root. Take the jetbrains-gradle lease first; if a peer holds it for a short window, moe.wait_for_resource in-session beats report_blocked (mem:gotcha-jetbrains-snapshot-gradle-test). Release it afterwards, even on failure.\n\nRun the checkRef exactly as written (copy in /mnt/d/moe-scratch/plan-048bfae2/checkref.txt, sha256 2f5e2a9a4c7e0e170b63cfebd6d30c85218fb0b6541b0c26baa349aca0c66af9). It runs the Windows equivalents of the DoD's `./gradlew test --tests 'com.moe.toolwindow.EpicArchiveTest'` and then the full `./gradlew test`, each with --rerun. WSL has no JDK, and gradlew.bat lives in moe-jetbrains/ (mem:gotcha-gradle-jetbrains-shared-box, section 2c). The command prints its log path, both BUILD lines, the module XML totals and EpicArchiveTest's counts. It exits non-zero on a build failure, or when EpicArchiveTest's XML is missing or is not failures=0 errors=0.\n\nExpected: two BUILD SUCCESSFUL lines, and EpicArchiveTest tests=13 skipped=0 failures=0 errors=0. The module total should be about the base plus 13: the control checkout's 2026-11-03 18:12Z results were 651 tests with 6 skipped, so about 664, plus any JetBrains landings since. Report it in complete_task as Windows evidence, never relabelled as the POSIX command.\n\nError handling for a red run:\n- Read the log the command names. Compile errors cascade, so read the FIRST `e:` line.\n- `> Task :test UP-TO-DATE` means nothing ran; never accept it.\n- An exit 1 with green XML can be the Gradle daemon MessageIOException IPC flake: grep the Gradle daemon log, then rerun once.\n- An unexplained compile error in a file you did not touch is a stale Kotlin incremental cache: run `compileKotlin --rerun` once (mem:gotcha-jetbrains-stale-kotlin-ic).\n- Never run cleanTest or --rerun-tasks, and never delete shared build output. Never kill Gradle or java processes by name (project rail: kill only PIDs you started, by recorded PID).\n\nThis run's fresh output is the complete_task verification evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T23:49:05.738Z"
+      "note": "Fresh exact Windows checkRef rerun exited 0: BUILD SUCCESSFUL in 3s and 28s; full suite 664 tests, 6 skipped, 0 failures/errors; EpicArchiveTest 13 tests, 0 skipped/failures/errors. Log /tmp/tmp.wv4xH0vpx8. First full run /tmp/tmp.fMm4SKyBQc had one unrelated TimeoutException in MoeProjectConnectionTest malformed-readiness test at line 217; inspected fixture/request flow and reran unchanged, now green. No out-of-scope fixes. jetbrains-gradle released after each run. Worktree qualityGate also exited 0: parity-check.sh PASS and npm run lint role-doc counts 39/30/36.",
+      "startedAt": "2026-11-03T23:49:05.738Z",
+      "completedAt": "2026-11-03T23:51:03.622Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of THIS task's diff: load adversarial-self-review. The epic is a rolling bucket, and isEpicFinal comes from the highest-order fallback, so the review covers this task. Step 3's full plugin suite is the regression gate: only moe-jetbrains changes, with no daemon, proxy, VS Code or docs change.\n\nMutants run under the jetbrains-gradle lease in a copy outside the checkout, never in the worktree, because a crash mid-mutant would land the mutant (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, worker variant). Run `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/m-048b`, then `cp --parents` every path that `git status --porcelain -- moe-jetbrains` lists. Per mutant, run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\m-048b\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.EpicArchiveTest --rerun\"`, restore the file, and sha256-compare the copy at the end.\n- M1: delete plan()'s in-flight return. 'archiving with in-flight tasks sends nothing and names them by title' and 'each in-flight status alone blocks the archive' must fail.\n- M2: the archive Details frame carries chosenStatus instead of epic.status (today's one-frame bug). 'a quiet epic sends its edits with the current status before a status-only ARCHIVED frame' and 'an epic with no tasks still asks with a zero count' must fail.\n- M3: save() calls confirmArchive but ignores its answer. 'Cancel on the archive confirmation sends nothing' must fail.\n- M4: archiveTaskCount = epicTasks.size. The quiet-epic test must fail (5, not 4).\n- M5: the copy's EpicDetailDialog Save goes back to the HEAD one-frame body. 'the dialog Save plans with the helper and sends only through it' must fail.\n\nAlso check by reading:\n- The dialogs are modal, so two Saves cannot overlap.\n- Both frames go out synchronously on the EDT over one socket. The daemon applies them in arrival order, because WebSocketServer.handlePluginMessage reaches the FIFO StateManager mutex before its first await, so the details frame lands before the archive.\n- A cache that lags a task going in flight only makes the daemon refuse the ARCHIVED frame after the edits landed; the task accepts that.\n- service.getState() is null only after MoeProjectService.dispose, when the sender is disconnected and sends nothing.\n- Agent-written titles reach only Messages dialogs whose bundle value starts with literal text.\n- The cascade count excludes ARCHIVED rows and other epics.\n\nRecord the mutant results in complete_task's summary.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review completed against all four task paths, including untracked helper/test diff. M1-M5 each exited 1 with exactly the required failures: M1 2 blockers tests; M2 2 split/status tests; M3 Cancel test; M4 quiet count test; M5 dialog wiring guard. All ran in /mnt/d/moe-scratch/m-048b under jetbrains-gradle; copy restored and all 118 src hashes equal worktree before/after. Lease released. Reviewed EDT/modal reentry, synchronous ordered sends and daemon FIFO mutex, zero/foreign/ARCHIVED tasks, nullable cache fallback, literal-first bundle text, all cancellation/side-effect paths. Accepted contract limits: cached state may go stale during confirmation; daemon refusal then follows the edits; sender remains existing best-effort transport. No in-scope issue found. Fresh step-3 gate stays green on byte-identical worktree: 664 tests, 6 skipped, 0 failures/errors; EpicArchiveTest 13/0. No tracked edits in this review; all four paths attributed by steps 1-2. Filed out-of-scope intermittent readiness-test timeout as task-8784d35dd2814e8ab678689c1476ab0d. Mutant logs/results: plan-048bfae2/M1.log through M5.log and worker-mutants.json.",
+      "startedAt": "2026-11-03T23:51:03.651Z",
+      "completedAt": "2026-11-03T23:54:21.869Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -72,12 +77,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:23:15.930Z",
-  "updatedAt": "2026-11-03T23:49:05.738Z",
+  "updatedAt": "2026-11-03T23:55:37.814Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:23:20.563Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -89,7 +94,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T23:42:12.253Z",
@@ -166,5 +173,46 @@
   },
   "planApprovedAt": "2026-11-03T23:42:12.284Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T23:44:14.640Z"
+  "workStartedAt": "2026-11-03T23:44:14.640Z",
+  "reviewStartedAt": "2026-11-03T23:54:34.050Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.toolwindow.EpicArchiveTest --rerun && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; X=$R/TEST-com.moe.toolwindow.EpicArchiveTest.xml; echo \"toolwindow.EpicArchiveTest: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; exit $r",
+    "exitCode": 0,
+    "outputTail": "log=/tmp/tmp.wv4xH0vpx8\nBUILD SUCCESSFUL in 3s\nBUILD SUCCESSFUL in 28s\nxml tests=664 skipped=6 failures=0 errors=0\ntoolwindow.EpicArchiveTest: tests=\"13\" skipped=\"0\" failures=\"0\" errors=\"0\"",
+    "reportedAt": "2026-11-03T23:54:34.050Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/EpicArchiveTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicArchive.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicDetailDialog.kt"
+  ],
+  "completionSummary": "Implemented approved JetBrains archive guard, titled blockers, cascade confirmation and ordered split-save preserving edits. Warning/Cancel sends nothing and keeps dialog open; ordinary/already-archived saves stay one frame. Four scoped files byte-match plan references; no daemon/VS Code/docs changes. Windows Gradle focused class: 13 tests, 0 failures/errors. Full suite: 664 tests, 6 skipped, 0 failures/errors (658 passed); exact checkRef log /tmp/tmp.wv4xH0vpx8. QualityGate parity-check + npm run lint exited 0. M1-M5 killed with exact expected failures (2/2/1/1/1), in scratch archive copy only; all 118 source hashes restored and worktree unchanged. Adversarial review found no in-scope defect. First full run's unrelated readiness-test timeout passed on unchanged rerun; filed task-8784d35dd2814e8ab678689c1476ab0d. Handoff and gotcha recorded in Serena; Gradle lease released.",
+  "commits": [
+    {
+      "sha": "19af5ca6445507f77475bd83f20af7a81269df8d",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T23:42:23Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicArchive.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicDetailDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/EpicArchiveTest.kt"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T23:55:37.814Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T23:42:23Z",
+    "at": "2026-11-03T23:55:37.814Z"
+  }
 }

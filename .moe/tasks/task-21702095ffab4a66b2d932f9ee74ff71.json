@@ -1,0 +1,31 @@
+{
+  "id": "task-21702095ffab4a66b2d932f9ee74ff71",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the board's /ws UPDATE_TASK move from BLOCKED back to blockedFromStatus re-assigns the row to its recorded assignee with no owner check (WebSocketServer.ts:545), so a drag after the blocked-timeout idled a resource-parked seat strands the row on that corpse: the /ws twin of task-a133bd6a",
+  "description": "Filed by architect-74d9e1c7 on 2026-11-04 while planning task-a133bd6a. That row fixes the same defect in moe.set_task_status only; its description puts \"the /ws handlers\" out of scope. This row is the twin.\n\nPROBLEM (HEAD d5431577)\n- packages/moe-daemon/src/server/WebSocketServer.ts:507-547 is the /ws UPDATE_TASK exit from BLOCKED. Its comment says it \"Mirrors src/tools/setTaskStatus.ts\". On a return to blockedFromStatus it does `...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {})` (:545), with no owner check.\n- The two automatic restores keep a hold only for a worker that exists, is not DEAD and still points at the task:\n  - state/dependencyUnblock.ts:255-267 (runDependencyUnblock);\n  - state/resourceStore.ts:570-573 (resumeResourceHolder).\n  The contract is in packages/moe-daemon/CLAUDE.md:7.\n- task-a133bd6a (WORKING, planRevision 1) adds that predicate as one exported helper, `parkedHoldOwner(state, task): string | null` in state/dependencyUnblock.ts, and calls it from setTaskStatus.ts. Once it lands, the board drag (the most common human route) is the only manual path still stranding the row.\n- How the strand arises: the blocked-timeout sweep keeps a resource-waiting BLOCKED row assigned (sweeps.ts:456-460) and sets the timed-out seat IDLE with currentTaskId null (:485-489). A drag back to WORKING then restores the row onto that IDLE corpse. isTaskClaimable is false (the owner is neither missing nor DEAD), the Layer-3 prune keeps the corpse (it owns active work), and no sweep alerts. Only release_task recovers it.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-a133-ws/zzWsUnblockCorpse.test.ts. It is a real MoeWebSocketServer on an ephemeral port, the WebSocketServer.transitions.test.ts pattern, run from packages/moe-daemon/src/__hunt__/ of a whole-tree `git archive d5431577` snapshot after `npm ci`: `npx vitest run src/__hunt__/zzWsUnblockCorpse.test.ts` gives 1 failed. Output is in zzWsUnblockCorpse.vitest.txt:\n  HUNT /ws UNBLOCK: {\"task-ghost\":{\"reply\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":\"worker-gone\",\"claimable\":true},\"task-corpse\":{\"reply\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":\"worker-idle\",\"claimable\":false},\"task-dead\":{\"reply\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":\"worker-dead\",\"claimable\":true},\"task-held\":{\"reply\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":\"worker-held\",\"claimable\":false}}\n- What it shows:\n  - task-corpse (IDLE record, currentTaskId null) is the strand: claimable false.\n  - The ghost and DEAD rows keep a stale assignee.\n  - task-held (a BLOCKED record pointing at the row) is the genuine hold and must stay kept.\n\nFIX DIRECTION\n- In the BLOCKED exit arm, replace `existing.assignedWorkerId` with `parkedHoldOwner(this.state, existing)`, imported from '../state/dependencyUnblock.js'. carriedBlockQuestion already comes from there. The explicit null then hands the seat back through updateTask, which also closes the task's running/reconciling attempt (MCP_SERVER.md, Close on hand-back).\n- Do not change the BLOCKED-entry arm (:559-566) or any other exit.\n- Docs: in docs/MCP_SERVER.md `### moe.set_task_status`, task-a133bd6a's Assignment sentence says the /ws handler \"still restores the recorded assignee without that owner check\". Replace that clause with \"enforces the same rules\". Edit only that section; it is free once task-a133bd6a is DONE, which dependsOn guarantees.\n\nFILES (planner to confirm)\n- packages/moe-daemon/src/server/WebSocketServer.ts\n- packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts (new; port the repro, asserting the correct behaviour)\n- docs/MCP_SERVER.md (### moe.set_task_status only)\n\nOUT OF SCOPE: setTaskStatus.ts and dependencyUnblock.ts (task-a133bd6a); resourceStore.ts; sweeps.ts (task-fa70e835); the IDE plugins (they send the same UPDATE_TASK frame, so no client change).\n\nVERIFICATION, in a whole-tree git-archive snapshot (never in the shared checkout): `cd packages/moe-daemon && npx vitest run src/server/WebSocketServer.unblockOwner.test.ts src/server/WebSocketServer.transitions.test.ts src/tools/setTaskStatus`",
+  "definitionOfDone": [
+    "A new test, packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts, drives a real MoeWebSocketServer. It sends UPDATE_TASK {status: blockedFromStatus} for BLOCKED rows assigned to: a missing worker, an IDLE record whose currentTaskId is null, a DEAD record, and a BLOCKED record whose currentTaskId names the row. It asserts assignedWorkerId null and isTaskClaimable true for the first three, and that the last keeps its assignee.",
+    "WebSocketServer.ts's BLOCKED exit calls parkedHoldOwner from state/dependencyUnblock.ts and holds no inline owner check. The BLOCKED-entry arm is unchanged.",
+    "docs/MCP_SERVER.md's `### moe.set_task_status` says the /ws board-move handler enforces the same rules, and no other section changes. In a snapshot, `cd packages/moe-daemon && npx vitest run src/server/WebSocketServer.unblockOwner.test.ts src/server/WebSocketServer.transitions.test.ts src/tools/setTaskStatus` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-a133bd6a56cc459aa2d4da94d0b80511"
+  ],
+  "priority": "MEDIUM",
+  "order": 464.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:50:08.712Z",
+  "updatedAt": "2026-11-03T23:50:08.712Z"
+}
