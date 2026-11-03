@@ -1,0 +1,34 @@
+{
+  "id": "task-61bb595240c144b28bb244caac77fbde",
+  "epicId": "epic-be924fb8",
+  "title": "bug: every state.load() builds a new MentionRouter, so a FileWatcher reload clears the chat loop guard: a paused channel resumes routing and hop counts reset with no human message",
+  "description": "Filed by architect-1dd28c7c from the daemon/proxy defect hunt (task-8f18d6fa).\n\nPROBLEM\nThe chat loop guard lives in MentionRouter: hopCounts, pausedChannels and maxHops, at packages/moe-daemon/src/util/mentionRouter.ts ~75-81. docs/SCHEMA.md:1758 says that when chatMaxAgentHops (default 4) is exceeded, \"routing pauses until a human message resets the counter\". mentionRouter.ts ~252-253 adds that only a human, or an explicit continue token, resumes a channel.\n\nStateManager.load() breaks that. It ends with `this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4)` (state/StateManager.ts ~1132-1133). The new router exists only to apply the setting, but it throws away every channel's hop count and pause. The FileWatcher calls state.load() on every external .moe change that self-write suppression lets through (index.ts ~848-853). state/sweeps.ts ~172-182 records that on the live host a claim reliably produces such a reload (measured 2026-09-17), and git operations that touch tracked .moe files produce them too. So an agent-to-agent loop resumes after the next reload, which defeats the guard. The sweeps fix in that same comment handled this reset-on-reload class for the periodic timers, but not for the router.\n\nEVIDENCE: repro on HEAD 99cae90a (a descendant of 1558f141), in a git-archive snapshot outside the shared checkout. It uses ToolTestHarness plus the real FileWatcher, wired exactly as index.ts wires it. File: /mnt/d/moe-scratch/hunt-8f18d6fa/zzHuntUtil1.test.ts (copy it into a snapshot's packages/moe-daemon/src/util/). Output: /mnt/d/moe-scratch/hunt-8f18d6fa/repro-output-util-99cae90a.txt.\nCommand: cd <snapshot>/packages/moe-daemon && npx vitest run src/util/zzHuntUtil1.test.ts\nObserved:\nbefore reload: {\"hopCount\":5,\"paused\":true}\nafter reload : {\"hopCount\":0,\"paused\":false}\n6th agent hop routed to: [\"worker-a\"]\nhops 5-8 after reload routed: [[\"worker-b\"],[\"worker-a\"],[\"worker-b\"],[\"worker-a\"]] state: {\"hopCount\":4,\"paused\":false}\npaused after 5 hops: {\"hopCount\":5,\"paused\":true}\nreloads: 1 state now: {\"hopCount\":0,\"paused\":false}   (after an external write to .moe/tasks/task-ext.json, seen by the real FileWatcher)\nnext agent hop routed to: [\"worker-a\"]\nTests 3 failed (3)\n\nFIX DIRECTION\nKeep one MentionRouter for the daemon's lifetime:\n- Give it a maxHops setter (e.g. setMaxHops(n); maxHops stops being readonly).\n- Have load() call the setter on the existing router instead of constructing a new one. The first load still constructs it.\nHop counts and pauses then survive reloads, and a human message or the existing continue path still resets them. Keep load()'s existing error handling.\nFiles: packages/moe-daemon/src/util/mentionRouter.ts, packages/moe-daemon/src/state/StateManager.ts, plus one new test file (e.g. packages/moe-daemon/src/util/mentionRouter.reload.test.ts).",
+  "definitionOfDone": [
+    "A channel paused by the loop guard stays paused across state.load(). A vitest case drives agent hops past chatMaxAgentHops, calls state.load(), and asserts that the next agent-to-agent message routes to [] and that mentionRouter.getChannelState still reports the channel paused.",
+    "Hop counts survive a reload and the setting still applies. One vitest case reaches 4 hops, reloads, and asserts the 5th hop pauses. Another lowers settings.chatMaxAgentHops in project.json, reloads, and asserts the new limit governs the following hops.",
+    "After a reload, a human message still resets the counter and un-pauses the channel. The existing mentionRouter, mentionRouterSystemHops and chatSystemFeed suites pass unchanged, run in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 361.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T13:37:04.594Z",
+  "updatedAt": "2026-11-03T13:39:44.915Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T13:39:40.903Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

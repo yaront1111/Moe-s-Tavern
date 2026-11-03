@@ -1,0 +1,34 @@
+{
+  "id": "task-13ff6bb41f1844eca9c75082169a5f08",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the reload-hold banner (a13eb354) is not a routine presence line, so each hot reload of a task-holding seat pages every busy seat in #workers and #governors, the reloading seat included, and wakes a channel-filtered chat_wait",
+  "description": "Filed by architect-1dd28c7c from the daemon/proxy defect hunt (task-8f18d6fa).\n\nPROBLEM\ntask-4ddbfb31 (a13eb354, DONE 2026-11-03) changed what a wrapper_restart deregister does for a task-holding seat. It now holds the seat's task instead of releasing it, and posts \"🔌 <id> reloading (wrapper_restart); holding N task(s) for its relaunch until <iso>: <task>(<status>)\" to #workers and #governors (packages/moe-daemon/src/state/workerLifecycle.ts ~202-205).\nutil/chatPayload.ts isRoutinePresenceLine (~27-42) recognises only two shapes: \"<id> left (<reason>)\" and \"🔌 <id> deregistered (<reason>); (no tasks held)\". So the hold banner is not a feed line. It also mentions nobody, and MentionRouter routes a system line with no mentions to every non-IDLE, non-DEAD seat (util/mentionRouter.ts ~255-267). That includes the reloading seat itself, which is still CODING with reloadHoldUntil set.\ntask-48edc21b's contract, pinned in tools/chatSystemFeed.test.ts, is that a deregistration banner which released no task and dropped no resource claim routes to nobody, adds no unread and wakes no parked chat_wait. The hold path releases nothing, so its banner belongs in that quiet class. The actionable paths are unaffected: an expired hold goes through deregisterWorker with the hold-expired reason (state/sweeps.ts runReloadHoldSweep), releases the task, and its \"released N task\" banner keeps routing.\nRate: .moe/messages/chan-15c8e232.jsonl (#governors) shows 4 \"🔌 worker-… deregistered (wrapper_restart); released 1 task: …→WORKING\" banners on 2026-11-03. Once a13eb354 runs live, each of those reloads becomes a hold banner that pages every busy seat twice. No hold banner appears in today's chat yet, because the live daemon predates the restage.\n\nEVIDENCE: repro on HEAD 99cae90a (a descendant of 1558f141), in a git-archive snapshot outside the shared checkout. The test calls deregister_worker {reason: wrapper_restart} on a task-less seat and on a task-holding seat while a #governors-filtered chat_wait is parked. File: /mnt/d/moe-scratch/hunt-8f18d6fa/zzHuntUtil3.test.ts (copy into a snapshot's packages/moe-daemon/src/util/). Output: /mnt/d/moe-scratch/hunt-8f18d6fa/repro-output-util-99cae90a.txt.\nCommand: cd <snapshot>/packages/moe-daemon && npx vitest run src/util/zzHuntUtil3.test.ts\nObserved:\n#workers \"🔌 worker-idle-seat deregistered (wrapper_restart); (no tasks held)\" -> routed []\n#governors \"🔌 worker-idle-seat deregistered (wrapper_restart); (no tasks held)\" -> routed []\n#workers \"🔌 worker-holder reloading (wrapper_restart); holding 1 task(s) for its relaunch until 2026-11-…\" -> routed [\"qa-busy\",\"worker-busy\",\"worker-holder\"]\n#governors \"🔌 worker-holder reloading (wrapper_restart); holding 1 task(s) for its relaunch until 2026-11-…\" -> routed [\"qa-busy\",\"worker-busy\",\"worker-holder\"]\ntask-1 still assigned to: worker-holder WORKING\n#governors-filtered chat_wait woke early: true [\"🔌 worker-holder reloading (wrapper_rest\"]\nTests 1 failed (1)\n\nFIX DIRECTION\nClassify the hold banner as a routine presence line: add its exact daemon-written shape to isRoutinePresenceLine in util/chatPayload.ts. Anchor it the way QUIET_DEREGISTER_BANNER is anchored, so that text appended to a hold banner (and any release or drop banner) keeps routing. Pin the new shape in tools/chatSystemFeed.test.ts next to the task-48edc21b cases. Leave the banner text in workerLifecycle.ts unchanged unless the anchor needs it. Keep the existing error handling: banner posts never block a deregister.\nFiles: packages/moe-daemon/src/util/chatPayload.ts and packages/moe-daemon/src/tools/chatSystemFeed.test.ts.",
+  "definitionOfDone": [
+    "A wrapper_restart deregister of a task-holding seat (the reload hold) posts banners in #workers and #governors that route to [], add no unread for any seat (the holder included), and do not wake a #governors-filtered chat_wait. A vitest case in tools/chatSystemFeed.test.ts asserts all three.",
+    "isRoutinePresenceLine accepts the exact hold-banner shape. It still rejects a banner that released tasks or dropped resource claims, and a hold-banner line with extra text appended. Unit cases in the same test file cover each.",
+    "The existing chatSystemFeed, reloadHold and mentionRouter suites pass unchanged, run in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-74d9e1c7",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 362.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T13:38:33.967Z",
+  "updatedAt": "2026-11-03T13:40:25.764Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T13:40:22.435Z"
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ]
+}

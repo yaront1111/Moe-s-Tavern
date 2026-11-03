@@ -9,10 +9,54 @@
     "The same case asserts the #general notices read 'Task moved to REVIEW by worker-a', 'Task moved to WORKING by qa-b' and 'Task moved to DONE by qa-b'. The existing completeTask, qaApprove and qaReject suites pass unchanged, run in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first (RED). Create packages/moe-daemon/src/tools/reviewLoopActor.test.ts with the Write tool.\n\nBase it on the filer's scratch repro /mnt/d/moe-scratch/hunt-8f18d6fa/zzReproActor.test.ts, which drives all three tools on HEAD. Reuse its fixture:\n- a temp dir with .moe/{epics,tasks,workers,proposals,teams,channels,messages};\n- project.json with approvalMode TURBO;\n- epic-1;\n- task-1 in WORKING, assigned to worker-a, with one COMPLETED step;\n- worker records worker-a (CODING on task-1) and qa-b (IDLE);\n- `new StateManager({ projectPath })` then `load()`;\n- afterEach removes the dir.\n\nOne `it`, named for the bug, follows the repro's flow:\n1. completeTaskTool by worker-a, with a verification {command, exitCode: 0, outputTail}.\n2. Setup: `state.updateTask('task-1', { assignedWorkerId: 'qa-b' }, undefined, 'qa-b')` stands in for the QA claim. Then getContextTool for qa-b (qa_reject and qa_approve assert the context was fetched).\n3. qaRejectTool by qa-b, with a reason and rejectionDetails.\n4. Setup: back to REVIEW assigned to qa-b (updateTask with actor qa-b), then getContextTool again.\n5. qaApproveTool by qa-b with a summary.\n6. `await flushActivityLog(state)`.\n\nAssert, each with a message naming what broke:\n- DoD 1: the TASK_COMPLETED, QA_REJECTED and QA_APPROVED events from state.getActivityLog occur exactly once each. Map each event to its workerId and deep-equal {TASK_COMPLETED: 'worker-a', QA_REJECTED: 'qa-b', QA_APPROVED: 'qa-b'}. Build the map, so the log's sort order does not matter.\n- DoD 2:\n  - getActivityLogTool { workerId: 'qa-b', limit: 100 } includes QA_REJECTED and QA_APPROVED and not TASK_COMPLETED;\n  - { workerId: 'worker-a' } includes TASK_COMPLETED and neither QA event.\n- DoD 3:\n  - The #general jsonl lines that contain 'Task moved to' (channel from state.getChannels(), as in the repro) include exactly 'task-1: Task moved to REVIEW by worker-a', 'task-1: Task moved to WORKING by qa-b' and 'task-1: Task moved to DONE by qa-b'. Use the stored `<taskId>: ` prefix the repro printed.\n  - No such line ends with 'by unknown'.\n  - The setup moves add lines by qa-b too, so check membership and the 'by unknown' absence, not the whole list.\n\nError handling: the tool calls are awaited, and a refusal fails the test with its message; no `.catch` swallowing like the repro's. Keep the file self-contained: no shared helpers, and no changes to the existing completeTask, qaApprove and qaReject suites.\n\nRun it in a snapshot OUTSIDE the shared checkout (global rail), using step 3's command restricted to this file. It must FAIL on all three actor assertions (RED). Record the failing lines for the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/reviewLoopActor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reviewLoopActor.test.ts"
+      ],
+      "note": "Added one self-contained review-loop regression case. External /tmp/d981-red snapshot: npm ci + npx tsc --noEmit passed; npx vitest run src/tools/reviewLoopActor.test.ts RED (exit 1), seven expected assertion failures: actor map has undefined for TASK_COMPLETED/QA_REJECTED/QA_APPROVED, per-seat queries omit events, all three status notices say by unknown. No tool refusal or swallowed failure.",
+      "startedAt": "2026-11-03T13:41:53.374Z",
+      "completedAt": "2026-11-03T13:42:53.621Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix: pass the caller's workerId as the fourth argument to state.updateTask in the three review-loop tools. Edit tool only; nothing else in these files changes.\n- packages/moe-daemon/src/tools/completeTask.ts, the `state.updateTask(task.id, {...}, 'TASK_COMPLETED')` call (~:277): add `params.workerId`.\n- packages/moe-daemon/src/tools/qaApprove.ts, the `state.updateTask(params.taskId, {...}, 'QA_APPROVED')` call (~:224): add `params.workerId`.\n- packages/moe-daemon/src/tools/qaReject.ts, the `state.updateTask(params.taskId, updatePayload, 'QA_REJECTED')` call (~:301): add `params.workerId`.\n\nWhy params.workerId, and not handoffWorkerId or `params.workerId || 'human'`:\n- each tool has already validated it as the caller (assertWorkerHoldsTask / assertWorkerOwns);\n- updateTask's existing fallback (actorWorkerId || assignee || 'unknown', state/taskStore.ts ~:657) keeps a workerId-less call exactly as it behaves today;\n- ActivityEvent.workerId is an existing optional field, so there is no schema or MCP contract change (epic rails: no breaking API change; existing .moe state stays valid).\n\nScope: the TASK_BLOCKED (report_blocked) and TASK_REOPENED (request_replan) gaps stay out of this row, as the description says, and every other appendActivity in these tools stays unchanged. Keep each tool's existing error handling untouched; this adds an argument only.\n\nRe-run the step-1 test in the snapshot: GREEN.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "startedAt": "2026-11-03T13:42:53.653Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate (DoD 3: the existing suites pass unchanged, run outside the shared checkout). Run it once, fresh, from the task worktree after the last tracked edit; its output is the complete_task evidence. Run exactly:\n\n( set -o pipefail && R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/d981-v.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon scripts/moe-account-lease.mjs | tar -x -C \"$S\" && for f in tools/completeTask.ts tools/qaApprove.ts tools/qaReject.ts tools/reviewLoopActor.test.ts; do cp \"$R/packages/moe-daemon/src/$f\" \"$S/packages/moe-daemon/src/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/reviewLoopActor.test.ts src/tools/completeTask.test.ts src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/tools/getActivityLog.test.ts src/state/StateManager.test.ts 2>&1 | tail -15 )\n\nWhat the command does:\n- `git archive HEAD` plus the cp list puts the worktree's uncommitted edits into the snapshot.\n- scripts/moe-account-lease.mjs is archived because vmTokens.test.ts imports it; tsc --noEmit type-checks the whole package, tests included.\n- The suite list is narrow, because this is a mid-epic bug row: the new test, the three tools' own suites, get_activity_log, and StateManager (its updateTask actor-notice case).\n\nExpected: tsc clean, and every file passes, with 0 failed in the vitest summary.\n\nError handling: on a failure, fix it in step 2 (or step 1 for a test-only fault) and re-run the whole command; never paste a partial run. Delete $S afterwards. Kill only PIDs you started.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this row's diff, using the adversarial-self-review skill.\n\n- Scope: `git diff` is three one-argument changes plus the new test file, with no other byte touched.\n- Mutation check, in the snapshot: drop the new argument in each tool, one at a time (3 mutants). Each must fail the new test on its own assertion: TASK_COMPLETED for completeTask, QA_REJECTED and the WORKING notice for qaReject, QA_APPROVED and the DONE notice for qaApprove. Record the kills for the completion summary.\n- Null input: a call with no workerId (the IDE's /ws path, or an old caller) still writes no actor and posts 'by unknown', exactly as before. The test does not need a case for it, but confirm by reading taskStore's fallback.\n- Concurrency: the argument is per-call. The repeated QA claim/approve flow in the test shows nothing leaks between calls.\n- Collisions: confirm that no existing test asserts an actor-less TASK_COMPLETED or QA_* event. A grep at plan time found only StateManager.test.ts's direct updateTask notice case and chatSystemFeed fixtures, neither of which goes through these tools.\n\nIf the review changes any tracked byte, re-run step 3's exact command and use that output as the evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/reviewLoopActor.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,5 +68,76 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:25:49.539Z",
-  "updatedAt": "2026-11-03T13:25:49.539Z"
+  "updatedAt": "2026-11-03T13:42:53.653Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T13:38:13.350Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-26483323"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T13:40:11.624Z",
+  "executionContract": {
+    "intendedBehavior": "complete_task, qa_reject and qa_approve record their caller as the actor of TASK_COMPLETED, QA_REJECTED and QA_APPROVED. As a result, get_activity_log filtered by a worker or QA seat returns that seat's completions and verdicts, and the #general notices read 'Task moved to REVIEW/WORKING/DONE by <caller>' instead of 'by unknown'. A call without workerId behaves as today.",
+    "acceptanceCriteria": [
+      "DoD 1: reviewLoopActor.test.ts asserts TASK_COMPLETED.workerId = worker-a and QA_REJECTED.workerId = QA_APPROVED.workerId = qa-b. It was RED before the fix and is GREEN after.",
+      "DoD 2: get_activity_log {workerId:'qa-b'} returns QA_REJECTED and QA_APPROVED, and {workerId:'worker-a'} returns TASK_COMPLETED.",
+      "DoD 3: the #general lines include 'task-1: Task moved to REVIEW by worker-a', '... WORKING by qa-b' and '... DONE by qa-b'. The completeTask, qaApprove and qaReject suites pass unchanged in a snapshot (step-3 command)."
+    ],
+    "invariants": [
+      "No schema, MCP contract or .moe format change: ActivityEvent.workerId is an existing optional field.",
+      "updateTask's actor fallback (actorWorkerId || assignee || 'unknown') is unchanged, so a workerId-less call writes and posts exactly as before.",
+      "The TASK_BLOCKED and TASK_REOPENED gaps (report_blocked, request_replan) stay out of this row."
+    ],
+    "approvedScope": [
+      "completeTaskTool, qaApproveTool and qaRejectTool: the 4th argument of their single state.updateTask call each.",
+      "New test file packages/moe-daemon/src/tools/reviewLoopActor.test.ts."
+    ],
+    "sourceAssumptions": [
+      "state/taskStore.ts ~:643-658: appendActivity(event, ..., actorWorkerId), and the notice actor = actorWorkerId || updated.assignedWorkerId || 'unknown'.",
+      "StateManager.updateTask(taskId, updates, event?, actorWorkerId?) at StateManager.ts:671.",
+      "completeTask.ts ~:277, qaApprove.ts ~:224 and qaReject.ts ~:301 call updateTask with no 4th argument.",
+      "The repro at /mnt/d/moe-scratch/hunt-8f18d6fa/zzReproActor.test.ts reproduces the bug on 99cae90a (repro-output-99cae90a.txt)."
+    ],
+    "checkRefs": [
+      "( set -o pipefail && R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/d981-v.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon scripts/moe-account-lease.mjs | tar -x -C \"$S\" && for f in tools/completeTask.ts tools/qaApprove.ts tools/qaReject.ts tools/reviewLoopActor.test.ts; do cp \"$R/packages/moe-daemon/src/$f\" \"$S/packages/moe-daemon/src/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/reviewLoopActor.test.ts src/tools/completeTask.test.ts src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/tools/getActivityLog.test.ts src/state/StateManager.test.ts 2>&1 | tail -15 )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Passing handoffWorkerId (task.assignedWorkerId || params.workerId) was rejected: the caller is what the event should name, and each tool already validates params.workerId. Passing `params.workerId || 'human'` was also rejected: it would change today's workerId-less behaviour, which the fix direction says to keep. TASK_BLOCKED and TASK_REOPENED are out of scope, as the filer chose, to keep the row small.",
+    "codebaseInsights": "taskStore.updateTask (~:643-658) already threads actorWorkerId into both the activity event and the 'Task moved to X by Y' notice, and six other tools pass it. The three review-loop tools are the gap. The scratch repro is a ready-made fixture: drive the tools directly, set QA assignment with updateTask(..., 'qa-b'), and call get_context before qa_reject and qa_approve because of assertContextFetched.",
+    "risks": "Low. The vitest gates run only in a snapshot (global rail: no npm ci or test in the live checkout). getActivityLog's order may be newest-first, so compare by event map, not by position. The setup moves also post notices, so check notice membership, not the whole list.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/getActivityLog.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "eaad2635fcf26163be34ddb763d29f977eeca187",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T13:40:11.653Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T13:41:53.374Z"
 }

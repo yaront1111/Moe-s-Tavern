@@ -10,9 +10,76 @@
     "The two-leg VS Code snapshot gate (Linux env -i node v24.21.0 and Windows cmd.exe: npm ci, npm test, npm run compile in moe-vscode) and bash scripts/tests/parity-check.sh && npm run lint exit 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Re-check DoD 1-2 against the landed bytes. This step edits no tracked file.\n\nThe VS Code half shipped in task-55710898 (completion fb126280; see comment-ae4b502b on this row):\n- AgentLauncher.AccountsTerminal.project;\n- AccountsTreeProvider.runCli, moe-vscode/src/providers/AccountsTreeProvider.ts:299: `const words = pinned === null ? args : ['--protected-project', pinned.project, ...args];`;\n- windows-terminal-shell.test.cjs rows W5-W8 and W10.\nThis row's DoD 1 asks for proof that those rows fail when the option or its value is dropped. DoD 2 asks that the legacy rows stay unchanged.\n\nIn a snapshot OUTSIDE the repo. The global rail forbids npm ci in the shared checkout and its task worktrees.\n1. `S=$(mktemp -d /tmp/m3a9-mut.XXXX) && git archive HEAD | tar -x -C \"$S\"`. Then, in $S/moe-vscode: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" npm ci --no-audit --no-fund`.\n2. Control, with the same env -i PATH: `node --test tests/windows-terminal-shell.test.cjs`. Every row passes; W7 is skipped on Linux.\n3. Mutants on the snapshot's src/providers/AccountsTreeProvider.ts, one at a time, restoring the file in between. The tests transpile src/*.ts on the fly, so no build is needed.\n   - D1, drop the pair: the line becomes `... : [...args];`.\n   - D2, drop the value: `... : ['--protected-project', ...args];`.\n   Apply each with a python script fed through a quoted heredoc and asserting a needle count of exactly 1. Never pass a replacement through a double-quoted bash string: 55710898's worker found that turns a mutant into a silent no-op.\n   Each mutant must FAIL W8 with an AssertionError; 55710898's QA saw W8 and W10 fail for both. A failure of any other kind (an import error, a timeout) is not a kill: fix the copy and re-run.\n4. Read-only: `grep -n PROTECTED_PROJECT_OPTION moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt`. It shows the option on the WSL route (~:596, the /mnt project) and the native route (~:634, basePath), which step 2's docs describe.\n\nRecord the control line and the D1/D2 failing-row lines for the completion summary. Delete $S afterwards.\n\nError handling: if the control fails at HEAD, stop and report it. That is a regression in landed bytes, not something to fix under this docs row.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Control at HEAD (Linux node v24.21.0): W1-W6, W8-W10 pass, W7 skipped (Windows only). Mutants on AccountsTreeProvider.ts:299, each via python with needle count 1: D1 (pair dropped) and D2 (value dropped) each fail W8 and W10 with AssertionError (\"win32: the protected line\"). File restored. TerminalAgentLauncher.kt shows PROTECTED_PROJECT_OPTION at :581, the WSL route at :596 and the native route at :634. Snapshot deleted.",
+      "startedAt": "2026-11-03T13:38:47.583Z",
+      "completedAt": "2026-11-03T13:39:24.163Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 3, part 1: docs/MCP_SERVER.md, section **Claude Account Rotation**, the **CLI.** bullet (about :3147-3152). Edit this bullet only, with the Edit tool. Match the section's terse nested-bullet style.\n\n1. Commands sub-bullet: append `vm-token <id> [--remove]`. It mints or deletes the account's long-lived token for Moe VM jobs; it is in the CLI's USAGE (packages/moe-daemon/src/accounts/cli.ts:71) but missing here, and the new rule below names it.\n2. Error tokens sub-bullet: append `MOE_PROTECTED_CLAUDE_REFUSED` and `MOE_PROTECTED_CLAUDE_NOT_FOUND`.\n3. After the `MOE_CLAUDE_BIN` sub-bullet, add one `--protected-project <path>` sub-bullet with short nested points. Each fact below is the landed behaviour; check it against the cited code as you write.\n\n- Contract and callers:\n  - It is the IDEs' protected-profile contract, so `help` (USAGE) does not list it (cli.ts:19-24).\n  - Under the protected profile, both IDEs pass it right after `--accounts-file <registry>`.\n  - JetBrains passes it on every Accounts route (TerminalAgentLauncher.accountsCommandFor): PowerShell and bash with the project folder, and WSL with the project's /mnt path.\n  - VS Code passes it in its Accounts terminal line and the same clipboard line, with the workspace folder that protectedAccountsTerminal checked (AccountsTreeProvider.runCli).\n- When it is resolved: lazily, once per run, and only by commands that run claude: login, logout, check, `vm-token <id>` (the mint) and `remove --sign-out`. list, add, help, a plain remove and `vm-token --remove` never resolve it.\n- Which claude is used (claudeAuth.ts protectedClaudeCommand and localEntry):\n  - Only absolute PATH entries are kept: on Windows drive-qualified, and still drive-qualified after the real-path resolve, so never UNC, device, rooted or drive-relative. An entry is kept only when its real path and every ancestor is not the project, compared by path (case-folded on Windows and macOS) or by stat identity.\n  - claude is `MOE_CLAUDE_BIN` when that names a path, and the path must then be a local absolute file outside the project.\n  - Otherwise it is that bare name (default `claude`) in the kept entries: PATHEXT on Windows, an executable file on POSIX.\n- How the claude child runs:\n  - PATH = the kept entries; cwd = the home folder (HOME, or USERPROFILE on Windows, else os.homedir()), which must be a local folder outside the project.\n  - Windows adds NoDefaultCurrentDirectoryInExePath=1, and a .cmd or .bat claude runs under the absolute %SystemRoot%\\System32\\cmd.exe.\n  - A .js/.mjs/.cjs claude runs under the CLI's own node.\n- Refusal: otherwise the command exits 1 before any folder, prompt, registry write or run, with one of these two messages.\n  - `MOE_PROTECTED_CLAUDE_REFUSED: <reason>; nothing was run.` The reason names one of: the project is not a local folder; no absolute PATH entry is outside the project; the home folder is not a local folder outside the project; MOE_CLAUDE_BIN is not an absolute file outside the project; or cmd.exe under SystemRoot is not a local file outside the project.\n  - `MOE_PROTECTED_CLAUDE_NOT_FOUND: \"<bin>\" was not found on an absolute PATH entry outside the project <path>; nothing was run.`\n- Without the option (the legacy profile), nothing changes.\n\nKeep the addition to about 12 lines. Cross-link to the step-3 troubleshooting entry by its heading text, not by a computed anchor.\n\nError handling and accuracy: any fact you cannot confirm in the cited code is left out, never guessed. A test fact from task-55710898 (pw/pp/pc rows) is not quoted as a doc claim.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "MCP_SERVER.md CLI bullet: vm-token, both tokens, and a --protected-project sub-bullet with five points, checked against claudeAuth.ts and cli.ts.",
+      "startedAt": "2026-11-03T13:39:26.630Z",
+      "completedAt": "2026-11-03T13:39:46.930Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 3, part 2: docs/TROUBLESHOOTING.md and docs/CONFIGURATION.md. Edit only with the Edit tool.\n\n(a) TROUBLESHOOTING. Add a new entry directly after `### Sign-in fails: MOE_ACCOUNT_NOT_SUBSCRIPTION, ... MOE_CLAUDE_NOT_FOUND` (about :1072-1086) and before `### MOE_ACCOUNT_SIGNED_OUT ...`. Heading: `### Sign-in refused under the protected profile: \\`MOE_PROTECTED_CLAUDE_REFUSED\\`, \\`MOE_PROTECTED_CLAUDE_NOT_FOUND\\``. Use that section's **Symptom:** / **Cause:** / **Fix:** form.\n\nSymptom:\n- Under the protected profile (`executionProfile` `verified-local`), in JetBrains or VS Code, the terminal tab that **Sign in**, **Check sign-ins** or **Sign out** (or **Sign out and remove**) opened ends with one of the two lines.\n- Quote each line's fixed text exactly as claudeAuth.ts:147 and :171 print it, with <reason>, <bin> and <path> as placeholders.\n- The account's state is unchanged, and nothing was written or run.\n\nCause:\n- Both IDEs start the accounts CLI with `--protected-project <project>` under that profile. That keeps a project copy of claude, or of the node an npm claude.cmd shim starts, from running during sign-in.\n- The CLI then takes claude only from an absolute PATH entry outside the project (on Windows, a drive-qualified one), or from a MOE_CLAUDE_BIN path outside it. It runs claude with PATH = those entries and cwd = the home folder.\n- NOT_FOUND: no such entry holds claude. Examples: claude installed only inside the project, or reachable only through a '.', relative or in-project PATH entry, or through a share or a mapped drive.\n- REFUSED: list the five reasons from claudeAuth.ts protectedClaudeCommand.\n  - A network-share home folder is refused.\n  - The cmd.exe reason applies only to a .cmd or .bat claude on Windows.\n\nFix:\n- Install Claude Code outside the project and put its folder on the PATH the IDE terminal gets, or set MOE_CLAUDE_BIN to its absolute path outside the project.\n- Keep the home folder on a local drive.\n- Run the action again.\n- Point to docs/MCP_SERVER.md **Claude Account Rotation** for the full rule.\n\n(b) CONFIGURATION, the `MOE_CLAUDE_BIN` row (:23). Keep it ONE table line. Extend the description cell: under the protected profile, where both IDEs pass `--protected-project`, a path must be an absolute file outside the project, and a bare name is looked up only on absolute PATH entries outside it (`MOE_PROTECTED_CLAUDE_REFUSED` / `MOE_PROTECTED_CLAUDE_NOT_FOUND`; see docs/TROUBLESHOOTING.md, **Sign-in refused under the protected profile**). Leave the Default and Example cells as they are.\n\nThe merge-risk check for (b) is already done. WT-19 (task-b1ca54f2) is the only open row with unlanded CONFIGURATION.md hunks, and they sit at about :195-238, far from :23. If a newer row touches :22-24 by the time you land, say so in the completion summary (mem:gotcha-adjacent-line-edits-conflict-in-worktree-landing).\n\nError handling and accuracy: name only behaviour the code shows, and every heading must render as plain markdown (no HTML).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "New TROUBLESHOOTING entry after the Sign-in fails entry. CONFIGURATION MOE_CLAUDE_BIN row is still one line with 4 cells.",
+      "startedAt": "2026-11-03T13:39:47.948Z",
+      "completedAt": "2026-11-03T13:40:04.718Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate (DoD 4). Run it once, fresh, from the task worktree after the last tracked edit; its output is the complete_task evidence. Run exactly:\n\n( set -o pipefail && R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/m3a9-l.XXXX) && W=$(mktemp -d /mnt/d/moe-scratch/m3a9-w.XXXX) && for S in \"$L\" \"$W\"; do git -C \"$R\" archive HEAD | tar -x -C \"$S\" || exit 1; done && G=' W([1-9]|10) |(tests|pass|fail|skipped) [0-9]+$' && (cd \"$L/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile') >\"$L/v.log\" 2>&1 || { tail -40 \"$L/v.log\"; exit 1; } && grep -aE \"$G\" \"$L/v.log\" && cmd.exe /d /c \"cd /d $(wslpath -w \"$W\")\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\" 2>&1 | tr -d '\\r' >\"$W/v.log\" || { tail -40 \"$W/v.log\"; exit 1; } && grep -aE \"$G\" \"$W/v.log\" ) && ( cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint )\n\nThis is task-a6227f4e's and task-55710898's two-leg VS Code snapshot gate. This row changes no moe-vscode file, so the plain `git archive HEAD` is the tree under test.\n\nExpected:\n- Linux leg (node v24.21.0): W1-W10, with W6 ok and W7 skipped; totals about 695 tests, 0 fail.\n- Windows leg (cmd.exe): W7 ok and W6 skipped; about 691 tests, 0 fail. Both legs compile.\n- Then PASS from parity-check.sh, and the role-doc lint is OK.\n\nThe gate takes a few minutes; run it in the foreground. The Windows leg needs a /mnt/d scratch dir, which the command already uses (mem:gotcha-vscode-gate-from-wsl). Delete $L and $W afterwards. Kill only PIDs you started; never use pkill, killall or a pattern kill.\n\nError handling: any failure means stop, find the cause, and re-run the whole command. Never paste a partial run as evidence. A VS Code failure here is in landed bytes, outside this docs row: report it and do not patch moe-vscode under this row.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate exit 0. Linux: 695 tests, 685 pass, 0 fail, 10 skipped (W6 ok, W7 skipped), compile OK. Windows: 691 tests, 678 pass, 0 fail, 13 skipped (W7 ok), compile OK. parity PASS, lint OK. Scratch dirs deleted.",
+      "startedAt": "2026-11-03T13:40:05.780Z",
+      "completedAt": "2026-11-03T13:41:28.102Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's docs diff, using the adversarial-self-review skill.\n\n- Scope: `git diff` touches exactly docs/MCP_SERVER.md, docs/TROUBLESHOOTING.md and docs/CONFIGURATION.md, and only the three planned spots (the CLI bullet, one new troubleshooting entry, one table row).\n- Accuracy: every claim matches the code. Check it against these sites line by line:\n  - claudeAuth.ts: protectedClaudeCommand, localEntry, inProject and pinnedEnv; the messages at :147 and :171;\n  - cli.ts: the run switch, and the claude() lazy resolve at :223-225;\n  - AccountsTreeProvider.ts:299;\n  - TerminalAgentLauncher.kt :581-634.\n  In particular:\n  - the option is not in `help`;\n  - only login, logout, check, the vm-token mint and remove --sign-out resolve it;\n  - a MOE_CLAUDE_BIN path must be outside the project, and a bare name is looked up on the kept entries;\n  - the home folder is the cwd;\n  - cmd.exe is needed only for a .cmd or .bat claude on Windows.\n- Both IDEs: each doc that mentions the option says both IDEs pass it under the protected profile, and none still says VS Code does not.\n- Stale text: run `grep -rn 'task-3a98393f\\|protected-project' docs/ moe-vscode/src packages/moe-daemon/src/accounts moe-jetbrains/src/main` and confirm the hits are the intended ones.\n- Rendering: markdown renders, the CONFIGURATION table row is still one line with 4 cells, and the troubleshooting heading has no HTML. Cross-links name a heading in text, never a guessed anchor.\n- Evidence: step 1's control plus the D1 and D2 kills, and step 4's gate tail, go in the completion summary.\n\nIf the review changes any tracked byte, re-run step 4's exact command and use that output as the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Self-review: git diff touches exactly the 3 docs at the 3 planned spots. Every claim was checked against claudeAuth.ts and cli.ts. The grep hits are the intended ones. No doc says VS Code lacks the option. The CONFIGURATION row is one line with 4 cells. No tracked byte changed after the gate.",
+      "startedAt": "2026-11-03T13:41:29.002Z",
+      "completedAt": "2026-11-03T13:41:32.668Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,10 +102,128 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:06:45.880Z",
-  "updatedAt": "2026-11-03T13:23:07.098Z",
+  "updatedAt": "2026-11-03T13:42:47.254Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T13:23:07.098Z",
     "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T13:33:11.653Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-2dc72348"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T13:37:48.236Z",
+  "executionContract": {
+    "intendedBehavior": "Docs for task-55710898's accounts CLI contract, written now that both IDEs pass the option. docs/MCP_SERVER.md describes --protected-project: who passes it, which commands resolve it, the lookup and child rules, and both refusal tokens. docs/TROUBLESHOOTING.md gets a cause-and-fix entry for MOE_PROTECTED_CLAUDE_REFUSED and MOE_PROTECTED_CLAUDE_NOT_FOUND. docs/CONFIGURATION.md's MOE_CLAUDE_BIN row states the protected rule. DoD 1-2 are proven against the landed VS Code bytes: drop-the-option mutants fail W8, and the legacy rows are unchanged. No code changes.",
+    "acceptanceCriteria": [
+      "DoD 1: at HEAD, windows-terminal-shell.test.cjs passes (W7 skipped on Linux), and mutants D1 (pair dropped) and D2 (value dropped) of AccountsTreeProvider.ts:299 each fail W8 with an AssertionError.",
+      "DoD 2: the W1-W3, W9, Q1, V2 and accounts-view rows pass unchanged inside the step-4 gate; no moe-vscode file is edited.",
+      "DoD 3: the three docs describe --protected-project, MOE_PROTECTED_CLAUDE_NOT_FOUND and MOE_PROTECTED_CLAUDE_REFUSED as the code landed them, and say that both IDEs pass the option under the protected profile.",
+      "DoD 4: the step-4 command exits 0 (both VS Code legs: npm ci, npm test and npm run compile; then parity-check.sh and npm run lint)."
+    ],
+    "invariants": [
+      "No code, test or .moe file changes; the landed VS Code, JetBrains and daemon bytes stay as task-55710898 left them.",
+      "The docs state only behaviour the cited code shows."
+    ],
+    "approvedScope": [
+      "docs/MCP_SERVER.md: the CLI bullet of Claude Account Rotation.",
+      "docs/TROUBLESHOOTING.md: one new entry after 'Sign-in fails: ...'.",
+      "docs/CONFIGURATION.md: the MOE_CLAUDE_BIN row."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/accounts/claudeAuth.ts: protectedClaudeCommand (~:142-176), localEntry, inProject and pinnedEnv; the messages at :147 (REFUSED) and :171 (NOT_FOUND).",
+      "packages/moe-daemon/src/accounts/cli.ts: :19-24 (the option is left out of USAGE); :223-225 (the lazy claude() resolve); the switch dispatch for login, logout, check, remove --sign-out and vm-token.",
+      "moe-vscode/src/providers/AccountsTreeProvider.ts:299: words = pinned === null ? args : ['--protected-project', pinned.project, ...args].",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt: PROTECTED_PROJECT_OPTION :581; the WSL route :596 (the /mnt project); the native route :634 (basePath)."
+    ],
+    "checkRefs": [
+      "( set -o pipefail && R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/m3a9-l.XXXX) && W=$(mktemp -d /mnt/d/moe-scratch/m3a9-w.XXXX) && for S in \"$L\" \"$W\"; do git -C \"$R\" archive HEAD | tar -x -C \"$S\" || exit 1; done && G=' W([1-9]|10) |(tests|pass|fail|skipped) [0-9]+$' && (cd \"$L/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile') >\"$L/v.log\" 2>&1 || { tail -40 \"$L/v.log\"; exit 1; } && grep -aE \"$G\" \"$L/v.log\" && cmd.exe /d /c \"cd /d $(wslpath -w \"$W\")\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\" 2>&1 | tr -d '\\r' >\"$W/v.log\" || { tail -40 \"$W/v.log\"; exit 1; } && grep -aE \"$G\" \"$W/v.log\" ) && ( cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Re-implementing the VS Code half was rejected: it already landed in task-55710898 (rev 3 folded it in; see comment-ae4b502b). So this row re-proves DoD 1-2 with two drop-the-option mutants in a snapshot, writes the docs and runs the DoD 4 gate. vm-token is added to MCP_SERVER's Commands line, because it is in the CLI USAGE and the protected rule names it; leaving it out would make the doc contradict the code. The CONFIGURATION row cross-links by heading text, because GitHub anchors for a heading with backticks are easy to get wrong.",
+    "codebaseInsights": "The protected lookup lives in claudeAuth.ts protectedClaudeCommand. localEntry accepts only drive-qualified Windows paths whose real path is still drive-qualified, so a mapped drive that resolves to UNC is refused. inProject walks the ancestors by case-folded path or bigint stat identity. MOE_CLAUDE_BIN that names a path must be an absolute file outside the project; a bare name is looked up on the kept entries. cli.ts resolves it lazily (`pinned ??=`), so list, add and plain remove never touch it. The moe-vscode tests transpile src/*.ts through `typescript`, so a mutant needs only an npm ci in the snapshot, no compile.",
+    "risks": "Merge overlap is low. WT-19 has unlanded CONFIGURATION.md hunks at ~195-238, not near row 23; no other open row plans edits to these docs (checked 13:40Z).\nDocs drift: the task description says MOE_CLAUDE_BIN 'must be an absolute file', but a bare-name MOE_CLAUDE_BIN is looked up on the kept PATH entries. Document the code, not the description.\nTest the mutants only in /tmp snapshots, never with npm ci in the checkout or a worktree (global rail).\nThe step-4 gate re-runs the whole moe-vscode suite on both OSes: a few minutes, in the foreground.",
+    "keyFiles": [
+      "packages/moe-daemon/src/accounts/claudeAuth.ts",
+      "packages/moe-daemon/src/accounts/cli.ts",
+      "moe-vscode/src/providers/AccountsTreeProvider.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "docs/MCP_SERVER.md",
+      "docs/TROUBLESHOOTING.md",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "eaad2635fcf26163be34ddb763d29f977eeca187",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T13:37:48.263Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T13:38:47.583Z",
+  "reviewStartedAt": "2026-11-03T13:41:40.464Z",
+  "verification": {
+    "command": "( set -o pipefail && R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/m3a9-l.XXXX) && W=$(mktemp -d /mnt/d/moe-scratch/m3a9-w.XXXX) && for S in \"$L\" \"$W\"; do git -C \"$R\" archive HEAD | tar -x -C \"$S\" || exit 1; done && G=' W([1-9]|10) |(tests|pass|fail|skipped) [0-9]+$' && (cd \"$L/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile') >\"$L/v.log\" 2>&1 || { tail -40 \"$L/v.log\"; exit 1; } && grep -aE \"$G\" \"$L/v.log\" && cmd.exe /d /c \"cd /d $(wslpath -w \"$W\")\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\" 2>&1 | tr -d '\\r' >\"$W/v.log\" || { tail -40 \"$W/v.log\"; exit 1; } && grep -aE \"$G\" \"$W/v.log\" ) && ( cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint )",
+    "exitCode": 0,
+    "outputTail": "Linux: ℹ tests 695 / pass 685 / fail 0 / skipped 10 (W1-W6, W8-W10 ✔, W7 skipped)\nWindows: ℹ tests 691 / pass 678 / fail 0 / skipped 13 (W1-W5, W7-W10 ✔, W6 skipped)\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nEXIT=0",
+    "reportedAt": "2026-11-03T13:41:40.464Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md",
+    "docs/TROUBLESHOOTING.md",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "Docs-only row; no code or test changed (the VS Code half landed in task-55710898, fb126280).\n\nDoD 1: control at HEAD (Linux node v24.21.0), windows-terminal-shell.test.cjs W1-W6 and W8-W10 pass, W7 skipped. Mutants of AccountsTreeProvider.ts:299, each applied with a python needle-count-1 script on a /tmp snapshot: D1 (pair dropped) and D2 (value dropped) each fail W8 and W10 with AssertionError. File restored.\n\nDoD 2: W1-W3, W9, Q1, V2 and the accounts-view rows pass unchanged in the gate.\n\nDoD 3:\n- docs/MCP_SERVER.md, CLI bullet: vm-token added to Commands; both tokens added; new --protected-project sub-bullet (who passes it, which commands resolve it, the lookup, the child's PATH and cwd, both refusals).\n- docs/TROUBLESHOOTING.md: new entry \"Sign-in refused under the protected profile\" after the Sign-in fails entry.\n- docs/CONFIGURATION.md: the MOE_CLAUDE_BIN row, still one line with 4 cells.\n- All three say both IDEs pass the option under the protected profile.\n\nDoD 4: gate exit 0. Linux 695 tests / 685 pass / 0 fail / 10 skipped (W6 ok); Windows 691 / 678 / 0 / 13 (W7 ok); compile OK on both; parity PASS; role-doc lint OK.\n\nMerge risk: none seen; no newer row touches CONFIGURATION.md :22-24.",
+  "commits": [
+    {
+      "sha": "776074e5da48665efb45008e209952d9070908f2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T13:37:48Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T13:42:47.254Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-03T13:37:48Z",
+    "at": "2026-11-03T13:42:47.254Z"
   }
 }

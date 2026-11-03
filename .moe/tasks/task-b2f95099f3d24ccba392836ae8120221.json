@@ -9,10 +9,51 @@
     "Cursor-mode reads (workerId, no sinceId) still advance cursors and clear unread as before: tools/chatBudgets.test.ts, chatChannelRef.test.ts, chatSystemFeed.test.ts and chatWait.test.ts pass unchanged, run in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Create packages/moe-daemon/src/tools/chatRead.cursor.test.ts using ToolTestHarness (tools/toolTestHarness.ts). In beforeEach: h.init(); h.setupMoeFolder(); h.createWorker for a READER seat and a PEER seat BEFORE `await h.state.load()` (as completeStep.test.ts does); then take the general and workers channel ids from h.state.getChannels(). Post with h.state.sendMessage({ channel, sender: PEER, content }), read through chatReadTool(h.state).handler, and inspect h.state.getWorker(READER).chatCursors and h.state.getUnreadSummary(READER). A direct mention of the reader is content built at runtime as an at-sign plus the READER id; that is what raises its unread count. Table-drive where it is natural, and keep the file at or under about 180 lines.\n\nCases:\n(1) DoD 1, channel peek keeps the cursor. Post m1..m6 in general. A cursor-mode read (workerId, no sinceId, limit 10) returns all six and stores m6. Then peek with sinceId m1 and limit 1: the page is [m2] and the response cursor is m2, but the stored cursor is still m6. The next cursor-mode read returns []. A chat_wait on general for the reader with timeoutMs 1000 (its floor) then returns hasMessage false: nothing is re-delivered.\n(2) A peek leaves unread untouched. After (1)'s cursor read, the peer posts m7, which mentions the reader, so unread for general is 1. A peek with sinceId m1 and limit 50 includes m7 in the page, while unread for general stays 1 and the cursor stays m6. The next cursor-mode read then returns exactly [m7], stores m7 and clears the general unread count. That is cursor mode unchanged.\n(3) A peek ahead of the cursor skips nothing. Post m1, m2 and read in cursor mode (cursor m2). Post m3..m6. A peek with sinceId m4 returns [m5, m6] and the cursor stays m2. The next cursor-mode read returns [m3, m4, m5, m6].\n(4) DoD 2, an all-channel peek applies the id only to its channel. Post w1..w5 in workers and read workers in cursor mode (cursor w5). Post w6..w20, where w7 mentions the reader (workers unread 1), then g1 and g2 in general. An all-channel read with workerId, sinceId g1 and limit 50 (no channel) returns a page whose workers messages are exactly w6..w20 in order (read from the stored cursor, not the newest window) and whose general messages are exactly [g2]. Filter the page by channel, because equal millisecond timestamps make the cross-channel order unstable. Afterwards: the workers cursor is still w5, no general cursor was written, and the workers unread count is still 1. A cursor-mode workers read with limit 50 then returns w6..w20, including the w7 mention.\n(5) An anonymous all-channel peek is unchanged. The same messages, no workerId, sinceId g1 and limit 50: the workers part is its newest window, w1..w20.\n(6) chatReadTool(h.state).description and its inputSchema sinceId description both say a sinceId read is a peek that moves no cursor. Use a case-insensitive regex on 'peek' and on 'cursor'.\n\nRun it RED against the unmodified chatRead.ts in a snapshot outside the shared checkout. Use the step-4 recipe, but run only this file; never npm in the shared checkout (rail). Keep the failing lines for the completion summary: (1), (2), (3), (4) and (6) must fail, and (5) passes.\nError handling in the test: no try/catch around a tool call; a thrown tool error fails the case.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/chatRead.cursor.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT in packages/moe-daemon/src/tools/chatRead.ts, one concern: a read with an explicit sinceId is a peek.\n(a) Near the top of the handler, set `const explicitSinceId = params.sinceId || undefined;`, so an empty string keeps today's cursor mode, then `const peek = explicitSinceId !== undefined;`. Comment why: a peek pages from that id but writes no stored cursor and clears no unread count. Otherwise it rewinds the cursor chat_wait drains from, or skips unread messages.\n(b) Channel mode is unchanged. It reads from the explicit id, else (with workerId) the stored cursor, else the newest window.\n(c) All-channel mode: inside the per-channel loop, use the explicit id only for a channel that holds it, else the caller's stored cursor for that channel (undefined without a workerId): `explicitSinceId && state.messageExistsInChannel(ch.id, explicitSinceId) ? explicitSinceId : existingCursors[ch.id]`. existingCursors stays {} without a workerId, so an anonymous read keeps today's newest-window behavior. Add a comment citing collectChatBacklog's same rule (util/chatBacklog.ts ~171): an id applied to a channel that does not hold it trips getMessages' expired-cursor fallback (state/chatStore.ts ~325) and returns that channel's newest window. messageExistsInChannel reads the same bounded 1 MB tail as getMessages, so the two agree.\n(d) Guard BOTH the updateWorkerCursors block and the clearUnread block with `!peek`. The response shape (messages, cursor = the page's last id, truncated, hint), the response-size trim and touchWorker stay exactly as they are.\n(e) The tool description gets one sentence: a read with sinceId is a peek that moves no stored cursor or unread count. In all-channel mode the id applies only to the channel that holds it, and the other channels read from the caller's stored cursor. Omit sinceId to read from and advance your cursor. The sinceId property description says the same in a few words.\nError handling: keep the existing refusals (invalid limit or maxContentChars, an unknown channel via notFound) byte-identical. messageExistsInChannel already returns false on an unreadable file, so a channel that cannot be checked falls back to the stored cursor and never throws. Done when the step-1 file passes in the snapshot.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DOCS: docs/MCP_SERVER.md, the '### moe.chat_read' section only (about line 2519). In the parameters block, the sinceId comment becomes: return messages after this message ID; a peek that moves no cursor. In Notes, replace the bullet 'After reading, the worker's cursor is automatically updated only for messages returned in the response' with two bullets:\n- after a cursor-mode read (workerId, no sinceId), the worker's cursor advances only for the messages returned;\n- a read with an explicit sinceId is a peek: it moves no stored cursor and clears no unread count, and in all-channel mode the id applies only to the channel that holds it, while the other channels read from the caller's stored cursor (their newest window without a workerId).\nLeave the other bullets unchanged. The filer deferred this only because task-0c78c290 held the file at filing time, and that task has since landed (eaad2635). task-3a98393f edits the Accounts part of this file, far from this section. No test changes in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFICATION, once, fresh, from this task worktree's root after the last tracked edit. Its output is the complete_task evidence. The DoD 3 files run unchanged, in a snapshot outside the shared checkout, never with npm in it (rail; mem:gotcha-daemon-linux-snapshot-gate). Run exactly this ONE command:\nS=$(mktemp -d /tmp/b2f9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp packages/moe-daemon/src/tools/chatRead.ts packages/moe-daemon/src/tools/chatRead.cursor.test.ts \"$S/packages/moe-daemon/src/tools/\" && cp docs/MCP_SERVER.md \"$S/docs/\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/tools/chatRead.cursor.test.ts src/tools/chatBudgets.test.ts src/tools/chatChannelRef.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatWait.test.ts src/tools/joinTeam.notification.test.ts src/tools/completeStep.test.ts && npx tsc --noEmit'\njoinTeam.notification and completeStep are the other suites that call chatReadTool in cursor mode. tsc type-checks the source.\nError handling for a red run: read the failing assertion, fix chatRead.ts (never an existing test's expectation), and rerun the WHOLE command; paste the failing and the final tails. The node on PATH must be the nvm Linux node (v24.21.0 on this host).",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW (adversarial-self-review skill), then complete_task.\n\nMutants: run each in the step-4 snapshot, one file and one mutant at a time, and restore chatRead.ts from your worktree copy after each (mem:gotcha-daemon-linux-snapshot-gate on mutant restores and false kills). Each must fail the new file with real test failures:\n- M1: drop `!peek` from the cursor-update condition; (1)-(4) fail.\n- M2: drop `!peek` from the clearUnread condition only; (2) and (4) fail.\n- M3: apply the explicit id to every channel in all-channel mode; (4) fails.\n- M4: give non-holder channels undefined instead of the stored cursor; (4) fails and (5) still passes.\n- M5: define peek only for channel mode; (4) fails.\nRecord the results in the completion summary.\n\nChecklist:\n- Two concurrent reads by one seat: a peek writes nothing, so it cannot race a cursor-mode read's merge in updateWorkerCursors.\n- An empty or absent sinceId is cursor mode; a non-string one is a peek as before.\n- An explicit id no channel holds: each channel reads from its stored cursor.\n- No workerId: behavior identical to today.\n- An all-channel peek costs one extra bounded tail read per channel (messageExistsInChannel), the same as collectChatBacklog.\n- No MCP response field added or removed.\n- No added line contains a project.json globalRails.forbiddenPatterns string.\n- The diff is at or under about 250 net LOC, tests included.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts",
+        "packages/moe-daemon/src/tools/chatRead.cursor.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,5 +65,86 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:25:34.209Z",
-  "updatedAt": "2026-11-03T13:25:34.209Z"
+  "updatedAt": "2026-11-03T13:42:14.701Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T13:36:32.002Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-33f67e5b"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T13:41:53.941Z",
+  "executionContract": {
+    "intendedBehavior": "moe.chat_read with an explicit (non-empty) sinceId becomes a peek. It returns the page after that id, but never writes the caller's stored chatCursors and never clears an unread count, in channel and all-channel mode alike. In all-channel mode the explicit id applies only to the channel that holds it, the rule collectChatBacklog already applies: every other channel reads from the caller's stored cursor, or its newest window when there is no workerId. Cursor-mode reads (workerId without sinceId), the only form the wrappers and wait_for_task's hint use, keep advancing cursors and clearing unread exactly as today. This error handling keeps every existing refusal (bad limit or maxContentChars, an unknown channel) unchanged, and a test pins each behavior.",
+    "acceptanceCriteria": [
+      "Stored cursor m6, then a peek with sinceId m1 and limit 1: the page is [m2] and the stored cursor stays m6. The next cursor-mode read returns [], and chat_wait re-delivers nothing.",
+      "A peek leaves a channel's unread count unchanged; the next cursor-mode read returns the mention and clears the count.",
+      "A peek ahead of the cursor skips nothing for the next cursor-mode read.",
+      "An all-channel peek with an id from general reads workers from its stored cursor. It leaves workers' cursor and unread count unchanged, and the next cursor-mode workers read still returns the unread direct mention.",
+      "chatBudgets, chatChannelRef, chatSystemFeed, chatWait, joinTeam.notification and completeStep pass unchanged in a snapshot outside the shared checkout, and tsc --noEmit is clean."
+    ],
+    "invariants": [
+      "Cursor-mode chat_read (workerId, no sinceId) behaves byte-for-byte as before.",
+      "A read without workerId behaves as before, the all-channel newest-window fallback for an id a channel does not hold included.",
+      "The chat_read response shape is unchanged: messages, cursor, truncated, hint.",
+      "No change to chat_wait, chatStore, workerStore or the proxy's workerId injection."
+    ],
+    "compatibility": [
+      "A request with sinceId keeps returning the same page and cursor field. Only the stored-cursor and unread side effects change, which is the fix.",
+      "An empty-string sinceId still means cursor mode."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/tools/chatRead.ts: the chat_read handler and its description strings.",
+      "packages/moe-daemon/src/tools/chatRead.cursor.test.ts (new).",
+      "docs/MCP_SERVER.md: the moe.chat_read section's sinceId comment and Notes."
+    ],
+    "reuse": [
+      "collectChatBacklog's holder-only rule and state.messageExistsInChannel, not a new existence scan.",
+      "ToolTestHarness and the chat tool handlers for the test setup."
+    ],
+    "sourceAssumptions": [
+      "tools/chatRead.ts writes updateWorkerCursors and clearUnread whenever workerId is set and the page is non-empty, sinceId or not. In all-channel mode it applies params.sinceId to every channel.",
+      "state/chatStore.ts getMessages falls back to the newest window when sinceId is not in the channel's bounded 1 MB tail. messageExistsInChannel scans the same tail and returns false on any read error.",
+      "util/chatBacklog.ts collectChatBacklog (~171) already applies an explicit catch-up id only to the channel that holds it.",
+      "moe-proxy injectWorkerId adds workerId to every chat_read. Both wrappers' chat_read calls pass channel and workerId only (moe-agent.sh ~9571/~9943, moe-agent.ps1 ~9254/~9529). The plugins read chat through WebSocketServer, which calls state.getMessages directly (~1078), not this tool.",
+      "ToolTestHarness.createWorker writes the worker file, so it must run before state.load(). An unread count rises only for a message's routing targets (chatStore ~245), so a direct mention of the reader raises it."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/b2f9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp packages/moe-daemon/src/tools/chatRead.ts packages/moe-daemon/src/tools/chatRead.cursor.test.ts \"$S/packages/moe-daemon/src/tools/\" && cp docs/MCP_SERVER.md \"$S/docs/\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/tools/chatRead.cursor.test.ts src/tools/chatBudgets.test.ts src/tools/chatChannelRef.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatWait.test.ts src/tools/joinTeam.notification.test.ts src/tools/completeStep.test.ts && npx tsc --noEmit'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Make a sinceId read never move the cursor backwards but still advance it forward: rejected, because a forward peek past unread messages (bug item 3) would still skip them. A peek has to write nothing. (2) Stop the proxy from injecting workerId into chat_read: rejected. workerId still feeds touchWorker activity and the stored-cursor fallback for other channels, and the proxy is out of scope. (3) Validate sinceId as a non-empty string the way chat_wait does: rejected as an API change; an empty string keeps meaning cursor mode.",
+    "codebaseInsights": "chat_read has one handler for both modes. Cursor writes happen in a single updateWorkerCursors block and unread clears in a single clearUnread block, both after the response-size trim, so one `!peek` guard on each covers every mode. Only collectChatBacklog (chat_wait) already guards an explicit id per channel. The plugins never call this tool.",
+    "risks": "An all-channel peek now does one extra bounded tail read per channel. Equal millisecond timestamps make cross-channel page order unstable, so tests filter by channel. chatWait's minimum timeout is 1000 ms, so case (1) costs about 1 s. Nothing else depends on sinceId reads moving the cursor: the wrappers, wait_for_task's nextAction and every existing test use cursor mode.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/chatRead.ts",
+      "packages/moe-daemon/src/util/chatBacklog.ts",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "eaad2635fcf26163be34ddb763d29f977eeca187",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T13:41:53.972Z",
+  "approvedPlanRevision": 1
 }
