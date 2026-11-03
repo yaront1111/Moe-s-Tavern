@@ -1,0 +1,28 @@
+{
+  "id": "task-c8d6dbd50b734050b8eb05f859d719a4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: release_task without force treats an explicit blank/null workerId as human and releases a live peer between steps",
+  "description": "Found during task-0adea941 QA repair self-review. The proxy injects only absent workerId keys; without force, releaseTask.ts reaches claimGuards.assertReleaseCaller's `if (!caller) return`, so explicit '' or null releases a peer-held row with no IN_PROGRESS step.\nSnapshot /tmp/moe-0adea941-red-BP1LVK contains the repaired force gates plus a scratch '(follow-up)' test in src/tools/releaseForceGate.test.ts: npx vitest run src/tools/releaseForceGate.test.ts -t follow-up (env -i) passed 2 probes proving success:true and task-idle assignee null. Log: packages/nonforce-repro.log.\nKeep this separate from the approved force-only contract: preserve genuine omitted-ID human/board recovery and legitimate own-row releases, refuse malformed supplied IDs before writes, and correct docs/MCP_SERVER.md:2030's stale 'Anyone can call — no ownership check' claim.",
+  "definitionOfDone": [
+    "Without force, explicit blank/null/non-string caller IDs cannot release a peer-held row between steps and refusal writes nothing.",
+    "Absent-ID human/board recovery, valid own-row release, and governor/human force controls remain green.",
+    "release_task documentation accurately describes its ownership checks rather than saying there are none."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 421.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:39:02.411Z",
+  "updatedAt": "2026-11-03T20:39:02.411Z"
+}

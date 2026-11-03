@@ -13,44 +13,65 @@
     {
       "stepId": "step-1",
       "description": "Tests first: create packages/moe-daemon/src/tools/releaseForceGate.test.ts, porting the hunt repro /mnt/d/moe-scratch/hunt-66961b32/B/zzHuntB_releaseTaskForceGate.test.ts.\n\nSetup:\n- Use ToolTestHarness with h.setupMoeFolder() and h.createEpic().\n- task-peer: WORKING, assignedWorkerId 'worker-peer', implementationPlan step-1 IN_PROGRESS and step-2 PENDING.\n- task-idle: WORKING, held by 'worker-peer2', step-1 COMPLETED and step-2 PENDING.\n- Call await h.state.load(), then register the seats on role teams with state.createWorker + createTeam + addTeamMember: worker-peer, worker-peer2 and worker-1 on a worker team, qa-1 on a qa team. Leave governor-1 unregistered, so its role comes from the id prefix.\n\nCases, with these title prefixes:\n- (p1) The release_task inputSchema force description still matches /^Governor\\/human crash-recovery override/.\n- (p2) worker-1 force:true on task-peer rejects with codeName NOT_ALLOWED. Afterwards the row is unchanged: [status, assignedWorkerId, step-1 status] is ['WORKING','worker-peer','IN_PROGRESS'].\n- (p3) qa-1 force:true on task-peer rejects NOT_ALLOWED; the assignee is unchanged.\n- (p4) qa-1 force:true on task-idle (no IN_PROGRESS step) rejects NOT_ALLOWED; the assignee is unchanged.\n- (p5) governor-1 force on task-peer and a workerId-less force on task-idle both return success:true, and both assignees become null.\n- (p6) A worker-1 release of task-peer without force rejects with codeName RELEASE_NOT_ASSIGNEE. A workerId-less release of task-peer without force rejects with STEP_LEASE_HELD. Neither error message contains 'pass force:true', and both contain 'governor or a human'.\n  - Type the caught errors: `await release(...).catch((e: unknown) => e) as MoeError`, with `import type { MoeError } from '../util/errors.js'`. The gate typechecks this file (TS18046 otherwise).\n- (r1) worker-peer acquires 'gate' for task-peer via acquireResourceTool. Then worker-1 force:true with taskId task-peer and qa-1 force:true without taskId each reject NOT_ALLOWED, and the holders are still ['task-peer:worker-peer'].\n- (r2) governor-1 force:true with taskId task-peer returns released ['task-peer']. After re-acquiring, a workerId-less force:true with taskId returns released ['task-peer'], and the holders are [].\n- (r3) A workerId-less release_resource without force still rejects MISSING_REQUIRED. worker-peer releasing its own lease without force returns released ['task-peer'], as before.\n\nRun the file in a snapshot before the fix and expect 6 failed | 3 passed (p1, p5 and r3 are controls). The architect dry-ran a draft of these cases. Edit with your own editing tool, never a shell write.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/releaseForceGate.test.ts"
       ],
-      "startedAt": "2026-11-03T20:32:18.412Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts"
+      ],
+      "note": "QA repair: original p1-p6/r1-r3 already exist in this worktree. Added p7/r4 tables for present empty/null/number/zero/false/whitespace/object/array IDs; refusal snapshots cover tasks, workers, leases and queued waiters, plus spies prove no task/resource read, touch, release or activity append. Added r5 missing/unusable non-force-ID cases per rejection. Red-first snapshot /tmp/moe-0adea941-red-BP1LVK (git archive HEAD plus test overlay), env -i npm ci --prefer-offline --no-audit --no-fund then npx vitest run src/tools/releaseForceGate.test.ts: exit 1, 18 failed / 16 passed. Failures reproduce illicit success or uncoded TypeError; omitted-ID/governor controls stay green. Implementing key-presence gates per QA instead of the rejected truthiness in the original plan.",
+      "startedAt": "2026-11-03T20:32:18.412Z",
+      "completedAt": "2026-11-03T20:34:46.697Z"
     },
     {
       "stepId": "step-2",
       "description": "release_task gate plus the guard wording.\n\nIn packages/moe-daemon/src/tools/releaseTask.ts:\n- Import notAllowed from ../util/errors.js and workerHasRole from ../util/workerRole.js, the resolver the restricted siblings use (setTaskPriority.ts:47, setTaskDependencies.ts:69, amendPlanStep.ts:62).\n- Directly after `const force = params.force === true;` add: if force && params.workerId && !workerHasRole(state, params.workerId, 'governor'), throw notAllowed('release_task', `force is the governor/human crash-recovery override (worker ${params.workerId} is not a governor)`).\n- The rule is role-only, with no assignee exemption: the assignee never needs force for its own row, because assertReleaseCaller and assertNoLiveLease both pass the assignee.\n- Error handling: the refusal is thrown before the handoff validation, the git fingerprint, the mutex, any task read and any write, so nothing changes. A workerId-less call (the /ws RELEASE_TASK board path and a human CLI) and a governor seat keep force.\n- Keep the force inputSchema description starting with 'Governor/human crash-recovery override' (p1 pins it). Append that a caller whose workerId resolves to no governor role is refused NOT_ALLOWED, and that a human or the board omits workerId.\n\nIn packages/moe-daemon/src/util/claimGuards.ts, reword the two refusal tails so neither tells the caller to pass force:true:\n- assertNoLiveLease (STEP_LEASE_HELD): '...IN_PROGRESS; only a governor or a human may override that lease (moe.release_task force), and only for a confirmed-dead holder'.\n- assertReleaseCaller (RELEASE_NOT_ASSIGNEE): '...not <caller>; only the holder may release it, or a governor or a human (moe.release_task force) once the holder is confirmed dead'.\n- Keep the codeNames, the MoeErrorCode and the context objects exactly as they are. claim_next_task's replaceExisting path shares the STEP_LEASE_HELD text, and the neutral wording suits it too.\n- Add one JSDoc line on assertNoLiveLease: only a governor or a human may pass force, and release_task enforces it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/releaseTask.ts",
         "packages/moe-daemon/src/util/claimGuards.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "note": "QA repair reuses setTaskStatus's key-presence + string-normalization pattern and existing workerHasRole/notAllowed, replacing the rejected truthy-ID check. Explicit empty/null/numeric/other malformed IDs cannot enter the human path or throw TypeError. Gate still precedes handoff validation/fingerprint, task lookup and mutex. Existing force description and claimGuards wording/JSDoc already satisfy this step and were retained unchanged. Snapshot command: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npx vitest run src/tools/releaseForceGate.test.ts -t \"\\\\(p\"' after overlaying releaseTask.ts in /tmp/moe-0adea941-red-BP1LVK/packages/moe-daemon: exit 0, 14 passed / 20 skipped. All p7 malformed cases now green, with no task reads or writes.",
+      "startedAt": "2026-11-03T20:35:11.500Z",
+      "completedAt": "2026-11-03T20:35:57.258Z"
     },
     {
       "stepId": "step-3",
       "description": "release_resource gate.\n\nIn packages/moe-daemon/src/tools/releaseResource.ts:\n- Import notAllowed and workerHasRole.\n- Schema `required` becomes ['resourceId']. A human's force call may omit workerId, which gives DoD 2's workerId-less force path. The proxy always injects a seat's MOE_WORKER_ID, so seats are always gated.\n- Replace the missingRequired('workerId') check with `if (!params.workerId && params.force !== true) throw missingRequired('workerId')`.\n- After the RESOURCE_ID_RE check: if params.force === true && params.workerId && !workerHasRole(state, params.workerId, 'governor'), throw notAllowed('release_resource', `force is the governor/human override (worker ${params.workerId} is not a governor)`).\n- Then `if (params.workerId) await state.touchWorker(params.workerId)`.\n- Pass `workerId: params.workerId ?? ''` to state.releaseResource. Under force, the store's matchesCaller (resourceStore.ts:319-323) matches by taskId or by every holder and never reads the caller id. Say so in a comment.\n- Give the two `params.taskId ?? params.workerId` message fallbacks a final `?? 'every holder'`.\n- Update the descriptions: the tool description says force is 'governor or human only'; the force description says a caller whose workerId resolves to no governor role is refused NOT_ALLOWED; the workerId description says 'required unless force:true from a human, who omits it'.\n\nError handling: both refusals are thrown before touchWorker, the precondition reads and the store write, so nothing is released and no lease or queue entry changes.\n\nIn packages/moe-daemon/src/tools/releaseResource.generation.test.ts, case 'checks PEER leases too under force with no taskId' (line 137) forces as worker-1, which is now refused before its precondition. Switch that caller to 'governor-1'. Keep ifHolderWorkerId 'worker-1', the /worker-2/ rejection and the holders assertion. Add a one-line comment: since task-0adea941 only a governor or a human may force.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/releaseResource.ts",
         "packages/moe-daemon/src/tools/releaseResource.generation.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseResource.ts"
+      ],
+      "note": "QA repair changes force authorization to key presence and normalizes workerId before workerHasRole. Kept Boolean(force), matching the store's truthy force behavior. Non-force missing/non-string/blank IDs now get MISSING_REQUIRED before touchWorker; touch is limited to non-blank strings. Store receives normalized string. Existing schema/descriptions and releaseResource.generation governor fixture were already present and retained. Snapshot overlay + env -i npx vitest run src/tools/releaseForceGate.test.ts src/tools/releaseResource.generation.test.ts: exit 0, 2 files / 40 tests passed (log /tmp/moe-0adea941-red-BP1LVK/packages/resource-green.log). The new resource cases cover scoped/all-lease force, truthy non-boolean force, queue preservation, malformed IDs and no side effects; human/governor/own-lease controls remain green.",
+      "startedAt": "2026-11-03T20:35:57.286Z",
+      "completedAt": "2026-11-03T20:37:06.181Z"
     },
     {
       "stepId": "step-4",
       "description": "Document the contract in docs/MCP_SERVER.md. Use the seat's own editor (Edit on Claude, apply_patch on codex exec), never Serena (it ignores docs/) or a shell write. No open row held docs/MCP_SERVER.md at plan time; if lanes.js shows it held at claim time, edit only these hunks.\n- moe.release_task Parameters block (about line 2043, after `workerId?: string`): add `force?: boolean  // Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. A caller whose workerId resolves to no governor role is refused NOT_ALLOWED; a human or the board omits workerId.`\n- moe.release_resource Parameters block (about line 2994): `workerId: string,` becomes `workerId?: string, // required, except on a human's force:true call, which omits it`. Append to the force comment: a seat whose workerId resolves to no governor role is refused NOT_ALLOWED.\n- The `force: true` bullet (about line 3017): add one clause saying it is enforced (governor seats and workerId-less human calls only; any other seat is refused NOT_ALLOWED and nothing is released).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "note": "Rechecked docs/MCP_SERVER.md release_task parameter block (2033-2046) and release_resource parameter/notes blocks (2991-3019). The original completion already added all planned force-audience, optional workerId, NOT_ALLOWED/no-release documentation. It explicitly says the human/board omits workerId, which the repaired gates now enforce for malformed explicit IDs. No documentation change is necessary for this QA repair; retained those landed hunks unchanged and did not touch join_team or other docs scope.",
+      "startedAt": "2026-11-03T20:37:06.215Z",
+      "completedAt": "2026-11-03T20:37:37.836Z"
     },
     {
       "stepId": "step-5",
       "description": "Verify once, then do one adversarial self-review. The gate is narrow, per the epic-be924fb8 ruling msg-bbf4f109 that this row's description cites.\n\nRun this exact command from the task worktree. It also works verbatim in the control checkout after landing.\n\ncd \"$(git rev-parse --show-toplevel)\" && d=packages/moe-daemon/src && ! grep -q \"pass force:true\" $d/util/claimGuards.ts && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $d/tools/{releaseTask,releaseResource}.ts $d/util/claimGuards.ts $d/tools/{releaseResource.generation,releaseForceGate}.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/release*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/release src/tools/claimNextTask.race src/state/resourceStore > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'\n\nExpect exit 0 and no FAIL line. The architect's dry-run of this exact command on a scratch tree holding the draft fix printed 'Test Files 10 passed (10)' and 'Tests 156 passed (156)'. On the unfixed checkout it exits 1. The architect also ran src/server/WebSocketServer*, reportBlocked.test.ts and deregisterWorker* green on the draft fix (213 tests). Never run npm in the shared checkout, and never pass TMPDIR inside the env -i (`mem:convention-daemon-full-suite-gate-checkref`).\n\nError handling for a red run: fix only the owned files and re-run the same command.\n\nSelf-review:\n- Can any non-governor seat still reach force? The proxy injects MOE_WORKER_ID, so a seat cannot go workerId-less by accident.\n- Does a refusal write anything? (p2)-(p4) and (r1) pin that it does not.\n- Does /ws RELEASE_TASK still force? It sends no workerId; releaseTask.test.ts arm 4 pins it.\n- Is any message still telling the caller to pass force? The grep in the gate checks.\n- Does the store ever read the '' caller under force?\n- The diff is the 6 planned files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T20:37:37.871Z"
     }
   ],
   "planRevision": 1,
@@ -67,12 +88,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:01:05.255Z",
-  "updatedAt": "2026-11-03T20:32:18.412Z",
+  "updatedAt": "2026-11-03T20:37:37.871Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:03:54.143Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5,
+    "executedStepCount": 9,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -87,7 +108,12 @@
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [
     {
       "item": "release_task with force:true from a worker- or qa- seat on a peer-held row (with or without an IN_PROGRESS step) is refused NOT_ALLOWED and writes nothing (assignee, step and lease unchanged); a governor seat and a workerId-less call can still force, and the ported hunt repro passes in a snapshot outside the shared checkout.",

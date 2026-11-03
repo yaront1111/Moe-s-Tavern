@@ -74,8 +74,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:44.109Z",
-  "updatedAt": "2026-11-03T19:40:15.810Z",
+  "updatedAt": "2026-11-03T20:40:00.443Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T16:31:41.317Z",
@@ -122,7 +122,9 @@
     "firstClaimAt": "2026-11-03T16:40:15.880Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T20:39:27.283Z",
+    "wallClockMs": 14351403
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -248,10 +250,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T19:24:51Z",
-    "at": "2026-11-03T19:39:45.648Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T19:40:00Z",
+    "at": "2026-11-03T20:40:00.443Z"
   },
   "reviewStartedAt": "2026-11-03T19:28:35.075Z",
   "verification": {
@@ -261,5 +264,9 @@
     "reportedAt": "2026-11-03T19:28:35.075Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Invoke-MoeRpc (scripts/moe-agent.ps1) now keeps a reply's wire shape: top-level JSON arrays (1-element, empty) return as ONE array via -NoEnumerate on pwsh>=7 / whole-array on 5.1 plus `return ,$value`; objects, scalars, null, raw text, 2+ arrays unchanged; failure paths untouched. New row 'malformed-array' in postflight-vm-route.ps1 ($tRows) takes today's host path like the sh twin. Gate (checkRef): exit 0; 3x PASS postflight-vm-route.ps1 (5.1, pwsh7, nested), PASS postflight.ps1 (5.1), PASS parity-check.sh (BOM kept). Mutants: M1,M3 killed at T-malformed-array (5.1), M2 at T-malformed-array (pwsh7), M4 at C1 (5.1). Diff: moe-agent.ps1 +10/-1, postflight-vm-route.ps1 +1; ASCII, LF, BOM ok. AUDIT of Invoke-MoeRpc callers (~50 sites, no code change): every daemon tool the wrapper calls returns a JSON object, so no real reply is a top-level array; no caller pipes/enumerates/@()-wraps the result. (1) Discarded/Out-Null: deregister_worker 686; chat_send 5324/8804/9594/9616/10345/11053/11060/11177/11317; add_comment 6147; chat_join 9385 - no change. (2) Null-checked only: chat_send 2838, report_blocked 3117, record_commit 5313, add_comment 7563, release_task 8769, report_account_usage 9073/11007, enter_governance 9397 - no change (only a malformed [] differs: $null->@()). (3) Object-field readers via Get-MoeProp/PSObject.Properties/.field: reattach_attempt 2079; Send-MoeEvidence 2110 (record_candidate/record_check_run/record_delivery_receipt/finalize_attempt); get_commit_scope 4216; Invoke-MoeLandLeaseRpc 7258-7312 (acquire/wait/release_resource); get_context 7988/9653/11107/11287; chat_channels 8044/9374; chat_read 9387/9662; get_pending_questions 9389; claim_next_task 9420/9506; chat_wait 9445; list_tasks 11149 (reads .tasks of an object); lease_account 8877 - unchanged on objects; on a malformed array they see no field and take their failure branch. (4) get_execution_readiness 3181 (n1 gate) -isnot PSCustomObject -> today's path: the purpose of this fix. (5) Pass-thro"
+  "completionSummary": "Invoke-MoeRpc (scripts/moe-agent.ps1) now keeps a reply's wire shape: top-level JSON arrays (1-element, empty) return as ONE array via -NoEnumerate on pwsh>=7 / whole-array on 5.1 plus `return ,$value`; objects, scalars, null, raw text, 2+ arrays unchanged; failure paths untouched. New row 'malformed-array' in postflight-vm-route.ps1 ($tRows) takes today's host path like the sh twin. Gate (checkRef): exit 0; 3x PASS postflight-vm-route.ps1 (5.1, pwsh7, nested), PASS postflight.ps1 (5.1), PASS parity-check.sh (BOM kept). Mutants: M1,M3 killed at T-malformed-array (5.1), M2 at T-malformed-array (pwsh7), M4 at C1 (5.1). Diff: moe-agent.ps1 +10/-1, postflight-vm-route.ps1 +1; ASCII, LF, BOM ok. AUDIT of Invoke-MoeRpc callers (~50 sites, no code change): every daemon tool the wrapper calls returns a JSON object, so no real reply is a top-level array; no caller pipes/enumerates/@()-wraps the result. (1) Discarded/Out-Null: deregister_worker 686; chat_send 5324/8804/9594/9616/10345/11053/11060/11177/11317; add_comment 6147; chat_join 9385 - no change. (2) Null-checked only: chat_send 2838, report_blocked 3117, record_commit 5313, add_comment 7563, release_task 8769, report_account_usage 9073/11007, enter_governance 9397 - no change (only a malformed [] differs: $null->@()). (3) Object-field readers via Get-MoeProp/PSObject.Properties/.field: reattach_attempt 2079; Send-MoeEvidence 2110 (record_candidate/record_check_run/record_delivery_receipt/finalize_attempt); get_commit_scope 4216; Invoke-MoeLandLeaseRpc 7258-7312 (acquire/wait/release_resource); get_context 7988/9653/11107/11287; chat_channels 8044/9374; chat_read 9387/9662; get_pending_questions 9389; claim_next_task 9420/9506; chat_wait 9445; list_tasks 11149 (reads .tasks of an object); lease_account 8877 - unchanged on objects; on a malformed array they see no field and take their failure branch. (4) get_execution_readiness 3181 (n1 gate) -isnot PSCustomObject -> today's path: the purpose of this fix. (5) Pass-thro",
+  "completedAt": "2026-11-03T20:39:27.283Z",
+  "reviewCompletedAt": "2026-11-03T20:39:27.283Z",
+  "reviewSummary": "APPROVED. Reviewed completion 39bec237 (in moe/work-2026-10-24 and control HEAD ef354ee9): moe-agent.ps1 +10/-1 (Invoke-MoeRpc parse block only) and postflight-vm-route.ps1 +1 (row 'malformed-array'); 11 net LOC, in plan scope. BOM intact (ef bb bf), added lines ASCII, no CR.\n\nRe-ran task.verification verbatim at the completion bytes (byte-identical to plan-044c/checkref.txt). Log 044c-gate.Aw40: exit=0; 3x PASS postflight-vm-route.ps1 (5.1, pwsh7, nested), 1x PASS postflight.ps1 (5.1), 1x PASS parity-check.sh (BOM check included). Refusal rows C1/C2, S1-S6, N1-N4, R1/R2 and the today-path rows incl. malformed still ok. About 1h45m wall clock under load ~14.\n\nRe-ran mutants.sh against HEAD: M1 and M3 (5.1) killed at T-malformed-array, M2 (pwsh7) killed at T-malformed-array, M4 (5.1) killed at C1; exit=0.\n\nprobe.ps1 on 5.1.26100 and 7.6.9: objects, scalars, null, non-JSON text, 2+ arrays unchanged; [{..}] and [] now come back as array[1]/array[0]; pass-through wrapper and 6>$null keep the shape; gate predicate -isnot PSCustomObject is True for the singleton array, False for an object; pwsh 6 keeps old behaviour via the Major -ge 7 branch.\n\nCaller audit checked independently: none of the 58 Invoke-MoeRpc/Unserved/LandLease/Send-MoeEvidence references pipes, enumerates or @()-wraps the result. None of the 27 daemon tool files the wrapper calls has a top-level 'return [', and McpAdapter.ts:313 serializes with JSON.stringify, so no real reply is a top-level array. Failure paths untouched.\n\nCollision alert msg-80408f04: peer task-23c803d2 edits moe-agent.ps1 at lines 3195, 7493+, 9228+ and similar, not Invoke-MoeRpc (~1830-1920), so the hunks are disjoint. task-62ec51f1 is dormant with no branch.\n\nPonytail: no findings. Not verified: pwsh 6 (unsupported by design).",
+  "requiredCheckAtDone": null
 }
