@@ -549,8 +549,10 @@ and `verified-local` stays refused until certification and the client gates pass
 - **The daemon CLI's `stop` and `status`** (`packages/moe-daemon/src/index.ts`, task-d6ebe4ab). Both flows above reach
   the old daemon through the installed CLI's `stop`. `stop`, `status` and the `start` gate find it through
   `.moe/daemon.json`, which is repository content, so the CLI dials its `bindHost` only when the literal it resolves to
-  is loopback (127.0.0.0/8 or `::1`) or an address that one of this machine's network interfaces holds. The name is
-  resolved once, and that literal is the one dialed. Otherwise nothing is probed. While the recorded pid is alive,
+  is loopback (127.0.0.0/8 or `::1`) or an address that one of this machine's network interfaces holds. A zoned IPv6
+  literal such as `fe80::a%eth1` never counts, because its zone picks the link that is dialed: it can reach a peer
+  there even when another interface holds that address. The name is resolved once, and that literal is the one
+  dialed. Otherwise nothing is probed. While the recorded pid is alive,
   `stop` sends no signal, removes nothing and exits 1: Stop and Replace then starts nothing, and the protected Restart
   Daemon reports that the stop request failed. `status` reports `stopped` with reason `bindHost not local`. A dead
   pid's daemon.json is still removed, and `start` replaces the file as it does any daemon.json it cannot verify.

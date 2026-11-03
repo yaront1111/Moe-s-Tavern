@@ -133,13 +133,14 @@ stop request failed".
 **Cause:** `.moe/daemon.json` is repository content, and the CLI probes its `bindHost` for `/health` before
 it signals the recorded pid. It dials that `bindHost` only when the address it resolves to is loopback or
 held by one of this machine's network interfaces, because a `/health` answer from another host could name
-any pid. A pull, a hand edit, or a DNS change for a daemon started with `--host <name>` can point it
-elsewhere.
+any pid. A zoned IPv6 literal such as `fe80::a%eth1` never counts: its zone picks the link that is dialed,
+which can reach a peer even when another interface holds that address. A pull, a hand edit, or a DNS
+change for a daemon started with `--host <name>` can point it elsewhere.
 
 **Solution:** Check what the pid is (`ps -p <pid> -o pid,lstart,args`, or Task Manager's Details tab). If it
 is this project's Moe daemon, stop it yourself. Otherwise leave that process alone and remove
 `.moe/daemon.json` as in [daemon.json is stale](#daemonjson-is-stale). Then start the daemon again (in
-JetBrains, **Restart Daemon**). A `--host` value should name this machine.
+JetBrains, **Restart Daemon**). A `--host` value should name this machine, with no `%zone`.
 
 ---
 

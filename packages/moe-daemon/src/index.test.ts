@@ -673,9 +673,15 @@ setInterval(() => {}, 60000);`;
       const NAME = 'moe-bindhost.test';
       const lo = { address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' };
       const eth0 = { address: OFF, netmask: '255.255.255.0', family: 'IPv4', mac: '02:00:00:00:00:01', internal: false, cidr: `${OFF}/24` };
+      const v6 = (address: string, scopeid: number) =>
+        ({ address, netmask: 'ffff:ffff:ffff:ffff::', family: 'IPv6', mac: '02:00:00:00:00:01', internal: false, cidr: `${address}/64`, scopeid });
       type Interfaces = ReturnType<typeof os.networkInterfaces>;
       const loopbackOnly = { lo: [lo] } as Interfaces;
       const withOff = { lo: [lo], eth0: [eth0] } as Interfaces;
+      // eth0's subnets hold OFF and 2001:db8::10, but eth0 itself holds .11 and ::11.
+      const neighbors = { lo: [lo], eth0: [{ ...eth0, address: '192.0.2.11', cidr: '192.0.2.11/24' }, v6('2001:db8::11', 2)] } as Interfaces;
+      // Two links with their own link-local addresses; eth0 is interface index 2.
+      const linkLocal = { lo: [lo], eth0: [v6('fe80::a', 2)], docker0: [v6('fe80::b', 3)] } as Interfaces;
       const unreadable = () => vi.spyOn(os, 'networkInterfaces').mockImplementation(() => {
         throw new Error('uv_interface_addresses EPERM');
       });
@@ -699,8 +705,9 @@ setInterval(() => {}, 60000);`;
         }) as unknown as typeof dns.promises.lookup);
       });
 
-      it.each([['an IP literal', OFF], ['a name that resolves', NAME]])('B1 %s off this machine is never dialed, signalled or removed', async (_kind, bindHost) => {
-        vi.spyOn(os, 'networkInterfaces').mockReturnValue(loopbackOnly);
+      // The whole refusal: nothing dialed, signalled, written or removed, exit 1, and status reports the reason.
+      async function expectRefused(bindHost: string, interfaces: Interfaces): Promise<void> {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(interfaces);
         const raw = writeDaemonFiles(await healthServer(testDir), process.pid, testDir, { bindHost });
         const info = parsed(raw);
         const lock = fs.readFileSync(lockPath(), 'utf-8');
@@ -721,6 +728,30 @@ setInterval(() => {}, 60000);`;
         expect(logged.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields))
           .toMatchObject([{ status: 'stopped', reason: 'bindHost not local', pid: process.pid }]);
         expect(errors.mock.calls.map(([fields]) => fields)).toEqual([{ pid: process.pid, bindHost }]);
+      }
+
+      it.each([['an IP literal', OFF], ['a name that resolves', NAME]])('B1 %s off this machine is never dialed, signalled or removed', (_kind, bindHost) =>
+        expectRefused(bindHost, loopbackOnly));
+
+      // Exact addresses, never subnets: a neighbor on a local interface's subnet is another machine.
+      it.each([OFF, '2001:db8::10'])('B7 %s, on the subnet of a local interface but not held by one, is refused', (bindHost) =>
+        expectRefused(bindHost, neighbors));
+
+      // BlockList.check drops a %zone, but the zone picks the link that is dialed: with eth0 holding fe80::a,
+      // fe80::a%docker0 leaves on docker0's link to a peer. A Moe daemon's /health refuses a zoned Host, so no zone counts.
+      it.each(['fe80::a%docker0', 'fe80::a%eth0', 'fe80::a%2'])('B8 the zoned literal %s is refused', (bindHost) =>
+        expectRefused(bindHost, linkLocal));
+
+      it('B8 unzoned, a link-local address a local interface holds still stops: the OS delivers it locally', async () => {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(linkLocal);
+        const info = parsed(writeDaemonFiles(await healthServer(testDir), process.pid, testDir, { bindHost: 'fe80::a' }));
+        const killSpy = killSpyWithoutSignals();
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info });
+        await stopDaemon(testDir);
+
+        expect(signals(killSpy)).toEqual([[process.pid, 'SIGTERM']]);
+        expect(dialed).toEqual(['fe80::a', 'fe80::a']);
       });
 
       it.each([['an IP literal', OFF], ['a name that resolves', NAME]])('B2 %s to a local interface still stops, dialing the resolved literal', async (_kind, bindHost) => {
@@ -780,6 +811,12 @@ setInterval(() => {}, 60000);`;
 
         interfaces.mockReturnValue(withOff);
         expect(await otherSide(() => validateDaemonInfoForProject(testDir, info))).toEqual({ valid: true, info, foreign: true });
+        expect(dialed).toEqual([OFF]);
+
+        // The zone rule covers it too: eth0 holds fe80::a, but %docker0 would dial docker0's link.
+        interfaces.mockReturnValue(linkLocal);
+        expect(await otherSide(() => validateDaemonInfoForProject(testDir, { ...info, bindHost: 'fe80::a%docker0' })))
+          .toEqual({ valid: false, reason: 'foreign daemon unreachable', foreign: true });
         expect(dialed).toEqual([OFF]);
       });
     });

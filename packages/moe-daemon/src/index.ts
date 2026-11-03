@@ -94,10 +94,13 @@ function recordedProbeHost(info: DaemonInfo): string {
 /**
  * True when `address`, an IP literal, is this machine: loopback (127.0.0.0/8 or ::1, IPv4-mapped forms included) or an
  * address one of its network interfaces holds. A peer on the same subnet is not, so exact addresses are added, never
- * subnets. daemon.json is repository content, and a /health answer from any other host could name any pid, so its
+ * subnets. A zoned literal never is: BlockList.check drops the %zone, but the zone picks the link that is dialed, so
+ * with eth0 holding fe80::a, fe80::a%docker0 reaches a peer on docker0's link (and a Moe daemon's /health refuses a
+ * zoned Host). daemon.json is repository content, and a /health answer from any other host could name any pid, so its
  * bindHost is dialed only at such an address (task-d6ebe4ab). When the interfaces cannot be read, only loopback counts.
  */
 function isLocalAddress(address: string): boolean {
+  if (address.includes('%')) return false;
   const local = new net.BlockList();
   local.addSubnet('127.0.0.0', 8, 'ipv4');
   local.addAddress('::1', 'ipv6');
