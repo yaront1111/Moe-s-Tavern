@@ -54,9 +54,14 @@ export interface Registry {
   accounts: RegistryAccount[];
 }
 
-/** A registry problem, carrying the token the CLI prints (MOE_ACCOUNT_*). */
+/**
+ * A registry problem, carrying the token the CLI prints (MOE_ACCOUNT_*).
+ * `readFailed` marks an I/O failure reading the file (EACCES, EBUSY, EMFILE,
+ * EIO), as opposed to a problem with its content: the file may read fine on the
+ * next try, so a caller that caches must not cache it.
+ */
 export class RegistryError extends Error {
-  constructor(readonly token: string, detail: string) {
+  constructor(readonly token: string, detail: string, readonly readFailed = false) {
     super(`${token}: ${detail}`);
     this.name = 'RegistryError';
   }
@@ -91,8 +96,8 @@ export function emptyRegistry(): Registry {
   return { version: 1, switchAtPercent: DEFAULT_SWITCH_AT_PERCENT, accounts: [] };
 }
 
-function invalid(file: string, detail: string): RegistryError {
-  return new RegistryError('MOE_ACCOUNT_REGISTRY_INVALID', `${file}: ${detail}`);
+function invalid(file: string, detail: string, readFailed = false): RegistryError {
+  return new RegistryError('MOE_ACCOUNT_REGISTRY_INVALID', `${file}: ${detail}`, readFailed);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -149,7 +154,7 @@ export function readRegistry(file: string): Registry | null {
     text = fs.readFileSync(file, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw invalid(file, `cannot read it (${(error as Error).message})`);
+    throw invalid(file, `cannot read it (${(error as Error).message})`, true);
   }
   let raw: unknown;
   try {

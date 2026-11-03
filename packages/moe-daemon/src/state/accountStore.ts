@@ -39,6 +39,7 @@ import {
   readRegistry,
   recordSignIn,
   registryFilePath,
+  RegistryError,
   writeJsonAtomic,
   type Registry,
   type RegistryAccount,
@@ -154,32 +155,54 @@ function statKey(file: string): string {
 
 function loadRegistry(fleet: Fleet, file: string): RegistryRead {
   const key = `${file}|${statKey(file)}`;
-  if (fleet.registry?.key !== key) {
-    let value: RegistryRead;
-    try {
-      value = { registry: readRegistry(file), error: null };
-    } catch (error) {
-      value = { registry: null, error: (error as Error).message };
-    }
-    fleet.registry = { key, value };
+  if (fleet.registry?.key === key) return fleet.registry.value;
+  let value: RegistryRead;
+  try {
+    value = { registry: readRegistry(file), error: null };
+  } catch (error) {
+    value = { registry: null, error: (error as Error).message };
+    // An I/O failure (EACCES, EBUSY, EMFILE, EIO) clears without changing the
+    // file's inode, mtime or size, so a cached one would keep rotation off until
+    // the list is rewritten. Report it for this call; the next call reads again.
+    // A content error (bad JSON, failed validation) stays cached.
+    if (error instanceof RegistryError && error.readFailed) return value;
   }
-  return fleet.registry.value;
+  fleet.registry = { key, value };
+  return value;
 }
 
-function readUsage(usageFile: string, id: string): AccountUsage | null {
+/** A usage file that exists but could not be read (`unreadable` is the errno code). It says nothing about the content, so it is never cached. */
+interface UnreadableUsage {
+  unreadable: string;
+}
+
+function isUnreadable(read: AccountUsage | null | UnreadableUsage): read is UnreadableUsage {
+  return read !== null && 'unreadable' in read;
+}
+
+function readUsage(usageFile: string, id: string): AccountUsage | null | UnreadableUsage {
+  let text: string;
   try {
-    return validateUsage(JSON.parse(fs.readFileSync(usageFile, 'utf8')), id);
+    text = fs.readFileSync(usageFile, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' ? null : { unreadable: code ?? 'UNKNOWN' };
+  }
+  try {
+    return validateUsage(JSON.parse(text), id);
   } catch {
     return null;
   }
 }
 
+/** The usage of the account; while its file cannot be read, the last good sample (null when there is none), read again on the next call. */
 function loadUsage(fleet: Fleet, registryFile: string, id: string): AccountUsage | null {
   const usageFile = accountUsageFile(registryFile, id);
   const key = statKey(usageFile);
   const cached = fleet.usage.get(usageFile);
   if (cached?.key === key) return cached.value;
   const value = key === 'missing' ? null : readUsage(usageFile, id);
+  if (isUnreadable(value)) return cached?.value ?? null;
   fleet.usage.set(usageFile, { key, value });
   return value;
 }
@@ -395,20 +418,9 @@ export async function recordAccountReport(state: StateManager, report: AccountRe
     }. Sign it in again in the Moe tool window (Accounts); seats use the next account meanwhile.`);
   }
 
-  // Read fresh, not from the cache: another project's daemon may have written it a moment ago.
-  const usageFile = accountUsageFile(file, account.id);
-  const { usage, changed } = mergeSample(
-    readUsage(usageFile, account.id),
-    account.id,
-    { windows: report.windows, refused: report.refused },
-    threshold,
-    nowMs
-  );
-  if (changed) {
-    writeJsonAtomic(usageFile, usage);
-    fleet.usage.delete(usageFile);
-    recorded = true;
-  }
+  const merged = mergeReportUsage(fleet, file, account.id, report, threshold, nowMs);
+  const usage = merged.usage;
+  recorded = recorded || merged.written;
   // A restart forgets every lease. The wrapper only reports the account its
   // running claude was launched under, so learn it back (after the merge, so
   // the one broadcast carries both); a lease is never replaced.
@@ -416,8 +428,38 @@ export async function recordAccountReport(state: StateManager, report: AccountRe
     await settleLease(state, fleet, report.workerId, account.id, nowMs);
   }
   refreshAccounts(state, nowMs);
-  const until = blockedUntilMs(usage, threshold, nowMs);
-  return { recorded, blockedUntil: until === null ? null : iso(until), peakPercent: peakPercent(usage, nowMs) };
+  const until = usage ? blockedUntilMs(usage, threshold, nowMs) : null;
+  return { recorded, blockedUntil: until === null ? null : iso(until), peakPercent: usage ? peakPercent(usage, nowMs) : null };
+}
+
+/**
+ * Merge a report into the account's usage file. Reads the file fresh, not from
+ * the cache: another project's daemon may have written it a moment ago. While
+ * the file cannot be read (an I/O error) nothing is merged or written: a merge
+ * from an empty base would overwrite its stored windows and refusal. The reply
+ * then reports the last good sample (null when there is none), and the next
+ * report reads the file again.
+ */
+function mergeReportUsage(
+  fleet: Fleet,
+  registryFile: string,
+  id: string,
+  report: AccountReport,
+  threshold: number,
+  nowMs: number
+): { usage: AccountUsage | null; written: boolean } {
+  const usageFile = accountUsageFile(registryFile, id);
+  const stored = readUsage(usageFile, id);
+  if (isUnreadable(stored)) {
+    logger.warn({ accountId: id, code: stored.unreadable }, 'Account usage file cannot be read; report not merged');
+    return { usage: fleet.usage.get(usageFile)?.value ?? null, written: false };
+  }
+  const { usage, changed } = mergeSample(stored, id, { windows: report.windows, refused: report.refused }, threshold, nowMs);
+  if (changed) {
+    writeJsonAtomic(usageFile, usage);
+    fleet.usage.delete(usageFile);
+  }
+  return { usage, written: changed };
 }
 
 /**
