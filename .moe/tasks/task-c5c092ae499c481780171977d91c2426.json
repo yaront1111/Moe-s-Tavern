@@ -50,8 +50,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -63,12 +63,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:23:13.101Z",
-  "updatedAt": "2026-11-03T17:40:54.124Z",
+  "updatedAt": "2026-11-03T17:42:08.487Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:33:39.202Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T17:41:39.876Z",
+    "wallClockMs": 480674
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -177,9 +179,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-03T17:37:08Z",
-    "at": "2026-11-03T17:40:16.809Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T17:40:34Z",
+    "at": "2026-11-03T17:42:08.487Z"
+  },
+  "completedAt": "2026-11-03T17:41:39.876Z",
+  "reviewCompletedAt": "2026-11-03T17:41:39.876Z",
+  "reviewSummary": "Reviewed completion ff652048 (on moe/work-2026-10-24, HEAD of moe/control): `git show` diff is 2 files, +51/-2 (net +49): scripts/mods/moe-compaction-keeper/hooks/register.ts and register.test.ts only; ASCII-only; the 6 existing tests are untouched. DoD1: register.test.ts gains the two required cases. The first shows the amendment text for an IN_PROGRESS step with activeAmendmentId amend-1 and lacks the original. The second shows the original for a dangling id (amend-9). DoD2: I extracted `git archive ff652048 scripts/mods/moe-compaction-keeper` into a fresh /tmp dir and ran `env -u MOE_WORKER_ID -u MOE_PROJECT_PATH claude plugin test <dir>/scripts/mods/moe-compaction-keeper`: 8 pass / 0 fail, rc=0, matching the worker's task.verification. DoD3: the commit touches only those two paths. Fix: stepText() mirrors util/planAmendments.ts activeAmendment/effectiveStepDescription: it requires a non-empty string id and an array, then the first truthy entry with a string description and a matching amendmentId. Anything else falls back to s.description, with no throw, so the hook stays fail-open. The Twin comment names the real symbol and path. Line format and the 1500/120 clip are unchanged, and no daemon import was added. Mutation checks in the scratch copy: (a) use s.description again -> amended-step test fails (7/1); (b) last-amendment-wins -> dangling-id test fails (7/1); (c) dropping the null-entry guard is accepted by the unchanged suite, but the code keeps the guard and it mirrors the daemon's. Size 49 net LOC, well under the cap. Not run: the mod's stepText has no dedicated odd-value tests (null entry, non-array amendments, empty id), covered by code reading only; this is non-blocking and not a DoD item. Ponytail pass: nothing to cut (single small helper, no new deps).",
+  "requiredCheckAtDone": null
 }

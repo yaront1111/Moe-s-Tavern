@@ -9,10 +9,52 @@
     "`npm ci && npm test && npm run compile` passes in moe-vscode in a full-repo git-archive snapshot outside the checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first. Create moe-vscode/tests/step-amendment.test.cjs with the Write tool, byte for byte from the reference /mnt/d/moe-scratch/plan-e9a25fbf/step-amendment.test.cjs (sha256 e4dcc63f24073bf4a641c492ffc560a361e0293a7cb9931fb559bb8fccd5fbd3). Rail: tracked files are written only through Edit/Write, never cp or git apply.\n\nWhat the test pins (mem:convention-vscode-renderer-tests). It loads the REAL renderers:\n- PlanReviewPanel.ts and TaskDetailPanel.ts, transpiled with ts.transpileModule into node:vm. It calls their private renderSteps through `Panel.prototype.renderSteps.call({}, steps)`.\n- media/planReview.js and media/taskDetail.js, raw under node:vm with a small DOM stand-in. It calls their top-level renderSteps.\n\nThere are 10 cases x 4 renderers = 40 rows, named `<case> <renderer>: ...`. The renderer is one of plan-review-html, plan-review-live, task-detail-html or task-detail-live.\n- A1: the entry activeAmendmentId names is shown, not the latest one.\n- A2: a blank amendedBy reads 'Amended by unknown'.\n- A3: hostile amendment, amender and original text stays text.\n- A4: malformed entries before the named one are skipped, and a non-string amendedBy reads unknown.\n- O1 never amended; O2 dangling id; O3 blank id; O4 amendments not an array; O5 the named entry's description is not a string; O6 non-string id. Each shows the original description and no marker.\n\nStep 4's RED re-proof counts the A-row ids, so do not rename the cases or the renderer labels.\n\nQuick test run from the worktree root. The worktree has no node_modules, so read the control checkout's TS6 JS typescript, read-only:\n`cd moe-vscode && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/step-amendment.test.cjs`\nIt must be RED now: `# fail 16` (exactly the A-rows) and `# pass 24`.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/step-amendment.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Shared rule and the two HTML renderers: moe-vscode/src/types/moe.ts, moe-vscode/src/panels/PlanReviewPanel.ts and moe-vscode/src/panels/TaskDetailPanel.ts. Copy these three files' hunks from /mnt/d/moe-scratch/plan-e9a25fbf/fix.diff with Edit. The diff's sha256 is 94488338b7bea88f673077e48aa1835388f59121ad6f9d22dfc3653da8a88012, and `git apply --check` passes against 6d6bdc51.\n\n(a) moe.ts:\n- Above ImplementationStep (line 162), add `export interface StepAmendment { amendmentId: string; description: string; reason?: string; amendedBy?: string; amendedAt?: string; }`, with a one-line doc comment naming packages/moe-daemon/src/types/schema.ts StepAmendment.\n- Add optional `amendments?: StepAmendment[]` and `activeAmendmentId?: string` to ImplementationStep, each with a short doc comment.\n\n(b) PlanReviewPanel.ts:\n- Add ImplementationStep and StepAmendment to the existing `import type` line.\n- Below escapeHtml (line 856), add two exported module functions, both with doc comments:\n  - `activeStepAmendment(step)` returns the `step.amendments` entry whose amendmentId equals `step.activeAmendmentId` and whose description is a string. It returns null when the id is not a non-empty string or amendments is not an array. It never throws and never falls back to the latest entry. Doc comment: it mirrors activeAmendment in packages/moe-daemon/src/util/planAmendments.ts, and media/planReview.js and media/taskDetail.js carry the same rule.\n  - `stepTextHtml(step)`. With no amendment it returns exactly today's `<div class=\"step-description\">${escapeHtml(step.description)}</div>`. With one it returns `<div class=\"step-description\">${escapeHtml(amendment.description)}</div>` followed by `<div class=\"step-amended\" title=\"${escapeHtml('Original step: ' + (step.description || ''))}\">Amended by ${escapeHtml(by)}</div>`. Here `by` is amendedBy when it is a string whose trim() is non-blank, else 'unknown'. Keep that markup order (class first, then title), because the test reads it with a regex.\n- renderSteps (line 720) takes `steps: ImplementationStep[]`, and its description line becomes `${stepTextHtml(step)}`. Keep renderSteps a prototype method that never touches `this`: the test calls it on an empty receiver.\n- In the panel's style block, add `.step-amended { margin-top: 4px; font-size: 11px; font-style: italic; color: var(--vscode-descriptionForeground); }` right after the `.step-description` rule.\n\n(c) TaskDetailPanel.ts:\n- Add stepTextHtml to the existing `./PlanReviewPanel` import (line 3), and ImplementationStep to its `import type` list.\n- renderSteps (line 1125) takes `ImplementationStep[]` and uses `${stepTextHtml(step)}` for its description line.\n- Add the same `.step-amended` rule after its `.step-description` rule.\n- Do not touch its 'prev'/'next' message case; task-3ab5be0d owns it.\n\nError handling: both renderSteps run while the panel builds its whole HTML, so a throw here blanks Plan Review or Task Detail. .moe/tasks is hand-editable. That is why activeStepAmendment checks typeof and Array.isArray before reading anything and returns null rather than throwing, and why a non-string amendedBy is never trimmed. A step that was never amended keeps exactly today's markup.\n\nRun step 1's quick test command: the 8 *-html A-rows turn green, and only the 8 *-live A-rows still fail.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Live renderers and the changelog: moe-vscode/media/planReview.js, moe-vscode/media/taskDetail.js and moe-vscode/CHANGELOG.md. Copy them with Edit from the same fix.diff hunks.\n\n(a) In each script, add a top-level `function activeStepAmendment(step)` directly above `function renderSteps(steps)` (planReview.js line 137, taskDetail.js line 331).\n- Same rule as the TS helper, as a plain ES5 loop: a non-empty string id, Array.isArray(step.amendments), and an object entry with a string description and a matching amendmentId; else null.\n- Give it a 4-line comment naming src/panels/PlanReviewPanel.ts and the daemon's planAmendments.ts.\n\n(b) In each renderSteps, replace the description block (planReview.js lines 166-169, taskDetail.js lines 367-370):\n- `var amendment = activeStepAmendment(step);`\n- desc.textContent is `amendment ? amendment.description : (step.description || '')`.\n- When there is an amendment, append a div with className 'step-amended'. Its textContent is 'Amended by ' + (amendedBy when it is a string whose trim() is non-blank, else 'unknown'), and its title is 'Original step: ' + (step.description || '').\n- Set text only through textContent and title, never through the markup-injection DOM property (a project.json globalRails.forbiddenPatterns entry).\n\n(c) Do not touch planReview.js applyRenderedTask/tokenForTask or taskDetail.js renderedPlanRevision. Approval latching is unchanged; only the step text block changes.\n\n(d) CHANGELOG.md: append to [Unreleased] > ### Fixed, after the Prior hand-offs bullet:\n'- Plan review and task detail show an amended plan step's current text (the active `moe.amend_plan_step` amendment), with an \"Amended by <who>\" line whose tooltip keeps the original, as in JetBrains. Before, they showed the original text while **Approve** approved the amended plan.'\n\nEdit trap (mem:gotcha-edit-tool-unescapes-unicode-literals): taskDetail.js writes its step icons as backslash-u escapes just above the description block. Keep those icon lines out of every old_string/new_string. Afterwards `LC_ALL=C grep -c -P '[^\\x00-\\x7F]' <file>` must still print the merge-base counts: moe.ts 5, PlanReviewPanel.ts 12, TaskDetailPanel.ts 14, planReview.js 3, taskDetail.js 1, CHANGELOG.md 1; the new test prints 0.\n\nRun step 1's quick test command: 40/40 ok.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/planReview.js",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/CHANGELOG.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, once, from the task worktree root. Run checkRef 1 and then checkRef 2 from executionContract.checkRefs, verbatim. The same texts are saved as:\n- /mnt/d/moe-scratch/plan-e9a25fbf/checkref-gate.txt (sha256 918d0eac8e05d92dee701e8edf487a1bdbd7fc5844d2e4dcae886cc505d9179c);\n- /mnt/d/moe-scratch/plan-e9a25fbf/checkref-red.txt (sha256 c79c80556e790789252e15e843777da12fb3f204f68e7e7095fa48b3eef7ec1f).\n\nThe complete_task verification command is `bash /mnt/d/moe-scratch/plan-e9a25fbf/checkref-gate.txt && bash /mnt/d/moe-scratch/plan-e9a25fbf/checkref-red.txt`. Its fresh output is the evidence.\n\nWhat checkRef 1 does:\n- It snapshots the worktree's HEAD, plus the six edited source/test files, into a fresh /tmp/me9a.* dir. A snapshot is needed because a worktree has no node_modules, the rail forbids npm ci inside the repo tree, and the shared node_modules hold only win32 tsc (mem:gotcha-vscode-gate-from-wsl, mem:gotcha-vscode-tests-need-full-repo-snapshot).\n- It runs npm ci, npm test and npm run compile under env -i with nvm node v24.21.0.\n- It requires all 40 step-amendment rows to pass.\n\nWhat checkRef 2 does:\n- It copies the new test next to the merge-base versions of the four renderers. Each base file must differ from the worktree's.\n- It requires exactly the 16 A-rows to fail and the 24 O-rows to pass. This is the RED re-proof that the test catches today's renderers (mem:convention-vscode-port-mutant-checkref).\n\nPlanner dry run on a 6d6bdc51 clone with the reference files:\n- checkRef 1 exit 0: ℹ tests 736, pass 726, fail 0, skipped 10, and 'step-amendment rows passed: 40'.\n- checkRef 2 exit 0: 'RED: 16 failing, 24 ok'.\nTotals may shift by rows that other landings add.\n\nError handling for a red run:\n- If npm ci, a test or compile fails, checkRef 1 prints its snapshot path and the last 40 log lines, then exits 1. Fix the code and rerun.\n- A RED count other than 16/24 means a case was renamed, dropped or made vacuous. Fix the test, never the command.\n\nNever run npm ci or npm install in the worktree or the shared checkout. Afterwards, delete the /tmp/me9a.* and /tmp/me9r.* dirs your runs printed, by their literal paths.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff: load the adversarial-self-review skill.\n\nFrom the worktree root, run checkRef 3 (/mnt/d/moe-scratch/plan-e9a25fbf/checkref-scope.txt, sha256 56ba24f9875aba79014dd7b2bf2558fff6d879e25d6d5084dd3d4cbde606c542).\n- It must print exactly the 7 planned moe-vscode paths and exit 0: CHANGELOG.md, media/planReview.js, media/taskDetail.js, src/panels/PlanReviewPanel.ts, src/panels/TaskDetailPanel.ts, src/types/moe.ts and tests/step-amendment.test.cjs.\n- It also refuses any added line that contains a forbiddenPatterns string.\n- Dry run: 6 tracked files at +109/-8, plus the new test.\n- QA re-runs it at the control checkout with MOE_LAND_TARGET=<completion>^ QA_TIP=<completion>, and runs checkRefs 1-2 with MOE_LAND_TARGET=<completion>^.\n\nChecklist:\n- All three copies of the rule agree with activeAmendment in packages/moe-daemon/src/util/planAmendments.ts: the named entry, never the latest; a string description; Array.isArray; a non-empty string id.\n- Every value that reaches panel HTML passes escapeHtml, the title attribute included. The webviews set text through textContent and title only.\n- An unamended step's HTML is byte-identical to today's.\n- The planReview.js approval-token code and taskDetail.js renderedPlanRevision handling are untouched: `git diff` shows no hunk in applyRenderedTask, tokenForTask or revisionForTask.\n- The non-ASCII counts from step 3 still hold.\n\nThe planner ran these mutants against the step 1 test, and each was killed (/mnt/d/moe-scratch/plan-e9a25fbf/mutate.py):\n- the latest entry instead of the named one: 6 rows fail;\n- a truthiness amender guard: 2;\n- unescaped amendment text in the HTML: 2;\n- no string check on the entry description: 2;\n- the live marker dropped: 4.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +66,102 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:26:41.845Z",
-  "updatedAt": "2026-11-03T17:29:07.142Z",
+  "updatedAt": "2026-11-03T17:42:00.818Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T17:29:03.070Z"
+    "firstClaimAt": "2026-11-03T17:29:03.070Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 7
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:42:00.790Z",
+  "executionContract": {
+    "intendedBehavior": "Every VS Code renderer of a plan step shows the step's active amendment text: the entry `activeAmendmentId` names in `amendments`, never simply the latest. The four renderers are the Plan Review HTML (PlanReviewPanel.renderSteps), its live update (media/planReview.js renderSteps), the Task Detail HTML (TaskDetailPanel.renderSteps) and its live update (media/taskDetail.js renderSteps). The text is followed by an 'Amended by <amendedBy>' line whose title tooltip is 'Original step: <original>'. This is the text the daemon's plan revision covers, and so the text Approve binds to (packages/moe-daemon/src/util/planAmendments.ts, taskStore.ts approvalPlanSurface). A step with no usable amendment renders exactly as before: its own description and no marker. 'No usable amendment' means a missing, blank, non-string or dangling id; non-array amendments; or a named entry whose description is not a string.",
+    "acceptanceCriteria": [
+      "A step with amendments [amend-1, amend-2] and activeAmendmentId 'amend-1' renders amend-1's description as its .step-description text. It also gets a .step-amended element with the text 'Amended by <amendedBy>' and the title 'Original step: <original description>', in all four renderers.",
+      "An amendedBy that is missing, blank or not a string renders 'Amended by unknown'.",
+      "Step, amendment and amender text is escaped with escapeHtml in the panel HTML, and set through textContent/title in the webviews. An `<img ...>` in an amendment never reaches the HTML as a tag.",
+      "These steps render the original description and no marker: no amendments, a dangling id, a blank id, a non-string id, non-array amendments, and a named entry whose description is not a string.",
+      "moe-vscode/tests/step-amendment.test.cjs has 40 rows and all pass. Against the merge-base renderers exactly the 16 A-rows fail and the 24 O-rows pass.",
+      "moe-vscode npm ci, npm test and npm run compile pass in a Linux full-tree snapshot, and only the 7 planned moe-vscode files change."
+    ],
+    "invariants": [
+      "The planReview.js approval-token code (tokenForTask, applyRenderedTask latching) and taskDetail.js renderedPlanRevision handling are unchanged. Only the step text block changes.",
+      "A step that was never amended renders the same `<div class=\"step-description\">...</div>` as today in both panels' HTML.",
+      "No added line contains a project.json globalRails.forbiddenPatterns string, and no non-ASCII character is added to any source file.",
+      "No file outside moe-vscode/ changes."
+    ],
+    "compatibility": [
+      "No daemon, wire, JetBrains or .moe/ change. The daemon already writes amendments/activeAmendmentId (amendPlanStep.ts:107-110), so existing amended rows show the amended text as soon as this lands.",
+      "Steps without amendments, and hand-edited rows with malformed amendment fields, render as before and never throw.",
+      "types/moe.ts only adds a new interface and two optional ImplementationStep fields; no existing field changes."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/types/moe.ts: a new StepAmendment interface and two optional ImplementationStep fields",
+      "moe-vscode/src/panels/PlanReviewPanel.ts: the import type line; exported activeStepAmendment and stepTextHtml below escapeHtml; renderSteps' parameter type and description line; one .step-amended CSS rule",
+      "moe-vscode/src/panels/TaskDetailPanel.ts: the ./PlanReviewPanel and type imports; renderSteps' parameter type and description line; one .step-amended CSS rule. Not the 'prev'/'next' message case.",
+      "moe-vscode/media/planReview.js: activeStepAmendment plus renderSteps' description block. Not the approval-token code.",
+      "moe-vscode/media/taskDetail.js: activeStepAmendment plus renderSteps' description block. Not the renderedPlanRevision handling.",
+      "moe-vscode/tests/step-amendment.test.cjs: new, 40 rows",
+      "moe-vscode/CHANGELOG.md: one [Unreleased] ### Fixed bullet"
+    ],
+    "reuse": [
+      "escapeHtml in moe-vscode/src/panels/PlanReviewPanel.ts, which escapes & < > \" '.",
+      "The rule of activeAmendment in packages/moe-daemon/src/util/planAmendments.ts. The JetBrains copy is ImplementationStep.activeAmendment/effectiveDescription in moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt (3b56ee35), with the strings 'Amended by {0}' and 'Original step: {0}' (MoeBundle moe.message.stepAmended/stepAmendedOriginal).",
+      "TaskDetailPanel already imports shared helpers from ./PlanReviewPanel (seedRevisionAttribute, showApprovalRefusal), so stepTextHtml lives there rather than in a new module.",
+      "The node:vm loading pattern of tests/plan-review.test.cjs and tests/approval-paths.test.cjs, simplified (mem:convention-vscode-renderer-tests)."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/amendPlanStep.ts:71-73 refuses only DONE/ARCHIVED, and :107-110 appends {amendmentId, description, reason, amendedBy, amendedAt} and sets activeAmendmentId. The step's description is never rewritten.",
+      "packages/moe-daemon/src/state/taskStore.ts:132-140: approvalPlanSurface includes effectiveDescription: effectiveStepDescription(step). :172-199 derivePlanRevision bumps planRevision when that surface changes.",
+      "packages/moe-daemon/src/types/schema.ts:447-455 StepAmendment; :491 amendments?: StepAmendment[]; :499 activeAmendmentId?: string.",
+      "moe-vscode/src/panels/PlanReviewPanel.ts:720-745 renderSteps prints escapeHtml(step.description) at :742. escapeHtml is at :856.",
+      "moe-vscode/src/panels/TaskDetailPanel.ts:1125-1150 renderSteps prints it at :1146, and :3 imports from ./PlanReviewPanel.",
+      "moe-vscode/media/planReview.js:137 renderSteps sets desc.textContent = step.description at :168. applyRenderedTask re-renders the steps on every updateTask and latches Approve off when the revision changed.",
+      "moe-vscode/media/taskDetail.js:331 renderSteps sets desc.textContent = step.description at :369. On updateTask, :407-408 re-render the steps and then arm renderedPlanRevision.",
+      "moe-vscode/src/types/moe.ts:162-171 ImplementationStep has no amendments or activeAmendmentId. Nothing in moe-vscode/src or media mentions 'amend'."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/me9a.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in src/types/moe.ts src/panels/{PlanReview,TaskDetail}Panel.ts media/{planReview,taskDetail}.js tests/step-amendment.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log; C=$(grep -acE '^✔ [AO][1-6] [a-z-]+: ' ../v.log); echo \"step-amendment rows passed: $C ($L)\"; [ \"$C\" = 40 ] )",
+      "( R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/me9r.XXXX) && cd \"$L\" && mkdir -p src/panels media tests && cp \"$R/moe-vscode/tests/step-amendment.test.cjs\" tests/ && for f in src/panels/{PlanReview,TaskDetail}Panel.ts media/{planReview,taskDetail}.js; do git -C \"$R\" show \"$B:moe-vscode/$f\" > $f && ! cmp -s $f \"$R/moe-vscode/$f\" || exit 1; done && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/step-amendment.test.cjs > red.log 2>&1; N=$(grep '^not ok' red.log); echo \"RED: $(grep -c . <<<\"$N\") failing, $(grep -c '^ok' red.log) ok ($L)\"; [ $(grep -c . <<<\"$N\") = 16 ] && [ $(grep -c '^ok' red.log) = 24 ] && ! grep -v ' - A[1-4] ' <<<\"$N\" )",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && G=$({ git diff --name-only \"$B\" ${QA_TIP:-}; [ -n \"$QA_TIP\" ] || git ls-files -o --exclude-standard; } | LC_ALL=C sort -u) && echo \"$G\" && [ \"$G\" = \"$(printf 'moe-vscode/%s\\n' CHANGELOG.md media/{planReview,taskDetail}.js src/panels/{PlanReview,TaskDetail}Panel.ts src/types/moe.ts tests/step-amendment.test.cjs)\" ] && git diff --stat \"$B\" ${QA_TIP:-} && ! git diff \"$B\" ${QA_TIP:-} | grep '^+' | grep -qiE 'ev''al\\(|inner''html|__pro''to__'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) The extension host adds an effectiveDescription to each step before posting updateTask. Rejected: it changes the payload both webviews and the approval-token code read, and the HTML render would still need the rule. (2) A new src/util module for the TS helper. Rejected: it adds a file, and TaskDetailPanel already imports shared helpers from PlanReviewPanel (seedRevisionAttribute, showApprovalRefusal). (3) The webviews cannot import TS, so each carries a 10-line ES5 copy of the rule, pinned by the same 40 test rows across all four renderers. Chosen.",
+    "codebaseInsights": "planReview.js applyRenderedTask re-renders the steps on every updateTask and latches Approve off when the revision changed, which an amendment does. The human then reopens the panel, and the reopened HTML comes from PlanReviewPanel.renderSteps, which shows the original text while Approve is armed on the amended revision. taskDetail.js re-renders the steps and then arms renderedPlanRevision with no latch, so Task Detail's Approve binds the amended revision while it shows the original text. The JetBrains fix 3b56ee35 is the parity reference.",
+    "risks": "- The test reads the HTML marker with a class-then-title regex: keep the markup order.\n- renderSteps must stay a this-free prototype method: the test calls it on an empty receiver.\n- Backslash-u escapes typed into an Edit become literal characters (the taskDetail.js step icons). Keep those lines out of edits and check the non-ASCII counts.\n- A non-string amendedBy must not reach .trim().\n- task-3ab5be0d edits TaskDetailPanel.ts's prev/next message case, a different hunk. Do not touch it.",
+    "keyFiles": [
+      "moe-vscode/src/panels/PlanReviewPanel.ts",
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/media/planReview.js",
+      "moe-vscode/media/taskDetail.js",
+      "moe-vscode/src/types/moe.ts",
+      "packages/moe-daemon/src/util/planAmendments.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ff65204820df7c3e46e46aca94d5b598e8788f06",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:42:00.818Z",
+  "approvedPlanRevision": 1
 }
