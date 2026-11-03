@@ -9,10 +9,42 @@
     "`gradlew.bat test` passes under the jetbrains-gradle lease (Windows), with the command and output tail in the completion evidence."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 2, red first. Edit only moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt, with the Edit tool (TOOL-witness rail).\n\nAppend two JUnit 4 tests after everyPreviousMoveIsLegalForTheDaemon. The file already imports assertEquals, assertFalse, assertNull and assertTrue, so add no import:\n\n```\n@Test fun nextFollowsTheWorkflowOrder() {\n    assertEquals(\"PLANNING\", BoardMoves.next(\"BACKLOG\"))\n    assertEquals(\"AWAITING_APPROVAL\", BoardMoves.next(\"PLANNING\"))\n    assertEquals(\"WORKING\", BoardMoves.next(\"AWAITING_APPROVAL\"))\n    assertEquals(\"REVIEW\", BoardMoves.next(\"WORKING\"))\n    assertEquals(\"DONE\", BoardMoves.next(\"REVIEW\"))\n}\n\n@Test fun doneBlockedArchivedAndUnknownHaveNoNext() {\n    for (s in listOf(\"DONE\", \"BLOCKED\", \"ARCHIVED\", \"\", \"NOT_A_STATUS\")) {\n        assertNull(\"status '$s'\", BoardMoves.next(s))\n        assertFalse(\"status '$s'\", BoardMoves.hasNext(s))\n    }\n    for (s in listOf(\"BACKLOG\", \"PLANNING\", \"AWAITING_APPROVAL\", \"WORKING\", \"REVIEW\")) {\n        assertTrue(\"status '$s'\", BoardMoves.hasNext(s))\n    }\n}\n```\n\nThe AWAITING_APPROVAL assertion matters: handleNext returns early on a null next, so a null there would silently remove the approve ▶. Leave the validTransitions copy at :10-21 untouched. The new cases do not read it, and the row scopes that fix to \"only if the new cases depend on it\".\n\nRED run, before any main-source edit:\n1. moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId } (mem:convention-jetbrains-gradle-lease).\n2. From the task worktree root, run exactly: `cmd.exe /d /c \"cd /d $(wslpath -w \"$(git rev-parse --show-toplevel)\")\\\\moe-jetbrains && gradlew.bat test --rerun\"`\n3. moe.release_resource right after, even on failure.\n4. Expected result: a non-zero exit at :compileTestKotlin, with `e:` lines reporting an unresolved reference to next / hasNext in BoardMovesTest.kt.\n5. Run `git diff --quiet ff652048 -- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt && echo BOARDMOVES_IS_ff652048`. It ties the run to ff652048; no moe-jetbrains file changed between ff652048 and 7a08e3d9.\n6. Run checkRef 3 (static RED). It must exit 0.\n7. Post moe.add_comment on this task, headed `RED (does not compile against ff652048's BoardMoves.kt):`, with the command, the exit code, the `e:` lines and the BOARDMOVES_IS_ff652048 line.\n\nThe error handling for this step:\n- If the lease is queued, call moe.report_blocked { resourceId: \"jetbrains-gradle\" }. The grant restores the task.\n- If the run fails without the unresolved-reference lines, post no RED comment yet.\n- For a truncated tail that ends at `> Task :test`, first check the Gradle daemon log for the IPC MessageIOException (mem:gotcha-gradle-jetbrains-shared-box §2), then re-run once.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt"
+      ],
+      "startedAt": "2026-11-03T18:07:13.323Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 1. Main-source edits only, with the Edit tool.\n\n(a) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt: insert after hasPrevious (:27), inside the object:\n\n```\n/**\n * The status the board's Next (right arrow / detail-dialog Next) moves [status] to, or null when there is\n * none. Workflow order BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING, REVIEW, DONE; each target is in the\n * daemon's VALID_TRANSITIONS (packages/moe-daemon/src/tools/setTaskStatus.ts), and AWAITING_APPROVAL reaches\n * WORKING through BoardApproval.approveRendered. DONE is the end, BLOCKED leaves only through unblock_worker\n * resolveBlocks or set_task_status, and ARCHIVED or unknown statuses have no forward move. Never throws.\n */\nfun next(status: String): String? = when (status) {\n    \"BACKLOG\" -> \"PLANNING\"\n    \"PLANNING\" -> \"AWAITING_APPROVAL\"\n    \"AWAITING_APPROVAL\" -> \"WORKING\"\n    \"WORKING\" -> \"REVIEW\"\n    \"REVIEW\" -> \"DONE\"\n    else -> null\n}\n\nfun hasNext(status: String): Boolean = next(status) != null\n```\n\n(b) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt. It is in the same package, so add no import.\n- Delete the local `val workflowOrder` and `fun getNextStatus` (:532-536), plus the blank line after them.\n- handleNext's first line (:539) becomes `val nextStatus = BoardMoves.next(task.status) ?: return`.\n- The detail dialog's callback (:626) becomes `val nextCb = if (BoardMoves.hasNext(task.status)) { t: Task -> handleNext(t) } else null`, mirroring prevCb on the next line.\n- Keep handleNext's AWAITING_APPROVAL → BoardApproval.approveRendered branch and `onNext = if (!isDone) ...` (:665) as they are.\n\n(c) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt:175: change `onNext = onNext` to `onNext = onNext?.takeIf { BoardMoves.hasNext(task.status) }`, exactly as onPrevious is filtered on the same line. BoardMoves is already imported at :5.\n\nWhy this preserves behavior: next(s) returns what getNextStatus(s) returned for every s. That is the next status in order for BACKLOG..REVIEW, and null for DONE (last index), BLOCKED, ARCHIVED and unknown (index -1). So the dialog's Next and handleNext's targets are unchanged. The only visible change is that a card whose status has no forward move (BLOCKED, display-mapped into the Working column) no longer gets the ▶. A BLOCKED card already has no ◀, so TaskCard.kt:280 then adds no arrow panel at all. Do not edit TaskCard.kt.\n\nThe error handling stays as it was. next() never throws, since unknown statuses map to null. The ▶ click stays wrapped in TaskCard's safeCallback, and handleNext keeps its `?: return` guard.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 3: verification. Run it ONCE, fresh, from the task worktree root, after every edit is in. Its output is the evidence you give complete_task, and QA re-runs the same command.\n\n1. moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId }.\n2. Run checkRef 1 exactly: `cmd.exe /d /c \"cd /d $(wslpath -w \"$(git rev-parse --show-toplevel)\")\\\\moe-jetbrains && gradlew.bat test --rerun\"`. gradlew.bat lives in moe-jetbrains/, not the repo root (mem:gotcha-gradle-jetbrains-shared-box §2c).\n3. moe.release_resource immediately afterwards, even on failure.\n4. Run checkRefs 2-5. Each must exit 0:\n   - 2 prints the test-results XML totals (tests > 0, 0 failures, 0 errors) and requires both new cases in TEST-com.moe.toolwindow.BoardMovesTest.xml.\n   - 3 is the static RED check.\n   - 4 checks the card/panel wiring.\n   - 5 checks scope: only the 4 plan files differ from the merge base, and there are no untracked files.\n\ncomplete_task evidence:\n- verification.command = checkRef 1 verbatim\n- exitCode = 0\n- outputTail = the BUILD SUCCESSFUL tail plus checkRef 2's totals line\n\nThe error handling for a red run:\n- A red exit with a truncated tail can be the Gradle IPC flake. Check the Windows Gradle daemon log (%USERPROFILE%\\.gradle\\daemon\\<ver>\\daemon-<pid>.out.log) for MessageIOException before believing it, then re-run once (§2).\n- A real compile or test failure goes back to step 2.\n- Never hand in a `> Task :test UP-TO-DATE` run (§1).\n- The `Exception in thread \"cleanup\" java.lang.OutOfMemoryError` line from JansiLoader is noise (§3).",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, once. Load the adversarial-self-review skill, then read this task's diff (`git diff $(git merge-base HEAD moe/work-2026-10-24)`) as an attacker. Check each item:\n(1) `grep -rnE 'workflowOrder|getNextStatus' moe-jetbrains/src` finds nothing. The card ▶, the detail dialog's Next and handleNext all go through BoardMoves.\n(2) For each status, compare the old getNextStatus with BoardMoves.next, including \"\" and lowercase \"working\" (both null before and after). BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING and REVIEW cards keep the ▶ and the same target. AWAITING_APPROVAL still approves through BoardApproval.approveRendered.\n(3) Re-read VALID_TRANSITIONS in packages/moe-daemon/src/tools/setTaskStatus.ts at the current tip. Every non-null next target must be legal from its source status.\n(4) Mutation check: next(\"AWAITING_APPROVAL\") = null, or next(\"BLOCKED\") = \"WORKING\", must each fail one of the new tests.\n(5) Stale input: a card rendered as WORKING whose task turns BLOCKED before the click still sends WORKING's move, from its stale Task object. That is pre-existing, and the next state snapshot re-renders the card. Note it in the completion summary; do not widen scope.\n(6) No added line contains a project.json globalRails.forbiddenPatterns string. TaskCard.kt, TaskDetailDialog.kt and the validTransitions copy in BoardMovesTest.kt are unchanged, and checkRef 5 still exits 0.\nFix anything you find inside the 4 plan files only. If a file changed, re-run step 3.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +56,88 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:42:21.168Z",
-  "updatedAt": "2026-11-03T17:54:20.019Z",
+  "updatedAt": "2026-11-03T18:07:13.323Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T17:54:16.662Z"
+    "firstClaimAt": "2026-11-03T17:54:16.662Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
-  ]
+    "architect-1dd28c7c",
+    "worker-33f67e5b"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T18:06:10.561Z",
+  "executionContract": {
+    "intendedBehavior": "On the JetBrains board, a card shows the ▶ (move forward) only when its status has a forward move. BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING and REVIEW cards keep their ▶ and exactly their ff652048 behavior; AWAITING_APPROVAL approves through BoardApproval.approveRendered. BLOCKED, DONE, ARCHIVED and unknown statuses render none. The forward move lives in one pure helper, BoardMoves.next/hasNext, and the card ▶ filter, the detail dialog's Next and handleNext all use it.",
+    "acceptanceCriteria": [
+      "A BLOCKED card in the Working column renders no ▶ (and so no empty arrow panel). BACKLOG/PLANNING/AWAITING_APPROVAL/WORKING/REVIEW cards keep the ▶ with unchanged targets.",
+      "BoardMovesTest gains nextFollowsTheWorkflowOrder and doneBlockedArchivedAndUnknownHaveNoNext. They reference BoardMoves.next/hasNext, which ff652048 lacks, so they do not compile there. The RED run's unresolved-reference lines are in a task comment.",
+      "`gradlew.bat test --rerun` (from moe-jetbrains/) passes under the jetbrains-gradle lease. The XML totals show tests > 0, 0 failures and 0 errors, and TEST-com.moe.toolwindow.BoardMovesTest.xml lists both new cases."
+    ],
+    "invariants": [
+      "BoardMoves.next(s) equals the removed getNextStatus(s) for every string s",
+      "handleNext's AWAITING_APPROVAL branch and the panel's `onNext = if (!isDone)` column wiring are unchanged",
+      "TaskCard.kt, TaskDetailDialog.kt and the validTransitions copy in BoardMovesTest.kt are unchanged",
+      "No daemon, /ws, VS Code or .moe change"
+    ],
+    "compatibility": [
+      "No wire or state change: the same UPDATE_TASK and approval calls are sent for the same statuses."
+    ],
+    "approvedScope": [
+      "New BoardMoves.next(status: String): String? and BoardMoves.hasNext(status: String): Boolean",
+      "MoeToolWindowPanel: the local workflowOrder and getNextStatus are removed; handleNext and the detail dialog's nextCb call BoardMoves",
+      "TaskColumn: a per-card onNext filter that mirrors the onPrevious filter on the same line",
+      "BoardMovesTest: two new JUnit 4 cases"
+    ],
+    "reuse": [
+      "Mirrors BoardMoves.previous/hasPrevious and TaskColumn's onPrevious?.takeIf filter from e44a8daf (landed 8be13403); no new file."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt:175 passes `onNext = onNext` unfiltered, while the same line filters `onPrevious?.takeIf { BoardMoves.hasPrevious(task.status) }`. BoardMoves is imported at :5.",
+      "board/TaskCard.kt:266-278 renders the ▶ JBLabel only when onNext != null, and :280 adds the arrow panel only when onPrevious or onNext is non-null.",
+      "MoeToolWindowPanel.kt:532-536 hold a local workflowOrder and getNextStatus. Their only users are :539 (handleNext) and :626 (the detail dialog's nextCb). :665 gives every non-Done column onNext = handleNext.",
+      "BoardMoves.kt has previous/hasPrevious only. ff652048 has no next/hasNext, and no moe-jetbrains file differs between ff652048 and 7a08e3d9.",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts:48-55 VALID_TRANSITIONS lists BACKLOG→PLANNING, PLANNING→AWAITING_APPROVAL, AWAITING_APPROVAL→WORKING, WORKING→REVIEW and REVIEW→DONE. /ws UPDATE_TASK uses that table (WebSocketServer.ts:496-503)."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"cd /d $(wslpath -w \"$(git rev-parse --show-toplevel)\")\\\\moe-jetbrains && gradlew.bat test --rerun\"",
+      "cd \"$(git rev-parse --show-toplevel)/moe-jetbrains/build/test-results/test\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' *.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"tests\", t, \"skipped\", s, \"failures\", f, \"errors\", e; exit !(t > 0 && f == 0 && e == 0)}' && [ \"$(grep -cE '<testcase name=\"(nextFollowsTheWorkflowOrder|doneBlockedArchivedAndUnknownHaveNoNext)\"' TEST-com.moe.toolwindow.BoardMovesTest.xml)\" = 2 ]",
+      "cd \"$(git rev-parse --show-toplevel)\" && F=moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt && T=moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt && git cat-file -e \"ff652048:$F\" && ! git show \"ff652048:$F\" | grep -qE 'fun (next|hasNext)\\(' && grep -qF 'BoardMoves.next(' \"$T\" && grep -qF 'BoardMoves.hasNext(' \"$T\"",
+      "cd \"$(git rev-parse --show-toplevel)/moe-jetbrains/src/main/kotlin/com/moe/toolwindow\" && grep -qF 'onNext = onNext?.takeIf { BoardMoves.hasNext(task.status) }' board/TaskColumn.kt && grep -qF 'BoardMoves.next(task.status) ?: return' MoeToolWindowPanel.kt && grep -qF 'if (BoardMoves.hasNext(task.status))' MoeToolWindowPanel.kt && ! grep -nE 'workflowOrder|getNextStatus' MoeToolWindowPanel.kt",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && K=moe-jetbrains/src/main/kotlin/com/moe/toolwindow && X=':(exclude)' && D=$(git diff --name-only \"$B\" -- . \"$X.moe\" \"$X$K/BoardMoves.kt\" \"$X$K/MoeToolWindowPanel.kt\" \"$X$K/board/TaskColumn.kt\" \"${X}moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt\"; git ls-files --others --exclude-standard -- . \"$X.moe\") && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Three alternatives were rejected:\n(a) A hasNext in TaskColumn that wraps the panel's getNextStatus. That function is local to the panel's board builder, so neither TaskColumn nor a test can reach it, and two copies of the order would drift.\n(b) Hiding the ▶ inside TaskCard by status. TaskCard takes callbacks, and the sibling onPrevious is already filtered in TaskColumn, so the fix belongs there too.\n(c) Giving BLOCKED a forward action such as unblock. That is out of scope: the row asks only that the ▶ be absent, and the way out of BLOCKED stays unblock_worker resolveBlocks or set_task_status.",
+    "codebaseInsights": "The detail dialog's Next (TaskDetailDialog.kt:756) is already gated at MoeToolWindowPanel.kt:626, so only the card ▶ is wrong today.\n\nDry run (scratch shared clone of 7a08e3d9, edits as planned):\n- checkRef 3 fails before the test edit and passes after it.\n- checkRef 4 fails until step 2, and on two mutants: an unfiltered onNext, and the panel keeping its own getNextStatus.\n- checkRef 5 catches an out-of-scope tracked edit, an untracked stray file and an out-of-scope committed checkpoint.\n- checkRef 2 catches a failure, missing new cases and absent results.\n\nAll checkRefs are under 1000 chars. The architect did not run Gradle itself; the worker owns the lease-wrapped gate.",
+    "risks": "- The RED run must be a real compile failure (unresolved next/hasNext), not the Gradle IPC flake.\n- Always pass --rerun, because `test` UP-TO-DATE runs zero tests.\n- QA re-running in the task worktree after landing: the wrapper's sync commit carries peer landings, so totals can exceed the worker's. Confirm that `git diff --quiet <landed sha> HEAD -- moe-jetbrains` exits 0 before the run (mem:gotcha-gradle-jetbrains-shared-box §2c). For scope, run checkRef 5 with MOE_LAND_TARGET=<completion sha>^, or read `git show --stat <completion sha>`.\n- The stale-card race (status changes between render and click) is pre-existing and out of scope.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "701e082807047d36397cd3d2e7e52c1c3b9f85e5",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T18:06:10.588Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T18:07:13.323Z"
 }

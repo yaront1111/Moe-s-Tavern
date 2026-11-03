@@ -92,7 +92,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,16 +112,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:18:14.949Z",
-  "updatedAt": "2026-11-03T18:02:44.871Z",
+  "updatedAt": "2026-11-03T18:07:14.997Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:27:41.811Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T18:06:38.062Z",
+    "wallClockMs": 2336251
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-c9368191"
+    "worker-c9368191",
+    "qa-7328a40d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -250,9 +253,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T17:51:00Z",
-    "at": "2026-11-03T18:02:44.871Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T18:02:50Z",
+    "at": "2026-11-03T18:07:14.997Z"
+  },
+  "completedAt": "2026-11-03T18:06:38.062Z",
+  "reviewCompletedAt": "2026-11-03T18:06:38.062Z",
+  "reviewSummary": "Reviewed completion 701e0828: on moe/work-2026-10-24 and origin, pushed. 6 files, +279/-2 (net 277); runtime +53, inserts only, all within declared scope.\n\nGate: re-ran task.verification on a git archive of 701e0828. bash -n OK; ParseFile OK; parity-check PASS. WSL 45 tests (44 pass, 0 fail, 1 skip); Windows 67 tests (65 pass, 0 fail, 2 skip). All 4 new rows green on bash, powershell.exe, pwsh.exe and Git Bash.\n\nRED reproduced: on 19d5e67a, WSL 2 fail / 2 pass and Windows 6 fail / 6 pass. The pin-closed and untrusted-wait rows fail on every engine, matching comment-f5a1969d.\n\nDoD1, both twins:\n- The waited flag resets first and is set before both sleeps.\n- The recheck runs only after a wait with a pin set, reading the pin via moe_attempt_read / Read-MoeAttempt.\n- On a stale pin: the identical STALE_ATTEMPT line, then it removes only its own marker, clears the lease with no RPC, gives back one resume attempt, sets the relaunch flag and returns false. The caller then continues.\n- sh's continue targets the main while and skips the --no-loop break. ps1's targets the do/while that is kept alive by AccountRelaunch, and Push-Location is popped at the iteration top (9321). The pin pair is re-blanked at each iteration top.\n- The no-wait and no-pin paths are unchanged. The banners are unchanged, and no MOE_ACCOUNT_* variable was added.\n\nDoD2: the new test cuts the real wrapper code and asserts exact launch, pass, marker, sleep and lease output.\n\nDoD3: bash -n, ParseFile and parity-check all pass. The CI line and the scripts/CLAUDE.md sentence plus test entry are present. The idle_wait cut fixes the previously red moe-account-lease bash rows.\n\nNon-blocking notes: the reason wording differs between twins for phase/id errors, and a leftover launch-failure backoff sleeps once. The worker disclosed both. Ponytail pass found nothing to cut.",
+  "requiredCheckAtDone": null
 }
