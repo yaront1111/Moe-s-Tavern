@@ -68,8 +68,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -81,12 +81,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:32:30.999Z",
-  "updatedAt": "2026-11-03T18:12:53.112Z",
+  "updatedAt": "2026-11-03T18:15:37.975Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:51:32.076Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T18:15:05.813Z",
+    "wallClockMs": 1413737
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -203,9 +205,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T18:08:02Z",
-    "at": "2026-11-03T18:12:16.357Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T18:12:27Z",
+    "at": "2026-11-03T18:15:37.975Z"
+  },
+  "completedAt": "2026-11-03T18:15:05.813Z",
+  "reviewCompletedAt": "2026-11-03T18:15:05.813Z",
+  "reviewSummary": "Approved. Reviewed completion e9f6e21f via git show (on moe/work-2026-10-24, contained in control HEAD); index.ts/index.test.ts at HEAD match it. Diff: 2 files, +133/-4 = 129 net, under the 400 cap, exactly the approved scope; existing tests touched only by two import widenings; no forbidden patterns.\nRe-ran task.verification verbatim in a /tmp git-archive snapshot (env -i, nvm Node 24, no npm in the shared checkout): tsc and test-file tsc clean; vitest index.test.ts 73 passed | 1 skipped incl. N1-N5; atomicWrite.test.ts 18 passed; rc=0.\nRED: pre-fix index.ts (e9f6e21f^) plus the new tests fails exactly N1-N5 (5 failed | 68 passed). The task's RED checkRef uses merge-base(HEAD, work branch), which is HEAD itself now the fix has landed, so I used e9f6e21f^.\nDoD 1: N1 exits 1, logs '.moe/ missing at ', no 'Another process is starting', dir left empty; N2 nonexistent path same, not created. DoD 2: N3 start exits 1 in under 10 s, no 'Supervisor spawned daemon process', no 'Restarting daemon after backoff' (superviseDaemon has its own gate). DoD 3: whole index.test.ts passes, existing acquireLock/stale-lock rows unchanged.\nCode: missingMoeDirBlocksStart creates nothing, sets exitCode=1, returns (no process.exit), runs before existingDaemonBlocksStart in both entry points. acquireLock keeps EEXIST/stale/write-failure paths and throws other create errors (N5: ENOENT); startDaemon logs 'Could not create the daemon lock', exit 1; lock-wait failure sets exitCode=1 (N4). init unaffected (initProject creates .moe/ first). Only other acquireLock caller, atomicWrite.test.ts, passes.\nNote: a genuine lock race now makes the losing _run exit 1, so the supervisor does its bounded crash-restart; intended per the task contract.",
+  "requiredCheckAtDone": null
 }

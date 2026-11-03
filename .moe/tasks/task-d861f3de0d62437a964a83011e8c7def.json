@@ -57,17 +57,14 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
   "reopenReason": null,
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
-  "dependsOn": [
-    "task-91ee455a601b411f97d5d951cc5f241c",
-    "task-65b3e023923e4ab6b71cb94e7bea2f9b"
-  ],
+  "dependsOn": [],
   "priority": "MEDIUM",
   "order": 231.164,
   "comments": [
@@ -76,18 +73,25 @@
       "author": "architect-1a34a669",
       "content": "Planner note from CQ-M07m2 (task-91ee455a, plan revision 1). The sh row now carries TWO functions. This ps1 twin must port both.\n\n1. land_vm_candidate COMMIT BASE_TREE TREE, in this order:\n   - Refusals, all prefixed MOE_VM_CANDIDATE_: NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY, TREE_INVALID.\n   - EMPTY is a no-op.\n   - The commit is a checkpoint-kind commit-tree.\n   - W takes the new tree via `read-tree -m -u COMMIT NEW` BEFORE the CAS. Then the CAS: update-ref of the task branch from COMMIT. On a lost CAS, roll W back and park the commit on a rescue ref.\n   - Return codes: 0 committed or empty, 1 nothing written, 2 rescued.\n2. wt_strong_intent M B, called each wt_land_rounds round before L7. Under the strong profile it refuses with MOE_COMMIT_REFUSED_INTENT_INCOMPLETE unless the frozen candidate is exactly M on B and the attempt and plan revision are pinned. The ps1 home is the worktree completion rounds in Invoke-MoeWorktreeCompletion.\n\nPort from the landed sh bytes; never re-derive them. Rationale and probe results: mem:task-task-91ee455a601b411f97d5d951cc5f241c-handoff and mem:decision-worktree-strong-intent.",
       "timestamp": "2026-11-01T18:51:16.651Z"
+    },
+    {
+      "id": "comment-53c4b7c6dc924d64a616f47dbde864e3",
+      "author": "governor-e6b40560",
+      "content": "Governor ruling (18:14Z): early start. I dropped dependsOn task-91ee455a (CQ-M07m2) and task-65b3e023 (CQ-M07n1). Both completions are on moe/work-2026-10-24: m2 c89e4c59 (18:13Z) and n1 6d6bdc51. Both rows are in REVIEW, so QA is the only gate left. The formal gate moved downstream: CQ-M07n3 (23c803d2) now depends on both directly.\n- Base check before step 1, in your task worktree: `git merge-base --is-ancestor c89e4c59 HEAD && git merge-base --is-ancestor 6d6bdc51 HEAD`. If it fails, report_blocked on the missing row and end the session. Your step 1 port source (`git log -1 --grep 'Moe-Task: task-91ee455a…' -- scripts/moe-agent.sh`) now finds c89e4c59.\n- If a QA reject on m2 or n1 changes the bytes you port or extend, re-sync onto the new tip before you land.\n- task-044c7410 (WORKING) also edits scripts/moe-agent.ps1 (inside Invoke-MoeRpc only) and adds one row to postflight-vm-route.ps1. Put Invoke-MoeVmCandidateLanding and your rows in their own blocks, not next to its row or at the file's end. Edit with the Edit tool and keep the UTF-8 BOM.",
+      "timestamp": "2026-11-03T18:14:50.679Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:51.655Z",
-  "updatedAt": "2026-11-01T18:56:58.460Z",
+  "updatedAt": "2026-11-03T18:15:25.097Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:54:05.533Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-1a34a669"
+    "architect-1a34a669",
+    "worker-8cf0816c"
   ],
   "tier": "standard",
   "effort": "xhigh",

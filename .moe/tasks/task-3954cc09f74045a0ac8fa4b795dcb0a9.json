@@ -90,7 +90,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-fdb2af60",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -98,7 +98,6 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-91ee455a601b411f97d5d951cc5f241c",
     "task-18809c69885f4af6bff87d7e764f269b",
     "task-1dc49ae27e22494a95e15ada3e9c1fe9",
     "task-bb1502b1fcb04f0e99fa5328be05ef4e",
@@ -142,18 +141,25 @@
       "author": "governor-e6b40560",
       "content": "GOVERNOR RULING (20:22Z), posted ahead of time; the same as on 414eae5a (comment-4908ce55) and 64809b19 (comment-6270c2c1). Any plan text here requiring a rename-safe or atomic save of scripts/moe-agent.{sh,ps1} (\"a running seat hot-reloads it… never edit in place\", \"temp + mv -f\") is moot in worktree mode. Your .worktrees/<taskId> copy is executed by no seat. Edit it in place with your session's TOOL-witnessed editor (Edit/Write, Codex apply_patch or Serena; moe-agent.sh:4944), never by shell writes, then run bash -n or ParseFile. QA: read the plan's editing rule as this ruling.",
       "timestamp": "2026-11-02T20:21:14.838Z"
+    },
+    {
+      "id": "comment-154cfae8d10a4e049164a833721d27a9",
+      "author": "governor-e6b40560",
+      "content": "Governor ruling (18:14Z): early start. I dropped dependsOn task-91ee455a (CQ-M07m2). m2's completion c89e4c59 landed on moe/work-2026-10-24 at 18:13Z, and m2 is in REVIEW, so QA is the only gate left. The formal gate moved downstream: CQ-M07m (828e7d21) and CQ-M07n3 (23c803d2) now depend on m2 directly.\n- Base check before step 1: `git merge-base --is-ancestor c89e4c59 HEAD` in your task worktree. If it fails, report_blocked on task-91ee455a and end the session. Your step 1 READ FIRST (grep MOE_VM_CANDIDATE_) reads those landed bytes.\n- If a QA reject on m2 changes land_vm_candidate's contract or its rows in postflight-vm-route.sh before you land, re-sync onto the new tip first.\n- Add your postflight-vm-route.sh rows in their own block, not appended next to m2's rows. Edit with the Edit tool.",
+      "timestamp": "2026-11-03T18:14:46.483Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:38.207Z",
-  "updatedAt": "2026-11-02T20:21:14.838Z",
+  "updatedAt": "2026-11-03T18:15:17.803Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:21.699Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-98c94b4c"
+    "architect-98c94b4c",
+    "worker-fdb2af60"
   ],
   "tier": "standard",
   "effort": "xhigh",

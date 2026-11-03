@@ -13,19 +13,26 @@
     {
       "stepId": "step-1",
       "description": "TDD first: create scripts/tests/team-launch-quoting.test.mjs, the Windows-only regression test for DoD 1 and 2 plus the new error-handling path. A dry-run-verified reference is /mnt/d/moe-scratch/plan-c4f1/ref/team-launch-quoting.test.mjs (sha256 a2698ad349474adb...): Read it and create the file with the Write tool (a cp or any shell write leaves no TOOL witness). Shape, modelled on scripts/tests/daemon-autostart-argv.test.mjs:\n- ENGINES: PowerShell 5.1 (%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe) and PowerShell 7 (where.exe pwsh.exe, else skip 'pwsh.exe not found'). On any non-win32 platform every row skips with a 'Windows only' reason (Linux node: 8 skipped).\n- fixture(t, dir): root = fs.realpathSync.native(fs.mkdtempSync(...)), which is 8.3-free and removed in t.after. <root>\\<dir>\\scripts holds a copy of the real scripts/moe-team.ps1. <root>\\records collects one record-<PID>.json per child.\n- DRIVER: a .ps1 written with a \ufeff BOM and run -NoProfile -NonInteractive -ExecutionPolicy Bypass -File from the fixture root, never from the scripts dir. It does four things:\n  (1) Lifts the real param block from scripts/moe-agent.ps1 with [System.Management.Automation.Language.Parser]::ParseFile -> $ast.ParamBlock.Extent.Text. It writes the fake moe-agent.ps1 beside the copy as UTF-8 with BOM (the block has non-ASCII comments): the param block plus a RECORDER that writes {bound: every $PSBoundParameters key, unbound: @($args), cwd: (Get-Location -PSProvider FileSystem).ProviderPath} as JSON.\n  (2) Defines an advanced function Start-Process (FilePath, ArgumentList, WorkingDirectory) that prints 'START-PROCESS FilePath=<f> NoExit=<bool>'. When TEAM_QUOTE_FAIL is set it calls Write-Error 'simulated launch failure' and returns. Otherwise it swaps -NoExit for -NoProfile -NonInteractive and calls Microsoft.PowerShell.Management\\Start-Process @PSBoundParameters -Wait -NoNewWindow. The function shadows the cmdlet, so no window opens and each child finishes before the next starts.\n  (3) Splats the case params (plus DelayBetween 0) into the copy.\n  (4) Exits with the copy's $LASTEXITCODE, or 3 when a success row left an error in $Error.\n  Case values reach the driver through a UTF-8 JSON file, never through PowerShell source text.\n- Rows, per engine:\n  R1 (DoD 1): dir 'with space', -Project <root>\\proj plain -Team 'Moe Team' -NoQa -NoArchitect. The record list deepStrictEquals [{bound:{Role:'worker', Project, Command:'claude', Team:'Moe Team'}, unbound:[], cwd:<scripts dir>}], so no ProjectName or WorkerId is bound. Stdout has a 'NoExit=True' line.\n  R2 (DoD 1, $ and '): dir \"it's $HOME dir\". The Project path holds ', $HOME, a backtick and U+2019. The Team holds an ASCII \", ASCII ', $(Write-Output PWNED), U+2018/U+2019 and U+201C/U+201D. CommandArgs is ['--flag', \"two words 'q' $env:USERNAME\"]. That one record must match byte-for-byte; the exact strings are in the reference. The curly quotes catch an ASCII-only escape, the \" catches a -Command text launch, and the 2-entry CommandArgs catches a space join.\n  R3 (DoD 2): dir 'plain', -Project <root>\\projplain -Team plainteam, no -No* switch. Exactly three records (architect, qa, worker, sorted by Role) with only Role, Project, Command and Team bound, and three 'NoExit=True' lines.\n  R4 (error handling): TEAM_QUOTE_FAIL=1 with -NoQa -NoArchitect. Exit 1; stdout matches /Failed to start the worker agent: .*simulated launch failure/ and /Launched 0 agent\\(s\\)/; no record.\n- run(): spawn with windowsHide and a 120 s cap. On the cap, run taskkill /pid <that recorded pid> /T /F and nothing else (never kill by name or pattern).\nThen run it RED against the unfixed script: \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/team-launch-quoting.test.mjs must end with pass 2 / fail 6. R1, R2 and R4 fail on both engines and R3 passes; the dry run at HEAD 7a08e3d9 gave exactly that. The cwd check is deliberate: step 2 keeps the child in the scripts dir.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/team-launch-quoting.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/team-launch-quoting.test.mjs"
+      ],
+      "note": "Created scripts/tests/team-launch-quoting.test.mjs with the Write tool, from the dry-run reference. RED against unfixed moe-team.ps1 under Windows node: tests 8 / pass 2 / fail 6. R1, R2 and R4 fail on both PowerShell 5.1 and 7, and the R3 no-space control passes.",
+      "startedAt": "2026-11-03T18:14:52.294Z",
+      "completedAt": "2026-11-03T18:15:31.740Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix scripts/moe-team.ps1 with the Edit tool (TOOL-witnessed; never a shell write). A dry-run-verified reference is /mnt/d/moe-scratch/plan-c4f1/ref/moe-team.ps1 (sha256 3546a3f8920118a8...); diff it against HEAD to see the whole change, about +34/-17.\n(a) Quote-ForCommand returns \"'\" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + \"'\". That is a single-quoted literal in which nothing expands, and the escape doubles all five single-quote characters (ASCII ' and U+2018-U+201B; mem:gotcha-powershell-curly-quotes-psquote). Never use a hand-rolled -replace of the ASCII ' alone. Replace its comment, and delete the stale comment above $projectArg that says values 'survive the child powershell -Command re-parse'.\n(b) CommandArgs: join the quoted entries with \",\", not \" \". A [string[]] parameter takes one argument, and HEAD bound the second entry to moe-agent.ps1's next positional parameter (ProjectName).\n(c) Add function Start-AgentWindow([string]$RoleName), defined after $teamArg:\n- $line = \"& $(Quote-ForCommand $agentScript) -Role $RoleName $projectArg $commandArg $teamArg\". There is no cd; the script runs by its full path.\n- $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($line)).\n- try { Start-Process powershell -ArgumentList \"-NoExit\", \"-EncodedCommand\", $encoded -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape($scriptDir)) -ErrorAction Stop; return $true } catch { Write-Host \"Failed to start the $RoleName agent: $($_.Exception.Message)\" -ForegroundColor Red; return $false }.\n-WorkingDirectory is now the escaped scripts dir, so the child still starts where the old cd put it (rows R1-R3 pin cwd). Keep -NoExit. Add no -NoProfile or -ExecutionPolicy, so launch behaviour is unchanged. A full-line comment above the function says why: Start-Process joins -ArgumentList with single spaces and quotes nothing, and the child's argv parser drops embedded double quotes (task-c4f17045).\n(d) Error handling:\n- Each role block becomes `if (Start-AgentWindow \"<role>\") { $launched++ } else { $failed++ }` for worker, qa and architect. Banners, launch order and the DelayBetween sleeps are unchanged.\n- Initialise $failed = 0 beside $launched.\n- After the 'Launched N agent(s)' line, add `if ($failed -gt 0) { Write-Host \"$failed agent(s) failed to start.\" -ForegroundColor Red; exit 1 }`. Exit stays 0 when every requested role started.\nConstraints the static test enforces:\n- The file stays ASCII and BOM-less.\n- Start-Process keeps the exact -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape(...)) form at top level.\n- No path-cmdlet name (Set-Location, Test-Path, ...) and no Start-Process inside a string or a trailing comment; literal-project-path.test.mjs flags those as 'uninspected'. Mention them only in full-line comments.\nThe param block, defaults, Load-Registry and the team-name fallback stay byte-identical. Then rerun the step-1 test with Windows node: 8 pass.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-team.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-03T18:15:33.167Z"
     },
     {
       "stepId": "step-3",
@@ -64,20 +71,24 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:32:08.766Z",
-  "updatedAt": "2026-11-03T18:13:18.122Z",
+  "updatedAt": "2026-11-03T18:15:33.167Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:51:19.006Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
+    "architect-74d9e1c7",
+    "worker-33f67e5b"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T18:12:54.696Z",
   "executionContract": {
@@ -145,5 +156,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T18:12:54.725Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T18:14:52.294Z"
 }
