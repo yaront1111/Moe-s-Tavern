@@ -12,39 +12,61 @@
     {
       "stepId": "step-1",
       "description": "Tests first, RED before step 2 (test-driven-development). Step 4's negative control proves the RED.\n\nCreate packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts in your task worktree with the Write tool. The architect dry-ran the full file at tip 6ded0c93: /mnt/d/moe-scratch/plan-72f02ef3/getActivityLog.eventTypes.test.ts. Read it and write the file from it. Do not cp it: a shell copy leaves no TOOL witness.\n\nIt ports the hunt repro /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_eventTypeExample.test.ts onto this row's additive contract. The repro accepted \"findable with the advertised filter, or refused\". Refusal is ruled out (no MCP contract break), so the port asserts both halves of the new contract:\n- the advertised types find a status change (e2);\n- the old advertised value is reported (e3).\n\nFixture:\n- ToolTestHarness; setupMoeFolder, createEpic, task-s BACKLOG, then state.load.\n- `state.updateTask('task-s', { status: 'PLANNING' })` and flushActivityLog. The status change is logged as TASK_UPDATED with payload.status 'PLANNING'; the repro's output shows exactly that.\n- examples() parses the `(e.g. A, B, C)` list out of tool.inputSchema.properties.eventTypes.description with /\\(e\\.g\\. ([^)]+)\\)/ and splits it on commas.\n\nCases. Keep the title prefixes exactly; step 4 greps them.\n- (e1) examples() names at least 2 types, every one is in ACTIVITY_EVENT_TYPES, and TASK_STATUS_CHANGED is not among them. This is DoD 1's pin.\n- (e2) A query { taskId: 'task-s', eventTypes: examples(), limit: 100, maxPayloadChars: 0 } contains a TASK_UPDATED event whose payload.status is 'PLANNING', and the result has no 'unknownEventTypes' key.\n- (e3) DoD 2:\n  - { taskId: 'task-s', eventTypes: ['TASK_UPDATED', 'TASK_STATUS_CHANGED', 'TASK_STATUS_CHANGED', 'task_updated'], limit: 100 } returns events and count equal to the TASK_UPDATED-only query (which is non-empty);\n  - its unknownEventTypes toEqual ['TASK_STATUS_CHANGED', 'task_updated'] (deduped, first-seen order, case-sensitive);\n  - { eventTypes: ['TASK_STATUS_CHANGED'] } returns events [] and unknownEventTypes ['TASK_STATUS_CHANGED'].\n- (e4) A query with only known types (['TASK_UPDATED', 'STEP_COMPLETED']), and a query with no eventTypes, carry no 'unknownEventTypes' key. Existing response shapes stay byte-identical.\n\nAt base 6ded0c93 the file prints 'Tests  3 failed | 1 passed (4)': (e1), (e2) and (e3) fail, and (e4) passes. Do not run vitest in the shared checkout (global rail).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts"
+      ],
+      "note": "Wrote the test file from the architect's dry-run copy with the Write tool. Cases e1-e4 are in place. The RED check runs in step 4.",
+      "startedAt": "2026-11-03T22:00:44.329Z",
+      "completedAt": "2026-11-03T22:00:58.562Z"
     },
     {
       "stepId": "step-2",
       "description": "GREEN: edit packages/moe-daemon/src/tools/getActivityLog.ts with the Edit tool only. The architect's dry-run diff (+10/-1) is /mnt/d/moe-scratch/plan-72f02ef3/getActivityLog.diff.\n\n(a) Imports: keep `import type { ActivityEvent } ...` and add `import { ACTIVITY_EVENT_TYPES } from '../types/schema.js';`. StateManager.ts and activityLog.ts already import that value, so there is no cycle risk.\n\n(b) After ACTIVITY_LOG_FILTER_SCAN_LIMIT, add `const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set(ACTIVITY_EVENT_TYPES);` with a 2-line comment. The comment says these are the only types a query can return: the log reader skips any line whose event is not one of them (state/activityLog.ts:171), so no other value can match.\n\n(c) queryActivityLog, right after the eventTypes filter block (:134-137):\n- add `const unknownEventTypes = [...new Set(params.eventTypes ?? [])].filter(t => !KNOWN_EVENT_TYPES.has(t));` with a 2-line comment: reported, never refused (additive contract), so an empty page does not read as \"no such events\";\n- in the returned object, right after `hasMore,`, add `...(unknownEventTypes.length > 0 ? { unknownEventTypes } : {}),`.\n- Leave the eventTypes filter itself unchanged: still exact, case-sensitive matching.\n\n(d) The eventTypes description (:192) becomes exactly 'Filter by event types (e.g. STEP_COMPLETED, TASK_UPDATED, TASK_BLOCKED). A value that is not an activity event type matches nothing and is echoed back in unknownEventTypes.'\n- (e1) parses the parenthetical, so keep it a plain comma-separated list of type names.\n- TASK_UPDATED is the type a status change set through updateTask is logged under.\n\nError handling: no new throw and no new catch.\n- normalizeActivityLogParams's eventTypes validation stays as it is: an array, at most 50 items, non-empty strings, otherwise invalidInput.\n- An unknown value is reported, never refused, so callers that pass one today get the same page plus one additive key.\n- The /ws GET_ACTIVITY_LOG path takes only `events` from queryActivityLog (WebSocketServer.ts:443), so the IDE reply is unchanged.\n\nScope:\n- Do NOT edit docs/MCP_SERVER.md: task-34e42a0a (REVIEW) and task-c8d6dbd5 (WORKING) both hold it. Documenting unknownEventTypes in the get_activity_log section is the governor's follow-up.\n- Do NOT touch backfillTaskMetrics.ts:63-69. It has its own dead TASK_STATUS_CHANGED comparison, which is out of scope.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getActivityLog.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ],
+      "note": "Corrected the eventTypes example to STEP_COMPLETED, TASK_UPDATED, TASK_BLOCKED. Added KNOWN_EVENT_TYPES and a conditional top-level unknownEventTypes (deduped, first-seen order). The filter itself is unchanged. Edit tool only.",
+      "startedAt": "2026-11-03T22:00:58.949Z",
+      "completedAt": "2026-11-03T22:01:10.068Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification (DoD 2's snapshot run). Run this ONCE from the task worktree root after steps 1-2, exactly:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/getActivityLog.ts packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/getActivityLog.eventTypes.test.ts src/tools/getActivityLog.test.ts src/state/activityLog.rotation.test.ts src/tools/registry.test.ts\n\nWhat it does:\n- Snapshots HEAD's packages/moe-daemon outside the shared checkout and overlays the two files. They are uncommitted in the worktree; for QA after landing they equal HEAD.\n- Type-checks the sources.\n- Runs the new file, the existing get_activity_log tests, the rotation tests (which go through queryActivityLog's search fields) and the tool registry test.\n\nThe architect dry-ran it at 6ded0c93: tsc exit 0, 4 files, 23 tests, all passing. All 16 other test files that use the activity-log tool also passed with the change (315 tests).\n\nIts fresh output is complete_task's verification { command, exitCode: 0, outputTail }.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot run: tsc clean, 4 files, 23 tests passed.",
+      "startedAt": "2026-11-03T22:01:10.535Z",
+      "completedAt": "2026-11-03T22:01:25.737Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's diff. This is the final step: load the adversarial-self-review skill.\n\n(1) Negative control: the new tests must fail on the old code. Run from the worktree root:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\")\" packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/getActivityLog.eventTypes.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests \" \"$S/l\"; grep -aqE \"^ +Tests +3 failed \\| 1 passed \\(4\\)\" \"$S/l\" && grep -aqF \"> (e1) \" \"$S/l\" && grep -aqF \"> (e3) \" \"$S/l\" && ! grep -aqF \"> (e4) \" \"$S/l\" && echo RED-AT-BASE; }\n\n- Expect 'Tests  3 failed | 1 passed (4)' and RED-AT-BASE. The architect's dry run printed exactly that.\n- Quote both lines in the completion summary, and mutate nothing in the worktree (mem:convention-daemon-vitest-mutant-checkref).\n- QA variant after landing: replace the merge-base with <completion sha>^.\n\n(2) Response shape: a query with no unknown value has no unknownEventTypes key (e4), so getActivityLog.test.ts and every other caller see today's bytes. The key is additive and top-level, and appears only when at least one value is unknown.\n\n(3) Inputs:\n- Duplicates are reported once, in first-seen order.\n- A lowercase or space-padded value is unknown, because matching stays exact.\n- Validation is unchanged: at most 50 items, non-empty strings. The Set lookup is O(n) over at most 50 items.\n\n(4) Error handling: no new throw or catch, and nothing is refused that was accepted before.\n\n(5) Consumers:\n- /ws GET_ACTIVITY_LOG reads only `events`.\n- The IDE clients send no eventTypes outside ACTIVITY_EVENT_TYPES.\n\n(6) The diff touches exactly getActivityLog.ts and the new test file. In the completion summary, note the docs/MCP_SERVER.md follow-up: the get_activity_log section should mention unknownEventTypes, but 34e42a0a and c8d6dbd5 hold that file.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getActivityLog.ts",
         "packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts",
+        "packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts"
+      ],
+      "note": "Negative control at merge-base: \"Tests  3 failed | 1 passed (4)\" and RED-AT-BASE. Self-review: the key is conditional, so responses with no unknown value are unchanged. Duplicates are reported once and matching stays exact and case-sensitive. There is no new throw or catch. /ws reads only events. The diff touches exactly the 2 files. Follow-up: docs/MCP_SERVER.md's get_activity_log section should mention unknownEventTypes; it is held by 34e42a0a and c8d6dbd5.",
+      "startedAt": "2026-11-03T22:01:26.304Z",
+      "completedAt": "2026-11-03T22:01:51.689Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -56,11 +78,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:46:58.752Z",
-  "updatedAt": "2026-11-03T21:16:01.298Z",
+  "updatedAt": "2026-11-03T22:01:57.094Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:10:12.467Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -70,7 +93,12 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:14:59.208Z",
   "executionContract": {
@@ -128,5 +156,19 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T21:14:59.241Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:00:44.329Z",
+  "reviewStartedAt": "2026-11-03T22:01:57.092Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/getActivityLog.ts packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/getActivityLog.eventTypes.test.ts src/tools/getActivityLog.test.ts src/state/activityLog.rotation.test.ts src/tools/registry.test.ts",
+    "exitCode": 0,
+    "outputTail": "tsc --noEmit clean; Test Files  4 passed (4); Tests  23 passed (23)",
+    "reportedAt": "2026-11-03T22:01:57.092Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getActivityLog.eventTypes.test.ts",
+    "packages/moe-daemon/src/tools/getActivityLog.ts"
+  ],
+  "completionSummary": "get_activity_log's eventTypes description now names only real types (STEP_COMPLETED, TASK_UPDATED, TASK_BLOCKED). TASK_STATUS_CHANGED is gone. A query with a value outside ACTIVITY_EVENT_TYPES returns the same page as before, plus a top-level unknownEventTypes array (deduped, first-seen order, exact and case-sensitive). The key is absent when every value is known or no eventTypes is given. Nothing is refused, the filter is unchanged, and the /ws reply is unchanged. Files: tools/getActivityLog.ts and the new tools/getActivityLog.eventTypes.test.ts. Snapshot run: tsc clean, 4 files, 23 tests passed. Negative control at merge-base: \"Tests  3 failed | 1 passed (4)\" and RED-AT-BASE. Follow-up for the governor: add unknownEventTypes to the get_activity_log section of docs/MCP_SERVER.md, held by 34e42a0a and c8d6dbd5."
 }

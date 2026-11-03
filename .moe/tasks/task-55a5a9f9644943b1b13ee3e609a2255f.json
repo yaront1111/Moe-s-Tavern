@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,17 +94,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:41:48.670Z",
-  "updatedAt": "2026-11-03T21:31:56.344Z",
+  "updatedAt": "2026-11-03T22:03:09.765Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:45:25.436Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:02:40.834Z",
+    "wallClockMs": 4635398
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
     "worker-8cf0816c",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -231,10 +234,15 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T21:28:58Z",
-    "at": "2026-11-03T21:31:55.771Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:00:19Z",
+    "at": "2026-11-03T22:03:09.765Z"
   },
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-03T22:02:40.834Z",
+  "reviewCompletedAt": "2026-11-03T22:02:40.834Z",
+  "reviewSummary": "Reviewed completion 6272d308 (on moe/work-2026-10-24, HEAD of moe/control). 3 files, +125/-12, under the 400 LOC cap: requestReplan.ts (+30 runtime), new requestReplan.test.ts (+89), docs/MCP_SERVER.md (6 lines, request_replan section only, per governor ruling 20:50Z).\n\nRe-ran verification myself in a git-archive snapshot of 6272d308 (moe-daemon + scripts) outside the shared checkout: npm ci exit 0, npx tsc --noEmit exit 0, npx vitest run requestReplan + reportBlocked + taskMoveActor + echoedReasonNotices = 4 files, 74 tests passed. Negative control: new test file on the 6272d308^ sources = \"Tests 5 failed (5)\" (r1, r2 x2, r3, r4), so the cases are mutation-resistant.\n\nDoD 1: r1 asserts nextAction undefined, sessionHandoff END_SESSION with task-a/worker-1, reason contains 'Do not call moe.claim_next_task or moe.wait_for_task'.\nDoD 2: r2 covers a governor by team role and by id prefix (no handoff, GOVERNING kept); r3 covers a dangling seat on task-b (no handoff, currentTaskId and CODING untouched).\nDoD 3: r1 asserts PLANNING, assignedWorkerId null, priorAttempt set, closed attempt phases; r4 covers a non-governor caller on a row that already lost its assignee getting END_SESSION for itself.\n\nCode matches report_blocked's seat-freeing arm (reportBlocked.ts:367-387, :485-503): the guarded touchWorker in try/catch, the callerSeat/seatWorker/currentTaskId computation via resolveWorkerRole, and the reason text are identical. WORKING-only check, assertWorkerOwns, priorAttempt, TASK_REOPENED actor, #general/#architects posts unchanged; only nextAction is removed, on purpose. The e2e workstreamComposition call does not read nextAction. No role doc or skill mentions request_replan.\n\nNot re-run: the e2e suite and the quality gate (parity-check + lint); the worker reports the gate passed, and this diff touches no scripts or role docs. Complexity pass: the handoff logic is copied from report_blocked rather than shared, which the plan chose deliberately. No other finding.",
+  "requiredCheckAtDone": null
 }

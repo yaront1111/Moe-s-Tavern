@@ -12,50 +12,81 @@
     {
       "stepId": "step-1",
       "description": "Tests first, RED before steps 2-3 (test-driven-development). Step 5's negative control proves the RED.\n\nCreate packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts in your task worktree with the Write tool. The architect dry-ran the full file at tip ab9b5237: /mnt/d/moe-scratch/plan-c8618ccd/pendingQuestions.daemonComment.test.ts. Read it and write the file from it. Do not cp it: a shell copy leaves no TOOL witness.\n\nCase (p1) ports the hunt repro /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_pendingMasked.test.ts.\n\nFixture:\n- ToolTestHarness; setupMoeFolder, createEpic, workers worker-1 and worker-other.\n- task-q: WORKING, assignedWorkerId worker-other, hasPendingQuestion true, with the case's comments. comment(id, author, minute) gives fixed timestamps.\n- pending() calls get_pending_questions {}.\n- waitOnReview() calls wait_for_task { statuses: ['REVIEW'], workerId: 'worker-1', timeoutMs: 1000 }. Nothing is in REVIEW, so it answers at once with a pending question, or parks for its 1000 ms floor and returns timedOut.\n- afterEach clears activeWaiters' timers, as waitForTask.test.ts does.\n\nCases. Keep the title prefixes exactly; step 5 greps them.\n- (p1) Comments [human c1, moe-daemon c2]: get_pending_questions totalMatches 1, and the question ids are ['c1']. This is DoD 1 and the hunt repro.\n- (p2) The same comments: wait_for_task returns hasPendingQuestion true with taskId 'task-q'. This is DoD 1's wait_for_task surface.\n- (p3) Control, [human c1, worker-other c2, moe-daemon c3]: totalMatches 0, and wait_for_task has no hasPendingQuestion and timedOut true. DoD 1: a real agent answer still answers.\n- (p4) [human c1, worker-other c2, human c3, moe-daemon c4, human c5]: the question ids are ['c3', 'c5']. A daemon comment neither ends the unanswered run nor joins it.\n\nAt base the file prints 'Tests  3 failed | 1 passed (4)': (p1), (p2) and (p4) fail, and (p3) passes. Do not run vitest in the shared checkout (global rail).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts"
+      ],
+      "note": "Wrote the 4-case test file from the architect dry-run; RED proof is step 5's negative control.",
+      "startedAt": "2026-11-03T22:00:42.053Z",
+      "completedAt": "2026-11-03T22:00:52.876Z"
     },
     {
       "stepId": "step-2",
       "description": "Add the one shared helper to packages/moe-daemon/src/util/taskPayload.ts, right after MAX_PENDING_QUESTIONS_PER_TASK. That is where the pending-question constants already live, and TaskComment is already imported there. Edit with the Edit tool only. The architect's dry-run diff is /mnt/d/moe-scratch/plan-c8618ccd/taskPayload.diff.\n\n- `const SYSTEM_COMMENT_AUTHORS: ReadonlySet<string> = new Set(['moe-daemon']);` with a 2-line comment naming the two daemon writers: finalizeAttempt.ts:161 (landing notes) and delivery/repairActivation.ts:75 (diagnostics). These are the only daemon-authored comment ids in src; the architect grepped `author:` across non-test sources.\n- `export function unansweredHumanComments(comments: readonly TaskComment[] | undefined): TaskComment[]`, with a doc comment:\n  - `list = Array.isArray(comments) ? comments : []`;\n  - scan from the end for the last comment whose author is neither 'human' nor in SYSTEM_COMMENT_AUTHORS (lastAnswer, -1 if none);\n  - return `list.slice(lastAnswer + 1).filter((c) => c.author === 'human')`.\n\nError handling:\n- A hand-edited non-array `comments` yields [] instead of throwing. That is backward-compatible with existing .moe/ files: today `task.comments || []` would throw on a truthy non-array.\n- A comment without an author still counts as an answer, as today.\n- No throw is added.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/taskPayload.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/taskPayload.ts"
+      ],
+      "note": "Added SYSTEM_COMMENT_AUTHORS and unansweredHumanComments helper.",
+      "startedAt": "2026-11-03T22:00:57.239Z",
+      "completedAt": "2026-11-03T22:01:02.214Z"
     },
     {
       "stepId": "step-3",
       "description": "GREEN: make both pending-question surfaces use the helper. Edit with the Edit tool only. The dry-run diffs are getPendingQuestions.diff and waitForTask.diff in /mnt/d/moe-scratch/plan-c8618ccd/.\n\n(a) packages/moe-daemon/src/tools/getPendingQuestions.ts:\n- Add unansweredHumanComments to the existing '../util/taskPayload.js' import list.\n- Replace :125-140 (the `comments` local, the lastAgentIdx scan and the slice/filter) with `const questions = unansweredHumanComments(task.comments).map((c) => ({ commentId: c.id, content: c.content, timestamp: c.timestamp }));` and a 1-line comment.\n- Everything after it (maxQuestionsPerTask, compactQuestion, the result shape) is unchanged.\n\n(b) packages/moe-daemon/src/tools/waitForTask.ts, findPendingQuestion (:77-104) ONLY:\n- Add `import { unansweredHumanComments } from '../util/taskPayload.js';` after the logger import.\n- Replace :91-102 (the `comments` local, the scan and hasUnansweredHumanComment) with `if (unansweredHumanComments(task.comments).length === 0) continue;`.\n- In the (2) comment above it, change \"the last agent comment\" to \"the last answering comment (the same helper, which skips the daemon's own comments)\".\n\nScope:\n- Do not touch waitForTask.ts's event filter or the wake path near :435-480. Sibling task-b7203d89 (delete wake) edits that region; in worktree mode separate hunks merge cleanly.\n- Do not touch the hasPendingQuestion flag writers (WebSocketServer.ts:972, addComment.ts:123) or the two daemon comment writers. The flag stays set when a daemon comment lands, which is why both surfaces now see the question.\n\nError handling: no new failure path. get_pending_questions' parameter validation and wait_for_task's refusals are unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getPendingQuestions.ts",
         "packages/moe-daemon/src/tools/waitForTask.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getPendingQuestions.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "note": "Both surfaces use unansweredHumanComments; waitForTask.ts changed only in findPendingQuestion plus one import.",
+      "startedAt": "2026-11-03T22:01:21.485Z",
+      "completedAt": "2026-11-03T22:01:24.096Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification (DoD 2). Run this ONCE from the task worktree root after steps 1-3, exactly:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/taskPayload.ts packages/moe-daemon/src/tools/getPendingQuestions.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/pendingQuestions src/tools/getPendingQuestions src/tools/waitForTask src/tools/initHookFixes\n\nWhat it does:\n- Snapshots HEAD's packages/moe-daemon outside the shared checkout and overlays the four files. They are uncommitted in the worktree; for QA after landing they equal HEAD.\n- Type-checks the sources.\n- Runs every test file whose path matches those prefixes: the new file, getPendingQuestions.test.ts, waitForTask.test.ts, waitForTask.ownFinalizing.test.ts and initHookFixes.test.ts (hasPendingQuestion).\n\nThe architect dry-ran it at ab9b5237: tsc exit 0, 5 files, 30 tests, all passing.\n\nIts fresh output is complete_task's verification { command, exitCode: 0, outputTail }.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "tsc clean; Test Files 5 passed (5), Tests 30 passed (30), exit 0.",
+      "startedAt": "2026-11-03T22:01:24.962Z",
+      "completedAt": "2026-11-03T22:01:47.199Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff. This is the final step: load the adversarial-self-review skill.\n\n(1) Negative control: the new tests must fail on the old code. Run from the worktree root:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\")\" packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/pendingQuestions.daemonComment.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests \" \"$S/l\"; grep -aqE \"^ +Tests +3 failed \\| 1 passed \\(4\\)\" \"$S/l\" && grep -aqF \"> (p1) \" \"$S/l\" && grep -aqF \"> (p2) \" \"$S/l\" && ! grep -aqF \"> (p3) \" \"$S/l\" && echo RED-AT-BASE; }\n\n- Expect 'Tests  3 failed | 1 passed (4)' and RED-AT-BASE. The architect's dry run printed exactly that.\n- Quote both lines in the completion summary, and mutate nothing in the worktree (mem:convention-daemon-vitest-mutant-checkref).\n- QA variant after landing: replace the merge-base with <completion sha>^.\n\n(2) Parity: both surfaces call the one helper, so they cannot disagree again. A question get_pending_questions hides no longer spins a waiter (the hot-loop invariant in findPendingQuestion's comment).\n\n(3) Semantics:\n- A real agent answer still ends the run (p3).\n- A daemon comment neither ends nor joins it (p4).\n- 'agent', any workerId, and an author-less legacy comment still count as answers.\n- Only 'moe-daemon' is skipped.\n\n(4) Error handling and inputs:\n- A non-array comments value yields [], never a throw.\n- Empty comments yield [].\n- The flag-gated loops are unchanged and are O(comments) per flagged task.\n\n(5) Scope:\n- The diff touches exactly the four planned files.\n- waitForTask.ts changes only inside findPendingQuestion plus one import, leaving task-b7203d89's region alone.\n- Flag writers and docs are untouched: docs/MCP_SERVER.md already describes questions as unanswered human comments.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/taskPayload.ts",
         "packages/moe-daemon/src/tools/getPendingQuestions.ts",
         "packages/moe-daemon/src/tools/waitForTask.ts",
         "packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/taskPayload.ts",
+        "packages/moe-daemon/src/tools/getPendingQuestions.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts"
+      ],
+      "note": "Self-review: diff is exactly the four planned files; parity via one helper; only 'moe-daemon' skipped; non-array/empty comments yield []; waitForTask.ts changed only in findPendingQuestion plus one import. Negative control at merge-base: \"Tests  3 failed | 1 passed (4)\" then RED-AT-BASE.",
+      "startedAt": "2026-11-03T22:01:48.189Z",
+      "completedAt": "2026-11-03T22:02:10.253Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -70,7 +101,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:31.406Z",
-  "updatedAt": "2026-11-03T21:20:42.983Z",
+  "updatedAt": "2026-11-03T22:02:16.863Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:14:27.370Z",
@@ -79,7 +110,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T21:15:11.000Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -89,7 +121,13 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:19:24.603Z",
   "executionContract": {
@@ -149,5 +187,21 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T21:19:24.646Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:00:42.053Z",
+  "reviewStartedAt": "2026-11-03T22:02:16.861Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/taskPayload.ts packages/moe-daemon/src/tools/getPendingQuestions.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/pendingQuestions src/tools/getPendingQuestions src/tools/waitForTask src/tools/initHookFixes",
+    "exitCode": 0,
+    "outputTail": "Test Files  5 passed (5)\n      Tests  30 passed (30)\n   Start at  00:01:40\n   Duration  6.06s (tests 76%, transform 21%, import 3%)\n\ntsc --noEmit clean; exit=0",
+    "reportedAt": "2026-11-03T22:02:16.861Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/pendingQuestions.daemonComment.test.ts",
+    "packages/moe-daemon/src/util/taskPayload.ts",
+    "packages/moe-daemon/src/tools/getPendingQuestions.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts"
+  ],
+  "completionSummary": "get_pending_questions and wait_for_task now derive unanswered human questions through one shared helper, util/taskPayload unansweredHumanComments. A comment authored 'moe-daemon' (landing notes, repair diagnostics) is no longer taken as an answer, so a human question followed only by daemon comments stays pending on both surfaces. A real agent comment, any workerId, 'agent' or an author-less legacy comment still answers it. A daemon comment neither ends nor joins the unanswered run. A non-array comments value yields none.\n\nChanges (4 files): util/taskPayload.ts (SYSTEM_COMMENT_AUTHORS + unansweredHumanComments); tools/getPendingQuestions.ts (inline scan replaced); tools/waitForTask.ts (findPendingQuestion only, plus one import; event filter and wake path untouched); new tools/pendingQuestions.daemonComment.test.ts with cases p1-p4, p1 being the ported hunt repro.\n\nVerification, in a git-archive snapshot outside the shared checkout: tsc --noEmit clean; Test Files 5 passed (5), Tests 30 passed (30); exit 0.\nNegative control at the merge-base (new test file only): \"Tests  3 failed | 1 passed (4)\", then RED-AT-BASE. p1, p2 and p4 fail, p3 passes."
 }

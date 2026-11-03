@@ -86,8 +86,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -99,12 +99,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:44:36.392Z",
-  "updatedAt": "2026-11-03T21:20:24.629Z",
+  "updatedAt": "2026-11-03T22:02:50.316Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:57:04.180Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T22:02:50.314Z",
+    "wallClockMs": 3946134
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -228,5 +230,9 @@
     "kind": "completion",
     "sessionId": "worker-d6c1cb7a@2026-11-03T21:03:41Z",
     "at": "2026-11-03T21:19:32.896Z"
-  }
+  },
+  "completedAt": "2026-11-03T22:02:50.314Z",
+  "reviewCompletedAt": "2026-11-03T22:02:50.314Z",
+  "reviewSummary": "Reviewed completion fa405c59 (on moe/work-2026-10-24, contained in control HEAD 6272d308; 4 files, +207/-44, net 163, runtime net ~97 — under the 400 cap). Re-ran task.verification in a fresh git-archive snapshot outside the shared checkout (HEAD + the 4 files overlaid; the 4 paths equal HEAD): npm ci, `npx tsc --noEmit` clean, vitest 5 files / 155 tests passed, exit 0. Negative control at fa405c59^ (overlay only amendPlanStep.rails.test.ts): \"Tests  4 failed | 3 passed (7)\", failing a1/a2/a5/a6, c1/a3/a4 green, RED-AT-BASE printed. DoD 1: amend_plan_step now builds the post-amendment plan text via planRailText and refuses an INTRODUCED violation with submit_plan's coded CONSTRAINT_VIOLATION 'Rail violation: \"<v>\". Default action: revise the replacement text ... call moe.amend_plan_step again.' plus the propose_rail escape hatch; the check sits after the cap refusal and before previousDescription/updateTask, so nothing is written (a6 asserts task file bytes, planRevision and zero subscribe events). DoD 2: hunt repro ported as c1,a1,a2 plus a3-a6; compliant amendment unchanged (a3). DoD 3: pre-existing violation reading is explicit in the code comment and tests (introduced = in the after-list but not the before-list; a4 lacks-required and a5 forbidden-elsewhere don't block, and a5's new refusal names only 'drop database'). submit_plan invariants: assertPlanRails moved verbatim to util/rails.ts, with default action text byte-identical to the old sentence; planRailText equals the old inline map for normalized arrays; checkPlanRails still returns exactly {ok:true} (checkArchitecture.test passes unchanged). Non-array affectedFiles/newFiles yield '' (no throw); missing project -> NOT_FOUND. No weakened/deleted tests. Not verified/deferred by design: docs/MCP_SERVER.md amend_plan_step refusal note is the governor's follow-up (file held by task-7d3428d1). Complexity pass: nothing worth cutting.",
+  "requiredCheckAtDone": null
 }
