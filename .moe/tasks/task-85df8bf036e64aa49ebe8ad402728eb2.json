@@ -71,8 +71,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -84,7 +84,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:35:53.599Z",
-  "updatedAt": "2026-11-03T02:29:46.430Z",
+  "updatedAt": "2026-11-03T02:30:59.215Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T02:19:02.854Z",
     "plannedStepCount": 4,
@@ -172,5 +172,48 @@
   },
   "planApprovedAt": "2026-11-03T02:23:35.721Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T02:24:36.531Z"
+  "workStartedAt": "2026-11-03T02:24:36.531Z",
+  "reviewStartedAt": "2026-11-03T02:29:59.738Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/chatStore.ts packages/moe-daemon/src/state/StateManager.ts packages/moe-daemon/src/tools/completeStep.ts packages/moe-daemon/src/tools/completeStep.test.ts docs/MCP_SERVER.md; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/completeStep.test.ts src/tools/chatSystemFeed.test.ts src/tools/governanceFeatures.test.ts src/tools/addComment.test.ts src/tools/reportBlocked.test.ts && npx vitest run'",
+    "exitCode": 0,
+    "outputTail": "Focused run: Test Files  5 passed (5) / Tests  150 passed (150)\nFull suite:  Test Files  229 passed (229) / Tests  6946 passed | 20 skipped (6966)\n   Start at  04:28:51\n   Duration  42.52s (tests 93%, import 4%, transform 3%)\nVERIFY-EXIT=0\n(git archive HEAD snapshot with this task's 5 files overlaid and cmp-checked; tsc --noEmit clean; run fresh 04:28Z after the last edit)",
+    "reportedAt": "2026-11-03T02:29:59.738Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/completeStep.test.ts",
+    "packages/moe-daemon/src/state/chatStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/completeStep.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "The daemon's 'Step N completed: <step text>' notice now echoes the step text but addresses no seat. sendMessage gained an optional parseMentions flag (chatStore.ts, mirrored on the StateManager wrapper). When it is false, no mentions are recorded, routingTargets is [] and the mention router is not called. postToGeneral and postSystemMessage take a trailing SystemPostOptions and forward it only when given, so every other caller's call shape is unchanged. completeStep.ts posts the step notice with parseMentions false. The collision heads-up, addComment relay and reportBlocked prefix tags are untouched and still route; their tests pass unchanged. A mention-less #general system line is already feed that agent reads skip, so the notice stays readable in the IDE but pages nobody. Tests (completeStep.test.ts, new describe 'moe.complete_step chat notice'): E1 the notice equals 'task-1: Step 1 completed: ' plus the full description, routingTargets [], stored mentions [], and chat_read returns no such line; E2 a plain postSystemMessage still records and routes its tag; E3 sendMessage with parseMentions false in the workers role channel routes to no seat. RED before the change: E1 and E3 failed, E2 passed (2 failed, 23 passed). Final: focused 5 files 150 tests pass; full daemon suite 229 files, 6946 passed, 20 skipped (baseline 6943, +3 new tests), all in a git-archive snapshot, never npm in the shared checkout. docs/MCP_SERVER.md has one added sentence in the complete_step notes. Follow-up candidates left unchanged: amendPlanStep's amended-text echo, qaReject's reason, requestReplan's reason, the claim notice's title. reportBlocked's prefix tags are deliberate.",
+  "commits": [
+    {
+      "sha": "1b3298363ffcb56a6652d3efd18a86b2363e4082",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T02:23:48Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T02:30:59.215Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T02:23:48Z",
+    "at": "2026-11-03T02:30:59.215Z"
+  }
 }
