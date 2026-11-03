@@ -29,33 +29,51 @@
     {
       "stepId": "step-2",
       "description": "chat_resync resolves the reference and caps the response (chatResync.ts).\n\n(a) Resolve the reference.\n- When params.channel is truthy, apply the same string check, resolution and notFound as step 1.\n- Place this after the limit/maxContentChars validation and BEFORE the first `state.updateWorker` (:73), so a refused resync clears no cursor. Today an unknown channel clears nothing and then throws an uncoded Error from chatStore.ts:296.\n- Use `channel.id` for the cursor delete (:69) and for the fetch (:78).\n\n(b) Cap the response.\n- Apply the cap after the fetch, in both the single-channel and the all-channel branch, and BEFORE the cursor loop (:91-96).\n- Keep the NEWEST messages that fit MAX_CHAT_RESPONSE_CHARS, the same trim chat_read does (chatRead.ts:140-151). Reuse the helper reversed: `capChatMessagesToResponseBudget([...messages].reverse(), maxContentChars).delivered.reverse()` (util/chatPayload.ts:88).\n- Do NOT call the helper unreversed. It keeps the OLDEST prefix (chat_wait's drain semantics), which would park the cursor on an old message and contradict DoD 2.\n- The helper always keeps at least one message, so a single oversized message is still returned alone.\n- Derive cursors only from the returned messages, so each one points at the newest message returned.\n- messagesCount reports the returned count.\n\n(c) Give the channel inputSchema description the step 1 wording.\n\nError handling: leave the workerId, limit and maxContentChars refusals as they are. A non-string channel is INVALID_INPUT, never a TypeError from resolveChannelRef's startsWith. An unresolvable channel is -32001 NOT_FOUND. The tests for this step are in steps 3 and 4.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatResync.ts"
       ],
-      "startedAt": "2026-11-03T19:35:00.615Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatResync.ts"
+      ],
+      "note": "chat_resync resolves the channel reference after limit/maxContentChars validation and before the first updateWorker (non-string -> INVALID_INPUT, unresolved -> NOT_FOUND, so a refusal clears no cursor); cursor delete and fetch key on channel.id. The window is capped to MAX_CHAT_RESPONSE_CHARS via capChatMessagesToResponseBudget on the reversed list (keeps newest, always >=1 message) in both single- and all-channel branches, before cursors are derived; messagesCount reports the returned count. Default payload (20 x ~1220 chars) is under the cap. Channel inputSchema description updated. Tests in steps 3-4.",
+      "startedAt": "2026-11-03T19:35:00.615Z",
+      "completedAt": "2026-11-03T19:35:21.514Z"
     },
     {
       "stepId": "step-3",
       "description": "Tests in chatChannelRef.test.ts for the three tools' channel references.\n\nFixture fix first:\n- Change the fixture Worker's `epicId: null` (:76) to `epicId: ''`, the fix d88f004d made in chatWait.test.ts. At HEAD a test-file typecheck fails on this line with TS2322.\n- Import chatWhoTool, chatJoinTool, chatResyncTool, activeChatWaiters (./chatWait.js) and MoeErrorCode (../util/errors.js).\n\nAdd describe blocks 'moe.chat_who', 'moe.chat_join' and 'moe.chat_resync' beside the existing ones, using the file's StateManager fixture and `channels` map.\n\nchat_who:\n- Call `read({ channel: channels.general, workerId: WORKER_ID })`, which saves the cursor under the id.\n- Then `who({ channel })` with channels.general, with 'general' and with '#general' must each list exactly [WORKER_ID]. Assert the ids, so an all-empty answer fails.\n- Register a waiter with `activeChatWaiters.set(WORKER_ID, { resolve(){}, unsubscribe(){}, timer: setTimeout(()=>{}, 60_000), channels: new Set([channels.governors]) })`, the workerType.test.ts:353-356 shape. It must be listed with source 'waiting' for '#governors'.\n- Clear any timer you set and delete the waiter in afterEach.\n\nchat_join:\n- `join({ channel: '#general', workerId: WORKER_ID })` returns channel === channels.general and posts exactly one system line `${WORKER_ID} joined #general` in #general.\n- A second join by 'general' posts no further line.\n\nchat_resync:\n- With two messages in #general and the cursor saved by read, `resync({ workerId: WORKER_ID, channel: '#general' })` returns both.\n- Afterwards the worker's chatCursors[channels.general] is the newest message id, and there is no '#general' key.\n\nRefusals:\n- who, join and resync each called with '#nope' reject toMatchObject({ code: MoeErrorCode.NOT_FOUND }).\n- After the resync refusal, the worker's chatCursors are deep-equal to their value before the call.\n- join with channel 5 rejects { code: MoeErrorCode.INVALID_INPUT }.\n\nEach new case fails on HEAD b5f40fee. The hunt repros in /mnt/d/moe-scratch/hunt-21d671c1/A/ show those failures.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatChannelRef.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatChannelRef.test.ts"
+      ],
+      "note": "chatChannelRef.test.ts: fixture epicId null -> '' (TS2322 fix); imports for who/join/resync, activeChatWaiters, MoeErrorCode; new describe blocks for moe.chat_who (id/name/#name list [WORKER_ID], waiter listed 'waiting' for '#governors', omitted/empty channel lists all, unknown -> NOT_FOUND incl. all-channel waiter, non-string -> INVALID_INPUT), moe.chat_join ('#general' joins and posts one line, idempotent across id/name/#name, '#nope' NOT_FOUND posts nothing, 5 -> INVALID_INPUT), moe.chat_resync ('#general' clears then sets cursor keyed by the id via updateWorker spy, other channel cursor kept, '#nope' NOT_FOUND with zero writes and cursors unchanged, 5 -> INVALID_INPUT). Run in step 5 gate.",
+      "startedAt": "2026-11-03T19:35:23.142Z",
+      "completedAt": "2026-11-03T19:36:11.114Z"
     },
     {
       "stepId": "step-4",
       "description": "Test in chatBudgets.test.ts for the chat_resync response budget.\n\nAdd the case 'caps chat_resync at the total response budget, keeping the newest messages', using setupChat().\n\nSetup:\n- Post 40 messages, each `${i} ${'x'.repeat(9000)}`.\n- Oracle: `chatReadTool` with { channel, limit: 40, maxContentChars: 0 } and no workerId.\n- Subject: `chatResyncTool` with { workerId: 'worker-chat', channel, limit: 40, maxContentChars: 0 }.\n\nAssert:\n- The summed chatMessageResponseCost(m, 0) over resync.messages is ≤ MAX_CHAT_RESPONSE_CHARS. Import both from ../util/chatPayload.js.\n- resync's message ids equal read's message ids, so both return the same newest window.\n- 0 < length < 40.\n- The last returned id is the 40th posted message's id.\n- messagesCount === messages.length.\n- worker-chat's chatCursors[channel] === that last id.\n\nAdd the all-channel variant (no channel): the total cost is ≤ MAX_CHAT_RESPONSE_CHARS, and the newest posted message is the last one returned.\n\nThe existing 'keeps chat_resync default payload smaller' case must stay green unchanged. It expects messagesCount 20, and 20 messages of about 1,000 chars is under the cap, so the cap must not trim at the default maxContentChars. This case fails on HEAD with { count: 40, chars: 368910 } against { count: 4, chars: 36892 }, per the hunt repro.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatBudgets.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatBudgets.test.ts"
+      ],
+      "note": "chatBudgets.test.ts: new describe 'chat_resync total response budget' with 'caps chat_resync at the total response budget, keeping the newest messages' (40 x 9000-char messages, maxContentChars 0: summed chatMessageResponseCost <= MAX_CHAT_RESPONSE_CHARS, ids equal chat_read's window, 0 < n < 40, last id is the 40th posted, messagesCount === length, cursor on last id) and an all-channel variant. Dropped the planned 'single message larger than the whole budget' assertion: sendMessage refuses a message over MAX_CHAT_MESSAGE_BYTES (10,240), so such a message cannot exist; the helper's keep-one rule stays covered by its own contract. Existing default-payload case untouched.",
+      "startedAt": "2026-11-03T19:36:12.048Z",
+      "completedAt": "2026-11-03T19:36:46.373Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification: run this one command, exactly, from the task worktree. It is the complete_task evidence, and the same command is checkRefs[0].\n\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/{chatWho,chatJoin,chatResync}.ts packages/moe-daemon/src/tools/{chatChannelRef,chatBudgets}.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatChannelRef.test.ts\",\"src/tools/chatBudgets.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{chatChannelRef,chatBudgets,chatRead.cursor,chatSystemFeed,chatDecision,workerType,registry}.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'`\n\nWhat it does: it snapshots HEAD plus the 5 owned files outside the shared checkout. The global rail forbids npm ci or test in place.\n\nExpected: `Test Files  7 passed (7)` and exit 0.\n\nMeasured while planning, on HEAD b5f40fee:\n- The full command exits 1 at `npx tsc -p tt.json` with chatChannelRef.test.ts(76,7) TS2322. Step 3 fixes that line.\n- Its vitest half alone passed 7 files and 123 tests.\n\nError handling for a red run: read the FAIL lines in ../v.log in the snapshot, fix the file of the step that owns it, and re-run the whole command. Never submit a narrowed subset as evidence.\n\nIf workerType.test.ts 'chat_who carries the type…' fails with NOT_FOUND chan-x, the prerequisite task-a4970220 has not landed. Stop and moe.report_blocked on task-a4970220. Do not edit workerType.test.ts: it is outside this row's files (DoD 3).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T19:36:49.241Z"
     },
     {
       "stepId": "step-6",
@@ -85,12 +103,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T19:10:57.784Z",
-  "updatedAt": "2026-11-03T19:35:00.615Z",
+  "updatedAt": "2026-11-03T19:36:49.241Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T19:12:59.296Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -104,7 +122,10 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T19:20:08.729Z",

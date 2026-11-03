@@ -119,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:20:35.156Z",
-  "updatedAt": "2026-11-03T19:15:45.503Z",
+  "updatedAt": "2026-11-03T19:36:51.936Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:34:40.391Z",
     "plannedStepCount": 6,
@@ -216,11 +216,10 @@
   "planApprovedAt": "2026-11-03T18:59:54.494Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-74d9e1c7@2026-11-03T18:34:39Z",
-    "at": "2026-11-03T19:00:51.248Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-03T18:59:53Z",
+    "at": "2026-11-03T19:36:51.936Z"
   },
   "workStartedAt": "2026-11-03T19:04:07.259Z",
   "reviewStartedAt": "2026-11-03T19:15:45.501Z",
@@ -237,5 +236,25 @@
     "packages/moe-daemon/src/tools/chatWait.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "chat_wait's entry and wake drains now apply the live wake's relevance rule. Outside the caller's channels filter, and in every scanned channel when there is no filter, they deliver only lines routed to the caller, plus any human line when there is no filter. A line counts as routed when MentionRouter.parseMentions over the current roster names the caller, or when it names nobody and was sent by system or human. Watched channels still deliver every line.\n- Skipped lines advance the channel's cursor through skipAfter/skipLead and clear unread when the channel was read to its end, so no later call delivers them.\n- A filtered channel reads past up to MAX_SKIP_PAGES = 10 full skip-only pages.\n- A skip-only entry drain writes its cursors before it blocks.\n- New export: chatWaitAdmits, shared with the live isRelevant.\n- Extra guard: a channel whose dropped line is off-bus keeps its plain cursor (unit row g).\n- The MCP wire shapes, the tool description and stored state are unchanged. docs/MCP_SERVER.md chat_wait Notes are updated.\nTests:\n- RED on c99801aa: exactly 7 rows fail (a-f plus the adapted :252), 28 pass; see comment-70c9b7cf.\n- Adapted rows: :252 is inverted; :364 now posts human fillers.\n- Rows for 06cf7baf, 5902a670 and 8b0b3edc are unchanged and pass.\n- 6 mutants checked, all killed.\n- Self-review, with parity and cursor invariants, in comment-35c8c490."
+  "completionSummary": "chat_wait's entry and wake drains now apply the live wake's relevance rule. Outside the caller's channels filter, and in every scanned channel when there is no filter, they deliver only lines routed to the caller, plus any human line when there is no filter. A line counts as routed when MentionRouter.parseMentions over the current roster names the caller, or when it names nobody and was sent by system or human. Watched channels still deliver every line.\n- Skipped lines advance the channel's cursor through skipAfter/skipLead and clear unread when the channel was read to its end, so no later call delivers them.\n- A filtered channel reads past up to MAX_SKIP_PAGES = 10 full skip-only pages.\n- A skip-only entry drain writes its cursors before it blocks.\n- New export: chatWaitAdmits, shared with the live isRelevant.\n- Extra guard: a channel whose dropped line is off-bus keeps its plain cursor (unit row g).\n- The MCP wire shapes, the tool description and stored state are unchanged. docs/MCP_SERVER.md chat_wait Notes are updated.\nTests:\n- RED on c99801aa: exactly 7 rows fail (a-f plus the adapted :252), 28 pass; see comment-70c9b7cf.\n- Adapted rows: :252 is inverted; :364 now posts human fillers.\n- Rows for 06cf7baf, 5902a670 and 8b0b3edc are unchanged and pass.\n- 6 mutants checked, all killed.\n- Self-review, with parity and cursor invariants, in comment-35c8c490.",
+  "commits": [
+    {
+      "sha": "5681b6dbd53087ba4bf3d938d1d4104fc65f55a1",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T18:59:53Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/chatWait.test.ts",
+        "packages/moe-daemon/src/tools/chatWait.ts",
+        "packages/moe-daemon/src/util/chatBacklog.ts"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T19:36:51.936Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
