@@ -57,20 +57,25 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once, fresh, after steps 1-3 (DoD 3; it also re-proves DoD 1 and 2).\n\nFrom this task's worktree in WSL, run exactly this, the three checkRefs joined with ' && ':\ncd \"$(git rev-parse --show-toplevel)\" && ( bash -n scripts/moe-agent.sh && bash -n scripts/tests/postflight.sh && for f in scripts/moe-agent.ps1 scripts/tests/postflight.ps1; do powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$PWD/$f\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 || exit 1; done && [ \"$(grep -c '^    resume_rule=\"' scripts/moe-agent.sh)\" = 1 ] && R=$(sed -n 's/^    resume_rule=\"\\(.*\\)\"$/\\1/p' scripts/moe-agent.sh) && [ ${#R} -gt 400 ] && for f in scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do grep -qF -- \"$R\" \"$f\" || { echo \"rule differs: $f\"; exit 1; }; done && ! grep -nF 'no git commands' scripts/moe-agent.sh scripts/moe-agent.ps1 && echo \"ParseFile ok; resume rule ${#R} chars in 4 files\" && bash scripts/tests/parity-check.sh ) && cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d /mnt/d/moe-scratch/v-b5c8fd34.XXXXXX) && git ls-files -z scripts | tar --null -T - -cf - | tar -x -C \"$S\" && ( cd \"$S\" && L=\"$S/postflight-sh.log\" && { env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh > \"$L\" 2>&1; rc=$?; }; printf 'postflight.sh exit=%s ok-lines=%s SKIP-lines=%s log=%s\\n' \"$rc\" \"$(grep -c '\\] ok' \"$L\")\" \"$(grep -c 'SKIP' \"$L\")\" \"$L\"; grep -F '[landing resume]' \"$L\"; grep -x 'PASS postflight.sh' \"$L\"; [ \"$rc\" = 0 ] && grep -qx 'PASS postflight.sh' \"$L\" && ! grep -q '^SKIP' \"$L\" ) && cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d /mnt/d/moe-scratch/v-b5c8fd34.XXXXXX) && git ls-files -z scripts | tar --null -T - -cf - | tar -x -C \"$S\" && ( cd \"$S\" && L=\"$S/postflight-ps1.log\" && { WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\" > \"$L\" 2>&1; rc=$?; }; tr -d '\\r' < \"$L\" > \"$L.txt\"; printf 'postflight.ps1 exit=%s ok-lines=%s SKIP-lines=%s log=%s\\n' \"$rc\" \"$(grep -ac '\\] ok' \"$L.txt\")\" \"$(grep -ac 'SKIP' \"$L.txt\")\" \"$L.txt\"; grep -aF '[landing resume]' \"$L.txt\"; grep -ax 'PASS postflight.ps1' \"$L.txt\"; [ \"$rc\" = 0 ] && grep -aqx 'PASS postflight.ps1' \"$L.txt\" && ! grep -aq '^SKIP' \"$L.txt\" )\n\nWhat each piece proves:\n- Piece 1 (about 20 s): bash -n on both sh files; ParseFile on both ps1 files through Windows PowerShell 5.1 interop; exactly one `resume_rule=\"` line, longer than 400 chars, present verbatim in moe-agent.ps1, postflight.sh and postflight.ps1 (DoD 1, \"identical wording\"); no 'no git commands' left in either wrapper; parity-check.sh.\n- Piece 2 (about 25-35 min): postflight.sh, with MOE_*/CLAUDE* unset.\n- Piece 3 (about 40-45 min): postflight.ps1 under PS 5.1.\n- Pieces 2 and 3 run from a /mnt/d/moe-scratch snapshot built from the WORKING TREE with git ls-files | tar. That is the form the new rule tells workers to use; it stays correct mid-merge, and Windows PowerShell can reach /mnt/d.\n- Each piece passes only on exit 0, its PASS line, and no line starting with SKIP.\n\nThe outputTail you submit must carry: the ParseFile/rule line, PASS parity-check.sh, both `postflight.* exit=0 ok-lines=N SKIP-lines=M` lines (DoD 3's counts), the [landing resume] lines and both PASS lines. Name every line that the SKIP count covers.\n\nRunning it: the chain takes over an hour, and the Bash tool caps one call at 10 min.\n- Write the command into a runner script outside the checkout that logs to a file and ends by printing `EXIT=$?`.\n- Start it detached with setsid nohup and record its PID.\n- Poll with `timeout 590 tail --pid=<pid> -f /dev/null`, or until-grep the EXIT= line. Never sleep in the foreground.\n- Kill only your own recorded PID (global rail 2).\n\nWhen a run fails:\n- Read the log the summary names, and fix the cause only inside steps 1-3's four files. Never weaken an assertion.\n- A failure that also reproduces on a clean snapshot of `git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"` is pre-existing. Post that evidence as a task comment for the governor, and report_blocked only if it blocks DoD 3.\n- If any byte of the four files changes after the run, re-run the whole command and submit the last output.\n\nArchitect dry run on a scratch clone of 12d7bb62 plus this change: piece 1 passed; a one-word drift in the ps1 rule failed it (\"rule differs: scripts/moe-agent.ps1\"). The results of pieces 2 and 3 will be posted as a task comment.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T01:25:56.524Z"
+      "note": "Ran the plan's joined verification command once, fresh, detached (runner /mnt/d/moe-scratch/b5c8fd34-run/runner.sh, 01:26:14Z to 02:37:35Z, log verify.log, EXIT=0). Output: 'ParseFile ok; resume rule 654 chars in 4 files'; 'PASS parity-check.sh'; 'postflight.sh exit=0 ok-lines=75 SKIP-lines=0'; '[landing resume] LANDING-RETRY and LANDING-CONFLICT prompts carry the merged-tree verification rule' + '[landing resume] ok' + 'PASS postflight.sh'; 'postflight.ps1 exit=0 ok-lines=69 SKIP-lines=0' (PS 5.1); the same two [landing resume] lines + 'PASS postflight.ps1'. SKIP-lines=0 in both legs, so there is no SKIP line to name. The two legs ran from /mnt/d/moe-scratch snapshots built from the working tree with git ls-files | tar. sha256 of the four files (moe-agent.sh, moe-agent.ps1, postflight.sh, postflight.ps1) was recorded before the run and re-checked after: unchanged. No file was modified in this step.",
+      "startedAt": "2026-11-03T01:25:56.524Z",
+      "completedAt": "2026-11-03T02:40:49.685Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, once, as the final step. Load the adversarial-self-review skill.\n\nRead the diff: `git diff \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\" -- scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1`. Expect about +159/-5 in only these four files, under the 400 net-LOC cap.\n\nCheck:\n- The rule is one line, byte-identical in all four files (piece 1), with no backtick, `$`, double quote or apostrophe. Line 1 of each prompt is unchanged, and postflight-worktree.cjs promptOf still sees it.\n- A gate or contention retry whose target did not move merges nothing ('Already up to date', no MERGE_HEAD). \"HEAD can lack\" is still true then, and the snapshot advice is still right: the working tree is HEAD plus your edits.\n- The allowlist is exact, and every listed command is read-only. git status may refresh only the index stat cache; it never changes a stage or MERGE_HEAD.\n- Harness:\n  - (a) is the negative control. MERGE_HEAD is asserted in (b) and (c). `merge --abort` is fixture-only cleanup. The repo has its own identity.\n  - The .ps1 fake CLI ends with `exit 0`.\n  - The new names (lr_*, LR_*, *-Lr*, lr-project, landing-cli.ps1, FAKE_LR_PROMPT) existed nowhere before; the architect grepped.\n  - Each case uses its own repo under the harness temp dir.\n- Two seats at once: the rule is a constant, so there is nothing to race.\n- Windows: the .ps1 fake CLI runs under the same execution policy as the wrapper .ps1, which the harness already launches with -File.\n\nError handling and tests: confirm that every new fixture step fails loudly (lr_fail / Stop-Lr / Invoke-LrGit throws), and that no assertion was loosened to pass.\n\nOut of scope, already filed: docs/roles/worker.reference.md's LANDING rule (\"use no git command\") and its vendored copy in initFiles.ts belong to task-ee85bfb1a3e3418b8555ec97ae1afd88, which dependsOn this task. Do not edit docs here.\n\nRecord the findings in the complete_step notes. If you change any byte, re-run step 4's command and submit that output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review, no byte changed (so step 4's output stands; the four files' sha256 matched before and after the run). Diff vs base 12d7bb62: moe-agent.ps1 +5/-3, moe-agent.sh +6/-4, postflight.ps1 +92/-0, postflight.sh +60/-0 = +163/-7 in exactly those four files, under the 400 net-LOC cap. Findings: (1) Rule: 654 chars, ONE line, found once by grep -F in each of the four files, 0 backtick/$/double-quote/apostrophe, so neither wrapper double-quoted string expands or ends early; both prompts carry it verbatim (the harnesses assert it). Line 1 of each prompt (LANDING-CONFLICT: <paths> / LANDING-RETRY: <reason>) is untouched; postflight-worktree.cjs promptOf and the [WARN] echo still read it. 'no git commands' is gone from both wrappers. ps1 files keep their BOM, all four have 0 CR. (2) No-move retry: a gate/contention retry whose target did not move merges nothing (no MERGE_HEAD); 'HEAD can lack' stays true and the snapshot advice stays right, since the working tree is HEAD plus the worker's edits. (3) Allowlist: status, diff, log, show, ls-files, rev-parse are read-only; git status may only refresh the index stat cache and never touches a stage or MERGE_HEAD. (4) Concurrency/inputs: the rule is a constant, no input reaches it, nothing to race between two seats; the added prompt text is 654 chars against PROMPT_ARGV_MAX_BYTES=100000 (sh) and the ps1 context-file route for quoted/long prompts is handled by the fake CLI. (5) Harness: (a) plain is the negative control; MERGE_HEAD asserted in (b) and (c); merge --abort is fixture-only; the repo carries its own identity; the ps1 fake CLI ends with exit 0; every fixture step fails loudly (lr_fail / Stop-Lr / Invoke-LrGit throws) and no assertion was loosened; the new names (lr_*, LR_*, *-Lr*, lr-project, landing-cli.ps1, FAKE_LR_PROMPT) occur in no other file (git grep). RED/GREEN proven: HEAD's wrappers fail (b) on both engines. Theoretical, not changed (any byte change would force the ~70 min re-run): the rule's 'the paths git ls-files lists' snapshot form could, in a delete/modify conflict where the file is absent from the worktree, make a naive tar error on that path; the worker is told to keep every other command unchanged and say so in the evidence, so the substitution stays visible. Out of scope, already filed: docs/roles/worker.reference.md and initFiles.ts ('use no git command') belong to task-ee85bfb1a3e3418b8555ec97ae1afd88.",
+      "startedAt": "2026-11-03T02:40:54.144Z",
+      "completedAt": "2026-11-03T02:41:23.477Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -89,12 +94,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T00:31:10.080Z",
-  "updatedAt": "2026-11-03T01:25:56.524Z",
+  "updatedAt": "2026-11-03T02:42:39.235Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T00:44:10.024Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -107,7 +112,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T01:18:58.459Z",
@@ -197,17 +204,45 @@
       "treeId": "24cbb3b764f58469e3d601876deb310905b9289f",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "f7b077f77fbc3e00c8dc3c85c3a88dff60e6d884",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T01:22:03Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T02:42:38.336Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
+    "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
-    "scripts/moe-agent.sh"
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-33f67e5b@2026-11-03T01:18:59Z",
-    "at": "2026-11-03T01:21:27.192Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T01:22:03Z",
+    "at": "2026-11-03T02:42:39.235Z"
+  },
+  "reviewStartedAt": "2026-11-03T02:41:57.914Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && ( bash -n scripts/moe-agent.sh && bash -n scripts/tests/postflight.sh && for f in scripts/moe-agent.ps1 scripts/tests/postflight.ps1; do powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$PWD/$f\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 || exit 1; done && [ \"$(grep -c '^    resume_rule=\"' scripts/moe-agent.sh)\" = 1 ] && R=$(sed -n 's/^    resume_rule=\"\\(.*\\)\"$/\\1/p' scripts/moe-agent.sh) && [ ${#R} -gt 400 ] && for f in scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do grep -qF -- \"$R\" \"$f\" || { echo \"rule differs: $f\"; exit 1; }; done && ! grep -nF 'no git commands' scripts/moe-agent.sh scripts/moe-agent.ps1 && echo \"ParseFile ok; resume rule ${#R} chars in 4 files\" && bash scripts/tests/parity-check.sh ) && cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d /mnt/d/moe-scratch/v-b5c8fd34.XXXXXX) && git ls-files -z scripts | tar --null -T - -cf - | tar -x -C \"$S\" && ( cd \"$S\" && L=\"$S/postflight-sh.log\" && { env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh > \"$L\" 2>&1; rc=$?; }; printf 'postflight.sh exit=%s ok-lines=%s SKIP-lines=%s log=%s\\n' \"$rc\" \"$(grep -c '\\] ok' \"$L\")\" \"$(grep -c 'SKIP' \"$L\")\" \"$L\"; grep -F '[landing resume]' \"$L\"; grep -x 'PASS postflight.sh' \"$L\"; [ \"$rc\" = 0 ] && grep -qx 'PASS postflight.sh' \"$L\" && ! grep -q '^SKIP' \"$L\" ) && cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d /mnt/d/moe-scratch/v-b5c8fd34.XXXXXX) && git ls-files -z scripts | tar --null -T - -cf - | tar -x -C \"$S\" && ( cd \"$S\" && L=\"$S/postflight-ps1.log\" && { WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\" > \"$L\" 2>&1; rc=$?; }; tr -d '\\r' < \"$L\" > \"$L.txt\"; printf 'postflight.ps1 exit=%s ok-lines=%s SKIP-lines=%s log=%s\\n' \"$rc\" \"$(grep -ac '\\] ok' \"$L.txt\")\" \"$(grep -ac 'SKIP' \"$L.txt\")\" \"$L.txt\"; grep -aF '[landing resume]' \"$L.txt\"; grep -ax 'PASS postflight.ps1' \"$L.txt\"; [ \"$rc\" = 0 ] && grep -aqx 'PASS postflight.ps1' \"$L.txt\" && ! grep -aq '^SKIP' \"$L.txt\" )",
+    "exitCode": 0,
+    "outputTail": "start 2026-11-03T01:26:14Z\nParseFile ok; resume rule 654 chars in 4 files\nPASS parity-check.sh\npostflight.sh exit=0 ok-lines=75 SKIP-lines=0 log=/mnt/d/moe-scratch/v-b5c8fd34.wgpIsa/postflight-sh.log\n[landing resume] LANDING-RETRY and LANDING-CONFLICT prompts carry the merged-tree verification rule\n[landing resume] ok\nPASS postflight.sh\npostflight.ps1 exit=0 ok-lines=69 SKIP-lines=0 log=/mnt/d/moe-scratch/v-b5c8fd34.6bZY97/postflight-ps1.log.txt\n[landing resume] LANDING-RETRY and LANDING-CONFLICT prompts carry the merged-tree verification rule\n[landing resume] ok\nPASS postflight.ps1\nend 2026-11-03T02:37:35Z\nEXIT=0",
+    "reportedAt": "2026-11-03T02:41:57.914Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Fixed the worktree LANDING-CONFLICT/LANDING-RETRY resume prompt. Both lines now drop 'no git commands' and end with one 654-char rule, byte-identical in scripts/moe-agent.sh (worktree_resume) and scripts/moe-agent.ps1 (Invoke-MoeWorktreeResume): the wrapper commits the merge only on landing, so HEAD can lack the merged target; build any HEAD-based snapshot (git archive HEAD, a clone at HEAD) from the worktree's tracked files (the paths git ls-files lists), keep other commands unchanged and say so in the evidence; git stays read-only (only status, diff, log, show, ls-files, rev-parse; every write named and forbidden). Line 1 of each prompt, the merge/fetch/stop flow and every MOE_ code are unchanged. New [landing resume] blocks in scripts/tests/postflight.sh and postflight.ps1 (inserted before [worktree reuse]) run 3 seat runs: plain (no rule, no LANDING- line), retry ('LANDING-RETRY: gate', rule, no 'no git commands', MERGE_HEAD set), conflict ('LANDING-CONFLICT: src/a.txt', rule, MERGE_HEAD set, src/a.txt unmerged). RED/GREEN: 12d7bb62's wrappers fail at (retry) on both engines; the fixed wrappers pass. Fresh run of the plan's joined verification (01:26:14Z-02:37:35Z, EXIT=0): ParseFile ok + rule 654 chars in 4 files; PASS parity-check.sh; postflight.sh exit=0 ok-lines=75 SKIP-lines=0; postflight.ps1 (PS 5.1) exit=0 ok-lines=69 SKIP-lines=0; both [landing resume] ok and both PASS lines. sha256 of the four files identical before, after and at completion. Diff +163/-7 in exactly four files; docs untouched (worker.reference.md / initFiles.ts alignment is task-ee85bfb1a3e3418b8555ec97ae1afd88)."
 }
