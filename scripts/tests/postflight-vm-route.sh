@@ -72,6 +72,14 @@ vmr_run() {
   set -e
 }
 vmr_fail() { cat "$OUT" >&2 || true; echo "VM ROUTE FAILED ($1): $2" >&2; exit 1; }
+# vmr_one_reason ROW REASON: a skipped taskless iteration prints exactly ONE
+# MOE_TASKLESS_NO_LAUNCH line, and it names REASON.
+vmr_one_reason() {
+  local n
+  n=$(grep -c 'MOE_TASKLESS_NO_LAUNCH reason=' "$OUT" || true)
+  [ "$n" = 1 ] && grep -q "^MOE_TASKLESS_NO_LAUNCH reason=$2 role=" "$OUT" \
+    || vmr_fail "$1" "expected exactly one MOE_TASKLESS_NO_LAUNCH reason=$2 line, saw $n"
+}
 # The tools the fake proxy saw, one per line, in call order.
 vmr_calls() { [ ! -f "$CALLS" ] || "$NODE" -e 'for (const l of require("fs").readFileSync(process.argv[1],"utf8").split("\n")) if (l) console.log(JSON.parse(l).tool)' "$CALLS"; }
 
@@ -133,7 +141,15 @@ for t in "${T_ROWS[@]}"; do
   vmr_normalized > "$TMP_DIR/T-${t%%|*}.json"
   diff -u "$TMP_DIR/T-base.json" "$TMP_DIR/T-${t%%|*}.json" >&2 || vmr_fail "T-${t%%|*}" "the CLI launch differs from legacy's"
 done
-echo "[vm route] ok today's path (legacy x2, observe, unreadable, refuse, unknown, fail, 2 malformed)"
+# Legacy taskless lines: nothing to answer prints one reason=idle and no CLI; a
+# routed mention launches the notification-only CLI and prints no no-launch line.
+vmr_run T-taskless-idle worker claude "$LEGACY" - - FAKE_CLAIM_MODE=idle
+[ "$VMR_CODE" = 0 ] && [ ! -e "$REC" ] || vmr_fail T-taskless-idle "exit $VMR_CODE or the CLI ran"
+vmr_one_reason T-taskless-idle idle
+vmr_run T-taskless-mention worker claude "$LEGACY" - - FAKE_CLAIM_MODE=idle FAKE_MENTION=1
+vmr_launched T-taskless-mention
+! grep -q 'MOE_TASKLESS_NO_LAUNCH' "$OUT" || vmr_fail T-taskless-mention 'a launching iteration printed a no-launch line'
+echo "[vm route] ok today's path (legacy x2, observe, unreadable, refuse, unknown, fail, 2 malformed, taskless idle and mention)"
 
 # vmr_refused ROW CODE DETAIL: exit 1 with exactly one MOE_VERIFIED_LOCAL_ line,
 # `[ERROR] CODE: DETAIL` byte for byte; one readiness read, followed only by the
@@ -260,7 +276,7 @@ const raw=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'', output=fs.readFil
 const rows=raw.trim().split('\n').filter(Boolean).map(JSON.parse), seats=rows.filter(r=>r.tool==='agent-seat');
 assert.equal(fs.existsSync(rec),false,'host CLI ran'); assert.ok(!raw.includes(token)&&!output.includes(token),'token leaked');
 const job=seats.find(r=>r.args.cmd==='seat-job');
-assert.deepEqual(seats.map(r=>r.args.cmd),mode==='shared'?['seat-start','seat-stop']:mode==='none'?[]:['seat-start','seat-job','seat-stop']);
+assert.deepEqual(seats.map(r=>r.args.cmd),mode==='shared'||mode==='taskless'?['seat-start','seat-stop']:mode==='none'?[]:['seat-start','seat-job','seat-stop']);
 for(const r of seats) for(const k of ['ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY']) assert.ok(!(k in r.args.env),k);
 const claims=rows.filter(r=>r.tool==='claim_next_task');
 if(mode==='none') { assert.equal(claims.length,0); process.exit(0); }
@@ -477,6 +493,19 @@ kill -INT "$pid"
 wait "$VMJ_PID"
 kill "$watchdog" 2>/dev/null || true; wait "$watchdog" 2>/dev/null || true
 [ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail VR-sigint 'INT did not exit 0'; vmj_rows sigint
+echo '[seat job] VR-taskless: one accurate no-launch reason, no host CLI'
+VMR_ARGS=(--no-loop --poll-interval 0)
+vmr_run VR-taskless worker claude "$READY" on 0 FAKE_CLAIM_MODE=idle FAKE_MENTION=1
+[ "$VMR_CODE" = 0 ] || vmr_fail VR-taskless "exit $VMR_CODE"
+vmr_one_reason VR-taskless vm-route; vmj_rows taskless
+vmr_run VR-taskless-teamless worker claude "$READY" on 0 FAKE_CLAIM_MODE=idle FAKE_MENTION=1 FAKE_JOIN_FULL=1
+[ "$VMR_CODE" = 1 ] && [ "$(grep -c MOE_SEAT_UNREGISTERED "$OUT")" = 1 ] || vmr_fail VR-taskless-teamless "exit $VMR_CODE, expected the one-shot teamless exit 1"
+# A seat whose join failed reads no chat, so it has no routed mention: the legacy
+# teamless rule skipped first and its reason stands, once.
+vmr_one_reason VR-taskless-teamless teamless; vmj_rows taskless
+vmr_run VR-taskless-idle worker claude "$READY" on 0 FAKE_CLAIM_MODE=idle
+[ "$VMR_CODE" = 0 ] || vmr_fail VR-taskless-idle "exit $VMR_CODE"
+vmr_one_reason VR-taskless-idle idle; vmj_rows taskless
 echo '[seat job] VR-reload: taskless mentions never launch, both instances stopped'
 COPY="$TMP_DIR/reload"; mkdir -p "$COPY"; cp -R "$ROOT_DIR/scripts" "$COPY/"
 git -C "$COPY" init -q -b main; git -C "$COPY" add scripts; git -C "$COPY" commit -qm wrapper
@@ -487,6 +516,8 @@ printf '\n# committed reload test\n' >> "$COPY/scripts/moe-agent.sh"
 git -C "$COPY" add scripts/moe-agent.sh; git -C "$COPY" commit -qm reload
 vmj_wait seat-start 2; kill -TERM "$pid"; wait "$VMJ_PID"
 [ "$(cat "$TMP_DIR/bg.code")" = 0 ] && grep -q 'MOE_TASKLESS_NO_LAUNCH reason=vm-route' "$OUT" && [ ! -e "$REC" ] || vmr_fail VR-reload 'taskless host launch or no reload'
+[ "$(grep -c 'MOE_TASKLESS_NO_LAUNCH reason=' "$OUT" || true)" = "$(grep -c 'MOE_TASKLESS_NO_LAUNCH reason=vm-route ' "$OUT" || true)" ] \
+  || vmr_fail VR-reload 'a taskless iteration printed a reason other than vm-route'
 "$NODE" - "$PROJECT/.moe/evidence-rpcs.jsonl" <<'JS'
 const fs=require('fs'),a=require('node:assert/strict'),r=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(JSON.parse);
 const s=r.filter(x=>x.tool==='agent-seat'); a.deepEqual(s.map(x=>x.args.cmd),['seat-start','seat-stop','seat-start','seat-stop']);
@@ -494,7 +525,7 @@ const d=r.filter(x=>x.tool==='deregister_worker'); a.equal(d[0].args.reason,'wra
 for(let i=0;i<2;i++){a.ok(r.indexOf(s[i*2+1])<r.indexOf(d[i])); const v=s[i*2+1].args.argv; a.equal(v[v.indexOf('--instance')+1],s[i*2].args.instance);}
 a.notEqual(s[0].args.instance,s[2].args.instance);
 JS
-echo '[seat job] PASS VR-happy, nonzero, R2, noclaim, qa-shared, protected, shared, qa, sigint, reload'
+echo '[seat job] PASS VR-happy, nonzero, R2, noclaim, qa-shared, protected, shared, qa, sigint, taskless, taskless-teamless, taskless-idle, reload'
 )
 
 # --- [vm candidate] CQ-M07m2: land_vm_candidate turns a VM job's admitted tree

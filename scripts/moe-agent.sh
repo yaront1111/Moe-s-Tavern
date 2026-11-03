@@ -11031,7 +11031,7 @@ $PROMPT_BODY"
     # the one taskless launch with nothing to answer: the probe (its prompt is
     # NOTIFICATION_PROMPT above) shows whether the CLI starts again, and the
     # outer loop's launch-failure backoff paces the probes.
-    MOE_SKIP_LAUNCH=false
+    MOE_SKIP_LAUNCH=false; VM_TASKLESS_SKIP=false
     if [ "$AUTO_CLAIM" = true ] && { [ "$PREFLIGHT_NO_TASK" = true ] || [ "$PREFLIGHT_CLAIM_FAILED" = true ]; } \
         && [ "$PREFLIGHT_OK" != true ] && [ "$ROLE" != "governor" ]; then
         if [ "$LAUNCH_OUTAGE" = true ]; then
@@ -11043,8 +11043,7 @@ $PROMPT_BODY"
     fi
 
     if [ "$VM_ROUTE" = true ] && [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$PREFLIGHT_OK" != true ] || [ -z "$PREFLIGHT_TASK_ID" ]; }; then
-        MOE_SKIP_LAUNCH=true; LAUNCH_PROBE=false
-        echo "MOE_TASKLESS_NO_LAUNCH reason=vm-route role=$ROLE worker=$WORKER_ID - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job."
+        MOE_SKIP_LAUNCH=true; LAUNCH_PROBE=false; VM_TASKLESS_SKIP=true
     fi
     if [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$CLI_TYPE" = claude ] || [ "$CLI_TYPE" = codex ]; }; then
         # Settings can change between tasks in a long-lived wrapper.
@@ -11068,7 +11067,13 @@ $PROMPT_BODY"
     start_heartbeat_sidecar "$WORKER_ID"
 
     if [ "$MOE_SKIP_LAUNCH" = true ]; then
-        if [ "$PREFLIGHT_CLAIM_FAILED" = true ]; then
+        # One reason per skipped iteration. vm-route comes first because only the
+        # route stopped a launch the legacy rules allow (a routed mention, a
+        # claim-failed or teamless seat with mentions, an unparseable claim);
+        # when a legacy rule skipped first, its reason stands.
+        if [ "$VM_TASKLESS_SKIP" = true ]; then
+            echo "MOE_TASKLESS_NO_LAUNCH reason=vm-route role=$ROLE worker=$WORKER_ID - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job."
+        elif [ "$PREFLIGHT_CLAIM_FAILED" = true ]; then
             echo "MOE_TASKLESS_NO_LAUNCH reason=claim-failed role=$ROLE worker=$WORKER_ID - the claim RPC is unreachable; no CLI is launched without a task bound."
         elif seat_is_teamless; then
             echo "MOE_TASKLESS_NO_LAUNCH reason=teamless role=$ROLE worker=$WORKER_ID - no task claimed and this seat has NO team (moe.join_team: $TEAM_JOIN_LAST_ERROR), so claims skip every epic+status a live worker already holds; the join is retried before the next claim."
