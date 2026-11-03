@@ -75,8 +75,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,7 +91,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:44:42.438Z",
-  "updatedAt": "2026-11-03T23:07:45.177Z",
+  "updatedAt": "2026-11-03T23:09:30.601Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:48:23.850Z",
@@ -101,7 +101,9 @@
     "firstClaimAt": "2026-11-03T23:00:54.756Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T23:09:00.002Z",
+    "wallClockMs": 485246
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -215,9 +217,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T23:02:44Z",
-    "at": "2026-11-03T23:07:14.337Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T23:07:27Z",
+    "at": "2026-11-03T23:09:30.601Z"
+  },
+  "completedAt": "2026-11-03T23:09:00.002Z",
+  "reviewCompletedAt": "2026-11-03T23:09:00.002Z",
+  "reviewSummary": "Reviewed completion 80ea39d0 (contained in moe/work-2026-10-24), 3 declared paths, +46/-2 (net 44). DIFF: submitPlan.ts timer callback reads state.project?.settings?.approvalMode inside runExclusive after the AWAITING_APPROVAL re-check and returns silently unless SPEED/TURBO (CONTROL/unset withheld); return still passes the existing finally with its own-timer identity check; no new write/activity/message/throw. Docs: only the Mode switch bullet in MCP_SERVER.md ('already fired'). Tests: approvalModeSwitch.test.ts adds fireTimerBehind helper + queued-CONTROL case (stays AWAITING_APPROVAL, no approvedPlanRevision, no PLAN_AUTO_APPROVED, still none after 4x delay) + queued-TURBO case (approved once, bound to submitted revision); no existing test removed or weakened. RE-RAN task.verification from a git archive HEAD snapshot outside the repo (/tmp/tmp.4Y5JhbCIqB): docs grep ok, npm ci, tsc --noEmit clean, vitest 5 files / 215 tests passed, exit 0. MUTANT: overlaid pre-fix submitPlan.ts (80ea39d0^) in the snapshot: only the queued-CONTROL case fails (row went WORKING), 1 failed/8 passed; fixed code 9/9. DoD 1 and 2 and the contract acceptance criteria are met. Not re-run by me: worker-reported qualityGate (parity-check + lint); the diff touches no scripts or role docs. Ponytail: nothing to cut. Non-blocking: the CONTROL test does not assert absence of every other activity/message on the withheld path.",
+  "requiredCheckAtDone": null
 }
