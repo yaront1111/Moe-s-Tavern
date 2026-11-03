@@ -659,6 +659,8 @@ function shLeaseScript(fx) {
     '    printf \'%s\' "${line:-{\\"rotation\\":false,\\"reason\\":null\\}}"',
     '}',
     'sleep() { printf \'%s\\n\' "$1" >> "$SLEEP_LOG"; }',
+    // get_account_lease sleeps through the real idle_wait (d94c095f), which calls the stub above.
+    between(launcherSource('sh'), '# An externally killed idle/backoff sleep must not end the seat under set -e', '# moe_rpc TOOL ARGS_JSON'),
     block,
     'get_account_lease',
     'printf \'LEASED=%s\\n\' "$ACCOUNT_LEASED_ID"',

@@ -8851,6 +8851,7 @@ function Clear-MoeAccountLease {
 }
 
 function Get-MoeAccountLease {
+    $script:AccountLeaseWaited = $false
     if (-not (Test-Path -LiteralPath $accountHelper)) {
         Write-Host "[account] MOE_ACCOUNT_LEASE_UNAVAILABLE (moe-account-lease.mjs is missing next to this wrapper) - launching without rotation." -ForegroundColor Yellow
         return
@@ -8900,6 +8901,7 @@ function Get-MoeAccountLease {
             if ($escalated.Add($f[1])) {
                 Send-MoeGeneralChat "@governors ${WorkerId}: MOE_ACCOUNT_UNTRUSTED - account $($f[1]) does not trust project $projectPath and Moe could not grant it ($($t[2])). The interactive seat waits instead of parking at Claude's folder-trust dialog. Fix: start claude once in $projectPath under that account's folder (claude-accounts/$($f[1])) and accept the trust dialog."
             }
+            $script:AccountLeaseWaited = $true
             Start-Sleep -Seconds $trustSec
             continue
         }
@@ -8907,6 +8909,7 @@ function Get-MoeAccountLease {
             $waitSec = 0
             if (-not [int]::TryParse($f[1], [ref]$waitSec) -or $waitSec -lt 1) { $waitSec = 60 }
             Write-Host "[account] MOE_ACCOUNT_WAIT retry_in=${waitSec}s next_reset=$($f[2]) - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)" -ForegroundColor Yellow
+            $script:AccountLeaseWaited = $true
             Start-Sleep -Seconds $waitSec
             continue
         }
@@ -8918,6 +8921,28 @@ function Get-MoeAccountLease {
         Write-Host "[account] MOE_ACCOUNT_LEASE_UNAVAILABLE ($why) - launching without rotation." -ForegroundColor Yellow
         return
     }
+}
+
+# After a lease that WAITED (every account spent, or an untrusted account), the
+# attempt pre-flight pinned before the wait may be gone: a release during the
+# wait (the REVIEW self-heal, a governor) closes it and a peer's claim
+# supersedes it. A CLI launched then carries the pre-wait prompt and a pin the
+# proxy stamps on every fenced call, so each is refused ATTEMPT_SUPERSEDED
+# (task-a7d02ec3). $true: launch as before (no wait, nothing pinned, or the pin
+# is still this seat's current attempt). $false: launch nothing; this session's
+# live-session marker is dropped, the resume attempt given back, and the caller
+# re-runs pre-flight at once ($script:AccountRelaunch also keeps a -NoLoop run
+# going) for a fresh claim, context and pin. Twin: account_wait_recheck.
+function Test-MoeAccountWaitAttempt {
+    if (-not $script:AccountLeaseWaited) { return $true }
+    if (-not $script:MoeAttemptId -or $null -eq $script:MoeAttemptGeneration) { return $true }
+    if (Read-MoeAttempt $preflightTaskId $script:MoeAttemptId $script:MoeAttemptGeneration) { return $true }
+    Write-Host "[account] MOE_ACCOUNT_WAIT_STALE_ATTEMPT task=$preflightTaskId attempt=$($script:MoeAttemptId) generation=$($script:MoeAttemptGeneration) ($($script:MoeAttemptReadError)) - the claim ended while this seat waited for an account; not launching the pre-wait prompt, re-running pre-flight now." -ForegroundColor Yellow
+    if ($moeGit) { Remove-MoeLiveMarker $moeGit.GitDir $preflightTaskId }
+    Clear-MoeAccountLease
+    if ($script:ResumeAttempts -gt 0) { $script:ResumeAttempts-- }
+    $script:AccountRelaunch = $true
+    return $false
 }
 
 # Process-scoped Git hooks: only the native CLI call owns the appended entries.
@@ -10153,6 +10178,7 @@ $mentionsJson
     Clear-MoeAccountLease
     if (-not $moeSkipLaunch -and $cliType -eq 'claude') {
         Get-MoeAccountLease
+        if (-not (Test-MoeAccountWaitAttempt)) { continue }
         # A wait for a free or trusted account is not launch time.
         $script:CliLaunchedAt = Get-Date
     }

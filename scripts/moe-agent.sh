@@ -9084,6 +9084,7 @@ announce_account_untrusted() {
 # this machine (a Windows path becomes its /mnt form under WSL).
 get_account_lease() {
     local gate reply pick kind f1 f2 f3 rest why trust trust_sec trust_why escalated=" "
+    ACCOUNT_LEASE_WAITED=false
     if [ ! -f "$ACCOUNT_HELPER" ]; then
         account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE (moe-account-lease.mjs is missing next to this wrapper) - launching without rotation."
         return 0
@@ -9133,6 +9134,7 @@ get_account_lease() {
                 *" $f1 "*) ;;
                 *) escalated="$escalated$f1 "; announce_account_untrusted "$f1" "$trust_why" ;;
             esac
+            ACCOUNT_LEASE_WAITED=true
             idle_wait "$trust_sec"
             continue
         fi
@@ -9140,6 +9142,7 @@ get_account_lease() {
             case "$f1" in ''|*[!0-9]*) f1=60 ;; esac
             [ "$f1" -ge 1 ] || f1=60
             account_say "MOE_ACCOUNT_WAIT retry_in=${f1}s next_reset=$f2 - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)"
+            ACCOUNT_LEASE_WAITED=true
             idle_wait "$f1"
             continue
         fi
@@ -9152,6 +9155,29 @@ get_account_lease() {
         account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE ($why) - launching without rotation."
         return 0
     done
+}
+
+# After a lease that WAITED (every account spent, or an untrusted account), the
+# attempt pre-flight pinned before the wait may be gone: a release during the
+# wait (the REVIEW self-heal, a governor) closes it and a peer's claim
+# supersedes it. A CLI launched then carries the pre-wait prompt and a pin the
+# proxy stamps on every fenced call, so each is refused ATTEMPT_SUPERSEDED
+# (task-a7d02ec3). 0: launch as before (no wait, nothing pinned, or the pin is
+# still this seat's current attempt). 1: launch nothing; this session's
+# live-session marker is dropped, the resume attempt given back, and the caller
+# re-runs pre-flight at once (ACCOUNT_RELAUNCH skips the poll sleep) for a
+# fresh claim, context and pin. Twin: Test-MoeAccountWaitAttempt.
+account_wait_recheck() {
+    local detail
+    [ "${ACCOUNT_LEASE_WAITED:-false}" = true ] || return 0
+    { [ -n "${MOE_ATTEMPT_ID:-}" ] && [ -n "${MOE_ATTEMPT_GENERATION:-}" ]; } || return 0
+    if detail=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" 2>&1 >/dev/null); then return 0; fi
+    account_say "MOE_ACCOUNT_WAIT_STALE_ATTEMPT task=$PREFLIGHT_TASK_ID attempt=$MOE_ATTEMPT_ID generation=$MOE_ATTEMPT_GENERATION (${detail:-attempt not current}) - the claim ended while this seat waited for an account; not launching the pre-wait prompt, re-running pre-flight now."
+    live_marker_remove "$PREFLIGHT_TASK_ID" || true
+    clear_account_lease
+    if [ "${RESUME_ATTEMPTS:-0}" -gt 0 ]; then RESUME_ATTEMPTS=$((RESUME_ATTEMPTS - 1)); fi
+    ACCOUNT_RELAUNCH=true
+    return 1
 }
 
 # The guard program runs from a function, not inside $( ): macOS /bin/bash 3.2 cannot parse a quoted heredoc inside $( ).
@@ -10739,6 +10765,7 @@ $PROMPT_BODY"
     clear_account_lease
     if [ "$MOE_SKIP_LAUNCH" != true ] && [ "$CLI_TYPE" = claude ]; then
         get_account_lease
+        account_wait_recheck || continue
     fi
     if [ "$MOE_SKIP_LAUNCH" != true ]; then
         prepare_agent_git_guard || { echo 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' >&2; exit 1; }
