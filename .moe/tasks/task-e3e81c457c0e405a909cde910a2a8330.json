@@ -84,21 +84,24 @@
     {
       "stepId": "step-5",
       "description": "Verification. This is the DoD 3 gate: both postflight harnesses, which also run postflight-worktree.cjs, plus parity, the producer's unit suite and lint. Run this once, fresh, after the last edit:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-e3e81c45.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && node --test scripts/tests/serena-ignore.test.mjs && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\" && cd \"$R\" && npm run lint\n\nHow to run it:\n- It takes about 25 min for bash plus 45 min for PS 5.1 (mem:gotcha-postflight-worktree-mutant-copy timings). Run it as ONE detached job, e.g. `setsid nohup bash -c '<command>; echo $? > <scratch>/exit' > <scratch>/out 2>&1 &`, record its PID, and poll the exit file. That command's exit code and output tail are the complete_task evidence.\n- Never kill other processes. Kill only the PID you recorded.\n- Never run npm install or npm ci in the checkout.\n- Run it from a normal WSL shell, not env -i, so Windows interop has git and powershell.exe.\n\nReport the pass and fail counts of both harnesses, and name the three new cases' ok lines for sh and for ps1.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-03T09:27:45.053Z"
+      "note": "RESUME session. The previous session started the plan's verification command as one detached job at about 09:29Z, after the last edit (step 4, 09:27Z). The job outlived that session. Its exit file and full log are on disk: /mnt/d/moe-scratch/e3e81c45-work/gate/{cmd.txt,out,exit}, snapshot /mnt/d/moe-scratch/v-e3e81c45.lEC6Uo. exit=0, and it finished about 10:45Z.\nRe-checked in this session: `diff -rq` of the snapshot's scripts/ against `git archive HEAD` (a29b2c13) differs in one file only, scripts/CLAUDE.md. That is docs, the snapshot holds the pre-edit copy because only the 3 script files are copied in, and no test reads its content (grep: account-trust-docs reads docs/ARCHITECTURE.md and packages/moe-daemon/CLAUDE.md). Every executed file is byte-identical to HEAD.\nResults: parity-check PASS. The serena-ignore.test.mjs producer suite passes. postflight.sh PASS, with '[worktree] serena-ignore ok', 'serena-ignore-off ok' and 'serena-ignore-wt ok' (out:221-223). postflight.ps1 PASS, with the same three ok lines (out:620-622). lint OK (architect 39, worker 30, qa 36). Both harnesses end PASS with no FAILED line; the counts are the per-section PASS lines, e.g. frozen candidate 106/106 and owner guard 16/16 on both.",
+      "startedAt": "2026-11-03T09:27:45.053Z",
+      "completedAt": "2026-11-03T11:33:07.176Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this diff (load the adversarial-self-review skill). Then run mutants in scratch copies of the snapshot's scripts/: copy the whole scripts/ tree per mutant and run an unmutated control first (mem:gotcha-postflight-worktree-mutant-copy). Run only the three new cases through MOE_WORKTREE_ONLY for each engine.\n\nMutants, each to be KILLED:\n- M1: the sh shared call removed. serena-ignore (sh) must fail.\n- M2: the ps1 shared call removed. serena-ignore (ps1) must fail.\n- M3: the sh W call removed. serena-ignore-wt (sh) must fail.\n- M4: the ps1 W call removed. serena-ignore-wt (ps1) must fail.\n- M5: the call runs even when SERENA_CMD is empty. serena-ignore-off (a) must fail.\n- M6: the W call placed before the tooling program. serena-ignore-wt must fail on project_name, or on the block's project.yml entries.\n\nChecklist:\n- set -e safety;\n- PS 5.1 native-stderr handling under EAP Stop;\n- a Serena root with spaces or a trailing backslash;\n- concurrent seats writing the same file (the script renames atomically and writes only changed bytes);\n- protected seats: the script reads MOE_PROTECTED_GIT, and skips until task-3acf7f79 exports it;\n- the extra launch time, a few git calls.\n\nRecord the evidence under /mnt/d/moe-scratch/e3e81c45-work, and write the handoff memory task-task-e3e81c457c0e405a909cde910a2a8330-handoff.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-03T11:33:10.124Z"
     }
   ],
   "planRevision": 2,
@@ -122,12 +125,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T07:25:34.188Z",
-  "updatedAt": "2026-11-03T09:27:45.053Z",
+  "updatedAt": "2026-11-03T11:33:10.124Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T07:31:25.007Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -145,7 +148,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T07:43:53.542Z",
@@ -218,5 +222,42 @@
   },
   "planApprovedAt": "2026-11-03T07:43:53.584Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T09:16:20.684Z"
+  "workStartedAt": "2026-11-03T09:16:20.684Z",
+  "commits": [
+    {
+      "sha": "a29b2c13a20bf5a1dc44521adeade7767d53b7fc",
+      "ref": "refs/heads/moe/task/task-e3e81c457c0e405a909cde910a2a8330",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T09:14:24Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "docs/MEMORY.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T09:45:50.085Z",
+      "treeId": "415b5c085b8ebc772cb6bb19d480e68a8a13336a",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/CONFIGURATION.md",
+    "docs/MEMORY.md",
+    "scripts/CLAUDE.md",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-33f67e5b@2026-11-03T09:14:24Z",
+    "at": "2026-11-03T09:45:50.085Z"
+  }
 }
