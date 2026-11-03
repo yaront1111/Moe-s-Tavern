@@ -442,7 +442,7 @@ for (const engine of ENGINES.filter((e) => e.kind === 'ps1')) {
     cliStub(fx, fx.trusted, 'claude', 'trusted');
     const same = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
     // The guard is the `node - <project> ...` program; only its children count. A '.' entry also reaches
-    // the launcher's own PowerShell lookups, which this row does not cover (task-3acf7f79).
+    // the launcher's own PowerShell lookups in legacy; W3 checks the whole log under the marker (task-3acf7f79).
     const guardChildren = () => {
       const rows = (existsSync(log) ? readFileSync(log, 'utf8') : '').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
       const guards = new Set(rows.filter((e) => e.args[0] === '-' && e.args[1] && same(e.args[1], fx.project)).map((e) => e.pid));
@@ -612,3 +612,128 @@ for (const engine of ENGINES.filter((e) => e.kind === 'ps1')) {
     assertRefused(engine, fx, r, notFoundLine('claude'));
   });
 }
+
+// task-3acf7f79: under the marker the ps1 launcher rewrites PATH to the entries Find-MoeProtectedFile
+// trusts before its first bare-name command, so neither its own `& git` (WT-13 included) nor any Node it
+// starts reaches a git.exe planted in the project. Both wrappers export MOE_PROTECTED_GIT, the only git
+// their worktree-launch and board-snapshot programs spawn. G1's NODE_OPTIONS logger records every node.exe
+// in the seat, so a planted git.exe (a node.exe copy) shows up in the whole log, whoever ran it.
+function exeLogger(fx) {
+  const log = path.join(fx.root, 'exe.log'), js = path.join(fx.root, 'which-exe.js');
+  writeFileSync(js, `require('fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, ppid: process.ppid, exe: process.execPath, args: process.argv.slice(1) }) + '\\n');\n`);
+  const real = (f) => { try { return realpathSync.native(f).toLowerCase(); } catch { return path.resolve(f).toLowerCase(); } };
+  const inProject = (f) => { const r = path.relative(real(fx.project), real(f)); return !r.startsWith('..') && !path.isAbsolute(r); };
+  const rows = () => (existsSync(log) ? readFileSync(log, 'utf8') : '').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+  return { log, options: `--require "${js.replaceAll('\\', '/')}"`, planted: () => rows().filter((e) => inProject(e.exe)) };
+}
+function plantGit(fx) {
+  for (const dir of [fx.project, path.join(fx.project, 'bin')]) copyFileSync(process.execPath, path.join(dir, 'git.exe'));
+}
+for (const engine of ENGINES.filter((e) => e.kind === 'ps1')) {
+  const skip = engine.skip || (!windows && 'the planted git.exe rows are Windows-only') || (!GIT_DIR && 'git is not on PATH, and the agent Git guard needs it');
+  test(`${engine.name}: W3 a git.exe planted in the project never runs through a '.', relative or in-project PATH entry; legacy still reaches it`, { skip }, async (t) => {
+    const fx = fixture(t); plantGit(fx);
+    const exe = exeLogger(fx);
+    cliStub(fx, fx.trusted, 'claude', 'trusted');
+    for (const [label, entry] of plantedEntries.slice(1)) {
+      for (const marker of ['1', null]) {
+        rmSync(exe.log, { force: true }); rmSync(fx.ran, { force: true });
+        const r = await run(engine, fx, { command: 'claude', marker, role: 'governor', pathEntries: [entry(fx), nodeBin(fx), fx.trusted, ...TAIL, GIT_DIR],
+          env: { MOE_NODE_COMMAND: undefined, NODE_OPTIONS: exe.options } });
+        const planted = exe.planted();
+        if (!marker) { assert.ok(planted.length > 0, `${label}: the plant is unreachable in legacy\n${show(r)}`); continue; }
+        assert.equal(r.code, 0, `${label}\n${show(r)}`);
+        assert.match(existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8') : '', /^trusted claude/m, `${label}\n${show(r)}`);
+        assert.deepEqual(planted, [], `${label}\n${show(r)}`);
+      }
+    }
+  });
+  test(`${engine.name}: W4 under the marker a PATH of only '.' refuses before WT-13's git runs`, { skip }, async (t) => {
+    const fx = fixture(t); plantGit(fx);
+    const exe = exeLogger(fx);
+    const r = await run(engine, fx, { command: 'claude', role: 'governor', pathEntries: ['.'], env: { MOE_NODE_COMMAND: undefined, NODE_OPTIONS: exe.options } });
+    assertRefused(engine, fx, r, interpreterNotFound('node'));
+    assert.deepEqual(exe.planted(), [], show(r));
+  });
+}
+// The first git the protected lookup takes from this PATH: GIT_DIR's on Windows, the first TAIL dir's on Linux.
+const trustedGit = windows ? GIT_DIR && path.join(GIT_DIR, 'git.exe')
+  : (() => { const d = TAIL.find((dir) => existsSync(path.join(dir, 'git'))); return d && path.join(realpathSync(d), 'git'); })();
+for (const engine of ENGINES) {
+  const skip = engine.skip || (engine.kind === 'ps1' && windows && !GIT_DIR && 'git is not on PATH, and the agent Git guard needs it') || (!trustedGit && 'no git on this PATH');
+  test(`${engine.name}: X2 only the marker gives the CLI MOE_PROTECTED_GIT, the first trusted git`, { skip }, async (t) => {
+    const fx = fixture(t);
+    const file = path.join(fx.trusted, windows ? 'claude.cmd' : 'claude');
+    // In a .cmd file an unset %VAR% expands to nothing, as C2 relies on.
+    writeFileSync(file, windows ? `@echo git [%MOE_PROTECTED_GIT%]>>"${fx.ran}"\r\n` : `#!/bin/sh\necho "git [\${MOE_PROTECTED_GIT-}]" >> '${fx.ran}'\n`);
+    if (!windows) chmodSync(file, 0o755);
+    for (const [marker, want] of [['1', `git [${trustedGit}]`], [null, 'git []']]) {
+      rmSync(fx.ran, { force: true });
+      const r = await run(engine, fx, { command: 'claude', marker, role: 'governor', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL, ...(GIT_DIR ? [GIT_DIR] : [])], env: { MOE_NODE_COMMAND: undefined } });
+      assert.equal(r.code, 0, show(r));
+      const got = existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8').trim() : '';
+      assert.equal(windows ? got.toLowerCase() : got, windows ? want.toLowerCase() : want, show(r));
+    }
+  });
+}
+// The worktree-launch (tooling) and board-snapshot programs, run straight from the wrappers' text under a
+// --require shim that logs every spawnSync: under exactly '1' they spawn only an absolute MOE_PROTECTED_GIT
+// and otherwise fail closed through their own failure paths; legacy spawns 'git' as before.
+function wrapperPrograms() {
+  const sh = readFileSync(SH, 'utf8'), ps = readFileSync(PS1, 'utf8'), at = ps.indexOf('function Initialize-MoeWorktreeLaunch');
+  assert.ok(at >= 0, 'moe-agent.ps1 has Initialize-MoeWorktreeLaunch');
+  const MARK = /^\/\/ moe board snapshot program[^\n]*\n[\s\S]*?^\/\/ end of the moe board snapshot program$/m;
+  return {
+    tooling: [/<<'MOE_WT_TOOLING_JS'\r?\n([\s\S]*?)^MOE_WT_TOOLING_JS$/m.exec(sh)?.[1], /\$js = @'\r?\n([\s\S]*?)^'@/m.exec(ps.slice(at))?.[1]],
+    board: [MARK.exec(sh)?.[0], MARK.exec(ps)?.[0]],
+  };
+}
+test('X1 the worktree-launch and board-snapshot programs spawn only MOE_PROTECTED_GIT under the marker, and git in legacy', (t) => {
+  const programs = wrapperPrograms();
+  for (const [label, [a, b]] of Object.entries(programs)) {
+    assert.ok(a && a === b, `the wrappers do not carry one identical ${label} program`);
+    assert.doesNotMatch(a, /[^\x00-\x7f]/, `the ${label} program is not ASCII`);
+    assert.ok(!a.includes("spawnSync('git'"), `the ${label} program spawns git by bare name`);
+  }
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'moe-protected-git-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const project = path.join(root, 'project'), w = path.join(root, 'w'), log = path.join(root, 'spawn.log'), shim = path.join(root, 'shim.js');
+  mkdirSync(path.join(project, '.moe'), { recursive: true }); mkdirSync(w);
+  writeFileSync(path.join(project, '.moe', 'project.json'), '{}\n');
+  writeFileSync(path.join(root, 'gitconfig'), '');
+  if (trustedGit) for (const dir of [project, w]) assert.equal(spawnSync(trustedGit, ['init', '-q', dir]).status, 0);
+  writeFileSync(shim, `const cp = require('child_process'), fs = require('fs'), real = cp.spawnSync;
+cp.spawnSync = function (cmd) { const r = real.apply(this, arguments); fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cmd, status: r.status }) + '\\n'); return r; };\n`);
+  const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(MOE_|NoDefaultCurrentDirectoryInExePath$)/i.test(k)));
+  Object.assign(base, { GIT_CONFIG_GLOBAL: path.join(root, 'gitconfig'), GIT_AUTHOR_NAME: 'x1', GIT_AUTHOR_EMAIL: 'x1@example.invalid', GIT_COMMITTER_NAME: 'x1', GIT_COMMITTER_EMAIL: 'x1@example.invalid' });
+  const args = { tooling: [project, w, project, 'task-x1'], board: [project, 'task-x1', 'WORKING'] };
+  const ignored = trustedGit || path.join(root, windows ? 'git.exe' : 'git');
+  const cases = [['(a) the marker, MOE_PROTECTED_GIT unset', { MOE_RUNTIME_PROTECTED: '1' }, null],
+    ['(b) the marker, a relative MOE_PROTECTED_GIT', { MOE_RUNTIME_PROTECTED: '1', MOE_PROTECTED_GIT: 'git' }, null],
+    ['(c) the marker, an absolute MOE_PROTECTED_GIT', { MOE_RUNTIME_PROTECTED: '1', MOE_PROTECTED_GIT: trustedGit }, trustedGit],
+    ['(d) legacy, the marker unset', { MOE_PROTECTED_GIT: ignored }, 'git'], ['(d) legacy, the marker true', { MOE_RUNTIME_PROTECTED: 'true', MOE_PROTECTED_GIT: ignored }, 'git']];
+  for (const [label, text] of Object.entries(programs).map(([k, [a]]) => [k, a])) {
+    const file = path.join(root, `${label}.js`);
+    writeFileSync(file, `${text}\n`);
+    for (const [name, env, want] of cases) {
+      if (name.startsWith('(c)') && !trustedGit) { t.diagnostic(`${label} ${name}: no git on this PATH`); continue; }
+      rmSync(log, { force: true });
+      const r = spawnSync(process.execPath, ['--require', shim, file, ...args[label]], { cwd: root, encoding: 'utf8', env: { ...base, ...env }, timeout: 60_000 });
+      const out = `${label} ${name}: exit ${r.status}\n${r.stdout}${r.stderr}`;
+      const spawned = (existsSync(log) ? readFileSync(log, 'utf8') : '').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+      const outLines = r.stdout.split(/\r?\n/).filter(Boolean);
+      if (want === null) {
+        assert.deepEqual(spawned, [], out);
+        if (label === 'tooling') assert.ok(r.status === 1 && outLines.at(-1)?.includes('MOE_PROTECTED_GIT'), out);
+        else assert.ok(r.status === 0 && outLines.some((l) => l.startsWith('[WARN] MOE_BOARD_SNAPSHOT_SKIPPED:') && l.includes('MOE_PROTECTED_GIT')), out);
+        continue;
+      }
+      assert.ok(spawned.length > 0, `nothing spawned\n${out}`);
+      assert.deepEqual([...new Set(spawned.map((s) => s.cmd))], [want], out);
+      if (want !== 'git') {
+        assert.ok(r.status === 0 && spawned[0].status === 0, out);
+        if (label === 'board') assert.ok(outLines.some((l) => l.startsWith('[OK] board snapshot')), out);
+      }
+    }
+  }
+});
