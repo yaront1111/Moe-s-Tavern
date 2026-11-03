@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -94,7 +94,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:25:34.209Z",
-  "updatedAt": "2026-11-03T13:45:55.908Z",
+  "updatedAt": "2026-11-03T13:47:15.038Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T13:36:32.002Z",
     "plannedStepCount": 5,
@@ -183,5 +183,44 @@
   },
   "planApprovedAt": "2026-11-03T13:41:53.972Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T13:43:13.038Z"
+  "workStartedAt": "2026-11-03T13:43:13.038Z",
+  "reviewStartedAt": "2026-11-03T13:46:10.044Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/b2f9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp packages/moe-daemon/src/tools/chatRead.ts packages/moe-daemon/src/tools/chatRead.cursor.test.ts \"$S/packages/moe-daemon/src/tools/\" && cp docs/MCP_SERVER.md \"$S/docs/\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/tools/chatRead.cursor.test.ts src/tools/chatBudgets.test.ts src/tools/chatChannelRef.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatWait.test.ts src/tools/joinTeam.notification.test.ts src/tools/completeStep.test.ts && npx tsc --noEmit'",
+    "exitCode": 0,
+    "outputTail": " Test Files  7 passed (7)\n      Tests  101 passed (101)\n   Duration  8.15s (tests 63%, transform 30%, import 7%)\n\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\n(tsc produced no errors; whole command exit 0)",
+    "reportedAt": "2026-11-03T13:46:10.044Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatRead.cursor.test.ts",
+    "packages/moe-daemon/src/tools/chatRead.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "moe.chat_read with an explicit sinceId is now a peek: it returns the page but writes no chatCursors and clears no unread count, in channel and all-channel mode. In all-channel mode the id applies only to the channel that holds it (state.messageExistsInChannel, the collectChatBacklog rule); other channels read from the caller's stored cursor, or their newest window without a workerId. Cursor-mode reads (workerId, no sinceId) and anonymous reads are unchanged; empty sinceId stays cursor mode; response shape and error handling unchanged.\n\nFiles: chatRead.ts (+24/-8: explicitSinceId/peek, holder-only per-channel id, !peek guards on the updateWorkerCursors and clearUnread blocks, tool + sinceId descriptions), new chatRead.cursor.test.ts (6 cases, 144 lines), docs/MCP_SERVER.md moe.chat_read section only (+3/-2).\n\nEvidence: RED first on unmodified code (5 failed|1 passed: cases 1,2,3,4,6 fail, 5 passes). Final snapshot run (git archive HEAD, node v24.21.0, env -i): 7 files, 101 passed, including chatBudgets, chatChannelRef, chatSystemFeed, chatWait, joinTeam.notification, completeStep unchanged; tsc --noEmit clean; new test file also type-checks under a scratch tsconfig. Mutants all killed with real failures: M1 drop !peek on cursor update (1,2,3,4); M2 drop !peek on clearUnread (2,4); M3 id on every channel (4); M4 non-holders read undefined (4 only, 5 still passes); M5 peek only in channel mode (4). Out of scope, untouched: chat_wait, chatStore, workerStore, proxy.",
+  "commits": [
+    {
+      "sha": "aa228daf8879e8ca589ed5e4813f27cb6f0b3847",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T13:41:56Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/chatRead.cursor.test.ts",
+        "packages/moe-daemon/src/tools/chatRead.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T13:47:15.038Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T13:41:56Z",
+    "at": "2026-11-03T13:47:15.038Z"
+  }
 }

@@ -28,41 +28,58 @@
     {
       "stepId": "step-2",
       "description": "Minimum fix, with the Edit tool only.\n\n1) packages/moe-daemon/src/util/mentionRouter.ts:\n- Make maxHops non-readonly.\n- Add setMaxHops(maxHops: number | undefined): void. It stores maxHops when Number.isInteger(maxHops) && maxHops >= 1, and otherwise stores the default 4, the same default the constructor uses. A missing setting, or a hand-edited invalid one, must neither disable the guard nor wedge every channel.\n- It never touches hopCounts or pausedChannels.\n- Give it a short doc comment saying why: StateManager.load() re-applies chatMaxAgentHops on every FileWatcher reload, and building a new router there cleared every pause and hop count.\n- Error handling: setMaxHops never throws.\n- Leave the constructor signature and route() unchanged.\n\n2) packages/moe-daemon/src/state/StateManager.ts, load(), about lines 1132-1133: replace the comment 'Re-initialize MentionRouter with project-configured maxHops' and the line that assigns a new MentionRouter with a one-line comment plus this.mentionRouter.setMaxHops(this.project?.settings?.chatMaxAgentHops);\n- The constructor (about line 490) keeps new MentionRouter(4), so the router exists before the first load.\n- The change is net zero lines. StateManager.ts must stay at split('\\n').length 1483, under the 1500 budget that state/stateModules.test.ts enforces (mem:gotcha-statemanager-line-budget). Check with node -e before moving on.\n- Touch nothing else in load(); its existing error handling and timeout stay as they are.\n\nOut of scope:\n- update_settings (state/profileRollout.ts updateProjectSettings) still applies a changed chatMaxAgentHops only at the next load(), exactly as today.\n- No doc change: docs/SCHEMA.md already describes the pause-until-human behaviour this restores.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/mentionRouter.ts",
         "packages/moe-daemon/src/state/StateManager.ts"
       ],
-      "startedAt": "2026-11-03T13:45:58.780Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "setMaxHops added; load() calls it. StateManager.ts split-line count is 1483.",
+      "startedAt": "2026-11-03T13:45:58.780Z",
+      "completedAt": "2026-11-03T13:46:13.866Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification gate, run once in a snapshot outside the shared checkout (global rail). Follow mem:gotcha-daemon-linux-snapshot-gate.\n- SNAP=$(mktemp -d /tmp/moe-61bb-gate.XXXXXX)\n- Archive the WHOLE repo at the task worktree's HEAD: git -C <worktree> archive HEAD | tar -x -C $SNAP\n- Overlay ONLY the three owned files from the worktree and cmp each one.\n- Give $SNAP/packages/moe-daemon a lock-matching Linux node_modules: cp -al an existing one, or run npm ci there under env -i with the nvm node bin on PATH (mem:gotcha-linux-vitest-reuse-native-node-modules).\n\nThen run exactly this command. Every listed test must pass, and its fresh output tail is the complete_task verification:\ncd \"$SNAP/packages/moe-daemon\" && NO_COLOR=1 npx vitest run src/util/mentionRouter.reload.test.ts src/util/mentionRouter.test.ts src/util/mentionRouterSystemHops.test.ts src/util/utilFixes.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatBudgets.test.ts src/tools/addComment.test.ts src/state/stateModules.test.ts\n\nCapture the exit code with '> log 2>&1; echo $?', not through a pipe.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/mentionRouter.ts",
         "packages/moe-daemon/src/state/StateManager.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/util/mentionRouter.reload.test.ts"
-      ]
+      ],
+      "note": "Gate in snapshot: 8 files, 107 tests passed, exit 0.",
+      "startedAt": "2026-11-03T13:46:14.957Z",
+      "completedAt": "2026-11-03T13:46:32.842Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review: load the adversarial-self-review skill.\n\nMutants: run each in a copy of the step 3 snapshot with node_modules re-linked, running only src/util/mentionRouter.reload.test.ts. Count a mutant KILLED only when the Tests line shows real failures. Back up once, then restore from git show and check diff -rq is empty (mem:gotcha-daemon-linux-snapshot-gate).\n- M1: load() builds a new router again (restore the old 'this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4)' line). (a) and (b) must fail.\n- M2: the setMaxHops body is empty. (c) and (e) must fail.\n- M3: setMaxHops also clears hopCounts and pausedChannels. (a) and (b) must fail.\n- M4: setMaxHops assigns the raw value without the integer >= 1 guard. The invalid-input rows of (e) must fail.\n\nChecklist:\n- Concurrency: load() runs under the state mutex and route() is synchronous, so nothing interleaves.\n- Null project: setMaxHops(undefined) gives 4.\n- Raising the limit leaves a paused channel paused until a human message or the continue token.\n- System messages still route neutrally (mentionRouterSystemHops passes).\n- git diff --stat shows only the three owned files.\n\nPut the mutant table and the StateManager split-line count in the complete_task summary.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/mentionRouter.ts",
         "packages/moe-daemon/src/state/StateManager.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/util/mentionRouter.reload.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/util/mentionRouter.reload.test.ts"
+      ],
+      "note": "M1-M4 all killed (3/4/5 real failures). Concurrency: load() under state mutex, route() sync. setMaxHops(undefined)=4. Mutant tree restored, diff -rq clean.",
+      "startedAt": "2026-11-03T13:46:33.806Z",
+      "completedAt": "2026-11-03T13:46:50.882Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -74,12 +91,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:37:04.594Z",
-  "updatedAt": "2026-11-03T13:45:58.780Z",
+  "updatedAt": "2026-11-03T13:47:05.947Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T13:39:40.903Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -90,7 +107,10 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:43:44.607Z",
@@ -136,5 +156,19 @@
   },
   "planApprovedAt": "2026-11-03T13:43:44.633Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T13:45:24.265Z"
+  "workStartedAt": "2026-11-03T13:45:24.265Z",
+  "reviewStartedAt": "2026-11-03T13:47:05.945Z",
+  "verification": {
+    "command": "cd \"$SNAP/packages/moe-daemon\" && NO_COLOR=1 npx vitest run src/util/mentionRouter.reload.test.ts src/util/mentionRouter.test.ts src/util/mentionRouterSystemHops.test.ts src/util/utilFixes.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatBudgets.test.ts src/tools/addComment.test.ts src/state/stateModules.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  8 passed (8)\n      Tests  107 passed (107)\n   Duration  1.28s  (snapshot of HEAD + 3 owned files cmp-identical, env -i, node v24.21.0)",
+    "reportedAt": "2026-11-03T13:47:05.945Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/mentionRouter.reload.test.ts",
+    "packages/moe-daemon/src/util/mentionRouter.ts",
+    "packages/moe-daemon/src/state/StateManager.ts"
+  ],
+  "completionSummary": "StateManager.load() no longer builds a new MentionRouter: it calls the new MentionRouter.setMaxHops() on the one router, so hop counts and pauses survive FileWatcher reloads. setMaxHops stores an integer >= 1, else the default 4, and never touches hopCounts or pausedChannels. Net-zero edit in StateManager.ts (split lines 1483, under the 1500 budget). New util/mentionRouter.reload.test.ts has 10 cases: pause survives load, hop count survives load, lowered setting applies, human still resets after load, and setMaxHops unit/invalid-input rows. Gate (snapshot, 8 files): 107 passed, exit 0. Mutants, all killed by the new file: M1 load() rebuilds router (3 failed), M2 empty setter (7 failed), M3 setter clears state (4 failed), M4 no input guard (5 failed). Mutant tree restored, diff -rq clean. Out of scope: update_settings still applies chatMaxAgentHops at the next load()."
 }

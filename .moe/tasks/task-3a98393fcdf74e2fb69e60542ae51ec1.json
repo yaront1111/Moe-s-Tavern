@@ -79,8 +79,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -102,7 +102,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:06:45.880Z",
-  "updatedAt": "2026-11-03T13:43:38.785Z",
+  "updatedAt": "2026-11-03T13:46:52.178Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T13:23:07.098Z",
@@ -112,7 +112,9 @@
     "firstClaimAt": "2026-11-03T13:33:11.653Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T13:46:52.176Z",
+    "wallClockMs": 820523
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -226,5 +228,9 @@
     "kind": "completion",
     "sessionId": "worker-2dc72348@2026-11-03T13:37:48Z",
     "at": "2026-11-03T13:42:47.254Z"
-  }
+  },
+  "completedAt": "2026-11-03T13:46:52.176Z",
+  "reviewCompletedAt": "2026-11-03T13:46:52.176Z",
+  "reviewSummary": "Reviewed completion 776074e5 (on moe/work-2026-10-24, kind=completion, pushed). Docs-only, +33/-3 in the 3 declared files; no code/test/.moe bytes; well under 400 LOC.\n\nDoD 1: in a fresh git-archive snapshot (npm ci, env -i, node v24.21.0) I applied mutants D1 (pair dropped) and D2 (value dropped) to AccountsTreeProvider.ts:299. Each fails W8 and W10 with AssertionError \"win32: the protected line\"; the restored file passes 9/9 (W7 skipped on Linux).\n\nDoD 2: W1-W3, W9, Q1, V2 and the accounts-view rows pass in the gate; no moe-vscode file is in the diff.\n\nDoD 3: I checked each doc claim against claudeAuth.ts (protectedClaudeCommand, localEntry, inProject, pinnedEnv) and cli.ts (:19-24, :223-225, the dispatch).\n- Both messages, the five REFUSED reasons, the kept-entry rule, home cwd, NoDefaultCurrentDirectoryInExePath, the absolute cmd.exe for .cmd/.bat and the .js claude under the CLI's node match.\n- list, add, help, a plain remove and vm-token --remove never resolve it.\n- JetBrains passes the option on every route (TerminalAgentLauncher.kt:596, :634). VS Code passes it in the typed and clipboard line (AccountsTreeProvider.ts:299).\n- The CONFIGURATION row is still one line with 4 cells; no HTML added; no stale text says VS Code lacks the option.\n- Non-blocking nit: the printed NOT_FOUND message continues past \"nothing was run.\" with an \"Install Claude Code outside the project...\" sentence that the docs omit.\n\nDoD 4: I re-ran task.verification verbatim. Linux 695 tests / 685 pass / 0 fail / 10 skipped. Windows cmd.exe 691 / 678 / 0 / 13. npm ci, npm test and npm run compile green on both. PASS parity-check.sh, role-doc lint OK, EXIT=0. Snapshots deleted.\n\nMerge note for live rows b1ca54f2/f9874361 (CONFIGURATION.md) and b2f95099 (MCP_SERVER.md): this landing touches CONFIGURATION.md :23, the MCP_SERVER.md CLI bullet (~:3148-3160) and a new TROUBLESHOOTING entry after \"Sign-in fails\".",
+  "requiredCheckAtDone": null
 }
