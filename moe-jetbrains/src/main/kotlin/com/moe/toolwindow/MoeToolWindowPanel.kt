@@ -545,16 +545,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             }
 
             fun handleReleaseAgent(task: Task) {
-                val workerId = task.assignedWorkerId ?: return
-                val result = Messages.showYesNoDialog(
-                    project,
-                    MoeBundle.message("moe.message.releaseAgent", workerId, task.title),
-                    MoeBundle.message("moe.message.releaseAgentTitle"),
-                    Messages.getQuestionIcon()
-                )
-                if (result == Messages.YES) {
-                    service.releaseTask(task.id, MoeBundle.message("moe.message.releasedInUI"))
-                }
+                // Shared with Task Detail: a mid-step holder needs a second confirmation before force.
+                BoardRelease.releaseRendered(project, service, task)
             }
 
             fun handlePrevious(task: Task) {

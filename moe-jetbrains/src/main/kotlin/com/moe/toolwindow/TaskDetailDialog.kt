@@ -726,14 +726,8 @@ class TaskDetailDialog(
         if (!task.assignedWorkerId.isNullOrBlank()) {
             actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.releaseAgent")) {
                 override fun doAction(e: java.awt.event.ActionEvent) {
-                    val result = Messages.showYesNoDialog(
-                        project,
-                        MoeBundle.message("moe.message.releaseAgent", task.assignedWorkerId ?: "", task.title),
-                        MoeBundle.message("moe.message.releaseAgentTitle"),
-                        Messages.getQuestionIcon()
-                    )
-                    if (result == Messages.YES) {
-                        service.releaseTask(task.id, MoeBundle.message("moe.message.releasedInUI"))
+                    // Same flow as the board card; declining either question keeps the dialog open.
+                    if (BoardRelease.releaseRendered(project, service, task) != BoardRelease.Outcome.CANCELLED) {
                         close(OK_EXIT_CODE)
                     }
                 }

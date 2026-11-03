@@ -144,12 +144,20 @@ class MoeCommandSender(
         if (!delivered) onDisconnected()
         return delivered
     }
-    fun releaseTask(taskId: String, reason: String? = null) {
+    /**
+     * RELEASE_TASK {taskId, reason?, force?}. force is the human override past the
+     * daemon's step lease (STEP_LEASE_HELD), sent only by BoardRelease after a second
+     * confirmation. Without it the frame stays byte-identical to before: no force key.
+     */
+    fun releaseTask(taskId: String, reason: String? = null, force: Boolean = false) {
         if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("taskId", taskId)
             if (!reason.isNullOrBlank()) {
                 addProperty("reason", reason)
+            }
+            if (force) {
+                addProperty("force", true)
             }
         }
         sendMessage("RELEASE_TASK", payload)

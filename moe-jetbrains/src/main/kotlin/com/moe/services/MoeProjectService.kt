@@ -552,7 +552,8 @@ class MoeProjectService @JvmOverloads constructor(
     fun approveTask(taskId: String, expectedPlanRevision: Long): Boolean =
         commandSender.approveTask(taskId, expectedPlanRevision)
 
-    fun releaseTask(taskId: String, reason: String? = null) = commandSender.releaseTask(taskId, reason)
+    fun releaseTask(taskId: String, reason: String? = null, force: Boolean = false) =
+        commandSender.releaseTask(taskId, reason, force)
 
     fun rejectTask(taskId: String, reason: String) = commandSender.rejectTask(taskId, reason)
 
