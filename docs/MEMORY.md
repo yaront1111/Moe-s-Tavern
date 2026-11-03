@@ -131,3 +131,13 @@ If a project still has a `.moe/memory/knowledge.jsonl` from the previous native 
 - **No auto-surfacing.** Memory never appears in `moe.get_context` automatically; agents must call `list_memories` / `read_memory`. Naming discipline is what makes the right file discoverable.
 - **No ranking, confidence, or dedup.** There is no relevance score and no automatic merging. Avoid near-duplicates by preferring `edit_memory`; merging stays manual, and merged-away files go to `_archive/`.
 - **No-op without Serena.** If Serena is not installed (`uv tool install -p 3.13 serena-agent`), the launchers skip injecting it and agents run without cross-session memory.
+
+### Serena startup ignore override
+
+Serena's startup `.gitignore` walk ignores `.git/info/exclude` and `core.excludesFile`, and it also walks `.git/`. Tools wait for that walk. On UnAI, 112 worktrees excluded only in `info/exclude` made every new seat's Serena time out for 15-23 min.
+
+So every launch that configures Serena runs `scripts/moe-serena-ignore.mjs` on Serena's root: the shared or override root, and in worktree mode also the task worktree. The script keeps a Moe-managed block in `.serena/project.local.yml` that turns the walk off (`ignore_all_files_in_gitignore: false`). The block's `ignored_paths` hold `/.git`, `project.yml`'s own entries, and the patterns from `core.excludesFile`, `info/exclude` and every `.gitignore` git reads, converted as Serena converts them.
+
+The script writes only when `.serena/project.yml` exists, git ignores `project.local.yml`, and the bytes change. Otherwise it changes nothing and prints one `MOE_SERENA_IGNORE_SKIPPED` line, and Serena keeps its own walk. That covers a root without `.serena/project.yml`, a root that is not a git work tree's top level, a failing git, a nested repository, and over 5000 patterns. A launch without Serena never runs the script. The launch never fails because of it.
+
+To opt out, set `MOE_SERENA_IGNORE_OVERRIDE=0`, or set `ignore_all_files_in_gitignore` or `ignored_paths` yourself in `project.local.yml` outside the block. Either removes the block.
