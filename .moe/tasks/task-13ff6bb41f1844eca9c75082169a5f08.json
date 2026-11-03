@@ -9,10 +9,49 @@
     "The existing chatSystemFeed, reloadHold and mentionRouter suites pass unchanged, run in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). packages/moe-daemon/src/tools/chatSystemFeed.test.ts only. Add cases and never edit an existing one: DoD 3 needs the existing cases to pass unchanged. Write the raw plug character in test strings, as the existing cases at :166 and :186 do. In test code, build any at-sign with String.fromCharCode(64) (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions).\n(a) Import: add `import { isRoutinePresenceLine } from '../util/chatPayload.js';` after the `import type { ChatMessage }` line.\n(b) DoD 1. Inside describe('routine presence lines'), right after the case 'a deregistration that released a task still routes to busy seats' and before the it.each 'keeps routing the %s banner to busy seats', add `it('(h1) a hot reload of a task-holding seat holds its task and pages nobody', ...)`. Build it like the 'a routine deregistration pages nobody' case: park `chatWaitTool(h.state).handler({ workerId: 'worker-busy', channels: [governors], timeoutMs: 2000 }, h.state)` with a settled flag, wait 30 ms, run `await deregister('worker-holder', 'wrapper_restart')`, then wait 30 ms. Then assert, in this order:\n 1. The hold ran: `const holdUntil = h.state.getWorker('worker-holder')?.reloadHoldUntil;` has typeof 'string', and `h.state.getTask('task-1')?.assignedWorkerId` is 'worker-holder'.\n 2. With `const banner = `🔌 worker-holder reloading (wrapper_restart); holding 1 task(s) for its relaunch until ${holdUntil}: task-1(WORKING)`;`, routedTo(banner, workers) and routedTo(banner, governors) each have length 1, and every one of those events has routingTargets toEqual([]).\n 3. getUnreadSummary is null for 'worker-busy', for 'worker-holder' (the reloading seat itself) and for 'worker-peer'.\n 4. settled is false. Then a human line in #governors wakes the wait with exactly that line: `result.messages?.map((m) => m.id)` toEqual([human.id]). That proves the wait was live and that its drain skipped the banner.\n 5. Agent reads hide it. `chatReadTool(h.state).handler({ workerId: 'worker-busy', channel: workers }, h.state)` returns no messages, while `chatReadTool(h.state).handler({ channel: workers, includeSystem: true }, h.state)` returns the banner; its id is routedTo(banner, workers)[0].message.id.\n Fixture facts: the beforeEach already makes worker-holder CODING with currentTaskId task-1, and task-1 WORKING assigned to it. The default settings.reloadHoldMs (120000) enables the hold. An assigned active task is enough for beginReloadHold to post the banner, so no claim is needed; the filer's repro /mnt/d/moe-scratch/hunt-8f18d6fa/zzHuntUtil3.test.ts does the same.\n(c) DoD 2. At the end of the file, add a new top-level describe('the reload-hold banner shape', ...) with `const until = '2026-11-03T13:40:22.435Z';` and `const hold = `🔌 worker-x reloading (wrapper_restart); holding 1 task(s) for its relaunch until ${until}: task-1(WORKING)`;`.\n - `it.each([[name, content], ...])('(h2) accepts %s', ...)` expects true for:\n   - 'one task' = hold;\n   - 'two tasks' = the same shape with `holding 2 task(s)` and the list `task-1(WORKING), task-2(AWAITING_APPROVAL)`;\n   - 'a 32-hex task id' = the same shape with the list `task-13ff6bb41f1844eca9c75082169a5f08(BLOCKED)`.\n - `it.each([[name, content], ...])('(h3) rejects %s', ...)` expects false for:\n   - 'a release banner' = `🔌 worker-x deregistered (terminal_closed); released 1 task: task-1→WORKING`;\n   - 'a dropped-claims banner' = `🔌 worker-x deregistered (terminal_closed); (no tasks held); dropped 1 resource claim: slot lease (task-1)`;\n   - 'appended text' = hold + ' again';\n   - 'an appended release clause' = hold + '; released 1 task: task-2→WORKING';\n   - 'an appended line' = hold, then a newline, then a mention of worker-busy built with String.fromCharCode(64);\n   - 'another reason' = hold with '(wrapper_restart)' replaced by '(terminal_closed)';\n   - 'a non-ISO deadline' = hold with until replaced by 'soon';\n   - 'an empty task list' = hold with ': task-1(WORKING)' replaced by ': ';\n   - 'a trailing space' = hold + ' '.\n - `it('(h4) a long hold-like line stays fast', ...)` expects false for `hold.replace(': task-1(WORKING)', ': ' + 'x(Y), '.repeat(3000) + 'x(Y) z')`, and false for the plug, a space, 'a'.repeat(50000) and ' reloading' joined. It also expects Date.now() to advance by under 500 ms. This mirrors util/chatPayload.test.ts 'is total'.\nRED proof: run step 3's recipe with vitest on this one file only. Record that (h1) fails on its first routingTargets assertion (today the targets are [worker-busy, worker-holder]) and that every (h2) row fails. (h3) and (h4) already pass. They guard against an over-broad fix, and step 4's mutants prove them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts"
+      ],
+      "note": "RED proof (snapshot /tmp/snap-13ff, vitest on chatSystemFeed.test.ts): 4 failed|26 passed — (h1) and (h2) x3 fail; (h3),(h4) already pass.",
+      "startedAt": "2026-11-03T13:54:45.793Z",
+      "completedAt": "2026-11-03T13:55:23.771Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT + DOCS. One concern: the reload-hold banner is a routine presence line.\n(a) packages/moe-daemon/src/util/chatPayload.ts. After QUIET_DEREGISTER_BANNER, add this comment and regex:\n// The reload-hold banner (state/workerLifecycle.ts beginReloadHold). A hot reload\n// keeps the seat's tasks assigned for its relaunch, so it frees nothing either.\n// The reason is always RELOAD_HOLD_REASON (beginReloadHold refuses any other), the\n// deadline is toISOString(), and the <taskId>(<STATUS>) list ends the line, so\n// appended text keeps routing. A hold that runs out is a full reload_hold_expired\n// deregister, whose \"released N task\" banner still routes.\nconst RELOAD_HOLD_BANNER = /^\\u{1F50C} \\S+ reloading \\(wrapper_restart\\); holding \\d+ task\\(s\\) for its relaunch until \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z: [^\\s(),]+\\([A-Z_]+\\)(?:, [^\\s(),]+\\([A-Z_]+\\))*$/u;\nThen make isRoutinePresenceLine's expression `PRESENCE_LEFT_LINE.test(content) || QUIET_DEREGISTER_BANNER.test(content) || RELOAD_HOLD_BANNER.test(content)`. Change the first sentence of its doc comment to say a routine presence line is a seat leaving, a deregistration that freed nothing, or a hot reload that holds its tasks for the relaunch.\n - Write the escape as \\u{1F50C}, as the line above does, and keep the u flag. A raw plug character is equivalent under the u flag. Check the result with `grep -c 'u{1F50C}' packages/moe-daemon/src/util/chatPayload.ts`, which should print 2 (mem:gotcha-edit-tool-unescapes-unicode-literals).\n - Do not import RELOAD_HOLD_REASON from state/: util stays free of state imports. (h1) drives the real producer and is the coupling guard (mem:decision-chat-system-feed-presence-lines).\n - Change nothing else. isSystemFeedMessage, chatStore sendMessage (:231 routingTargets = []), chat_wait's isRelevant (chatWait.ts:172) and getMessages' hideSystemFeed (chatStore.ts:340) already take all their behaviour from this one predicate.\n - Error handling: the predicate stays total. The typeof guard stays first, a regex test cannot throw, and there is no IO, so sendMessage, chat_wait and every agent read keep today's failure behaviour.\n(b) docs/MCP_SERVER.md, in the '### moe.chat_read' Notes. Find by text the one-line bullet that starts '- **Skips the system feed**' (about :2551). Its presence-line list now ends: and a `🔌 <id> deregistered (<reason>); (no tasks held)` banner that released no tasks and dropped no resource claims. Change that ending to: a `🔌 <id> deregistered (<reason>); (no tasks held)` banner that released no tasks and dropped no resource claims, and the `🔌 <id> reloading (wrapper_restart); holding N task(s) for its relaunch until <holdUntil>: <taskId>(<status>), …` banner of a hot reload, which holds its tasks instead of releasing them. Leave every other byte of the file alone, including the next sentence ('Feed lines are routed to nobody ...').\nThen run step 3's recipe with vitest on chatSystemFeed.test.ts alone, and see (h1)-(h4) green before step 3.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFICATION. Run it once, fresh, from this task worktree's root after the last tracked edit; its output is the complete_task evidence. Never run npm in the shared checkout or in the worktree (rail). The command archives HEAD into mktemp, overlays exactly the three owned files, and runs the following under env -i with nvm node v24.21.0 (mem:gotcha-daemon-linux-snapshot-gate): npm ci, tsc --noEmit, a scratch-tsconfig typecheck of the test file (tsc skips tests otherwise), and the FULL daemon vitest suite. Run exactly:\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/chatPayload.ts packages/moe-daemon/src/tools/chatSystemFeed.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatSystemFeed.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'\nExpect exit 0, a 'Test Files N passed' line and no FAIL line. The architect dry-ran this exact command at target tip 40c82161 with the files unchanged: 236 files passed, 7014 tests passed, 24 skipped, exit 0. Your counts should be that plus your new cases, which is +13 tests if you wrote exactly the rows above. DoD 3: the chatSystemFeed (existing cases), reloadHold, mentionRouter and mentionRouter.reload suites are all inside this full run.\nIf a FAIL is in a file this task does not touch, rerun that file alone in the same snapshot before calling it a regression. Known load flakes are index.version, bindHosts D-fail and baselineRun E2 (mem:gotcha-daemon-linux-snapshot-gate). Report both runs, and never edit outside the three owned files.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW (adversarial-self-review skill) of your own diff, then complete_task with step 3's output.\nMutants. In a snapshot built as in step 3, back up util/chatPayload.ts ONCE. Apply each mutant alone as an exact-once replacement and run `NO_COLOR=1 npx vitest run src/tools/chatSystemFeed.test.ts` under the same env -i. Restore from the backup and cmp after each (mem:convention-daemon-vitest-mutant-checkref; see mem:gotcha-daemon-linux-snapshot-gate on false kills). A mutant counts as killed only when the Tests line shows real failures and the named case is among the FAIL lines:\n M1: `|| RELOAD_HOLD_BANNER.test(content)` becomes `|| false`. (h1) and every (h2) row fail.\n M2: drop the final `$` of RELOAD_HOLD_BANNER. The (h3) rows 'appended text', 'an appended release clause', 'an appended line' and 'a trailing space' fail.\n M3: `reloading \\(wrapper_restart\\)` becomes `reloading \\([^\\n]*\\)`. (h3) 'another reason' fails.\n M4: `: [^\\s(),]+\\([A-Z_]+\\)(?:, [^\\s(),]+\\([A-Z_]+\\))*$` becomes `: [^\\n]*$`. Among others, (h3) 'appended text' and 'an empty task list' fail.\nPut the four Tests lines in the complete_task summary, plus one line for each checklist answer:\n - concurrency: a pure function with no shared state;\n - hostile input: non-strings give false, and 50000-char lines stay linear, per (h4);\n - an at-mention inside a hold banner: never feed, because isSystemFeedMessage requires no mentions (unchanged);\n - the expiry path: the reload_hold_expired banner says 'released N task' and still routes; read workerLifecycle.ts, which needs no change;\n - the agent-visible effect: chat_read, chat_resync and the chat_wait drain hide the banner unless includeSystem: true; the IDE reads unfiltered.\nDo not re-run step 3 unless you changed a byte after it. If you did, rerun step 3 and cite that output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.ts",
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +63,74 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T13:38:33.967Z",
-  "updatedAt": "2026-11-03T13:40:25.764Z",
+  "updatedAt": "2026-11-03T13:55:23.771Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T13:40:22.435Z"
+    "firstClaimAt": "2026-11-03T13:40:22.435Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
-  ]
+    "architect-74d9e1c7",
+    "worker-33f67e5b"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T13:53:48.421Z",
+  "executionContract": {
+    "intendedBehavior": "The daemon's reload-hold banner is a routine presence line. state/workerLifecycle.ts beginReloadHold posts it to #workers and #governors in this shape: `🔌 <id> reloading (wrapper_restart); holding N task(s) for its relaunch until <iso>: <taskId>(<STATUS>), …`. It is routed to nobody: no seat gets an unread count, the reloading seat included, and no chat_wait wakes, channel-filtered or not. Agents' chat_read, chat_resync and the chat_wait drain hide it unless includeSystem: true, and the IDE still shows it. Release banners, dropped-claim banners, and a hold banner with anything appended or another reason keep routing as today.",
+    "invariants": [
+      "isRoutinePresenceLine stays total: non-strings return false, no input throws, and matching stays linear on 50000-char input.",
+      "A system line with any at-mention is never feed (isSystemFeedMessage is unchanged).",
+      "A deregistration banner that released a task or dropped a resource claim still routes to busy seats; that includes the reload_hold_expired one."
+    ],
+    "compatibility": [
+      "No ChatMessage schema, wire shape or MCP tool contract changes. Only the set of daemon lines that count as feed changes. Stored legacy hold banners become hidden from agent reads too, as task-48edc21b did for the other presence lines.",
+      "util/ keeps no import from state/."
+    ],
+    "reuse": [
+      "Extends util/chatPayload.ts isRoutinePresenceLine (task-48edc21b) with one more anchored regex, with no per-caller filter."
+    ],
+    "sourceAssumptions": [
+      "state/workerLifecycle.ts:202 beginReloadHold builds the banner from: worker.id; reason, always RELOAD_HOLD_REASON = 'wrapper_restart' (:19, :188); held.length; holdUntil = new Date(...).toISOString(); and tasks.map(task => `${task.id}(${task.status})`).join(', ').",
+      "state/chatStore.ts:231 sendMessage sets routingTargets = [] when isSystemFeedMessage is true. tools/chatWait.ts:172 isRelevant and getMessages hideSystemFeed (chatStore.ts:340) use the same predicate.",
+      "state/reloadHold.test.ts:77 mocks postToRoleChannel and asserts only the banner text, so a routing change cannot affect it."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/chatPayload.ts packages/moe-daemon/src/tools/chatSystemFeed.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatSystemFeed.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A persisted feed flag on ChatMessage. Rejected: it needs a schema change, and legacy stored lines would stay visible (mem:decision-chat-system-feed-presence-lines). (2) Excluding only the reloading seat from routing. Rejected: the DoD needs [] for every seat. (3) A loose 'reloading (' prefix match. Rejected: appended text and any other reason must keep routing. (4) Importing RELOAD_HOLD_REASON into util. Rejected: util must not depend on state; (h1) drives the real producer instead.",
+    "codebaseInsights": "isSystemFeedMessage in util/chatPayload.ts is the single predicate behind three behaviours: sendMessage's empty routingTargets (no unread, no wake), chat_wait's isRelevant, and every agent read's hideSystemFeed. MentionRouter sends a mention-less system line to every non-IDLE, non-DEAD seat, so before this fix the hold banner reached worker-busy and the reloading worker-holder itself (repro output /mnt/d/moe-scratch/hunt-8f18d6fa/repro-output-util-99cae90a.txt:127-133). The hold path posts no 'left' lines. A hold that runs out is a full reload_hold_expired deregister, and its release banner keeps routing, so the actionable event still pages. The architect dry-ran the regex on 13 accept/reject cases plus long adversarial inputs (1 ms total), and dry-ran the step-3 command at 40c82161: 236 files, 7014 passed, 24 skipped.",
+    "risks": "The Edit tool may turn \\u{1F50C} into a raw plug character. That is harmless under the u flag, but check it with the grep in step 2. The regex is coupled to the producer's wording, and (h1) is the guard: never weaken it to a hand-written string that skips deregisterWorkerTool. Do not edit util/chatPayload.test.ts or any existing chatSystemFeed case (DoD 3). In test strings, build at-signs at runtime.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/chatPayload.ts",
+      "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/tools/chatWait.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "40c8216114564390ce5d307ef69c3ee314e0e838",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T13:53:48.446Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T13:54:45.793Z"
 }

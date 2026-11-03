@@ -124,8 +124,8 @@
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8cf0816c",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -273,7 +273,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-11-03T12:33:26.290Z",
+  "updatedAt": "2026-11-03T13:54:54.911Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",
@@ -420,20 +420,20 @@
     }
   ],
   "filesModified": [
-    "scripts/tests/parity-check.ps1",
     "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
     "scripts/tests/worktree-e2e.cjs",
-    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/validators.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    "packages/moe-daemon/src/delivery/acceptance.test.ts",
+    "packages/moe-daemon/src/__acceptance__/producerConsumer.acceptance.test.ts",
     "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
     "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
-    "packages/moe-daemon/src/__acceptance__/producerConsumer.acceptance.test.ts",
-    "packages/moe-daemon/src/delivery/acceptance.test.ts",
     "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
-    "packages/moe-daemon/src/state/validators.test.ts",
-    "packages/moe-daemon/src/state/validators.ts",
-    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
-    "packages/moe-daemon/src/types/schema.ts",
-    "scripts/tests/wave1-pilot.mjs"
+    "scripts/tests/wave1-pilot.mjs",
+    "docs/CONFIGURATION.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -442,5 +442,14 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "worker-8cf0816c@2026-11-03T10:17:06Z",
     "at": "2026-11-03T12:33:26.289Z"
-  }
+  },
+  "reviewStartedAt": "2026-11-03T13:54:54.909Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npx vitest run src/state/validators.test.ts src/tools/claimNextTask.test.ts && npm test) && (cd packages/moe-proxy && npm test) && (cd packages/moe-claude-plugin && npm test) && bash scripts/tests/parity-check.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && node scripts/tests/worktree-e2e.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d)\" \"$(command -v bash)\" && npm run lint",
+    "exitCode": 0,
+    "outputTail": "== start 2026-11-03T13:13:18Z in /tmp/wt19-g6.f7V9BR/snap (git 0da33a9)   [merged tree 14fdcfb3 = task e71aaeef + target 99cae90a; env -i]\n[...]\n Test Files  2 passed (2)\n      Tests  174 passed (174)\n[...]\n Test Files  232 passed (232)\n      Tests  7010 passed | 20 skipped (7030)\n[...]\n Test Files  9 passed (9)\n      Tests  335 passed (335)\n[...]\n Test Files  2 passed (2)\n      Tests  18 passed (18)\n\nPASS parity-check.sh\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n[worktree-e2e] wrapper checkout /tmp/wt19-g6.f7V9BR/snap at HEAD 0da33a9e193fd86dfeb568e9a3dc2881d7727ad4\n[worktree-e2e] parallel ok (8.9 s)\n[worktree-e2e] conflict-resume ok (10.5 s)\n[worktree-e2e] 2 ok, 0 failed\nnpm notice run lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n== end 2026-11-03T13:41:14Z rc=0",
+    "reportedAt": "2026-11-03T13:54:54.909Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-19 done. Fresh this session, on merge-tree snapshots of task e71aaeef + the moving target: the full checkRefs gate rc=0 on 14fdcfb3 (target 99cae90a), and before that on e583649b. On 58c72741 (target 40c82161): daemon 236 files 7037 pass/24 skip, proxy 335, qualityGate rc=0. On b06fd98e: parity-check.ps1 PASS, worktree-landing.ps1 18/0/0, worktree-e2e ps1 2 ok.\n\nDoD1, scope = the approved (b) of dec-eb7b8337: unset worktreeMode is 'on' iff qualityGate is non-blank after trim, else 'off'; stored on/off are honored, anything else is INVALID_INPUT. Human go: \"2 yes 3 ok rest decide\", then \"go\"; governor-ce2f28b9 \"APPROVE (a) and (b) as posted\" (comment-a7137dae, msg-1e79f940). validators+claimNextTask 174 pass. CONFIGURATION.md has the default, the 'off' rollback and the add-a-gate warning. 'off' pins (assertions unchanged): 5 daemon fixtures, wave1-pilot.mjs.\n\nDoD2: parity-check.sh/.ps1 exit 0 comparing MOE_WORKTREE_/LAND_/CONTROL_/BOARD_/PUSH_/MIGRATION_, requiring MOE_WRAPPER_IN_WORKTREE.\n\nDoD3, comment-edabc19c (853 records): §8 list 9 edges, all moot; msg-6c3c0ede chain 27, all moot; open rows 75 = 56 moot, 17 kept (produces), 2 drop-after-runbook (0900b936←648a5916, 48bbd091←3acf7f79), applied by the governor (comment-f2de4b93; later edits comment-0020695c). No worker set_task_dependencies.\n\nDoD4 (14fdcfb3): daemon 232 files 7010 pass/20 skip; proxy 335; claude-plugin 18; postflight-safe bash exit 0 NONE; worktree-landing.sh 18/0/0; lint OK. Step 6 (88e507e5): postflight-safe powershell exit 0 NONE; gradlew test under the jetbrains-gradle lease 625 tests, 0 fail, 6 skip. The only later moe-jetbrains change is task-55710898's.\n\nDoD5: worktree-e2e sh 2 ok on 14fdcfb3, ps1 2 ok on b06fd98e (parallel, conflict-resume).\n\nDoD6: filed task-f9874361 (HIGH), task-d2d6ac4b, task-1765335a; tracked 347dde85, c6436215. Runbook naming MOE_CONTROL_NOT_FOLLOWING: #general msg-f02df10b, #governors msg-c52f2578."
 }

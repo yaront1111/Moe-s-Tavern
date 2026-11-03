@@ -12,51 +12,80 @@
     {
       "stepId": "step-1",
       "description": "DoD 1 - docs/MCP_SERVER.md complete_task currentBranch bullet. Rewrite ONLY the bullet that starts '`currentBranch` is reported by the agent (the CLI), not by the wrapper' (docs/MCP_SERVER.md:587; the WT-02 worktree branch rule sits two lines up at :585 and the branch-policy bullet at :586 - leave both untouched). Keep the shared-mode sentence word for word, now scoped to shared mode, and add a worktree clause. Suggested text: '- `currentBranch` is reported by the agent (the CLI), not by the wrapper: the wrapper's landing happens *after* this call. In shared mode it lands on the branch its safe-branch step picks (a literal `consolidationBranch` doubles as that peel target; otherwise `moe/work-<YYYY-MM-DD>`). In worktree mode the agent reports its task branch `moe/task/<taskId>` (the WT-02 rule above), no safe-branch step runs, and the completion lands as one `merge-tree` squash commit on the target: a literal `consolidationBranch`, else `main`. In both modes the branch it actually landed on arrives afterwards as `record_commit.ref` / `task.commits[].ref` (`refs/heads/<target>` for a worktree completion). That is why an absent `currentBranch` warns instead of failing.' Source facts (verified at planning): scripts/moe-agent.sh land_worktree_completion (~7757-7765) uses target=${CS_CONSOLIDATION_BRANCH:-main} and falls back to main when the value holds ? or [; read_commit_settings (~3128) already turns a * glob into empty; the ps1 twin Invoke-MoeWorktreeCompletion (~7251) falls back to main the same way; the completion is recorded with record_commit_rpc ... completion ... refs/heads/$target (~7794/7801); moe-agent.sh:7726 says 'Never peel_target_branch, ensure_safe_branch or the shared push'. So 'literal' means no *, ? or [. Constraints: daemonGitDocs.test.ts scans every docs/*.md line, so never write a phrase like 'never runs git', 'does not run git', 'runs no git' or 'never touches git'. The chat_read section (~2519) belongs to task-b2f95099 (REVIEW): do not touch it. Use the Edit tool only, never a shell write (mem:gotcha-docs-edit-via-bash-python-no-tool-witness); edit in your task worktree (git rev-parse --show-toplevel), never in /mnt/d/projexts/moes (mem:decision-doc-row-checkrefs-worktree-mode). Error handling: a doc-only step with no runtime path; a wrong claim is caught by the step-5 cross-check against the wrapper code, and the test gate is step 4.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Rewrote the currentBranch bullet with shared/worktree clauses.",
+      "startedAt": "2026-11-03T13:53:14.034Z",
+      "completedAt": "2026-11-03T13:53:25.514Z"
     },
     {
       "stepId": "step-2",
       "description": "DoD 2 (text half) - docs/skills/moe-qa-loop/SKILL.md step 3 (line 26). Replace only the clause '`git branch --contains <sha>` confirms it is on the shared branch.' with a per-mode statement of where the completion lands, for example: '`git branch --contains <sha>` confirms it is on the branch the entry's `ref` names: in shared mode the shared branch; in worktree mode the target (a literal `consolidationBranch`, else `main`, recorded as `refs/heads/<target>`), where the wrapper squash-lands the task branch `moe/task/<taskId>`.' Leave every other byte of step 3 unchanged, including the mode test already in it ('worktree mode: `git rev-parse --symbolic-full-name HEAD` prints exactly `refs/heads/moe/control`; otherwise shared mode'). Do not claim which OTHER branches lack the SHA: a LANDING-CONFLICT resume merges the target into moe/task/<taskId>, so 'not on the task branch' can turn false. qaCommitPolicy.test.ts pins this file AND its vendored copy (the SENTINELS, ROUTE_SENTINELS, FORBIDDEN and RETIRED lists at the top of packages/moe-daemon/src/util/qaCommitPolicy.test.ts): keep every pinned phrase ('bounded wait, not a blocker', 'up to ~2 minutes', 'record_commit', 'refs/heads/moe/control', 'commit in the control checkout', 'in either mode', 'MOE_AGENT_GIT_REFUSED', 'lastCommitOutcome', 'counts toward the reopen cap', 'Landing gap:', '#governors'), and never write a retired or forbidden phrase: 'shared mode only' (so never 'in shared mode only'), 'land it yourself', 'you self-landed', 'Do NOT wait', 'wait for it before reviewing'. Same daemonGitDocs phrase ban as step 1. Do not touch .moe/skills/moe-qa-loop/SKILL.md: it is daemon-owned, the daemon refreshes stale marked copies at start, and worktree landings never carry .moe/ paths. Edit tool only. Error handling: doc-only; the sentinel test in step 4 fails loudly on a dropped or retired phrase.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/skills/moe-qa-loop/SKILL.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/skills/moe-qa-loop/SKILL.md"
+      ],
+      "note": "Step 3 clause now names landing branch per mode.",
+      "startedAt": "2026-11-03T13:53:26.535Z",
+      "completedAt": "2026-11-03T13:53:28.951Z"
     },
     {
       "stepId": "step-3",
       "description": "DoD 2 (vendored half) - regenerate packages/moe-daemon/src/generated/skillFiles.ts the way prebuild does, in a snapshot OUTSIDE the checkout (never npm build/ci/install/test in the repo or your worktree: mem:gotcha-moe-doc-generated-artifacts, mem:gotcha-daemon-linux-snapshot-gate). Recipe: T=$(mktemp -d); git archive HEAD | tar -x -C $T; copy your edited docs/skills/moe-qa-loop/SKILL.md (and docs/MCP_SERVER.md) over the same paths in $T; in $T/packages/moe-daemon run E='env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin', then $E npm ci --no-audit --no-fund, then $E npm run generate-skill-files (the tsx generator prebuild runs; it reads $T/docs/skills). Then diff -u your worktree's skillFiles.ts against $T's. Expect exactly two changed lines inside the 'moe-qa-loop/SKILL.md' template literal (entry at ~line 1384): the frontmatter marker line '# moe-generated: sha=3a3758447ab9' (the new sha12 of the edited, trimmed file) and the step-3 line. Planning verified that the generator reproduces HEAD's committed skillFiles.ts byte for byte, so any other hunk means HEAD's copy was already stale: apply it too (the generator output is the contract, and step 4 cmps the whole file) and name it in a moe.add_comment on this task. Apply every hunk with the Edit tool: Read the file with offset/limit around the marker and the step-3 line first (the file is ~1.36 MB), and copy each generated line exactly - the template literal escapes backticks and dollar-brace sequences, so never hand-escape. Never cp, sed or redirect into the tracked file (no TOOL witness). Error handling: if npm ci fails (network or cache), retry once; if it still fails, plain node v24 runs the same generator without node_modules ($HOME/.nvm/versions/node/v24.21.0/bin/node scripts/generate-skill-files.ts, byte-identical output verified at planning); if the diff shows a conflict marker or a hunk you cannot place, stop and comment instead of guessing a sha.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/generated/skillFiles.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "note": "Generator in /tmp snapshot produced exactly two hunks (sha marker + step-3 line); applied with Edit.",
+      "startedAt": "2026-11-03T13:53:30.167Z",
+      "completedAt": "2026-11-03T13:53:47.907Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification - run this ONE command fresh (it cds to git rev-parse --show-toplevel, so it works from your worktree and from QA's control checkout) and submit its output as moe.complete_task verification: bash -c 'set -e; cd \"$(git rev-parse --show-toplevel)\"; npm run lint; bash scripts/tests/parity-check.sh; T=$(mktemp -d); trap \"rm -rf $T\" EXIT; git archive HEAD | tar -x -C $T; for f in docs/MCP_SERVER.md docs/skills/moe-qa-loop/SKILL.md packages/moe-daemon/src/generated/skillFiles.ts; do cp $f $T/$f; done; cd $T/packages/moe-daemon; cp src/generated/skillFiles.ts $T/cand.ts; E=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\"; $E npm ci --no-audit --no-fund >/dev/null; $E npm run generate-skill-files >/dev/null; cmp src/generated/skillFiles.ts $T/cand.ts; echo VENDORED-COPY-MATCHES-PREBUILD; $E npx vitest run src/util/qaCommitPolicy.test.ts src/util/daemonGitDocs.test.ts src/util/skillFiles.test.ts src/util/recommendSkill.test.ts src/tools/getContextGovernance.test.ts src/util/executionContractDocs.test.ts src/util/taskTimeBudgetDocs.test.ts'. What it proves: the project quality gate in place (npm run lint = role-doc linter; parity-check.sh); then, in a /tmp archive snapshot overlaid with exactly this task's three files (never git diff --name-only, which drags peers' edits), that prebuild's generator reproduces your skillFiles.ts byte for byte (VENDORED-COPY-MATCHES-PREBUILD), and the seven test files that pin these docs pass: qaCommitPolicy (sentinels in SKILL.md and SKILL_FILES), daemonGitDocs (phrase scan over every docs/*.md and daemon source), skillFiles (marker stamping), recommendSkill and getContextGovernance (moe-qa-loop routing), executionContractDocs and taskTimeBudgetDocs (MCP_SERVER.md pins and tool-section headings). Expected: exit 0, VENDORED-COPY-MATCHES-PREBUILD printed, all vitest files passed. Error handling: a non-zero exit is never submitted as green - fix the cause (cmp failure = re-apply the generator hunks from step 3; sentinel failure = restore the phrase) and re-run the whole command.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md",
         "docs/skills/moe-qa-loop/SKILL.md",
         "packages/moe-daemon/src/generated/skillFiles.ts"
-      ]
+      ],
+      "note": "Verification command exit 0: lint, parity, cmp (set -e), 7 vitest files / 87 tests passed.",
+      "startedAt": "2026-11-03T13:53:49.036Z",
+      "completedAt": "2026-11-03T13:54:11.373Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's own diff (git diff in your worktree over the three files), once, before moe.complete_task. Check: (a) DoD 1 - the bullet names `moe/task/<taskId>` and 'a literal `consolidationBranch`, else `main`', and still carries the shared-mode safe-branch sentence for shared mode; (b) DoD 2 - step 3 names the landing branch for both modes, and the step-4 run printed VENDORED-COPY-MATCHES-PREBUILD with npm run lint green; (c) scope - git diff --stat shows exactly these three files, the MCP_SERVER.md hunk is the one bullet, and the skillFiles.ts diff is the marker line plus the step-3 line (plus any stale-copy hunks you reported in a comment); no .moe/ path changed; (d) every claim matches the code - grep scripts/moe-agent.sh for 'Never peel_target_branch, ensure_safe_branch' and for the refs/heads/$target completion record in land_worktree_completion, and the ps1 twin's $target line in Invoke-MoeWorktreeCompletion; (e) nothing you wrote turns false on a reopen or conflict resume (no 'not on the task branch'-style negative); (f) no retired or forbidden phrase ('shared mode only', 'land it yourself', 'you self-landed', 'Do NOT wait', 'wait for it before reviewing', 'never runs git'). Error handling: any failed check means fix it, then re-run the step-4 command fresh before complete_task; the test evidence you submit must come from that final run.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md",
         "docs/skills/moe-qa-loop/SKILL.md",
         "packages/moe-daemon/src/generated/skillFiles.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "note": "Self-review clean: 3 files, 4+/4-, no forbidden phrases, claims match wrapper code.",
+      "startedAt": "2026-11-03T13:54:12.514Z",
+      "completedAt": "2026-11-03T13:54:22.398Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -68,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T12:30:45.224Z",
-  "updatedAt": "2026-11-03T13:52:31.550Z",
+  "updatedAt": "2026-11-03T13:55:23.536Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T13:08:10.970Z",
@@ -77,7 +106,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T13:42:15.222Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -87,7 +117,13 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T13:52:07.083Z",
   "executionContract": {
@@ -141,5 +177,45 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T13:52:07.110Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T13:53:14.034Z",
+  "reviewStartedAt": "2026-11-03T13:54:28.555Z",
+  "verification": {
+    "command": "bash -c 'set -e; cd \"$(git rev-parse --show-toplevel)\"; npm run lint; bash scripts/tests/parity-check.sh; T=$(mktemp -d); trap \"rm -rf $T\" EXIT; git archive HEAD | tar -x -C $T; for f in docs/MCP_SERVER.md docs/skills/moe-qa-loop/SKILL.md packages/moe-daemon/src/generated/skillFiles.ts; do cp $f $T/$f; done; cd $T/packages/moe-daemon; cp src/generated/skillFiles.ts $T/cand.ts; E=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\"; $E npm ci --no-audit --no-fund >/dev/null; $E npm run generate-skill-files >/dev/null; cmp src/generated/skillFiles.ts $T/cand.ts; echo VENDORED-COPY-MATCHES-PREBUILD; $E npx vitest run src/util/qaCommitPolicy.test.ts src/util/daemonGitDocs.test.ts src/util/skillFiles.test.ts src/util/recommendSkill.test.ts src/tools/getContextGovernance.test.ts src/util/executionContractDocs.test.ts src/util/taskTimeBudgetDocs.test.ts'",
+    "exitCode": 0,
+    "outputTail": "Test Files 7 passed (7); Tests 87 passed (87); exit=0 (set -e: lint, parity-check and cmp all passed before vitest)",
+    "reportedAt": "2026-11-03T13:54:28.555Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md",
+    "docs/skills/moe-qa-loop/SKILL.md",
+    "packages/moe-daemon/src/generated/skillFiles.ts"
+  ],
+  "completionSummary": "Docs-only. MCP_SERVER.md complete_task currentBranch bullet now has a shared-mode clause (safe-branch text kept) and a worktree clause (task branch moe/task/<taskId>, merge-tree squash onto a literal consolidationBranch else main, recorded as refs/heads/<target>). moe-qa-loop SKILL.md step 3 says where the completion lands per mode. skillFiles.ts updated with exactly the two generator hunks (sha marker ed94cc8b886a + step-3 line); cmp against prebuild's generator output is byte-identical.",
+  "commits": [
+    {
+      "sha": "a708097048b60a4a504820d3a12e7a098c1648b4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T13:52:15Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T13:55:22.256Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T13:52:15Z",
+    "at": "2026-11-03T13:55:23.536Z"
+  }
 }
