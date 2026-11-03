@@ -121,8 +121,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -140,12 +140,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:21:49.720Z",
-  "updatedAt": "2026-11-03T16:22:44.050Z",
+  "updatedAt": "2026-11-03T16:55:20.846Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T14:27:03.726Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-03T16:54:05.092Z",
+    "wallClockMs": 181621366
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -203,10 +205,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-03T15:14:51Z",
-    "at": "2026-11-03T16:17:36.900Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T16:22:21Z",
+    "at": "2026-11-03T16:55:20.846Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -299,5 +302,9 @@
     "reportedAt": "2026-11-03T16:16:13.896Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M07m1: verified-local route gate in scripts/moe-agent.sh.\n\nWrapper (+88/-0):\n- Each worker/QA iteration calls verified_local_gate once, before any claim or chat read. The call sits right after read_commit_settings and before `if AUTO_CLAIM`. Architect and governor seats never call it.\n- The gate reads moe.get_execution_readiness via moe_rpc. Only a well-formed reply with profile verified-local acts: an object with a known profile, a bool `ready` and a str-list missingCapabilities.\n- It refuses with `[ERROR] <CODE>: <detail>` and exit 1, in this order: WSL_UNSUPPORTED, CLI_UNSUPPORTED (not claude/codex), SHARED_MODE_UNSUPPORTED, NOT_READY (ids in daemon order, isprintable-cleaned, '(none named)' when empty), then the VM_ROUTE_UNAVAILABLE placeholder.\n- The worktree-mode check mirrors resolveWorktreeMode (validators.ts:301-306): an unset key resolves to 'on' iff qualityGate is non-blank under JS trim(); the whitespace set is ASCII chr() code points.\n- The test seam MOE_POSTFLIGHT_WSL is read only in vm_route_is_wsl and ignored under MOE_RUNTIME_PROTECTED=1. is_wsl() is byte-identical to HEAD.\n- Every other answer (error frame, -32601, transport failure, malformed, legacy/observe/unreadable) returns 0 silently.\n\nTests:\n- Fake proxy: opt-in FAKE_CALL_LOG and FAKE_READINESS (+21/-1); both are inert when unset.\n- New scripts/tests/postflight-vm-route.sh (228 lines), chained from postflight.sh. Rows:\n  - T: masked CLI record identical across legacy x2, observe, unreadable, refuse, unknown, fail and 2 malformed replies.\n  - Refusals: W1, C1, C2, S1-S4, N1, N2, R1, R2. Each asserts exactly one ERROR line, one readiness read, no chat or claim before it, only deregister_worker after it, and no CLI.\n  - A1/G1: zero readiness reads.\n  - P1: protected seam ignored.\n  - A validators.ts drift guard and a static seam-scope check.\n- Mutants a-g plus the HEAD wrapper: all killed. Mutant e first survived, so I strengthened vmr_refused.\n\nGate: run fresh from the task worktree on the "
+  "completionSummary": "CQ-M07m1: verified-local route gate in scripts/moe-agent.sh.\n\nWrapper (+88/-0):\n- Each worker/QA iteration calls verified_local_gate once, before any claim or chat read. The call sits right after read_commit_settings and before `if AUTO_CLAIM`. Architect and governor seats never call it.\n- The gate reads moe.get_execution_readiness via moe_rpc. Only a well-formed reply with profile verified-local acts: an object with a known profile, a bool `ready` and a str-list missingCapabilities.\n- It refuses with `[ERROR] <CODE>: <detail>` and exit 1, in this order: WSL_UNSUPPORTED, CLI_UNSUPPORTED (not claude/codex), SHARED_MODE_UNSUPPORTED, NOT_READY (ids in daemon order, isprintable-cleaned, '(none named)' when empty), then the VM_ROUTE_UNAVAILABLE placeholder.\n- The worktree-mode check mirrors resolveWorktreeMode (validators.ts:301-306): an unset key resolves to 'on' iff qualityGate is non-blank under JS trim(); the whitespace set is ASCII chr() code points.\n- The test seam MOE_POSTFLIGHT_WSL is read only in vm_route_is_wsl and ignored under MOE_RUNTIME_PROTECTED=1. is_wsl() is byte-identical to HEAD.\n- Every other answer (error frame, -32601, transport failure, malformed, legacy/observe/unreadable) returns 0 silently.\n\nTests:\n- Fake proxy: opt-in FAKE_CALL_LOG and FAKE_READINESS (+21/-1); both are inert when unset.\n- New scripts/tests/postflight-vm-route.sh (228 lines), chained from postflight.sh. Rows:\n  - T: masked CLI record identical across legacy x2, observe, unreadable, refuse, unknown, fail and 2 malformed replies.\n  - Refusals: W1, C1, C2, S1-S4, N1, N2, R1, R2. Each asserts exactly one ERROR line, one readiness read, no chat or claim before it, only deregister_worker after it, and no CLI.\n  - A1/G1: zero readiness reads.\n  - P1: protected seam ignored.\n  - A validators.ts drift guard and a static seam-scope check.\n- Mutants a-g plus the HEAD wrapper: all killed. Mutant e first survived, so I strengthened vmr_refused.\n\nGate: run fresh from the task worktree on the ",
+  "completedAt": "2026-11-03T16:54:05.092Z",
+  "reviewCompletedAt": "2026-11-03T16:54:05.092Z",
+  "reviewSummary": "Reviewed completion 9578c609 (tree = candidate tree 53f766e1, on moe/work-2026-10-24 + origin). Size: +338/-1, exactly the 4 declared files, net 337 (<400).\n\nGate: task.verification run fresh from a /tmp git-archive snapshot of 9578c609 (blobs hash-checked before/after), env -i, job control. EXIT=0 in ~28 min. PASS parity-check, PASS postflight-vm-route x2 (alone + chained), PASS postflight.sh; 0 SKIP lines.\n\nDoD:\n1. Row T: identical masked CLI across 9 answers; postflight.sh +1 line, all rows pass.\n2. W1/C1/C2/S1-S3 refuse.\n3. N1 keeps daemon order; N2 '(none named)'.\n4. R1 worker / R2 qa: VM_ROUTE_UNAVAILABLE, no CLI.\n5. A1/G1: zero readiness reads; P1 seam ignored under protection, plus static scope check.\n6. Both harnesses pass.\n\nIndependent:\n- A/B of CI's wrapper-launching node suites (14 files), commit vs parent: both 828 tests / 714 pass / 13 fail, identical environmental fail set.\n- RED: parent wrapper fails T-legacy; refuse-returns-not-exits mutant fails W1.\n- Probed the gate under set -euo pipefail: surrogate/\\x1f ids cleaned to one line; malformed profile, ready null, NaN, empty and array replies keep today's path silently.\n- Worktree-mode mirror matches JS resolveWorktreeMode on 9 shapes.\n- Code: gate sits before `if AUTO_CLAIM`; locals only; is_wsl untouched; no readiness refresh.\n\nNon-blocking:\n- Codes and seam undocumented (deferred to CQ-M07 final docs).\n- The harness needs validators.ts in any snapshot.\n- m3 must keep MOE_POSTFLIGHT_WSL=0 from opening a VM route in WSL.",
+  "requiredCheckAtDone": null
 }
