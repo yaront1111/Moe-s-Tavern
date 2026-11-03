@@ -9,10 +9,43 @@
     "`cd packages/moe-daemon && npx vitest run src/state/FileWatcher.selfWrite.test.ts src/state/FileWatcher.test.ts src/state/FileWatcher.paths.test.ts` passes in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-74d9e1c7",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, RED before step 2 (test-driven-development). Step 4's negative control proves the RED.\n\nCreate packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts in your task worktree with the Write tool. The architect dry-ran a prototype at tip 9834628e: /mnt/d/moe-scratch/plan-bed60fca/FileWatcher.selfWrite.test.ts. Read it and write the file from it. Do not cp it: a shell copy leaves no TOOL witness.\n\nFixture:\n- Never start the watcher, so no chokidar handles open.\n- beforeEach:\n  - mkdtemp a dir and create <dir>/.moe/tasks;\n  - set file = <dir>/.moe/tasks/task-a.json;\n  - set events = [] and call vi.useFakeTimers();\n  - set watcher = new FileWatcher(moePath, (e) => { events.push(e); }).\n- afterEach: await watcher.stop(), vi.useRealTimers(), then rmSync the dir.\n- Deliver an event exactly as chokidar's handlers do, through the private scheduleChange:\n  `(watcher as unknown as { scheduleChange(e: FileChangeEvent): void }).scheduleChange({ type: 'change', path: file })`.\n- Advance time with `await vi.advanceTimersByTimeAsync(ms)`; processChange is async.\n\nCases. Keep the title prefixes exactly; step 4 greps them.\n\n(s1) The bug.\n- t=0: ignorePath(file).\n- t=200: deliver (consumed).\n- t=400: ignorePath(file).\n- t=550: deliver.\n- Advance 1000 ms, then expect(events).toEqual([]).\n- At base, write 1's 500 ms timer deletes write 2's token, so one 'change' arrives.\n\n(s2) A single self-write is suppressed.\n- ignorePath(file), advance 200, deliver, advance 1000.\n- events equals [].\n\n(s3) A change after the 500 ms window, with no new ignorePath, reaches onChange exactly once.\n- ignorePath(file), advance 600, deliver, advance 1000.\n- events equals [{ type: 'change', path: file }].\n\n(s4) stop() leaves no suppression timer pending.\n- ignorePath(file), await watcher.stop().\n- expect(vi.getTimerCount()).toBe(0).\n- At base the unref'd 500 ms timer stays pending.\n\nAt base 9834628e this file prints 'Tests  2 failed | 2 passed (4)'; (s1) and (s4) fail. Do not run vitest in the shared checkout (global rail).",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN: one suppression entry and one timer per path. Edit packages/moe-daemon/src/state/FileWatcher.ts with the Edit tool only. The architect's dry-run diff (+16/-4) is /mnt/d/moe-scratch/plan-bed60fca/FileWatcher.prototype.diff.\n\n(a) Field (:22):\n`/** Self-write tokens: one entry and one expiry timer per path. */ private ignorePaths = new Map<string, NodeJS.Timeout>();`\n\n(b) ignorePath (:50-56). After normalizing:\n- `const prior = this.ignorePaths.get(normalized); if (prior) clearTimeout(prior);`\n- Keep the 500 ms expiry, but guard it so only the current token can delete itself:\n  `const t = setTimeout(() => { if (this.ignorePaths.get(normalized) === t) this.ignorePaths.delete(normalized); }, 500);`\n- Keep `if (t.unref) t.unref();`, then `this.ignorePaths.set(normalized, t);`.\n- Add a comment: re-arm, never stack. An earlier call's timer must not delete the token a later write to the same file just registered, or that write's event reloads the whole store as an external edit (task-bed60fca).\n\n(c) scheduleChange (:101-105):\n`const token = this.ignorePaths.get(normalized); if (token) { clearTimeout(token); this.ignorePaths.delete(normalized); return; // Skip self-writes }`\n\n(d) stop(): right after `this.stopped = true;` add\n`for (const t of this.ignorePaths.values()) clearTimeout(t); this.ignorePaths.clear();`\n\nError handling: the change adds no throw path. clearTimeout on an already-fired timer is a no-op, and the timer callback only deletes its own entry. processChange's existing try/catch around onChange (it logs 'FileWatcher onChange error') and the 'FileWatcher error' handler stay as they are.\n\nKeep unchanged:\n- the 500 ms window, debounceMs, awaitWriteFinish, the watched-directory filter and path normalization;\n- consume-on-first-match, so a genuine external edit after a consumed token still reloads.\n\nTouch no other file. sweeps.ts:174-189 stays as it is: other leaks (an event later than 500 ms) remain possible, and arming stays idempotent.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification (DoD 3). Run this ONCE from the task worktree root after steps 1-2, exactly:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/FileWatcher.ts packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/state/FileWatcher.selfWrite.test.ts src/state/FileWatcher.test.ts src/state/FileWatcher.paths.test.ts\n\nWhat it does:\n- Copies HEAD's packages/moe-daemon into a mktemp snapshot and overlays the two files. They are uncommitted in the worktree; for QA after landing they equal HEAD.\n- Runs tsc --noEmit, which type-checks the sources (tsconfig excludes tests).\n- Runs the DoD vitest set. FileWatcher.test.ts and FileWatcher.paths.test.ts are the only other suites that exercise the watcher, and nothing outside FileWatcher.ts reads ignorePaths.\n- Never runs in the shared checkout (global rail).\n\nThe architect dry-ran it at 9834628e with the prototype: exit 0, 3 files, 30 tests.\n\nIts fresh output is complete_task's verification { command, exitCode: 0, outputTail }.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff. This is the final step: load the adversarial-self-review skill.\n\n(1) Negative control: the new tests must fail on the old code. Run from the worktree root:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\")\" packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/state/FileWatcher.selfWrite.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests \" \"$S/l\"; grep -aqE \"^ +Tests +2 failed \\| 2 passed \\(4\\)\" \"$S/l\" && grep -aqF \"> (s1) \" \"$S/l\" && grep -aqF \"> (s4) \" \"$S/l\" && echo RED-AT-BASE; }\n\n- Expect 'Tests  2 failed | 2 passed (4)' and RED-AT-BASE: the base source plus only the new test file. The architect's dry run printed exactly that.\n- Quote both lines in the completion summary.\n- Mutate nothing in the worktree (mem:convention-daemon-vitest-mutant-checkref).\n- QA variant after landing: replace the merge-base with <completion sha>^.\n\n(2) Memory: an entry leaves the map on consume, on its own expiry or on stop(), so nothing accumulates.\n\n(3) Ordering: Map operations are synchronous on one event loop, and only the latest timer for a path can delete it (the `=== t` guard).\n\n(4) Behaviour kept:\n- A genuine external edit within 500 ms of a daemon write to the same file is still suppressed, as before.\n- One after a consumed token or after expiry reloads (s3).\n- Path aliasing still matches (FileWatcher.paths.test.ts).\n\n(5) Windows: timers stay unref'd, so a pending token never holds the process open.\n\n(6) Error handling: no new throw or catch is needed. Confirm the diff leaves processChange's try/catch and the watcher 'error' handler untouched.\n\n(7) The diff touches only the two planned files: about +16/-4 runtime lines and about 70 test lines.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.ts",
+        "packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-33f67e5b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +57,81 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:43:41.189Z",
-  "updatedAt": "2026-11-03T20:53:22.237Z",
+  "updatedAt": "2026-11-03T20:57:47.526Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T20:53:14.675Z"
+    "firstClaimAt": "2026-11-03T20:53:14.675Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-74d9e1c7"
-  ]
+    "architect-74d9e1c7",
+    "worker-33f67e5b"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T20:56:52.256Z",
+  "executionContract": {
+    "intendedBehavior": "FileWatcher's self-write suppression holds exactly one token and one 500 ms expiry timer per normalized path. Re-registering a path (ignorePath) clears its previous timer before arming a new one. Consuming a token on a matching event clears its timer. stop() clears every pending token timer. A daemon write to a file it wrote 380-500 ms earlier is therefore still suppressed after the earlier call's expiry, instead of reaching onChange and triggering a full state.load() plus STATE_SNAPSHOT. A change event for a path with no live token still reaches onChange as before.",
+    "acceptanceCriteria": [
+      "Under fake timers, ignorePath at t=0, an event at t=200, ignorePath at t=400 and an event at t=550 produce zero onChange calls.",
+      "A single self-write's event is suppressed.",
+      "A change event arriving after the 500 ms window, with no new ignorePath, reaches onChange exactly once.",
+      "After ignorePath and stop(), no timer is pending.",
+      "FileWatcher.test.ts and FileWatcher.paths.test.ts pass unchanged."
+    ],
+    "invariants": [
+      "The suppression window stays 500 ms, and a token is consumed by the first matching event.",
+      "Path normalization (normalizeEventPath/watchRoot), the watched-directory filter, debounceMs and awaitWriteFinish are unchanged.",
+      "Token timers stay unref'd.",
+      "Error handling is unchanged: processChange's try/catch around onChange and the watcher 'error' handler."
+    ],
+    "compatibility": [
+      "ignorePath's signature and every caller (writeEntity in state/persistence.ts, seedCanonicalChannel, taskStore, workerStore, chatStore, StateManager, purgeResolvedProposals in sweeps.ts) are unchanged.",
+      "No MCP or /ws contract changes; only how often a daemon write is mistaken for an external edit."
+    ],
+    "reuse": [
+      "No new helper: the existing Set becomes a Map of timers inside FileWatcher."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/FileWatcher.ts:22 ignorePaths is a Set. ignorePath (:50-56) arms an unconditional 500 ms delete per call, and scheduleChange (:101-105) consumes on the first match.",
+      "packages/moe-daemon/src/index.ts:821-830: every onChange runs healMassDeletion, then state.load() under the state mutex, then broadcasts STATE_SNAPSHOT.",
+      "Nothing outside FileWatcher.ts reads ignorePaths (grep), and only FileWatcher.test.ts and FileWatcher.paths.test.ts exercise the watcher."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/FileWatcher.ts packages/moe-daemon/src/state/FileWatcher.selfWrite.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/state/FileWatcher.selfWrite.test.ts src/state/FileWatcher.test.ts src/state/FileWatcher.paths.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) A per-path counter instead of a timer map. Rejected: it still needs an expiry, and a timer that outlives its token is the bug. (b) Time-based suppression with no consume (ignore every event for P until a deadline). Rejected: it would also hide a genuine external edit that follows a consumed self-write, which (s3) pins. (c) Widening the 500 ms window. Rejected: it treats the symptom, and a stale timer still deletes a newer token.",
+    "codebaseInsights": "The bug is the stacked timer, not the window. Write 1's event consumes the token at about 200 ms, write 2 re-adds it, and write 1's timer fires at 500 ms and deletes write 2's token. Write 2's event at about 550-650 ms then reaches onChange. The hunt's real-chokidar repro saw the leak at gaps of 400-480 ms on Linux; the live Windows daemon's slower events widen the window downward. Today's activity log has 10 same-task write pairs in that window, mostly back-to-back record_commit calls. A prototype at 9834628e is +16/-4 runtime and 66 test lines; the base is RED 2/4 ((s1), (s4)), and with the fix 3 files / 30 tests pass.",
+    "risks": [
+      "Without the `=== t` guard in the timer callback, a missed clearTimeout path could still let an old timer delete a newer token. Keep both the clear and the guard.",
+      "(s3) must advance past 500 ms before delivering; delivering early would consume the token and hide a regression in the expiry path.",
+      "The negative control greps 'Tests  2 failed | 2 passed (4)'. Adding cases changes the count: keep four cases, or update step 4's expected counts."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/src/state/FileWatcher.ts",
+      "packages/moe-daemon/src/state/FileWatcher.test.ts",
+      "packages/moe-daemon/src/state/FileWatcher.paths.test.ts",
+      "packages/moe-daemon/src/state/persistence.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9834628e1656689aea635f266a421e9ca65ee2af",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T20:56:52.288Z",
+  "approvedPlanRevision": 1
 }
