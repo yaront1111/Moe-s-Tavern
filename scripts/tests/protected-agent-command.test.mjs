@@ -387,7 +387,8 @@ for (const engine of ENGINES) {
 // cmd.exe runs an npm .cmd shim (claude.cmd runs node by bare name) and looks a
 // bare name up in the current directory, the project, before PATH. Under the
 // marker both launchers export NoDefaultCurrentDirectoryInExePath=1, which every
-// cmd.exe in the seat honours (Node's own spawn of a bare name does not). A
+// cmd.exe in the seat honours, and so does Node 22+ (libuv 1.48+) for its own
+// bare-name spawns; G1 covers that. A
 // governor seat launches its CLI without a claimed task, so the inert runtime
 // is enough to reach the CLI; a worker row stops at MOE_TASKLESS_NO_LAUNCH.
 test('bash: C1 only the marker gives the CLI NoDefaultCurrentDirectoryInExePath=1', { skip: sh.skip }, async (t) => {
@@ -422,3 +423,58 @@ for (const engine of ENGINES.filter((e) => e.kind === 'ps1')) {
     }
   });
 }
+
+// The agent Git guard is a Node program. Node 22+ skips the current directory for a bare name under
+// NoDefaultCurrentDirectoryInExePath, older Node does not, and no Node skips a '.', relative or
+// in-project PATH entry. Under the marker the launcher passes the guard git's absolute path, from an
+// absolute PATH entry outside the project, and the guard runs %SystemRoot%'s powershell.exe
+// (task-52555102). The project is a Git repository, so the guard reaches its powershell.exe ACL step too.
+for (const engine of ENGINES.filter((e) => e.kind === 'ps1')) {
+  const skip = engine.skip || (!windows && 'the current-directory lookup is Windows-only') || (!GIT_DIR && 'git is not on PATH, and the agent Git guard needs it');
+  test(`${engine.name}: G1 a git.exe or powershell.exe planted at the project root never runs in the agent Git guard`, { skip }, async (t) => {
+    const fx = fixture(t);
+    assert.equal(spawnSync(path.join(GIT_DIR, 'git.exe'), ['init', '-q', fx.project]).status, 0);
+    for (const name of ['git.exe', 'powershell.exe']) copyFileSync(process.execPath, path.join(fx.project, name));
+    // NODE_OPTIONS makes every node.exe in the seat log itself. The planted git.exe does (node reads -C as an option);
+    // the planted powershell.exe exits on -NoProfile before the logger loads, so it shows only as a failed launch.
+    const log = path.join(fx.root, 'exe.log'), js = path.join(fx.root, 'which-exe.js');
+    writeFileSync(js, `require('fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, ppid: process.ppid, exe: process.execPath, args: process.argv.slice(1) }) + '\\n');\n`);
+    cliStub(fx, fx.trusted, 'claude', 'trusted');
+    const same = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+    // The guard is the `node - <project> ...` program; only its children count. A '.' entry also reaches
+    // the launcher's own PowerShell lookups, which this row does not cover (task-3acf7f79).
+    const guardChildren = () => {
+      const rows = (existsSync(log) ? readFileSync(log, 'utf8') : '').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+      const guards = new Set(rows.filter((e) => e.args[0] === '-' && e.args[1] && same(e.args[1], fx.project)).map((e) => e.pid));
+      assert.ok(guards.size > 0, 'the agent Git guard never ran');
+      return [...new Set(rows.filter((e) => guards.has(e.ppid) && same(path.dirname(e.exe), fx.project)).map((e) => path.basename(e.exe).toLowerCase()))];
+    };
+    // A '.' PATH entry reaches the plant through any Node; without one, only the current-directory lookup
+    // could. Legacy keeps Node's lookup, which also proves the planted file is reachable.
+    for (const [marker, dot, want] of [['1', true, []], ['1', false, []], [null, false, ['git.exe']]]) {
+      rmSync(log, { force: true }); rmSync(fx.ran, { force: true });
+      const r = await run(engine, fx, { command: 'claude', marker, role: 'governor', pathEntries: [...(dot ? ['.'] : []), nodeBin(fx), fx.trusted, ...TAIL, GIT_DIR],
+        env: { MOE_NODE_COMMAND: undefined, NODE_OPTIONS: `--require "${js.replaceAll('\\', '/')}"` } });
+      assert.deepEqual(guardChildren(), want, show(r));
+      if (marker) {
+        assert.equal(r.code, 0, show(r));
+        assert.match(existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8') : '', /^trusted claude/m, show(r));
+      }
+    }
+  });
+}
+test('bash: G2 the agent Git guard never runs a git that only an in-project PATH entry reaches', { skip: sh.skip }, async (t) => {
+  const fx = fixture(t);
+  const log = path.join(fx.root, 'git.log'), planted = path.join(fx.project, 'git');
+  // Logs the command line of the process that ran it (node for the guard, bash for the launcher), then runs the real git.
+  writeFileSync(planted, `#!/bin/sh\nps -o args= -p "$PPID" >> '${log}'\nexec '${path.join(realpathSync('/usr/bin'), 'git')}' "$@"\n`);
+  chmodSync(planted, 0o755);
+  cliStub(fx, fx.trusted, 'claude', 'trusted');
+  for (const [marker, guardRan] of [['1', false], [null, true]]) {
+    rmSync(log, { force: true });
+    const r = await run(sh, fx, { command: 'claude', marker, role: 'governor', pathEntries: [fx.project, nodeBin(fx), fx.trusted, ...TAIL], env: { MOE_NODE_COMMAND: undefined } });
+    assert.equal(r.code, 0, show(r));
+    const parents = (existsSync(log) ? readFileSync(log, 'utf8') : '').split('\n').filter((l) => l.trim()).map((l) => path.basename(l.trim().split(/\s+/)[0]));
+    assert.equal(parents.includes('node'), guardRan, `${parents.join(',')}\n${show(r)}`);
+  }
+});

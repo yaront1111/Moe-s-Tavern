@@ -419,8 +419,13 @@ and `verified-local` stays refused until certification and the client gates pass
   `grok`, by name, and take that CLI and node (sh also python3) only from an absolute PATH entry outside the project
   (`MOE_PROTECTED_AGENT_COMMAND_REFUSED`, `MOE_PROTECTED_AGENT_CLI_NOT_FOUND`, `MOE_PROTECTED_INTERPRETER_NOT_FOUND`).
   Both export `NoDefaultCurrentDirectoryInExePath=1`, so on Windows cmd.exe (an npm `.cmd` CLI shim, or any cmd.exe
-  in the seat) never looks a bare name up in the current directory, the project; Node's own `spawn` of a bare name
-  still does, because libuv ignores that variable.
+  in the seat) and Node 22+ (libuv 1.48+, which reads the variable from the spawning process) never look a bare name up
+  in the current directory, the project. Older Node still does, and no lookup skips a `.`, relative or in-project PATH
+  entry. So the agent Git guard's Node program gets git's absolute path, from an absolute PATH entry outside the
+  project, and runs `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`; with no such git the guard refuses
+  the launch (`MOE_AGENT_GIT_GUARD_FAILED`). The remaining residual is the agent CLI's own bare-name spawns: they
+  inherit the variable, but Moe controls neither the CLI's PATH walk nor a CLI runtime that ignores it. The launchers'
+  own lookups through such PATH entries are open: task-0b2ea570 (sh) and task-3acf7f79 (ps1).
   VS Code (`services/MoeDaemonClient.ts`, `util/AgentLauncher.ts`) selects the same way from
   `<extensionPath>/bundled`. Candidate source becomes Git objects only
   (`admission.mjs`); branch writes stay in the wrappers' landing. A guest gets no daemon address: the host session
