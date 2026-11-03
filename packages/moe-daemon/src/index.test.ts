@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import net from 'net';
+import dns from 'dns';
 import { createRequire } from 'module';
 import { pathToFileURL } from 'url';
 import { execSync, spawn, type ChildProcess } from 'child_process';
@@ -253,8 +254,8 @@ describe('daemon lifecycle validation', () => {
       }
     }
 
-    function writeDaemonFiles(port: number, pid = DEAD_PID, projectPath = testDir): string {
-      const raw = JSON.stringify(daemonInfo({ port, pid, projectPath }));
+    function writeDaemonFiles(port: number, pid = DEAD_PID, projectPath = testDir, extra: Partial<DaemonInfo> = {}): string {
+      const raw = JSON.stringify(daemonInfo({ port, pid, projectPath, ...extra }));
       fs.writeFileSync(jsonPath(), raw);
       fs.writeFileSync(lockPath(), JSON.stringify({
         pid, projectPath, createdAt: new Date().toISOString(),
@@ -662,6 +663,124 @@ setInterval(() => {}, 60000);`;
           expect([await existingDaemonBlocksStart(testDir), probes, fs.existsSync(jsonPath()), fs.existsSync(lockPath())])
             .toEqual([false, 0, false, false]);
         });
+      });
+    });
+
+    // daemon.json is repository content, and a /health answer from another host could name any pid. So its
+    // bindHost is dialed only when the literal it resolves to is loopback or held by a local interface.
+    describe('a daemon.json bindHost is dialed only when it names this machine (task-d6ebe4ab)', () => {
+      const OFF = '192.0.2.10'; // RFC 5737 TEST-NET-1
+      const NAME = 'moe-bindhost.test';
+      const lo = { address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' };
+      const eth0 = { address: OFF, netmask: '255.255.255.0', family: 'IPv4', mac: '02:00:00:00:00:01', internal: false, cidr: `${OFF}/24` };
+      type Interfaces = ReturnType<typeof os.networkInterfaces>;
+      const loopbackOnly = { lo: [lo] } as Interfaces;
+      const withOff = { lo: [lo], eth0: [eth0] } as Interfaces;
+      const unreadable = () => vi.spyOn(os, 'networkInterfaces').mockImplementation(() => {
+        throw new Error('uv_interface_addresses EPERM');
+      });
+      const parsed = (raw: string) => JSON.parse(raw) as DaemonInfo;
+      const signals = (spy: ReturnType<typeof killSpyWithoutSignals>) =>
+        spy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined);
+      let dialed: string[];
+      let lookup: ReturnType<typeof vi.spyOn>;
+
+      beforeEach(() => {
+        dialed = [];
+        // Every address answers like the healthy fake daemon, so only the bindHost rule can withhold a signal.
+        const realRequest = http.request;
+        vi.spyOn(http, 'request').mockImplementation(((options: http.RequestOptions, callback?: (res: http.IncomingMessage) => void) => {
+          dialed.push(String(options.hostname));
+          return realRequest({ ...options, hostname: '127.0.0.1' }, callback);
+        }) as typeof http.request);
+        lookup = vi.spyOn(dns.promises, 'lookup').mockImplementation((async (name: string) => {
+          if (name === NAME) return { address: OFF, family: 4 };
+          throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${name}`), { code: 'ENOTFOUND' });
+        }) as unknown as typeof dns.promises.lookup);
+      });
+
+      it.each([['an IP literal', OFF], ['a name that resolves', NAME]])('B1 %s off this machine is never dialed, signalled or removed', async (_kind, bindHost) => {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(loopbackOnly);
+        const raw = writeDaemonFiles(await healthServer(testDir), process.pid, testDir, { bindHost });
+        const info = parsed(raw);
+        const lock = fs.readFileSync(lockPath(), 'utf-8');
+        const logged = vi.spyOn(logger, 'info');
+        const errors = vi.spyOn(logger, 'error');
+        const killSpy = killSpyWithoutSignals();
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: false, reason: 'bindHost not local' });
+        expect(await probeDaemonHealth(info, testDir, 2000)).toBe(false);
+        await statusDaemon(testDir);
+        await stopDaemon(testDir);
+
+        expect(dialed).toEqual([]);
+        expect(signals(killSpy)).toEqual([]);
+        expect([fs.readFileSync(jsonPath(), 'utf-8'), fs.readFileSync(lockPath(), 'utf-8'), fs.existsSync(stopPath())])
+          .toEqual([raw, lock, false]);
+        expect(process.exitCode).toBe(1);
+        expect(logged.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields))
+          .toMatchObject([{ status: 'stopped', reason: 'bindHost not local', pid: process.pid }]);
+        expect(errors.mock.calls.map(([fields]) => fields)).toEqual([{ pid: process.pid, bindHost }]);
+      });
+
+      it.each([['an IP literal', OFF], ['a name that resolves', NAME]])('B2 %s to a local interface still stops, dialing the resolved literal', async (_kind, bindHost) => {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(withOff);
+        const info = parsed(writeDaemonFiles(await healthServer(testDir), process.pid, testDir, { bindHost }));
+        const killSpy = killSpyWithoutSignals();
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info });
+        await stopDaemon(testDir);
+
+        expect(signals(killSpy)).toEqual([[process.pid, 'SIGTERM']]);
+        expect(fs.existsSync(stopPath())).toBe(true);
+        // One resolution per validation, and the literal it gave is the one dialed.
+        expect(dialed).toEqual([OFF, OFF]);
+        expect(lookup).toHaveBeenCalledTimes(bindHost === NAME ? 2 : 0);
+        expect(process.exitCode ?? 0).toBe(0);
+      });
+
+      it.each([[undefined], ['127.0.1.1'], ['::1'], ['::ffff:127.0.0.1'], ['0.0.0.0'], ['::'], ['wsl']])('B3 loopback bindHost %s stops as before even when the interfaces cannot be read', async (bindHost) => {
+        unreadable();
+        const info = parsed(writeDaemonFiles(await healthServer(testDir), process.pid, testDir, bindHost === undefined ? {} : { bindHost }));
+        const probed = bindHost === undefined || ['0.0.0.0', '::', 'wsl'].includes(bindHost) ? '127.0.0.1' : bindHost;
+        const killSpy = killSpyWithoutSignals();
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info });
+        await stopDaemon(testDir);
+
+        expect(signals(killSpy)).toEqual([[process.pid, 'SIGTERM']]);
+        expect(dialed).toEqual([probed, probed]);
+      });
+
+      it('B4 unreadable interfaces leave loopback only, so a non-loopback bindHost is refused', async () => {
+        unreadable();
+        const info = daemonInfo({ port: await healthServer(testDir), bindHost: OFF });
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: false, reason: 'bindHost not local' });
+        expect(dialed).toEqual([]);
+      });
+
+      // net.isIP coerces its argument, so a one-element array passes as an IP literal unless the type is checked.
+      it.each([[[OFF]], [['127.0.0.1']], [5]])('B6 a non-string bindHost %j is never dialed and never throws', async (bindHost) => {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(withOff);
+        const info = daemonInfo({ port: await healthServer(testDir), bindHost: bindHost as unknown as string });
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: false, reason: 'health check failed' });
+        expect(await probeDaemonHealth(info, testDir, 2000)).toBe(false);
+        expect(dialed).toEqual([]);
+      });
+
+      it('B5 a foreign daemon.json bindHost is dialed only when a local interface holds it', async () => {
+        const info = daemonInfo({ port: await healthServer(testDir, DEAD_PID), pid: DEAD_PID, bindHost: OFF });
+        const interfaces = vi.spyOn(os, 'networkInterfaces').mockReturnValue(loopbackOnly);
+
+        expect(await otherSide(() => validateDaemonInfoForProject(testDir, info)))
+          .toEqual({ valid: false, reason: 'foreign daemon unreachable', foreign: true });
+        expect(dialed).toEqual([]);
+
+        interfaces.mockReturnValue(withOff);
+        expect(await otherSide(() => validateDaemonInfoForProject(testDir, info))).toEqual({ valid: true, info, foreign: true });
+        expect(dialed).toEqual([OFF]);
       });
     });
   });

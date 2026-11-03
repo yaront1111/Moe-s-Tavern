@@ -546,6 +546,17 @@ and `verified-local` stays refused until certification and the client gates pass
   after the stop, and it could restart the old one"), and so does a tree a previous attempt could not resolve. A
   second click while a stop is in flight is refused. On other hosts the protected restart destroys only a captured
   handle whose provenance verifies.
+- **The daemon CLI's `stop` and `status`** (`packages/moe-daemon/src/index.ts`, task-d6ebe4ab). Both flows above reach
+  the old daemon through the installed CLI's `stop`. `stop`, `status` and the `start` gate find it through
+  `.moe/daemon.json`, which is repository content, so the CLI dials its `bindHost` only when the literal it resolves to
+  is loopback (127.0.0.0/8 or `::1`) or an address that one of this machine's network interfaces holds. The name is
+  resolved once, and that literal is the one dialed. Otherwise nothing is probed. While the recorded pid is alive,
+  `stop` sends no signal, removes nothing and exits 1: Stop and Replace then starts nothing, and the protected Restart
+  Daemon reports that the stop request failed. `status` reports `stopped` with reason `bindHost not local`. A dead
+  pid's daemon.json is still removed, and `start` replaces the file as it does any daemon.json it cannot verify.
+  Loopback, `0.0.0.0`, `::`, `--host wsl`, and a name or address of a local interface stop as before. For a
+  daemon.json from the other side of the WSL boundary, the gateway from the routing table is still probed, and such a
+  file is never signalled or removed.
 - **VS Code parity** (CQ-RF06, `services/MoeDaemonClient.ts`). Selection takes only `<extensionPath>/bundled` and an
   absolute node outside the project, and fails closed. Windows bases that are not plain local paths are refused with
   the JetBrains words. Two gaps are open:

@@ -122,6 +122,25 @@ and the plugin reuses any daemon whose `.moe/daemon.json` pid and port are still
 `_run` child, which can outlive the IDE, so after closing the IDE confirm that no
 `node.exe … moe-jetbrains\daemon\index.js` process is left before reopening the project.
 
+### `moe-daemon stop` sends no signal: `bindHost not local`
+
+**Symptom:** `moe-daemon stop` exits 1 with "daemon.json names a bindHost that is not an address of this
+machine, so its pid cannot be verified here: no signal sent and nothing removed. Check what that process is
+and stop it yourself if it is a Moe daemon". `moe-daemon status` shows `stopped` with reason
+`bindHost not local`. In JetBrains, **Stop and Replace** starts nothing, or **Restart Daemon** reports "the
+stop request failed".
+
+**Cause:** `.moe/daemon.json` is repository content, and the CLI probes its `bindHost` for `/health` before
+it signals the recorded pid. It dials that `bindHost` only when the address it resolves to is loopback or
+held by one of this machine's network interfaces, because a `/health` answer from another host could name
+any pid. A pull, a hand edit, or a DNS change for a daemon started with `--host <name>` can point it
+elsewhere.
+
+**Solution:** Check what the pid is (`ps -p <pid> -o pid,lstart,args`, or Task Manager's Details tab). If it
+is this project's Moe daemon, stop it yourself. Otherwise leave that process alone and remove
+`.moe/daemon.json` as in [daemon.json is stale](#daemonjson-is-stale). Then start the daemon again (in
+JetBrains, **Restart Daemon**). A `--host` value should name this machine.
+
 ---
 
 ## Plugin Issues
@@ -216,7 +235,7 @@ cat .moe/daemon.json
 
 **Solution:**
 - After an IDE restart, the daemon this IDE started before is recognized, and there is nothing to do.
-- Otherwise the plugin asks when it connects. **Keep It** (the default) leaves that daemon running and the plugin disconnected, because VS Code or a terminal agent may be using it. **Stop and Replace** runs the installed CLI's `stop`, waits up to 15 s until the process, its parent and `.moe/daemon.json` have cleared, and then starts the installed daemon. If the stop fails or a process outlives the wait, nothing new starts until those captured processes have exited.
+- Otherwise the plugin asks when it connects. **Keep It** (the default) leaves that daemon running and the plugin disconnected, because VS Code or a terminal agent may be using it. **Stop and Replace** runs the installed CLI's `stop`, waits up to 15 s until the process, its parent and `.moe/daemon.json` have cleared, and then starts the installed daemon. If the stop fails or a process outlives the wait, nothing new starts until those captured processes have exited. This `stop` signals nothing when daemon.json's `bindHost` is not an address of this machine (see [`moe-daemon stop` sends no signal](#moe-daemon-stop-sends-no-signal-bindhost-not-local)).
 - When no dialog appears, stop that process yourself, then use **Restart Daemon**. Restart Daemon never signals a daemon it cannot verify (see [Restart Daemon refuses or starts nothing](#restart-daemon-refuses-or-starts-nothing)).
 
 ---
@@ -243,7 +262,7 @@ cat .moe/daemon.json
 - "Protected execution profile: Restart Daemon did not stop pid N, which .moe/daemon.json names: this IDE did not start it from the installed Moe runtime." (or "the stop request failed"), followed by "Check what that process is and stop it yourself if it is a Moe daemon, then use Restart Daemon."
 - "Restart Daemon did not stop pid N, which .moe/daemon.json names on the other side of the Windows/WSL boundary: …"
 
-**Cause:** On Windows, ending a process is `TerminateProcess`, which the old supervisor takes for a crash of its `_run` child and restarts. So Restart Daemon first runs the installed CLI's `stop`. It then ends the old process tree within one 15 s wait, the roots before their children: the supervisor this IDE spawned and, under the protected profile, the daemon's verified parent. It starts nothing while one of those processes still runs, or while an earlier attempt left a tree unresolved, and the plugin's automatic start waits too. On any host the protected profile never signals a `.moe/daemon.json` pid it cannot verify. A pid that is absent, dead or 0 is never signalled, so a stale `.moe/daemon.json` alone does not block a restart. The IDE cannot see processes on the other side of the WSL boundary.
+**Cause:** On Windows, ending a process is `TerminateProcess`, which the old supervisor takes for a crash of its `_run` child and restarts. So Restart Daemon first runs the installed CLI's `stop`. It then ends the old process tree within one 15 s wait, the roots before their children: the supervisor this IDE spawned and, under the protected profile, the daemon's verified parent. It starts nothing while one of those processes still runs, or while an earlier attempt left a tree unresolved, and the plugin's automatic start waits too. On any host the protected profile never signals a `.moe/daemon.json` pid it cannot verify. A pid that is absent, dead or 0 is never signalled, so a stale `.moe/daemon.json` alone does not block a restart. The IDE cannot see processes on the other side of the WSL boundary. The installed `stop` signals nothing when daemon.json's `bindHost` is not an address of this machine (see [`moe-daemon stop` sends no signal](#moe-daemon-stop-sends-no-signal-bindhost-not-local)).
 
 **Solution:** Wait for a running stop to finish. Otherwise look up the pid (Task Manager's Details tab, or `tasklist /fi "PID eq N"`), end it if it is a Moe `node` process, then use Restart Daemon again. For the WSL case, stop the process on that side.
 
