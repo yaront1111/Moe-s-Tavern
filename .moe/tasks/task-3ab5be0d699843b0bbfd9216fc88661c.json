@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -101,7 +101,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:27:05.532Z",
-  "updatedAt": "2026-11-03T17:53:09.437Z",
+  "updatedAt": "2026-11-03T17:55:31.348Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:37:25.780Z",
     "plannedStepCount": 5,
@@ -196,5 +196,46 @@
   },
   "planApprovedAt": "2026-11-03T17:45:18.967Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T17:47:04.727Z"
+  "workStartedAt": "2026-11-03T17:47:04.727Z",
+  "reviewStartedAt": "2026-11-03T17:53:50.624Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/g3ab5.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in media/board.js src/providers/BoardViewProvider.ts src/panels/TaskDetailPanel.ts tests/board-previous-move.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log && grep -aq '^ℹ fail 0$' ../v.log ) && ( R=$(git rev-parse --show-toplevel) && C=$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\") && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/r3ab5.XXXX) && git -C \"$R\" archive \"$B\" moe-vscode packages/moe-daemon/src/tools | tar -x -C \"$L\" && ! cmp -s \"$L/moe-vscode/media/board.js\" \"$R/moe-vscode/media/board.js\" && cp \"$R/moe-vscode/tests/board-previous-move.test.cjs\" \"$L/moe-vscode/tests/\" && cd \"$L/moe-vscode\" && { NODE_PATH=\"$C/moe-vscode/node_modules\" node --test --test-reporter=tap tests/board-previous-move.test.cjs > ../red.log 2>&1; true; } && N=$(grep -o '^not ok [0-9]* - PM[0-9]*' ../red.log | grep -o 'PM[0-9]*' | tr '\\n' ' ') && echo \"RED: $N\" && [ \"$N\" = \"PM2 PM3 PM4 PM5 PM6 PM7 \" ] && [ $(grep -c '^not ok' ../red.log) = 6 ] ) && cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && V=moe-vscode && T=$V/tests/board-previous-move.test.cjs && D=$(git diff --name-only \"$B\" -- . ':(exclude).moe' \":(exclude)$V/media/board.js\" \":(exclude)$V/src/providers/BoardViewProvider.ts\" \":(exclude)$V/src/panels/TaskDetailPanel.ts\" \":(exclude)$T\"; git ls-files --others --exclude-standard -- . ':(exclude).moe' \":(exclude)$T\") && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 703\nℹ pass 693\nℹ fail 0\nℹ skipped 10\nRED: PM2 PM3 PM4 PM5 PM6 PM7 \n",
+    "reportedAt": "2026-11-03T17:53:50.624Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/board-previous-move.test.cjs",
+    "moe-vscode/media/board.js",
+    "moe-vscode/src/providers/BoardViewProvider.ts",
+    "moe-vscode/src/panels/TaskDetailPanel.ts"
+  ],
+  "completionSummary": "Fixed VS Code board left-arrow and Task Detail Previous to use daemon-legal moves; board reopen intent now asks for a trimmed, nonblank reason host-side with explicit disconnect/rejection handling. Added production VM regression tests PM1–PM7 (including malformed IDs and host failures). Fresh joined plan checks exit 0: full archive npm ci/test/compile, 703 tests / 693 pass / 0 fail / 10 skipped; exactly PM2–PM7 fail at base; scope check passes. Worktree qualityGate parity+lint exit 0. Adversarial review clean; sibling-owned hunks unchanged; handoff and gotcha memories saved.",
+  "commits": [
+    {
+      "sha": "bb94ce7e033c52473338d668aef357c4c6303789",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T17:45:22Z",
+      "paths": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/tests/board-previous-move.test.cjs"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T17:55:31.348Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-03T17:45:22Z",
+    "at": "2026-11-03T17:55:31.348Z"
+  }
 }

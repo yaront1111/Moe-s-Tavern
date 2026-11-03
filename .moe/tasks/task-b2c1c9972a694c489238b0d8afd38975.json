@@ -13,36 +13,58 @@
     {
       "stepId": "step-1",
       "description": "Tests first: create scripts/tests/doctor-ps1.test.mjs with the Write tool. Never cp it into the tree: a shell write leaves no TOOL witness.\n\nREFERENCE: /mnt/d/moe-scratch/plan-b2c1/proto/scripts/tests/doctor-ps1.test.mjs is the architect's dry-run copy, run under Windows node v24.16.0 with Windows PowerShell 5.1. With the fix it went 3/3 green with 0 skipped. Against base doctor.ps1, DP1 and DP2 failed and DP3 passed. Reuse it, but write the file yourself.\n\nDESIGN:\n- An ESM node:test file. The rows use the repo's Windows-only option `{ skip: process.platform !== 'win32' && 'Windows only' }`, so they skip under WSL node.\n- runNative(calls) makes a temp dir in os.tmpdir() and writes two tools there: recorder.cmd, which appends `argv=[%*]` to argv.log and exits 0, and exit3.cmd, which exits 3.\n- It writes a probe.ps1 and runs it with `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File probe.ps1`. The probe:\n  - parses scripts/doctor.ps1 with `[System.Management.Automation.Language.Parser]::ParseFile` and throws on parse errors;\n  - finds exactly one FunctionDefinitionAst named Run-Native and dot-sources `[scriptblock]::Create($fn[0].Extent.Text)`;\n  - wraps each call in try/catch, writing `RESULT ok` or `RESULT thrown: <message>`.\n- Values are single-quoted PowerShell literals with `'` doubled. The temp dir is removed in a finally.\n\nROWS. Keep the exact ids: checkRef [2] greps `DP[0-9]`.\n- DP1: `@('buildPlugin')` gives results ['ok'] and argv ['argv=[buildPlugin]'].\n- DP2: `@('--version')` gives results ['ok'] and argv ['argv=[--version]'].\n- DP3: exit3.cmd gives one result matching /^thrown: .*exited with code 3/. It passes at base by design, because exit-code propagation does not depend on the bug. It pins that the rename keeps Run-Native's throw.\n\nRun it red before step 2 with WINDOWS node, from the worktree root: `node.exe --test --test-reporter=tap scripts/tests/doctor-ps1.test.mjs`. Expected: DP1 and DP2 not ok, DP3 ok, skipped 0. WSL `node` skips all three, which proves nothing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/doctor-ps1.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/doctor-ps1.test.mjs"
+      ],
+      "note": "Created doctor-ps1.test.mjs (DP1-DP3). Windows node.exe run at base: DP1, DP2 not ok, DP3 ok, skipped 0.",
+      "startedAt": "2026-11-03T17:53:58.705Z",
+      "completedAt": "2026-11-03T17:54:13.712Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix scripts/doctor.ps1 with Edit only. Reference: /mnt/d/moe-scratch/plan-b2c1/fixed-doctor.ps1.\n- Rename Run-Native's parameter: `function Run-Native([string]$Cmd, [string[]]$Arguments) {` (:14), and splat `& $Cmd @Arguments 2>&1 | Out-Host` (:23).\n- Add one comment line above the function: `# Not named Args: in a simple function the automatic unbound-arguments variable replaces a parameter of that name.`\n- The comment must not contain the literal token `$args` in any case, because DoD 1's case-insensitive grep would match it.\n- Do not make the function advanced, and change no other line. The callers at :45, :51 and :68 already pass arrays and stay as they are.\n- Keep the file ASCII with LF line endings and no BOM, as it is today.\n\nError handling is unchanged and must stay so:\n- Run-Native still throws \"$Cmd exited with code $LASTEXITCODE\" on a non-zero exit (DP3 pins it).\n- The finally still restores $ErrorActionPreference and PSNativeCommandUseErrorActionPreference.\nAfter the edit, re-run the step-1 command: 3 pass, 0 fail, 0 skipped.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/doctor.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/doctor.ps1"
+      ],
+      "note": "Renamed parameter to $Arguments and splat; added comment. Windows node: pass 3 fail 0 skipped 0.",
+      "startedAt": "2026-11-03T17:54:14.455Z",
+      "completedAt": "2026-11-03T17:54:23.607Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification (once, fresh, from the task worktree root). Run the four executionContract.checkRefs joined with ' && ' in this order: [0] green, [1] static, [2] red, [3] scope. Submit that exact text, its exit code and the output tail as complete_task's verification.\n- [0] runs the new test with Windows node.exe and requires '# pass 3', '# fail 0' and '# skipped 0' (CR stripped).\n- [1] is DoD 1 and DoD 3's parse half. `grep -niE '\\$args\\b' scripts/doctor.ps1` must print nothing, and Windows PowerShell's ParseFile must report 0 errors (it prints PARSE_OK).\n- [2] puts the merge-base doctor.ps1 and the new test into a fresh /mnt/d/moe-scratch/rb2c1.XXXX layout, which Windows node can reach. It requires the not-ok rows to be exactly DP1 and DP2.\n- [3] is the scope check: only scripts/doctor.ps1 and the new test may differ, plus .moe/.\nError handling for a red run:\n- [0] or [2] failing prints the TAP counts. Fix doctor.ps1, never the assertions.\n- [1] failing names the line that still matches, or the parse error.\n- [3] names the stray path. Revert it.\nThe architect's dry run passed all four, and each negative control (base file, unparseable file) exited 1.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "All four checkRefs passed (green 3/0/0, static+PARSE_OK, RED DP1 DP2, scope). exit 0.",
+      "startedAt": "2026-11-03T17:54:24.503Z",
+      "completedAt": "2026-11-03T17:54:48.489Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this row's diff. Load the adversarial-self-review skill first.\nChecklist:\n- Is every former use of the parameter renamed? A leftover splat of the automatic variable would silently pass nothing again.\n- Does the comment avoid the literal token?\n- Do Run-Native's three callers still pass arrays (`@(\"-version\")`, `@(\"--version\")`, `@(\"buildPlugin\")`)?\n- Is the throw text unchanged?\n- Is the file still ASCII with LF line endings and no BOM (`grep -c $'\\r' scripts/doctor.ps1` prints 0; `head -c3 | od -c` shows no BOM)?\n- Does the test clean up its temp dir on failure (finally), avoid hard-coded drive letters, and never invoke real java or Gradle?\n- `git diff` touches only the 2 files.\nIf you find something, fix it inside those files and re-run step 3's command before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/doctor.ps1",
+        "scripts/tests/doctor-ps1.test.mjs"
+      ],
+      "note": "Self-review: diff is 2 lines + comment in doctor.ps1; no leftover splat; callers (:46,:52,:69) still pass arrays; throw text and finally unchanged; file has 0 CR and no BOM; test cleans temp dir in finally, no drive letters, no real java/Gradle; scratch rb2c1 dirs removed.",
+      "startedAt": "2026-11-03T17:54:49.455Z",
+      "completedAt": "2026-11-03T17:54:54.974Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -54,11 +76,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:31:44.716Z",
-  "updatedAt": "2026-11-03T17:52:36.059Z",
+  "updatedAt": "2026-11-03T17:54:59.644Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:49:07.939Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -68,7 +91,12 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:51:58.563Z",
   "executionContract": {
@@ -125,5 +153,19 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T17:51:58.591Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:53:58.705Z",
+  "reviewStartedAt": "2026-11-03T17:54:59.642Z",
+  "verification": {
+    "command": "checkRefs [0]-[3] joined in order (bash /tmp/b2c1-verify.sh): [0] node.exe --test --test-reporter=tap scripts/tests/doctor-ps1.test.mjs requires pass 3/fail 0/skipped 0; [1] ! grep -niE '\\$args\\b' scripts/doctor.ps1 && powershell.exe ParseFile -> PARSE_OK; [2] merge-base doctor.ps1 + new test in /mnt/d/moe-scratch/rb2c1.XXXX -> RED rows exactly DP1 DP2; [3] scope diff only doctor.ps1 + test",
+    "exitCode": 0,
+    "outputTail": "# tests 3\n# pass 3\n# fail 0\n# skipped 0\nPARSE_OK\nRED: DP1 DP2 \nALL_OK",
+    "reportedAt": "2026-11-03T17:54:59.642Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/doctor-ps1.test.mjs",
+    "scripts/doctor.ps1"
+  ],
+  "completionSummary": "Renamed Run-Native's parameter from $Args to $Arguments (and its splat) in scripts/doctor.ps1 so the automatic unbound-arguments variable no longer replaces it; added scripts/tests/doctor-ps1.test.mjs (DP1-DP3, Windows-only)."
 }

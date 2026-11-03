@@ -63,7 +63,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -83,16 +83,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:27:40.881Z",
-  "updatedAt": "2026-11-03T17:53:28.298Z",
+  "updatedAt": "2026-11-03T17:55:40.176Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:45:34.012Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T17:55:40.173Z",
+    "wallClockMs": 606161
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-ed0f6a9e"
+    "worker-ed0f6a9e",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
@@ -203,5 +206,9 @@
     "kind": "completion",
     "sessionId": "worker-ed0f6a9e@2026-11-03T17:49:09Z",
     "at": "2026-11-03T17:53:28.298Z"
-  }
+  },
+  "completedAt": "2026-11-03T17:55:40.173Z",
+  "reviewCompletedAt": "2026-11-03T17:55:40.173Z",
+  "reviewSummary": "Reviewed completion ce5ff130 (on moe/work-2026-10-24, HEAD of control checkout), +141/-0 net, 2 files, well under the 400-LOC cap. Diff: ChatViewProvider.ts +4 (requestDecisions() after requestChannels() in the onConnectionChanged 'connected' branch and in the onDidChangeVisibility connected branch; 'ready' path untouched; both under an explicit 'connected' check, listeners still in this.disposables/this.viewDisposables) plus new tests/chat-decisions-reconnect.test.cjs CH1-CH3. I re-ran the task.verification legs myself in a /tmp full-repo git-archive snapshot under env -i + nvm node v24.21.0: GREEN `npm ci && npm test && npm run compile` -> tests 739, pass 729, fail 0, skipped 10, compile ok (exit 0). RED: archive of the completion's parent (MOE_LAND_TARGET=ce5ff130^, since in the control checkout the merge-base with the land branch is the completion itself) + only the new test -> exactly CH1 CH2 CH3 not ok (3 'not ok'), each failing on the intended assertion (frames: [\"GET_CHANNELS\"] with no GET_DECISIONS), not a load error. Scope: diff names exactly the 2 declared files; no forbidden patterns (eval(, innerHTML, dangerouslySetInnerHTML, __proto__) in either. DoD: (1) ready-before-connect -> GET_DECISIONS+GET_CHANNELS on 'connected' (CH1, also asserts nothing sent while disconnected); (2) disconnect/reconnect re-sends GET_DECISIONS and the DECISIONS reply is posted as exactly one loadDecisions (CH2, deepEqual); (3) test runs the production ChatViewProvider.ts + MoeDaemonClient.ts transpiled under vm and fails at the merge-base, full-snapshot npm ci/test/compile green. Asserts at-least-one GET_DECISIONS (a repeat is idempotent per chat.js loadDecisions rebuild). Narrow-row scope per governor comment-052f42ce: no daemon/Gradle/launcher gate run. Ponytail pass: nothing to cut (4 runtime lines, harness reused from the hunt).",
+  "requiredCheckAtDone": null
 }
