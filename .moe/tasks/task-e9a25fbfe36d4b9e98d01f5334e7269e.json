@@ -1,0 +1,34 @@
+{
+  "id": "task-e9a25fbfe36d4b9e98d01f5334e7269e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code Plan Review and Task Detail show a step's original description instead of its active amendment, yet Approve sends the amended planRevision, so a human approves step text they never saw (VS Code twin of the DONE JetBrains fix 37e03b91)",
+  "description": "Filed by defect hunt 11-03 #5 (task-b7332618). VS Code twin of task-37e03b91, which JetBrains fixed in 3b56ee35.\n\nPROBLEM\nmoe.amend_plan_step never rewrites a step's `description`.\n- It appends {amendmentId, description, reason, amendedBy, amendedAt} to `step.amendments` and points `step.activeAmendmentId` at the new entry (packages/moe-daemon/src/tools/amendPlanStep.ts:107-110).\n- It is allowed in every status except DONE and ARCHIVED (:71-73), so AWAITING_APPROVAL is included.\n- The approval surface holds the effective text: taskStore.ts:132-140, `effectiveDescription: effectiveStepDescription(step)`.\n- So an amendment bumps planRevision (derivePlanRevision, taskStore.ts:172-199), and Approve binds to the amended revision.\n\nEvery VS Code renderer prints only `step.description`:\n- moe-vscode/src/panels/PlanReviewPanel.ts:742, renderSteps: the initial Plan Review HTML, which Approve is clicked on.\n- moe-vscode/media/planReview.js:168, renderSteps: the live update.\n- moe-vscode/src/panels/TaskDetailPanel.ts:1146, renderSteps.\n- moe-vscode/media/taskDetail.js:369, renderSteps: the live update.\n\nmoe-vscode/src/types/moe.ts:162-171 (ImplementationStep) has no amendments or activeAmendmentId field. Nothing under moe-vscode/src or moe-vscode/media mentions \"amend\".\n\nEVIDENCE\nRepro on 19d5e67a (the moe/work-2026-10-24 tip; it includes 585fedc6), run in a git-archive snapshot outside the checkout. The re-run recipe is /mnt/d/moe-scratch/hunt-b733/notes.md.\n  cp /mnt/d/moe-scratch/hunt-b733/zz-hunt-b733-steps.test.cjs $S/moe-vscode/tests/\n  cd $S/moe-vscode && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/zz-hunt-b733-steps.test.cjs\n\nThe test runs the production renderers on a step whose active amendment reads \"AMENDED: edit src/a.ts and delete src/b.ts\". Result: `# fail 4` (steps.output.txt):\n- A1, PlanReviewPanel.renderSteps: <div class=\"step-description\">ORIGINAL: edit src/a.ts only</div>\n- A2, planReview.js: Step 1: PENDING ORIGINAL: edit src/a.ts only Affected files: src/a.ts\n- A3, TaskDetailPanel.renderSteps: <div class=\"step-description\">ORIGINAL: edit src/a.ts only</div>\n- A4, taskDetail.js: ○ Step 1: PENDING ORIGINAL: edit src/a.ts only Files:  src/a.ts\n\nFIX DIRECTION\nMirror the daemon's one resolution rule, packages/moe-daemon/src/util/planAmendments.ts activeAmendment / effectiveStepDescription. The same rule is in JetBrains ImplementationStep.effectiveDescription (3b56ee35).\n- Use the entry `activeAmendmentId` names, never simply the latest.\n- Fall back to the original description when the id is blank or dangling, when `amendments` is not an array, or when the entry has no string description.\n- Render that text in all four places, with a short \"Amended by <amendedBy>\" marker. Keep the original reachable, for example as a title tooltip.\n- Add the optional fields to ImplementationStep in types/moe.ts.\n- Step text goes through escapeHtml on the TS side and textContent in the webview scripts; never innerHTML (a forbidden pattern).\n\nFILES\n- moe-vscode/src/panels/PlanReviewPanel.ts\n- moe-vscode/media/planReview.js\n- moe-vscode/src/panels/TaskDetailPanel.ts (renderSteps only; its 'prev'/'next' message case belongs to the sibling hunt row for the WORKING left arrow)\n- moe-vscode/media/taskDetail.js\n- moe-vscode/src/types/moe.ts\n- one new moe-vscode/tests/*.test.cjs\n\nThe hunt repro shows how to load each renderer (transpiled panels; raw webview scripts under node:vm).\n\nRelated, not a duplicate: task-c5c092ae is the same bug class in the moe-compaction-keeper mod. The gate snapshot must be the full tree: mem:gotcha-vscode-tests-need-full-repo-snapshot.",
+  "definitionOfDone": [
+    "Plan Review (PlanReviewPanel.ts initial HTML and media/planReview.js live render) and Task Detail (TaskDetailPanel.ts initial HTML and media/taskDetail.js live render) show the active amendment's description for a step whose activeAmendmentId names an entry in amendments, with an \"Amended by <amendedBy>\" marker. A step with no activeAmendmentId, or a blank or dangling one, shows its original description and no marker.",
+    "A new moe-vscode node test runs the production renderers (PlanReviewPanel.ts and TaskDetailPanel.ts transpiled; media/planReview.js and media/taskDetail.js raw under node:vm) on amended, unamended and dangling-id steps. It passes on the fix, and its amended-step cases fail when the four renderers are restored to the merge-base.",
+    "`npm ci && npm test && npm run compile` passes in moe-vscode in a full-repo git-archive snapshot outside the checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 387.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:26:41.845Z",
+  "updatedAt": "2026-11-03T17:29:07.142Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:29:03.070Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}

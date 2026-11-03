@@ -1,0 +1,28 @@
+{
+  "id": "task-8867329727ba427e84a50e913b2c3676",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-daemon start (and _run) on a --project with no .moe/ logs \"Another process is starting the daemon, waiting...\" then \"Failed to acquire lock and daemon not running\" and exits 0, because acquireLock folds ENOENT into lock contention and the lock-failure branch returns without an exit code",
+  "description": "Filed by the 11-03 #6 defect hunt (task-cea8fa39, architect-1dd28c7c). Found by a hunt subagent; I re-ran the repro myself.\n\nPROBLEM\n- packages/moe-daemon/src/index.ts:274-283, acquireLock: the catch is `if (err.code === 'EEXIST') {...} return false;`. Every other error returns the same `false` as a held lock: ENOENT when .moe/ is missing (the O_EXCL create of .moe/daemon.lock fails), and also EACCES and ENOTDIR.\n- index.ts:695-708, startDaemon: on `false` it logs \"Another process is starting the daemon, waiting...\", waits LOCK_RETRY_DELAY_MS (2000 ms by default, :48), logs \"Failed to acquire lock and daemon not running\" at error level, and `return`s. `_run` exits 0.\n- index.ts:1036-1040, superviseDaemon's exit handler: code 0 means \"Daemon exited cleanly\" and `process.exit(0)`. So `start` exits 0 too.\nSo a typo'd or never-initialized --project looks like a successful start, and the log blames a race that never happened. The genuine case (\"lock held, and the other starter never brought a daemon up\") exits 0 as well.\n\nPrecedent in the same file: existingDaemonBlocksStart (:646-668), the shared first gate of start/init and _run, already reports a refused start with `process.exitCode = 1` and returns true (the foreign daemon.json case). The CLI promises exit codes elsewhere: doctor \"exits 1 on any hard fail\", check-architecture 0/1/2.\n\nEVIDENCE (HEAD 19d5e67a, git-archive snapshot, env scrubbed with `env -i PATH=... HOME=<scratch> NODE_ENV=production`)\n1. Mine: in /tmp/hunt-cea8-snap/packages/moe-daemon, `node --import tsx src/index.ts _run --project <empty dir> --port 19471` logs\n   {\"level\":\"info\",...,\"msg\":\"Another process is starting the daemon, waiting...\"}\n   {\"level\":\"error\",...,\"msg\":\"Failed to acquire lock and daemon not running\"}\n   and then rc=0. The project dir stays empty.\n2. Subagent, /mnt/d/moe-scratch/hunt-cea8/A/start-no-moe-exit0-repro.txt: `node dist/index.js start --project /tmp/hunt-cea8-A/proj-nomoe --port 19451` logs \"Supervisor spawned daemon process\", \"Another process is starting the daemon, waiting...\", \"Failed to acquire lock and daemon not running\" and \"Daemon exited cleanly\", then rc=0. A path that does not exist at all (.../proj-nomoe/typo) gives the same rc=0.\n3. A failing vitest: /mnt/d/moe-scratch/hunt-cea8/A/index.start-no-moe.repro.test.ts (output in start-no-moe-vitest.txt). It spawns `_run` on a dir without .moe/, and both soft assertions fail: the output contains \"Another process is starting the daemon\", and the status is 0.\n\nFIX DIRECTION\n- Refuse a project with no .moe/ before any lock or spawn. Extend the shared first gate (or add a sibling check that start, init and _run all pass) with a clear error such as \".moe/ missing at <path>; run moe-daemon init --project <path>\" and `process.exitCode = 1`. `start` then never enters the supervisor's crash-restart loop. `init` creates .moe/ first, so it is unaffected.\n- Make acquireLock stop presenting non-EEXIST errors as contention. Return a reason, or rethrow, so the \"Another process is starting\" message appears only for EEXIST.\n- When the daemon is still not running after the lock wait, exit non-zero.\nKeep the existing acquireLock and stale-lock behaviour and tests unchanged.\n\nFILES\n- packages/moe-daemon/src/index.ts\n- packages/moe-daemon/src/index.test.ts (test)\nOut of scope: src/tools/** (hunt #5's lane) and doctor.ts.\n\nNOTE FOR THE PLANNER\nThe spawn tests must scrub the seat's MOE_* env and use a scratch HOME. `_run` writes ~/.moe/config.json after a successful start. Set MOE_LOCK_RETRY_DELAY_MS small to keep the lock-wait case fast.",
+  "definitionOfDone": [
+    "A test in packages/moe-daemon/src/index.test.ts spawns `node --import tsx src/index.ts _run --project <tmp dir without .moe> --port <free>` with a scrubbed env and a scratch HOME. The exit status is non-zero, the output names the missing .moe/, and the output does not contain \"Another process is starting the daemon\".",
+    "A second spawn test runs `start` on the same kind of dir. It exits non-zero within 10 s, with no \"Restarting daemon after backoff\" line: a missing .moe/ is final, not a crash.",
+    "`cd packages/moe-daemon && npx vitest run src/index.test.ts` passes, with the existing acquireLock and stale-lock cases unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 393.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:32:30.999Z",
+  "updatedAt": "2026-11-03T17:32:30.999Z"
+}

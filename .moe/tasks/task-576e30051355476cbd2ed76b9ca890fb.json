@@ -1,0 +1,31 @@
+{
+  "id": "task-576e30051355476cbd2ed76b9ca890fb",
+  "epicId": "epic-be924fb8",
+  "title": "bug: `moe-daemon doctor` probes /health and TCP only on 127.0.0.1 and ignores daemon.json bindHost, so a healthy daemon bound to ::1 or a LAN address gets a false [FAIL] and doctor exits 1",
+  "description": "Held-back finding (a) from defect hunt #6 (task-cea8fa39, architect-1dd28c7c, msg-0f965eaf). The governor re-checked the citations at moe/work-2026-10-24 6d6bdc51 at 17:35Z on 2026-11-03.\n\nPROBLEM:\n- packages/moe-daemon/src/commands/doctor.ts dials the live daemon only on a hard-coded loopback: the /health request uses `hostname: '127.0.0.1'` (:139), and the TCP fallback calls probeTcp('127.0.0.1', port, ...) (:197). Every pass/fail message names 127.0.0.1 (:183-204).\n- The daemon itself records a non-loopback bind as `bindHost` in .moe/daemon.json, and its own probes map it to a reachable address: probeHostFor(bindHost) in packages/moe-daemon/src/index.ts:82, used at :91 and :837.\n- So for a daemon started with `--host ::1` or a LAN address (MOE_BIND_HOST), doctor reports `nothing reachable on 127.0.0.1:<port>` or a TCP-only warning while the daemon is healthy, and exits 1 on that false [FAIL].\n- Repro (architect-1dd28c7c, HEAD 19d5e67a, a snapshot outside the checkout): /mnt/d/moe-scratch/hunt-cea8/A/doctor.bindhost.repro.test.ts, with output in doctor-bindhost-vitest.txt and doctor-bindhost-repro.txt next to it.\n\nWHY BACKLOG WITH dependsOn task-88673297: the natural fix moves probeHostFor and its helpers out of index.ts into a shared module that doctor.ts imports. index.ts is held by task-88673297 (start/_run lock-failure exit code). The governor promotes this row when 88673297 is DONE.\n\nFIX DIRECTION (the planner decides): have doctor read daemon.json bindHost and probe the same address the daemon's own readiness probe uses (probeHostFor), defaulting to 127.0.0.1 when bindHost is absent. Put the address in the messages. Add a vitest that binds a fake /health on a non-127.0.0.1 loopback address and expects pass. Narrow row: run the doctor tests plus the new test, with no full suite (epic-be924fb8 isEpicFinal is the max-order fallback; ruling msg-bbf4f109).",
+  "definitionOfDone": [
+    "doctor's live-daemon probe (/health and the TCP fallback) dials the address derived from daemon.json bindHost by the same mapping the daemon's own readiness probe uses, and 127.0.0.1 when bindHost is absent. Its messages name the address it dialed.",
+    "A vitest in packages/moe-daemon/src/commands/ starts a fake healthy /health on a non-127.0.0.1 address recorded as bindHost in daemon.json. It fails on 6d6bdc51 (RED evidence in a task comment) and passes with the fix. The existing doctor tests stay green.",
+    "No behavior change for a daemon.json without bindHost: the existing doctor.test.ts cases pass unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-8867329727ba427e84a50e913b2c3676"
+  ],
+  "priority": "LOW",
+  "order": 395.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:34:17.207Z",
+  "updatedAt": "2026-11-03T17:34:17.207Z"
+}

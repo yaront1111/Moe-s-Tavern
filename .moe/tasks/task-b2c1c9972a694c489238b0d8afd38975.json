@@ -1,0 +1,28 @@
+{
+  "id": "task-b2c1c9972a694c489238b0d8afd38975",
+  "epicId": "epic-be924fb8",
+  "title": "bug: scripts/doctor.ps1 can never pass, because Run-Native names its argument array $Args and PowerShell's automatic $args replaces it with the empty unbound-argument list: `java -version` runs as bare `java` (usage text, exit 1) and -Full runs Gradle's default task instead of buildPlugin",
+  "description": "Filed by the 11-03 #6 defect hunt (task-cea8fa39, architect-1dd28c7c). Found by a hunt subagent; I re-ran both repros myself.\n\nPROBLEM\nscripts/doctor.ps1:14 declares `function Run-Native([string]$Cmd, [string[]]$Args)` and runs `& $Cmd @Args` at :23. In a simple (non-advanced) function, `$args` is PowerShell's automatic variable for the unbound arguments. It replaces the declared parameter, so inside the function $Args is always empty. As a result:\n- :45 `Run-Native \"java\" @(\"-version\")` runs bare `java`. That prints usage and exits 1, Run-Native throws \"java exited with code 1\", and under `$ErrorActionPreference = \"Stop\"` (:5) the script dies at \"Checking Java...\". On a machine without Java, Require-Command throws one line earlier. So doctor.ps1 fails on every machine.\n- :51 `Run-Native $gradleBin @(\"--version\")` would run Gradle with no task. It is never reached.\n- :68 `Run-Native $gradleBin @(\"buildPlugin\")` (the -Full build) would run Gradle's default task instead of buildPlugin. :70 would then report whatever stale zip build\\distributions already holds.\n\nEVIDENCE (Windows PowerShell 5.1.26100.9711 on this host, HEAD 19d5e67a)\n1. Minimal: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\\moe-scratch\\hunt-cea8\\mine\\args-shadow.ps1` prints\n   `Cmd=[java] Args.Count=0 Args=[]`\n   `Cmd=[java] Arguments.Count=1 Arguments=[-version]` (the same function with the parameter renamed)\n   Output: /mnt/d/moe-scratch/hunt-cea8/mine/args-shadow.out.txt.\n2. Run-Native copied verbatim (lines 14-33) with a recorder .cmd: /mnt/d/moe-scratch/hunt-cea8/B/doctor-ps1/run-native-harness.ps1, output run-native-harness.out.txt:\n   - `Run-Native $fake @(\"buildPlugin\")` gives `fake-tool argv=[]`, while a direct `& $fake buildPlugin` gives `fake-tool argv=[buildPlugin]`.\n   - `Run-Native \"java\" @(\"-version\")` prints `java.exe : Usage: java [options] <mainclass> [args...]` and then `THROWN: java exited with code 1`.\n3. End to end, using a byte-identical copy (checked with cmp) at /mnt/d/moe-scratch/hunt-cea8/B/doctor-ps1/scripts/doctor.ps1. The host has JDK 17.0.20, Node v24.16.0 and npm 11.15.0. Output, in doctor-ps1.out.txt: \"== Moe Doctor ==\", \"Checking Node + npm...\", \"v24.16.0\", \"11.15.0\", \"Checking Java...\", \"java.exe : Usage: java [options] ...\", \"java exited with code 1\", exit=1.\n\nFIX DIRECTION\nRename the parameter (for example `[string[]]$Arguments`) and splat `@Arguments`. Don't turn the function advanced just to dodge the automatic variable. Make no other change to doctor.ps1's checks: doctor.sh's Java-is-optional asymmetry is out of scope.\n\nFILES\n- scripts/doctor.ps1\n- scripts/tests/doctor-ps1.test.mjs (new test)\nThe test is Windows-only, using the repo convention `{ skip: process.platform !== 'win32' && 'Windows only' }`. It extracts the Run-Native FunctionDefinitionAst from scripts/doctor.ps1 with `[System.Management.Automation.Language.Parser]::ParseFile` and runs it in a child `powershell.exe -NoProfile` against a recorder .cmd in a temp dir. That keeps java and Gradle out of the test.\nOut of scope: scripts/moe-agent.* (the CQ-M07 lane). Note that moe-agent.ps1's `[object]$Args` parameters are on advanced functions, which bind correctly.\n\nNOTE FOR QA\nRun the test with Windows node (`node.exe --test scripts/tests/doctor-ps1.test.mjs` from a snapshot on a D:\\ path). Under WSL node it skips.",
+  "definitionOfDone": [
+    "`grep -niE '\\$args\\b' scripts/doctor.ps1` prints nothing (the parameter is renamed and every use follows it).",
+    "`node.exe --test scripts/tests/doctor-ps1.test.mjs` passes on Windows. The test extracts Run-Native from scripts/doctor.ps1 with the PowerShell parser and calls it with a recorder .cmd: `@(\"buildPlugin\")` and `@(\"--version\")` each reach the recorder as exactly that argv, and a recorder that exits 3 makes Run-Native throw a message containing \"exited with code 3\".",
+    "`[System.Management.Automation.Language.Parser]::ParseFile` on scripts/doctor.ps1 reports 0 errors, and the diff touches only scripts/doctor.ps1 and the new test file."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 391.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:31:44.716Z",
+  "updatedAt": "2026-11-03T17:31:44.716Z"
+}

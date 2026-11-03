@@ -1,0 +1,35 @@
+{
+  "id": "task-f802239563c34a2a901a12bae3a9aeb7",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code chat shows no Approve/Reject decision cards after an IDE start or a reconnect, because ChatViewProvider requests decisions only on the page's ready while already connected, never when the connection opens (twin of the DONE JetBrains fix 6fe1e5ae)",
+  "description": "Filed by defect hunt 11-03 #5 (task-b7332618). VS Code twin of task-6fe1e5ae (JetBrains fix d958f21d: ChatPanel calls requestDecisions on every connect).\n\nPROBLEM\n- The daemon sends DECISIONS only in reply to GET_DECISIONS (packages/moe-daemon/src/server/WebSocketServer.ts:1159-1161). Live changes arrive as DECISION_PROPOSED / DECISION_RESOLVED broadcasts.\n- chat.js renders a decision card only for a message whose decisionId is in its decisionMap (moe-vscode/media/chat.js:329).\n- ChatViewProvider asks for decisions in one place only: the page's 'ready', and only when the client is already connected (moe-vscode/src/providers/ChatViewProvider.ts:159-164).\n- chat.js posts 'ready' as soon as it loads (chat.js:662).\n- The connection handler (ChatViewProvider.ts:85-90) and the visibility handler (:130-137) re-request channels only.\n\nSo GET_DECISIONS is never sent in two cases:\n- the chat view loads before the daemon connection opens (an IDE start, while the daemon is still starting);\n- after any reconnect (a daemon restart).\n\nOpen decisions then show as plain messages without Approve/Reject. A decision proposed or resolved during an outage stays stale, because the page restores its old decisionMap from webview state (chat.js:14).\n\nEVIDENCE\nRepro on 19d5e67a (the moe/work-2026-10-24 tip, past 585fedc6), in a git-archive snapshot outside the checkout. The re-run recipe is /mnt/d/moe-scratch/hunt-b733/notes.md.\n  cp /mnt/d/moe-scratch/hunt-b733/zz-hunt-b733-chat.test.cjs $S/moe-vscode/tests/\n  cd $S/moe-vscode && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/zz-hunt-b733-chat.test.cjs\n\nIt runs the production MoeDaemonClient and ChatViewProvider, transpiled exactly as tests/wire-parity.test.cjs loads them. Result: `# fail 2` (chat.output.txt):\n- D1, ready before connect: `frames sent: [\"GET_CHANNELS\"]`\n- D2, after a disconnect and reconnect: `frames sent after reconnect: [\"GET_CHANNELS\"]`\n\nFIX DIRECTION\n- Request decisions everywhere channels are re-requested for a connected client: the onConnectionChanged 'connected' branch, and the visibility branch when connected. That is what JetBrains ChatPanel does.\n- Keep the 'ready' path.\n- A repeated DECISIONS reply is harmless, because loadDecisions rebuilds the map (chat.js:604-611). So the test should assert at least one GET_DECISIONS per connect, not an exact count, unless the plan dedupes on purpose.\n\nFILES\n- moe-vscode/src/providers/ChatViewProvider.ts\n- one new moe-vscode/tests/*.test.cjs, or new cases in tests/wire-parity.test.cjs\n\nNo other open row touches these files. The gate snapshot must be the full tree: mem:gotcha-vscode-tests-need-full-repo-snapshot.",
+  "definitionOfDone": [
+    "With the chat page ready before the daemon connection opens, the transition to 'connected' sends GET_DECISIONS as well as GET_CHANNELS.",
+    "After a disconnect and a reconnect, GET_DECISIONS is sent again, and its DECISIONS reply reaches the page as a loadDecisions post.",
+    "A moe-vscode node test runs the production ChatViewProvider.ts and MoeDaemonClient.ts (transpiled) for both cases and passes; both cases fail when ChatViewProvider.ts is restored to the merge-base. `npm ci && npm test && npm run compile` passes in moe-vscode in a full-repo git-archive snapshot outside the checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 390.7,
+  "comments": [
+    {
+      "id": "comment-052f42ce1f214c4d848c672ff54d8902",
+      "author": "governor-e6b40560",
+      "content": "Governor note for the planner and QA (17:31Z): treat this as a narrow row, whatever get_context says. This is the same ruling as comment-d5a68853 on 6a818a1c.\n- epic-be924fb8 (Stability & Hardening) is a long-running bucket epic with no finalTaskId, so isEpicFinal falls back to the highest order. This row reads isEpicFinal:true only because it was the newest row when hunt #5 filed it (architect-24611a0a flagged this in msg-9e5628fa). It does not integrate the epic.\n- Plan the verification for this row's own surface only: the moe-vscode tests that cover ChatViewProvider plus the new regression test, and `npm run compile`, in a full-repo snapshot (mem:gotcha-vscode-tests-need-full-repo-snapshot). No full daemon suite, Gradle or launcher gate.\n- In worktree mode, the project qualityGate runs on every landing anyway.",
+      "timestamp": "2026-11-03T17:29:26.611Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:27:40.881Z",
+  "updatedAt": "2026-11-03T17:29:26.611Z"
+}

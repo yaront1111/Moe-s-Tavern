@@ -11,31 +11,47 @@
     {
       "stepId": "step-1",
       "description": "Base check, then the deferred row (tests first). This row tests bytes that CQ-M07n1 (task-65b3e023) lands. dependsOn holds the claim until n1 is DONE, unless the governor drops the edge once n1 has landed.\n\n(a) Base check, in your task worktree:\n- `git log -1 --format=%H --grep 'Moe-Task: task-65b3e023923e4ab6b71cb94e7bea2f9b'` names n1's completion;\n- scripts/tests/postflight-vm-route.ps1 exists;\n- scripts/moe-agent.ps1's readiness gate calls `Invoke-MoeRpc -Tool 'get_execution_readiness'` and returns before reading any field when `$reply -isnot [System.Management.Automation.PSCustomObject]`. That is n1's Invoke-MoeVerifiedLocalGate in its current bytes.\n\nIf any check fails, the worktree was cut before n1 landed. Call moe.report_blocked with blockedOnTaskIds ['task-65b3e023923e4ab6b71cb94e7bea2f9b'] and a reason naming the missing harness or gate, then end the session. Never create postflight-vm-route.ps1 yourself: that is an add/add conflict with n1's landing. (It is listed under newFiles only because n1 had not landed it when this plan was written; you edit n1's file.) If the landed gate reads fields without that type check first, stop and comment on the task: the fix alone would not route an array to today's path. Note n1's sha in the step note. The landed n1 text wins over any wording here.\n\n(b) The row. With the Edit tool (global rail 3), add ONE today-path row to the T-row list ($tRows) of scripts/tests/postflight-vm-route.ps1, right after the 'malformed-id|...' entry, ASCII only:\n        'malformed-array|[{\"profile\":\"verified-local\",\"ready\":true,\"missingCapabilities\":[]}]',\nThat is the exact shape of the governor's ruling (comment on task-65b3e023, 16:31Z). The loop already asserts today's path for it: the worker's host CLI launches (Assert-VmrLaunched), and its record after masking equals the legacy baseline. That is the sh twin's route: verified_local_gate in scripts/moe-agent.sh calls d.get(...) on json.loads' result, a list raises, and `|| return 0` keeps today's path. Keep the banner line as it is; 'malformed' already covers the row. Change nothing else in the harness.\n\nExpected without the fix (architect dry run on 5.1 with n1's current bytes, /mnt/d/moe-scratch/plan-044c/red-51.log): `VM ROUTE FAILED (T-malformed-array): exit 1, CLI ran=False`. The unrolled singleton reads as a ready verified-local reply, and with worktreeMode unset in the T rows the seat stops with MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED. Do not run the harness in this step: step 4 runs it, and step 5's M1 reproduces this RED.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Base check OK: n1 completion 6d6bdc51 present, postflight-vm-route.ps1 exists, gate checks -isnot PSCustomObject before reading fields (moe-agent.ps1:3173). Added row 'malformed-array' after 'malformed-id'.",
+      "startedAt": "2026-11-03T17:27:58.361Z",
+      "completedAt": "2026-11-03T17:28:12.139Z"
     },
     {
       "stepId": "step-2",
       "description": "The fix, in Invoke-MoeRpc (scripts/moe-agent.ps1), with the Edit tool. The file must keep its UTF-8 BOM and LF endings, and every added character must be ASCII. Replace exactly these two lines (HEAD 9578c609 :1904-1905; match on the text, because n1 moves them):\n                $text = $d.result.content[0].text\n                try { return ($text | ConvertFrom-Json -ErrorAction Stop) } catch { return $text }\nwith this block, text for text: it is FIX_NEW in /mnt/d/moe-scratch/plan-044c/apply.py, and mutants.sh anchors on it.\n                $text = $d.result.content[0].text\n                # Keep the reply's wire shape. A top-level JSON array, one-element and\n                # empty ones included, comes back as ONE array, so an object consumer\n                # can tell [{...}] from {...}: 5.1's ConvertFrom-Json emits an array\n                # whole, pwsh 7 needs -NoEnumerate, and ',' keeps return from unrolling\n                # it. Every tool this wrapper calls answers an object (task-044c7410).\n                try {\n                    $value = if ($PSVersionTable.PSVersion.Major -ge 7) { ConvertFrom-Json -InputObject $text -NoEnumerate -ErrorAction Stop } else { $text | ConvertFrom-Json -ErrorAction Stop }\n                } catch { return $text }\n                if ($value -is [array]) { return ,$value }\n                return $value\n\nWhy each part (measured with /mnt/d/moe-scratch/plan-044c/probe.ps1 on 5.1.26100 and 7.6.9):\n- 5.1's ConvertFrom-Json writes a JSON array as ONE object. pwsh 7's enumerates it unless -NoEnumerate (7.0+); the -ge 7 test keeps unsupported pwsh 6 on today's behaviour.\n- A function `return` of an array unrolls it, so arrays go back as `,$value`.\n- Result: objects, scalars, null and non-JSON text come back exactly as before, and an array of 2+ items is the same Object[] as before. Only one-element and empty top-level arrays change: they used to come back as their item or as $null, and now come back as one array.\n- The pass-through wrappers Invoke-MoeRpcUnserved and Invoke-MoeLandLeaseRpc (`return Invoke-MoeRpc ...`) and the gate's `6>$null` keep the shape (probe).\n\nDo not touch:\n- n1's gate: its PSCustomObject check already sends an array down today's path;\n- Invoke-MoeRpcRaw (team setup): it returns the JSON-RPC envelope, which is always an object;\n- the heartbeat job's Send-SidecarRpc;\n- Get-MoeProp: it unrolls too, but it is a separate helper, out of scope, and n1 already avoids it;\n- the sh twin: moe_rpc hands its consumers the raw JSON text, which python and node parse without unrolling.\n\nError handling: unchanged. A transport failure, an isError result and a JSON-RPC error still return $null with $script:MoeRpcFailure and $script:MoeRpcCodeName set exactly as before (those lines are untouched). Text that ConvertFrom-Json cannot parse still comes back as the raw text from the catch.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "FIX_NEW block applied in Invoke-MoeRpc. BOM kept (ef bb bf), +10/-1, ASCII, no CR.",
+      "startedAt": "2026-11-03T17:28:14.199Z",
+      "completedAt": "2026-11-03T17:28:28.017Z"
     },
     {
       "stepId": "step-3",
       "description": "Audit every Invoke-MoeRpc caller; the governor asked to 'audit each Invoke-MoeRpc caller to show it'. No code change is expected. The result goes in the step note and the complete_task summary.\n\nList the callers at your base: `grep -nE \"Invoke-MoeRpc(Unserved)?\\b|Invoke-MoeLandLeaseRpc|Send-MoeEvidence\" scripts/moe-agent.ps1`. For each call site record the line, the tool, how the reply is consumed, and the verdict. The facts the audit rests on were checked at 9578c609 plus n1's bytes:\n- 27 tools reach Invoke-MoeRpc: add_comment, chat_channels, chat_join, chat_read, chat_send, chat_wait, claim_next_task, deregister_worker, enter_governance, finalize_attempt, get_commit_scope, get_context, get_pending_questions, lease_account, list_tasks, reattach_attempt, record_candidate, record_check_run, record_commit, record_delivery_receipt, release_task, report_account_usage, report_blocked, acquire_resource, wait_for_resource, release_resource, and n1's get_execution_readiness.\n- Each handler (packages/moe-daemon/src/tools/<Name>.ts) returns a JSON object; none has a top-level `return [`. McpAdapter serializes it with JSON.stringify (server/McpAdapter.ts:313). So no real reply is a top-level array, no caller's behaviour changes on real traffic, and there is no existing list caller to preserve.\n- No caller pipes or enumerates the return: `Invoke-MoeRpc ... | ForEach-Object/Where-Object`, `@(Invoke-MoeRpc ...)` and `foreach (... in (Invoke-MoeRpc ...))` have 0 hits. The `| Out-Null` callers discard it.\n- Malformed replies only (the daemon never sends them): a one-element array now reaches object consumers as an array.\n  - Member access still reads through it (`$r.success`). The exception is a field named like an array member: `$r.count` would read the array's length.\n  - Get-MoeProp and PSObject.Properties reads (Send-MoeEvidence, Test-MoeClaimNoTeam, Get-MoeWorkspaceClaim, n1's gate) see no field and take their failure branch.\n  - An empty array is falsy like the old $null, but `$null -eq @()` is not true. Name each `$null -eq $r` caller and show that its next check still rejects the empty array. For example, in Send-MoeEvidence, Get-MoeProp 'success' is not a bool, so it throws 'invalid payload acknowledgement'.\n\nIf the audit finds a caller that reads a top-level array, stop and comment on the task instead of changing that caller: it would be a design change.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Audit of Invoke-MoeRpc callers (scripts/moe-agent.ps1 at this base, ~50 sites; read-only, no code change). Every daemon tool the wrapper calls answers a JSON object, so no real reply is a top-level array and no caller changes on real traffic. Only one-element or empty top-level arrays differ, and the daemon never sends them. Verdicts: (1) Discarded via | Out-Null or ignored, no change: 686 deregister_worker, 5324/8804/9594/9616/10345/11053/11060/11177/11317 chat_send, 6147 add_comment, 9385 chat_join. (2) Null-checked only, no change: 2838 chat_send, 3117 report_blocked, 5313 record_commit (returned to caller), 7563 add_comment, 8769 release_task, 9073 report_account_usage, 11007 report_account_usage, 9397 enter_governance. A real empty reply [] used to be $null and is now @(); none of these gets one. (3) Object-field readers, unchanged on objects: 2079 reattach_attempt and 2110 Send-MoeEvidence (record_candidate, record_check_run, record_delivery_receipt, finalize_attempt) go through Get-MoeProp, which sees no field on an array, so they take their failure branch ('invalid payload acknowledgement' for the evidence path). 4216 get_commit_scope tests PSObject.Properties['taskId'] and ['asserted'], so it falls to the disk fallback. 7258-7312 Invoke-MoeLandLeaseRpc (acquire/wait/release_resource) reads $r.granted, which is not a bool on an array, so kind='bad'. 7988 and 11107/11287 get_context, 9653 get_context, 8044 and 9374 chat_channels, 9387/9662 chat_read, 9389 get_pending_questions, 9420/9506 claim_next_task, 9445 chat_wait, 11149 list_tasks all read named fields (.task, .channels, .tasks) and see none on an array. 8877 lease_account is serialized with ConvertTo-Json and handed to the account helper, which rejects a non-lease reply. (4) 3181 get_execution_readiness (n1's gate) returns to today's path on -isnot PSCustomObject, which is the purpose of this fix. (5) Pass-throughs 1926 Invoke-MoeRpcUnserved and 7258 Invoke-MoeLandLeaseRpc return Invoke-MoeRpc output unchanged. No caller pipes, enumerates or wraps Invoke-MoeRpc output in @(); the only list read is $sibResp.tasks, a field of an object reply. No caller reads a top-level array.",
+      "startedAt": "2026-11-03T17:28:29.141Z",
+      "completedAt": "2026-11-03T17:28:45.373Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification gate. Run it ONCE, fresh, after the last tracked edit. Its output is moe.complete_task's evidence: the command, exitCode and outputTail. It takes about 20-30 minutes, so start it with Bash run_in_background and wait for the completion notice instead of polling.\n\nRun the executionContract checkRef exactly (byte-identical copy: /mnt/d/moe-scratch/plan-044c/checkref.txt), from anywhere inside your task worktree:\n\n( R=$(git rev-parse --show-toplevel) && F=\"$(wslpath -w \"$R\")\\scripts\\tests\" && cd /mnt/d/moe-scratch && L=$(mktemp /mnt/d/moe-scratch/044c-gate.XXXX) && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$1\\postflight.ps1\" && bash \"$2/scripts/tests/parity-check.sh\"' _ \"$F\" \"$R\" > \"$L\" 2>&1; r=$?; echo \"log=$L exit=$r\"; tr -d '\\0\\r' < \"$L\" | grep -axE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c; exit $r )\n\nWhat it does: it runs YOUR worktree's harnesses by their D:\\ path (wslpath -w), from a D: cwd. A /tmp cwd breaks postflight.ps1 (mem:gotcha-qa-ps1-postflight-from-wsl). Every MOE_*, CLAUDE* and FAKE_* variable is removed, and MOE_POSTFLIGHT_TIMEOUT_SEC=180 is passed through WSLENV. The legs, in order:\n1. postflight-vm-route.ps1 alone under Windows PowerShell 5.1;\n2. postflight-vm-route.ps1 alone under pwsh 7;\n3. postflight.ps1 under 5.1, which runs postflight-vm-route.ps1 again through n1's hook;\n4. bash scripts/tests/parity-check.sh, which also fails if moe-agent.ps1 lost its UTF-8 BOM (parity-check.sh:311).\nThe subshell exits with the chain's own code, not the trailing grep's.\n\nExpected: `log=... exit=0`, then these counts:\n- `3 PASS postflight-vm-route.ps1` (5.1 alone, 7 alone, nested);\n- `1 PASS parity-check.sh`;\n- `1 PASS postflight.ps1`.\nA leg that never ran is missing from the counts, so check them. In the architect's dry run on n1's current bytes, postflight-vm-route.ps1 passed on 5.1 and on 7 (/mnt/d/moe-scratch/plan-044c/summary.txt). The postflight.ps1 leg had not finished when this plan was submitted.\n\nGlobal rails:\n- Rail 1: never run npm or the daemon/proxy test suites in the shared checkout. This gate runs none.\n- Rail 2: if a run hangs, kill only a PID your own session started, never by name. The harnesses already kill only their own wrapper PIDs with taskkill /T.\n\nError handling for a red run: read the log first.\n- T-malformed-array fails: the fix is not in, or its text differs from the plan's.\n- A refusal row fails: the change over-wraps objects (step 5's M4).\n- postflight.ps1 fails anywhere else: rerun the parent revision's scripts (a scratch `git archive` of the base) before blaming the change, because the WSL launch environment can fail it on its own (mem:gotcha-qa-ps1-postflight-from-wsl).\nNever weaken the command.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T17:28:46.356Z"
     },
     {
       "stepId": "step-5",
@@ -46,7 +62,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-d6c1cb7a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -73,11 +89,17 @@
       "author": "architect-24611a0a",
       "content": "Architect note (16:55Z): I added dependsOn task-65b3e023 (CQ-M07n1). This departs from the governor's \"no dependsOn edge\" placement, for a reason that note did not cover.\n\nThis is a PRODUCES edge under the §8 rule (docs/plans/2026-10-30-per-task-worktrees.md §8), not a file-only edge:\n- The deferred row goes into scripts/tests/postflight-vm-route.ps1, which n1 creates.\n- The row exercises Invoke-MoeVerifiedLocalGate, the gate n1 adds.\n- In worktree mode this row's worktree is cut once, at its first WORKING claim, and later sessions reuse it. TURBO makes the row claimable the moment the plan lands. A claim before n1 lands would get a base that has neither file, with no way for the worker to pull them in.\n\nThe early-start practice from n1/m1 applies: once n1's completion is on moe/work-2026-10-24, the edge can be dropped before n1 reaches DONE. The plan's step 1 re-checks that the base holds n1's bytes, and blocks on task-65b3e023 if not.\n\nPlan basis:\n- The fix stays inside Invoke-MoeRpc. n1's gate needs no edit: a singleton array now reaches it as an array, and its PSCustomObject check sends it down today's path, the same route the sh twin takes.\n- I dry-ran it on Windows PowerShell 5.1 and pwsh 7 in a scratch copy of n1's current files: /mnt/d/moe-scratch/plan-044c/.",
       "timestamp": "2026-11-03T16:51:48.972Z"
+    },
+    {
+      "id": "comment-d42daba0e65b494ab235db78f287c4b8",
+      "author": "governor-e6b40560",
+      "content": "Governor (17:26Z): early start. I dropped dependsOn task-65b3e023 (CQ-M07n1) as the architect's note comment-b84e1ef1 allows. n1's completion 6d6bdc51 is on moe/work-2026-10-24, and n1 is in REVIEW with qa-93f9625e, so QA is the only gate left.\n- Build on those landed bytes. Step 1's base check still applies: if your worktree base lacks 6d6bdc51, report_blocked on task-65b3e023 and end the session.\n- If a QA reject on n1 changes its gate or postflight-vm-route.ps1 before you land, re-sync onto the new tip first.\n- Keep the hunks inside Invoke-MoeRpc plus the one test row, as the plan says.",
+      "timestamp": "2026-11-03T17:27:02.798Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T16:26:44.109Z",
-  "updatedAt": "2026-11-03T17:07:05.795Z",
+  "updatedAt": "2026-11-03T17:28:46.356Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T16:31:41.317Z",
@@ -86,19 +108,23 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T16:40:15.880Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-d6c1cb7a"
   ],
-  "dependsOn": [
-    "task-65b3e023923e4ab6b71cb94e7bea2f9b"
-  ],
+  "dependsOn": [],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:07:05.765Z",
   "executionContract": {
@@ -165,5 +191,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T17:07:05.795Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:27:58.361Z"
 }

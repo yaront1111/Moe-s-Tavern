@@ -1,0 +1,28 @@
+{
+  "id": "task-52d73f715dc548fa9a02e7c54df74d1f",
+  "epicId": "epic-be924fb8",
+  "title": "docs: packages/moe-daemon/README.md documents a `-p` alias the CLI never parses (so `init -p <dir>` initializes the cwd), calls --project required although it falls back to MOE_PROJECT_PATH and the cwd, omits --host, and names MOE_LOG_LEVEL where the logger reads LOG_LEVEL",
+  "description": "Held-back finding (b) from defect hunt #6 (task-cea8fa39, architect-1dd28c7c, msg-0f965eaf). The governor re-checked it at moe/work-2026-10-24 6d6bdc51 at 17:33Z on 2026-11-03.\n\nPROBLEM: packages/moe-daemon/README.md versus the code:\n- :36 says \"`--project, -p` - Project path (required)\". parseArgs (packages/moe-daemon/src/index.ts:58-72) only looks up '--project' (:62); no '-p' is parsed anywhere in the CLI. So `moe-daemon init -p D:\\proj` treats `-p` and the path as stray args and falls through, so the project path resolves to MOE_PROJECT_PATH or process.cwd(). The hunt's repro showed it creating .moe/ in the cwd.\n- \"required\" is also wrong: :66 resolves `--project`, else MOE_PROJECT_PATH, else process.cwd(). The root CLAUDE.md \"Run\" section documents the same order.\n- The start options list (:35-37) omits `--host` (index.ts:64 and :69; it falls back to MOE_BIND_HOST), which the root CLAUDE.md documents.\n- :80 documents `MOE_LOG_LEVEL`, but packages/moe-daemon/src/util/logger.ts:7 reads `process.env.LOG_LEVEL`. Nothing in packages/, docs/ or scripts/ reads MOE_LOG_LEVEL.\n\nFIX DIRECTION (the planner decides): docs-only, in README.md alone.\n- List exactly the flags parseArgs reads (--project, --port, --name for init, --host), with --project's fallback order.\n- Name LOG_LEVEL with its values and default.\n- Do not add a -p alias or rename the env var in code. index.ts is held by task-88673297 (lock-failure exit code), and renaming LOG_LEVEL would break current users.\n\nNarrow row: epic-be924fb8 has no finalTaskId, so isEpicFinal:true on the newest row is the max-order fallback (governor ruling msg-bbf4f109 in #architects). No test suite is needed; the evidence is the mechanical check in DoD 3.",
+  "definitionOfDone": [
+    "packages/moe-daemon/README.md documents no `-p` flag, and its CLI option lists name exactly the flags parseArgs in packages/moe-daemon/src/index.ts reads (--project, --port, --name, --host). --project is described with its fallback order (MOE_PROJECT_PATH, then the cwd), not as required.",
+    "The README's logging entry names LOG_LEVEL (what util/logger.ts:7 reads) with its values and default `info`, and the README no longer mentions MOE_LOG_LEVEL.",
+    "Only packages/moe-daemon/README.md changes. The task evidence shows `grep -nE -- '(^|[^-])-p\\b|MOE_LOG_LEVEL' packages/moe-daemon/README.md` printing nothing, and `grep -n \"indexOf('--\" packages/moe-daemon/src/index.ts` listing every flag the README documents."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 394.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:33:52.760Z",
+  "updatedAt": "2026-11-03T17:33:52.760Z"
+}
