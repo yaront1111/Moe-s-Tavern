@@ -746,6 +746,9 @@ async function wtRecover(){
   const m=/MOE_CHECKPOINT_RECOVERED task=(\S+) sha=([0-9a-f]{40})/.exec(r.log),head=revOf(p.top,p.branch);
   assert.ok(m&&m[1]===TASK,'no MOE_CHECKPOINT_RECOVERED line'+tail(r.log));
   assert.match(git(p.top,'log','-1','--format=%s',m[2]),/ recovered\n$/,'the recovery subject');
+  // task-d2d6ac4b (a): a fresh claim labels recovery with get_context's task status.
+  assert.match(git(p.top,'log','-1','--format=%s',m[2]),/\[status=WORKING /,'the recovery status: '+git(p.top,'log','-1','--format=%s',m[2]));
+  assert.deepEqual(ledger(p).filter(x=>x.sha===m[2]).map(x=>x.status),['WORKING'],'the recovery ledger status');
   assert.deepEqual([parents(p.top,m[2]),parents(p.top,head)],[[main],[m[2]]],"the recovery is not on the old tip, or not the session checkpoint's parent");
   assert.deepEqual([files(p,m[2]).includes('src/left.txt'),files(p,m[2]).includes('src/own.txt'),files(p,head).includes('src/own.txt')],
     [true,false,true],'the recovery or the session checkpoint holds the wrong bytes');
@@ -1045,6 +1048,51 @@ async function wtLeaseSignal(){
       [main,'done\n',tools,signal?0:1,true],`${n}: main moved, T lost the bytes, the lease calls, the gate runs, or no handled exit`+tail(r.log));
   }
 }
+// task-d2d6ac4b: local regressions for the worktree twins' diagnostics and evidence.
+async function wtHooksSparse(){
+  const p=repo('wt-hooks-sparse',{settings:{...LANDS,commitHooks:true}}),out=path.join(root,'wt-hooks-sparse.out'),hook=path.join(p.top,'.git','hooks','pre-commit');
+  write(hook,`#!/bin/sh\necho ran > "${out.replace(/\\/g,'/')}"\n`);fs.chmodSync(hook,0o755);
+  await landRun(p,'wt-hooks-sparse-0',{'src/a.txt':'task\n'});
+  const t=revOf(p.top,p.branch),main=mainOf(p);
+  const r=await landRun(p,'wt-hooks-sparse',{},{...REVIEW,WT_GIT_FAIL:'sparse-checkout'}),rec=done(p).pop()||{};
+  const m=/MOE_RESCUE_REF task=\S+ ref=\S+ sha=([0-9a-f]{40}) reason=commit-failed/.exec(r.log);
+  assert.deepEqual([mainOf(p),[rec.outcome,rec.code,(rec.message||'').trim()],m&&m[1],present(out),
+    git(p.top,'worktree','list','--porcelain').match(/^worktree /gm).length],
+    [main,['failed','MOE_COMMIT_FAILED','the completion commit was refused: hooked-commit-worktree-failed'],t,false,2],
+    'the helper failure reason, rescue, hook or cleanup'+tail(r.log));
+}
+
+async function wtGateInterrupt(){
+  const p=repo('wt-gate-interrupt',{settings:{...LANDS,qualityGate:gateCmd()}}),main=mainOf(p),log=path.join(root,'wt-gate-interrupt-gate.jsonl');
+  const r=await landRun(p,'wt-gate-interrupt',{'src/a.txt':'done\n'},{...REVIEW,WT_GATE_LOG:log,WT_GATE_SLEEP_MS:'60000'},{ready:log});
+  const t=revOf(p.top,p.branch),m=git(p.top,'merge-tree','--write-tree','refs/heads/main',t).trim();
+  const cand=rpcs(p).filter(x=>x.tool==='record_candidate'),runs=rpcs(p).filter(x=>x.tool==='record_check_run');
+  assert.ok(present(log+'.sent')&&!ended(p),'no interrupt, or the session was not cut short'+tail(r.log));
+  assert.equal(rows(log).length,1,'the gate runs'+tail(r.log));
+  assert.equal(cand.length,1,'the frozen candidates'+tail(r.log));
+  assert.deepEqual(runs.map(x=>[x.args.outcome,x.args.candidateId,x.args.treeSha]),[['infra-failure',cand[0].args.id,m]],'the interrupted gate check run'+tail(r.log));
+  assert.deepEqual([mainOf(p),git(p.top,'show',t+':src/a.txt'),present(journal(p))],[main,'done\n',false],'main, T bytes or journal'+tail(r.log));
+  assert.deepEqual([finals(p),phase(p)],[[['failed',undefined]],'closed'],'the one failed finalize'+tail(r.log));
+  assert.equal(rpcs(p).filter(x=>x.tool==='deregister_worker').length,1,'the seat deregister'+tail(r.log));
+  leased(p,r,1);
+}
+
+async function wtMoePost(){
+  const p=repo('wt-moe-post',{settings:LANDS}),main=mainOf(p),code=/\[WARN\] MOE_WORKTREE_MOE_PRESENT: .*\.moe exists; no commit carries \.moe \(DENY\)/g;
+  let r=await landRun(p,'wt-moe-post-1',{'src/a.txt':'one\n','.moe/x':'x\n'});
+  const t=revOf(p.top,p.branch);
+  assert.equal((r.log.match(code)||[]).length,1,'the checkpoint .moe diagnostic'+tail(r.log));
+  assert.deepEqual([parents(p.top,t),git(p.top,'diff','--name-only',main,t),readOr(path.join(p.W,'.moe','x'))],
+    [[main],'src/a.txt\n','x\n'],'the checkpoint paths or W/.moe'+tail(r.log));
+  fs.rmSync(path.join(p.W,'.moe'),{recursive:true,force:true});
+  r=await landRun(p,'wt-moe-post-2',{'src/a.txt':'two\n','.moe/y':'y\n'},REVIEW);
+  const c=mainOf(p),rec=done(p).pop()||{};
+  assert.equal((r.log.match(code)||[]).length,1,'the completion .moe diagnostic'+tail(r.log));
+  assert.deepEqual([parents(p.top,c),git(p.top,'diff','--name-only',main,c),git(p.top,'show',c+':src/a.txt'),
+    [rec.outcome,rec.sha],readOr(path.join(p.W,'.moe','y'))],
+    [[main],'src/a.txt\n','two\n',['committed',c],'y\n'],'the completion paths, ledger or W/.moe'+tail(r.log));
+}
+
 // A function of this wrapper, by name (sh one-liners included).
 function wrapperFn(n){
   const m=new RegExp(win?`^function ${n}\\b[\\s\\S]*?^\\}`:`^${n}\\(\\) \\{(?: .*; \\}$|[\\s\\S]*?^\\})`,'m').exec(read(wrapper));
@@ -1675,6 +1723,7 @@ const cases={lifecycle,resume,'half-made':halfMade,
   ...Object.fromEntries(refusals.map(c=>[c[0],()=>refusal(...c)])),'shared-landed':sharedLanded,
   'wt-config-lock':wtConfigLock,'wt-config-lock-exhausted':wtConfigLockExhausted,'wt-config-other':wtConfigOther,'wt-config-preset':wtConfigPreset};
 Object.assign(cases,{'resume-unread':resumeUnread,'resume-dirty':resumeDirty,'resume-shared-unread':resumeSharedUnread});
+Object.assign(cases,{'wt-hooks-sparse':wtHooksSparse,'wt-gate-interrupt':wtGateInterrupt,'wt-moe-post':wtMoePost});
 for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchAs(t);
 Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,

@@ -5505,13 +5505,17 @@ moe_commit_with_hooks() {
         return 1
     fi
     private_git=$(git -C "$scratch" rev-parse --absolute-git-dir 2>/dev/null) || private_git=""
-    if [ "${6:-}" = worktree ] && [ -n "$private_git" ]; then
+    if [ "${6:-}" = worktree ]; then
         root="$scratch"; index="$private_git/index"
         # The patterns go via stdin, which MSYS never converts: Git Bash rewrites a '!/.moe/' argument
         # into a Windows path, and MSYS2_ARG_CONV_EXCL='*' would also stop converting the POSIX -C "$scratch".
-        if ! { printf '%s\n' '/*' '!/.moe/' | git -C "$scratch" sparse-checkout set --no-cone --stdin \
+        if [ -z "$private_git" ] || ! { printf '%s\n' '/*' '!/.moe/' | git -C "$scratch" sparse-checkout set --no-cone --stdin \
             && git -C "$scratch" read-tree -mu "$tree"; } > "$err" 2>&1 || [ -e "$scratch/.moe" ] || [ -L "$scratch/.moe" ]; then
-            private_git=""
+            printf '%s\n' 'hooked-commit-worktree-failed' > "$err"
+            if ! git -C "$MOE_TOP" worktree remove --force "$scratch" >/dev/null 2>&1; then
+                printf '%s\n' 'Could not remove the private hook worktree; refusing publication.' > "$err"
+            fi
+            return 1
         fi
     fi
     if [ -f "$MOE_GITDIR/config.worktree" ]; then
@@ -8070,6 +8074,9 @@ worktree_postflight() {
     [ -z "${STATUS_LOOKUP_ERROR:-}" ] || status=UNKNOWN
     case "$status" in REVIEW|DONE) completion=true ;; esac
     MOE_WT_COMPLETION="$completion"
+    if [ -n "${MOE_WT_PATH:-}" ] && { [ -e "$MOE_WT_PATH/.moe" ] || [ -L "$MOE_WT_PATH/.moe" ]; }; then
+        echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_MOE_PRESENT: $MOE_WT_PATH/.moe exists; no commit carries .moe (DENY), and the next pre-flight stops the seat for a human to inspect it."
+    fi
     if [ "$CS_AUTO_COMMIT" != true ]; then
         echo -e "${BLUE}[info]${NC} settings.autoCommit=false -- no git activity for task $PREFLIGHT_TASK_ID; its bytes stay in $MOE_WT_PATH."
     elif [ "$completion" = true ] || { [ "$CS_CHECKPOINT_COMMITS" = true ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != 1 ]; }; then
@@ -10537,7 +10544,14 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         qa_control_preflight
         qa_landed_gate
     fi
-    if [ "${MOE_WT_MODE:-}" = worktree ]; then worktree_preflight "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "${RESUME_TASK_STATUS:-}"; fi
+    if [ "${MOE_WT_MODE:-}" = worktree ]; then
+        # Twin: $moeWtStatus, the pre-flight get_context's task.status; RESUME_TASK_STATUS is empty on a fresh claim.
+        MOE_WT_PREFLIGHT_STATUS=$(printf '%s' "$PREFLIGHT_CONTEXT" | $PYTHON_CMD -c 'import json,sys
+try: status=json.load(sys.stdin)["task"]["status"]
+except Exception: status=""
+print(status if isinstance(status,str) else "")' 2>/dev/null) || MOE_WT_PREFLIGHT_STATUS=""
+        worktree_preflight "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "$MOE_WT_PREFLIGHT_STATUS"
+    fi
 
     # -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------
     # Runs once the task id is known and before the CLI starts (fresh claim

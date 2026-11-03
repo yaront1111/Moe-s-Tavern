@@ -6989,9 +6989,21 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
             $L.Msg = "receipt journal $journal still owes the completion row of $jc"; return $false
         }
         if ($Settings.configuredGate) {
-            $frozen = $null
-            try { $frozen = New-MoeFrozenCandidate $Git $m $b } catch {}
-            if (-not $frozen -or -not (Send-MoeCandidate $preflightTaskId $frozen $Res.Branch) -or -not (Invoke-MoeFrozenGate $Git $frozen $Settings.configuredGate -WorktreeMode)) {
+            $frozen = $null; $gated = $false
+            try {
+                try { $frozen = New-MoeFrozenCandidate $Git $m $b } catch {}
+                $gated = $frozen -and (Send-MoeCandidate $preflightTaskId $frozen $Res.Branch) -and (Invoke-MoeFrozenGate $Git $frozen $Settings.configuredGate -WorktreeMode)
+            } finally {
+                # Twin: finish_gate_observation. An interrupted gate was never verified: no pass, whatever its exit code.
+                if ($frozen -and $script:MoeGate -and $script:MoeGate.Started -and -not $script:MoeGate.Recorded) {
+                    try { Stop-MoeGateChild } catch { Write-Host "[WARN] Cannot stop owned qualityGate process: $_" -ForegroundColor Yellow }
+                    $script:MoeGate.Recorded = $true
+                    $script:MoeGate.Outcome = 'infra-failure'
+                    try { Send-MoeCheckRun $frozen $script:MoeGate | Out-Null }
+                    catch { Write-Host "[WARN] Cannot record interrupted qualityGate check run: $_" -ForegroundColor Yellow }
+                }
+            }
+            if (-not $gated) {
                 $Res.Code = 'MOE_COMMIT_FAILED_GATE'; $L.Msg = "the merged tree $m on $b was not frozen, recorded and passed by the qualityGate"; return $false
             }
         }
@@ -7566,6 +7578,9 @@ try {
 function Invoke-MoeWorktreePostflight([hashtable]$Settings, [string]$Status, [int]$ReopenCount, [int]$CliExit, [string]$Sid) {
     $completion = ($Status -eq 'REVIEW' -or $Status -eq 'DONE')
     $script:MoeWtCompletion = $completion
+    if ($script:MoeWtPath -and $null -ne (Get-Item -LiteralPath (Join-Path $script:MoeWtPath '.moe') -Force -ErrorAction SilentlyContinue)) {
+        Write-Host "[WARN] MOE_WORKTREE_MOE_PRESENT: $($script:MoeWtPath)/.moe exists; no commit carries .moe (DENY), and the next pre-flight stops the seat for a human to inspect it." -ForegroundColor Yellow
+    }
     $res = $null
     if (-not $Settings.autoCommit) {
         Write-Host "[info] settings.autoCommit=false -- no git activity for task $preflightTaskId; its bytes stay in $($script:MoeWtPath)." -ForegroundColor Cyan
