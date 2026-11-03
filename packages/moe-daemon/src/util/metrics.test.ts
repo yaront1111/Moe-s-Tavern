@@ -157,3 +157,51 @@ describe('filterTasksForMetrics sinceIso window', () => {
     )).toEqual(['task-done-new', 'task-legacy-claimed']);
   });
 });
+
+// Completed means delivered (task-83cf11f5): a DONE row, or an ARCHIVED row that
+// reached DONE (qa_approve stamped metrics.doneAt and archiving keeps it). doneCount,
+// firstPassApprovalPct, avgWallClockMs and the dashboard's totalCompleted, per-epic
+// completed and per-epic avgWallClockMs all count that one set. A shelved ARCHIVED row
+// and an in-flight row count in none of them, even with a stale wallClockMs.
+describe('delivered set: DONE plus ARCHIVED rows that reached DONE', () => {
+  function row(id: string, status: string, epicId: string, metrics: Record<string, unknown>): Task {
+    return { id, epicId, title: `fixture ${id}`, status, createdAt: CREATED_AT, updatedAt: UPDATED_AT, metrics } as unknown as Task;
+  }
+  const DONE_AT = '2026-09-10T00:30:00.000Z';
+  const done = row('task-done', 'DONE', 'epic-a', { doneAt: DONE_AT, wallClockMs: 1000, rejectCount: 0 });
+  const archivedDone = row('task-archived-done', 'ARCHIVED', 'epic-a', { doneAt: DONE_AT, wallClockMs: 9000, rejectCount: 1 });
+  const shelved = row('task-shelved', 'ARCHIVED', 'epic-b', { wallClockMs: 99000, rejectCount: 0 });
+  const working = row('task-working', 'WORKING', 'epic-b', { wallClockMs: 50000, rejectCount: 0 });
+
+  it('(d1) doneCount, firstPassApprovalPct and avgWallClockMs count DONE plus archived-after-DONE rows only', () => {
+    expect(computeMetricsAggregate([done, archivedDone, shelved, working])).toMatchObject({
+      taskCount: 4, doneCount: 2, firstPassApprovalPct: 50, avgWallClockMs: 5000,
+    });
+  });
+
+  it('(d2) the dashboard totalCompleted and the per-epic completed and avgWallClockMs use the same set', () => {
+    const dashboard = computeDashboardAggregate([done, archivedDone, shelved, working], epicTitle);
+    expect(dashboard).toMatchObject({ totalCompleted: 2, firstPassApprovalPct: 50, avgWallClockMs: 5000 });
+    expect(dashboard.perEpic).toEqual([
+      { epicId: 'epic-a', epicTitle: 'Metrics fixture epic', completed: 2, avgReopenCount: 0, avgWallClockMs: 5000 },
+      { epicId: 'epic-b', epicTitle: 'Metrics fixture epic', completed: 0, avgReopenCount: 0, avgWallClockMs: undefined },
+    ]);
+  });
+
+  it('(d3) an ARCHIVED row counts only when its doneAt is a non-blank string', () => {
+    expect(computeMetricsAggregate([
+      row('task-a', 'ARCHIVED', 'epic-a', { doneAt: DONE_AT }),
+      row('task-b', 'ARCHIVED', 'epic-a', { doneAt: '' }),
+      row('task-c', 'ARCHIVED', 'epic-a', { doneAt: '  ' }),
+      row('task-d', 'ARCHIVED', 'epic-a', { doneAt: 1234 }),
+    ]).doneCount).toBe(1);
+  });
+
+  it('(d4) only shelved rows: nothing is completed and the dashboard keeps its empty state', () => {
+    expect(computeMetricsAggregate([shelved])).toMatchObject({ doneCount: 0, firstPassApprovalPct: 0, avgWallClockMs: 0 });
+    const dashboard = computeDashboardAggregate([shelved], epicTitle);
+    expect(dashboard.totalCompleted).toBe(0);
+    expect(dashboard.firstPassApprovalPct).toBeUndefined();
+    expect(dashboard.avgWallClockMs).toBeUndefined();
+  });
+});

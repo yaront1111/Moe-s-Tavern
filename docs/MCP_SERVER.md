@@ -2857,7 +2857,7 @@ Return per-task `TaskMetrics` plus an aggregate over the full filtered set. Aggr
 {
   aggregate: {
     taskCount, doneCount, avgWallClockMs,
-    firstPassApprovalPct,           // 0..100; first-pass = DONE with rejectCount===0
+    firstPassApprovalPct,           // 0..100; first-pass = delivered (see Notes) with rejectCount===0
     avgReopenCount,
     totalRejectCount, totalExecutedStepCount
   },
@@ -2869,6 +2869,7 @@ Return per-task `TaskMetrics` plus an aggregate over the full filtered set. Aggr
 **Notes:**
 - `aggregate.firstPassApprovalPct` is an integer **percentage on the 0..100 scale**, not a 0..1 ratio — a first-pass rate of one task in two is emitted as `50`. Clients must render it as-is and must never multiply it by 100 (both IDE plugins once did, showing `5000%`). The same 0..100 unit applies to the `firstPassApprovalPct` in the plugin `GET_METRICS` response.
 - Per-task entries are sorted newest-first by `metrics.doneAt → metrics.firstClaimAt → updatedAt → createdAt`.
+- **Delivered** is the completed set: a `DONE` row, or an `ARCHIVED` row that reached DONE (it keeps the `metrics.doneAt` that `moe.qa_approve` stamped; a reopen strips it). `doneCount`, `firstPassApprovalPct` and `avgWallClockMs` count only delivered rows, and so do `GET_METRICS`' `totalCompleted`, per-epic `completed` and `avgWallClockMs`. A shelved `ARCHIVED` row that never reached DONE, and every in-flight row, count only in `taskCount`, `avgReopenCount` and the totals.
 - `sinceIso` uses the most recent lifecycle timestamp available on each task, so in-flight tasks aren't excluded just because they haven't reached DONE.
 
 ---
@@ -3404,14 +3405,14 @@ Dashboard query for per-epic + project-wide metrics.
 {
   type: 'METRICS',
   payload: {
-    firstPassApprovalPct?: number,     // omitted when no DONE tasks
-    avgWallClockMs?: number,           // omitted when no completed tasks have wall-clock data
+    firstPassApprovalPct?: number,     // omitted when no delivered tasks (list_metrics Notes)
+    avgWallClockMs?: number,           // omitted when no delivered tasks have wall-clock data
     avgReopenCount?: number,           // omitted on empty task set
-    totalCompleted?: number,
+    totalCompleted?: number,           // delivered tasks (list_metrics doneCount)
     perEpic: Array<{
       epicId: string,
       epicTitle?: string,
-      completed: number,
+      completed: number,               // delivered tasks in this epic
       avgReopenCount?: number,
       avgWallClockMs?: number
     }>

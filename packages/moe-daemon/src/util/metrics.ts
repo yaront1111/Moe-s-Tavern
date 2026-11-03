@@ -13,6 +13,7 @@ import type { Task, TaskMetrics } from '../types/schema.js';
 
 export interface MetricsAggregate {
   taskCount: number;
+  /** Delivered rows: DONE, or ARCHIVED after reaching DONE (see isDelivered). */
   doneCount: number;
   avgWallClockMs: number;
   firstPassApprovalPct: number;   // 0..100
@@ -49,6 +50,20 @@ export function emptyMetricsAggregate(): MetricsAggregate {
 }
 
 /**
+ * Completed, for every aggregate here (doneCount, firstPassApprovalPct,
+ * avgWallClockMs, and the dashboard's totalCompleted and per-epic completed):
+ * a DONE row, or an ARCHIVED row that reached DONE. qa_approve stamps
+ * metrics.doneAt, the startup backfill fills it on a DONE row without one,
+ * util/reopen.ts strips it on reopen and archiving keeps it, so on an ARCHIVED
+ * row it marks delivered work. A shelved ARCHIVED row never had one.
+ */
+function isDelivered(task: Task): boolean {
+  if (task.status === 'DONE') return true;
+  const doneAt = task.metrics?.doneAt;
+  return task.status === 'ARCHIVED' && typeof doneAt === 'string' && doneAt.trim() !== '';
+}
+
+/**
  * Compute aggregate metrics across the given tasks. Tasks without a metrics
  * record are still counted toward taskCount but contribute zero to numeric
  * averages (so a partially-instrumented project still gets a usable number).
@@ -68,16 +83,18 @@ export function computeMetricsAggregate(tasks: Task[]): MetricsAggregate {
 
   for (const task of tasks) {
     const m = task.metrics ?? {};
-    if (task.status === 'DONE') {
+    if (isDelivered(task)) {
       doneCount += 1;
       // first-pass = approved without ever being rejected. Use rejectCount
       // (live counter) rather than reopenCount, which can be reset.
       approvalCount += 1;
       if ((m.rejectCount ?? 0) === 0) firstPassCount += 1;
-    }
-    if (typeof m.wallClockMs === 'number' && Number.isFinite(m.wallClockMs)) {
-      wallClockSum += m.wallClockMs;
-      wallClockCount += 1;
+      // Wall-clock averages the same delivered rows, so a stale value on a
+      // shelved or in-flight row never leaks into it.
+      if (typeof m.wallClockMs === 'number' && Number.isFinite(m.wallClockMs)) {
+        wallClockSum += m.wallClockMs;
+        wallClockCount += 1;
+      }
     }
     reopenSum += m.reopenCount ?? task.reopenCount ?? 0;
     totalRejectCount += m.rejectCount ?? 0;
