@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { invalidInput } from '../util/errors.js';
+import { invalidInput, notFound } from '../util/errors.js';
 
 export function chatUnpinTool(_state: StateManager): ToolDefinition {
   return {
@@ -9,7 +9,7 @@ export function chatUnpinTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        channel: { type: 'string', description: 'Channel ID' },
+        channel: { type: 'string', description: 'Channel id, or name in either "general" or "#general" form' },
         messageId: { type: 'string', description: 'Message ID to unpin' }
       },
       required: ['channel', 'messageId'],
@@ -28,7 +28,10 @@ export function chatUnpinTool(_state: StateManager): ToolDefinition {
         throw invalidInput('messageId', 'must be a non-empty string');
       }
 
-      await state.unpinMessage(params.channel, params.messageId);
+      const channel = state.resolveChannelRef(params.channel);
+      if (!channel) throw notFound('Channel', params.channel);
+
+      await state.unpinMessage(channel.id, params.messageId);
       return { success: true };
     }
   };

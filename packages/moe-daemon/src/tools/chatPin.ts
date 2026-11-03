@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { invalidInput } from '../util/errors.js';
+import { invalidInput, notAllowed, notFound } from '../util/errors.js';
 
 export function chatPinTool(_state: StateManager): ToolDefinition {
   return {
@@ -9,9 +9,9 @@ export function chatPinTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        channel: { type: 'string', description: 'Channel ID' },
+        channel: { type: 'string', description: 'Channel id, or name in either "general" or "#general" form' },
         messageId: { type: 'string', description: 'Message ID to pin' },
-        workerId: { type: 'string', description: 'Worker pinning the message' }
+        workerId: { type: 'string', description: 'Worker pinning the message (a registered worker or "human")' }
       },
       required: ['channel', 'messageId', 'workerId'],
       additionalProperties: false
@@ -33,7 +33,18 @@ export function chatPinTool(_state: StateManager): ToolDefinition {
         throw invalidInput('workerId', 'must be a non-empty string');
       }
 
-      const pin = await state.pinMessage(params.channel, params.messageId, params.workerId);
+      // workerId becomes pinnedBy in the pins file, PINS_UPDATED and PIN_CREATED, so
+      // chat_send's sender rule applies and every refusal precedes the write.
+      if (params.workerId === 'system') {
+        throw notAllowed('chat_pin as "system"', 'reserved for daemon-internal messages');
+      }
+      if (params.workerId !== 'human' && !state.getWorker(params.workerId) && !state.tryLoadWorkerFromDisk(params.workerId)) {
+        throw invalidInput('workerId', 'Unknown sender: workerId must be a registered worker or "human"');
+      }
+      const channel = state.resolveChannelRef(params.channel);
+      if (!channel) throw notFound('Channel', params.channel);
+
+      const pin = await state.pinMessage(channel.id, params.messageId, params.workerId);
       return { success: true, pin };
     }
   };
