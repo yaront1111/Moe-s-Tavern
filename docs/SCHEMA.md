@@ -2145,26 +2145,44 @@ export function migrate(data: Record<string, unknown>): Record<string, unknown> 
 
 ## ID Generation
 
-All IDs use a prefix + short UUID format:
+The daemon mints the ids it owns with `generateId` (`packages/moe-daemon/src/util/ids.ts`): the prefix, a dash, and the whole `crypto.randomUUID()` with its dashes removed. Every id it mints today is therefore `<prefix>-<32 lowercase hex>`. It keeps all 128 bits on purpose: 32-bit ids make birthday collisions likely once a board holds thousands of entities, and a colliding id silently overwrites a file.
 
 ```typescript
 function generateId(prefix: string): string {
-  const uuid = crypto.randomUUID().split('-')[0]; // First 8 chars
+  const uuid = crypto.randomUUID().replace(/-/g, '');
   return `${prefix}-${uuid}`;
 }
-
-// Examples:
-// Project:  "proj-a1b2c3d4"
-// Epic:     "epic-e1f2g3h4"
-// Task:     "task-t1u2v3w4"
-// Worker:   "worker-w1x2y3z4"
-// Step:     "step-s1t2u3v4"
-// Proposal: "prop-p1q2r3s4"
-// Event:    "evt-e1f2g3h4"
-// Channel:  "chan-c1d2e3f4"
-// Message:  "msg-m1n2o3p4"
-// Decision: "dec-d1e2f3g4"
 ```
+
+| Prefix | Entity | Example |
+|---|---|---|
+| `proj-` | Project | `proj-54125b5ae91e4ad6b663e6d92a3a5418` |
+| `epic-` | Epic | `epic-890174221fbb4427aa42c280f3d3a78c` |
+| `task-` | Task | `task-19d1fd27db354746ab3f8976d527df6f` |
+| `team-` | Team | `team-1364cc3d3ffa44c18c2ea86e524dd5e6` |
+| `prop-` | RailProposal | `prop-5fa8108ce4834d579577edaa0bd952d1` |
+| `evt-` | ActivityEvent | `evt-443cf409047d44139c2162f978d4af82` |
+| `chan-` | ChatChannel | `chan-79b64e60b3d741fda216455844f22cee` |
+| `msg-` | ChatMessage | `msg-7fafb5101ac648da85a27fe86c9a1e7d` |
+| `dec-` | Decision | `dec-cb0cc483cb234d91ab68477f51aaf13a` |
+| `comment-` | Task comment | `comment-9f610ecb39e947e9b24ede00f6d6db07` |
+| `attempt-` | ExecutionAttempt | `attempt-1b8c24b723654595baa83853fafdf12c` |
+| `ctxreceipt-` | ServedContextReceipt | `ctxreceipt-76e3df81d7ee4545a8d8f3b53daf5db8` |
+| `cand-` | Candidate | `cand-bd972721489c4d53bbe68dcc0bca6b02` |
+| `review-` | Review | `review-f4318da2ab41498a821cbcb3f1ce0689` |
+| `check-` | CheckRun | `check-b353089b6c104aba8139fb6167cbe291` |
+| `dispatch-` | CheckDispatch | `dispatch-dce8ea0e1a7f4e379963a0e3f7bd5d92` |
+| `receipt-` | DeliveryReceipt | `receipt-6b3128f21b7f4b19b93e3a72adb55a07` |
+
+Candidate, Review, CheckRun and CheckDispatch also accept a caller-supplied id (see their interfaces above); the daemon mints a `cand-`, `review-`, `check-` or `dispatch-` id only when the caller gives none.
+
+**Legacy 8-hex ids.** Until commit 0aab4d36 (2026-06-30), `generateId` kept only the first 8 hex characters of the UUID, so boards created before then still hold ids such as `proj-3830fac7` and `epic-be924fb8`. They were never rewritten and stay valid. Code that parses ids must accept both lengths, as the daemon's own task-id scan does (`task-[0-9a-f]{6,}` in `tools/reportBlocked.ts`): treat an id as an opaque token, not a fixed-length string.
+
+**Step ids are positional.** `moe.submit_plan` numbers a plan's steps `step-<n>` (`step-1`, `step-2`, ...) in plan order (`tools/submitPlan.ts`), so a step id is unique only within its task's plan, and a resubmitted plan is numbered afresh.
+
+**Worker ids come from the seat.** The daemon never mints one. Each seat brings its own through `MOE_WORKER_ID`, which `moe-proxy` injects as the default `workerId` on the seat's tool calls. The launchers (`scripts/moe-agent.sh`, `scripts/moe-agent.ps1`) default it to `<role>-<8 hex>`, for example `worker-1a2b3c4d`, and `--worker-id` / `-WorkerId` overrides it.
+
+Example ids elsewhere in this document are short placeholders such as `proj-a1b2c3d4`; real ids have the shapes above.
 
 ---
 
