@@ -9,7 +9,7 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        channel: { type: 'string', description: 'Channel ID to join' },
+        channel: { type: 'string', description: 'Channel id, or name in either "general" or "#general" form' },
         workerId: { type: 'string', description: 'Your worker ID' }
       },
       required: ['channel', 'workerId'],
@@ -32,14 +32,18 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
         }
       }
 
-      const channel = state.getChannel(params.channel);
+      // Resolve the reference (id, "general" or "#general") before any read or
+      // write, so a refused join posts nothing. Everything below keys on the
+      // canonical id; getChannel only matched the id and refused "#general".
+      if (typeof params.channel !== 'string') throw invalidInput('channel', 'must be a string');
+      const channel = state.resolveChannelRef(params.channel);
       if (!channel) throw notFound('Channel', params.channel);
 
       // Idempotency: if a join message for this worker already exists in the
       // recent message window for this channel, skip the broadcast.
       let alreadyMember = false;
       try {
-        const recent = await state.getMessages(params.channel, { limit: 200 });
+        const recent = await state.getMessages(channel.id, { limit: 200 });
         const joinMarker = `${params.workerId} joined #${channel.name}`;
         alreadyMember = recent.some((m) => m.sender === 'system' && m.content === joinMarker);
       } catch {
@@ -49,7 +53,7 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
       // Post system join message (skip if worker is already a member)
       if (!alreadyMember) {
         await state.sendMessage({
-          channel: params.channel,
+          channel: channel.id,
           sender: 'system',
           content: `${params.workerId} joined #${channel.name}`
         });
@@ -67,7 +71,7 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
       }
 
       return {
-        channel: params.channel,
+        channel: channel.id,
         channelName: channel.name,
         onlineWorkers
       };
