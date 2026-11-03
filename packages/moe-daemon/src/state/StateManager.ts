@@ -879,8 +879,8 @@ export class StateManager {
     return opts ? postToGeneral(this, content, opts) : postToGeneral(this, content);
   }
 
-  async postToRoleChannel(roleName: string, content: string): Promise<void> {
-    return postToRoleChannel(this, roleName, content);
+  async postToRoleChannel(roleName: string, content: string, opts?: SystemPostOptions): Promise<void> {
+    return opts ? postToRoleChannel(this, roleName, content, opts) : postToRoleChannel(this, roleName, content);
   }
 
   async deleteChannel(channelId: string): Promise<void> {

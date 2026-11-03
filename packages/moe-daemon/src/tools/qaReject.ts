@@ -363,9 +363,10 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       // REVIEW -> WORKING handoff. touchWorker skips missing worker records.
       await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
 
-      // Post system message to task channel
+      // Post system message to task channel. The line echoes QA's reason, so a
+      // tag it spells must not page seats (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions).
       try {
-        await state.postSystemMessage(params.taskId, `QA rejected: ${params.reason}`);
+        await state.postSystemMessage(params.taskId, `QA rejected: ${params.reason}`, { parseMentions: false });
       } catch { /* never block tool */ }
 
       // Cross-post structured rejection to #governors so the governor's chat_wait

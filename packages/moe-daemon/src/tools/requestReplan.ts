@@ -86,8 +86,10 @@ export function requestReplanTool(_state: StateManager): ToolDefinition {
 
       const stepHint = params.stepId ? ` (broke at step ${params.stepId})` : '';
       const reasonSummary = params.reason.length > 200 ? params.reason.slice(0, 200) + '…' : params.reason;
+      // The #general line echoes the agent's reason, so a tag it spells must not
+      // page seats (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions).
       try {
-        await state.postSystemMessage(task.id, `Replan requested${stepHint}: ${reasonSummary}`);
+        await state.postSystemMessage(task.id, `Replan requested${stepHint}: ${reasonSummary}`, { parseMentions: false });
       } catch { /* never block tool */ }
       try {
         await state.postToRoleChannel(

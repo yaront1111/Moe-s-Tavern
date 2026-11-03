@@ -250,8 +250,10 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
 
           if (correctedStatus !== task.status) {
             const msg = `🔧 task ${repaired.id} was unassigned but stuck in ${task.status}; auto-routed to ${correctedStatus}`;
-            try { await state.postToGeneral(msg); } catch { /* never block tool */ }
-            try { await state.postToRoleChannel('workers', msg); } catch { /* never block tool */ }
+            // A status notice, not a page: a mention-less #workers line would
+            // otherwise route to every busy seat.
+            try { await state.postToGeneral(msg, { parseMentions: false }); } catch { /* never block tool */ }
+            try { await state.postToRoleChannel('workers', msg, { parseMentions: false }); } catch { /* never block tool */ }
           }
 
           return {
@@ -366,8 +368,12 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           chatMsg = `${baseMsg} (released without handoff)`;
           warning = 'release_task called without handoffNote; next claimer will lack context.';
         }
-        try { await state.postToGeneral(chatMsg); } catch { /* never block tool */ }
-        try { await state.postToRoleChannel('workers', chatMsg); } catch { /* never block tool */ }
+        // These copies echo agent text (the title, the reason, the handoff
+        // summaries), so a tag it spells must not page seats
+        // (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions). The
+        // #governors copy keeps parsing: it is the governor's page.
+        try { await state.postToGeneral(chatMsg, { parseMentions: false }); } catch { /* never block tool */ }
+        try { await state.postToRoleChannel('workers', chatMsg, { parseMentions: false }); } catch { /* never block tool */ }
         try { await state.postToRoleChannel('governors', chatMsg); } catch { /* never block tool */ }
 
         if (cascadeTriggered) {

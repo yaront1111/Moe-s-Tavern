@@ -421,8 +421,11 @@ export async function postToGeneral(state: StateManager, content: string, opts?:
 /**
  * Post a system message to a role channel by name (e.g. 'architects').
  * Silently skips if no matching channel is found. Never throws.
+ * `opts.parseMentions: false` marks echoed agent text, as for postToGeneral.
  */
-export async function postToRoleChannel(state: StateManager, roleName: string, content: string): Promise<void> {
+export async function postToRoleChannel(
+  state: StateManager, roleName: string, content: string, opts?: SystemPostOptions
+): Promise<void> {
   try {
     let target: ChatChannel | null = null;
     for (const ch of state.channels.values()) {
@@ -432,7 +435,10 @@ export async function postToRoleChannel(state: StateManager, roleName: string, c
       }
     }
     if (!target) return;
-    await state.sendMessage({ channel: target.id, sender: 'system', content });
+    await state.sendMessage({
+      channel: target.id, sender: 'system', content,
+      ...(opts?.parseMentions === false ? { parseMentions: false } : {}),
+    });
   } catch (error) {
     logger.warn({ error, roleName }, 'Failed to post to role channel');
   }
