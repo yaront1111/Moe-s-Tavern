@@ -9,7 +9,7 @@ import { chatWhoTool } from './chatWho.js';
 import { listWorkersTool } from './listWorkers.js';
 import { activeChatWaiters } from './chatWait.js';
 import { listAttempts } from '../state/attemptStore.js';
-import type { Team, Worker, WorkerType } from '../types/schema.js';
+import type { ChatChannel, Team, Worker, WorkerType } from '../types/schema.js';
 
 // The seat's CLI (CLAUDE/CODEX/GEMINI/GROK) is reported by the launcher on
 // claim_next_task and join_team. Only an exact, case-sensitive name is kept;
@@ -349,6 +349,12 @@ describe('moe.chat_who and moe.list_workers project the persisted type', () => {
     h.createWorker({ id: 'worker-stale', type: 'CODEX', lastActivityAt: STALE, chatCursors: { [CHAN]: 'msg-3' } });
     h.createWorker({ id: 'worker-quiet', type: 'GEMINI', lastActivityAt: FRESH });
     h.createWorker({ id: 'worker-elsewhere', type: 'GROK', lastActivityAt: FRESH });
+    // CHAN must exist in state: chat_who resolves its channel reference and refuses an
+    // unknown one (task-4877ef36). Written into the temp project's .moe/channels, the way
+    // createWorker writes worker files.
+    const channel: ChatChannel = { id: CHAN, name: 'x', type: 'custom', linkedEntityId: null, createdAt: FRESH };
+    fs.mkdirSync(path.join(h.moePath, 'channels'), { recursive: true });
+    fs.writeFileSync(path.join(h.moePath, 'channels', `${CHAN}.json`), JSON.stringify(channel, null, 2));
     await h.state.load();
     const wait = (id: string, channels: string[] | null) => activeChatWaiters.set(id, {
       resolve: () => {}, unsubscribe: () => {}, timer: setTimeout(() => {}, 60_000),
