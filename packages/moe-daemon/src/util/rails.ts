@@ -81,12 +81,24 @@ export function assertPlanRails(
     // the plan — propose_rail is only for when the rail itself is the
     // bug, not when the plan skipped a required pattern.
     const v = railsCheck.violation || {};
+    // Only a GLOBAL MODIFY_RAIL/REMOVE_RAIL of the quoted entry can lift this
+    // refusal: the check reads globalRails.forbiddenPatterns and requiredPatterns
+    // only (never epicRails, taskRails or customRules), and propose_rail resolves
+    // a GLOBAL currentValue in those lists (task-34e42a0a). Every violation is
+    // built by listPlanRailViolations, so the entry is the text after its label.
+    const entry = typeof v === 'string'
+      ? /^(?:Forbidden pattern|Required pattern missing): ([\s\S]*)$/.exec(v)?.[1]
+      : undefined;
+    const currentValue = entry === undefined
+      ? '<the exact forbiddenPatterns or requiredPatterns entry>'
+      : JSON.stringify(entry);
     const message =
       `Rail violation: ${JSON.stringify(v)}. ` +
       `Default action: ${defaultAction}. ` +
       `Escape hatch: if this rail is genuinely wrong for task ${taskId} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +
-      `moe.propose_rail { proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL" | "EPIC" | "TASK", taskId: "${taskId}", currentValue, proposedValue, reason, workerId } ` +
-      `to request a human-approved rail change. Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
+      `moe.propose_rail { proposalType: "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL", taskId: "${taskId}", currentValue: ${currentValue}, proposedValue, reason, workerId } ` +
+      `to request a human-approved change to that globalRails entry. Only that GLOBAL change can lift this refusal: the plan check enforces no other rail. ` +
+      `Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
     throw new MoeError(
       MoeErrorCode.CONSTRAINT_VIOLATION,
       message,
