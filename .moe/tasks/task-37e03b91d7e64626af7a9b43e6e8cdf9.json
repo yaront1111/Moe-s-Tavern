@@ -93,7 +93,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:43:02.522Z",
-  "updatedAt": "2026-11-03T16:00:52.873Z",
+  "updatedAt": "2026-11-03T16:12:01.848Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:44:38.033Z",
     "plannedStepCount": 4,
@@ -176,5 +176,33 @@
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
     "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
   ],
-  "completionSummary": "JetBrains Plan Review and Task Detail now show each step's effective text: the active amendment's text, else the original. An \"Amended by X\" marker carries the original text in its tooltip. Plan Review's Approve therefore binds to the revision of the text the human read. The daemon is unchanged.\n- Models.kt: new StepAmendment, plus ImplementationStep's defaulted `amendments` and `activeAmendmentId`. The single rule lives in two body properties:\n  - `activeAmendment`: the entry the non-empty id names, never simply the latest; else null;\n  - `effectiveDescription`.\n  Both mirror daemon util/planAmendments.ts.\n- MoeJson.kt: parseImplementationStep plus a new parseStepAmendments. They use strict string readers and never throw: malformed shapes degrade to the original text, and the task is kept.\n- PlanReviewDialog and TaskDetailDialog render effectiveDescription and the marker, with two MoeBundle keys next to stepStatus. approval.onRendered is untouched.\n- Test: one new MoeJsonTest method, through both parseTask and parseState. It covers:\n  - the F1 wire step (\"AMENDED: delete src/a.ts\", original kept, amendedBy architect-1);\n  - the active amendment, not the latest;\n  - junk entries skipped;\n  - dangling, blank, numeric-id, object-holder, non-string and legacy shapes.\n- RED on the base: compileTestKotlin fails with \"Unresolved reference 'effectiveDescription'\".\n- GREEN, run under the jetbrains-gradle lease: 39 classes, 626 tests, 0 failures, 0 errors, 6 pre-existing skips.\n- qualityGate (parity-check + lint): exit 0.\n- gradlew.bat lives in moe-jetbrains/, so the gate runs from there; the plan's root-level form cannot find it."
+  "completionSummary": "JetBrains Plan Review and Task Detail now show each step's effective text: the active amendment's text, else the original. An \"Amended by X\" marker carries the original text in its tooltip. Plan Review's Approve therefore binds to the revision of the text the human read. The daemon is unchanged.\n- Models.kt: new StepAmendment, plus ImplementationStep's defaulted `amendments` and `activeAmendmentId`. The single rule lives in two body properties:\n  - `activeAmendment`: the entry the non-empty id names, never simply the latest; else null;\n  - `effectiveDescription`.\n  Both mirror daemon util/planAmendments.ts.\n- MoeJson.kt: parseImplementationStep plus a new parseStepAmendments. They use strict string readers and never throw: malformed shapes degrade to the original text, and the task is kept.\n- PlanReviewDialog and TaskDetailDialog render effectiveDescription and the marker, with two MoeBundle keys next to stepStatus. approval.onRendered is untouched.\n- Test: one new MoeJsonTest method, through both parseTask and parseState. It covers:\n  - the F1 wire step (\"AMENDED: delete src/a.ts\", original kept, amendedBy architect-1);\n  - the active amendment, not the latest;\n  - junk entries skipped;\n  - dangling, blank, numeric-id, object-holder, non-string and legacy shapes.\n- RED on the base: compileTestKotlin fails with \"Unresolved reference 'effectiveDescription'\".\n- GREEN, run under the jetbrains-gradle lease: 39 classes, 626 tests, 0 failures, 0 errors, 6 pre-existing skips.\n- qualityGate (parity-check + lint): exit 0.\n- gradlew.bat lives in moe-jetbrains/, so the gate runs from there; the plan's root-level form cannot find it.",
+  "commits": [
+    {
+      "sha": "3b56ee35dd989253be447825210c5b9572b23ea3",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T15:51:36Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T16:12:01.848Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T15:51:36Z",
+    "at": "2026-11-03T16:12:01.848Z"
+  }
 }

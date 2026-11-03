@@ -46,15 +46,21 @@
     {
       "stepId": "step-3",
       "description": "Gate, run ONCE. Its output is moe.complete_task's verification evidence.\n1. Take the shared lease: moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId, note: \"gradlew test --rerun\" } (mem:convention-jetbrains-gradle-lease). If it is queued, moe.report_blocked with that resourceId parks the task and the grant returns it.\n2. Run the executionContract checkRef from inside your worktree. It does the following:\n   - cds to <worktree>/moe-jetbrains (gradlew.bat lives there, not at the repo root; mem:gotcha-gradle-jetbrains-shared-box 2c);\n   - runs Windows `.\\gradlew.bat test --rerun` through cmd.exe, because WSL has no JDK (mem:gotcha-jetbrains-gradle-from-wsl);\n   - prints the BUILD line and the summed TEST-*.xml counts, and exits with Gradle's code.\n   `--rerun` matters: a plain `test` can be UP-TO-DATE and run zero tests.\n3. Release the lease right after, on failure too.\n\nExpected: BUILD SUCCESSFUL, exit 0, and `xml tests=N skipped=S failures=0 errors=0`, where N is the target's baseline plus 1 (the new MoeJsonTest case). If the exit is red with a truncated tail, check the Gradle daemon log for the loopback IPC flake (same memory, trap 2) and re-run once before believing it.\n\nNothing outside moe-jetbrains changes, so run no npm or vitest. moe-vscode must stay untouched (DoD 2). Its twin bug, moe-vscode/src/types/moe.ts:202-210, is out of scope.\n\nOn placement: get_context says isEpicFinal only through the highest-order fallback on this bucket epic. This plugin-wide suite IS the full regression for the only package touched; there is no cross-package flow to integrate.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T16:08:06.522Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Fresh exact checkRef passed: BUILD SUCCESSFUL in 28s; XML tests=633 skipped=6 failures=0 errors=0 (627 passed). Scoped correction to new test: added epicId required by parseSnapshotTask. First run caught that omitted fixture key; second had unrelated MoeProjectConnectionTest TimeoutException, immediate full retry green. jetbrains-gradle released after every run. Mandatory root qualityGate also freshly passed: parity-check.sh PASS and npm run lint exit 0, role counts 39/30/36.",
+      "startedAt": "2026-11-03T16:08:06.522Z",
+      "completedAt": "2026-11-03T16:11:20.889Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (the one review step), then complete_task with step 3's evidence.\n(1) Scope: `git status --short` and `git diff --stat` show exactly the 5 planned files. Nothing in MoeBundle.properties, moe-vscode or MoeJsonTest's import block, and no untracked file in the worktree.\n(2) Leniency and error handling: the decoy test's legacy-only note and the `{}` and legacy rows in TaskTimingPresentationTest prove a note missing the daemon keys parses to nulls and renders \"#N\" without throwing. getStringOrNull and the non-object skip are unchanged.\n(3) Mutation check. Make a scratch archive copy, never touching the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy):\n   - `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/ac587df5-mut/repo`, then copy your 5 edited files over it (a scratch dir, so cp is fine there).\n   - Under the jetbrains-gradle lease, run ONE mutant at a time with `.\\gradlew.bat test --tests <Class> --rerun`. The --tests value is unquoted.\n   - Required mutants:\n     - M2: drop the reason append in handoffBlocks. com.moe.toolwindow.TaskTimingPresentationTest must fail.\n     - M3: re-add `val from: String? = null` to HandoffNote and `from = h.getStringOrNull(\"from\")` to parseHandoffs. com.moe.util.MoeJsonTest must fail on the new decoy test.\n   - Optional M1: source releasedBy from \"from\" in parseHandoffs. MoeJsonTest must fail.\n   - Restore each mutant and delete the scratch copy afterwards.\n(4) Concurrency: the edits are pure parse and presentation with no shared state. If task-37e03b91 or task-40813cc1 lands first, landing is a merge-tree squash and these hunks are disjoint from theirs. Only if landing reports a conflict: rebase on the target tip and re-run the gate.\n(5) Would I be embarrassed? The header must never show 'null' or a dangling ' released by ' or ' ()'. Each fragment is guarded by isNullOrBlank.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T16:11:20.917Z"
     }
   ],
   "planRevision": 1,
@@ -71,12 +77,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:47:05.199Z",
-  "updatedAt": "2026-11-03T16:08:06.522Z",
+  "updatedAt": "2026-11-03T16:11:20.917Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:57:50.997Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -88,7 +94,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T16:06:02.367Z",

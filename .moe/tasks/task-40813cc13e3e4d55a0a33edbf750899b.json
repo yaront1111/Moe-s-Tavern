@@ -63,28 +63,39 @@
     {
       "stepId": "step-4",
       "description": "Docs, DoD 3. Edit docs/CONFIGURATION.md at the current target tip only.\n- In the Settings Reference intro (:176-181), add `worktreeMode` to the list of keys the JetBrains dialog shows as read-only effective values. Add one clause: when worktreeMode resolves to `on`, the Landing branch, Commit board state and Quality gate scope rows describe worktree landing.\n- In the worktreeMode row (:206), prefix the description with `**Dialog: Worktree mode.**`, matching the other rows' labels. The dialog shows the mode row only when the mode resolves on, so the label should say that.\n- Change nothing else. task-f9874361's REVIEW hunks also sit in this file, so keep this hunk to those two spots.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CONFIGURATION.md"
       ],
-      "startedAt": "2026-11-03T16:08:39.998Z"
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "CONFIGURATION.md, two spots only (the file is identical at HEAD and the target tip moe/work-2026-10-24): (1) the Settings Reference intro lists `worktreeMode` among the read-only effective values and adds \"When `worktreeMode` resolves to `on`, the Landing branch, Commit board state and Quality gate scope rows describe worktree landing.\"; (2) the worktreeMode row is prefixed `**Dialog: Worktree mode (shown only when the mode resolves to `on`).**`. No daemon docs test reads these anchors (grep of the *Docs.test.ts files).",
+      "startedAt": "2026-11-03T16:08:39.998Z",
+      "completedAt": "2026-11-03T16:09:05.162Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification. Run each gate ONCE, fresh, after every edit is in. Both outputs go into the complete_task evidence, and QA re-runs both.\n\n(1) JetBrains, with the jetbrains-gradle lease held only for the run:\n- Run exactly `gradlew.bat -p moe-jetbrains test --rerun` from the task worktree root. From WSL: `cmd.exe /d /c \"cd /d <wslpath -w worktree root> && gradlew.bat -p moe-jetbrains test --rerun\"`.\n- --rerun matters: a test task reported UP-TO-DATE runs nothing (mem:gotcha-gradle-jetbrains-shared-box).\n- Confirm in the TEST-*.xml totals that tests > 0 with 0 failures and 0 errors, and that SettingsPolicyCorpusTest and MoeJsonTest are present.\n- A socket MessageIOException is the known IPC flake: re-run once.\n- Never use --stop.\n\n(2) VS Code, in a Linux snapshot outside the checkout (mem:gotcha-vscode-gate-from-wsl). The global rail bans npm ci in the shared tree.\n- `S=$(mktemp -d)`, then `git archive HEAD | tar -x -C \"$S\"` from the worktree.\n- Overlay this task's files with cp --parents: client-settings-policy.json, SettingsPanel.ts and the three Kotlin files. The corpus test reads the JSON and MoeBundle.properties by path.\n- Then run `cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npm test && npm run compile'`.\n- It must exit 0, with the settings-policy-corpus rows P01-P15 passing.\n- Delete $S afterwards by its literal path.\n\nNo daemon or proxy npm gate applies: no daemon TypeScript changes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/resources/client-settings-policy.json"
-      ]
+      ],
+      "note": "Both gates fresh, after every edit. (1) JetBrains under the jetbrains-gradle lease (acquired 16:09:57Z, released right after): `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\.worktrees\\task-40813cc13e3e4d55a0a33edbf750899b\\moe-jetbrains && gradlew.bat test --rerun\"`. gradlew.bat lives in moe-jetbrains/ and not the repo root (mem:gotcha-gradle-jetbrains-shared-box 2c), so this is the plan's command run from that directory. Exit 0, BUILD SUCCESSFUL in 28s. XML totals: 40 classes, tests=633 skipped=6 failures=0 errors=0, timestamps 16:10:05-16:10:29Z, after the 16:10:04Z start. MoeJsonTest, SettingsPolicyCorpusTest and MoeSettingsDialogTest are present. (2) VS Code in a Linux snapshot: /tmp/t40813-vsc.7ojq1o = git archive HEAD plus cp --parents of all 9 changed files, cmp-verified. Ran `env -i HOME PATH=nvm v24.21.0 … sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npm test && npm run compile'`: exit 0, tests 695, pass 685, fail 0, skipped 10. The settings-policy-corpus C1-C5 all pass, P01-P15 included, and tsc is clean. Snapshot deleted. (3) Worktree landing runs the project qualityGate on every completion, so I ran `bash scripts/tests/parity-check.sh && npm run lint` locally: exit 0.",
+      "startedAt": "2026-11-03T16:09:06.353Z",
+      "completedAt": "2026-11-03T16:10:54.358Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review, once. Load the adversarial-self-review skill, then check:\n(1) Both clients mirror validators.ts:301-311 exactly, re-read at the current tip:\n- 'on' or 'off' is honoured as stored;\n- an unset mode is on only when the gate string is non-blank after trimming;\n- the target is the trimmed literal, with no `*`, `?` or `[`, else main.\n(2) A malformed mode (null, a number, an unknown string) degrades to the gate rule in BOTH clients. Neither client ever throws or blanks the board.\n(3) With the mode off, every row is byte-identical to 946358a8. Diff P01-P10's expect arrays against the base: only P04's settings and note changed. Its expect array did not.\n(4) No corpus row carries a client-specific expectation. Both clients pass P11-P15.\n(5) UPDATE_SETTINGS still sends only its four keys, so the resolved mode is never written back.\n(6) The hunks stay inside ProjectSettings, parseProjectSettings, the dialog companion, one MoeJsonTest method beside the settings tests, the SettingsPanel rows, and the two CONFIGURATION.md spots. That keeps the task-37e03b91, task-ac587df5 and task-f9874361 squashes clean.\n(7) The diff touches only this plan's 7 files.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
         "moe-vscode/src/panels/SettingsPanel.ts"
-      ]
+      ],
+      "note": "Self-review of my own diff, run once. No changes were needed.\n(1) Mirror check, re-read at the tip (validators.ts:300-311). Both clients honour 'on'/'off' as stored. An unset mode is on iff the gate is a string that is non-blank after trim: Kotlin uses the strict-trimmed qualityGate with isNotBlank, VS Code uses trimmedString !== ''. The target is the trimmed literal with no `*`, `?` or `[`, else main.\n(2) A malformed mode degrades to the gate rule in both clients. Kotlin: getStrictStringOrNull, where JsonNull is not a primitive. VS Code: strict ===. Neither has a throw path; the quick replay also fed {} and null modes.\n(3) Mode off: the corpus diff hunks are @@57,2 (P04 settings and note only) plus @@173 (appended P11-P15). P01-P10 expect arrays are untouched, and the off branches are the original code and strings.\n(4) No client-specific rows. Both clients pass P01-P15.\n(5) MoeCommandSender.updateSettings is untouched, so it still sends 4 keys. The new constructor param is last and defaulted, so no positional caller breaks.\n(6) Hunks stay in ProjectSettings, parseProjectSettings, the dialog companion, one MoeJsonTest method, the SettingsPanel rows and the two CONFIGURATION.md spots.\n(7) Files: the plan's 7, plus 2 one-line test edits explained in step 1.\nRendering: MoeSettingsDialog escapes every label, value and detail before the <html> JBLabel, and SettingsPanel uses escapeHtml, so \"<taskId>\" displays literally.\nTheoretical only: Kotlin trim/isNotBlank and JS trim disagree on exotic Unicode such as a lone U+FEFF gate. That divergence already exists in the Quality gate row; I left it alone.\nThe target tip (ef5c7101) has no changes to the moe-jetbrains, moe-vscode or CONFIGURATION.md paths, and 37e03b91 has not landed, so no rebase was needed.",
+      "startedAt": "2026-11-03T16:10:55.503Z",
+      "completedAt": "2026-11-03T16:11:46.577Z"
     }
   ],
   "planRevision": 1,
@@ -101,12 +112,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T15:46:49.581Z",
-  "updatedAt": "2026-11-03T16:08:39.998Z",
+  "updatedAt": "2026-11-03T16:11:46.577Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T15:55:39.579Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 3
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -122,7 +133,10 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T15:59:57.397Z",
