@@ -67,8 +67,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,12 +87,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:47:03.896Z",
-  "updatedAt": "2026-11-03T23:13:46.750Z",
+  "updatedAt": "2026-11-03T23:21:28.978Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:02:48.409Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T23:21:03.363Z",
+    "wallClockMs": 1094954
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -213,9 +215,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T23:08:03Z",
-    "at": "2026-11-03T23:13:24.110Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:13:30Z",
+    "at": "2026-11-03T23:21:28.977Z"
+  },
+  "completedAt": "2026-11-03T23:21:03.363Z",
+  "reviewCompletedAt": "2026-11-03T23:21:03.363Z",
+  "reviewSummary": "Reviewed completion b796ea48 (on moe/work-2026-10-24, contained in control HEAD 8f33694c; 3 files, +131/-5, net +126 non-board LOC, under the 400 cap). Diff is scoped to the approved hunks only: McpAdapter.ts env reads (now parsePositiveIntegerEnv with DEFAULT_RATE_LIMIT_MAX_REQUESTS=100 / DEFAULT_RATE_LIMIT_WINDOW_MS=1000) plus the RateLimiter constructor fallback (1 -> 100); the sibling task-5158e85b dispatch-comment hunk is untouched; docs/CONFIGURATION.md changes only the rate-limiting clause; new McpAdapter.rateLimitEnv.test.ts. Re-ran task.verification myself in an external snapshot (/tmp/tmp.duhgeTwZJQ, git archive HEAD + 3-file overlay, npm ci): tsc --noEmit exit 0; vitest run McpAdapter + daemonGitDocs + executionContractDocs + taskTimeBudgetDocs = 6 files / 81 tests passed. Mutation check: restored parent McpAdapter.ts in the snapshot, ran the new file alone: 9 failed / 5 passed (r1 x4, r2 x4, r5 fail; r3 valid override, r4 enabled=false, unset-silent, parseInt-prefix pass), so the tests bite. npm run lint OK (architect 39, worker 30, qa 36 lines). DoD 1: abc/0/-5/'' for both vars fall back to 100/1000 with exactly one warn {name,value,fallback} (toHaveBeenCalledExactlyOnceWith); DoD 2: MAX_REQUESTS=5 -> 6th ping answers -32000 'Rate limit exceeded: 5 requests per 1000ms' (and 2000 window variant), valid override logs no warn, ENABLED=false -> limiter null and all pings answer; DoD 3: one new vitest file with fresh logger/module import per env (resetModules + fresh logger spy), passes alongside existing McpAdapter tests. Assertions are exact (toStrictEqual), afterEach restores env/mocks/modules. Not verified: JetBrains/proxy/shell paths (untouched). Complexity pass: nothing to cut (reuses the existing parser; constants shared by constructor).",
+  "requiredCheckAtDone": null
 }
