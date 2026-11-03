@@ -14,23 +14,35 @@
     {
       "stepId": "step-1",
       "description": "Rewrite the body of docs/SCHEMA.md's \"## ID Generation\" section from the architect's verified reference text. Use the Edit tool only: the rail forbids shell writes and `git apply`.\n\nLAYOUT at HEAD 585fedc6:\n- :2146 is the heading `## ID Generation` and :2147 is blank. Both stay.\n- :2148 is `All IDs use a prefix + short UUID format:` and :2149 is blank.\n- :2150-2154 are a ```typescript fence with the old generator.\n- :2155 is blank, :2156 is `// Examples:`, :2157-2166 are ten 8-char example comments, and :2167 is the closing fence.\n- :2168 is blank and :2169 is the `---` separator before `## Validation Rules`. Leave both untouched.\n\nEDIT: replace :2148 through the closing fence at :2167 with lines 3-40 of /mnt/d/moe-scratch/plan-b5bf/section.md. That is everything after its heading line and the blank line that follows it.\n- section.md's sha256 is d6a988fd148c5d8c39d6ac0842ac853061d056e91ecdfdcc263ac8758c6ae00c, and it is 40 lines.\n- Copy it byte for byte. Its example ids are random 32-hex strings; keep them as written.\n- /mnt/d/moe-scratch/plan-b5bf/fix.diff (sha256 7dccef8fbb80153b695321867b60a5af4c3ac09f236e2863bc225d929477b7d2) is the same change as a unified diff, already checked with `git apply --check` against 585fedc6. Use it to compare, never to apply.\n- mem:decision-architect-dry-run-reference-files explains the method.\n\nThe new text states:\n- (a) generateId mints `<prefix>-<32 lowercase hex>` (packages/moe-daemon/src/util/ids.ts:8), and why: 32-bit ids collide.\n- (b) a 17-row Prefix / Entity / Example table: proj, epic, task, team, prop, evt, chan, msg, dec, comment, attempt, ctxreceipt, cand, review, check, dispatch, receipt.\n- (c) Candidate, Review, CheckRun and CheckDispatch may take a caller-supplied id, as their interfaces in SCHEMA.md say.\n- (d) legacy 8-hex ids from before 0aab4d36 (2026-06-30) stay valid. Consumers accept both, as tools/reportBlocked.ts:32 `task-[0-9a-f]{6,}` does.\n- (e) step ids are `step-<n>` in plan order (tools/submitPlan.ts:509).\n- (f) worker ids come from the seat's MOE_WORKER_ID. The launchers default it to `<role>-<8 hex>` (scripts/moe-agent.sh:917-921, scripts/moe-agent.ps1:460-465), overridable with `--worker-id` or `-WorkerId`, and the daemon never mints one.\n- (g) one sentence saying the example ids elsewhere in the doc are short placeholders.\n\nBefore pasting, confirm the facts still hold at your HEAD:\n- `grep -rhoE \"generateId\\('[a-z]+'\\)\" packages/moe-daemon/src --include=*.ts --exclude=*.test.ts | sort -u` lists exactly those 17 prefixes;\n- ids.ts:8;\n- submitPlan.ts:509.\n\nError handling:\n- If the Edit's old_string no longer matches because the section changed after 585fedc6, re-read the section by its heading. Replace exactly from the line after the heading's blank line through the section's closing fence, and never touch text outside it.\n- If a new non-test generateId prefix has appeared, add a table row for it, with its interface name and a fresh 32-hex example.\n- If a cited code fact changed, write the sentence to match the code and say so in complete_step.\n\nDo not edit the 8-char placeholder ids elsewhere in SCHEMA.md (for example :307 and :671). They are out of scope.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "Pasted reference section; facts rechecked (17 prefixes).",
+      "startedAt": "2026-11-03T17:12:21.309Z",
+      "completedAt": "2026-11-03T17:12:43.911Z"
     },
     {
       "stepId": "step-2",
       "description": "Verify and run the one self-review. Make no edits unless something is red.\n\n1. From your worktree root, run the checkRef exactly as given in the executionContract. It must print `ID-GENERATION-OK` and exit 0. That fresh output is the complete_task evidence.\n   - The checkRef asserts that the section has no `split('-')[0]` and no `First 8 chars`, that every non-test generateId prefix appears in it, that it contains `<32 lowercase hex>`, `0aab4d36`, `step-<n>` and `MOE_WORKER_ID`, that it has exactly 2 fence lines, and that no file other than docs/SCHEMA.md differs from the merge base.\n   - Dry-run numbers on a scratch copy: exit 0 on the candidate. Exit 1 on HEAD 585fedc6, which has the old text and 9 missing prefixes. Exit 1 for the mutant that drops the `step-<n>` wording, and for the mutant that drops the `review-` row. So a green run is not a harness slip.\n2. Run `git diff -U0 -- docs/SCHEMA.md | grep '^@@'`. Every hunk must lie between the `## ID Generation` heading and the `---` separator. The dry run gave 4 hunks: -2148, -2152, -2155,12, and -2168,0 +2157,30.\n\nSelf-review checklist:\n- The markdown renders: one ```typescript block, and a table with a header, a separator and 17 rows.\n- No line inside the section is exactly `---`. Such a line would end the DoD sed range early and hide the rest of the section from the test.\n- The heading text is unchanged.\n- Every factual sentence matches its code line (ids.ts:8, submitPlan.ts:509, reportBlocked.ts:32, moe-agent.sh:917-921 and moe-agent.ps1:460-465, and `git show 0aab4d36 -- packages/moe-daemon/src/util/ids.ts`).\n- No other file or section changed.\n- What would I be embarrassed by if a tool author copied the regex or table straight from this doc?\n\nError handling for a red run:\n- `missing <prefix>`: add that prefix's row.\n- Fence count not 2: fix the fences inside the section.\n- Scope check red (another path differs from the merge base): find out why, and restore that path's merge-base bytes with Edit, never with a checkout of shared files.\n- Then re-run the checkRef until it is green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "checkRef green; hunks all inside section; no edits.",
+      "startedAt": "2026-11-03T17:12:44.826Z",
+      "completedAt": "2026-11-03T17:12:47.275Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -49,11 +61,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:02:49.230Z",
-  "updatedAt": "2026-11-03T17:11:39.757Z",
+  "updatedAt": "2026-11-03T17:13:42.018Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:05:48.104Z",
     "plannedStepCount": 2,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -64,7 +77,10 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T17:11:21.472Z",
   "executionContract": {
@@ -120,5 +136,41 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-03T17:11:21.501Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:12:21.309Z",
+  "reviewStartedAt": "2026-11-03T17:12:49.940Z",
+  "verification": {
+    "command": "checkRef from executionContract (ID-GENERATION-OK)",
+    "exitCode": 0,
+    "outputTail": "ID-GENERATION-OK\nexit=0",
+    "reportedAt": "2026-11-03T17:12:49.940Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/SCHEMA.md"
+  ],
+  "completionSummary": "Rewrote docs/SCHEMA.md \"## ID Generation\": 32-hex generator, 17-prefix table, caller-supplied ids, legacy 8-hex (0aab4d36), step-<n>, MOE_WORKER_ID worker ids, placeholder note. Docs only.",
+  "commits": [
+    {
+      "sha": "19d5e67a8e14c73f6aaf94f0256166b1f9040e6b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T17:11:26Z",
+      "paths": [
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T17:13:42.018Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T17:11:26Z",
+    "at": "2026-11-03T17:13:42.018Z"
+  }
 }

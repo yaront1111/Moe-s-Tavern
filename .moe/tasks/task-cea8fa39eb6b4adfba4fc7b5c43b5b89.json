@@ -1,0 +1,34 @@
+{
+  "id": "task-cea8fa39eb6b4adfba4fc7b5c43b5b89",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #6): file 2-4 evidence-backed bug rows from the session mods, the non-wrapper scripts, the daemon CLI commands and the claude-plugin",
+  "description": "Filed by the governor at 17:12Z on 2026-11-03. It runs in parallel with hunt #5 (task-b7332618, architect-24611a0a), so the lanes are disjoint. Hunts #2-#4 produced 15 rows today, and most were DONE within an hour. A notification-only architect session can't run a hunt, so the hunt is a claimable row.\n\nWHY. 5 coders and 3 QA seats are idle, with 0 claimable WORKING rows. Only the serial CQ-M07m/n wrapper chain and two hunt-#4 rows remain.\n\nLANE. Search, in this order of preference:\n1. scripts/mods/** (moe-account-switch, moe-compaction-keeper), plus scripts/moe-call.sh, scripts/moe-team.{sh,ps1}, scripts/doctor.{sh,ps1} and scripts/install-*.{sh,ps1}. Cases to look for:\n   - sh/ps1 twin drift outside moe-agent.*: an argument, exit code, env name or banner one twin handles and the other doesn't;\n   - a mod contract that disagrees with the daemon tool it calls (argument names, reply fields such as chat_wait's accountSwitch);\n   - a documented behavior in scripts/CLAUDE.md or docs/MCP_SERVER.md \"Claude Account Rotation\" that the script doesn't implement.\n   Before filing, grep .moe/tasks for the file name: the mods already have open or DONE fix rows (e.g. task-16ec5641).\n2. packages/moe-daemon/src/commands/** (doctor.ts, doctorWorktree.ts, checkArchitecture.ts) and the CLI entry in packages/moe-daemon/src/index.ts: flags, exit codes and output against the root CLAUDE.md \"Run\" section and docs. Examples: `doctor` exit 0 = green, and check-architecture's exit codes 0/1/2.\n3. packages/moe-claude-plugin/src (daemonClient.ts, postToolUse.ts, index.ts): the event and frame shapes it sends against the daemon's /ws handler. Hunt #3 dropped one item as minor: daemonClient.ts:149 and :237 read daemon.json `host`, but the daemon writes `bindHost`. File it only with evidence that it matters, e.g. a hook that never reaches a daemon bound for WSL.\n\nSkip:\n- hunt #5's lane: moe-vscode/**, packages/moe-daemon/src/tools/**, docs/TROUBLESHOOTING.md and docs/DEVELOPMENT.md;\n- scripts/moe-agent.*, scripts/tests/postflight* and scripts/tests/parity-check.* (the CQ-M07 lane);\n- the JetBrains release path, MoeCommandSender.kt / MoeToolWindowPanel.kt (0f2e958f), and docs/SCHEMA.md (b5bfda4d);\n- every other file an open row's plan holds. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\nAlready known, so don't re-file: TURBO auto-approve's \"WORKING by unknown\" line; the account-switch \"Background work is running\" exit dialog (task-16ec5641); REVIEW claim churn during an all-accounts-spent wait (task-0c78c290).\n\nEVIDENCE BAR. Same as hunts #2-#5. Work only from real evidence:\n- A repro on HEAD c4121a4b or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place, and never run a mod or launcher against the live board or a live seat.\n- A failure line from today's logs: the file and the timestamp.\n- For contract drift: the emitter file:line and the consumer file:line, or the doc line and the code file:line.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Prefer rows QA can check with one test file (vitest, or one scripts/tests harness run).\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD c4121a4b or later run outside the shared checkout, a failure line from today's logs, or an emitter/consumer (or doc/code) file:line pair.",
+    "No filed row targets hunt #5's lane, scripts/moe-agent.*, scripts/tests/postflight*, scripts/tests/parity-check.* or a file an open row's plan holds (per lanes.js at hunt time). The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-1dd28c7c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 384.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:13:06.680Z",
+  "updatedAt": "2026-11-03T17:13:29.646Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:13:15.547Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}
