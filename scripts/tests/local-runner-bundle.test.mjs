@@ -40,7 +40,8 @@ function fixture(t) {
     'packages/moe-proxy/dist/utils.spec.js', 'packages/moe-daemon/dist/tools/sample.test.js']) put(name, 'export {};\n');
   for (const name of ['packages/moe-proxy/dist/latest.js', 'packages/moe-daemon/dist/tools/attestation.js']) put(name, 'export {};\n');
   for (const name of ['moe-agent.ps1', 'moe-agent.sh', 'moe-call.sh', 'prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs',
-    'prompt-cache-witness.mjs', 'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs']) {
+    'prompt-cache-witness.mjs', 'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs',
+    'moe-serena-ignore.mjs']) {
     put(`scripts/${name}`, readFileSync(path.join(root, 'scripts', name)));
   }
   put(manifestFile, readFileSync(path.join(root, manifestFile)));
