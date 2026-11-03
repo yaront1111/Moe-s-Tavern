@@ -69,8 +69,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -82,12 +82,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:43:54.639Z",
-  "updatedAt": "2026-11-03T21:12:04.412Z",
+  "updatedAt": "2026-11-03T21:14:29.704Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T20:54:28.772Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T21:13:58.120Z",
+    "wallClockMs": 1169348
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -202,9 +204,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T21:03:03Z",
-    "at": "2026-11-03T21:11:14.656Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T21:11:24Z",
+    "at": "2026-11-03T21:14:29.704Z"
+  },
+  "completedAt": "2026-11-03T21:13:58.120Z",
+  "reviewCompletedAt": "2026-11-03T21:13:58.120Z",
+  "reviewSummary": "Approved. Reviewed completion 67d7a0c0 (pushed, on moe/work-2026-10-24, equals this checkout's HEAD): 4 files, +113/-3, net 110, under the 400 cap.\nRe-ran task.verification in git-archive snapshots outside the shared checkout (env -i, node 24, npm ci).\nLeg 0 gate: tsc --noEmit and the new test's typecheck passed; Test Files 11 passed (11), Tests 356 passed (356) over waitForTask*, claimNextTask* (incl. 'refuses a coding claim while that worker has an attempt finalizing'), finalizeAttempt, executionProfileAdmission, executionRoute, attemptHandback; exit 0.\nLeg 1 red-at-base (new file vs waitForTask.ts pinned at 9834628e): Tests 2 failed | 2 passed (4), (f1)/(f2) red, (c1)/(c2) green, RED-AT-BASE; exit 0.\nDoD 1: (f1) asserts hasNext:false, no task, no claim_next_task nextAction while worker-1's own attempt is finalizing; red at base. DoD 2: (f2) parks a waiter, finalize_attempt wakes it hasNext:true with task-next, and the claim with the returned args assigns it to worker-1. DoD 3: named suites pass in the snapshot.\nCode: ownFinalizingAttempt is one pass over state.attempts.values(), no copy/sort/clone, lowest generation and earliest stored on a tie, which matches the old listAttempts().find (stable ascending-generation sort). claimNextTask keeps the ATTEMPT_FINALIZING refusal, context and position; listAttempts is still used at :234. waitForTask returns NO_MATCH after the own-task match and blockingHold (claim's order). Other workers' waiters and foreignFinalizingAttempt are unchanged, pinned by (c2). No lost wake: no await between the immediate match and subscribe. claimGuards.ts, finalizeAttempt.ts, docs untouched. No forbidden patterns; no tests weakened.\nNot run: full daemon suite, gradle (outside this slice). Non-blocking follow-up, not built: a seat parked on its own finalizing attempt gets only the plain re-enter-wait hint, and the wrapper's AUTO_CLAIM fallback prompt still says to wait; END_SESSION guidance would fit better.",
+  "requiredCheckAtDone": null
 }

@@ -50,16 +50,23 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's diff. This is the final step: load the adversarial-self-review skill.\n\n(1) Negative control (DoD 1: (w1) fails on the old key). Run from the worktree root:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\")\" packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/metrics.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/util/metrics.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests \" \"$S/l\"; grep -aqE \"^ +Tests +1 failed \\| 10 passed \\(11\\)\" \"$S/l\" && grep -aqF \"> (w1) \" \"$S/l\" && ! grep -aqF \"> (w2) \" \"$S/l\" && ! grep -aqF \"> (w3) \" \"$S/l\" && ! grep -aqF \"> (w4) \" \"$S/l\" && echo RED-AT-BASE; }\n\n- Expect 'Tests  1 failed | 10 passed (11)' and RED-AT-BASE. The architect's dry run printed exactly that.\n- util/metrics.ts is byte-identical between 31492ac5, the hunt's HEAD, and ac3ea38f, so this is DoD 1's \"fails against HEAD 31492ac5\".\n- Quote both lines in the completion summary, and mutate nothing in the worktree (mem:convention-daemon-vitest-mutant-checkref).\n- QA variant after landing: replace the merge-base with <completion sha>^.\n\n(2) Mutants the cases kill:\n- updatedAt first, or a max over all stamps: (w2) fails.\n- firstClaimAt kept before updatedAt: (w1) fails.\n- firstClaimAt dropped from the fallback: (w4) fails.\n\n(3) Error handling and inputs: a missing or unparseable key still excludes the row, with no new throw. An invalid sinceIso is still refused at listMetrics.ts and WebSocketServer.ts.\n\n(4) No other consumer changes:\n- listMetrics.ts's sort and output are untouched;\n- GET_METRICS uses the same function;\n- no state file changes shape, so legacy rows are covered by (w4).\n\n(5) The diff touches exactly metrics.ts and metrics.test.ts. docs/MCP_SERVER.md is untouched; its :2863 note becomes true.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/metrics.ts",
         "packages/moe-daemon/src/util/metrics.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/metrics.ts",
+        "packages/moe-daemon/src/util/metrics.test.ts"
+      ],
+      "note": "Negative control at merge-base printed 'Tests  1 failed | 10 passed (11)' and RED-AT-BASE (only w1 fails). Review: pure synchronous filter, no shared state or IO; a missing or unparseable key still excludes the row; invalid sinceIso still refused at listMetrics.ts and /ws; the sort and docs are untouched; the diff is exactly the two files.",
+      "startedAt": "2026-11-03T21:13:36.003Z",
+      "completedAt": "2026-11-03T21:14:01.232Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -71,12 +78,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:44:05.533Z",
-  "updatedAt": "2026-11-03T21:13:33.972Z",
+  "updatedAt": "2026-11-03T21:14:04.877Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T21:05:34.534Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -89,7 +96,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:10:03.782Z",
@@ -149,5 +157,18 @@
   },
   "planApprovedAt": "2026-11-03T21:10:03.811Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T21:12:56.383Z"
+  "workStartedAt": "2026-11-03T21:12:56.383Z",
+  "reviewStartedAt": "2026-11-03T21:14:04.875Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/metrics.ts packages/moe-daemon/src/util/metrics.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/util/metrics.test.ts src/tools/governanceFeatures.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  2 passed (2)\n      Tests  39 passed (39)\n   Start at  23:13:29\n   Duration  2.98s",
+    "reportedAt": "2026-11-03T21:14:04.875Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/metrics.test.ts",
+    "packages/moe-daemon/src/util/metrics.ts"
+  ],
+  "completionSummary": "filterTasksForMetrics now keys the sinceIso cutoff on metrics.doneAt ?? updatedAt ?? metrics.firstClaimAt ?? createdAt, so a WORKING, REVIEW or BLOCKED row first claimed before the cutoff but touched after it is kept. A finished row still keys on doneAt. Added the (w1)-(w4) cases to metrics.test.ts. Negative control at the merge-base printed 'Tests  1 failed | 10 passed (11)' and RED-AT-BASE, with only (w1) failing. The verification command ran in a git-archive snapshot: tsc clean, 2 files, 39 tests passed. listMetrics.ts's sort and docs/MCP_SERVER.md are untouched."
 }

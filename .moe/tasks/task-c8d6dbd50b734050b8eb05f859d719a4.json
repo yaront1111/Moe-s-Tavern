@@ -43,15 +43,18 @@
     {
       "stepId": "step-3",
       "description": "Verification, once. Never in the shared checkout (rail). Both commands snapshot into a fresh mktemp dir and work the same in your task worktree, uncommitted, and in QA's control checkout after landing. The architect dry-ran both both ways, and GREEN exits 1 on the unfixed tree.\nGREEN, which is complete_task's verification. It runs all 15 test files that drive release_task. `scripts` is archived too, because delivery/acceptance.test.ts launches the real wrapper and exits 127 without it, even at base.\n`cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"before anything is read or written: the proxy injects\" docs/MCP_SERVER.md && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon scripts | tar -x -C $S && cp $T/releaseTask.ts $T/releaseForceGate.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/{releaseForceGate,releaseTask,reportBlocked,taskEventActor,governanceFeatures,governancePlaneV2.integration,claimNextTask,claimNextTask.race,echoedReasonNotices,executionProfileAdmission}.test.ts src/server/WebSocketServer.test.ts src/state/resourceStore.deregister.test.ts src/delivery/{acceptance,executionPolicyLifecycle}.test.ts src/__e2e__/executionContract.e2e.test.ts`\nRun it in bash, which brace expansion needs. Expect `Test Files 15 passed (15)` and `Tests 513 passed (513)`.\nRED-AT-BASE:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive 395172f08e996b02b91c868a3fb110f384247f80 packages/moe-daemon | tar -x -C $S && cp $T/releaseForceGate.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/releaseForceGate.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +8 failed \\| 36 passed \\(44\\)\" $S/l && ! grep -aqF \"> (n2) \" $S/l && ! grep -aqF \"> (n3) \" $S/l && echo RED-AT-BASE; }`\nIt must print RED-AT-BASE.\nError handling for a red run:\n- A failure in a file other than releaseForceGate.test.ts means the new guard rejected a caller that sends '' or null on purpose; read it and report it, never weaken (n1).\n- A tsc error in releaseTask.ts is almost always an apostrophe in the description string.\nQuote both outputs in complete_task's summary.\nThe gate dirs are about 100 MB each. Delete only yours: `for d in /tmp/tmp.*; do f=$d/packages/moe-daemon/src/tools/releaseForceGate.test.ts; [ -O \"$d\" ] && [ -f \"$f\" ] && grep -q 'task-c8d6dbd5' \"$f\" && rm -rf -- \"$d\"; done`.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T21:13:27.680Z"
+      "note": "GREEN in a snapshot: tsc clean, Test Files 15 passed (15), Tests 513 passed (513). RED-AT-BASE: 8 failed | 36 passed (44), only the (n1) cases failed, printed RED-AT-BASE. No files changed in this step.",
+      "startedAt": "2026-11-03T21:13:27.680Z",
+      "completedAt": "2026-11-03T21:14:31.579Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of your `git diff`. Fix any finding, re-run step 3, then call complete_task.\n(1) Scope:\n- releaseTask.ts gains only the guard and the description sentence.\n- MCP_SERVER.md changes only the release_task paragraph.\n- releaseForceGate.test.ts gains only (n1) to (n3).\n- claimGuards.ts is untouched.\n(2) Ordering: force plus a malformed id is still refused NOT_ALLOWED by the 0adea941 gate, so (p7) is green. No force plus a malformed id is INVALID_INPUT. Both are thrown before handoff capture and before the mutex.\n(3) Who still releases:\n- an omitted workerId: the board, a human, moe-call.sh without MOE_WORKER_ID, the DONE/ARCHIVED no-op and the unassigned repair;\n- the holder's own id, even mid-step;\n- a governor or omitted id with force.\nA well-formed non-holder id is still RELEASE_NOT_ASSIGNEE (n3), or STEP_LEASE_HELD mid-step.\n(4) A whitespace-padded real id such as ' worker-1 ' is not blank, so it passes the guard and is judged as an id: not the holder, so it is refused. That matches today's behaviour for any non-holder string.\n(5) Concurrency: the guard reads only the call's own arguments, so there is no race. Would you be embarrassed if `workerId: \"\"` still stripped a peer? (n1)'s spies prove it cannot even read the task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T21:14:33.948Z"
     }
   ],
   "planRevision": 1,
@@ -68,7 +71,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:39:02.411Z",
-  "updatedAt": "2026-11-03T21:13:27.680Z",
+  "updatedAt": "2026-11-03T21:14:33.948Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T20:57:45.753Z",
@@ -78,7 +81,7 @@
     "firstClaimAt": "2026-11-03T21:02:08.278Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -90,7 +93,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T21:10:15.749Z",
