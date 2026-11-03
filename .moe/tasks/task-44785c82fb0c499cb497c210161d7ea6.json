@@ -1,0 +1,28 @@
+{
+  "id": "task-44785c82fb0c499cb497c210161d7ea6",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #7): file 2-4 evidence-backed bug rows from daemon tool-family gaps (src/tools) and TROUBLESHOOTING/DEVELOPMENT docs drift, the two lanes hunt #5 never reached",
+  "description": "Filed by the governor at 17:57Z on 2026-11-03. Hunt #5 (task-b7332618) filled its cap in its first lane (4 VS Code rows) and never searched its lanes 2 and 3. Hunts #2-#6 produced 23 rows today, and most were DONE within an hour. A notification-only architect session can't run a hunt, so the hunt is a claimable row.\n\nWHY. The last 3 PLANNING rows (6a6d3782, 88673297, c4f17045) are claimed. After them the queue is empty, and about 5 coders are idle with 0 claimable WORKING rows. The CQ-M07 wrapper chain stays serial.\n\nLANE. Search, in this order of preference:\n1. packages/moe-daemon/src/tools/**: systematic gaps across a tool family, the way earlier hunts found the missing actor (c05bf92d, e977c32b, 2e3012b9), chat_decision's skipped sender and channel checks (314405bb) and the modifiedFiles cap (e3d41183). That means a family member that skips a guard, a fence (attemptId/generation), an actor, a role gate, a validation or a size cap its siblings apply, or a refusal code that differs from its siblings'. Integration gaps among today's daemon landings count too.\n2. docs/TROUBLESHOOTING.md and docs/DEVELOPMENT.md against the code: a documented command, flag, default, error string, file path or fix that no longer matches. Cite the doc line and the code file:line.\n\nSkip:\n- every file an open row holds. At filing time that is: scripts/moe-agent.*, scripts/tests/postflight*, scripts/tests/parity-check.*, scripts/tests/account-wait-attempt.test.mjs, scripts/tests/moe-account-lease.test.mjs, scripts/CLAUDE.md, scripts/doctor.ps1, scripts/moe-team.ps1, packages/moe-daemon/README.md, packages/moe-daemon/src/index.ts (88673297), packages/moe-daemon/src/commands/doctor.ts (576e3005), moe-vscode/** (several rows in REVIEW), the JetBrains board files TaskColumn/TaskCard/BoardMoves (6a6d3782), and .github/workflows/ci.yml. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\nAlready known, so don't re-file: TURBO auto-approve's \"WORKING by unknown\" line; the JetBrains board fingerprint omitting needsHumanReview; isEpicFinal's max-order fallback on bucket epics (handled by governor ruling msg-bbf4f109); the launcher attempt pin after an account wait (a7d02ec3); hunt #6's held items doctor.sh's Node floor and the moe-call.sh comment.\n\nEVIDENCE BAR. Same as hunts #2-#6. Work only from real evidence:\n- A repro on HEAD 7a08e3d9 or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place.\n- A failure line from today's logs: the file and the timestamp.\n- For a family gap: the sibling file:line that applies the check, and the member file:line that skips it, plus a test or call that shows the difference.\n- For docs drift: the doc line and the code file:line.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Prefer rows QA can check with one vitest file.\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD 7a08e3d9 or later run outside the shared checkout, a failure line from today's logs, or a sibling/member (or doc/code) file:line pair.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time). The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 397.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:57:41.682Z",
+  "updatedAt": "2026-11-03T17:57:41.682Z"
+}

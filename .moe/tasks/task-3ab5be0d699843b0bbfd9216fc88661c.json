@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -101,12 +101,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T17:27:05.532Z",
-  "updatedAt": "2026-11-03T17:56:46.071Z",
+  "updatedAt": "2026-11-03T17:58:52.147Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T17:37:25.780Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T17:58:26.441Z",
+    "wallClockMs": 1260661
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -234,9 +236,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-03T17:45:22Z",
-    "at": "2026-11-03T17:55:31.348Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T17:56:22Z",
+    "at": "2026-11-03T17:58:52.147Z"
+  },
+  "completedAt": "2026-11-03T17:58:26.441Z",
+  "reviewCompletedAt": "2026-11-03T17:58:26.441Z",
+  "reviewSummary": "Reviewed completion bb94ce7e (recorded, pushed, on moe/work-2026-10-24, in HEAD; 4 paths, +312/-16 = 296 net, under 400). Re-ran gates in snapshots outside the checkout: (1) GREEN on full-repo git archive HEAD (7a08e3d9, includes sibling 8b7f9560) + 4 task files overlaid, env -i node v24.21.0, npm ci && npm test && npm run compile: tests 756, pass 746, fail 0, skipped 10, exit 0. (2) RED with MOE_LAND_TARGET=bb94ce7e^ (control checkout, default merge-base already has the fix): merge-base tree + only new test fails exactly PM2-PM7, PM1 ok. (3) Scope: commit touches only board.js, BoardViewProvider.ts, TaskDetailPanel.ts, board-previous-move.test.cjs; sibling hunks untouched; git diff --check clean; no forbidden pattern added. DoD: [1] previousMove sends PLANNING for WORKING/AWAITING_APPROVAL, BACKLOG for PLANNING, nothing/no arrow for BACKLOG/BLOCKED/ARCHIVED/unknown; Task Detail uses same rule; all targets in VALID_TRANSITIONS[from] (PM7 over all statuses, both controls); matches JetBrains BoardMoves.previous. [2] REVIEW/DONE arrow posts only {reopenTask, taskId}; host asks via showInputBox, ignores webview reason, trims, sends REOPEN_TASK only for non-blank, warns if disconnected, surfaces input rejection, ignores non-string taskId (PM4); grep \"prompt(\" board.js prints nothing. [3] new test runs production board.js under node:vm with transpiled provider/panel/client, deepEqual on exact frames. Invariants (next arrow, moveMessage, approval guard) unchanged. Complexity pass: nothing to cut. Not run (not required): JetBrains Gradle, manual VS Code UI click-through.",
+  "requiredCheckAtDone": null
 }
