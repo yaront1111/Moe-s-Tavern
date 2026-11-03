@@ -13,28 +13,42 @@
     {
       "stepId": "step-1",
       "description": "EDIT docs/TROUBLESHOOTING.md only, with the Edit tool (project rail: no shell writes into the tree). Make the 8 exact replacements below. Each old string occurs exactly once at c99801aa. Applied to a scratch copy, they turned step 2's gate green. Keep every other line and section untouched. Two doc tests read other sections of this file: packages/moe-daemon/src/util/qaCommitPolicy.test.ts (the NO-COMPLETION-COMMIT heading, and the phrases 'then a self-land' / 'landed the row itself' must stay absent) and scripts/tests/account-trust-docs.test.mjs (## Claude Account Rotation Issues). No anchor links into the edited headings (`grep -rhoE 'TROUBLESHOOTING\\.md#[a-z0-9-]+'`).\n\nR1, item 4 (:103-104). Old:\n# From JetBrains plugin: Tools > Moe > Initialize Project\n# Or manually create .moe/project.json\nNew:\n# From the JetBrains plugin: Tools > Moe > Initialize Moe\n# Or from a terminal (creates .moe/ and starts the daemon; never hand-write .moe/project.json):\nnode packages/moe-daemon/dist/index.js init --project <path>\nFact: plugin.xml:85 text=\"Initialize Moe\"; DEVELOPMENT.md:55 already says Tools → Moe → Initialize Moe.\n\nR2, item 6 (:168). Old: # Shows: { \"port\": 3141, ... }\nNew: # Shows: { \"port\": 9876, ... }  (9876 is the default; a taken port moves to the next free one, up to 50 higher)\nFact: packages/moe-daemon/src/index.ts:43-44, MOE_DEFAULT_PORT || '9876' and MOE_PORT_RANGE || '50'.\n\nR3, item 4 (:220). Old: **Solution:** Initialize via Tools > Moe > Initialize Project\nNew: **Solution:** Initialize via Tools > Moe > Initialize Moe\n\nR4, item 5 (:341-343). Old:\n#### \"Worker not registered\"\n\n**Solution:** Register the worker first using `moe.claim_next_task`.\nNew:\n#### `Unknown worker: workerId must be a registered worker, \"human\", or \"system\"`\n\n**Solution:** `moe.chat_join` refuses a `workerId` that has no worker record. Register the seat first:\n`moe.claim_next_task` or `moe.join_team` creates the record (`moe.enter_governance` for a governor), and the\nagent wrappers do both in pre-flight. A daemon restart purges worker records that are neither recently active\nnor mid-execution, so re-register after one.\nFact: chatJoin.ts:31 is the only emitter; worker records are created in claimNextTask.ts:800, joinTeam.ts:72 and enterGovernance.ts.\n\nR5, item 2 (:631-635). Replace the whole fenced block (```bash plus its 3 lines: cd packages/moe-daemon && npm run build ..., cd moe-jetbrains && ./gradlew buildPlugin, .\\scripts\\install-all.ps1 ... # then restart the IDE) with:\n```powershell\n# Builds the daemon, the proxy and the plugin, then installs the plugin. Restart the IDE afterwards.\n.\\scripts\\install-all.ps1 -BuildPlugin -InstallPlugin -IdeVersion <IDE folder>\n```\nFact: install-all.ps1 runs Install-NodePackage (npm install, then build) for moe-daemon and moe-proxy, and installs the plugin only under -InstallPlugin (:116). This is the same form as the doc's own :119 and :442. Keep the surrounding Note sentence.\n\nR6, item 3a (:555-556, the MOE_COMMIT_REFUSED_OWNED_PATH_MISSING bullet; keep its first line). Old:\n  absent from disk and from HEAD (renamed, deleted, or edited inside a `.worktrees/` checkout the\n  post-flight cannot see). Move the edits into the project root and re-declare.\nNew:\n  absent from disk and from HEAD of the checkout the post-flight lands from (renamed, deleted, or edited\n  in another checkout). In shared mode that is the project root: move edits made inside a `.worktrees/`\n  checkout into the root and re-declare. In worktree mode a worker lands from its own task worktree\n  `.worktrees/<taskId>`: move edits made in the control checkout or in another task's worktree into that\n  task worktree and re-declare, never into the control checkout.\n\nR7, item 3b (:667-668). Old:\n4. The edits were made inside a `.worktrees/` checkout — invisible to the post-flight, which only ever\n   runs against the project root. Copy them into the root and `moe.declare_files` them.\nNew:\n4. The edits were made in a checkout the post-flight does not land from. In shared mode it lands from\n   the project root, so edits inside a `.worktrees/` checkout are invisible: copy them into the root and\n   `moe.declare_files` them. In worktree mode a worker lands from its own task worktree\n   `.worktrees/<taskId>`: move edits made in the control checkout or another worktree into that task\n   worktree and declare them there, never into the control checkout.\nFact for R6/R7: scripts/CLAUDE.md, 'Land on every exit, worktree mode': a worker \"works in, and lands from, its own task worktree W\"; this doc's :1226-1227 says the same. The row's moe-agent.sh:7291 cite is the VM landing path; do not cite it.\n\nR8, item 1 (:936-937). Old:\nthe fields live, rewrite the rails. Apply via `moe.update_settings` / `scripts/moe-call.sh`, never by\nhand-editing `.moe/`:\nNew:\nthe fields live, rewrite the rails. Apply each rail edit as a `moe.propose_rail` proposal\n(`targetScope: \"GLOBAL\"`, `MODIFY_RAIL` / `REMOVE_RAIL` / `ADD_RAIL`; from an agent seat or\n`scripts/moe-call.sh`) that a human approves on the board, and any settings change through the plugin\n(`UPDATE_SETTINGS`), never by hand-editing `.moe/`:\nFact: tools/index.ts has no update_settings (0 hits). customRules change only through StateManager.applyRailChange (targetScope GLOBAL) when a proposal is approved (the plugin's APPROVE_PROPOSAL, MoeCommandSender.kt:382). /ws UPDATE_SETTINGS (WebSocketServer.ts:828) only writes settings.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/TROUBLESHOOTING.md"
       ],
-      "startedAt": "2026-11-03T18:38:27.568Z"
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "8 replacements applied via Edit",
+      "startedAt": "2026-11-03T18:38:27.568Z",
+      "completedAt": "2026-11-03T18:42:01.720Z"
     },
     {
       "stepId": "step-2",
       "description": "VERIFY: the one gate, and this docs fix's regression test. From the task worktree root, run executionContract checkRefs[0] exactly as written. It prints dod1/dod2/dod3/wt/files and exits 0 only when all of these hold:\n- the DoD 1 grep counts 0;\n- every install-all.ps1 line carries -InstallPlugin (DoD 2);\n- the phrase 'only ever runs against the project root' is gone even across a line wrap. Lines are joined first, because the raw DoD 3 grep already printed 0 at HEAD, the phrase being split over :667-668;\n- both .worktrees passages (the OWNED_PATH_MISSING bullet, and item '4. The edits were made') mention 'worktree mode';\n- `git diff --name-only` against the merge base with moe/work-2026-10-24 lists only docs/TROUBLESHOOTING.md (DoD 3).\nBaseline at c99801aa: dod1=5 dod2=1 dod3=1 wt=0,0, exit 1. Error handling for a red run:\n- a nonzero count: re-open the named passage and fix the text, never the gate;\n- an extra path in files=: revert that path. Docs-only row: no other file may change, and no .moe/ path can appear in the sparse worktree.\nQA in the control checkout: run the same command minus the diff check (board diffs are uncommitted there), then `git show --name-only --format= <completion sha>`, which must list only docs/TROUBLESHOOTING.md. Submit the command, exitCode and outputTail via moe.complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "gate rc=0: dod1=0 dod2=0 dod3=0 wt=1,1",
+      "startedAt": "2026-11-03T18:42:03.420Z",
+      "completedAt": "2026-11-03T18:42:05.381Z"
     },
     {
       "stepId": "step-3",
       "description": "ADVERSARIAL SELF-REVIEW (load the adversarial-self-review skill) of this one-file diff:\n- Is every new claim true at HEAD? Re-check the facts cited in step 1: plugin.xml:85, index.ts:43-44, chatJoin.ts:31 and its registration paths, install-all.ps1 :116 and Install-NodePackage, scripts/CLAUDE.md's worktree-mode landing rule, propose_rail's schema (proposalType and targetScope enums) and WebSocketServer.ts:828.\n- Did any rewrite drift into new advice the code does not support?\n- Do the shared-mode instructions still hold?\n- Is the never-hand-edit-.moe rule kept everywhere you touched?\n- Do markdown fences still balance (the R5 fence changed from bash to powershell)? Does the R4 heading with inner quotes render?\n- `git diff --stat` shows one file, and no added line contains a project.json globalRails.forbiddenPatterns string.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "self-review: one file, fences balanced, propose_rail enums match, no forbidden tokens",
+      "startedAt": "2026-11-03T18:42:06.269Z",
+      "completedAt": "2026-11-03T18:42:14.311Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -53,11 +67,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T18:19:52.719Z",
-  "updatedAt": "2026-11-03T18:41:11.387Z",
+  "updatedAt": "2026-11-03T18:43:28.211Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T18:30:43.434Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -69,7 +84,11 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6-luna",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T18:36:57.665Z",
   "executionContract": {
@@ -131,11 +150,38 @@
   "blockedAt": null,
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-26483323@2026-11-03T18:36:55Z",
-    "at": "2026-11-03T18:39:09.352Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-03T18:40:53Z",
+    "at": "2026-11-03T18:43:28.211Z"
   },
-  "priorBlockedReason": "Cannot safely edit the approved documentation path: Serena replace_in_files refuses docs/TROUBLESHOOTING.md as ignored for safety, and project rail expressly prohibits shell writes into the tree. No changes were applied; needs an allowed editor/path access."
+  "priorBlockedReason": "Cannot safely edit the approved documentation path: Serena replace_in_files refuses docs/TROUBLESHOOTING.md as ignored for safety, and project rail expressly prohibits shell writes into the tree. No changes were applied; needs an allowed editor/path access.",
+  "reviewStartedAt": "2026-11-03T18:42:18.059Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && f=docs/TROUBLESHOOTING.md && j() { tr '\\n' ' ' | tr -s ' '; } && a=$(grep -cE 'moe\\.update_settings|Initialize Project|Worker not registered|3141' $f); b=$(grep 'install-all.ps1' $f | grep -vc -- '-InstallPlugin'); c=$(j < $f | grep -c 'only ever runs against the project root'); p=$(awk '/OWNED_PATH_MISSING\" }/,/ACTIVE_ASSIGNEE/' $f | j | grep -c 'worktree mode'); q=$(awk '/^4\\. The edits were made/,/^$/' $f | j | grep -c 'worktree mode'); d=$(git diff --name-only $(git merge-base HEAD moe/work-2026-10-24)); echo \"dod1=$a dod2=$b dod3=$c wt=$p,$q files=[$d]\"; [ \"$a$b$c$p$q\" = 00011 ] && [ \"$d\" = \"$f\" ]",
+    "exitCode": 0,
+    "outputTail": "dod1=0 dod2=0 dod3=0 wt=1,1 files=[docs/TROUBLESHOOTING.md]",
+    "reportedAt": "2026-11-03T18:42:18.059Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completionSummary": "Fixed 8 passages in docs/TROUBLESHOOTING.md: removed nonexistent moe.update_settings (propose_rail/UPDATE_SETTINGS instead), one-command reinstall, worktree-mode scoping of both .worktrees passages, Initialize Moe, real chat_join error, port 9876.",
+  "commits": [
+    {
+      "sha": "207fc6827406795e91fb00c9dfe974d51da8bfa1",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T18:40:53Z",
+      "paths": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T18:43:27.901Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ]
 }

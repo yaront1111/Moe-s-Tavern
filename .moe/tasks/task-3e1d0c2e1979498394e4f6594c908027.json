@@ -1,0 +1,34 @@
+{
+  "id": "task-3e1d0c2e1979498394e4f6594c908027",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_epic, update_epic, delete_epic and delete_task record no actor on EPIC_CREATED / EPIC_UPDATED / EPIC_DELETED / TASK_DELETED (update_epic even deletes the proxy-injected workerId), so get_activity_log by workerId misses every epic edit and every task delete (last members of the c05bf92d / 2e3012b9 actor family)",
+  "description": "Filed by governor-e6b40560 from item (a) of defect hunt #7 (task-44785c82, architect-1dd28c7c, #governors msg-2dd55925). The hunt held it back until task-68a47060 landed, because both touch StateManager createEpic. 68a47060 is now DONE (9d08bab8).\n\nPROBLEM (verified by reading moe/work-2026-10-24 at cc84c88a)\n- tools/createEpic.ts, tools/deleteEpic.ts and tools/deleteTask.ts never read params.workerId. They call state.createEpic(input), state.deleteEpic(epicId) and state.deleteTask(taskId), and none of those takes an actor.\n- tools/updateEpic.ts:52 runs `delete raw.workerId` (its comment says \"update_epic doesn't use it\") before strict-field validation, then calls state.updateEpic(epicId, updates).\n- StateManager.ts createEpic (:1244), updateEpic (:1285) and deleteEpic (:1310) append EPIC_CREATED, EPIC_UPDATED and EPIC_DELETED without actorWorkerId, the last parameter of appendActivity (:552). deleteTask (:674) does the same for TASK_DELETED.\n- Every sibling already records the caller:\n  - create_task (c05bf92d): StateManager.createTask(input, actorWorkerId)\n  - report_blocked, request_replan, archive_task and submit_plan_critique (2e3012b9)\n  - the review loop (d981e0b0)\n  - add_comment, amend_plan_step and release_task (e977c32b)\n  - archive_epic (1064df99 / b9119a93)\n\nEFFECT\nget_activity_log { workerId } omits every epic a seat creates, edits or deletes, and every task delete. A per-seat audit cannot see who deleted a row or rewrote an epic.\n\nREPRO\n/mnt/d/moe-scratch/hunt-44785c82/A/epicDeleteActor.test.ts, a vitest file meant for packages/moe-daemon/src/tools/. Seat 'architect-c' makes a create_task baseline call, then create_epic, update_epic, delete_epic and delete_task. get_activity_log { workerId: 'architect-c' } should return [EPIC_CREATED, EPIC_DELETED, EPIC_UPDATED, TASK_CREATED, TASK_DELETED]. It returns only TASK_CREATED.\n\nFIX SHAPE (the architect decides)\n- Thread an optional actorWorkerId through StateManager createEpic, updateEpic, deleteEpic and deleteTask into appendActivity, the way createTask does.\n- Pass params.workerId from all four tools.\n- update_epic keeps workerId out of the epic's stored fields and out of its strict-field check, but uses it as the actor.\n- Everything else about the events, payloads included, stays as it is.\n\nGate: narrow, per the standing epic-be924fb8 ruling (msg-bbf4f109). Run the four tools' test files plus the ported repro.",
+  "definitionOfDone": [
+    "create_epic, update_epic, delete_epic and delete_task record the caller's workerId as the actor on EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED and TASK_DELETED, so get_activity_log { workerId } returns all four; a call without workerId still succeeds and records no actor.",
+    "update_epic still refuses unknown fields and never stores workerId on the epic, but no longer discards it as the actor.",
+    "A daemon regression test (the hunt repro ported into packages/moe-daemon/src/tools/) fails before the fix and passes after it, and the existing createEpic, updateEpic, deleteEpic and deleteTask test files still pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 403.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:42:33.313Z",
+  "updatedAt": "2026-11-03T18:43:09.187Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T18:42:52.720Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}
