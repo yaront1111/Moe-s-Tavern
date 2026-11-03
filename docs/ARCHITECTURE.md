@@ -536,8 +536,9 @@ and `verified-local` stays refused until certification and the client gates pass
     have written, reads as protected. On Windows, a folder pinned under another spelling (subst, mapped drive, share
     or device path) is matched by file identity (task-9a1da6f6). A pin is read even when the store cannot be placed,
     because a read only restricts. The pin is per IDE system directory: another JetBrains product or IDE profile has
-    none, like a fresh machine, and follows the declaration as written. Open: task-6d5d3db2 (a same-session
-    re-declaration after an allowed downgrade).
+    none, like a fresh machine, and follows the declaration as written. A later same-session `verified-local` read
+    records the project protected again (task-6d5d3db2). An Allow answered while it declares `verified-local`, or while
+    its `project.json` is unreadable, records nothing.
 - **Unverified-daemon replacement (JetBrains).** When the protected plugin finds such a daemon it asks first
   (**Moe: Unverified Daemon**, default **Keep It**), because VS Code or a terminal agent may be using it. **Keep It**
   leaves it running, and the plugin stays disconnected. **Stop and Replace** runs the installed CLI's `stop`,

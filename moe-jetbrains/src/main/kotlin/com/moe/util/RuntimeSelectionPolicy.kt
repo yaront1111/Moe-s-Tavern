@@ -53,6 +53,7 @@ fun interface DowngradeConfirmer {
  * selection. Anything the daemon would reject, or this IDE cannot read strictly, is PROTECTED.
  * The confirmed profile persists outside the repository: a weaker repository declaration cannot
  * downgrade a confirmed-protected project without human confirmation, effective after an IDE restart.
+ * A later verified-local read withdraws an allowed downgrade; an Allow applies only while the declaration is still weaker.
  * On Windows a folder confirmed protected is also recognized under another spelling (subst, mapped, share or device) by file identity.
  */
 object RuntimeSelectionPolicy {
@@ -72,9 +73,11 @@ object RuntimeSelectionPolicy {
     private const val BASE_NOT_PLAIN = "the project directory is not a plain local Windows path"
 
     // Projects read as verified-local or awaiting a downgrade decision this JVM session. A later
-    // repository edit cannot downgrade them; even an explicitly confirmed downgrade waits for restart.
+    // repository edit cannot downgrade them; a confirmed downgrade waits for restart and a verified-local read withdraws it.
     // The atomic add also ensures only one confirmation request per project per session.
     private val pinned: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    // Serialize verified-local and Allow record decisions together with their writes.
+    private val recordLock = Any()
 
     @Volatile
     internal var confirmer: DowngradeConfirmer = ProfileDowngradeDialog
@@ -128,7 +131,6 @@ object RuntimeSelectionPolicy {
     fun profile(basePath: String): RuntimeProfile {
         if (basePath.isBlank()) return RuntimeProfile.LEGACY
         val key = projectKey(basePath)
-        if (key in pinned) return RuntimeProfile.PROTECTED
         val verifiedLocal = try {
             declaresVerifiedLocal(Paths.get(basePath, ".moe", "project.json"))
         } catch (ex: Exception) {
@@ -136,20 +138,23 @@ object RuntimeSelectionPolicy {
             log.warn("Moe runtime selection fails closed to the protected profile: $failure")
             return RuntimeProfile.PROTECTED
         }
-        val stored = storedProfile(basePath, key)
         if (verifiedLocal) {
             pinned += key
-            if (stored != StoredProfile.PROTECTED) persist(basePath, key, RuntimeProfile.PROTECTED)
-        } else {
-            val weaker = stored == StoredProfile.ABSENT || stored == StoredProfile.LEGACY
-            val aliases = if (weaker) protectedAliases(basePath, key) else emptyList()
-            if (weaker && aliases.isEmpty()) {
-                // Another reader may have pinned and confirmed a downgrade while this one was reading the store.
-                return if (key in pinned) RuntimeProfile.PROTECTED else RuntimeProfile.LEGACY
+            synchronized(recordLock) {
+                if (storedProfile(basePath, key) != StoredProfile.PROTECTED) persist(basePath, key, RuntimeProfile.PROTECTED)
             }
-            if (aliases.isNotEmpty()) log.warn("Moe keeps the protected profile: ${aliases.size} other spelling(s) of this project were confirmed protected")
-            if (pinned.add(key)) askDowngrade(basePath, key, aliases)
+            return RuntimeProfile.PROTECTED
         }
+        if (key in pinned) return RuntimeProfile.PROTECTED
+        val stored = storedProfile(basePath, key)
+        val weaker = stored == StoredProfile.ABSENT || stored == StoredProfile.LEGACY
+        val aliases = if (weaker) protectedAliases(basePath, key) else emptyList()
+        if (weaker && aliases.isEmpty()) {
+            // Another reader may have pinned and confirmed a downgrade while this one was reading the store.
+            return if (key in pinned) RuntimeProfile.PROTECTED else RuntimeProfile.LEGACY
+        }
+        if (aliases.isNotEmpty()) log.warn("Moe keeps the protected profile: ${aliases.size} other spelling(s) of this project were confirmed protected")
+        if (pinned.add(key)) askDowngrade(basePath, key, aliases)
         return RuntimeProfile.PROTECTED
     }
 
@@ -173,14 +178,23 @@ object RuntimeSelectionPolicy {
         val answered = AtomicBoolean(false)
         try {
             confirmer.ask(basePath) { allow ->
-                if (answered.compareAndSet(false, true) && allow) {
-                    persist(basePath, key, RuntimeProfile.LEGACY)
-                    aliases.forEach { persist(it, it, RuntimeProfile.LEGACY) }
+                if (answered.compareAndSet(false, true) && allow) synchronized(recordLock) {
+                    if (stillWeaker(basePath)) {
+                        persist(basePath, key, RuntimeProfile.LEGACY)
+                        aliases.forEach { persist(it, it, RuntimeProfile.LEGACY) }
+                    }
                 }
             }
         } catch (ex: Exception) {
             log.warn("Moe keeps the protected profile: downgrade confirmation failed (${ex.javaClass.simpleName})")
         }
+    }
+
+    private fun stillWeaker(basePath: String): Boolean = try {
+        !declaresVerifiedLocal(Paths.get(basePath, ".moe", "project.json"))
+    } catch (ex: Exception) {
+        log.warn("Moe keeps the protected profile: cannot re-read the downgrade declaration (${describe(ex)})")
+        false
     }
 
     /** True for exactly "verified-local", false for absent/legacy/observe; throws for anything else. */

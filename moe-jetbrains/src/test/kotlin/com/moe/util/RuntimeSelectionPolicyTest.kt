@@ -301,6 +301,57 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `D13 a verified-local read after an allowed downgrade records protected again, so a later weaker declaration asks after restart`() = withProfileStore { store, dir, asks ->
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        writeProfile(dir, "legacy")
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals(listOf(dir.path), asks.paths)
+        asks.answers.single()(true)
+        assertEquals(profileJson(dir, "legacy"), store.read(name))
+        writeProjectJson(dir, "{")
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals("an unreadable declaration writes nothing", profileJson(dir, "legacy"), store.read(name))
+        writeProfile(dir, "verified-local")
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals("a re-declaration withdraws the allowed downgrade", profileJson(dir, "protected"), store.read(name))
+        writeProfile(dir, "legacy")
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals("no second question this session", 1, asks.paths.size)
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals(listOf(dir.path, dir.path), asks.paths)
+    }
+
+    @Test
+    fun `D14 an Allow answered after a verified-local re-declaration or an unreadable project records nothing`() = withProfileStore { store, dir, asks ->
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        listOf("""{"settings":{"executionProfile":"verified-local"}}""", "{").forEachIndexed { index, later ->
+            writeProfile(dir, "legacy")
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+            assertEquals(index + 1, asks.paths.size)
+            writeProjectJson(dir, later)
+            asks.answers.last()(true)
+            assertEquals(later, profileJson(dir, "protected"), store.read(name))
+        }
+        if (!RuntimeSelectionPolicy.windowsHost) return@withProfileStore
+        val base = File(temporaryFolder.newFolder("b"), "proj").also { writeProfile(it, "legacy") }
+        val local = File(temporaryFolder.newFolder("a"), "proj").also { writeProfile(it, "legacy") }
+        val localName = recordName(key(local))
+        store.write(localName, profileJson(local, "protected"))
+        RuntimeSelectionPolicy.sameDirectory = { stored, _ -> stored == Paths.get(key(local)) }
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(base))
+        assertEquals(base.path, asks.paths.last())
+        writeProfile(base, "verified-local")
+        asks.answers.last()(true)
+        assertEquals("the matched spelling stays protected", profileJson(local, "protected"), store.read(localName))
+        assertNull("no base record was written", store.read(RuntimeSelectionPolicy.profileRecordName(base.path)))
+    }
+
+    @Test
     fun `D7 on Windows a protected record stored under the local spelling also pins its subst and device spellings`() = withProfileStore { store, dir, asks ->
         assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
         assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))

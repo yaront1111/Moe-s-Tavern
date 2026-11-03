@@ -248,7 +248,7 @@ cat .moe/daemon.json
 **Cause:** The plugin pinned the project as protected when it read `verified-local`. A repository change (a pull or a branch switch) must never turn the profile off silently.
 
 **Solution:**
-- If the downgrade is intended, choose **Allow Downgrade**, then restart the IDE. **Keep Protected** (the default) changes nothing, and the question comes back next session.
+- If the downgrade is intended, choose **Allow Downgrade**, then restart the IDE. **Keep Protected** (the default) changes nothing, and the question comes back next session. If the plugin reads `verified-local` again before the restart, the allowed downgrade is withdrawn, and the question comes back next session once the project declares legacy again.
 - The question also comes back after every restart when the IDE cannot write its store: a store that is not owner-only, or a project or store root it cannot place (a share, a mapped or subst drive it cannot resolve, or a device path). There an allowed downgrade lasts one session.
 - A pin record the IDE would not have written (edited, a link, not owner-only, over 64 KiB, or for another project) also reads as protected. As a last resort a human may delete that one record: the `<sha-256>.json` file in the store whose `"project"` field names this project and which has a `"profile"` field. Never edit it.
 
