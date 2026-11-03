@@ -9,10 +9,47 @@
     "A new vitest file covers the refusals and the allowed paths, and `npx vitest run src/tools/deleteTask.roleGate.test.ts src/tools/deleteTask.test.ts src/tools/deleteEpic.test.ts` passes in a snapshot."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-1dd28c7c",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Gate both handlers and test them. Copy the set_task_status gate from task-629ddc99 (packages/moe-daemon/src/tools/setTaskStatus.ts:100-113) into each handler, right after its missingRequired check and before any lookup or write.\n\n(a) deleteTask.ts: import notAllowed (with missingRequired and notFound) and workerHasRole from '../util/workerRole.js'. Type params.workerId as unknown. Directly after `if (!params.taskId) throw missingRequired('taskId');` add:\n  if (params.workerId !== undefined) {\n    const callerId = typeof params.workerId === 'string' ? params.workerId : '';\n    if (!workerHasRole(state, callerId, 'architect', 'governor')) {\n      throw notAllowed('delete_task', `architect or governor role required (worker ${callerId || '(none)'} is not on an architect or governor team and its id declares neither role); ask a governor in #governors to delete the row`);\n    }\n  }\nAdd a two-line comment above it: TOOL_AUDIENCE only filters tools/list, so the tool gates here like set_task_status; an absent workerId key is the human path.\n\n(b) deleteEpic.ts: the same gate with operation 'delete_epic' and remedy '... to delete the epic'. Put it directly after the missingRequired('epicId') check, so it runs before getSnapshot(), the cascade refusal and state.deleteEpic. notAllowed is already imported there.\n\nIn both files, keep passing the caller's id to the state call as the actor. Append to each inputSchema workerId description: 'A supplied id must resolve to the architect or governor role; omit it for the human path.' The /ws DELETE_TASK and DELETE_EPIC paths call state directly with no workerId. Do not touch them.\n\n(c) New packages/moe-daemon/src/tools/deleteTask.roleGate.test.ts. Use the ToolTestHarness setup from deleteTask.test.ts, and the seat() helper (createWorker plus a team per role) from /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_deleteRoleGate.test.ts, the hunt repro to adapt. Cases:\n  (r1) A worker-peer seat claims a WORKING row through claimNextTaskTool, so an attempt is open. delete_task from qa-1 then rejects with codeName NOT_ALLOWED. Afterwards the task is still in state and on disk, its status and assignee are unchanged, worker-peer still has currentTaskId set, and currentAttempt(state, id) from state/attemptStore.js is still phase 'running'.\n  (r2) delete_task on a REVIEW row from worker-1 is refused, and the row stays.\n  (r3) For both tools, workerId '' and workerId null are refused NOT_ALLOWED.\n  (r4) delete_epic from worker-1, with and without cascadeDelete, rejects NOT_ALLOWED with a message containing 'architect or governor role required', not the cascade refusal. The epic and its tasks stay.\n  (r5) The gate comes before the lookup: worker-1 on 'task-missing' and on 'epic-missing' gets NOT_ALLOWED, not a not-found error.\n  (a1) These callers still delete: 'architect-1', 'governor-1', an unprefixed id that is a member of a governor-role team (proves the team role is resolved), and a call with no workerId key. delete_task removes the row; delete_epic with cascadeDelete removes the epic and its tasks.\nEach refusal test must fail if the gate is removed, and each a1 case must fail if the gate refuses everyone.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/deleteTask.ts",
+        "packages/moe-daemon/src/tools/deleteEpic.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/deleteTask.roleGate.test.ts"
+      ],
+      "startedAt": "2026-11-03T22:38:26.865Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs sync, per governor ruling msg-71db57ac: each row syncs its own `### moe.<tool>` section, and no other open row edits these two (83cf11f5 owns list_metrics, dd1e00f8 owns submit_plan's Rail refusal note). Edit only `### moe.delete_task` and `### moe.delete_epic` in docs/MCP_SERVER.md, with your own editor (Claude Edit, or apply_patch on codex). Never use Serena, which ignores docs/, and never a shell write. Work in your task checkout, not /mnt/d/projexts/moes.\n(1) delete_task: after the first paragraph and before **Parameters:**, add the paragraph below. The verification check greps for its phrase 'architect or governor'.\n**Role gate:** a call that names a `workerId` must come from an architect or governor seat (`workerHasRole`: team role first, then the id prefix). Any other id, `''` and `null` included, is refused `-32003` / `NOT_ALLOWED` before the task lookup and any write, so the task, its attempts and its holder's record are unchanged. A call with no `workerId` key is the human path; the board's `DELETE_TASK` does not go through this tool.\nAppend '; must resolve to architect or governor (see Role gate)' to the Parameters workerId comment. Add this line to **Errors:**:\n- `[NOT_ALLOWED] delete_task not allowed: architect or governor role required …` - a `workerId` that resolves to neither role (checked before the lookup)\n(2) delete_epic: after 'Delete an epic and optionally its tasks.', add:\n**Role gate:** as for `moe.delete_task`, a named `workerId` must resolve to architect or governor, or the call is refused `-32003` / `NOT_ALLOWED` before the epic lookup, the task-count check and any write, a cascade included. A call with no `workerId` key is the human path; the board's `DELETE_EPIC` does not go through this tool.\nAppend the same note to its workerId comment, and add this line to **Errors:**:\n- `[NOT_ALLOWED] delete_epic not allowed: architect or governor role required …` - a `workerId` that resolves to neither role (checked first)\nTouch nothing outside these two sections.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification: run once, from your task checkout root. The doc check runs on the checkout. The daemon checks run in a fresh git-archive snapshot outside the repo, never in place (global rail). Submit this exact command and its fresh output as complete_task verification:\ncd \"$(git rev-parse --show-toplevel)\" && ( for t in delete_task delete_epic; do awk -v h=\"### moe.$t\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'architect or governor' || { echo \"docs: moe.$t section lacks the role gate\"; exit 1; }; done ) && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/deleteTask.ts packages/moe-daemon/src/tools/deleteEpic.ts packages/moe-daemon/src/tools/deleteTask.roleGate.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/deleteTask.roleGate.test.ts src/tools/deleteTask.test.ts src/tools/deleteEpic.test.ts src/tools/epicDeleteActor.test.ts src/tools/waitForTask.deleteWake.test.ts src/state/attemptHandback.test.ts src/state/dependencyReadiness.strict.test.ts'\nThe extra test files are every other caller of deleteTaskTool or deleteEpicTool. epicDeleteActor.test.ts passes 'architect-c' and 'governor-g', which must stay green unchanged. The rest call with no workerId. Red-first proof for the completion summary: revert only the two gates and the new file must fail (r1-r5); restore them and it passes.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your diff: `git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")`. Expect three source files plus one docs file, about +120/-4. Error handling: check each item and fix what fails.\n(1) The gate runs before every lookup and write in both tools. Confirm delete_epic's getSnapshot() and its cascade refusal come after it, and that a refused call leaves no activity event.\n(2) workerId null, '' and a non-string (123, {}) are refused, not thrown as a TypeError: callerId falls back to ''.\n(3) An absent key is the only human path. A key present with undefined cannot cross JSON.\n(4) A team role beats the id prefix. workerHasRole resolves the team first, so an unprefixed governor-team id passes and is covered by test a1.\n(5) No caller breaks. Run git grep for deleteTaskTool, deleteEpicTool, moe.delete_task and moe.delete_epic across packages/, scripts/, docs/roles/ and docs/skills/. Every workerId-passing caller must be architect or governor, or pass no workerId.\n(6) The /ws DELETE_TASK and DELETE_EPIC handlers are untouched.\n(7) The new test asserts specific outcomes (codeName NOT_ALLOWED, rows still on disk, attempt phase 'running'), not merely 'it threw'.\nIf anything changes, re-run the step-3 command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/deleteTask.ts",
+        "packages/moe-daemon/src/tools/deleteEpic.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-c9368191",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -31,11 +68,87 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:32:04.154Z",
-  "updatedAt": "2026-11-03T22:35:25.382Z",
+  "updatedAt": "2026-11-03T22:38:26.865Z",
   "metrics": {
-    "firstClaimAt": "2026-11-03T22:33:47.343Z"
+    "firstClaimAt": "2026-11-03T22:33:47.343Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c"
-  ]
+    "architect-1dd28c7c",
+    "worker-c9368191"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:36:51.817Z",
+  "executionContract": {
+    "intendedBehavior": "moe.delete_task and moe.delete_epic refuse a call whose workerId does not resolve to the architect or governor role. The refusal is NOT_ALLOWED and comes before any lookup or write, matching set_task_status's gate from task-629ddc99. A call with no workerId key is the human path and still deletes. The /ws DELETE_TASK and DELETE_EPIC paths are unchanged. docs/MCP_SERVER.md's delete_task and delete_epic sections document the gate.",
+    "acceptanceCriteria": [
+      "A workerId of 'worker-1', 'qa-1', '' or null is refused NOT_ALLOWED by both tools, with and without cascadeDelete. The task and epic files, the holder's worker record and its open attempt are unchanged.",
+      "The gate comes before the lookup: a refused caller gets NOT_ALLOWED for a missing task or epic id, not a not-found error.",
+      "These callers delete as before: 'architect-1', 'governor-1', an unprefixed governor-team member, and a call with no workerId key.",
+      "The delete_task and delete_epic sections of docs/MCP_SERVER.md carry a Role gate paragraph and a NOT_ALLOWED Errors line."
+    ],
+    "invariants": [
+      "A refused call writes nothing: no file unlink, no attempt close, no worker update, no activity event.",
+      "Role resolution goes through util/workerRole.workerHasRole (team role first, then id prefix), never a raw prefix test."
+    ],
+    "compatibility": [
+      "A call with no workerId key, which is the human path, behaves exactly as before.",
+      "The /ws DELETE_TASK and DELETE_EPIC handlers call state directly and are unchanged.",
+      "Existing tests pass unchanged: epicDeleteActor uses architect-c and governor-g, and the others pass no workerId.",
+      "The schemas only gain description text. No field is added or removed."
+    ],
+    "approvedScope": [
+      "deleteTaskTool and deleteEpicTool handlers: one inline workerHasRole gate each, plus their inputSchema workerId descriptions",
+      "A new deleteTask.roleGate.test.ts",
+      "docs/MCP_SERVER.md: the ### moe.delete_task and ### moe.delete_epic sections only"
+    ],
+    "reuse": [
+      "The inline gate is copied from setTaskStatus.ts:100-113 (task-629ddc99), the same pattern used by setTaskPriority.ts:47 and setTaskDependencies.ts:69.",
+      "The test setup adapts /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_deleteRoleGate.test.ts, which fails 3 of 6 at f159784e."
+    ],
+    "sourceAssumptions": [
+      "tools/deleteTask.ts:18-33 handler: missingRequired('taskId'), then getTask, then state.deleteTask(taskId, workerId). No role check.",
+      "tools/deleteEpic.ts:23-56 handler: missingRequired('epicId'), getSnapshot, the cascade notAllowed, then state.deleteEpic(epicId, workerId). No role check. notAllowed is already imported.",
+      "tools/index.ts TOOL_AUDIENCE: delete_epic :211, set_task_status :213 and delete_task :219 are all [A]. McpAdapter.ts:270 filters only tools/list.",
+      "util/workerRole.ts:56 workerHasRole(state, workerId, ...roles) resolves via resolveWorkerRole: team role first, then the id prefix.",
+      "state/taskStore.ts:690 deleteTask closes open attempts (:700) and sets the holder IDLE (:739)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && ( for t in delete_task delete_epic; do awk -v h=\"### moe.$t\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'architect or governor' || { echo \"docs: moe.$t section lacks the role gate\"; exit 1; }; done )",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/deleteTask.ts packages/moe-daemon/src/tools/deleteEpic.ts packages/moe-daemon/src/tools/deleteTask.roleGate.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/deleteTask.roleGate.test.ts src/tools/deleteTask.test.ts src/tools/deleteEpic.test.ts src/tools/epicDeleteActor.test.ts src/tools/waitForTask.deleteWake.test.ts src/state/attemptHandback.test.ts src/state/dependencyReadiness.strict.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A shared assertArchitectOrGovernor helper in util/workerRole.ts: rejected for now. It is three short inline copies, consistent with the siblings, and touches no widely imported util. (2) Gating in state.deleteTask or deleteEpic: rejected. The board's /ws path is the human path and must stay ungated, and the actor fix kept state role-agnostic. (3) Deferring the doc sync because lanes.js lists MCP_SERVER.md under 83cf11f5 and dd1e00f8: rejected per governor ruling msg-71db57ac (21:06Z). Those rows edit other sections.",
+    "codebaseInsights": "TOOL_AUDIENCE is listing-only, so a restricted tool must gate in its handler, and an absent workerId key is the human path. The proxy injects MOE_WORKER_ID only when the key is missing, so '' or null arrives as given and is judged like any id (629ddc99's rule). Both IDE plugins delete through /ws without a workerId, which this gate never sees.",
+    "risks": "Another delete-tool test may pass a worker- id as an actor. git grep found none: epicDeleteActor uses architect-c and governor-g, and the rest pass none. Re-check in self-review. The worktree branch may have checkpoint commits, so verification snapshots HEAD of the task branch and overlays the three changed files.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/deleteTask.ts",
+      "packages/moe-daemon/src/tools/deleteEpic.ts",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "packages/moe-daemon/src/util/workerRole.ts",
+      "packages/moe-daemon/src/tools/epicDeleteActor.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "b3ab4a83b490bd5f6c8ff14c156df501cfc6a130",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:36:51.848Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:38:26.865Z"
 }

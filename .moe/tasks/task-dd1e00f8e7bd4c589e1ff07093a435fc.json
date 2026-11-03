@@ -42,20 +42,30 @@
     {
       "stepId": "step-3",
       "description": "Verification, run once.\n\nRun the GREEN gate (first checkRef) verbatim. It is complete_task's verification and takes about 2 min, mostly npm ci in a fresh /tmp snapshot. Never run npm or vitest in the checkout (rail). Expect:\n- the docs grep ok;\n- `npx tsc --noEmit` clean;\n- `Test Files  6 passed (6)` and `Tests  175 passed (175)`. The `src/tools/proposeRail` filter matches proposeRail.test.ts and proposeRail.globalPatterns.test.ts, and the counts move only if a peer adds tests to those files.\n\nThe vitest output is large (logger INFO lines). Read only the `Test Files`, `Tests` and `FAIL` lines (mem:gotcha-propose-rail-global-lists).\n\nThen run the RED gate once more. It must still print RED-AT-BASE, because it pins fa405c59's rails.ts. Quote its output in your completion summary.\n\nError handling for a red run:\n- If an amendPlanStep or proposeRail test fails, re-run it in a second snapshot with HEAD's rails.ts overlaid.\n- If it fails there too, it is pre-existing. Report it in #general and call moe.report_blocked with the evidence; do not edit those files.\n- If it fails only with your change, fix rails.ts, never the test.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T22:36:09.066Z"
+      "note": "GREEN: tsc clean, Test Files 6 passed (6), Tests 175 passed (175), rc=0. RED: Tests 3 failed | 92 skipped (95), RED-AT-BASE.",
+      "startedAt": "2026-11-03T22:36:09.066Z",
+      "completedAt": "2026-11-03T22:36:54.751Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (load adversarial-self-review) of your `git diff`. Fix any finding, then re-run step 3's gates.\n\n(1) Scope: exactly 3 files.\n- rails.ts: the message block and its comment.\n- submitPlan.test.ts: the inserted lines only.\n- MCP_SERVER.md: the one Rail refusal sentence.\n\n(2) Nothing else moved:\n- the code is still -32003 / CONSTRAINT_VIOLATION;\n- the message still starts `[CONSTRAINT_VIOLATION] Rail violation: \"<v>\". Default action: <defaultAction>. `;\n- error.data is still `{ tool, codeName }`;\n- the MoeError context is unchanged.\n\n(3) No EPIC, TASK or ADD_RAIL is offered anywhere in the message, for any violation. The architect's dry run printed the forbidden, required, odd-string and missing-violation shapes. The odd and missing shapes get the placeholder currentValue.\n\n(4) currentValue is the exact entry:\n- `rm -rf` for `Forbidden pattern: rm -rf`;\n- `error handling` for `Required pattern missing: error handling`;\n- a pattern that itself contains `: ` keeps everything after the FIRST label, because the regex anchors on the label.\n\n(5) The amend_plan_step refusal shares the text. Its own default action is unchanged.\n\nFollow-up, out of scope: the `Rail Proposals (escape hatch)` template in docs/roles/{architect,worker,governor}.reference.md still lists every scope for propose_rail in general (valid for editing guidance rails). Say in the completion summary that a refused plan needs GLOBAL MODIFY/REMOVE.\n\nThen call moe.complete_task with step 3's evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/rails.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review: diff is exactly 3 files (+22/-3); the only line mentioning EPIC/TASK/ADD_RAIL in the diff is the removed one; code, prefix, data and context untouched.",
+      "startedAt": "2026-11-03T22:36:55.845Z",
+      "completedAt": "2026-11-03T22:37:04.343Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -71,7 +81,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T21:02:46.344Z",
-  "updatedAt": "2026-11-03T22:36:09.066Z",
+  "updatedAt": "2026-11-03T22:37:12.690Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:05:47.251Z",
@@ -81,7 +91,7 @@
     "firstClaimAt": "2026-11-03T22:29:29.371Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -93,7 +103,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:34:07.689Z",
@@ -154,5 +166,19 @@
   },
   "planApprovedAt": "2026-11-03T22:34:07.721Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T22:35:30.759Z"
+  "workStartedAt": "2026-11-03T22:35:30.759Z",
+  "reviewStartedAt": "2026-11-03T22:37:12.688Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'Only a GLOBAL proposal can lift a rail refusal' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/util/rails.ts $P/tools/submitPlan.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/submitPlan.test.ts src/util/rails.test.ts src/tools/amendPlanStep.rails.test.ts src/tools/amendPlanStep.test.ts src/tools/proposeRail",
+    "exitCode": 0,
+    "outputTail": "tsc clean; Test Files  6 passed (6); Tests  175 passed (175); rc=0. RED-AT-BASE: Tests  3 failed | 92 skipped (95)",
+    "reportedAt": "2026-11-03T22:37:12.688Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/submitPlan.test.ts",
+    "packages/moe-daemon/src/util/rails.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "The shared rail refusal (util/rails.ts assertPlanRails, used by submit_plan steps and contract and by amend_plan_step) now names only the escape hatch that can lift it: moe.propose_rail { proposalType: \"MODIFY_RAIL\" | \"REMOVE_RAIL\", targetScope: \"GLOBAL\", taskId, currentValue: <JSON-quoted exact forbiddenPatterns/requiredPatterns entry parsed from the violation label>, ... }, plus the sentence \"Only that GLOBAL change can lift this refusal: the plan check enforces no other rail.\" EPIC, TASK and ADD_RAIL are no longer offered. A non-string or odd violation gets a placeholder currentValue; the builder never throws. Code -32003, the \"[CONSTRAINT_VIOLATION] Rail violation: ... Default action: \" lead, error.data and MoeError context are unchanged. docs/MCP_SERVER.md Rail refusal bullet now says \"Only a GLOBAL proposal can lift a rail refusal\". Tests: submitPlan.test.ts 'rail refusal on the MCP wire' it.each gains assertions for the exact hatch text and no EPIC|TASK|ADD_RAIL, for all three cases. GREEN: docs grep ok, tsc clean, Test Files 6 passed (6), Tests 175 passed (175), rc=0. RED at fa405c59's rails.ts: \"Tests 3 failed | 92 skipped (95)\", RED-AT-BASE. Both ran in mktemp snapshots outside the checkout, removed after. Note for governor (out of scope): the \"Rail Proposals (escape hatch)\" template in docs/roles/{architect,worker,governor}.reference.md still lists every scope for propose_rail in general; a refused plan needs GLOBAL MODIFY/REMOVE."
 }

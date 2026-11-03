@@ -85,7 +85,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T20:47:31.406Z",
-  "updatedAt": "2026-11-03T22:36:22.117Z",
+  "updatedAt": "2026-11-03T22:38:40.190Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:14:27.370Z",
@@ -118,12 +118,15 @@
     "firstClaimAt": "2026-11-03T21:15:11.000Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T22:38:09.923Z",
+    "wallClockMs": 4978923
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
     "worker-c9368191",
-    "worker-ed0f6a9e"
+    "worker-ed0f6a9e",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -246,10 +249,15 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T22:33:17Z",
-    "at": "2026-11-03T22:36:21.545Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T22:36:34Z",
+    "at": "2026-11-03T22:38:40.190Z"
   },
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-03T22:38:09.923Z",
+  "reviewCompletedAt": "2026-11-03T22:38:09.923Z",
+  "reviewSummary": "Reviewed completion b3ab4a83 (on moe/work-2026-10-24 and control HEAD; 4 files, +110/-28, net 82 LOC, no size issue). Diff is exactly the 4 planned files: util/taskPayload.ts adds SYSTEM_COMMENT_AUTHORS=['moe-daemon'] + unansweredHumanComments (last comment whose author is neither 'human' nor a daemon author ends the run; non-array comments -> []); getPendingQuestions.ts and waitForTask.ts findPendingQuestion (plus one import only; event filter/wake path untouched) both call that one helper, so the two surfaces cannot disagree. Grepped src: no other pending-question derivation, and 'moe-daemon' is the only daemon-authored comment id (finalizeAttempt.ts:161, delivery/repairActivation.ts:75). Flag writers (WebSocketServer.ts:972, addComment) unchanged. Re-ran task.verification in a git-archive snapshot outside the shared checkout: tsc --noEmit clean; vitest run src/tools/pendingQuestions src/tools/getPendingQuestions src/tools/waitForTask src/tools/initHookFixes -> Test Files 6 passed (6), Tests 33 passed (33). Negative control at b3ab4a83^ + only the new test file: 'Tests  3 failed | 1 passed (4)' with (p1),(p2),(p4) dead and (p3) green -> RED-AT-BASE. DoD 1: (p1)/(p2) human question + only moe-daemon comment stays pending on get_pending_questions (totalMatches 1, ['c1']) and wait_for_task (hasPendingQuestion true, task-q); (p3) real agent comment (even with a daemon comment after) still answers on both; (p4) daemon comment neither ends nor joins the run (['c3','c5']). DoD 2: (p1) ports the hunt repro and passes; existing getPendingQuestions/waitForTask/initHookFixes files green. No tests deleted or weakened. Not verified (out of scope): nothing deferred. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
