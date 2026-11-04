@@ -3,14 +3,18 @@
 // Serena 1.6.2's startup .gitignore walk ignores .git/info/exclude and core.excludesFile, so it walks
 // every directory they exclude (minutes on a big tree). This keeps one Moe block in
 // <root>/.serena/project.local.yml that turns the walk off and lists the patterns the walk would have
-// built, plus git's, converted exactly as Serena converts .gitignore lines.
+// built, plus git's, converted exactly as Serena converts .gitignore lines. The block also carries
+// ignored_memory_patterns (project.yml's own list plus _archive/.*), so QA-archived memories stay out of
+// Serena's list_memories and read_memory in every Moe project: .serena/ is untracked, so only a hand-edited
+// project.yml carries that entry. A project.local.yml key replaces the project.yml key, hence the merge.
 //
 // Usage: node moe-serena-ignore.mjs <serena-root>. It always exits 0 and prints exactly one line:
 //   [OK] MOE_SERENA_IGNORE_OVERRIDE: wrote <file> (<n> patterns; Serena's .gitignore walk is off)
 //   [info] MOE_SERENA_IGNORE_OVERRIDE: <file> is up to date (<n> patterns)
 //   [info] MOE_SERENA_IGNORE_SKIPPED: <reason>; Serena keeps its own .gitignore walk
 // Opt out with MOE_SERENA_IGNORE_OVERRIDE=0, or by setting ignore_all_files_in_gitignore or ignored_paths
-// in project.local.yml yourself: either removes the Moe block and writes nothing else.
+// in project.local.yml yourself: either removes the Moe block and writes nothing else. Setting
+// ignored_memory_patterns there yourself keeps your list: the block then leaves that key out, and stays.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +29,8 @@ const WHY = [
   "# directory they exclude. Moe turns that walk off and lists the same patterns, plus git's, below.",
   '# To opt out, set MOE_SERENA_IGNORE_OVERRIDE=0, or set ignore_all_files_in_gitignore or ignored_paths',
   '# yourself outside this block; Moe then removes this block.',
+  '# Moe also hides QA-archived memories (_archive/.*); set ignored_memory_patterns yourself outside',
+  '# this block to keep your own list instead.',
 ];
 export const END = '# <<< moe serena-ignore <<<';
 
@@ -62,7 +68,7 @@ const PLAIN = /^(?:[A-Za-z_/]|\.(?![0-9]))[\w./*?+=@~ -]*$/;
 const NOT_STRING = /^(?:null|Null|NULL|true|True|TRUE|false|False|FALSE|yes|Yes|YES|no|No|NO|on|On|ON|off|Off|OFF|[yYnN]|\.(?:inf|Inf|INF|nan|NaN|NAN))$/;
 const QUOTED = /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')/;
 const TAIL = /^(?:[ \t]*|[ \t]+#.*)$/; // nothing left but whitespace or a comment
-const KEY = /^(?:ignored_paths|"ignored_paths"|'ignored_paths')[ \t]*:(?=[ \t]|$)(.*)$/;
+const keyPattern = (key) => new RegExp(`^(?:${key}|"${key}"|'${key}')[ \\t]*:(?=[ \\t]|$)(.*)$`); // key: a plain identifier
 
 /** One scalar at the start of s: [value, rest], or null. A plain one ends at ',' or ']' in flow. */
 function scalar(s, flow) {
@@ -113,8 +119,9 @@ function blockSequence(lines) {
   return out;
 }
 
-/** project.yml's top-level ignored_paths as Serena reads it; null when it cannot be read safely. */
-export function parseIgnoredPaths(text) {
+/** project.yml's top-level `key` as a string sequence, as Serena reads it; [] when absent, null when it cannot be read safely. */
+export function parseStringSequence(text, key) {
+  const KEY = keyPattern(key);
   const lines = text.replace(/^\u{feff}/u, '').split('\n').map((l) => l.replace(/\r$/, ''));
   const at = lines.flatMap((l, i) => (KEY.test(l) ? [i] : []));
   if (at.length === 0) return [];
@@ -124,11 +131,17 @@ export function parseIgnoredPaths(text) {
   return /^[ \t]*\[/.test(rest) ? flowSequence(rest) : null;
 }
 
-/** The managed block, LF, ending in '\n'; each pattern a JSON (so YAML double-quoted) string. */
-export function renderBlock(patterns) {
-  const items = patterns.map((p) => `  - ${JSON.stringify(p)}`.replace(/[\x7f-\x9f\u{2028}\u{2029}\u{feff}\u{fffe}\u{ffff}]/gu,
-    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`));
-  return [BEGIN, ...WHY, 'ignore_all_files_in_gitignore: false', 'ignored_paths:', ...items, END, ''].join('\n');
+/** project.yml's top-level ignored_paths as Serena reads it; null when it cannot be read safely. */
+export const parseIgnoredPaths = (text) => parseStringSequence(text, 'ignored_paths');
+
+/** Each pattern a JSON (so YAML double-quoted) string, under `key:`. */
+const renderList = (key, patterns) => [`${key}:`, ...patterns.map((p) => `  - ${JSON.stringify(p)}`.replace(/[\x7f-\x9f\u{2028}\u{2029}\u{feff}\u{fffe}\u{ffff}]/gu,
+  (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`))];
+
+/** The managed block, LF, ending in '\n'; memoryPatterns null leaves ignored_memory_patterns out. */
+export function renderBlock(patterns, memoryPatterns = null) {
+  return [BEGIN, ...WHY, 'ignore_all_files_in_gitignore: false', ...renderList('ignored_paths', patterns),
+    ...(memoryPatterns ? renderList('ignored_memory_patterns', memoryPatterns) : []), END, ''].join('\n');
 }
 
 // ---- the CLI ----
@@ -138,6 +151,8 @@ const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }); // igno
 const ABSENT = new Set(['ENOENT', 'ENOTDIR']);
 const SCRUB = /^GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|NAMESPACE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|(?:LITERAL|GLOB|NOGLOB|ICASE)_PATHSPECS)$/i;
 const OWN_KEY = /^(["']?)(?:ignore_all_files_in_gitignore|ignored_paths)\1[ \t]*:(?:[ \t]|$)/;
+const OWN_MEMORY_KEY = /^(["']?)ignored_memory_patterns\1[ \t]*:(?:[ \t]|$)/; // a softer opt-out: the block drops the key, and stays
+const ARCHIVE = '_archive/.*';
 const MAP_KEY = /^("[^"]*"|'[^']*'|[^\s#'"{}[\],&*!|>%@`?:-][^:#]*?)[ \t]*:(?:[ \t]|$)/;
 
 /** access: change nothing. content: git works but the list would be wrong, so an earlier block goes. */
@@ -254,9 +269,21 @@ function walk(root, git, addSource) {
   }
 }
 
-/** Steps 10-12: every pattern, in Serena's order. */
-function collect(root, projectYml, env, git) {
-  const yml = tryOr(() => readText(projectYml), () => null); // unreadable, or not UTF-8
+/**
+ * The block's ignored_memory_patterns: project.yml's own list plus _archive/.*. Serena replaces the whole key
+ * with project.local.yml's, so the block must carry project.yml's patterns too. null leaves the key out: the
+ * user sets it outside the block (a second key would be a duplicate YAML key), or project.yml's list cannot
+ * be read safely (never guessed at).
+ */
+function memoryPatterns(yml, user) {
+  const lines = user.replace(/^\u{feff}/u, '').split('\n');
+  if (lines.some((line) => OWN_MEMORY_KEY.test(line.replace(/\r$/, '')))) return null;
+  const own = parseStringSequence(yml, 'ignored_memory_patterns');
+  return own && (own.includes(ARCHIVE) ? own : [...own, ARCHIVE]);
+}
+
+/** Steps 10-12: every pattern, in Serena's order; yml is project.yml's text (null: unreadable, or not UTF-8). */
+function collect(root, yml, projectYml, env, git) {
   const own = typeof yml === 'string' ? parseIgnoredPaths(yml) : null;
   if (!own) throw content(`${projectYml} ignored_paths is not a sequence of plain or quoted strings`);
   const patterns = ['/.git', ...own];
@@ -303,8 +330,9 @@ function main(argv, env, state) {
   try {
     if (optOut) throw content('MOE_SERENA_IGNORE_OVERRIDE=0');
     checkUser(local.user, file);
-    const patterns = collect(root, projectYml, env, git);
-    const block = renderBlock(patterns);
+    const yml = tryOr(() => readText(projectYml), () => null);
+    const patterns = collect(root, yml, projectYml, env, git);
+    const block = renderBlock(patterns, memoryPatterns(yml, local.user));
     const fresh = local.block ? local.before + block + local.after
       : local.user + (local.user && !local.user.endsWith('\n') ? '\n' : '') + block;
     if (fresh === local.text) return `[info] MOE_SERENA_IGNORE_OVERRIDE: ${file} is up to date (${patterns.length} patterns)`;
