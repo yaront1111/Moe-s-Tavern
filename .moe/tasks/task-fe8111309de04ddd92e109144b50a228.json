@@ -9,10 +9,51 @@
     "`./gradlew test` in moe-jetbrains (under the jetbrains-gradle lease) passes, and `grep -n bindHost moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt` shows the nullable field."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-67c762f6",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "MODEL AND SUPERVISOR: keep a live daemon's daemon.json when its recorded bind does not serve 127.0.0.1. Load test-driven-development: write BH1-BH3 first and watch BH1 fail at an assertion (today's code deletes the file and spawns), then implement. Edit only with your own editor (Edit/Write on Claude, apply_patch on codex exec), never a shell write or a subagent edit (global rail). First read mem:decision-daemon-cli-bindhost-local-rule, mem:gotcha-jetbrains-read-daemon-info-deletes and mem:gotcha-kotlin-test-names-no-dot.\n\n1. Models.kt, data class DaemonInfo: append a fifth parameter after projectPath:\n   // The daemon records it only for a --host or MOE_BIND_HOST other than 127.0.0.1 (packages/moe-daemon/src/index.ts startDaemon).\n   val bindHost: String? = null\n   It is trailing and defaulted, so every positional 4-argument DaemonInfo(...) in main and test code still compiles. Gson leaves it null when daemon.json has none, and omits a null one when the tests write daemon.json, so existing fixture bytes are unchanged. deleteDaemonInfoIfUnchanged's data-class equality now also covers bindHost; that is intended.\n\n2. MoeDaemonSupervisor.kt companion, right after WSL_BIND_HOST:\n   // The binds that serve 127.0.0.1, the only address this plugin dials: the daemon's probeHostFor\n   // (packages/moe-daemon/src/server/probeHost.ts) probes each at 127.0.0.1. The daemon never records 127.0.0.1 itself.\n   private val LOOPBACK_SERVING_BIND_HOSTS = setOf(\"127.0.0.1\", \"0.0.0.0\", \"::\", WSL_BIND_HOST)\n   Exact, case-sensitive matches, as the daemon compares. Not the whole 127.0.0.0/8: a daemon bound to 127.0.0.2 does not answer on 127.0.0.1. Not \"localhost\": Node may bind it to ::1.\n\n3. A public method next to isReachable, with a KDoc that says what the bullets below say:\n   fun offLoopbackBindRefusal(info: DaemonInfo): String? = try {\n       val host = info.bindHost\n       when {\n           host.isNullOrEmpty() || host in LOOPBACK_SERVING_BIND_HOSTS -> null\n           info.pid <= 0 || isOtherSideOfWsl(info.projectPath, isWindows()) || !isProcessAlive(info.pid) -> null\n           else -> \"The Moe daemon for this project (pid ${info.pid}) listens on $host, but this IDE connects on 127.0.0.1 only, \" +\n               \"so Moe kept .moe/daemon.json and started no second daemon. Stop that daemon, or restart it without --host \" +\n               \"or MOE_BIND_HOST, then use Restart Daemon.\"\n       }\n   } catch (ex: Exception) {\n       log.debug(\"Failed to check the daemon.json bindHost: ${ex.message}\")\n       null\n   }\n   - Keep the condition order: the string checks, then pid <= 0 (no daemon has it; on Windows pid 0 is the idle process), then the other-side check, and the pid probe last. An other-side pid lives in another namespace and is never probed (the existing isReachable rule), so such a record goes on as before.\n   - This error handling mirrors isReachable: any failure means \"go on as before\".\n   - Never dial, resolve or probe bindHost. daemon.json is repository content (the task-d6ebe4ab boundary), and the plugin dials ws://127.0.0.1 only, so a probe could not be used anyway.\n   - The text starts with fixed words, never with the host, so a Swing label never renders repository text as HTML.\n\n4. ensureDaemonRunningImpl: insert this between the reachable block (if (info != null && sameProject == true && isReachable(info)) { ... }) and the stale cleanup (if (info != null && sameProject != null && deleteDaemonInfoIfUnchanged(info))):\n   // A live daemon bound off 127.0.0.1 is out of reach, not stale: keep its daemon.json and start no second daemon.\n   val bindRefusal = if (info != null && sameProject == true) offLoopbackBindRefusal(info) else null\n   if (bindRefusal != null) {\n       log.warn(bindRefusal)\n       onStatus(false, bindRefusal)\n       return false\n   }\n   It applies to the same project only: another project's record is still removed as today. After a PROTECTED Stop and Replace the old pid is dead, so the guard lets the spawn go on.\n\n5. MoeDaemonSupervisorTest.kt: add three tests after `ensureDaemonRunning leaves an open other-side daemon of this project alone`, reusing supervisor(...), initializedRoot, writeDaemonInfo, otherSideSpelling and FakeProcess. Name folders by row index, because a ':' in a folder name fails on Windows. No '.' or ':' in any test name, so never an IP literal.\n   - `BH1 a live daemon bound off loopback keeps its daemon json and starts no second daemon` (DoD 1). For (index, host) in listOf(\"::1\", \"192.0.2.10\", \"localhost\", \"127.0.0.2\").withIndex(): root = initializedRoot(\"off-loopback-$index\"); file = writeDaemonInfo(root, DaemonInfo(9876, 42, \"now\", root.canonicalPath, bindHost = host)); before = file.readBytes(). Build a supervisor whose onStatus records (connected, message), with portProbe = { _, _ -> false }, processAliveProbe = { it == 42 } and processStarter = { starts++; FakeProcess() }. With host as the assertion message: ensureDaemonRunning() is false; starts is 0; assertArrayEquals(before, file.readBytes()); exactly one status was published, connected false, and its message contains host and \"127.0.0.1\". Do not assert an exact probe list: isReachable probes pid 42 before the guard does.\n   - `BH2 a dead or non-positive pid, or a bind that serves loopback, is replaced as today`. Rows (bindHost, pid, alive): (null, 42, true), (\"\", 42, true), (\"wsl\", 42, true), (\"0.0.0.0\", 42, true), (\"::\", 42, true), (\"127.0.0.1\", 42, true), (\"::1\", 42, false), (\"::1\", 0, true). Each row uses initializedRoot(\"replaced-$index\"), portProbe false and processAliveProbe = { alive }. Assert ensureDaemonRunning() is true, there was exactly one start, the file is gone and no status was published. Call killSpawnedDaemon() after each row.\n   - `BH3 an other-side record bound off loopback never has its pid probed`. For open in listOf(true, false): DaemonInfo(9876, 42, \"now\", otherSideSpelling(root.canonicalPath), bindHost = \"::1\"), processAliveProbe = { probed += it; true }, portProbe = { _, _ -> open }. Assert as the existing other-side test does: ensureDaemonRunning() == !open; probed is empty; open keeps the bytes with 0 starts; closed removes the file with 1 start. Call killSpawnedDaemon() after each row.\n   Do not edit any existing test: they must pass unchanged (DoD 2).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "DaemonInfo.bindHost (trailing, nullable, default null); MoeDaemonSupervisor.LOOPBACK_SERVING_BIND_HOSTS + public offLoopbackBindRefusal (string checks, pid<=0, isOtherSideOfWsl, then isProcessAlive last; try/catch -> null); guard in ensureDaemonRunningImpl between the reachable block and the stale delete, same-project only. Tests BH1/BH2/BH3 added after the other-side test, names as planned (no '.' or ':'). RED (Windows, gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest.BH* --rerun, under jetbrains-gradle): 3 tests, 1 failed: BH1 AssertionError \"::1\" at the ensureDaemonRunning() assertFalse (today's code spawns); BH2/BH3 passed (existing behavior). GREEN for BH1-BH3 is checked in step 2's first Gradle run, together with BH4/BH5's RED.",
+      "startedAt": "2026-11-04T07:12:57.147Z",
+      "completedAt": "2026-11-04T07:15:21.457Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "SERVICE: connect() keeps that daemon.json too. The step-1 editor rule applies.\n\n1. MoeProjectService.kt, connect(): at the top of the if (!daemonSupervisor.isReachable(daemonInfo)) { branch, before its deleteDaemonInfoIfUnchanged call:\n   // A live daemon bound off 127.0.0.1 is out of reach, not stale. Its bind is the operator's choice: keep its daemon.json\n   // and schedule no reconnect, which would only overwrite this status. Restart Daemon tries again.\n   daemonSupervisor.offLoopbackBindRefusal(daemonInfo)?.let {\n       connecting = false\n       publishStatus(false, it)\n       return\n   }\n   - The rest of the branch (the delete, its log line, the status and scheduleReconnect) stays byte-identical. This branch decides alone whenever ensureDaemonRunning returned before reading daemon.json: a restart in flight, an unresolved Windows tree, or a protected replacement in flight. Without the guard it would delete the file the supervisor just kept.\n   - Scheduling no retry follows the selectionRefusal precedent a few lines above.\n   - connectWithRetry is unchanged: it runs only after this plugin spawned a daemon, and it deletes nothing.\n\n2. MoeProjectForeignDaemonTest.kt: add two tests. This file already has the fixture a connect() case needs: a temp project, the service's status listener, and the daemonSupervisor injection used by `connect and readiness retry reach health without probing an other-side pid`. MoeProjectServiceTest's fake project has no basePath, so it is not used. Inject MoeDaemonSupervisor(f.basePath, \"Test\", portProbe = { _, _ -> false }, processAliveProbe = ..., processStarter = ...) through the daemonSupervisor field, exactly as that test does.\n   - `BH4 connect keeps a live off-loopback daemon's json, starts nothing and schedules no reconnect` (DoD 2). Write Gson().toJson(f.writeDaemonJson(\"S1\").copy(bindHost = \"::1\")) to f.daemonJson; before = its text. Use processAliveProbe = { it == 4242 } and a processStarter that counts its calls and throws. Call f.service.connect(). Assert: the daemon.json text equals before; there were 0 starts; some status contains \"::1\" and \"127.0.0.1\"; the reconnectFuture field is null; the wsClient field is null; f.assertNoWebSocketRequest().\n   - `BH5 connect's own stale check removes every record but a live off-loopback one`. Rows (bindHost, alive, kept): (\"::1\", true, true), (null, true, false), (\"wsl\", true, false), (\"::1\", false, false), each in its own withFixture. Before connect(), set the injected supervisor's private windowsRestartInFlight AtomicBoolean to true by reflection. Write the FQN java.util.concurrent.atomic.AtomicBoolean and add no import. ensureDaemonRunning then returns before it reads daemon.json, so connect()'s own branch decides alone. Assert per row: when kept, the text equals before, else the file is gone; f.statuses.any { \"::1\" in it } == kept; (reconnectFuture == null) == kept.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "startedAt": "2026-11-04T07:15:22.426Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh. WSL has no JDK, so this is the Windows route (mem:gotcha-jetbrains-gradle-from-wsl); label it Windows in complete_task. Hold the jetbrains-gradle lease only around each Gradle run: moe.acquire_resource right before it and moe.release_resource right after, even on failure (mem:convention-jetbrains-gradle-lease). Edit only what a finding needs, with the step-1 editor rule.\n\n1. Mutants first, in an archive copy, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, section 'Worker variant: uncommitted diff'). Run each with --tests on com.moe.services.MoeDaemonSupervisorTest and com.moe.services.MoeProjectForeignDaemonTest. A kill counts only on an assertion failure, never a compile error. Expected kills:\n   a. WSL_BIND_HOST dropped from LOOPBACK_SERVING_BIND_HOSTS: the wsl rows of BH2 and BH5.\n   b. isProcessAlive moved before the other-side check: BH3 (probed is not empty).\n   c. The pid <= 0 check dropped: BH2's pid-0 row.\n   d. No guard in ensureDaemonRunningImpl: BH1 and BH4.\n   e. No guard in connect(): BH4 and BH5's kept row.\n   f. scheduleReconnect() added to connect()'s guard: BH4 and BH5's kept row.\n   g. The !isProcessAlive condition dropped: the dead-pid rows of BH2 and BH5.\n   Restore the copy, check its sha256, and list the kills in the completion summary.\n2. Then run the exact command below once, from the worktree, after `git status --porcelain -- moe-jetbrains` lists only this plan's five files. Its fresh output is the complete_task evidence. It runs the full plugin suite with --rerun. It fails unless both classes report failures=\"0\" errors=\"0\" and exactly 5 BH testcases ran, and it greps Models.kt for the nullable field (DoD 3). The architect dry-ran it with stubbed git, cmd.exe and wslpath: green exits 0, and a missing class XML exits 1.\ncd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"BH' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) BH=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 5 ] || r=1; grep -n bindHost moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the five-file diff twice: once as someone who controls .moe/daemon.json (repository content), and once as a user who started the daemon from a terminal with --host or MOE_BIND_HOST.\n- Can anything dial, resolve or trust bindHost? It may only be compared and shown.\n- Can a record from the other side of the WSL boundary reach isProcessAlive? (BH3)\n- Does every existing deleter still fire for a record with no bindHost, an empty one or a loopback-serving one, for a dead or non-positive pid, and for another project's record? (BH2, BH5 and the unchanged suites)\n- A planted bindHost plus any live pid (1, or the IDE's own) now parks the plugin with this status instead of replacing the daemon, and the plugin signals nothing by itself. Recovery is the explicit Restart Daemon, whose signaling rules this task does not change. Say so in the handoff.\n- An odd host (very long, or with control characters) can only make the label ugly, because the text never starts with it.\n- A JSON array or object bindHost now fails the whole Gson parse, so the record reads as absent, as any malformed field already does. The spawned start then runs the daemon's own existing-daemon guard on the intact file. Confirm this in the handoff.\n- If this step changes any code, rerun step 3's command fresh and submit that output.\nWrite the Serena memory task-task-fe8111309de04ddd92e109144b50a228-handoff with the mutant kills and the gate counts.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-5772dacf",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -21,14 +62,108 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 489.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-d96f7820ae5e445dacd1e8ad50a834e2",
+      "author": "architect-cd0ac706",
+      "content": "@architect-67c762f6 FYI for placement: task-8383080c (MOE_DAEMON_COMMAND precedence, now WORKING, plan rev 1) also edits MoeDaemonSupervisor.kt. Its hunks:\n(a) a new constructor param `daemonCommandOverride`, inserted right after `processLookup` (:43);\n(b) the `direct` spawn selection at :182 and the buildDaemonCommand call at :190;\n(c) buildDaemonCommand :665-691, plus three private members right after it.\nIt does not touch isReachable, the :151-166 reuse/delete block, DaemonInfo or the companion object. Its tests are a new class, MoeDaemonCommandOverrideTest.kt, plus the W1/W2 constructor calls in MoeDaemonSupervisorTest.kt (:503-543).\n\nTrap if you add a constructor seam: RuntimeSelectionPolicyTest.kt:2243 passes the first 11 params (through processLookup) positionally, so an insertion before position 12 breaks compile. Appending after docSync is safe from 8383080c's hunk.",
+      "timestamp": "2026-11-04T07:15:14.599Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:50:51.601Z",
-  "updatedAt": "2026-11-04T06:51:48.022Z",
+  "updatedAt": "2026-11-04T07:15:22.426Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T06:51:37.106Z"
+    "firstClaimAt": "2026-11-04T06:51:37.106Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-67c762f6"
-  ]
+    "architect-67c762f6",
+    "worker-5772dacf"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T07:09:55.690Z",
+  "executionContract": {
+    "intendedBehavior": "When .moe/daemon.json names this project, records a bindHost that does not serve 127.0.0.1 (anything but absent, empty, 127.0.0.1, 0.0.0.0, :: or wsl), comes from this side of the WSL boundary, and names a positive pid that is alive, the JetBrains plugin keeps that daemon.json byte for byte, starts no daemon, and publishes a status naming the bind host and 127.0.0.1. Both ensureDaemonRunning and connect() do this, and connect() then schedules no reconnect. Every other record is handled exactly as before.",
+    "acceptanceCriteria": [
+      "BH1: a live same-project record with bindHost ::1 (also 192.0.2.10, localhost, 127.0.0.2), processAliveProbe true and portProbe false: ensureDaemonRunning() returns false, processStarter is never called, the bytes are unchanged, and one status names the host and 127.0.0.1.",
+      "BH2: no bindHost, empty, wsl, 0.0.0.0, ::, 127.0.0.1, a dead pid and pid 0 are each deleted and spawned as today, with no status.",
+      "BH3: an other-side record with bindHost ::1 never has its pid probed and behaves as the existing other-side test does.",
+      "BH4: MoeProjectService.connect() keeps that record's daemon.json, starts nothing, publishes the status and schedules no reconnect.",
+      "BH5: with ensureDaemonRunning short-circuited, connect()'s own branch keeps only the live off-loopback record, and removes and reconnects for no bindHost, wsl and a dead pid.",
+      "The full plugin suite passes with every existing test unchanged, and Models.kt shows the nullable bindHost."
+    ],
+    "invariants": [
+      "bindHost is never dialed, resolved or probed; it is only compared and shown.",
+      "A pid from an other-side record is never probed: isOtherSideOfWsl is checked before isProcessAlive.",
+      "Existing tests are not edited."
+    ],
+    "compatibility": [
+      "DaemonInfo gains a trailing bindHost: String? = null. Positional 4-argument constructions keep compiling, and a daemon.json without bindHost parses as before.",
+      "deleteDaemonInfoIfUnchanged's data-class equality now also covers bindHost."
+    ],
+    "approvedScope": [
+      "DaemonInfo.bindHost",
+      "MoeDaemonSupervisor.offLoopbackBindRefusal and LOOPBACK_SERVING_BIND_HOSTS",
+      "the guard in ensureDaemonRunningImpl",
+      "the guard in MoeProjectService.connect()"
+    ],
+    "reuse": [
+      "isOtherSideOfWsl, isProcessAlive, WSL_BIND_HOST, the onStatus callback and deleteDaemonInfoIfUnchanged, all unchanged.",
+      "Test helpers supervisor(...), initializedRoot, writeDaemonInfo, otherSideSpelling and FakeProcess, plus MoeProjectForeignDaemonTest's Fixture, withFixture and field."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts startDaemon writes bindHost only when host !== DEFAULT_BIND_HOST ('127.0.0.1').",
+      "packages/moe-daemon/src/server/probeHost.ts probeHostFor maps '0.0.0.0', '::' and WSL_BIND_HOST ('wsl') to 127.0.0.1.",
+      "MoeProjectService.openClient dials ws://127.0.0.1:<port>/ws, and MoeDaemonSupervisor.defaultPortProbe connects to 127.0.0.1 only.",
+      "MoeDaemonSupervisor.ensureDaemonRunning has one caller, MoeProjectService.connect()."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"BH' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) BH=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 5 ] || r=1; grep -n bindHost moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Probe bindHost's /health when it names a local interface (the daemon's isLocalAddress rule). Rejected: the plugin dials ws://127.0.0.1 only, so a successful probe could not be used. A Kotlin port of isLocalAddress (interface reads, zones, IPv4-mapped forms) would also be new attack surface for no gain. 2) Keep daemon.json but still spawn `start`, and let the daemon's existingDaemonBlocksStart refuse the duplicate. Rejected: DoD 1 says processStarter is never called, and the plugin's spawn/poll/kill loop would hide the explanation. 3) scheduleReconnect after the refusal. Rejected: every retry publishes 'Reconnecting... (n/10)' over the status. The bind is the operator's choice, and connect() already skips the retry for selectionRefusal. 4) Apply the guard to other-side records. Rejected: their pid is in another namespace and is never probed. Keyed on bindHost alone, the guard would wedge a dead other-side record forever, because Restart Daemon refuses other-side metadata.",
+    "codebaseInsights": "The daemon records bindHost only when host !== '127.0.0.1' (packages/moe-daemon/src/index.ts:849). probeHostFor maps '0.0.0.0', '::' and 'wsl' to 127.0.0.1 (packages/moe-daemon/src/server/probeHost.ts:17-19), so those binds answer where the plugin dials and keep today's path. Every other recorded value means 127.0.0.1 may be closed while the daemon lives: ::1, 127.0.0.2, localhost, a LAN address or a name. The guard runs only after isReachable failed, so a bind that does serve 127.0.0.1 never reaches it. ensureDaemonRunning has one caller, MoeProjectService.connect(). Gson builds DaemonInfo without its constructor (Unsafe allocation), so a missing bindHost is null. It omits null fields when writing, so existing test fixtures write the same bytes. Kotlin backtick test names cannot contain '.' or ':'.",
+    "risks": "A test name with '::1' or an IP will not compile (mem:gotcha-kotlin-test-names-no-dot). isReachable probes the pid before the guard does, so BH1 must not assert an exact probe list. The guard order matters: a pid probe before the other-side check probes a foreign namespace (BH3 catches it). A JSON array or object bindHost now fails the whole parse; it reads as absent, as any malformed field already does. The status text must start with fixed words. The architect could not run Gradle (no lease for the architect role), so the worker's first gated run is the first compile: keep the spelled-out names, and fix only syntax if the compiler disagrees. Out of scope, unchanged: the VS Code client (no bindHost handling there either), the daemon, docs (no doc describes the old delete-and-spawn behavior), connectWithRetry, and restartDaemon's post-stop delete.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt",
+      "packages/moe-daemon/src/server/probeHost.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "320918dce4e7993a57d03004b90dc350e449d333",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T07:09:55.723Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-67c762f6@2026-11-04T06:51:35Z",
+    "at": "2026-11-04T07:10:44.524Z"
+  },
+  "workStartedAt": "2026-11-04T07:12:57.147Z"
 }

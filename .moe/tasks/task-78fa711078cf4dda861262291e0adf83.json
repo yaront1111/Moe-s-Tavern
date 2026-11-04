@@ -9,10 +9,68 @@
     "`npx vitest run src/index.test.ts` (plus any new test file) passes in a snapshot outside the shared checkout, with the run's output as the completion evidence."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2a219562",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the regression test first and prove it RED (TDD). Create packages/moe-daemon/src/index.relativeProject.test.ts with the Write tool. A reference prototype that already ran GREEN and RED is at /mnt/d/moe-scratch/plan-78fa7110/index.relativeProject.test.ts, with the full diff in code.diff next to it. Read it, but never cp it into the tree: a shell write leaves no TOOL witness. Use one describe, and keep these case-title prefixes so QA can grep `> (rN) `:\n- (r1) `init --project .` with cwd = a fresh project dir. daemon.json projectPath, the /health projectPath and .moe/project.json rootPath each equal path.resolve(project). [DoD 1]\n- (r2) `init` with MOE_PROJECT_PATH='.' and no --project, cwd = the project, over a pre-seeded .moe/project.json `{ id, schemaVersion: CURRENT_SCHEMA_VERSION, name, rootPath: '.' }`, which is what a pre-fix `init --project .` left. The same three values equal path.resolve(project). This also proves a legacy rootPath \".\" heals at load. [DoD 1, plus the epic's backward-compat rail]\n- (r3) With an `init --project .` daemon healthy, run `start --project <absolute project>` from the scratch root (another cwd), with its own free --port and MOE_SOCKET_TIMEOUT_MS=5000. That env value is a load margin only: the guard's /health probe defaults to 200 ms, and at base the guard fails on 'projectPath mismatch' before it probes. Assert in ONE toEqual, so a RED run shows every field:\n  - it exits 0 within 30 s;\n  - its JSON log msgs include 'Moe daemon already running', and include neither 'Supervisor spawned daemon process' nor 'Cleaning up stale daemon lifecycle files';\n  - daemon.json pid and port are unchanged;\n  - /health on the first port still answers the first pid;\n  - nothing answers /health on the second port.\n  [DoD 2: the case /mnt/d/moe-scratch/hunt-3488566e/A/repro-relative-daemon-guard.sh drives]\n- (r4) `init --project <spelled>` run from the scratch root. spelled is `${project}/` on POSIX, and the project with every backslash turned into '/' on win32. All three values equal the spelling exactly. [DoD 2: absolute values are recorded unchanged; scripts/tests/local-runner-channel.test.mjs relies on this]\n- (r5) One table over the exported `parseArgs(args, env).projectPath`:\n  - '.', 'sub/../proj/', and MOE_PROJECT_PATH '.' and 'proj' give path.resolve(...);\n  - MOE_PROJECT_PATH '' gives process.cwd();\n  - a --project beats MOE_PROJECT_PATH;\n  - '/srv/moe/p/' and '/srv//moe/./p' (also via MOE_PROJECT_PATH), 'D:\\\\projexts\\\\app', 'd:/projexts/app/', '\\\\\\\\srv\\\\share\\\\app' and '//srv/share/app' come back exactly as given, on every OS.\n  [DoD 2]\n\nHarness (the shape of index.test.ts 'no-moe start', :951-995):\n- Spawn `process.execPath --import <tsx URL> src/index.ts <args>` asynchronously, with NODE_OPTIONS=`--import <tsx URL>`, because the supervisor's _run child needs it. Never use spawnSync while a daemon child holds pipes.\n- Scrubbed env: PATH, a scratch HOME and USERPROFILE, NODE_ENV=production (for JSON log lines), plus SystemRoot/TEMP/TMP on win32. No seat MOE_* variable.\n- scratch = fs.realpathSync.native(fs.mkdtempSync(...)), because a child's process.cwd() is the real path (the macOS tmpdir is a symlink).\n- Explicit free ports, never 9876.\n- Wait up to 60 s for daemon.json's pid to answer GET 127.0.0.1:<port>/health.\n\nError handling in the test:\n- A failed or unparseable /health read resolves null; it never throws.\n- afterEach has an explicit 60 s hook timeout. It SIGTERMs each supervisor through its own ChildProcess handle (SIGKILL after 12 s).\n- It then signals a recorded _run pid only while /health on that pid's recorded port still answers with that pid. On win32, TerminateProcess skips the supervisor's signal forwarding, so the _run can outlive it.\n- Last, fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }).\n- No pattern kill, and no pid this test did not spawn or verify.\n\nBudget: about 160 lines; (r5) is table-driven.\n\nProve RED against the unfixed sources. Base 59e95024 predates the fix:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive 59e95024a08f312e6674ee329c693d6a284b5f7b packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/index.relativeProject.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/index.relativeProject.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests |^ FAIL \" \"$S/l\"; }`\nThe prototype gave `Tests  4 failed | 1 passed (5)`:\n- (r1) and (r2) record '.';\n- (r3) shows a second daemon (cleaned: true, new pid and port) after its 30 s wait;\n- (r5) fails with 'parseArgs is not a function';\n- (r4) passes at base by design, because it guards the absolute path.\nPut that Tests line in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/index.relativeProject.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.relativeProject.test.ts"
+      ],
+      "note": "Created index.relativeProject.test.ts with (r1)-(r5) via the Write tool (prototype read, not copied). RED at base 59e95024 in a git-archive snapshot: `Tests  4 failed | 1 passed (5)` — (r1),(r2),(r3),(r5) fail, (r4) passes at base by design. (r3) shows the bug: cleaned true and a second daemon answering on the second port. No leaked processes after the run.",
+      "startedAt": "2026-11-04T07:13:29.044Z",
+      "completedAt": "2026-11-04T07:14:41.203Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the fix: resolve a relative project path once, in parseArgs.\n\n1. packages/moe-daemon/src/util/projectPath.ts. Below the MNT_DRIVE constant, add `export function absoluteProjectPath(projectPath: string): string`. It returns `WINDOWS_FORM.test(projectPath) || projectPath.startsWith('/') ? projectPath : path.resolve(projectPath)`, which is moe-proxy/src/utils.ts:39's rule. Give it a 3-line doc comment: this is the value the daemon records in daemon.json, /health and project.json rootPath; a relative value is resolved once against the cwd because every later reader has its own cwd; a POSIX-absolute, drive or UNC value is kept as given.\n   Then make comparableProjectPath reuse it: replace its two lines (`const raw = …trim()` and `const abs = … ? raw : path.resolve(raw)`) with `const abs = absoluteProjectPath(projectPath.trim());`. This is behavior-identical: index.test.ts X1/X9/X10/X15 pin it, and scripts/tests/daemon-json-cap.test.mjs keeps comparing the daemon and proxy dists.\n\n2. packages/moe-daemon/src/index.ts.\n   - Import absoluteProjectPath on the :28 line.\n   - Change `function parseArgs()` to `function parseArgs(args: string[] = process.argv.slice(2), env: NodeJS.ProcessEnv = process.env)`, and drop the `const args = …` line.\n   - Read MOE_PROJECT_PATH and MOE_BIND_HOST from `env`.\n   - Write `const projectPath = absoluteProjectPath(projectIndex >= 0 ? args[projectIndex + 1] : env.MOE_PROJECT_PATH || process.cwd());`.\n   - Add parseArgs to the export block (:1304). main() keeps calling parseArgs() with no arguments.\n   - Rewrite the sentence at :94-95 in isForeignDaemonInfo's doc comment: only a daemon before task-78fa7110 recorded a relative projectPath, and such a path still names no side.\n\n3. packages/moe-daemon/src/index.test.ts:316. Change only the X2 comment, the same way. The X2 rows stay.\n\nNothing else changes. These already take parseArgs's projectPath:\n- daemon.json (:844-853);\n- /health (:760);\n- the supervisor's `_run --project` (:973);\n- initProject's rootPath (:1199);\n- the lock (:232).\nnormalizeProject (state/persistence.ts:97, persisted by StateManager.ts:1058-1066) also rewrites rootPath from it at every load.\n\nError handling and compatibility:\n- An absolute value is never touched. Launchers, both IDE plugins, Docker (MOE_PROJECT_PATH=/project) and local-runner-channel's spelled start therefore record exactly what they recorded before.\n- Never apply canonicalProjectPath or path.resolve to an absolute value. It strips a trailing '/', and on win32 it turns '/' into a backslash and prefixes the cwd drive.\n- A trailing `--project` with no value still fails the command with exit 1 through main's catch ('Fatal error'), as before. Do not default it to the cwd.\n- Keep the index.ts hunks local to parseArgs, the import, the export block and the one comment. task-d7b24cab (BACKLOG, waits on this row) will later move isForeignDaemonInfo/wslGatewayHost out of index.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/projectPath.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/projectPath.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Added absoluteProjectPath to util/projectPath.ts (comparableProjectPath reuses it, behavior-identical); parseArgs(args, env) wraps the project value in it and is now exported; main() still calls parseArgs() with no args. Two comments updated (isForeignDaemonInfo doc, index.test.ts X2). Diff is 3 files +18/-10 plus the new test file. grep shows no other raw MOE_PROJECT_PATH read in index.ts; the remaining process.argv reads are the accounts/check-architecture/script-path commands.",
+      "startedAt": "2026-11-04T07:14:42.694Z",
+      "completedAt": "2026-11-04T07:15:11.622Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate. Run it once, fresh, outside the shared checkout. Its output is the complete_task evidence. Run exactly:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/index.ts packages/moe-daemon/src/index.test.ts packages/moe-daemon/src/index.relativeProject.test.ts packages/moe-daemon/src/util/projectPath.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/index.test.ts src/index.relativeProject.test.ts`\n\nIt works the same from the task worktree, where the edits may be uncommitted, and from the control checkout after landing; QA re-runs it as written. A dry run from a scratch clone carrying the prototype took 8 s and printed `Test Files  2 passed (2)` and `Tests  78 passed | 1 skipped (79)` on Linux. The skip is a win32-only index.test.ts row.\n\nPass complete_task `verification: { command: <exactly the line above>, exitCode: 0, outputTail: <its last lines> }`.\n\nPer the project rails, never run npm ci, build or test in the shared checkout. A failed `cd` stops the chain, so nothing runs there.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate ran fresh in a git-archive snapshot: tsc --noEmit clean; `Test Files  2 passed (2)`, `Tests  78 passed | 1 skipped (79)` (the skip is the win32-only index.test.ts row), exit 0.",
+      "startedAt": "2026-11-04T07:15:12.503Z",
+      "completedAt": "2026-11-04T07:15:28.325Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff (the four files only). Read it as an attacker:\n- Absolute spellings untouched? (r4) and (r5) cover it. Grep that no other index.ts line now runs canonicalProjectPath or path.resolve on the parsed value.\n- One entry point? `grep -n \"MOE_PROJECT_PATH\\|process.argv\" packages/moe-daemon/src/index.ts` must show no second raw read. The `accounts` and `check-architecture` argv reads are separate commands.\n- Empty and odd inputs: `--project ''` resolves to the cwd. MOE_PROJECT_PATH '' falls back to the cwd. A trailing `--project` still exits 1 and is not defaulted. On win32, `C:x` and a single-backslash root are relative and resolve on the cwd drive.\n- Concurrency: two starts of one project from different cwds now record and lock the same absolute path (acquireLock already writes canonicalProjectPath).\n- Legacy: a daemon.json that a pre-fix daemon wrote with '.' is still judged local (the X2 rows are unchanged). A pre-fix daemon that is still running keeps its '.' file until it restarts; that is out of scope, so say it in the summary.\n- Runner key: runnerKeyPath is sha256(projectPath), so a project once started relative gets a fresh key under the absolute name at its next start. verified-local stays refused, and the local-runner client reads the key by the daemon's reported spelling.\n- Test hygiene:\n  - after the gate, `ps -eo pid,args | grep -F \"$S/packages/moe-daemon/src/index.ts\"` is empty. This is a read-only check, never a kill by pattern;\n  - no fixture outside os.tmpdir();\n  - the test file type-checks: put a scratch tt.json in the snapshot's packages/moe-daemon, `{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/index.relativeProject.test.ts\"],\"exclude\":[]}`, then `npx tsc -p tt.json` (mem:gotcha-daemon-linux-snapshot-gate).\n- No new daemon source comment may match util/daemonGitDocs.test.ts's git-claim regex (same memory).\n- Explicit error handling is present on every new path: the /health helper, cleanup, and the missing value.\n- Budget: at most about 200 net LOC. The prototype was +179/-10.\n- If this review changes any byte, re-run step 3's exact command and use that fresh output as the evidence.\n- Background: mem:gotcha-daemon-lifecycle-wsl-foreign, mem:decision-project-path-comparison-contract.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.relativeProject.test.ts",
+        "packages/moe-daemon/src/util/projectPath.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Self-review changed no bytes (the paths listed are the task's four files, repeated for attribution). Checked: the test file type-checks (scratch tt.json, tsc exit 0); no daemon process left from the snapshot (read-only ps); no other canonical/resolve call on the parsed value and no second raw MOE_PROJECT_PATH read in index.ts (remaining process.argv reads are the accounts, check-architecture and script-path commands); trailing `--project` with no value still exits 1 with 'Fatal error' on start and status, not defaulted; no new comment matches daemonGitDocs' NEVER_RUNS_GIT regex. Out of scope, per the plan: a pre-fix daemon still running keeps its '.' daemon.json until it restarts; runnerKeyPath is sha256(projectPath), so a project once started relative gets a fresh runner key under its absolute name at next start (verified-local stays refused).",
+      "startedAt": "2026-11-04T07:15:29.281Z",
+      "completedAt": "2026-11-04T07:15:51.147Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +82,113 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:50:29.049Z",
-  "updatedAt": "2026-11-04T06:50:46.765Z",
+  "updatedAt": "2026-11-04T07:16:11.349Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T06:50:33.037Z"
+    "firstClaimAt": "2026-11-04T06:50:33.037Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-2a219562"
-  ]
+    "architect-2a219562",
+    "worker-a408f113"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T07:11:51.386Z",
+  "executionContract": {
+    "intendedBehavior": "The daemon CLI resolves a relative --project or MOE_PROJECT_PATH to an absolute path once, in parseArgs, before anything records or compares it. daemon.json projectPath, the /health projectPath, project.json rootPath, the daemon lock and the supervisor's `_run --project` argument therefore all carry the absolute path, and a later start from another cwd recognises the live daemon. POSIX-absolute, drive-letter and UNC values are kept exactly as given.",
+    "acceptanceCriteria": [
+      "`init --project .` and `init` with MOE_PROJECT_PATH=. (no --project), each run from a temp cwd, record path.resolve(cwd) in daemon.json projectPath, the /health projectPath and project.json rootPath.",
+      "A second `start --project <absolute path>` from another cwd, while that daemon lives, logs 'Moe daemon already running', exits 0, leaves daemon.json's pid and port unchanged and starts no second daemon.",
+      "An absolute POSIX, drive-letter or UNC --project or MOE_PROJECT_PATH value comes out of parseArgs, and is recorded, byte-identical to the input."
+    ],
+    "invariants": [
+      "comparableProjectPath returns the same key for every input as before",
+      "main() still calls parseArgs() with no arguments; every command keeps its arguments",
+      "A trailing --project with no value is never defaulted to the cwd",
+      "No MCP tool, wire shape or .moe/ file format changes"
+    ],
+    "compatibility": [
+      "A project.json with rootPath '.', written by a pre-fix daemon, is rewritten to the absolute path at the next load by normalizeProject",
+      "A daemon.json with a relative projectPath, written by a pre-fix daemon, is still judged local by isForeignDaemonInfo",
+      "Launchers, both IDE plugins, Docker (MOE_PROJECT_PATH=/project) and scripts/tests/local-runner-channel.test.mjs pass absolute paths and see no change"
+    ],
+    "approvedScope": [
+      "util/projectPath.ts: new export absoluteProjectPath; comparableProjectPath reuses it (behavior-identical)",
+      "index.ts: parseArgs(args = process.argv.slice(2), env = process.env), now exported; its import line; one sentence of isForeignDaemonInfo's doc comment",
+      "index.test.ts: the X2 comment only",
+      "new src/index.relativeProject.test.ts"
+    ],
+    "reuse": [
+      "moe-proxy/src/utils.ts:39's absolute-or-resolve rule, which is also the first line of the daemon's comparableProjectPath, becomes absoluteProjectPath, shared by parseArgs and comparableProjectPath",
+      "The CLI test harness follows index.test.ts 'no-moe start' (:951-995): tsx through NODE_OPTIONS, a scrubbed env and a scratch HOME"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts:59-73 parseArgs is the daemon's only reader of --project and MOE_PROJECT_PATH (grep of non-generated src)",
+      "index.ts:844-853 daemon.json, :760 /health, :973 the _run argv, :1199 initProject rootPath and :232 the lock all take parseArgs's projectPath; state/persistence.ts:97 normalizeProject sets rootPath from StateManager.projectPath",
+      "util/projectPath.ts WINDOWS_FORM is the drive/UNC regex comparableProjectPath already uses"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/index.ts packages/moe-daemon/src/index.test.ts packages/moe-daemon/src/index.relativeProject.test.ts packages/moe-daemon/src/util/projectPath.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/index.test.ts src/index.relativeProject.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Apply path.resolve / canonicalProjectPath to every --project value. Rejected:\n- it rewrites absolute spellings: it strips a trailing '/', and on win32 it turns '/' into a backslash and gives a POSIX path a drive;\n- that changes what launchers record, and breaks scripts/tests/local-runner-channel.test.mjs, whose spelled start relies on daemon.json, /health and the runner key name carrying the spelling as given. The prototype's mutant m1 fails (r4) and (r5).\n(2) Teach the readers to interpret a recorded '.' (the start guard, JetBrains isSameProjectPath, the STATE_SNAPSHOT rootPath checks). Rejected: '.' has no anchor, and every reader has its own cwd.\n(3) Resolve only in startDaemon. Rejected: initProject's rootPath, the supervisor's guard and its `_run --project` argument, the lock and the logs run before _run or outside it. parseArgs is the single entry point for --project and MOE_PROJECT_PATH.\nChosen: moe-proxy's own rule (utils.ts:39), extracted as util/projectPath.ts absoluteProjectPath and shared with comparableProjectPath, so recording and comparing cannot drift.",
+    "codebaseInsights": "Prototype: /mnt/d/moe-scratch/plan-78fa7110/code.diff (+179/-10), run in a git-archive snapshot of HEAD 59e95024 with a native npm ci:\n- GREEN: tsc clean, the test file type-checks, and the gate gives 78 passed | 1 skipped (79) in about 6 s.\n- RED at base: 4 failed | 1 passed (5). (r3) shows the bug exactly: cleaned true, a second _run pid on another port, the first still healthy.\n- Mutants: resolving every value fails (r4) and (r5). Leaving MOE_PROJECT_PATH unresolved fails (r5) only. In that case the supervisor hands `_run --project <value>` to its child, which re-parses it, so (r2) alone cannot see the env path; (r5) is what pins it.\n- No leaked processes after any run.\n\nFacts:\n- Daemon starts through tsx take about 0.8 s each here.\n- vitest.config.ts blanks MOE_PROJECT_PATH in process.env, so the CLI children get an explicit scrubbed env, and r5 passes env to parseArgs.\n- normalizeProject always sets rootPath to the daemon's projectPath, and StateManager persists it when it differs. That heals a legacy rootPath '.'; (r2) proves it.\n- No doc claims that a relative value is recorded as given. README.md:112's `init --project .` advice simply starts working, so there is no doc change.\n- Lanes at 07:0xZ: no open row declares index.ts, index.test.ts or util/projectPath.ts.",
+    "risks": "- An already-running pre-fix daemon keeps its '.' daemon.json until it restarts. This row does not heal it.\n- Windows:\n  - test cleanup must verify a _run pid by /health before signalling it, because TerminateProcess skips the supervisor's forwarding;\n  - the (r4) spelling uses forward slashes;\n  - (r5) expects POSIX-absolute values unchanged on win32 too, per the shared contract.\n- Load: give (r3)'s second start MOE_SOCKET_TIMEOUT_MS=5000. Keep the 60 s afterEach hook timeout; the default is 10 s, below the 12 s SIGKILL fallback.\n- At base, (r3) takes about 31 s because of its 30 s wait. That is expected in the RED run only.\n- runnerKeyPath = sha256(projectPath): a project once started relative mints a new key under the absolute name. verified-local is refused, so no client depends on the old key.\n- task-d7b24cab waits on this row and moves isForeignDaemonInfo out of index.ts. Keep the hunks local.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/util/projectPath.ts",
+      "packages/moe-daemon/src/index.test.ts",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-daemon/src/state/persistence.ts",
+      "/mnt/d/moe-scratch/plan-78fa7110/code.diff"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "320918dce4e7993a57d03004b90dc350e449d333",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T07:11:51.418Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-2a219562@2026-11-04T06:50:30Z",
+    "at": "2026-11-04T07:13:05.020Z"
+  },
+  "workStartedAt": "2026-11-04T07:13:29.044Z",
+  "reviewStartedAt": "2026-11-04T07:16:11.346Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/index.ts packages/moe-daemon/src/index.test.ts packages/moe-daemon/src/index.relativeProject.test.ts packages/moe-daemon/src/util/projectPath.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/index.test.ts src/index.relativeProject.test.ts",
+    "exitCode": 0,
+    "outputTail": "[2026-11-04 09:15:21.893 +0200] INFO: No daemon info found\n\n Test Files  2 passed (2)\n      Tests  78 passed | 1 skipped (79)\n   Start at  09:15:18\n   Duration  6.00s (tests 76%, transform 20%, import 4%)\n\nexit=0",
+    "reportedAt": "2026-11-04T07:16:11.346Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/index.relativeProject.test.ts",
+    "packages/moe-daemon/src/util/projectPath.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/index.test.ts"
+  ],
+  "completionSummary": "The daemon CLI now resolves a relative --project or MOE_PROJECT_PATH to an absolute path once, in parseArgs, so daemon.json projectPath, /health projectPath, project.json rootPath, the lock and the supervisor's `_run --project` all carry it, and a start from another cwd recognises the live daemon. Changes: util/projectPath.ts gains absoluteProjectPath (moe-proxy utils.ts:39's rule; comparableProjectPath reuses it, behavior-identical); index.ts parseArgs(args = process.argv.slice(2), env = process.env) wraps the project value and is exported (main() still calls it with no args); two comments updated (isForeignDaemonInfo doc, index.test.ts X2). POSIX-absolute, drive and UNC values are kept byte-identical. New src/index.relativeProject.test.ts covers (r1) init --project ., (r2) MOE_PROJECT_PATH=. over a legacy rootPath \".\", (r3) a second `start --project <abs>` from another cwd logs 'Moe daemon already running' and leaves pid/port unchanged, (r4) an absolute spelling recorded unchanged, (r5) a parseArgs table. RED at base 59e95024: `Tests  4 failed | 1 passed (5)` ((r4) passes at base by design). Out of scope: a pre-fix daemon still running keeps its '.' daemon.json until it restarts; runnerKeyPath is sha256(projectPath), so a project once started relative gets a fresh runner key under its absolute name at next start (verified-local stays refused). Quality gate also run in the worktree: parity-check.sh PASS, npm run lint OK."
 }
