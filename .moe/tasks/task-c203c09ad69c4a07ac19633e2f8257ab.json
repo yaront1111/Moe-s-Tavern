@@ -85,7 +85,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:58:04.053Z",
-  "updatedAt": "2026-11-04T08:12:19.318Z",
+  "updatedAt": "2026-11-04T08:13:15.746Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:00:29.051Z",
     "plannedStepCount": 4,
@@ -187,5 +187,29 @@
     "moe-vscode/tests/daemon-bindhost.test.cjs",
     "moe-vscode/src/services/MoeDaemonClient.ts"
   ],
-  "completionSummary": "VS Code twin of JetBrains offLoopbackBindRefusal (task-fe811130). MoeDaemonClient.ts gains exported offLoopbackBindRefusal(record, workspace, windows) and isOtherSideOfWsl, constants LOOPBACK_SERVING_BIND_HOSTS {127.0.0.1, 0.0.0.0, ::, wsl}, SHOWABLE_HOST and MAX_PID, and a private daemonBindRefusal(). connect() runs it synchronously before ensureDaemonRunning. On a live same-project daemon (pid integer 1..2**31-1 and alive, projectPath matching or absent, record from this side of WSL) bound off loopback, connect() keeps daemon.json byte-identical, spawns nothing, probes nothing (so it also covers the port collision with another project's daemon on 127.0.0.1), shows one error naming the host (only when it matches SHOWABLE_HOST, otherwise 'an address other than 127.0.0.1'), sets manualDisconnect so no reconnect timer is scheduled, and throws. A configured moe.daemon.port or non-default moe.daemon.host, and a missing, unparseable or oversized daemon.json, keep today's path. bindHost is only compared and shown, never dialed. New tests/daemon-bindhost.test.cjs: 13 rows. At base B1-B4 fail on the refused `start` spawn and the four B5 helper rows fail with 'not a function'; the five B6 guard rows pass at base by design. Five mutants (no int32 cap, no other-side check, no manualDisconnect, no SHOWABLE check, ESRCH read as alive) are each killed. Deliberate choices: the pre-check ignores autoStart, and a pid over int32 reads as null. Out of scope and untouched: dialing bindHost, a WSL-remote window facing a Windows-owned daemon, and task-e07e695c's hunks."
+  "completionSummary": "VS Code twin of JetBrains offLoopbackBindRefusal (task-fe811130). MoeDaemonClient.ts gains exported offLoopbackBindRefusal(record, workspace, windows) and isOtherSideOfWsl, constants LOOPBACK_SERVING_BIND_HOSTS {127.0.0.1, 0.0.0.0, ::, wsl}, SHOWABLE_HOST and MAX_PID, and a private daemonBindRefusal(). connect() runs it synchronously before ensureDaemonRunning. On a live same-project daemon (pid integer 1..2**31-1 and alive, projectPath matching or absent, record from this side of WSL) bound off loopback, connect() keeps daemon.json byte-identical, spawns nothing, probes nothing (so it also covers the port collision with another project's daemon on 127.0.0.1), shows one error naming the host (only when it matches SHOWABLE_HOST, otherwise 'an address other than 127.0.0.1'), sets manualDisconnect so no reconnect timer is scheduled, and throws. A configured moe.daemon.port or non-default moe.daemon.host, and a missing, unparseable or oversized daemon.json, keep today's path. bindHost is only compared and shown, never dialed. New tests/daemon-bindhost.test.cjs: 13 rows. At base B1-B4 fail on the refused `start` spawn and the four B5 helper rows fail with 'not a function'; the five B6 guard rows pass at base by design. Five mutants (no int32 cap, no other-side check, no manualDisconnect, no SHOWABLE check, ESRCH read as alive) are each killed. Deliberate choices: the pre-check ignores autoStart, and a pid over int32 reads as null. Out of scope and untouched: dialing bindHost, a WSL-remote window facing a Windows-owned daemon, and task-e07e695c's hunks.",
+  "commits": [
+    {
+      "sha": "e62cd216a625f55ab8c7f270dadc2076c106a519",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T08:05:57Z",
+      "paths": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-bindhost.test.cjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T08:13:15.746Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T08:05:57Z",
+    "at": "2026-11-04T08:13:15.746Z"
+  }
 }
