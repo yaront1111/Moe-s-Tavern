@@ -84,8 +84,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -97,16 +97,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:38:05.198Z",
-  "updatedAt": "2026-11-04T07:17:07.863Z",
+  "updatedAt": "2026-11-04T07:19:28.719Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:38:18.706Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T07:19:09.005Z",
+    "wallClockMs": 2450299
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "high",
@@ -194,10 +197,11 @@
   "planApprovedAt": "2026-11-04T06:56:35.802Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T06:56:44Z",
-    "at": "2026-11-04T07:00:36.497Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T07:17:04Z",
+    "at": "2026-11-04T07:19:28.719Z"
   },
   "workStartedAt": "2026-11-04T06:57:40.198Z",
   "reviewStartedAt": "2026-11-04T06:59:44.114Z",
@@ -234,5 +238,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T07:19:09.005Z",
+  "reviewCompletedAt": "2026-11-04T07:19:09.005Z",
+  "reviewSummary": "Reviewed completion 821478d6 (on moe/control HEAD 9f6857ee; +28/-20, 4 files, far under 400 LOC). Docs changed lines equal the planned proto-doc.diff; initFiles.ts at 821478d6 cmp-equals proto-initFiles.ts. Re-ran the worker's verification command in a clean --shared clone at HEAD 9f6857ee (outside the repo, so other seats' dirty files cannot skew R2/R3): SHA256SUMS ok; R0 OK (sentence A, sentence B and the moe.get_activity_log PROPOSAL_APPROVED/PROPOSAL_REJECTED call in all three rail sections; no 'MODIFY_RAIL at TASK scope' or 'moe.check_approval' left in governor.reference.md; :129 example fixed); R1 OK (parity-check + npm run lint); R2 OK (only the four named files changed); R3 OK (generate-init-files byte-identical, sha1sum -c ok, vitest initFiles/daemonGitDocs/targetedContextGuidance/qaCommitPolicy/blockedSeatGuidance 5 files, 44 tests pass). Source claims verified in code: util/rails.ts plan check reads only forbiddenPatterns/requiredPatterns (callers submitPlan, amendPlanStep); proposeRail resolves GLOBAL via resolveGlobalRail but EPIC/TASK via findRailIndex over that scope's own list (NOT_FOUND); GLOBAL ADD_RAIL appends to customRules; checkApproval approved = status WORKING; StateManager emits PROPOSAL_APPROVED/REJECTED with the task; getActivityLog filters taskId + eventTypes. SHIPPED_ROLE_BODY_SHAS keeps the three old shas and adds the three new. Untouched: role .md files, qa.reference.md, MCP_SERVER.md, skills, skillFiles.ts, .moe/. Docs-only row: R0 grep gate plus existing role-doc vitest files are the guard per plan. JetBrains/VS Code gates not run (untouched). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
