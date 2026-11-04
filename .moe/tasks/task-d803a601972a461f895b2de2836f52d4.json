@@ -80,7 +80,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -93,16 +93,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:32:11.270Z",
-  "updatedAt": "2026-11-04T15:56:30.051Z",
+  "updatedAt": "2026-11-04T16:00:34.114Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T15:32:23.499Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T16:00:03.083Z",
+    "wallClockMs": 1659584
   },
   "contextFetchedBy": [
     "architect-2a219562",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-25f21f0a"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -186,10 +189,11 @@
   "planApprovedAt": "2026-11-04T15:47:34.018Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T15:47:35Z",
-    "at": "2026-11-04T15:56:30.051Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T15:56:35Z",
+    "at": "2026-11-04T16:00:34.114Z"
   },
   "workStartedAt": "2026-11-04T15:48:56.426Z",
   "reviewStartedAt": "2026-11-04T15:55:31.827Z",
@@ -232,5 +236,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T16:00:03.083Z",
+  "reviewCompletedAt": "2026-11-04T16:00:03.083Z",
+  "reviewSummary": "Option (a) verified on completion 95155388 (on moe/work-2026-10-24 and origin; +34/-30 over 7 files, matches the plan; no size issue).\nRe-runs:\n- I extracted the 3 stored checkRefs byte-exact from the task file (their ' && ' join == task.verification.command). I ran them in a git clone --shared detached at 95155388 with MOE_LAND_TARGET=<sha>^. Results: SCOPE-OK, DOCS-OK, and SNAPSHOT-OK (7 files / 110 tests passed, tsc --noEmit clean). The snapshot qaReject.ts is cmp-identical to the sha.\n- RED mutant: parent qaReject.ts with the new tests gives 1 failure, the new 'ignores a maxReopens key on the task file: the reopen cap stays 3'; the rest pass.\n- Full daemon suite in the snapshot (schema.ts is a shared type, row is isEpicFinal): 293 files, 7625 passed, 24 skipped, 0 failed.\n- qualityGate in the clone: parity-check.sh && npm run lint exit 0.\nDoD:\n1. Code and docs agree. A repo-wide git grep at the sha finds no task.maxReopens / maxReopens?: outside tests, and no IDE client mentions it. Every remaining `maxReopens` is the local effective cap, the reply key, or a test name or comment. SCHEMA `### Reopen cap` and MCP_SERVER `### moe.qa_reject` both say 'there is no per-task override'. The new SCHEMA paragraph matches qaReject.ts: hardCap = cap+1, gated on capReplanAt. 'from REVIEW' is correct.\n2. The reply still returns maxReopens (local unrenamed; Returns line kept). Soft-cap re-plan at 3, hard-cap park at 4 with capReplanAt, and the DoD-twice flip all pass fresh. governanceFeatures adds exceededReopenCap false.\n3. All six named test files pass. Option (a) and why are given in completionSummary.\nCompat: the tool description changes only that phrase, inputSchema is unchanged, and a legacy key loads and is ignored (the new test loads one). No migration was added.\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
