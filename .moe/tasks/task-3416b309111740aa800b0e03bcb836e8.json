@@ -73,14 +73,16 @@
     {
       "stepId": "step-5",
       "description": "Verify and run the adversarial self-review (the adversarial-self-review skill), once, at the end.\n- Run the plan's one verification command fresh, from the task worktree root, and submit its output as complete_task evidence. It runs bash -n, ParseFile, parity sh/ps1, the full postflight-worktree suite on sh (fixture parent under /tmp, because of mkfifo) and PS 5.1, and worktree-landing sh/ps1.\n- The architect's prototype of these legs, run concurrently: 24 min, 77/77 worktree arms and 18/18 landing cases on each engine. Run sequentially, expect about 40-50 min. Launch it detached with a log and an `EXIT=` line (mem:convention-postflight-scratch-harness).\n- Kill only PIDs you started, by recorded PID; never kill by pattern.\nSelf-review checklist:\n1. Can a park loop? Only if report_blocked succeeds without blocking the row, and blockedOnTaskIds [] closes the dependenciesSatisfied path. A failed call exits.\n2. Can a seat-level condition now park rows en masse? Not when HEAD lacks QA_LAND_B (a failed fetch or follow), with an unreadable HEAD, on a git error, or with no context for this task.\n3. Are both twins spelled the same? Same strings, and no new MOE_* code; parity passes.\n4. Did anything set up before the gate need undoing at the continue? It must not.\n5. Do the hunks stay in your own functions? 561d347c (WORKING) and e76f32a0 edit other functions of these files; a landing conflict takes the unlanded route.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T07:01:57.077Z"
+      "note": "The plan's checkRef ran verbatim from the task worktree root, detached, 07:02-07:40Z. Results: bash -n OK; ParseFile 0 errors; parity-check sh and ps1 PASS; postflight-worktree 77 ok / 0 failed on sh (fixture under /tmp) and on PS 5.1; worktree-landing 18 passed / 0 failed on sh and on PS 5.1; EXIT=0. The quality gate (parity-check.sh && npm run lint) also passed.\nAdversarial self-review, all five checklist items:\n(1) No park loop: blockedOnTaskIds [] closes the dependenciesSatisfied path, and a failed report_blocked exits (covered by wt-qa-park-refused).\n(2) Seat-level conditions still stop the seat: no context or a mismatched task, an unreadable HEAD, a git error, and HEAD lacking QA_LAND_B (wt-qa-behind, wt-qa-park-ctx-*).\n(3) The twins share strings, there is no new MOE_* code, and parity passes.\n(4) The gate runs before the baseline, live marker, lease and sidecar, so the continue needs no undo.\n(5) The hunks stay inside our own functions and call sites.\nTheoretical cases, no change: a daemon refusal of report_blocked exits as today; a skipped remote mirror leaves HEAD without QA_LAND_B, so the seat stops as today.",
+      "startedAt": "2026-11-04T07:01:57.077Z",
+      "completedAt": "2026-11-04T07:40:44.668Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -92,12 +94,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:54:04.824Z",
-  "updatedAt": "2026-11-04T07:01:57.077Z",
+  "updatedAt": "2026-11-04T07:42:31.613Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T05:54:07.529Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -114,7 +116,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:50:15.717Z",
@@ -191,5 +194,50 @@
   },
   "planApprovedAt": "2026-11-04T06:50:15.747Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T06:52:20.040Z"
+  "workStartedAt": "2026-11-04T06:52:20.040Z",
+  "reviewStartedAt": "2026-11-04T07:41:07.830Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && T=scripts/tests A=scripts/moe-agent N=\"/mnt/c/Program Files/nodejs/node.exe\" P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass\" && S=$(mktemp -d /mnt/d/moe-scratch/3416-v.XXXXXX) && F=$(mktemp -d /tmp/3416-f.XXXXXX) && cp $T/postflight-fake-proxy.js $S/fp.js && w(){ wslpath -w \"$1\"; } && bash -n $A.sh && $P -Command \"\\$e=\\$null;[void][Management.Automation.Language.Parser]::ParseFile('$(w $A.ps1)',[ref]\\$null,[ref]\\$e);exit \\$e.Count\" && bash $T/parity-check.sh && $P -File \"$(w $T/parity-check.ps1)\" && env $E node $T/postflight-worktree.cjs sh \"$PWD/$A.sh\" $S/fp.js $F \"$BASH\" && env $E \"$N\" \"$(w $T/postflight-worktree.cjs)\" ps1 \"$(w $A.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell && env $E bash $T/worktree-landing.sh && $P -File \"$(w $T/worktree-landing.ps1)\"",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nPASS parity-check.ps1\n[worktree] wt-qa-gate ok\n[worktree] wt-qa-park ok\n[worktree] 77 ok, 0 failed   (sh leg, fixture parent under /tmp)\n...\n[worktree] wt-follow-race ok\n[worktree] wt-qa-gate ok\n[worktree] wt-qa-park ok\n[worktree] codes ok\n[worktree] wt-follow-lock ok\n[worktree] wt-settings ok\n[worktree] 77 ok, 0 failed   (PS 5.1 leg)\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors   (sh)\n... (same 18 PASS lines)\nworktree-landing: 18 passed, 0 failed, 0 errors   (ps1)\nEXIT=0\n(run 2026-11-04 07:02-07:40Z from the task worktree root, detached runner /mnt/d/moe-scratch/3416-run.WYCBk0; bash -n and ParseFile passed first in the && chain)",
+    "reportedAt": "2026-11-04T07:41:07.830Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/plans/2026-10-30-per-task-worktrees.md"
+  ],
+  "completionSummary": "The QA landed gate now parks the row, not the seat, on a row-level miss, in both launchers.\n- sh: new qa_gate_park, and `qa_landed_gate || continue`.\n- ps1: new Invoke-MoeQaGatePark, plus $script:MoeQaGateParked: reset at the loop top, a `continue` at the call site, and added to the do-while condition.\nA row-level miss is one report_blocked with blockedOnTaskIds [] (so the reason's ids are not parsed and the row is always parked), a [WARN] MOE_CONTROL_CHECKOUT_BEHIND line, no CLI, then a fresh pre-flight and claim even under --no-loop/-NoLoop. The cases: no usable completion sha, or a sha that is not a commit or not in HEAD while HEAD holds QA_LAND_B. QA_LAND_B / $script:MoeQaLandB is the target tip the QA pre-flight synced (Sync-MoeLandTarget's return value in ps1).\nSeat-level misses still exit 1 through the unchanged worktree_stop / Stop-MoeWorktreeSeat:\n- no context for this task: get_context failed, or task.id names another task (a new detail string);\n- an unreadable HEAD;\n- --is-ancestor exiting with something other than 0/1;\n- a miss while HEAD lacks QA_LAND_B;\n- a failed park report_blocked (no second call).\nThe existing detail strings are byte-identical, and there is no new MOE_* code.\nHarness:\n- fake-proxy knobs FAKE_CTX_LANDING_FROM_CLAIM and FAKE_REPORT_BLOCKED_FAIL (default off);\n- postflight-worktree.cjs: qaRun/qaParked helpers; wt-qa-gate's six row-level cases now assert park-and-continue, and wt-qa-behind is claim-bounded;\n- a new wt-qa-park arm: park, then the second claim reviews `Review commit <c>`, plus the refused park and ctx error/mismatch stops.\nRED on the pre-edit wrappers, sh and PS 5.1: wt-qa-gate (wt-qa-none exit 1) and wt-qa-park (exit 1) both fail. GREEN on both.\nDocs: the scripts/CLAUDE.md Control-follow sentence, and design doc §6 item 4.\nAll six files are byte-identical to the architect's prototype diff (code.diff/docs.diff). Full checkRef: postflight-worktree 77/77 on sh and PS 5.1, worktree-landing 18/18 on sh and ps1, parity PASS. ",
+  "commits": [
+    {
+      "sha": "16e14abd8819bbf5f354a677f38037b3a04511b4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T06:50:50Z",
+      "paths": [
+        "docs/plans/2026-10-30-per-task-worktrees.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T07:42:31.613Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T06:50:50Z",
+    "at": "2026-11-04T07:42:31.613Z"
+  }
 }
