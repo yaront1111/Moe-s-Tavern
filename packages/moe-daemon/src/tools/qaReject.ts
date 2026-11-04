@@ -2,7 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { QAIssue, QAIssueType, RejectionDetails, RejectionHistoryEntry } from '../types/schema.js';
 import { MAX_REOPENS_DEFAULT } from '../types/schema.js';
-import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
+import { missingRequired, invalidInput, notFound, invalidState, notAllowed } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 import { resetPlanStepsToPending } from '../util/reopen.js';
 import { bumpEffort, bumpTier, defaultModel, isEffort, isTier, planSizeFloor, tierEffort } from '../util/routing.js';
@@ -19,7 +19,7 @@ const VALID_ISSUE_TYPES: QAIssueType[] = [
 export function qaRejectTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_reject',
-    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the task\'s reopen cap (task.maxReopens, default 3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH.',
+    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the task\'s reopen cap (task.maxReopens, default 3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human (needsHumanReview), and a row so parked refuses any supplied workerId with NOT_ALLOWED. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -132,6 +132,15 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
 
       if (task.status !== 'REVIEW') {
         throw invalidState('Task', task.status, 'REVIEW');
+      }
+
+      // A row the qa_reject hard cap parked for a human (needsHumanReview) is
+      // a human's call. The unassigned park passes assertWorkerOwns and
+      // assertContextFetched, so refuse any supplied workerId here, before any
+      // write, the way claim_next_task fences the same row. The flag is read
+      // before this call's own write, so the cap's first park still lands.
+      if (task.needsHumanReview === true && params.workerId) {
+        throw notAllowed('qa_reject', `Task ${task.id} is parked for human review: its reopen budget and the architect re-plan are exhausted. A human must reopen or approve it; an agent seat cannot.`);
       }
 
       assertWorkerOwns(task, params.workerId);

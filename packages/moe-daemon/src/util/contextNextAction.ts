@@ -54,6 +54,9 @@ export function contextNextAction(state: StateManager, task: Task | null, worker
       recommendedSkill: reopenedSkill ?? recommendSkillFor('worker', 'before_complete_task'),
     };
   }
+  // A row parked for a human is no seat's verdict: qa_approve and qa_reject
+  // refuse a workerId caller on it, so offer no verdict hint.
+  if (task.status === 'REVIEW' && task.needsHumanReview === true) return undefined;
   if (task.status === 'REVIEW') {
     return {
       tool: 'moe.qa_approve',

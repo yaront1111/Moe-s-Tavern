@@ -90,7 +90,7 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
     // inside that runExclusive; before it the handler only validates input,
     // checks the caller's role for force and captures.
     blocking: true,
-    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Ownership: a caller that supplies workerId may release only the row it holds (RELEASE_NOT_ASSIGNEE otherwise); only an omitted workerId (a human or the board) may release a row another worker holds, and only between steps (STEP_LEASE_HELD while a step is IN_PROGRESS) unless force; a supplied workerId that is blank or not a string is refused INVALID_INPUT. NEVER release on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. One exception to in-place routing: the 3rd release in 24h whose handoffNote.whatIsDone reports no progress ("nothing"/"none"/"n/a") parks the task to BACKLOG for human triage and returns cascadeTriggered:true (disable via settings.refusalCascadeAutoBacklog:false). To pull a task OUT of the agent pool yourself, have a human/governor use moe.set_task_status → BACKLOG.',
+    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Ownership: a caller that supplies workerId may release only the row it holds (RELEASE_NOT_ASSIGNEE otherwise); only an omitted workerId (a human or the board) may release a row another worker holds, and only between steps (STEP_LEASE_HELD while a step is IN_PROGRESS) unless force; a supplied workerId that is blank or not a string is refused INVALID_INPUT. A row the qa_reject hard cap parked for human review (needsHumanReview) refuses any supplied workerId with NOT_ALLOWED; only the workerId-less human/board path unparks it. NEVER release on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. One exception to in-place routing: the 3rd release in 24h whose handoffNote.whatIsDone reports no progress ("nothing"/"none"/"n/a") parks the task to BACKLOG for human triage and returns cascadeTriggered:true (disable via settings.refusalCascadeAutoBacklog:false). To pull a task OUT of the agent pool yourself, have a human/governor use moe.set_task_status → BACKLOG.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -249,6 +249,12 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           // unpark paths for a qa_reject-capped task (see schema.ts).
           const correctedStatus = task.status === 'WORKING' ? nextStatusForRelease(task) : task.status;
           const unparking = task.needsHumanReview === true;
+          // The unpark is a human path: a seat (any supplied workerId) cannot put
+          // a row the qa_reject hard cap parked back into the QA queue. Refused
+          // before any write; the /ws RELEASE_TASK path sends no workerId.
+          if (unparking && params.workerId) {
+            throw notAllowed('release_task', `Task ${task.id} is parked for human review; only a human (no workerId) can release it back into the QA queue.`);
+          }
           if (correctedStatus === task.status && !normalizedHandoff && !unparking) {
             return {
               success: true,
