@@ -48,8 +48,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -61,7 +61,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:43.052Z",
-  "updatedAt": "2026-11-04T10:41:09.648Z",
+  "updatedAt": "2026-11-04T11:52:50.973Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T09:33:09.500Z",
@@ -71,7 +71,9 @@
     "firstClaimAt": "2026-11-04T09:34:51.074Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T11:52:16.285Z",
+    "wallClockMs": 8245211
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -182,9 +184,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T09:42:38Z",
-    "at": "2026-11-04T10:40:17.246Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T10:40:55Z",
+    "at": "2026-11-04T11:52:50.973Z"
+  },
+  "completedAt": "2026-11-04T11:52:16.285Z",
+  "reviewCompletedAt": "2026-11-04T11:52:16.285Z",
+  "reviewSummary": "Reviewed completion 7811de41 (on moe/work-2026-10-24; git show --stat: only scripts/tests/postflight-worktree.cjs, +5/-2). The diff adds the two WHY lines and the ignored_memory_patterns [\"_archive/.*\"] pair to serenaBlock(), plus one comment line. moe-serena-ignore.mjs and serena-ignore.test.mjs are unchanged, and the expectation stays a literal.\n\nVerified on a git-archive snapshot of 7811de41 (the archived blob sha1 matches the committed blob):\n- Literal vs script: a node check shows serenaBlock(pats) equals renderBlock(pats, ['_archive/.*']) and differs from renderBlock(pats, null).\n- Mutant: dropping the pair makes serena-ignore and serena-ignore-wt FAIL again on sh (1 ok, 2 failed), so the expectation is load-bearing.\n- DoD 1: MOE_WORKTREE_ONLY=serena-ignore,serena-ignore-off,serena-ignore-wt prints '[worktree] 3 ok, 0 failed' on sh (WSL bash) and on Windows PowerShell 5.1 via node.exe.\n- DoD 2, sh: full bash scripts/tests/postflight.sh exit 0, '[worktree] 77 ok, 0 failed', no worktree FAILED line, PASS postflight.sh.\n- DoD 2, ps1: full postflight.ps1 under 5.1 reads '[worktree] 77 ok, 0 failed' and runs on through every later section. It stopped at the vm-route's validators.ts read only because my snapshot omitted that file. With it added, postflight-vm-route.ps1 on 5.1 exits 0 (PASS). I did not re-run the whole ps1 script as one process.\n\nHarness notes: MOE_POSTFLIGHT_TIMEOUT_SEC=180. My first sh run failed Scenario W because my own launch left SIGINT ignored; the rerun with SIGINT live passed.",
+  "requiredCheckAtDone": null
 }

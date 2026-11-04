@@ -27,19 +27,25 @@
     {
       "stepId": "step-2",
       "description": "moe-agent.ps1 twin: keep the pair in script scope, and set it in `$env:` only around the wrapper's own helper calls. A native process copies the environment when it starts, so the CLI, the heartbeat job and every later child never see it (lines at 500e3f29; re-anchor by text).\n(a) Start-MoeUsageReceipt (:1235-1261). On entry, clear `$env:MOE_USAGE_RECEIPT_FILE`, `$env:MOE_USAGE_CONTEXT_JSON`, `$script:MoeUsageReceiptFile` and `$script:MoeUsageContextJson`. `$env:MOE_USAGE_CONTEXT_JSON` holds the supplied @{...} JSON only for the usage-session.mjs call. On success, set `$script:MoeUsageReceiptFile = [string]$usageSession.file` and `$script:MoeUsageContextJson = $usageSession.context | ConvertTo-Json -Compress` (exactly today's values), then run usage-start through Invoke-MoeUsageHelper. The catch clears both script variables and keeps `Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE'`, so error handling stays fail-open. The finally clears both `$env:` names, then restores `$global:LASTEXITCODE` as today.\n(b) Add `function Invoke-MoeUsageHelper([scriptblock]$Call)` after Start-MoeUsageReceipt and before `# End usage receipt helpers.` (usage-launcher.test.mjs runs that block as its preamble). It sets both `$env:` names from the script variables, runs `& $Call`, and clears both in `finally`. Add a comment giving the why and the twin (the sh helper calls' MOE_USAGE_* prefixes).\n(c) In the `$parseStreamJson` \"result\" branch (:11449), wrap the existing `$line | & node $promptCacheHelper claude-stream | Select-Object -Skip 1 | ForEach-Object { Write-Host $_ }` in `Invoke-MoeUsageHelper { ... }`. The scriptblock reads `$line` and `$promptCacheHelper` through dynamic scope.\n(d) In the claude launch `finally` (:11493), test `$script:MoeUsageReceiptFile` instead of `$env:MOE_USAGE_RECEIPT_FILE`. Run the `'' | & node $promptCacheHelper claude-stream | Out-Null` fallback through Invoke-MoeUsageHelper, inside the existing try/catch.\n(e) In the codex exec `ForEach-Object -Begin` (:10885-10901), after the TOOL-witness lines, add `if ($script:MoeUsageReceiptFile) { $psi.EnvironmentVariables['MOE_USAGE_RECEIPT_FILE'] = $script:MoeUsageReceiptFile; $psi.EnvironmentVariables['MOE_USAGE_CONTEXT_JSON'] = $script:MoeUsageContextJson }`. Put no `else` anywhere in this block: two tests cut it at the first `            } else {` after the codex exec line, and a deeper-indented one matches too.\n(f) At the main-loop top (:9699-9701), also reset both script variables to `$null`.\nKeep byte-identical: `function Start-MoeUsageReceipt`, `# End usage receipt helpers.`, `            $parseStreamJson = {`, `            # Usage receipt launch boundary.`, `                Start-MoeUsageReceipt 'codex' 'headless'`, the codex `                & {` line and its `Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$script:cliRoot\" @codexSandboxArgs \"$shortPrompt\"` line, and the `Remove-MoeAgentGitGuard` tail. Add no new MOE_* code or env name (parity). Keep the UTF-8 BOM, and ParseFile must report 0 errors.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-04T11:48:09.514Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "moe-agent.ps1 (+35/-8): Start-MoeUsageReceipt now keeps the pair in $script:MoeUsageReceiptFile/$script:MoeUsageContextJson, cleared on entry and in the catch. $env:MOE_USAGE_CONTEXT_JSON holds the supplied JSON only for usage-session.mjs. usage-start runs through the new Invoke-MoeUsageHelper, and the finally clears both $env names and then restores LASTEXITCODE. Invoke-MoeUsageHelper([scriptblock]$Call), with a why/twin comment, sits before `# End usage receipt helpers.`. The $parseStreamJson result branch and the claude finally fallback (which now tests $script:MoeUsageReceiptFile) go through it. The codex -Begin block adds both $psi entries in a one-line if, with no else. The loop top resets the script vars. All anchors are unchanged. ParseFile 0 errors, BOM ef bb bf. Windows node.exe usage-launcher + prompt-cache-launcher: 126/126 pass (= baseline).",
+      "startedAt": "2026-11-04T11:48:09.514Z",
+      "completedAt": "2026-11-04T11:51:22.456Z"
     },
     {
       "stepId": "step-3",
       "description": "scripts/tests/usage-launcher.test.mjs: pin the scope for each twin. Engines are /bin/bash under Linux node, and powershell.exe, pwsh.exe and Git Bash under Windows node. Write the test first and prove it RED (below).\n(a) Add a fake-provider prelude. It writes `<MOE_TEST_DIR>/cli-env.json` = `{receipt: process.env.MOE_USAGE_RECEIPT_FILE ?? null, context: process.env.MOE_USAGE_CONTEXT_JSON ?? null}`. Then it runs a CHILD, `spawnSync(process.execPath, [path.join(process.env.MOE_TEST_SCRIPTS, 'prompt-cache.mjs'), 'usage-start', '<provider>'], {stdio: 'ignore'})`. That child is the task-03418dc2 path: a fixture usage helper appending to whatever receipt it inherits. Prepend the prelude to the fake sources of 'real Claude launch' and 'real Codex launch' (both withResult arms). Assert cli-env.json is `{receipt: null, context: null}`. The existing `receipts.length === 2` assertion (pending + reported/missing, one launchId) then proves both halves: the child appended nothing, and the wrapper's own writes still landed.\n(b) Add a new per-engine test, 'interactive Claude launch keeps the receipt from the CLI and its child'. It uses the claude cut with no print args (sh `PRINT_ARGS=()`, ps1 `$usePrintMode=$false` and `$printArgs=@()`), the same prelude, and exitCode 23. Assert CHILD_EXIT=23, cli-env.json both null, and exactly one receipt row, with coverage 'pending' and launchMode 'interactive'.\n(c) In 'usage metadata is fresh for each task and resume', after the first start, print what a child of the wrapper would inherit and assert both values are empty. ps1: `$env:MOE_USAGE_RECEIPT_FILE` and `$env:MOE_USAGE_CONTEXT_JSON`. sh: a single-quoted `\"$NODE_CMD\" -e` probe printing both. This pins that the post-flight gate and every other wrapper child inherit nothing.\nKeep run(), between(), guard() and every anchor unchanged. RED proof: a scratch copy holding the base launchers (`git show <base>:scripts/moe-agent.{sh,ps1}`) fails (a)-(c) on every engine, because cli-env.json carries the receipt path and the receipt has 3 rows. Quote that in complete_task.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/usage-launcher.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T11:51:27.080Z"
     },
     {
       "stepId": "step-4",
@@ -81,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:06:21.135Z",
-  "updatedAt": "2026-11-04T11:48:09.514Z",
+  "updatedAt": "2026-11-04T11:51:27.080Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:57.567Z",
@@ -91,7 +97,7 @@
     "firstClaimAt": "2026-11-04T10:57:11.313Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -102,7 +108,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T11:23:55.643Z",
