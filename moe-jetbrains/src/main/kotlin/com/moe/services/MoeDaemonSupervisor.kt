@@ -41,6 +41,8 @@ class MoeDaemonSupervisor(
     private val installedRoot: () -> File? = { RuntimeSelectionPolicy.installedRoot() },
     private val nodeExecutable: (() -> String?)? = null,
     private val processLookup: (Long) -> ProcessHandle? = { ProcessHandle.of(it).orElse(null) },
+    // MOE_DAEMON_COMMAND, injected by tests because a JVM cannot change its own environment.
+    private val daemonCommandOverride: () -> String? = { System.getenv("MOE_DAEMON_COMMAND") },
     private val replaceConfirmer: (String, Int) -> Boolean = ::confirmDaemonReplacement,
     private val runStop: (ProcessBuilder) -> Int? = { runStopProcess(it, processStarter) },
     private val onDispatchThread: () -> Boolean = { ApplicationManager.getApplication()?.isDispatchThread == true },
@@ -187,7 +189,13 @@ class MoeDaemonSupervisor(
 
         val projectBasePath = basePath.ifBlank { return false }
         val isProtected = profile() == RuntimeProfile.PROTECTED
-        val direct = if (isProtected) protectedCommandOrRefuse(projectBasePath) ?: return false else buildDirectDaemonCommand(projectBasePath)
+        // A set MOE_DAEMON_COMMAND wins over every daemon script; the protected profile never reads the environment.
+        val overrideCommand = if (isProtected) null else daemonCommandOverrideOrNull()
+        val direct = when {
+            isProtected -> protectedCommandOrRefuse(projectBasePath) ?: return false
+            overrideCommand != null -> null
+            else -> buildDirectDaemonCommand(projectBasePath)
+        }
         // This plugin is about to start its own daemon, which serves the plugin's bundled docs.
         syncDocs(File(projectBasePath, ".moe"), upgrade = true)
 
@@ -195,7 +203,7 @@ class MoeDaemonSupervisor(
             val pb = if (direct != null) {
                 ProcessBuilder(direct)
             } else {
-                val command = buildDaemonCommand(projectBasePath)
+                val command = buildDaemonCommand(projectBasePath, overrideCommand)
                 if (isWindows()) {
                     ProcessBuilder("cmd", "/c", command)
                 } else {
@@ -670,33 +678,51 @@ class MoeDaemonSupervisor(
         }
     }
 
-    internal fun buildDaemonCommand(basePath: String): String {
-        val raw = System.getenv("MOE_DAEMON_COMMAND")?.trim()
-        if (!raw.isNullOrBlank()) {
-            val normalized = raw.trim().trim('"')
-            if (raw.contains("{projectPath}")) {
-                return raw.replace("{projectPath}", basePath)
+    /**
+     * The shell command that starts the daemon. A non-blank [overrideCommand] (MOE_DAEMON_COMMAND) is rewritten:
+     * `{projectPath}` is substituted, and a command carrying it or `--project` is otherwise used as written. Any other
+     * command gets `start` unless a word after the first is a daemon subcommand, then `--project "<basePath>"`.
+     * `start` is only appended: the daemon reads its subcommand only as its first argument (packages/moe-daemon
+     * parseArgs, `args[0] || 'start'`), so nothing appended fixes a command with arguments of its own, and
+     * CONFIGURATION.md tells the operator to name it. WSL agent mode appends ` --host wsl` unless a word of the
+     * command is `--host`. With no override the installed start-daemon.cmd, else `moe-daemon start`, is used.
+     */
+    internal fun buildDaemonCommand(basePath: String, overrideCommand: String? = daemonCommandOverrideOrNull()): String {
+        val hostSuffix = if (wslAgentsEnabled()) " --host $WSL_BIND_HOST" else ""
+        val raw = overrideCommand?.trim()?.takeIf { it.isNotEmpty() }
+        if (raw != null) {
+            val words = commandWords(raw)
+            val command = when {
+                raw.contains("{projectPath}") -> raw.replace("{projectPath}", basePath)
+                raw.contains("--project") -> raw
+                words.drop(1).any { it in daemonSubcommands } -> "$raw --project \"$basePath\""
+                else -> "$raw start --project \"$basePath\""
             }
-            val hasProject = raw.contains("--project")
-            if (!hasProject) {
-                val needsStart = normalized.endsWith(".cmd", true) ||
-                    normalized.endsWith(".ps1", true) ||
-                    normalized.endsWith(".js", true) ||
-                    normalized.equals("moe-daemon", true)
-                val withStart = if (needsStart && !raw.contains(" start")) "$raw start" else raw
-                return "$withStart --project \"$basePath\""
-            }
-            return raw
+            return if ("--host" in words) command else command + hostSuffix
         }
 
         val installed = resolveInstalledDaemonCommand(basePath)
-        val hostSuffix = if (wslAgentsEnabled()) " --host $WSL_BIND_HOST" else ""
         if (installed != null) {
             return installed + hostSuffix
         }
 
         return "moe-daemon start --project \"$basePath\"$hostSuffix"
     }
+
+    private fun daemonCommandOverrideOrNull(): String? = try {
+        daemonCommandOverride()?.trim()?.takeIf { it.isNotEmpty() }
+    } catch (ex: Exception) {
+        log.warn("Cannot read MOE_DAEMON_COMMAND; starting the daemon without it", ex)
+        null
+    }
+
+    // The daemon CLI's subcommands: the word cases of main() in packages/moe-daemon/src/index.ts, plus accounts.
+    private val daemonSubcommands =
+        setOf("start", "stop", "status", "init", "doctor", "version", "accounts", "check-architecture", "_run")
+
+    /** The command's words as a shell splits them, quotes removed: a quoted path with spaces is one word. */
+    private fun commandWords(command: String): List<String> =
+        Regex("\"[^\"]*\"|'[^']*'|\\S+").findAll(command).map { it.value.trim('"', '\'') }.toList()
 
     private fun buildDirectDaemonCommand(basePath: String): List<String>? {
         val script = resolveLocalDaemonScript(basePath) ?: return null

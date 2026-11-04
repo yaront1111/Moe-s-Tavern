@@ -571,7 +571,7 @@ class MoeDaemonSupervisorTest {
             val supervisor = MoeDaemonSupervisor(
                 root.absolutePath, "Test Project",
                 processStarter = { started += it.command().toList(); FakeProcess() },
-                wslAgentsEnabled = { wsl }, profile = { RuntimeProfile.LEGACY }
+                wslAgentsEnabled = { wsl }, profile = { RuntimeProfile.LEGACY }, daemonCommandOverride = { null }
             )
             assertTrue("wsl=$wsl", supervisor.ensureDaemonRunning())
             val cmd = started.single()
@@ -584,12 +584,11 @@ class MoeDaemonSupervisorTest {
 
     @Test
     fun `W2 legacy shell start command appends --host wsl only in WSL agent mode`() {
-        // MOE_DAEMON_COMMAND is the operator's verbatim command and never carries --host.
-        Assume.assumeTrue(System.getenv("MOE_DAEMON_COMMAND").isNullOrBlank())
         listOf(false, true).forEach { wsl ->
             val root = initializedRoot("w2-$wsl")
             val supervisor = MoeDaemonSupervisor(
-                root.absolutePath, "Test Project", wslAgentsEnabled = { wsl }, profile = { RuntimeProfile.LEGACY }
+                root.absolutePath, "Test Project", wslAgentsEnabled = { wsl }, profile = { RuntimeProfile.LEGACY },
+                daemonCommandOverride = { null }
             )
             val cmd = supervisor.buildDaemonCommand(root.absolutePath)
             // Both the installed start-daemon.cmd branch and the `moe-daemon start` fallback end with the suffix.
