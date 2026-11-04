@@ -79,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:30:26.280Z",
-  "updatedAt": "2026-11-03T23:57:23.195Z",
+  "updatedAt": "2026-11-04T00:08:15.377Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:42:40.480Z",
     "plannedStepCount": 4,
@@ -179,5 +179,30 @@
     "packages/moe-daemon/src/state/sweeps.ts",
     "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
   ],
-  "completionSummary": "runBlockedTimeoutSweep's worker IDLE write now passes the worker's pre-sweep lastActivityAt (3-line comment + one property in sweeps.ts), matching the REVIEW self-heal and reconcile-window sweep. A timed-out seat no longer reads alive, purgeAllWorkers deletes it, and the same pass's Layer-3 prune removes it once it owns nothing. New blockedTimeoutPresence.test.ts (2 tests; RED in snapshot before the fix: 2 failed). dependencyUnblock.test.ts's old end-state assertion (corpse kept as IDLE) now asserts getWorker(...) is null. Mutants in a snapshot copy: M1 drop the line -> both new tests fail; M2 drop the WORKER_TIMEOUT arg -> test 1 fails at the activity-event assertion; M3 restore old assertion -> TypeError on null. `lastActivityAt: state.workers.get(worker.id)?.lastActivityAt` is an EQUIVALENT mutant today (passes), so not counted. All files byte-identical to the architect's references."
+  "completionSummary": "runBlockedTimeoutSweep's worker IDLE write now passes the worker's pre-sweep lastActivityAt (3-line comment + one property in sweeps.ts), matching the REVIEW self-heal and reconcile-window sweep. A timed-out seat no longer reads alive, purgeAllWorkers deletes it, and the same pass's Layer-3 prune removes it once it owns nothing. New blockedTimeoutPresence.test.ts (2 tests; RED in snapshot before the fix: 2 failed). dependencyUnblock.test.ts's old end-state assertion (corpse kept as IDLE) now asserts getWorker(...) is null. Mutants in a snapshot copy: M1 drop the line -> both new tests fail; M2 drop the WORKER_TIMEOUT arg -> test 1 fails at the activity-event assertion; M3 restore old assertion -> TypeError on null. `lastActivityAt: state.workers.get(worker.id)?.lastActivityAt` is an EQUIVALENT mutant today (passes), so not counted. All files byte-identical to the architect's references.",
+  "commits": [
+    {
+      "sha": "0f56d3a7894ed95126b5787527015e1af8228a8a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T23:54:44Z",
+      "paths": [
+        "packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/state/sweeps.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-04T00:08:15.377Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-33f67e5b@2026-11-03T23:54:44Z",
+    "at": "2026-11-04T00:08:15.377Z"
+  }
 }

@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,16 +111,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:29:53.656Z",
-  "updatedAt": "2026-11-04T00:06:01.947Z",
+  "updatedAt": "2026-11-04T00:07:57.476Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:37:53.856Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T00:07:57.473Z",
+    "wallClockMs": 1803617
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-fdb2af60"
+    "worker-fdb2af60",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -249,5 +252,9 @@
     "kind": "completion",
     "sessionId": "worker-fdb2af60@2026-11-03T23:48:17Z",
     "at": "2026-11-04T00:06:01.947Z"
-  }
+  },
+  "completedAt": "2026-11-04T00:07:57.473Z",
+  "reviewCompletedAt": "2026-11-04T00:07:57.473Z",
+  "reviewSummary": "Reviewed completion 7638ad06 (on moe/work-2026-10-24 == control HEAD; touched files clean vs commit; 5 files, +169/-31, ~138 net). Re-ran task.verification verbatim in a git-archive snapshot (no npm in checkout): exit 0, 5 files / 142 tests passed, 'unblockOwner ok'; structural single-predicate guard passed. Own mutation check: pre-commit setTaskStatus.ts restored in the snapshot -> new suite 8 failed / 4 passed (corpse flow, ghost/DEAD/repointed/IDLE-unpointed/REVIEW ghost/PLANNING ghost/missing-target fail; genuine resource hold, BLOCKED-pointing, IDLE-pointing, unassigned pass), so tests are non-vacuous. tsc --noEmit in snapshot: exit 0. DoD1: real claim -> report_blocked(resourceId) -> aged seat -> real checkBlockedTimeouts -> set_task_status (no workerId); asserts assignedWorkerId null, isTaskClaimable true, phases [[1,'running']] before/after sweep then [[1,'closed']], hasActiveTaskAssignment(corpse) false. DoD2: genuine-hold control keeps assignee+running attempt; owner table uses exact toBe; parkedHoldOwner is the one exported predicate used by runDependencyUnblock and setTaskStatus; dependencyUnblock.test.ts and attemptHandback pass unchanged. DoD3: docs/MCP_SERVER.md change confined to ### moe.set_task_status (Attempts + Assignment), states the alive-and-pointing rule; /ws sentence truthfully notes the board twin (follow-up task-21702095). Scope = approved five files; BLOCKED-entry arm, resourceStore, sweeps, /ws untouched. ponytail pass: nothing to cut. Not run: JetBrains gate / full daemon suite (not required by the DoD).",
+  "requiredCheckAtDone": null
 }
