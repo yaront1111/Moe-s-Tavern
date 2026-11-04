@@ -51,8 +51,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -69,12 +69,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:53:39.529Z",
-  "updatedAt": "2026-11-04T13:03:25.171Z",
+  "updatedAt": "2026-11-04T13:10:00.255Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T11:53:43.799Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T13:09:35.663Z",
+    "wallClockMs": 4551864
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -150,10 +152,11 @@
   "planApprovedAt": "2026-11-04T12:12:37.934Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T12:55:00Z",
-    "at": "2026-11-04T13:02:41.344Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T13:03:09Z",
+    "at": "2026-11-04T13:10:00.255Z"
   },
   "workStartedAt": "2026-11-04T12:56:11.814Z",
   "reviewStartedAt": "2026-11-04T13:01:49.041Z",
@@ -184,5 +187,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T13:09:35.663Z",
+  "reviewCompletedAt": "2026-11-04T13:09:35.663Z",
+  "reviewSummary": "Reviewed completion ecba01b5 (on moe/work-2026-10-24; +19/-3, one file scripts/tests/postflight-vm-route.ps1, within scope). Diff: top-level Get-VmcSha256 (.NET SHA256 over ReadAllBytes, upper-case hex, IOException retry x5, Dispose in finally) above Get-VmcControl; the 3 cmdlet calls in Get-VmcControl/Get-VmcWFiles/Get-VmcWIndex replaced (absolute args); 'abc' known-answer check after the New-Item $hooks line. Nothing else touched; moe-agent.ps1 untouched.\nDoD1: grep -c Get-FileHash on the file = 0; file is ASCII, 0 CR, no BOM, git diff --check clean.\nDoD2+3: re-ran checkRefs[0] verbatim from HEAD=ecba01b5 (git-archive snapshot /mnt/d/moe-scratch/tfa0f.ivAN, MOE_POSTFLIGHT_TIMEOUT_SEC=360): CHAIN_EXIT=0, and all 3 legs (pwsh->node->powershell 5.1; pwsh -File; pwsh->powershell -File) print the exact line 'PASS postflight-vm-route.ps1'.\nNegative control: parent ecba01b5^ (3 cmdlet hits) stops leg a at '[vm candidate] R1' with \"Get-FileHash is not recognized\", rc=1, so the bug reproduces without the fix.\nMutants (scratch snapshots): helper body `return ''` and a `.ToLower()` variant each exit 1 in seconds with 'VM ROUTE FAILED ([vm candidate] sha256)' (acceptance criterion 4).\nGate: parity-check.sh PASS; npm run lint OK.\nNot run: full postflight.ps1 5.1 end to end (DoD scopes verification to this harness file; test-only change). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
