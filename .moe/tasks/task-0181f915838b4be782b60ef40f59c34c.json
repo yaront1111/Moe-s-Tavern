@@ -9,10 +9,45 @@
     "The diff changes only moe-vscode/src/panels/SettingsPanel.ts, plus at most one existing test file."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-67c762f6",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (DoD 2). Append one test, C6, at the end of moe-vscode/tests/settings-policy-corpus.test.cjs. Use the session's own editing tool (Claude Edit/Write, or apply_patch on a codex exec seat). Never use a shell write or a subagent: either leaves no TOOL witness and the path is HELD at landing.\n\nReuse the file's existing rowsOf() (effectivePolicyRows → worktreeLandingRow → worktreeTarget, transpiled into a vm). Add no new harness. Write it as:\n\ntest('C6: in worktree mode a consolidationBranch holding *, ? or [ lands on main; any other branch, ] included, lands as written', () => {\n    const landing = consolidationBranch => rowsOf({ worktreeMode: 'on', consolidationBranch }).find(row => row.label === 'Landing branch');\n    const glob = 'A glob consolidationBranch is not a landing target; each completion lands on main.';\n    const literal = 'Each completion lands as one merge-tree squash commit on this branch.';\n    for (const branch of ['moe/work-*', 'release/v?', 'release/[ab]', '[']) {\n        assert.deepStrictEqual(landing(branch), { label: 'Landing branch', value: 'main', detail: glob }, branch);\n    }\n    for (const branch of ['release/train', 'release/a]b', 'feature/x-1']) {\n        assert.deepStrictEqual(landing(branch), { label: 'Landing branch', value: branch, detail: literal }, branch);\n    }\n});\n\nWhy it is needed: the shared corpus pins only `*` in worktree mode (row P14). A lint \"fix\" that drops ? or [ from the class, or adds ], would still pass C1-C5.\n\nThe change is behavior-neutral, so C6 passes on the unfixed base too. It is a regression pin, not a red test. Leave the corpus JSON moe-jetbrains/src/test/resources/client-settings-policy.json alone: JetBrains replays the same corpus, and this file's header says the corpus is only read here.\n\ntests/*.cjs are not linted (`eslint src --ext ts`), so this file does not affect DoD 1. See mem:gotcha-vscode-settings-panel-test-patterns.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/tests/settings-policy-corpus.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT (DoD 1 and 2). In moe-vscode/src/panels/SettingsPanel.ts:73 (const worktreeTarget), change the regex literal `/[*?\\[]/` to `/[*?[]/` with the session's own editing tool. That is the only edit, one character.\n\nInside a character class, [ needs no escape, so the class still matches exactly *, ? and [. The `branch !== ''` guard and the 'main' fallback stay as they are. Keep the doc comment on :72.\n\nError handling: worktreeTarget is a pure string function with no IO, so the edit adds no failure path. effectivePolicyRows keeps its never-throws contract for any JSON shape, which C5 pins: a non-string or blank consolidationBranch still falls back to the defaults.\n\nDo not:\n- add an eslint-disable comment;\n- rewrite the test as new RegExp or an includes() chain;\n- touch packages/moe-daemon/src/state/validators.ts:357 resolveWorktreeTarget. It holds the same `/[*?\\[]/`, but DoD 3 limits the diff and no gate lints it with this rule.\n\nPlanning evidence at 76e261b3, in a Linux snapshot: whole-tree `eslint src --ext ts` exits 1 with exactly one problem, `73:75 error Unnecessary escape character: \\[ no-useless-escape`. With this change it exits 0, and settings-policy-corpus passes 6/6 with C6.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY (DoD 1, 2 and 3), once. From the task worktree root run exactly:\n\nS=$(mktemp -d /tmp/moe-0181-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp moe-vscode/src/panels/SettingsPanel.ts \"$S/moe-vscode/src/panels/SettingsPanel.ts\" && cp moe-vscode/tests/settings-policy-corpus.test.cjs \"$S/moe-vscode/tests/settings-policy-corpus.test.cjs\" && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund >/dev/null && npm run lint && npm run compile && npm test'\n\nIt must exit 0. It runs CI's order: the ci.yml step \"Test VS Code daemon startup\" runs npm ci, then lint, compile and test. Because the legs are chained with &&, exit 0 means `npm run lint` (eslint over all of src) exited 0. Any failing leg, a failed npm ci included, stops the chain with a non-zero exit. Report that exit and its output; never rerun a narrower command in its place.\n\nWhy this recipe:\n- The snapshot is the whole repo, because the suite reads moe-jetbrains files (mem:gotcha-vscode-tests-need-full-repo-snapshot).\n- It is Linux-native, so compile resolves TS7 (mem:gotcha-vscode-gate-from-wsl).\n- Never run npm ci, lint, compile or test in the shared control checkout.\n\nThe fresh output is the complete_task verification evidence. The completion summary must quote the command and its exit code (DoD 1). It must also show that `git status --porcelain` in the worktree lists only moe-vscode/src/panels/SettingsPanel.ts and moe-vscode/tests/settings-policy-corpus.test.cjs (DoD 3).\n\nKeep $S for the self-review step, then rm -rf it. Kill only PIDs you started.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/tests/settings-policy-corpus.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then check:\n- Is the diff exactly the one-character regex change plus C6? There must be no eslint-disable, no other src file, no corpus JSON and no validators.ts.\n- Does the class still match exactly *, ? and [ and nothing else (not ] and not \\)? Does an empty branch still read main?\n- Is C6 mutation-resistant? In the gate snapshot $S, never in the worktree, swap the snapshot copy's literal for each of `/[*?]/`, `/[*[]/` and `/[*?[\\]]/` in turn. After each swap run `node --test tests/settings-policy-corpus.test.cjs` under the same env -i PATH. Each must fail C6, then restore the copy. The architect's planning run got this result: the original and the fix pass, those three fail only C6, and `/[?[]/` fails C1 and C6.\n- Did lint run over the whole tree (`eslint src --ext ts`), not only the touched file?\nDelete $S afterwards.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/tests/settings-policy-corpus.test.cjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +59,80 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:21:37.251Z",
-  "updatedAt": "2026-11-04T08:22:22.685Z",
+  "updatedAt": "2026-11-04T08:27:48.169Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T08:22:09.492Z"
+    "firstClaimAt": "2026-11-04T08:22:09.492Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
     "architect-67c762f6"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:27:48.131Z",
+  "executionContract": {
+    "intendedBehavior": "`npm run lint` in moe-vscode exits 0 over the whole tree. The worktree-mode Landing branch row (worktreeTarget) behaves exactly as before for every input.",
+    "acceptanceCriteria": [
+      "Whole-tree `npm run lint` in moe-vscode exits 0 at the row's tip; there is no eslint-disable comment",
+      "A consolidationBranch containing *, ? or [ reads main with the glob detail in worktree mode, and any other non-empty branch, ] included, is shown as written; settings-policy-corpus C6 pins this",
+      "`npm run compile` and `npm test` in moe-vscode pass in a full-repo Linux snapshot",
+      "The diff touches only moe-vscode/src/panels/SettingsPanel.ts and moe-vscode/tests/settings-policy-corpus.test.cjs"
+    ],
+    "invariants": [
+      "The character class matches exactly *, ? and [",
+      "An empty branch reads main",
+      "effectivePolicyRows never throws for any JSON shape (C5)",
+      "The held-out corpus moe-jetbrains/src/test/resources/client-settings-policy.json is unchanged",
+      "packages/moe-daemon/src/state/validators.ts is unchanged"
+    ],
+    "compatibility": [
+      "No settings, wire or rendered-text change: every corpus row (C1) and the rendered section (C2) stay byte-identical"
+    ],
+    "approvedScope": [
+      "SettingsPanel.ts worktreeTarget: the regex literal /[*?\\[]/ becomes /[*?[]/ and nothing else changes",
+      "settings-policy-corpus.test.cjs: one new test, C6, that reuses rowsOf()"
+    ],
+    "reuse": [
+      "The existing rowsOf()/loadPanel() vm harness in settings-policy-corpus.test.cjs; no new harness or fixture"
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/panels/SettingsPanel.ts:73 const worktreeTarget uses /[*?\\[]/; at 76e261b3, whole-tree eslint in a Linux snapshot reports exactly 73:75 no-useless-escape and exits 1, and exits 0 with /[*?[]/",
+      "moe-vscode/package.json lint = `eslint src --ext ts`, test = `node --test tests/*.test.cjs`, compile = `tsc -p ./`",
+      "tests/settings-policy-corpus.test.cjs rowsOf() calls effectivePolicyRows from the vm-loaded panel; corpus row P14 is the only worktree-mode glob row and uses *",
+      ".github/workflows/ci.yml 'Test VS Code daemon startup' runs npm ci, npm run lint, npm run compile and npm test in moe-vscode"
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/moe-0181-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp moe-vscode/src/panels/SettingsPanel.ts \"$S/moe-vscode/src/panels/SettingsPanel.ts\" && cp moe-vscode/tests/settings-policy-corpus.test.cjs \"$S/moe-vscode/tests/settings-policy-corpus.test.cjs\" && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund >/dev/null && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected an eslint-disable-next-line comment, because it hides the rule. Rejected an includes() chain, because it is a larger diff and could drift from the daemon's resolveWorktreeTarget. Rejected fixing validators.ts too: DoD 3 rules it out, and no gate lints the daemon with this rule. Rejected a new row in the shared corpus (moe-jetbrains client-settings-policy.json): JetBrains replays that held-out corpus, so the change would pull in a Gradle gate. A consumer-side C6 in the VS Code test is the precedent (C4 does the same for booleans).",
+    "codebaseInsights": "The VS Code lint script is `eslint src --ext ts`, so tests/*.cjs are never linted. In settings-policy-corpus.test.cjs, rowsOf(settings) transpiles SettingsPanel.ts (ts.transpileModule), runs it in a vm and calls effectivePolicyRows. In worktree mode the Landing branch row comes from worktreeLandingRow(trimmed branch): worktreeTarget returns main, and the glob detail applies when value !== branch. The only corpus row with a worktree-mode glob is P14, and it uses *. CI (ci.yml 'Test VS Code daemon startup') runs npm ci, lint, compile and test with bash on all three OSes, so this one error fails the VS Code step on every OS.",
+    "risks": "Running npm ci, compile or test in the shared control checkout violates a rail, and its node_modules there are Windows-native. If the overlay cp is left out, the gate tests HEAD (the unfixed base) and lint fails. Writing either file with a shell or a subagent leaves no TOOL witness, so the path is HELD at landing. Editing the corpus JSON instead of the .cjs breaks the held-out contract.",
+    "keyFiles": [
+      "moe-vscode/src/panels/SettingsPanel.ts",
+      "moe-vscode/tests/settings-policy-corpus.test.cjs",
+      "moe-vscode/eslint.config.mjs",
+      "moe-jetbrains/src/test/resources/client-settings-policy.json",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "5265909caa7945c81eda113ca16f0e6e5d18f9be",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:27:48.169Z",
+  "approvedPlanRevision": 1
 }

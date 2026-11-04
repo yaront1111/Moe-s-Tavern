@@ -44,20 +44,31 @@
     {
       "stepId": "step-3",
       "description": "Verification, once: from the task worktree run the checkRefs command exactly as written; its fresh output ending 'GATE-OK' is moe.complete_task's verification evidence. It archives HEAD into a mktemp dir, overlays the four owned files plus the hunt repro (/mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs, copied into the snapshot only, never into the repo), runs npm ci + build for the daemon and proxy there, builds the VS Code bundle with moe-vscode/scripts/bundle-assets.mjs, and then, all under env -i with HOME a temp dir and no receipt variables: node --test on usage-receipt (G1 must print '✔ G1: '), prompt-cache, prompt-cache-launcher and the hunt repro (DoD 1-3); the plain onboarding smoke; and the bundle-mode onboarding smoke with MOE_USAGE_RECEIPT_FILE naming a one-line file that must still read exactly 'L' (the only check that reaches onboarding.mjs:52, which G1's non-bundle run never executes). Never run npm ci, a build or these tests in the shared checkout, and never in this seat's own environment without clearing both receipt variables: that is the bug (project rail; env -i in the command handles it). If onboarding fails at its second start on a loaded host, rerun once and cite both runs (mem:gotcha-onboarding-smoke-restart-health-timeout). A failure prints the failing output: fix the code, never weaken an assertion.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T08:26:03.531Z"
+      "note": "checkRefs gate ended GATE-OK: usage-receipt+prompt-cache+launcher+hunt repro pass 55 fail 0 skip 2 (G1 printed); plain onboarding PASS; bundle-mode onboarding PASS with receipt still 'L'.",
+      "startedAt": "2026-11-04T08:26:03.531Z",
+      "completedAt": "2026-11-04T08:26:30.585Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's own diff (load the adversarial-self-review skill). Check: (a) `git diff --stat` against the base touches only the four scripts/tests files, nothing under scripts/moe-agent.* or logs/ (DoD 3); (b) each delete sits above every test() and every child process in its file; (c) G1 overrides both variables, so it can never touch the seat's real receipt, and cleans its temp dir; (d) G1 still fails loudly when a child fails, times out or onboarding finds no build. Then mutants in a snapshot (back up each file once, restore from `git show HEAD:<path>`, cmp before citing the gate): revert prompt-cache.test.mjs's delete (G1 and the hunt repro die); revert prompt-cache-launcher.test.mjs's delete (G1 dies: its fake codex turn appends one row); revert onboarding.mjs's delete (G1 survives because onboarding's writer runs only in bundle mode; the gate's bundle-mode check dies: record both); drop `delete env.NODE_TEST_CONTEXT` from G1 (record what the nested run does: G1's tap-summary assertion should catch it). Put the RED from step 1 and each mutant's result in the completion summary. If any byte changed during review, re-run step 3's command before moe.complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/usage-receipt.test.mjs",
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/onboarding.mjs"
+      ],
+      "note": "Diff touches only the 4 scripts/tests files (+45/-1). Mutants in a snapshot: revert prompt-cache.test.mjs delete -> G1 and hunt repro fail; revert launcher delete -> G1 fails; revert onboarding delete -> G1 survives (fail 0) but bundle-mode receipt grew from 1 to 2 lines (gate's L check would die); drop NODE_TEST_CONTEXT delete -> G1 fails on 'prompt-cache run reports no failures'.",
+      "startedAt": "2026-11-04T08:26:31.331Z",
+      "completedAt": "2026-11-04T08:27:12.128Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -76,12 +87,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:50.128Z",
-  "updatedAt": "2026-11-04T08:26:03.531Z",
+  "updatedAt": "2026-11-04T08:28:17.264Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:08:47.436Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -94,7 +105,9 @@
   "lowEffortEligible": true,
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:17:47.374Z",
@@ -166,5 +179,46 @@
   },
   "planApprovedAt": "2026-11-04T08:17:47.407Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T08:25:07.181Z"
+  "workStartedAt": "2026-11-04T08:25:07.181Z",
+  "reviewStartedAt": "2026-11-04T08:27:20.271Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=scripts/tests && git archive HEAD | tar -x -C \"$S\" && cp $T/{prompt-cache,prompt-cache-launcher,usage-receipt}.test.mjs $T/onboarding.mjs /mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs \"$S/$T/\" && cd \"$S\" && N=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin && for p in daemon proxy; do (cd packages/moe-$p && env -i HOME=\"$HOME\" PATH=$N sh -c 'npm ci --no-audit && npm run build') >/dev/null 2>&1 || exit 1; done && C=\"env -i HOME=$S PATH=$N\" && $C node moe-vscode/scripts/bundle-assets.mjs >/dev/null && $C node --test $T/{usage-receipt,prompt-cache,prompt-cache-launcher,hunt-a-receipt-leak}.test.mjs 2>&1 | tee o; [ ${PIPESTATUS[0]} = 0 ] && grep -aq '^✔ G1: ' o && $C node $T/onboarding.mjs && echo L > r && $C MOE_USAGE_RECEIPT_FILE=$S/r MOE_USAGE_CONTEXT_JSON={} node $T/onboarding.mjs moe-vscode/bundled && [ \"$(cat r)\" = L ] && echo GATE-OK )",
+    "exitCode": 0,
+    "outputTail": "✔ G1: the prompt-cache tests and the onboarding smoke never append to an inherited live usage receipt (4075ms)\nℹ tests 57\nℹ pass 55\nℹ fail 0\nℹ skipped 2\nPASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence\nPASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence\nGATE-OK",
+    "reportedAt": "2026-11-04T08:27:20.271Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/usage-receipt.test.mjs",
+    "scripts/tests/prompt-cache.test.mjs",
+    "scripts/tests/prompt-cache-launcher.test.mjs",
+    "scripts/tests/onboarding.mjs"
+  ],
+  "completionSummary": "Test-side fix only. prompt-cache.test.mjs, prompt-cache-launcher.test.mjs and onboarding.mjs now delete MOE_USAGE_RECEIPT_FILE and MOE_USAGE_CONTEXT_JSON from process.env right after the imports, so no fixture provider stream appends to a seat's live receipt. New guard G1 in usage-receipt.test.mjs runs the prompt-cache tests (tap) and the onboarding smoke under an env naming a one-line temp receipt, requires exit 0, '# fail 0', '# pass N>=1', 'PASS onboarding:', and asserts the receipt is byte-identical; failures, timeouts and a missing build fail loudly. RED at base: G1 failed ('receipt grew by' a codex row) and the hunt repro failed (4 fixture rows); pass 53 fail 2. After: gate GATE-OK, 55 pass 0 fail 2 skipped, plain and bundle-mode onboarding PASS, bundle receipt still 'L'. Mutants: reverting the prompt-cache or launcher delete fails G1 (and the hunt repro for prompt-cache); reverting onboarding's delete leaves G1 green but the bundle-mode receipt grows to 2 lines (only the gate catches it); dropping delete env.NODE_TEST_CONTEXT fails G1 on the tap-summary assertion. Diff: 4 scripts/tests files, +45/-1; nothing under scripts/moe-agent.* or logs/.",
+  "commits": [
+    {
+      "sha": "173bfaa804bf0ae4bb01f85870763caa5249f7a8",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T08:24:11Z",
+      "paths": [
+        "scripts/tests/onboarding.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/usage-receipt.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T08:28:17.264Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T08:24:11Z",
+    "at": "2026-11-04T08:28:17.264Z"
+  }
 }
