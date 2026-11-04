@@ -867,8 +867,9 @@ function Invoke-VmcSections {
 # VMs: R's fake dispatch CLI on the frozen candidate commit (tree M, sole parent B),
 # never the qualityGate on this host, whose canary writes $sgWitness. SGV, SGU, SG8
 # and G run the wrapper's functions in process. The port's Windows deviation: the
-# wrapper never signals the dispatch, so where sh expects one check-dispatch-term row
-# these rows expect none, and a dead fake. Runs in Invoke-SgSections' scope.
+# wrapper never signals the dispatch; it stops it by creating its --stop-file (task-e444f6ae),
+# so where sh expects one check-dispatch-term row these rows expect one check-dispatch-stop
+# row, no term row, and a dead fake. Runs in Invoke-SgSections' scope.
 function Initialize-SgFixture {
     Initialize-VmjFixture; Remove-Item Env:\FAKE_CTX_LANDING
     $p = Get-Content -Raw "$project\.moe\project.json" | ConvertFrom-Json
@@ -908,8 +909,11 @@ function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = ''
         if ($Code -ceq 'MOE_CHECK_DISPATCH_UNAVAILABLE') { Assert-Sg $R ($d.Count -eq 0) 'a missing CLI ran' }
         else {
             Assert-Sg $R ($d.Count -eq 1) "$($d.Count) check-dispatch rows"
-            $x = $d[0].args; $cx = "$($x.argv[5])"   # PowerShell names are case-blind: never $X beside $x
-            Assert-Sg $R ($cx -cmatch '^[0-9a-f]{40}$' -and ($x.argv -join "`n") -ceq (@('--project', $project, '--task', 'task-postflight', '--commit', $cx) -join "`n")) "dispatch argv: $($x.argv -join ' ')"
+            $x = $d[0].args; $cx = "$($x.argv[5])"; $sf = "$($x.argv[7])"   # PowerShell names are case-blind: never $X beside $x
+            Assert-Sg $R ($cx -cmatch '^[0-9a-f]{40}$' -and ($x.argv -join "`n") -ceq (@('--project', $project, '--task', 'task-postflight', '--commit', $cx, '--stop-file', $sf) -join "`n")) "dispatch argv: $($x.argv -join ' ')"
+            Assert-Sg $R ([IO.Path]::IsPathRooted($sf) -and -not (Test-Path -LiteralPath $sf) -and $x.stopAtStart -is [bool] -and -not $x.stopAtStart) "the stop file '$sf' is not rooted, outlived the row, or existed at the start ($($x.stopAtStart))"
+            $stops = @(& $of check-dispatch-stop | ForEach-Object { "$($_.args.pid)" }) -join ','; $want = if ($Code -ceq 'MOE_CHECK_DISPATCH_TIMEOUT') { "$($x.pid)" } else { '' }
+            Assert-Sg $R ($stops -ceq $want) "stop rows '$stops', expected '$want'"
             Assert-Sg $R ($x.entry -ceq $sgFake -and $x.tree -ceq $M -and (@($x.parents) -join ' ') -ceq $B -and $x.heads.'refs/heads/main' -ceq $B) 'dispatch entry, tree, parents or main'
             Assert-Sg $R ($x.candidateId -ceq $cand[0].args.id -and @($x.credentials).Count -eq 0) 'dispatch candidate, or a credential reached it'
             Assert-Sg $R (-not (Invoke-VmcGit $project @('for-each-ref', '--contains', $cx)) -and @(& $of check-dispatch-term).Count -eq 0) 'a ref holds the frozen candidate commit, or the wrapper signalled the dispatch'
@@ -1089,11 +1093,15 @@ function Invoke-SguRow([string]$Row, [string]$Want, [hashtable]$Set = @{}, [stri
     foreach ($n in $vmjCredentials) { if ([Environment]::GetEnvironmentVariable($n) -cne "outer-$n") { throw "VM ROUTE FAILED ([strong gate] $Row): $n not restored" } }
 }
 function Get-SguCount([string]$Line) { return @($script:SguOut | Where-Object { $_ -ceq $Line }).Count }
-# Assert-SguDispatch ROW ENTRY -- exactly one dispatch ran, from ENTRY, on the frozen commit, with no credential; its pid.
-function Assert-SguDispatch([string]$Row, [string]$Entry) {
-    $d = @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch' })
+# Assert-SguDispatch ROW ENTRY [STOPPED] -- exactly one dispatch ran, from ENTRY, on the frozen commit, with no credential and a
+# rooted --stop-file absent at its start and after; one stop row from it when STOPPED, else none, and never a term row; its pid.
+function Assert-SguDispatch([string]$Row, [string]$Entry, [bool]$Stopped = $false) {
+    $rows = @(Read-VmeJsonl $sguEv); $d = @($rows | Where-Object { $_.tool -ceq 'check-dispatch' }); $sf = if ($d.Count) { "$($d[0].args.argv[7])" } else { '' }
+    $stops = @($rows | Where-Object { $_.tool -ceq 'check-dispatch-stop' } | ForEach-Object { "$($_.args.pid)" }) -join ','
     if ($d.Count -ne 1 -or $d[0].args.entry -cne $Entry -or @($d[0].args.credentials).Count -or $d[0].args.candidateId -cne 'cand-sgu' -or
-        ($d[0].args.argv -join "`n") -cne (@('--project', $sguProject, '--task', 'task-sgu', '--commit', $sguC) -join "`n")) { throw "VM ROUTE FAILED ([strong gate] $Row): dispatch rows $(ConvertTo-Json $d -Compress -Depth 5)" }
+        ($d[0].args.argv -join "`n") -cne (@('--project', $sguProject, '--task', 'task-sgu', '--commit', $sguC, '--stop-file', $sf) -join "`n") -or
+        -not [IO.Path]::IsPathRooted($sf) -or (Test-Path -LiteralPath $sf) -or $d[0].args.stopAtStart -isnot [bool] -or $d[0].args.stopAtStart -or
+        $stops -cne $(if ($Stopped) { "$($d[0].args.pid)" } else { '' }) -or (Get-SguTerms) -ne 0) { throw "VM ROUTE FAILED ([strong gate] $Row): stop rows '$stops', $(Get-SguTerms) TERMs, dispatch rows $(ConvertTo-Json $d -Compress -Depth 5)" }
     return (Get-SguPid)
 }
 function Get-SguPid { return [int]@(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch' })[0].args.pid }
@@ -1118,29 +1126,48 @@ function Invoke-SguRows {
     }
     $clock = [Diagnostics.Stopwatch]::StartNew()
     Invoke-SguRow U5 'rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT' @{ MOE_CHECK_DISPATCH_TIMEOUT_SEC = '1'; FAKE_CHECK_DISPATCH = 'hang-hard' } '' $false 1
-    Assert-SgDead U5 (Assert-SguDispatch U5 $sguStub)
+    Assert-SgDead U5 (Assert-SguDispatch U5 $sguStub $true)
     if ($clock.Elapsed.TotalSeconds -gt 15 -or (Get-SguTerms) -ne 0) { throw "VM ROUTE FAILED ([strong gate] U5): $([int]$clock.Elapsed.TotalSeconds)s and $(Get-SguTerms) TERMs, expected at most 15 s and none" }
+    # U8: a dispatch that honours the stop exits by itself: its stop row comes 1 s after it saw the file, so no kill came first, and well inside the 30 s grace.
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    Invoke-SguRow U8 'rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT' @{ MOE_CHECK_DISPATCH_TIMEOUT_SEC = '1'; FAKE_CHECK_DISPATCH = 'hang' } '' $false 30
+    Assert-SgDead U8 (Assert-SguDispatch U8 $sguStub $true)
+    if ($clock.Elapsed.TotalSeconds -ge 15) { throw "VM ROUTE FAILED ([strong gate] U8): $([int]$clock.Elapsed.TotalSeconds)s, expected under 15 s (the wrapper waited out the grace)" }
     Invoke-SguRow U6 'rc=1 code=MOE_WORKTREE_PROJECT_NOT_TOP' @{ FAKE_CHECK_DISPATCH = 'pass' } 'sub'
     if ((Test-Path -LiteralPath $sguEv) -or (Get-SguCount '[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit.') -ne 1) { throw 'VM ROUTE FAILED ([strong gate] U6): the dispatch ran, or not one NOT_TOP line' }
     Invoke-SguStopRows
 }
 # U7: a runspace Stop() mid-dispatch, the PipelineStoppedException a Ctrl+C raises: the
-# invoker's finally waits the grace, ends the fake and clears the record. SG-interrupt: the outer
+# invoker's finally creates the stop file, waits the grace, ends the fake and clears the record.
+# U9: a Stop() inside the timeout's grace interrupts that stop before it clears the record,
+# so the invoker's finally stops the fake again. SG-interrupt: the outer
 # finally line (the twin of sh's EXIT-trap stop) sits right after Stop-MoeGateChild and
 # stops a still-recorded dispatch by itself.
 function Invoke-SguStopRows {
     Remove-Item -LiteralPath $sguEv -ErrorAction SilentlyContinue; $done = "$sgu\u7.done"; $env:FAKE_CHECK_DISPATCH = 'hang-hard'; $env:MOE_CHECK_DISPATCH_TIMEOUT_SEC = '60'
+    $body = "param(`$P, `$F, `$Fz, `$Done, `$Grace)`n$sgDefs`n" + @'
+$projectPath = $P; $preflightTaskId = 'task-sgu'; $script:MoeNode = $null; $script:CheckDispatchCli = $F; $script:CheckDispatchGraceSec = $Grace; $script:CheckDispatchProcess = $null
+try { Invoke-MoeCheckDispatch @{ Rel = '' } $Fz } finally { [IO.File]::WriteAllText($Done, "record=$([bool]$script:CheckDispatchProcess)") }
+'@
     $ps = [powershell]::Create()
     try {
-        $null = $ps.AddScript("param(`$P, `$F, `$Fz, `$Done)`n$sgDefs`n" + @'
-$projectPath = $P; $preflightTaskId = 'task-sgu'; $script:MoeNode = $null; $script:CheckDispatchCli = $F; $script:CheckDispatchGraceSec = 3; $script:CheckDispatchProcess = $null
-try { Invoke-MoeCheckDispatch @{ Rel = '' } $Fz } finally { [IO.File]::WriteAllText($Done, "record=$([bool]$script:CheckDispatchProcess)") }
-'@).AddArgument($sguProject).AddArgument($sgFake).AddArgument($sguFrozen).AddArgument($done)
+        $null = $ps.AddScript($body).AddArgument($sguProject).AddArgument($sgFake).AddArgument($sguFrozen).AddArgument($done).AddArgument(3)
         $h = $ps.BeginInvoke(); Wait-SguDispatch U7
         $clock = [Diagnostics.Stopwatch]::StartNew(); $ps.Stop(); $took = $clock.Elapsed.TotalSeconds
-        Assert-SgDead U7 (Assert-SguDispatch U7 $sgFake)
+        Assert-SgDead U7 (Assert-SguDispatch U7 $sgFake $true)
         $rec = if (Test-Path -LiteralPath $done) { [IO.File]::ReadAllText($done) } else { 'no finally' }
         if ($took -lt 2.5 -or $took -gt 20 -or $rec -cne 'record=False' -or (Get-SguTerms) -ne 0) { throw "VM ROUTE FAILED ([strong gate] U7): stop took $([int]$took)s, $rec, $(Get-SguTerms) TERMs; expected the 3 s grace, record=False and none" }
+    } finally { $ps.Dispose() }
+    Remove-Item -LiteralPath $sguEv, $done -ErrorAction SilentlyContinue; $env:MOE_CHECK_DISPATCH_TIMEOUT_SEC = '1'
+    $ps = [powershell]::Create()
+    try {
+        $null = $ps.AddScript($body).AddArgument($sguProject).AddArgument($sgFake).AddArgument($sguFrozen).AddArgument($done).AddArgument(5)
+        $h = $ps.BeginInvoke()
+        for ($i = 0; $i -lt 300 -and -not @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch-stop' }).Count; $i++) { Start-Sleep -Milliseconds 100 }
+        $ps.Stop()
+        Assert-SgDead U9 (Assert-SguDispatch U9 $sgFake $true)
+        $rec = if (Test-Path -LiteralPath $done) { [IO.File]::ReadAllText($done) } else { 'no finally' }
+        if ($rec -cne 'record=False') { throw "VM ROUTE FAILED ([strong gate] U9): a Stop() in the timeout's grace left $rec, expected record=False" }
     } finally { $ps.Dispose() }
     $lines = [IO.File]::ReadAllLines($wrapper)
     $g = @('    try { Stop-MoeGateChild } catch {}', '    try { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec } catch {}', '    try { Invoke-MoeTeardownRescue } catch {}', '    try { Complete-MoePostflight | Out-Null } catch {}')
@@ -1151,7 +1178,7 @@ try { Invoke-MoeCheckDispatch @{ Rel = '' } $Fz } finally { [IO.File]::WriteAllT
     $script:CheckDispatchGraceSec = 1; Wait-SguDispatch SG-interrupt
     & ([scriptblock]::Create($g[1].Trim()))
     Assert-SgDead SG-interrupt (Get-SguPid)
-    if ($script:CheckDispatchProcess) { throw 'VM ROUTE FAILED ([strong gate] SG-interrupt): the outer finally kept the record' }
+    if ($script:CheckDispatchProcess -or @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch-stop' }).Count) { throw 'VM ROUTE FAILED ([strong gate] SG-interrupt): the outer finally kept the record, or a dispatch with no stop file wrote a stop row' }
     Remove-Item Env:\FAKE_CHECK_DISPATCH, Env:\MOE_CHECK_DISPATCH_TIMEOUT_SEC
 }
 # SG8: L6 takes the check VMs only for the strong profile, and before the legacy gate and the intent rule.
@@ -1190,7 +1217,7 @@ function Invoke-SgSections {
         [IO.File]::WriteAllText($sguStub, "import { createRequire } from 'node:module';`ncreateRequire(import.meta.url)(process.env.SGU_FAKE);`n")
         $script:MoeScriptRoot = "$sgu\scripts"; $script:MoeNode = $null; $script:CheckDispatchProcess = $null; $projectPath = $sguProject; $preflightTaskId = 'task-sgu'
         Invoke-SgvRows; Invoke-SguRows; Test-Sg8
-        Write-Host '[strong gate] ok SGV, SGU U1-U7, SG8 and SG-interrupt'
+        Write-Host '[strong gate] ok SGV, SGU U1-U9, SG8 and SG-interrupt'
         $script:VmrSetup = { Initialize-SgFixture }; $script:VmjWorkspace = 'worktree'
         Invoke-SgRows; Invoke-SrRows
     } finally {

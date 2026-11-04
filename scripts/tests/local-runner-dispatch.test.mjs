@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -328,7 +328,7 @@ function jobSteps(log, { remove = 'deleted', session = PASS, verify = 'intact', 
   return { provision: async ({ ledger, owner }) => { log.push('create'); return { provisioned: true, instance: (await ledger.reserve(owner)).instance,
     bootstrapReady: true, failures: [], supervisorSha256: SUP, image: { source: { arch: 'x64', sha256: IMG }, provider: { imageHash: PROV } } }; },
   toolchain: async () => ({ file: '/t', sha256: TOOL, size: 1, version: '24.22.2' }), materialize, installToolchain: async () => {},
-  session: async () => { log.push('session'); return session; }, verify: async () => verify,
+  session: async input => { log.push('session'); return typeof session === 'function' ? session(input) : session; }, verify: async () => verify,
   remove: async () => {
     log.push('remove');
     await new Promise(setImmediate);
@@ -397,10 +397,11 @@ async function landedSeam(t, log, steps) {
   }
 }
 // runDispatchCli over the scripted daemon, its calls logged among the VM steps; one JSON line with no secret or escape byte.
-async function dispatchCli(runCheck, log, { ctx = context({ envs: [JOB_ENV] }), tools } = {}) {
+async function dispatchCli(runCheck, log, { ctx = context({ envs: [JOB_ENV] }), tools, stopFile, signal } = {}) {
   const [h, lines] = [harness(ctx, { tools }), []];
   const call = async (tool, args) => { log.push(tool.slice(4)); return h.call(tool, args); };
-  const exit = await runDispatchCli(['--project', '/srv/project', '--task', TASK, '--commit', TREE], { open: async () => ({ call, close() {} }),
+  const argv = ['--project', '/srv/project', '--task', TASK, '--commit', TREE, ...(stopFile ? ['--stop-file', stopFile] : [])];
+  const exit = await runDispatchCli(argv, { open: async () => ({ call, close() {} }), signal, pollMs: 20,
     exportSnapshot: async () => JOB_SNAP, loadRunCheck: async () => runCheck, write: text => lines.push(text) });
   assert.deepEqual([lines.length, /SENTINEL|\x1b/.test(lines[0])], [1, false]);
   return { exit, report: JSON.parse(lines[0]), h };
@@ -516,4 +517,73 @@ test('CD6 hostile or conflicting cleanup metadata fails closed with fixed codes;
   const [{ outputTail }] = h.of('moe.record_check_observation'), kept = outputTail.slice(0, -DIAG.length - 1), size = Buffer.byteLength(outputTail);
   assert.deepEqual([outputTail.endsWith(`z\n${DIAG}`), big.endsWith(kept), kept[0], size <= MAX_CHECK_TAIL_BYTES, size > MAX_CHECK_TAIL_BYTES - 3],
     [true, true, '€', true, true]);
+});
+
+// task-e444f6ae: `--stop-file <absolute path>`, moe-agent.ps1's Windows stop. The file appearing aborts like SIGINT/SIGTERM.
+const stopDir = async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'moe-stop-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+};
+const abortOf = signal => new Promise((resolve, reject) => {
+  if (signal.aborted) return resolve();
+  const timer = setTimeout(() => reject(new Error('no abort within 3 s')), 3_000);
+  signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+});
+const INFRA = { outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' };
+
+test('S1: --stop-file <absolute path> is an optional last pair; every other shape is refused before anything opens', async t => {
+  const ARGS = ['--project', '/srv/project', '--task', TASK, '--commit', TREE], absent = path.join(await stopDir(t), 'never.stop');
+  const cli = async argv => {
+    const [lines, state] = [[], { opened: 0, loaded: 0 }];
+    const exit = await runDispatchCli(argv, { write: text => lines.push(text), exportSnapshot: async () => SNAP, pollMs: 20,
+      loadRunCheck: async () => { state.loaded += 1; return harness(null).runCheck; },
+      open: async () => { state.opened += 1; return { call: harness(context()).call, close() {} }; } });
+    assert.equal(lines.length, 1);
+    return [exit, JSON.parse(lines[0]), state];
+  };
+  const shape = ([exit, report, state]) => [exit, state, { ...report, results: report.results.map(r => ({ ...r, dispatchId: typeof r.dispatchId })) }];
+  const plain = shape(await cli(ARGS));
+  assert.deepEqual([plain[0], plain[1], plain[2].results.map(r => r.outcome)], [0, { opened: 1, loaded: 1 }, ['passed', 'passed']]);
+  assert.deepEqual(shape(await cli([...ARGS, '--stop-file', absent])), plain);
+  for (const argv of [[...ARGS, '--stop-file'], [...ARGS, '--stop-file', 'relative.stop'], [...ARGS, '--stop-file', ''],
+    [...ARGS, '--stop-file', `${absent}\n`], [...ARGS, '--stop-file', `${absent}\x7f`], [...ARGS, '--stopfile', absent],
+    [...ARGS, '--stop-file', absent, 'x'], [...ARGS, '--stop-file', absent, '--stop-file', absent], ['--stop-file', absent, ...ARGS]]) {
+    assert.deepEqual(await cli(argv), [2, { code: 'RUNNER_CLI_INPUT_INVALID' }, { opened: 0, loaded: 0 }], JSON.stringify(argv));
+  }
+});
+
+test('S2: a stop mid-run, by the file or the entry\'s signal, deletes the VM before the CLI resolves and launches no later check', async t => {
+  const dir = await stopDir(t);
+  for (const [label, injected, byFile] of [['file, with the entry signal', true, true], ['file alone', false, true], ['entry signal', true, false]]) {
+    const [log, stopFile, controller] = [[], path.join(dir, `${label.replace(/\W+/g, '-')}.stop`), new AbortController()];
+    const session = async ({ signal }) => {
+      await new Promise(resolve => setTimeout(resolve, 120)); // six 20 ms polls with the file still absent
+      log.push(`aborted:${signal.aborted}`);
+      if (byFile) await writeFile(stopFile, ''); else controller.abort();
+      await abortOf(signal);
+      return INFRA;
+    };
+    const { exit, report, h } = await dispatchCli(await landedSeam(t, log, { session }), log, { stopFile, ...(injected ? { signal: controller.signal } : {}) });
+    assert.deepEqual([exit, log, report.stopped], [2, [...RAN.slice(0, 4), 'aborted:false', ...RAN.slice(4)], { code: 'RUNNER_ABORTED' }], label);
+    assert.deepEqual(report.results, [{ checkId: 'unit', command: 'npm test', dispatchId: h.of('moe.record_check_dispatch')[0].id,
+      outcome: 'infra-failure', ...DELETED }], label);
+  }
+});
+
+test('S3: a stop file that already exists at start launches no VM', async t => {
+  const [log, stopFile] = [[], path.join(await stopDir(t), 'early.stop')];
+  await writeFile(stopFile, '');
+  const { exit, report } = await dispatchCli(await landedSeam(t, log, {}), log, { stopFile });
+  assert.deepEqual([exit, log, report], [2, ['get_context'], { taskId: TASK, candidateId: 'cand-1', results: [], stopped: { code: 'RUNNER_ABORTED' } }]);
+});
+
+test('S4: the real entry, its stop file never created, exits by itself with one fixed-code line: the watch never holds the process', async t => {
+  const root = await stopDir(t);
+  await mkdir(path.join(root, 'project'));
+  const env = { PATH: process.env.PATH, MOE_RUNNER_STATE_DIR: path.join(root, 'state'), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) };
+  const entry = spawnSync(process.execPath, [fileURLToPath(new URL('../local-runner/check-dispatch.mjs', import.meta.url)), '--project', path.join(root, 'project'),
+    '--task', TASK, '--commit', TREE, '--stop-file', path.join(root, 'never.stop')], { encoding: 'utf8', timeout: 20_000, env });
+  assert.deepEqual([entry.error, entry.signal, entry.status, entry.stderr], [undefined, null, 2, '']);
+  assert.match(entry.stdout, /^\{"code":"[A-Z][A-Z0-9_]*"\}\n$/);
 });

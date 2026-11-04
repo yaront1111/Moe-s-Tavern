@@ -9558,6 +9558,7 @@ function Stop-MoeSeatVm {
 # is discarded.
 $script:CheckDispatchGraceSec = 120
 $script:CheckDispatchProcess = $null
+$script:CheckDispatchStopFile = $null
 $script:CheckDispatchCode = ''
 # Twin: resolve_check_dispatch_cli.
 function Resolve-MoeCheckDispatchCli {
@@ -9611,41 +9612,57 @@ function Get-MoeCheckDispatchVerdict([string]$Out, [int]$Rc, [string]$Task, [str
     if ($r.Value.Count -gt 0) { return 'PASS' }
     return $bad
 }
-# Twin: stop_check_dispatch, with the port's Windows deviation: no signal exists
-# that the wrapper could send this child alone, so it never signals it. The child
-# shares the console, so an operator's Ctrl+C reaches it once, as SIGINT, and
-# check-dispatch.mjs then deletes its VM. Wait GRACE seconds for it to exit, then
-# end its tree by the recorded process id only, never by name. The record is
-# cleared last, so the outer finally of a wrapper stopped mid-stop still finishes it.
+# Twin: stop_check_dispatch. Windows has no SIGTERM the wrapper could send this
+# child alone, and a console Ctrl+C reaches every process on the console. So the
+# dispatch runs with `--stop-file <path>`, a path that does not exist until now:
+# creating it is the stop, and check-dispatch.mjs then deletes its VM and exits as
+# on SIGTERM. Rewriting it is harmless, so no once-flag is needed. Wait GRACE
+# seconds for the child to exit, then end its tree by the recorded process id only,
+# never by name. A child with no recorded stop file gets only the grace and the
+# kill. The record is cleared last, outside any finally: a pipeline stop mid-wait
+# leaves it, so the invoker's finally and the outer finally still finish the stop.
 function Stop-MoeCheckDispatch([int]$GraceSec = 0) {
     $p = $script:CheckDispatchProcess
     if (-not $p) { return }
     $ErrorActionPreference = 'Continue'
+    $stop = $script:CheckDispatchStopFile
     try {
-        if (-not $p.HasExited -and -not $p.WaitForExit($GraceSec * 1000)) {
-            & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $p.Id 2>&1 | Out-Null
-            $null = $p.WaitForExit(5000)
+        if (-not $p.HasExited) {
+            if ($stop) {
+                try { [IO.File]::WriteAllText($stop, '') } catch [System.Management.Automation.PipelineStoppedException] { throw } catch {}
+            }
+            if (-not $p.WaitForExit($GraceSec * 1000)) {
+                & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $p.Id 2>&1 | Out-Null
+                $null = $p.WaitForExit(5000)
+            }
         }
-    } finally { $p.Dispose(); $script:CheckDispatchProcess = $null }
+    } catch [System.Management.Automation.PipelineStoppedException] { throw } catch {}
+    if ($stop) { Remove-Item -LiteralPath $stop -Force -ErrorAction SilentlyContinue }
+    $p.Dispose(); $script:CheckDispatchProcess = $null; $script:CheckDispatchStopFile = $null
 }
 # Twin: run_check_dispatch's child. Spawns node on the CLI with the credentials and
 # the Git location variables removed, stdin empty, stdout to a file and stderr
 # discarded, then polls it in 1 s slices (a Ctrl+C lands between them) up to MS.
+# Its stop file is only named here, never created (not GetTempFileName, which
+# creates its file and would stop the dispatch at once).
 function Invoke-MoeCheckDispatchChild([string]$Node, [long]$Ms, [hashtable]$Frozen) {
     $files = @(); $saved = @{}
     try {
         try {
             $files = @([IO.Path]::GetTempFileName(), [IO.Path]::GetTempFileName(), [IO.Path]::GetTempFileName())
+            $stop = Join-Path ([IO.Path]::GetTempPath()) "moe-check-dispatch-$([guid]::NewGuid().ToString('N')).stop"
+            $files += $stop
             Write-Host "Post-flight: owed checks in check VMs: task $preflightTaskId candidate $($Frozen.CandidateId)" -ForegroundColor Cyan
             foreach ($n in @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')) {
                 $saved[$n] = [Environment]::GetEnvironmentVariable($n); Remove-Item -LiteralPath "Env:\$n" -ErrorAction SilentlyContinue
             }
-            $script:CheckDispatchProcess = Start-Process -FilePath $Node -ArgumentList (ConvertTo-MoeArgumentLine @($script:CheckDispatchCli, '--project', "$projectPath", '--task', $preflightTaskId, '--commit', $Frozen.Commit)) -RedirectStandardInput $files[0] -RedirectStandardOutput $files[1] -RedirectStandardError $files[2] -NoNewWindow -PassThru -ErrorAction Stop -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
+            $script:CheckDispatchProcess = Start-Process -FilePath $Node -ArgumentList (ConvertTo-MoeArgumentLine @($script:CheckDispatchCli, '--project', "$projectPath", '--task', $preflightTaskId, '--commit', $Frozen.Commit, '--stop-file', $stop)) -RedirectStandardInput $files[0] -RedirectStandardOutput $files[1] -RedirectStandardError $files[2] -NoNewWindow -PassThru -ErrorAction Stop -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
+            $script:CheckDispatchStopFile = $stop
         } catch { return 'MOE_CHECK_DISPATCH_NO_REPORT' }
         finally { foreach ($n in $saved.Keys) { if ($null -ne $saved[$n]) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) } } }
         $p = $script:CheckDispatchProcess; $null = $p.Handle; $clock = [Diagnostics.Stopwatch]::StartNew()
         while (-not $p.WaitForExit(1000)) {
-            if ($clock.ElapsedMilliseconds -ge $Ms) { Stop-MoeCheckDispatch 0; return 'MOE_CHECK_DISPATCH_TIMEOUT' }
+            if ($clock.ElapsedMilliseconds -ge $Ms) { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec; return 'MOE_CHECK_DISPATCH_TIMEOUT' }
         }
         $rc = $p.ExitCode; Stop-MoeCheckDispatch 0
         if ($rc -isnot [int]) { $rc = 1 }   # an unknown exit is never a pass

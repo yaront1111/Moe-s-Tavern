@@ -5,8 +5,12 @@
 // with the post-run workspace 'intact'; retries reuse their ids (CQ-V03b). No isolation is claimed; verified-local stays off.
 // Dependencies come only from lockfiles named in the approved definition's configs. An uncovered owed gate stops every
 // check before a VM with RUNNER_DEPENDENCIES_UNDECLARED: it has no approved dependency choice.
+// Stopping: SIGINT/SIGTERM abort the run, and runCheckJob deletes its VM before the CLI exits. Windows cannot send SIGTERM to
+// this one process, and a console Ctrl+C reaches every process on the console, so moe-agent.ps1 passes `--stop-file <path>`:
+// a path that does not exist yet. The file existing means stop, through the same abort. It is polled (unref'd, so it never
+// keeps the process alive) and latched: removing it later changes nothing. moe-agent.sh never passes it; it signals.
 import { randomBytes } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,7 +20,7 @@ import { exportSourceSnapshot } from './source-export.mjs';
 import { validateImport } from './source-snapshot.mjs';
 
 const TRANSPORT = ['RUNNER_DISCONNECTED', 'RUNNER_CALL_TIMEOUT'], ATTEMPTS = 3;
-const FLAGS = ['--project', '--task', '--commit'], CONTROL = /[\x00-\x1f\x7f]/;
+const FLAGS = ['--project', '--task', '--commit', '--stop-file'], CONTROL = /[\x00-\x1f\x7f]/;
 const CALL_TIMEOUT_MS = 15_000, CHECK_BUDGET_MS = 3_600_000; // three calls fit runCheckJob's 60 s onReady bound
 const MAX_RERUNS = 10; // CQ-V05's maxInfraRetries: the daemon's repair decision is the budget, this only bounds it locally
 const LOCKFILE = 'package-lock.json';
@@ -186,13 +190,25 @@ export async function dispatchFocusedChecks({ taskId, snapshot, call, runCheck, 
   return done();
 }
 
-// Exactly `--project <absolute path> --task <task id> --commit <40- or 64-hex>`, cli.mjs style: nothing runs before this.
+// Exactly `--project <absolute path> --task <task id> --commit <40- or 64-hex>`, optionally then `--stop-file <absolute path>`,
+// cli.mjs style: nothing runs before this.
 function argumentsFor(argv) {
-  if (!Array.isArray(argv) || argv.length !== 6 || !argv.every((arg, index) => (index % 2 === 0 ? arg === FLAGS[index / 2]
-    : typeof arg === 'string' && !CONTROL.test(arg)))) return null;
-  const [, projectPath, , taskId, , commit] = argv;
+  if (!Array.isArray(argv) || (argv.length !== 6 && argv.length !== 8) || !argv.every((arg, index) => (index % 2 === 0
+    ? arg === FLAGS[index / 2] : typeof arg === 'string' && !CONTROL.test(arg)))) return null;
+  const [, projectPath, , taskId, , commit, , stopFile] = argv;
   return path.isAbsolute(projectPath) && /^task-[A-Za-z0-9]{1,64}$/.test(taskId) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)
-    ? { projectPath, taskId, commit } : null;
+    && (stopFile === undefined || path.isAbsolute(stopFile)) ? { projectPath, taskId, commit, stopFile } : null;
+}
+
+// The stop file's watch: it aborts at the first sight of the file and stays aborted. existsSync answers false on any error,
+// so an unreadable path only loses the graceful stop. The timer is unref'd and cleared by close().
+function stopWatch(file, pollMs) {
+  const controller = new AbortController();
+  const look = () => { if (existsSync(file)) { controller.abort(); clearInterval(timer); } };
+  const timer = setInterval(look, pollMs);
+  timer.unref();
+  look();
+  return { signal: controller.signal, close: () => clearInterval(timer) };
 }
 
 // R11's runCheckJob behind the runCheck seam, or null when the landed orchestrator lacks a seam this needs: onReady before
@@ -240,11 +256,17 @@ async function reportFor(input, { open, exportSnapshot, loadRunCheck, signal }) 
 const allPassed = ({ results, stopped }) => !stopped && Array.isArray(results) && results.length > 0
   && [...new Map(results.map(r => [`${r.checkId ?? ''}\n${r.command}`, r.outcome])).values()].every(outcome => outcome === 'passed');
 
-/** Prints one JSON line of fixed codes, ids, commands and outcomes; exit 0 only when every owed check was observed passed. */
+/** Prints one JSON line of fixed codes, ids, commands and outcomes; exit 0 only when every owed check was observed passed.
+ * With `--stop-file`, the file appearing (polled every pollMs) aborts the run as `signal` does. */
 export async function runDispatchCli(argv, { open = openRunnerChannel, exportSnapshot = exportSourceSnapshot, loadRunCheck = landedRunCheck,
-  signal, write = text => process.stdout.write(text) } = {}) {
+  signal, pollMs = 250, write = text => process.stdout.write(text) } = {}) {
   const input = argumentsFor(argv);
-  const report = input ? await reportFor(input, { open, exportSnapshot, loadRunCheck, signal }) : { code: 'RUNNER_CLI_INPUT_INVALID' };
+  let report = { code: 'RUNNER_CLI_INPUT_INVALID' };
+  if (input) {
+    const watch = input.stopFile === undefined ? null : stopWatch(input.stopFile, pollMs);
+    const stop = watch === null ? signal : signal ? AbortSignal.any([signal, watch.signal]) : watch.signal;
+    try { report = await reportFor(input, { open, exportSnapshot, loadRunCheck, signal: stop }); } finally { watch?.close(); }
+  }
   write(`${JSON.stringify(report)}\n`);
   return allPassed(report) ? 0 : 2;
 }
