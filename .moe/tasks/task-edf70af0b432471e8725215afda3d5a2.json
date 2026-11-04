@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,16 +81,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:10:01.205Z",
-  "updatedAt": "2026-11-04T15:31:36.608Z",
+  "updatedAt": "2026-11-04T15:36:13.152Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T15:10:14.283Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T15:35:44.995Z",
+    "wallClockMs": 1530712
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "high",
@@ -168,10 +171,11 @@
   "planApprovedAt": "2026-11-04T15:25:41.455Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T15:25:49Z",
-    "at": "2026-11-04T15:31:36.608Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T15:31:50Z",
+    "at": "2026-11-04T15:36:13.152Z"
   },
   "workStartedAt": "2026-11-04T15:26:45.722Z",
   "reviewStartedAt": "2026-11-04T15:30:35.415Z",
@@ -208,5 +212,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T15:35:44.995Z",
+  "reviewCompletedAt": "2026-11-04T15:35:44.995Z",
+  "reviewSummary": "Reviewed completion 342423a3 (on moe/work-2026-10-24, pushed; recorded in task.commits). Diff is 4 files, +20/-20 (numstat 8/8 and 2/2 in each package); well under the 400 LOC cap.\n\nDoD 1: I derived the sha256 from the live PR #234-#237 diffs (gh.exe pr diff, read-only) and from the landed commit (342423a3^..342423a3). Both are fdb4dad0cc6c0f593638140413605532f9e56214bbaa5e5d5a85d411bddb6997, so the changed lines are byte-for-byte the PRs' 20 -/+ pairs. `npm view` confirms ws@8.22.1 integrity sha512-oyL6OPYm...K9g== and @types/node@26.6.6 integrity sha512-MzQj+8Kx...aog==, both matching the lockfiles. The commit touches only packages/moe-{daemon,proxy}/package{,-lock}.json, so moe-vscode and moe-claude-plugin are untouched.\n\nDoD 2: I re-ran the task's gate (/tmp/edf70af0-gate/gate.sh, the checkRef verbatim) from a clean clone at 342423a3 in /tmp, with GATE_BASE=342423a3^. Result: EXIT=0 and GATE-OK. npm ci, npm run build and npm test passed in both packages, with no npm command in the shared checkout. Daemon: 293 files, 7630 passed | 18 skipped. Proxy: 9 files, 335 passed. `npm ls` shows only ws@8.22.1 and @types/node@26.6.6 in each package. Counts match the worker's run.\n\nNote: my first run from the control checkout failed the hash check. The gate's `git diff $B` compares against the working tree, which has dirty .moe/ files there. That is an artifact of where I ran it, not a defect in the commit. The clean-clone run is the valid one.\n\nDoD 3: `gh.exe pr view` on #234-#237 shows only Dependabot's own 2026-11-04T00:23Z comments (missing-label notice), and there is no worker comment, review or close. The worker's completionSummary names the four PRs as closing themselves when PR #230 merges. The live daemon picks up ws 8.22.1 only at the next governor restage.\n\nComplexity pass: nothing to cut. Dependency-only change with no source or test edits.",
+  "requiredCheckAtDone": null
 }

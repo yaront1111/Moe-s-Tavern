@@ -1,0 +1,34 @@
+{
+  "id": "task-d803a601972a461f895b2de2836f52d4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the per-task reopen cap override `task.maxReopens` is documented (SCHEMA.md:495/:1118, MCP_SERVER.md:2405, qa_reject's tool description) and read (qaReject.ts:221-223), but nothing can ever write it: no MCP tool takes it, no IDE client sets it, and 0 of 1062 live task files carry it, so the docs promise a knob no one can turn",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 at the human's request. Hunt #24 (task-53801f5d, architect-cd0ac706) first saw it and left it unfiled as \"a design question, not a docs fix\".\n\nPROBLEM\n- qaReject.ts:221-223 sets the reopen cap to `task.maxReopens` when it is a positive number, else MAX_REOPENS_DEFAULT (3, schema.ts:383).\n- These all describe the field as a per-task override:\n  - schema.ts:381 (\"Override per-task via `task.maxReopens`\") and :988-990 (`maxReopens?: number`);\n  - docs/SCHEMA.md:495 (`maxReopens?: number; // Per-task override of MAX_REOPENS_DEFAULT (3)`) and :1118 (`reopenCount ≥ task.maxReopens ?? MAX_REOPENS_DEFAULT`);\n  - docs/MCP_SERVER.md:2405 (\"per-task override `task.maxReopens`\");\n  - qa_reject's tool description (qaReject.ts:23, \"the task's reopen cap (task.maxReopens, default 3)\").\n- But nothing writes it:\n  - no MCP tool input names it, including create_task;\n  - no daemon path assigns it (`git grep maxReopens -- packages/moe-daemon/src` outside tests finds only the read and the comments);\n  - neither moe-jetbrains/src nor moe-vscode/src mentions it;\n  - 0 of the 1062 .moe/tasks/*.json files carry the key.\n- A human or agent reading the docs would try to tune a row's cap and find no way to do it. The only way to set it is hand-editing .moe/, which is forbidden.\n- History: the field arrived in 480dd8a9 (2026-05-15) and was reworked in 1aa15463 (2026-07-05). It has never had a writer.\n\nDO NOT CONFUSE. qa_reject's REPLY also returns a `maxReopens` field: the effective cap, at qaReject.ts:360, :376, :395 and :464, and MCP_SERVER.md:2385. That reply field is correct and stays.\n\nFIX DIRECTION. The architect decides. The recommendation is (a).\n- (a) Remove the dead override:\n  - drop `maxReopens` from the Task type and its comments (schema.ts:381, :988-990);\n  - make qaReject.ts use MAX_REOPENS_DEFAULT only;\n  - reword qa_reject's description, SCHEMA.md:495 and :1118, and MCP_SERVER.md:2405 to describe a fixed cap of 3;\n  - keep the reply field.\n  Tests that set task.maxReopens directly in fixtures must be updated: qaReject.test.ts (6 refs), governanceFeatures.test.ts (3), lifecycle.e2e.test.ts (2), parkedReview.guard.test.ts (1), qaVerdictHandoff.test.ts (1) and util/taskTimeBudgetDocs.test.ts (1). Check whether each uses the reply field or the task field. If several fixtures use it to reach the cap in fewer rejections, (c) may be cheaper.\n- (b) Make it settable: an optional, bounded `maxReopens` on create_task (for example an integer from 1 to 10), with validation, the MCP_SERVER.md create_task section, SCHEMA.md and tests. Only choose this if a real consumer needs it.\n- (c) Keep it as an internal test seam, and say so in every doc that names it: no tool sets it, and it is not a supported per-task setting.\n\nSKIP. No open row holds qaReject.ts, schema.ts's Task type or these docs sections, as of 15:30Z. Re-check with `node /mnt/d/moe-scratch/governor/lanes.js -v`.\nSize: small. epic-be924fb8 has no finalTaskId, so this row reads isEpicFinal:true by the order fallback. Keep the gate narrow: the vitest files above plus the docs test.",
+  "definitionOfDone": [
+    "After the change, the code and every doc agree. Either nothing documents a per-task maxReopens override, or the override is settable through a validated tool input with tests. With option (c), every doc that names it says no tool sets it.",
+    "qa_reject's reply still returns the effective cap as `maxReopens`, and the existing reopen-cap behaviour still holds with fresh vitest results: the soft-cap re-plan at 3, then the hard-cap park with needsHumanReview at 4, and the repeated-DoD-item flip.",
+    "The vitest files that reference maxReopens (qaReject, governanceFeatures, lifecycle e2e, parkedReview.guard, qaVerdictHandoff, taskTimeBudgetDocs) pass, and the summary names the option chosen and why."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 536.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T15:32:11.270Z",
+  "updatedAt": "2026-11-04T15:32:36.803Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T15:32:23.499Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}
