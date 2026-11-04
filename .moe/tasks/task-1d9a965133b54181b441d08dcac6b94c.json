@@ -13,19 +13,26 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (DoD 1 and 2). Create packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts with the session's own editing tool. Never use a shell write or a subagent.\n\nThe test spawns the entry the way src/index.version.test.ts does: spawnSync of `process.execPath --import <tsx> <src/index.ts> check-architecture ...`.\n- cwd: a fresh git fixture repo with two commits. The first adds arch.json = {version:1, rules:[{id:'a', from:['src/a'], forbid:['src/b'], reason:'r'}]}; the second adds x.md.\n- env: process.env minus every MOE_* key, plus NODE_ENV. Timeout 30 s.\n- tsx: the child's cwd is the fixture, where a bare tsx does not resolve, so pass an absolute URL: `pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href`.\n- Build the fixture with the isolated git helper from checkArchitecture.test.ts: GIT_* stripped, GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL set to /dev/null or NUL, fixed author.\n\nEvery case asserts: no spawn error, stderr '', stdout exactly one line plus its newline, then the parsed report. Cases:\n1-2. `--rules arch.json --project` with no value, under NODE_ENV=production and under development: exit 2 and exactly {detail:'unexpected argument \"--project\"', outcome:'unavailable', reason:'usage'}.\n3. `--rules arch.json --project ''`: the same report, exit 2.\n4. `--rules arch.json --bogus`: detail 'unexpected argument \"--bogus\"', exit 2.\n5. `--rules arch.json`: exit 0, outcome 'passed', rules 'arch.json'. This proves the early dispatch still runs the real check.\n6. Skipped on win32; NODE_ENV=production only. A deleted working directory gives exit 2 with outcome 'unavailable', reason 'repository-unavailable', and a detail matching ENOENT.\n   - tsx reads the cwd while it loads, so the child removes its own cwd: a second `--import` of a small .mjs, written into a temp dir, that runs `process.chdir(process.env.CHECK_ARCH_GONE)` then `fs.rmdirSync(process.env.CHECK_ARCH_GONE)`. CHECK_ARCH_GONE is an empty temp dir.\n   - Add a comment explaining why production only: with NODE_ENV unset or development, the logger's pino-pretty transport worker itself dies in a deleted cwd (10 s, then exit 1). That is a logger issue outside this dispatch.\nRemove both temp dirs in afterEach.\n\nRed proof: run the step 3 command now. The tests fail, and only cases 1, 2 and 6 fail: at acea850b they exit 1 with the pino fatal line, measured at plan time. Run vitest only in a snapshot outside the shared checkout (global rail).\n\nA vetted copy is at /mnt/d/moe-scratch/arch-1d9a9651/checkArchitecture.cli.test.ts. Read it; never cp it into the tree.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
+      ],
+      "note": "New spawn test; red at acea850b: exactly cases 1, 2, 6 fail (snapshot run).",
+      "startedAt": "2026-11-04T09:49:36.644Z",
+      "completedAt": "2026-11-04T09:50:07.538Z"
     },
     {
       "stepId": "step-2",
       "description": "FIX (DoD 1 and 2). Edit only main() in packages/moe-daemon/src/index.ts, with the session's own editing tool.\n\nRight after the `accounts` branch (:1208-1212) and before `parseArgs()`, add a branch for `process.argv[2] === 'check-architecture'`:\n- Take `process.cwd()` in a try.\n- If it throws, write one line to stdout, `JSON.stringify({ detail, outcome: 'unavailable', reason: 'repository-unavailable' })` (detail is the first line of the error's message, at most 500 chars), set process.exitCode = 2 and return.\n- Otherwise call `const { exitCode, report } = await runCheckArchitecture(process.argv.slice(3), cwd)`, write `JSON.stringify(report)` plus a newline to stdout, set process.exitCode = exitCode and return.\n\nDelete the switch's `case 'check-architecture'` block (:1246-1252); it is now unreachable.\n\nAdd a 3-line comment covering three points: the command prints one JSON line and exits 0, 1 or 2; it answers every bad argument itself, so it runs before parseArgs(), which throws on a trailing --project; a deleted cwd is an unavailable repository, not a crash.\n\nError handling: runCheckArchitecture never throws, because its own envelope maps every failure to exit 2. The only throw left on this path is process.cwd(), handled here. Nothing on this path logs through pino or calls process.exit.\n\nDo NOT touch:\n- parseArgs (:59-71);\n- the import block;\n- the default usage text;\n- the entry guard and main().catch at :1288-1293. task-d63e3dba owns that hunk, and merge-tree lands distinct hunks.\n\nThe plan-time prototype is +18/-7. A vetted copy of the whole file at acea850b plus the fix is at /mnt/d/moe-scratch/arch-1d9a9651/index.ts. Compare against it, never cp it: the target may have moved.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T09:50:08.084Z"
     },
     {
       "stepId": "step-3",
@@ -52,7 +59,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-5772dacf",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -64,20 +71,24 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:51.394Z",
-  "updatedAt": "2026-11-04T09:46:59.258Z",
+  "updatedAt": "2026-11-04T09:50:08.084Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:37:46.339Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-c33f294e"
+    "architect-c33f294e",
+    "worker-5772dacf"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T09:46:59.222Z",
   "executionContract": {
@@ -143,5 +154,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T09:46:59.258Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T09:49:36.644Z"
 }

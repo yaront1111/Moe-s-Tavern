@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,17 +94,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:13:13.972Z",
-  "updatedAt": "2026-11-04T09:47:20.394Z",
+  "updatedAt": "2026-11-04T09:50:13.668Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:13:21.593Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T09:49:40.073Z",
+    "wallClockMs": 2178480
   },
   "contextFetchedBy": [
     "architect-c33f294e",
     "worker-a0305b0b",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "high",
@@ -237,10 +240,15 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T09:43:58Z",
-    "at": "2026-11-04T09:47:19.733Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T09:48:04Z",
+    "at": "2026-11-04T09:50:13.668Z"
   },
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-04T09:49:40.073Z",
+  "reviewCompletedAt": "2026-11-04T09:49:40.073Z",
+  "reviewSummary": "Reviewed completion d6e34442 (on moe/work-2026-10-24, contained in control HEAD): one file, scripts/tests/runtime-requirements.test.mjs, +54/-19 (net 35). Re-ran in a git-archive snapshot of HEAD (.moe excluded) under env -i, node v24.21.0. (1) runtime-requirements alone: 9 pass/0 fail; all 7 Docker CI smoke cases 64-183 ms, far under 5 s. (2) CI's 4-file command (installers, install-dependencies-windows, dependencies, runtime-requirements): exit 0, 75 tests/39 pass/0 fail/36 Windows-only skipped. (3) Windows node.exe + Git Bash from a D: scratch copy: 9 pass, 7 smoke cases 98-494 ms. (4) Mutant: docker.yml at 291a34e3^ beside the test file: file fails; no-health, other-project, unhealthy, healthcheck-fails and match go red, fail/mismatch stay green. DoD: docker.yml and ci.yml byte-identical to merge-base; new negative cases cover never-answers and wrong projectPath; each case asserts its own text and that only match prints 'image HEALTHCHECK passed'. Static: stub literal has 0 '${', 0 backslashes, no bash-3.2-unsafe constructs; timeout stays 10000; DOCKER_HOST guard kept; docker stub fails unmodeled subcommands with 97; Node-minimum tests untouched; no temp dir or port. No blocking findings. Scratch removed.",
+  "requiredCheckAtDone": null
 }
