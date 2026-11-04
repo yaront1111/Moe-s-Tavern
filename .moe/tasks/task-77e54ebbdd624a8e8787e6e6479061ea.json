@@ -59,9 +59,11 @@
     {
       "stepId": "step-4",
       "description": "Verification, ONCE, from the task worktree root: run the checkRef exactly as written (also saved in /mnt/d/moe-scratch/task-77e54ebb/checkref.txt). It archives HEAD into a mktemp snapshot and overlays the 5 owned files. Then it runs npm ci, `tsc --noEmit`, a tsc of the two test files (tt.json: the package tsconfig excludes tests), and the FULL daemon vitest suite, which runs because a shared type changed. Last, it pins qaReject.test.ts at ≥ 29 passing tests. Never run npm in the shared checkout (global rail). Never put TMPDIR inside the env -i: a long temp root breaks tsx's IPC pipe (mem:convention-daemon-full-suite-gate-checkref). Expected tail (architect dry-run at d1062cb0): 'Test Files  280 passed (280)', 'Tests  7439 passed | 24 skipped (7463)', 'cap re-plan pin ok', exit 0. The counts grow if the target moved. Submit this fresh command, exit code and output tail to moe.complete_task. Optional extra evidence for DoD 1: the original repro /mnt/d/moe-scratch/hunt-928a468d/A/hardCapSkipsReplan.test.ts passes when copied into the snapshot's src/__hunt__/.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T05:49:41.580Z"
+      "note": "checkRef run verbatim from the task worktree (git archive snapshot, npm ci, tsc --noEmit, tsc -p tt.json, full daemon vitest): Test Files 283 passed (283); Tests 7453 passed | 24 skipped (7477); 'cap re-plan pin ok'; exit 0. Verification only, no file changes.",
+      "startedAt": "2026-11-04T05:49:41.580Z",
+      "completedAt": "2026-11-04T05:50:34.352Z"
     },
     {
       "stepId": "step-5",
@@ -94,7 +96,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:19.281Z",
-  "updatedAt": "2026-11-04T05:49:41.580Z",
+  "updatedAt": "2026-11-04T05:50:34.352Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T00:27:53.895Z",
@@ -104,7 +106,7 @@
     "firstClaimAt": "2026-11-04T00:28:52.393Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -118,7 +120,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:46:44.466Z",
