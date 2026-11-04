@@ -75,8 +75,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -95,12 +95,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:58:21.718Z",
-  "updatedAt": "2026-11-04T08:13:03.545Z",
+  "updatedAt": "2026-11-04T08:14:27.008Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:06:14.182Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:14:07.153Z",
+    "wallClockMs": 472971
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -222,9 +224,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T08:09:27Z",
-    "at": "2026-11-04T08:12:24.740Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T08:12:49Z",
+    "at": "2026-11-04T08:14:27.008Z"
+  },
+  "completedAt": "2026-11-04T08:14:07.153Z",
+  "reviewCompletedAt": "2026-11-04T08:14:07.153Z",
+  "reviewSummary": "Reviewed completion a0e2e328 (on moe/work-2026-10-24, in control HEAD; the 5 target files are unchanged in the later HEAD e62cd216). Diff: 5 files, 8+/8-, matches approvedScope, far under the 400 LOC cap.\n\nRe-ran task.verification in a fresh `git clone --shared` /tmp clone (no npm in the shared checkout): exit 0. grep -F \"another task's\" passes on SKILL.md and MEMORY.md; grep \"dependent\" passes on qa.md; `npm run lint` shows qa.md 36 lines (max 40); both generators printed \"Generated ...\" (no skip); cmp is byte-equal for initFiles.ts and skillFiles.ts.\n\nDoD: (1) SKILL.md:83 and MEMORY.md:86 forbid citing another task's task-<id>-handoff, with the qa_approve retirement as the reason, and give the alternative (quote the fact or cite a gotcha-/pattern-/decision- memory). qa.md:23 folds facts an open dependent plan cites, names `grep -l 'mem:task-<id>-' .moe/tasks/*.json`, and limits delete_memory to handoffs no live memory or open plan cites. (2) Root lint passes. (3) Regenerated copies are cmp-equal.\n\nInvariants: the qa.md archive command is byte-identical (extracted from line 23 of both revisions and compared); MEMORY.md has a single hunk at :86, so :80 and :139-143 are untouched; SKILL.md names no file as the _archive/ hiding source; no daemon runtime code changed; generated hunks are only the expected ones (qa.md and SKILL.md marker shas, :23 and :83 body lines, one new qa.md shipped sha a6f9de8de220).\n\nDocs-only row, no test file; greps + lint + regenerate-and-cmp are its tests, as planned. Complexity pass: nothing to cut. No open task plan cites mem:task-task-c1162cba, so retiring its handoff is safe.",
+  "requiredCheckAtDone": null
 }
