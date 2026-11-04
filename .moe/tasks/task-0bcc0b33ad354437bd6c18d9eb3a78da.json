@@ -53,7 +53,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -66,16 +66,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:00:43.663Z",
-  "updatedAt": "2026-11-04T12:21:48.132Z",
+  "updatedAt": "2026-11-04T12:25:39.786Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:13:45.728Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T12:25:08.581Z",
+    "wallClockMs": 682853
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "qa-96811257"
   ],
   "tier": "light",
   "effort": "high",
@@ -178,9 +181,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T12:15:03Z",
-    "at": "2026-11-04T12:21:48.132Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T12:21:55Z",
+    "at": "2026-11-04T12:25:39.786Z"
+  },
+  "completedAt": "2026-11-04T12:25:08.581Z",
+  "reviewCompletedAt": "2026-11-04T12:25:08.581Z",
+  "reviewSummary": "Reviewed completion 54dd64fb (on moe/work-2026-10-24 and contained in control HEAD): 2 files, +33/-3 (net 30), scope exactly check-dispatch.mjs and local-runner-dispatch.test.mjs. Re-ran the task.verification command in the task worktree (clean; the 2 files are byte-identical to 54dd64fb) under env -i with Linux node v24.21.0: tests 411, pass 410, fail 0, skipped 1 (the skip is a pre-existing environment skip, not this change). Also ran the E, E2, E3, E4 and CD3 rows alone: 5/5 pass.\n\nDoD 1: the onReady stop is now {code:'RUNNER_ENVIRONMENT_NOT_APPROVED', environment} only when typeof environment === 'string' and it matches ENVIRONMENT_ID_RE = /^moe-local-vm-v1:[0-9a-f]{64}$/. E2 asserts the exact stop, the trace get_context/create/delete and a frozen summary. E4 asserts the CLI line has stopped.environment === JOB_ENV and exit 2.\nDoD 2: E3 has one row per kind: wrong prefix, text before the prefix, uppercase hex, 63 hex, 65 hex, trailing newline, control character, number, null, object with toString, String object. Each stops with the code alone. The regex has no m flag, so $ does not match before a trailing newline.\nDoD 3: withCleanup and cleanupOf are untouched. CD3's unlisted variant still reports RUNNER_VM_DELETE_FAILED with causeCode RUNNER_ENVIRONMENT_NOT_APPROVED and now also expects environment: JOB_ENV. The dispatch-refused variant is unchanged. Test E is unchanged and passes.\nDoD 4: the verification command passes, as above.\nRail: the thrown Error message stays the fixed 'Unlisted environment.'. The only new value on any stop is the fixed-format id. Object.assign copies the stop onto the Error, but runOnce swallows that error and the value is the fixed-format id anyway. No daemon, formula or other stop code changed. Seams stay faked, so no Multipass runs. The worker's mutation checks (omit field, drop $, drop ^, drop typeof) match what E2, E3, E4 and CD3 would catch. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
