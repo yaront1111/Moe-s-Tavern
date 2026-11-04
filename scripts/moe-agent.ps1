@@ -2212,14 +2212,14 @@ function Send-MoeCheckRun([hashtable]$Frozen, [hashtable]$Gate) {
 # for the next pre-flight to replay. DELIVERY_RECEIPT_CONFLICT means a receipt
 # already records this candidate's landing: logged, never retried. $true on
 # either answer. A strong journal (its own profile verified-local) outlives an
-# accepted receipt until its attempt is closed (CQ-V08b): Complete-MoePostflight
-# or the next replay drops it. Twin: receipt_send.
+# accepted or a conflicting receipt until its attempt is closed (CQ-V08b):
+# Complete-MoePostflight or the next replay drops it. Twin: receipt_send.
 function Send-MoeReceipt([string]$Path, $Report) {
     $payload = @{ candidateId=[string]$Report.candidateId; target=[string]$Report.target; targetBefore=[string]$Report.targetBefore
         targetAfter=[string]$Report.targetAfter; landedRevision=[string]$Report.landedRevision; workerId=$WorkerId }
     if ($null -ne $Report.pushResult) { $payload.pushResult = [string]$Report.pushResult }
     $ok = Send-MoeEvidence 'record_delivery_receipt' $payload
-    $keep = $ok -and (Get-MoeProp $Report 'profile') -ceq 'verified-local'
+    $keep = (Get-MoeProp $Report 'profile') -ceq 'verified-local'
     if (-not $ok -and $script:MoeRpcCodeName -ceq 'DELIVERY_RECEIPT_CONFLICT') {
         Write-Host "[WARN] candidate $($payload.candidateId) already has a delivery receipt that differs from this report; keeping the recorded one, not retrying." -ForegroundColor Yellow
         $ok = $true

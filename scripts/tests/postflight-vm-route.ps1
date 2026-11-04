@@ -981,8 +981,9 @@ function Invoke-SgRows {
 # deviation: a hashtable's key order is not stable across pwsh processes, so the replay's
 # receipt is compared field by field in sorted-key form, not as wire bytes.
 # Assert-SrRow R KIND -- sr_check: KIND pass (T1), conflict (T3), deferred (T2's landing,
-# the receipt refused), replay (T2's next pre-flight, run 1's RPC rows first) or legacy
-# (T4: finalize_attempt refused, so the journal it wrote today stays to be read).
+# the receipt refused), replay (T2's next pre-flight, run 1's RPC rows first), legacy
+# (T4: finalize_attempt refused, so the journal it wrote today stays to be read), lost
+# (T5: a conflict, then every finalize lost) or lost-replay (T5's next pre-flight).
 function Assert-SrRow($R, [string]$Kind) {
     $rows = @(Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl"); $lines = @(($R.Text -replace '\x1b\[[0-9;]*m', '') -split '\r?\n')
     $i = 0; foreach ($x in $rows) { $x | Add-Member -NotePropertyName ix -NotePropertyValue $i; $i++ }
@@ -1005,15 +1006,39 @@ function Assert-SrRow($R, [string]$Kind) {
     $want = [pscustomobject]@{ candidateId = $id; target = 'refs/heads/main'; targetBefore = $B; targetAfter = $C; landedRevision = $C; workerId = 'worker-vmr' }
     Assert-Sg $R ($rec.Count -gt 0 -and (& $canon $rec[0].args) -ceq (& $canon $want) -and $done[0].ix -lt $rec[0].ix) "the receipt, or it precedes the completion row: $(& $canon $rec[0].args)"
     $conflict = "[WARN] candidate $id already has a delivery receipt that differs from this report; keeping the recorded one, not retrying."
-    Assert-Sg $R ((& $n { $_ -ceq $conflict }) -eq $(if ($Kind -eq 'conflict') { 1 } else { 0 })) 'conflict lines'
-    if ($Kind -eq 'deferred') {
-        Assert-Sg $R ($rec.Count -eq 1 -and $fin.Count -eq 0 -and $phase -ceq 'finalizing' -and $deferred -eq 1 -and $kept -eq 1) "receipts $($rec.Count), finalizes $($fin.Count), phase $phase, deferral lines $deferred, kept lines $kept"
-        Assert-Sg $R ((& $n { $_ -ceq "[WARN] MOE_FINALIZE_DEFERRED_RECEIPT: task task-postflight -- the delivery receipt of $C is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes." }) -eq 1) 'not one exact MOE_FINALIZE_DEFERRED_RECEIPT line'
-        Assert-Sg $R ((& $n { $_.StartsWith("[WARN] delivery receipt not recorded for candidate $id; journal kept at ") }) -eq 1) 'not one receipt-not-recorded line'
+    Assert-Sg $R ((& $n { $_ -ceq $conflict }) -eq $(if ($Kind -in @('conflict', 'lost', 'lost-replay')) { 1 } else { 0 })) 'conflict lines'
+    $strongJournal = {
         $j = Get-Content -Raw -LiteralPath $jf | ConvertFrom-Json; $keys = @($j.PSObject.Properties.Name) -join ','
         Assert-Sg $R ($keys -ceq (($today + @('candidateId', 'treeSha', 'baseRevision', 'planRevision', 'profile')) -join ',')) "the strong journal keys: $keys"
         Assert-Sg $R ($j.candidateId -ceq $id -and $j.treeSha -ceq $cand[0].args.treeSha -and $j.baseRevision -ceq $B -and ($j.planRevision -is [int] -or $j.planRevision -is [long]) -and $j.planRevision -eq 1 -and
             $j.profile -ceq 'verified-local' -and $j.targetBefore -ceq $B -and $j.targetAfter -ceq $C -and $j.landedRevision -ceq $C -and $j.target -ceq 'refs/heads/main') 'the strong journal fields'
+    }
+    if ($Kind -eq 'deferred') {
+        Assert-Sg $R ($rec.Count -eq 1 -and $fin.Count -eq 0 -and $phase -ceq 'finalizing' -and $deferred -eq 1 -and $kept -eq 1) "receipts $($rec.Count), finalizes $($fin.Count), phase $phase, deferral lines $deferred, kept lines $kept"
+        Assert-Sg $R ((& $n { $_ -ceq "[WARN] MOE_FINALIZE_DEFERRED_RECEIPT: task task-postflight -- the delivery receipt of $C is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes." }) -eq 1) 'not one exact MOE_FINALIZE_DEFERRED_RECEIPT line'
+        Assert-Sg $R ((& $n { $_.StartsWith("[WARN] delivery receipt not recorded for candidate $id; journal kept at ") }) -eq 1) 'not one receipt-not-recorded line'
+        & $strongJournal
+        return
+    }
+    # lost (T5): a receipt conflict, then every finalize lost; the strong journal stays (task-a1f3723f).
+    if ($Kind -eq 'lost') {
+        Assert-Sg $R ($rec.Count -eq 1 -and $fin.Count -eq 3 -and @($fin | Where-Object { $_.args.outcome -cne 'landed' -or $_.args.landedRevision -cne $C }).Count -eq 0 -and $rec[0].ix -lt $fin[0].ix) "receipts $($rec.Count), finalizes $($fin.Count), or not three landed finalizes after the receipt"
+        Assert-Sg $R ($phase -ceq 'finalizing' -and $deferred -eq 0) "phase $phase, deferral lines $deferred"
+        Assert-Sg $R ((& $n { $_.StartsWith('[WARN] receipt journal ') -and $_.EndsWith(' kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it.') }) -eq 1) 'not one strong journal-kept line'
+        Assert-Sg $R ((& $n { $_ -ceq '[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect).' }) -eq 1) 'not one exhausted-finalize line'
+        & $strongJournal
+        Assert-Sg $R (-not (Test-Path -LiteralPath "$project\.moe\receipts\$id.json")) 'a conflict stored a receipt'
+        return
+    }
+    # lost-replay (T5's next pre-flight): the conflict again, the finalize answered; the attempt closes and the journal goes.
+    if ($Kind -eq 'lost-replay') {
+        Assert-Sg $R ($rec.Count -eq 2 -and (& $canon $rec[1].args) -ceq (& $canon $rec[0].args)) "receipts $($rec.Count), or the replay did not re-send the journaled receipt"
+        Assert-Sg $R ((& $n { $_.StartsWith('[receipt] replaying the delivery receipt of task task-postflight from ') }) -eq 1) 'not one replay line'
+        $first = $fin[0].args; $last = $fin[-1].args
+        Assert-Sg $R ($fin.Count -eq 4 -and $last.outcome -ceq 'landed' -and $last.landedRevision -ceq $C -and $last.attemptId -ceq $first.attemptId -and $last.generation -eq $first.generation -and
+            $last.workerId -ceq $first.workerId -and $rec[-1].ix -lt $fin[-1].ix) "finalizes $($fin.Count), or the last is not the attempt's landed finalize after the last receipt"
+        Assert-Sg $R ($phase -ceq 'closed' -and -not (Test-Path -LiteralPath $jf) -and $deferred -eq 0 -and $kept -eq 0 -and @(& $of check-dispatch).Count -eq 1) "phase $phase, the journal stayed, a deferral or kept line, or the replay dispatched again"
+        Assert-Sg $R (-not (Test-Path -LiteralPath "$project\.moe\receipts\$id.json")) 'a conflict stored a receipt'
         return
     }
     Assert-Sg $R ($rec.Count -eq $(if ($Kind -eq 'replay') { 2 } else { 1 }) -and $fin.Count -eq 1 -and $fin[0].args.outcome -ceq 'landed' -and $fin[0].args.landedRevision -ceq $C -and $rec[-1].ix -lt $fin[0].ix) "receipts $($rec.Count), or not one landed finalize after the last"
@@ -1027,7 +1052,7 @@ function Assert-SrRow($R, [string]$Kind) {
 }
 function Invoke-SrRows {
     $strong = @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }
-    Write-Host '[strong receipt] T1-T4: the receipt between the completion row and finalize_attempt, the deferral and its replay, a conflict, the legacy control'
+    Write-Host '[strong receipt] T1-T5: the receipt between the completion row and finalize_attempt, the deferral and its replay, a conflict, the legacy control, a conflict with every finalize lost and its replay'
     Assert-SrRow (Invoke-SgRow SR-T1 $strong) pass
     Assert-SrRow (Invoke-SgRow SR-T2 ($strong + @{ FAKE_EVIDENCE_MODE = 'receipt-refused' })) deferred
     # The replay is the same seat's next run on the same project: its claim is refused
@@ -1040,7 +1065,14 @@ function Invoke-SrRows {
     Assert-SrRow $r replay
     Assert-SrRow (Invoke-SgRow SR-T3 ($strong + @{ FAKE_EVIDENCE_MODE = 'receipt-conflict' })) conflict
     Assert-SrRow (Invoke-SgRow SR-T4 @{ FAKE_EVIDENCE_MODE = 'finalize_attempt-refuse' }) legacy
-    Write-Host '[strong receipt] ok T1, T2, T2-replay, T3, T4'
+    Assert-SrRow (Invoke-SgRow SR-T5 ($strong + @{ FAKE_EVIDENCE_MODE = 'receipt-conflict-finalize-lost' })) lost
+    Remove-Item -LiteralPath $keep -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $project -Destination $keep -Recurse -Force
+    $script:VmrSetup = { Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $keep -Destination $project -Recurse -Force }
+    try { $r = Invoke-SgRow SR-T5-replay @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing'; FAKE_EVIDENCE_MODE = 'receipt-conflict' } }
+    finally { $script:VmrSetup = { Initialize-SgFixture } }
+    Assert-SrRow $r lost-replay
+    Write-Host '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay'
 }
 function Test-SgvRow([string]$Row, [int]$Rc, [string]$Want, [byte[]]$Bytes) {
     $file = "$tempRoot\sgv.reply"; [IO.File]::WriteAllBytes($file, $Bytes)

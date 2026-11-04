@@ -6476,9 +6476,9 @@ PY
 # or stops the loop, and keeps the journal for the next pre-flight to replay.
 # DELIVERY_RECEIPT_CONFLICT means a receipt already records this candidate's
 # landing: logged, never retried. RECEIPT_ACKED=true on either answer. A strong
-# journal (its own profile verified-local) outlives an accepted receipt until
-# its attempt is closed (CQ-V08b): finalize_postflight or the next replay drops
-# it. Twin: Send-MoeReceipt.
+# journal (its own profile verified-local) outlives an accepted or a conflicting
+# receipt until its attempt is closed (CQ-V08b): finalize_postflight or the next
+# replay drops it. Twin: Send-MoeReceipt.
 receipt_send() {
     local report="$1" journal="$2" parsed args cand strong err="$SECURE_TEMP_DIR/receipt-err.txt"
     RECEIPT_ACKED=""
@@ -6501,7 +6501,7 @@ print(d["candidateId"]); print("1" if d.get("profile")=="verified-local" else "-
     if grep -q '"codeName": *"DELIVERY_RECEIPT_CONFLICT"' "$err" 2>/dev/null; then
         echo -e "${YELLOW}[WARN]${NC} candidate $cand already has a delivery receipt that differs from this report; keeping the recorded one, not retrying."
         RECEIPT_ACKED=true
-        [ -z "$journal" ] || rm -f "$journal"
+        [ -z "$journal" ] || [ "$strong" = 1 ] || rm -f "$journal"
         return 0
     fi
     echo -e "${YELLOW}[WARN]${NC} delivery receipt not recorded for candidate $cand; journal kept at $journal for the next pre-flight to replay."

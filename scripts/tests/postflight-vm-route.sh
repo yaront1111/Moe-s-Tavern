@@ -1054,10 +1054,11 @@ echo "[strong gate] ok SGV, SGU U1-U7 and SG8"
 # --- [strong receipt] CQ-M07t: a strong worktree landing sends its delivery receipt
 # after the publish and before finalize_attempt; an unanswered one defers the
 # finalize to the next pre-flight replay. Same fixture as [strong gate].
-echo '[strong receipt] T1-T4: the receipt between the completion row and finalize_attempt, the deferral and its replay, a conflict, the legacy control'
+echo '[strong receipt] T1-T5: the receipt between the completion row and finalize_attempt, the deferral and its replay, a conflict, the legacy control, a conflict with every finalize lost and its replay'
 # sr_check ROW KIND -- KIND pass (T1), conflict (T3), deferred (T2's landing: the receipt
-# refused), replay (T2's next pre-flight, run 1's RPC rows first) or legacy (T4:
-# finalize_attempt refused, so the journal it wrote today stays to be read).
+# refused), replay (T2's next pre-flight, run 1's RPC rows first), legacy (T4:
+# finalize_attempt refused, so the journal it wrote today stays to be read), lost (T5:
+# a conflict, then every finalize lost) or lost-replay (T5's next pre-flight).
 sr_check() {
   "$NODE" - "$PROJECT" "$OUT" "$TMP_DIR/sg-base" "$VMR_CODE" "$@" <<'JS' || vmr_fail "$1" 'see the assertion above'
 const fs=require('node:fs'),a=require('node:assert/strict'),cp=require('node:child_process'),[p,out,baseFile,rc,row,kind]=process.argv.slice(2);
@@ -1079,15 +1080,39 @@ if(kind==='legacy'){
 const id=cand[0].args.id,want={candidateId:id,target:'refs/heads/main',targetBefore:B,targetAfter:C,landedRevision:C,workerId:'worker-vmr'};
 a.ok(rec.length>0,'no receipt'); a.deepEqual(rec[0].args,want,'the receipt'); a.ok(at(done[0])<at(rec[0]),'the receipt precedes the completion row');
 const conflict='[WARN] candidate '+id+' already has a delivery receipt that differs from this report; keeping the recorded one, not retrying.';
-a.equal(count(l=>l===conflict),kind==='conflict'?1:0,'conflict lines');
-if(kind==='deferred'){
-  a.equal(rec.length,1); a.equal(fin.length,0,'finalized before the receipt was recorded'); a.equal(phase,'finalizing'); a.equal(deferred,1); a.equal(kept,1);
-  a.equal(count(l=>l==='[WARN] MOE_FINALIZE_DEFERRED_RECEIPT: task task-postflight -- the delivery receipt of '+C+' is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes.'),1);
-  a.equal(count(l=>l.startsWith('[WARN] delivery receipt not recorded for candidate '+id+'; journal kept at ')),1);
+a.equal(count(l=>l===conflict),['conflict','lost','lost-replay'].includes(kind)?1:0,'conflict lines');
+const strongJournal=()=>{
   const j=JSON.parse(fs.readFileSync(jf,'utf8'));
   a.deepEqual(Object.keys(j),[...today,'candidateId','treeSha','baseRevision','planRevision','profile'],'the strong journal keys');
   a.deepEqual([j.candidateId,j.treeSha,j.baseRevision,j.planRevision,j.profile,j.targetBefore,j.targetAfter,j.landedRevision,j.target],
     [id,cand[0].args.treeSha,B,1,'verified-local',B,C,C,'refs/heads/main'],'the strong journal fields');
+};
+if(kind==='deferred'){
+  a.equal(rec.length,1); a.equal(fin.length,0,'finalized before the receipt was recorded'); a.equal(phase,'finalizing'); a.equal(deferred,1); a.equal(kept,1);
+  a.equal(count(l=>l==='[WARN] MOE_FINALIZE_DEFERRED_RECEIPT: task task-postflight -- the delivery receipt of '+C+' is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes.'),1);
+  a.equal(count(l=>l.startsWith('[WARN] delivery receipt not recorded for candidate '+id+'; journal kept at ')),1);
+  strongJournal();
+  process.exit(0);
+}
+// lost (T5): a receipt conflict, then every finalize lost; the strong journal stays (task-a1f3723f).
+if(kind==='lost'){
+  a.equal(rec.length,1); a.equal(fin.length,3,'one exhausted finalize_attempt');
+  a.ok(fin.every(r=>r.args.outcome==='landed'&&r.args.landedRevision===C),'the lost finalizes'); a.ok(at(rec[0])<at(fin[0]),'finalize_attempt precedes the receipt');
+  a.equal(phase,'finalizing'); a.equal(deferred,0,'a conflict deferred the finalize');
+  a.equal(count(l=>l.startsWith('[WARN] receipt journal ')&&l.endsWith(' kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it.')),1);
+  a.equal(count(l=>l==='[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect).'),1);
+  strongJournal(); a.equal(fs.existsSync(p+'/.moe/receipts/'+id+'.json'),false,'a conflict stored a receipt');
+  process.exit(0);
+}
+// lost-replay (T5's next pre-flight): the conflict again, the finalize answered; the attempt closes and the journal goes.
+if(kind==='lost-replay'){
+  a.equal(rec.length,2); a.equal(JSON.stringify(rec[1].args),JSON.stringify(rec[0].args),'the replay did not re-send the journaled receipt');
+  a.equal(count(l=>l.startsWith('[receipt] replaying the delivery receipt of task task-postflight from ')),1);
+  a.equal(fin.length,4,'finalize_attempt rows'); const f=fin.at(-1).args,f0=fin[0].args;
+  a.deepEqual([f.outcome,f.landedRevision,f.attemptId,f.generation,f.workerId],['landed',C,f0.attemptId,f0.generation,f0.workerId],'the replayed finalize');
+  a.ok(at(rec.at(-1))<at(fin.at(-1)),'finalize_attempt precedes the replayed receipt'); a.equal(phase,'closed'); a.equal(fs.existsSync(jf),false,'the receipt journal stayed');
+  a.equal(kept,0); a.equal(deferred,0); a.equal(of('check-dispatch').length,1,'the replay dispatched again');
+  a.equal(fs.existsSync(p+'/.moe/receipts/'+id+'.json'),false,'a conflict stored a receipt');
   process.exit(0);
 }
 a.equal(rec.length,kind==='replay'?2:1,'record_delivery_receipt rows'); a.equal(fin.length,1); a.equal(fin[0].args.outcome,'landed'); a.equal(fin[0].args.landedRevision,C);
@@ -1117,7 +1142,14 @@ vmr_run SR-T3 worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATC
 sr_check SR-T3 conflict
 vmr_run SR-T4 worker codex "$SG_READY" on 0 FAKE_EVIDENCE_MODE=finalize_attempt-refuse
 sr_check SR-T4 legacy
-echo "[strong receipt] ok T1, T2, T2-replay, T3, T4"
+vmr_run SR-T5 worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATCH=pass FAKE_EVIDENCE_MODE=receipt-conflict-finalize-lost
+sr_check SR-T5 lost
+rm -rf "$TMP_DIR/sr-keep"; cp -a "$PROJECT" "$TMP_DIR/sr-keep"
+VMR_SETUP=sr_restore
+vmr_run SR-T5-replay worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CLAIM_MODE=finalizing FAKE_EVIDENCE_MODE=receipt-conflict
+VMR_SETUP=sg_fixture
+sr_check SR-T5-replay lost-replay
+echo "[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay"
 )
 
 echo "PASS postflight-vm-route.sh"

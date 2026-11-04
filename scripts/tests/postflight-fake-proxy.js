@@ -262,10 +262,11 @@ function evidenceRpc() {
     error:{code:-32002,message,data:{codeName:codeName || 'FIXTURE_REFUSED'}}}) + '\n');
   const mode = process.env.FAKE_EVIDENCE_MODE || '';
   if (mode === tool + '-refuse') { refusal('fixture persistence refused'); return true; }
-  if (mode === tool + '-null') { ok(null); return true; }
+  // receipt-conflict-finalize-lost: a receipt conflict whose every finalize is lost (task-a1f3723f).
+  if (mode === tool + '-null' || (tool === 'finalize_attempt' && mode === 'receipt-conflict-finalize-lost')) { ok(null); return true; }
   if (mode === tool + '-malformed') { ok({success:true}); return true; }
   if (tool === 'record_delivery_receipt' && mode === 'receipt-refused') { refusal('fixture receipt refused'); return true; }
-  if (tool === 'record_delivery_receipt' && mode === 'receipt-conflict') { refusal('fixture receipt conflict', 'DELIVERY_RECEIPT_CONFLICT'); return true; }
+  if (tool === 'record_delivery_receipt' && ['receipt-conflict','receipt-conflict-finalize-lost'].includes(mode)) { refusal('fixture receipt conflict', 'DELIVERY_RECEIPT_CONFLICT'); return true; }
   // receipt-replay, receipt-rebase-replay, receipt-foreign-replay: the FIRST
   // receipt is never answered; the supervisor hard-kills the wrapper tree while
   // it waits (acceptance case 6's crash).
