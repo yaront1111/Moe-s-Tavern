@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -90,16 +90,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:38:27.340Z",
-  "updatedAt": "2026-11-04T10:01:59.987Z",
+  "updatedAt": "2026-11-04T10:04:22.057Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:45:23.833Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T10:04:22.055Z",
+    "wallClockMs": 1138222
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "high",
@@ -201,5 +204,9 @@
     "kind": "completion",
     "sessionId": "worker-a0305b0b@2026-11-04T09:58:00Z",
     "at": "2026-11-04T10:01:59.987Z"
-  }
+  },
+  "completedAt": "2026-11-04T10:04:22.055Z",
+  "reviewCompletedAt": "2026-11-04T10:04:22.055Z",
+  "reviewSummary": "Reviewed completion fec9a842 (on moe/work-2026-10-24; I verified it with `git show` and `git branch --contains`). The diff is +45/-7 across 5 files: doctor.sh, dependencies.test.mjs, moe-vscode/README.md, docs/MAC_INSTALL.md and CONTRIBUTING.md. Only floor lines and the rail-required test changed; `git diff --check` is clean.\n\nI re-ran everything in a `git archive` snapshot of the commit outside the shared tree, with `env -i` and Node 24:\n- `bash -n scripts/doctor.sh` and `node --test scripts/tests/dependencies.test.mjs`: syntax OK, 34/34 pass, 0 fail.\n- DoD1, real doctor.sh with a stub `node` first on PATH:\n  - v20.11.0 prints `[ERROR] Node.js version 20.11.0 is too old. Requires >= 22.22 (24 LTS recommended)`, followed by the `Update:` hint.\n  - v22.22.0 prints `[OK] Node.js version 22.22.0 (>= 22.22 required)`.\n  - Edge cases: v22.21.9, v22 (no minor), empty and vX all fail. v22.22.0-nightly and v100.0.0 pass. None of the eight runs wrote \"integer expression expected\" to stderr.\n- Mutant check: with the old doctor.sh restored, the 8 new doctor cases fail (pass 26, fail 8), so the tests do exercise the floor.\n- DoD2: the three floor lines now say 22.22+ and match engines `>=22.22.0`. The strict floor-statement grep at the commit finds nothing outside `.moe` task records and docs/plans. The wider `Node 18` grep shows only GETTING_STARTED.md:29, TROUBLESHOOTING.md:68 and workloadSnapshot.ts:120. None of them states a floor, and the worker left them on purpose.\n- Invariants hold. The colours, the `Update:` hint and the return codes are unchanged. The installers and the proxy's engines field are untouched. The test uses the file's own `bash` and `shellPath` helpers, so it works under Git Bash on Windows.\n\nI did not run the JetBrains or Windows legs.\n\nNote, no action needed: engines accepts 23/25/27, but the installer's `moe_node_ready` only accepts 22.22+, 24 and 26. The worker documented this.",
+  "requiredCheckAtDone": null
 }

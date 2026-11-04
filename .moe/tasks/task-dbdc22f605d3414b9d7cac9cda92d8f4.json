@@ -76,8 +76,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -89,12 +89,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:34:09.187Z",
-  "updatedAt": "2026-11-04T10:00:05.758Z",
+  "updatedAt": "2026-11-04T10:04:33.493Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:38:11.589Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T10:04:09.648Z",
+    "wallClockMs": 1558059
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -194,9 +196,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T09:53:48Z",
-    "at": "2026-11-04T09:59:11.246Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T09:59:49Z",
+    "at": "2026-11-04T10:04:33.493Z"
+  },
+  "completedAt": "2026-11-04T10:04:09.648Z",
+  "reviewCompletedAt": "2026-11-04T10:04:09.648Z",
+  "reviewSummary": "APPROVED. Reviewed completion bec9a063 (on moe/work-2026-10-24; tree == candidate == task worktree). 4 files, +146/-3 (net 143), all in plan; no weakened tests, no .moe/ edits.\n\nRE-RAN (Windows equivalent of `cd moe-jetbrains && ./gradlew test`, jetbrains-gradle lease taken and released): `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\.worktrees\\task-dbdc22f605d3414b9d7cac9cda92d8f4\\moe-jetbrains && .\\gradlew.bat test --rerun'` exit 0, BUILD SUCCESSFUL, :test executed. Fresh XMLs: OpenListenerTest 2/0 failures, ServiceTest 4/0; suite 687 tests, 0 failures, 6 skipped (not from this diff).\n\nMUTATION (mine, restored; diff vs bec9a063 = 0 after): both guards off via `false &&` -> 6 run, 2 failed (the two LightEdit cases: listener IllegalStateException at the service lookup after the registry write; service AssertionError, status published). Normal controls passed. Restored, full suite green again.\n\nDoD: (1) LightEdit.owns(project) is first in projectOpened (before basePath/registerProject/service()) and first in connect() (before wsLock, status, ensureMoeInitialized, ensureDaemonRunning); tests pin it and fail without it; listener test sets user.home to a temp dir restored in finally, service tests keep basePath null, so no real registry write or daemon. (2) Normal path unchanged bar one instanceof; controls still register / publish \"Project not initialized\". (3) gradle test green.\n\nRe-grep of registerProject/ensureMoeInitialized/initializeProject/ensureDaemonRunning callers: listener, connect(), supervisor, explicit Init actions only; none new; restartDaemon ends in connect(), covered.\n\nNon-blocking: manual one-off still open (out of scope): delete <IDE config>/light-edit/.moe and the LightEditProject entry in ~/.moe/projects.json. Explicit Init actions left unguarded on purpose.",
+  "requiredCheckAtDone": null
 }
