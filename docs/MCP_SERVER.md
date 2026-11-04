@@ -2089,9 +2089,13 @@ Release a task from its assigned worker (clears `assignedWorkerId` and keeps the
     openQuestions?: string        // ≤4000 chars
   },
   workerId?: string,              // Caller worker ID (auto-injected by proxy)
+  attemptId?: string,             // Optional fencing identity (≤128 chars): the attemptId moe.claim_next_task returned. Omitted = unfenced, as before
+  generation?: number,            // Optional fencing token (integer ≥ 1): the generation moe.claim_next_task returned, checked together with attemptId
   force?: boolean                 // Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. A caller whose workerId resolves to no governor role is refused NOT_ALLOWED; a human or the board omits workerId.
 }
 ```
+
+**Attempt fence.** A presented `attemptId` (and `generation`, when supplied) goes through the same currency check as the step tools (`assertAttemptCurrent`), inside the state lock beside the ownership gates and before any write: it must equal the task's current open attempt. A superseded, closed or future attempt is refused `STATE_CONFLICT` (`-32002`) `ATTEMPT_SUPERSEDED` and nothing is released; a malformed identity (a blank or non-string `attemptId`, one over 128 characters, or a `generation` that is not a positive integer) is refused `INVALID_INPUT` (`-32602`). A task with no attempt record skips the check, and an omitted identity is the unfenced legacy path. The launchers' seat-outage release (`launch_outage_release`, `Invoke-MoeLaunchOutageRelease`) sends the pinned `MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION`.
 
 **Returns:**
 ```typescript
