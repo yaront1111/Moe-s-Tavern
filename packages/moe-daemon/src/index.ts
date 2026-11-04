@@ -1210,6 +1210,24 @@ async function main() {
     process.exitCode = runAccountsCli(process.argv.slice(3));
     return;
   }
+  // `check-architecture` prints one JSON line and exits 0 passed, 1 failed, 2 inconclusive or unavailable. It answers
+  // every bad argument itself, so it runs before parseArgs(), which throws on a trailing --project. process.cwd()
+  // throws in a deleted directory: that is an unavailable repository, not a crash.
+  if (process.argv[2] === 'check-architecture') {
+    let cwd: string;
+    try {
+      cwd = process.cwd();
+    } catch (error) {
+      const detail = (error instanceof Error ? error.message : String(error)).split(/\r?\n/)[0].slice(0, 500);
+      process.stdout.write(`${JSON.stringify({ detail, outcome: 'unavailable', reason: 'repository-unavailable' })}\n`);
+      process.exitCode = 2;
+      return;
+    }
+    const { exitCode, report } = await runCheckArchitecture(process.argv.slice(3), cwd);
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    process.exitCode = exitCode;
+    return;
+  }
   const { command, projectPath, port, name, host } = parseArgs();
 
   switch (command) {
@@ -1242,13 +1260,6 @@ async function main() {
         process.stdout.write(line + '\n');
       }
       process.exit(result.exitCode);
-      break;
-    }
-    case 'check-architecture': {
-      // One JSON line on stdout; exit 0 passed, 1 failed, 2 inconclusive or unavailable.
-      const { exitCode, report } = await runCheckArchitecture(process.argv.slice(3), process.cwd());
-      process.stdout.write(`${JSON.stringify(report)}\n`);
-      process.exitCode = exitCode;
       break;
     }
     default:
