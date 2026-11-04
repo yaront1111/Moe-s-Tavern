@@ -6005,7 +6005,11 @@ finalize_postflight() {
     [ "${MOE_FINALIZE_DONE:-false}" != true ] || return "${MOE_FINALIZE_RC:-0}"
     MOE_FINALIZE_DONE=true
     MOE_FINALIZE_RC=1
-    local outcome=failed
+    local outcome=failed strong=""
+    # A strong landing: this session's pin, or (under any pin) a worktree landing whose
+    # own journal is strong, as strong_landing_task also journals strong from an attempt
+    # record or a leftover journal (RECEIPT_STRONG, set only by wt_land_published).
+    if [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] || [ "${RECEIPT_STRONG:-}" = true ]; then strong=1; fi
     case "${LAND_OUTCOME:-nothing}" in
         # A worktree completion is landed only once its C is on the target
         # (land_worktree_completion clears MOE_WT_COMPLETION then); until then a
@@ -6020,7 +6024,7 @@ finalize_postflight() {
     # transfer) the attempt stays finalizing, which holds qa_approve and every
     # claim of the task, so nothing reaches DONE and no dependent is released
     # before the replay settles it.
-    if [ "$outcome" = landed ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] \
+    if [ "$outcome" = landed ] && [ -n "$strong" ] \
         && { [ "${LAND_PROOF_UNTRANSFERRED:-}" = true ] \
             || { [ "${RECEIPT_ACKED:-}" != true ] && [ -n "${RECEIPT_JOURNAL:-}" ] && [ -e "$RECEIPT_JOURNAL" ]; }; }; then
         echo -e "${YELLOW}[WARN]${NC} MOE_FINALIZE_DEFERRED_RECEIPT: task ${LAND_TASK_ID:-} -- the delivery receipt of $LAND_SHA is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes."
@@ -6031,7 +6035,7 @@ finalize_postflight() {
     MOE_FINALIZE_RC=0
     # CQ-V08b: the strong journal goes only once its attempt is closed; a lost
     # finalize (above) or an attempt still open keeps it for the next replay.
-    if [ "$outcome" = landed ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] && [ -n "${RECEIPT_JOURNAL:-}" ] \
+    if [ "$outcome" = landed ] && [ -n "$strong" ] && [ -n "${RECEIPT_JOURNAL:-}" ] \
         && [ "$(moe_pinned_attempt_phase)" = closed ]; then
         rm -f "$RECEIPT_JOURNAL"
     fi
@@ -6749,7 +6753,7 @@ run_landing() {
     ATTR_DIR="$work/attr"
     mkdir -p "$ATTR_DIR"
     LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""; LAND_RECORDED=""; LAND_PUSH_RESULT=""
-    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""
+    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""; RECEIPT_STRONG=""
     LAND_N_PATHS=0; LAND_N_INFERRED=0; LAND_RESCUE_REF=""; LAND_STAGED_FILE=""; LAND_DROPPED_FILE=""
     TI_N_STAGED=0; TI_N_INFERRED=0
     local policy_override="${LAND_POLICY_OVERRIDE:-}"
@@ -7904,7 +7908,8 @@ if [ "$MIGRATION" = true ]; then run_migration_landing; exit 1; fi
 # deferred): sync BRANCH (best-effort), send the journal's exact completion row
 # and finalize_attempt landed; the journal goes once both answered. A strong
 # journal (its own profile verified-local, CQ-M07t) also sends its delivery
-# receipt between the two.
+# receipt between the two, and sets RECEIPT_STRONG so finalize_postflight treats
+# it as a strong landing whatever this session's pin (task-edf2162b).
 wt_land_published() {
     local ok=true
     MOE_WT_COMPLETION=false
@@ -7915,7 +7920,7 @@ wt_land_published() {
         # The receipt follows the row, as in the replay, so a lost row sends none. finalize_postflight
         # defers while the receipt is unacknowledged (CQ-V08) and drops the journal only once the
         # attempt is closed (CQ-V08b); otherwise the next pre-flight replays it.
-        RECEIPT_JOURNAL="$3"; RECEIPT_ACKED=""
+        RECEIPT_JOURNAL="$3"; RECEIPT_ACKED=""; RECEIPT_STRONG=true
         [ "$ok" != true ] || receipt_send "$(cat "$3")" "$3" || true
         finalize_postflight || true
         [ ! -e "$3" ] || echo -e "${YELLOW}[WARN]${NC} receipt journal $3 kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it."
@@ -10247,7 +10252,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
     MOE_FINALIZE_DONE=false; MOE_FINALIZE_RC=0; MOE_UNLANDED_REASON=""; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
-    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""
+    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""; RECEIPT_STRONG=""
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     # Exported blank: no CLI inherits a previous task's attempt (sh hot reload keeps env).
     export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""

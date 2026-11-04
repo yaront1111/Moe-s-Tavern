@@ -7559,7 +7559,8 @@ function Invoke-MoeMigrationLanding([string]$Br) {
 # (best-effort), send the journal's exact completion row and finalize_attempt
 # landed; the journal goes once both answered. A strong journal (its own
 # profile verified-local, CQ-M07t) also sends its delivery receipt between the
-# two. Twin: wt_land_published.
+# two, and sets ReceiptStrong so Complete-MoePostflight treats it as a strong
+# landing whatever this session's pin (task-edf2162b). Twin: wt_land_published.
 function Complete-MoeWorktreeLanding([hashtable]$Res, [string]$Journal) {
     $ok = $false; $strong = $false
     try {
@@ -7574,7 +7575,7 @@ function Complete-MoeWorktreeLanding([hashtable]$Res, [string]$Journal) {
             # The receipt follows the row, as in the replay, so a lost row sends none. Complete-MoePostflight
             # defers while the receipt is unacknowledged (CQ-V08) and drops the journal only once the
             # attempt is closed (CQ-V08b); otherwise the next pre-flight replays it.
-            $Res.ReceiptJournal = $Journal; $Res.ReceiptAcked = $false
+            $Res.ReceiptJournal = $Journal; $Res.ReceiptAcked = $false; $Res.ReceiptStrong = $true
             if ($ok) { $Res.ReceiptAcked = Send-MoeReceipt $Journal $j }
         }
         $ok = (Complete-MoePostflight) -and $ok
@@ -8729,6 +8730,10 @@ function Complete-MoePostflight {
     if ($script:MoeFinalizeDone) { return [bool]$script:MoeFinalizeRc }
     $script:MoeFinalizeDone=$true; $script:MoeFinalizeRc=$false
     $r=$script:MoeLandingResult
+    # A strong landing: this session's pin, or (under any pin) a worktree landing whose
+    # own journal is strong, as Test-MoeStrongLandingTask also journals strong from an
+    # attempt record or a leftover journal (ReceiptStrong, set only by Complete-MoeWorktreeLanding).
+    $strong = $script:PinnedAttemptProfile -ceq 'verified-local' -or ($null -ne $r -and $r.ReceiptStrong -eq $true)
     $outcome='nothing-to-commit'; $sha=''
     if ($r) {
         # A worktree completion is landed only once its C is on the target
@@ -8745,7 +8750,7 @@ function Complete-MoePostflight {
         # transfer) the attempt stays finalizing, which holds qa_approve and every
         # claim of the task, so nothing reaches DONE and no dependent is released
         # before the replay settles it. Twin: finalize_postflight.
-        if ($outcome -eq 'landed' -and $script:PinnedAttemptProfile -ceq 'verified-local' -and
+        if ($outcome -eq 'landed' -and $strong -and
             ($r.ProofUntransferred -or (-not $r.ReceiptAcked -and $r.ReceiptJournal -and (Test-Path -LiteralPath $r.ReceiptJournal)))) {
             Write-Host "[WARN] MOE_FINALIZE_DEFERRED_RECEIPT: task $preflightTaskId -- the delivery receipt of $sha is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes." -ForegroundColor Yellow
             $script:MoeFinalizeRc=$true
@@ -8755,7 +8760,7 @@ function Complete-MoePostflight {
     $script:MoeFinalizeRc=[bool](Send-MoeFinalize $outcome $sha $(if ($outcome -eq 'unlanded') { $r.Unlanded } else { @{} }))
     # CQ-V08b: the strong journal goes only once its attempt is closed; a lost
     # finalize or an attempt still open keeps it for the next replay. Twin: finalize_postflight.
-    if ($script:MoeFinalizeRc -and $outcome -eq 'landed' -and $script:PinnedAttemptProfile -ceq 'verified-local' -and $r.ReceiptJournal -and
+    if ($script:MoeFinalizeRc -and $outcome -eq 'landed' -and $strong -and $r.ReceiptJournal -and
         (Get-MoePinnedAttemptPhase) -ceq 'closed') {
         Remove-Item -LiteralPath $r.ReceiptJournal -Force -ErrorAction SilentlyContinue
     }

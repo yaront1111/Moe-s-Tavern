@@ -1072,7 +1072,27 @@ function Invoke-SrRows {
     try { $r = Invoke-SgRow SR-T5-replay @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing'; FAKE_EVIDENCE_MODE = 'receipt-conflict' } }
     finally { $script:VmrSetup = { Initialize-SgFixture } }
     Assert-SrRow $r lost-replay
-    Write-Host '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay'
+    # M1-M2 (task-edf2162b): an observe pin whose task's newest attempt record ties at
+    # generation 7 as verified-local, so Test-MoeStrongLandingTask journals the landing strong.
+    # The finalize keys on that journal, not on the pin. The record is closed, so no
+    # open-attempt or finalizing scan reads it.
+    Write-Host '[strong receipt] M1, M1-replay, M2: an observe pin with a strong journal finalizes as a strong landing'
+    $mixed = @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }
+    $mixedSetup = {
+        Initialize-SgFixture; New-Item -ItemType Directory -Force -Path "$project\.moe\attempts" | Out-Null
+        [IO.File]::WriteAllText("$project\.moe\attempts\attempt-tie.json", '{"id":"attempt-tie","taskId":"task-postflight","generation":7,"workerId":"worker-old","phase":"closed","executionPolicySnapshot":{"version":2,"profile":"verified-local","planRevision":1}}')
+    }
+    $mKeep = "$tempRoot\sr-mkeep"; Remove-Item -LiteralPath $mKeep -Recurse -Force -ErrorAction SilentlyContinue
+    $script:VmrSetup = $mixedSetup
+    try {
+        Assert-SrRow (Invoke-SgRow SR-M1 ($mixed + @{ FAKE_EVIDENCE_MODE = 'receipt-refused' })) deferred
+        Copy-Item -LiteralPath $project -Destination $mKeep -Recurse -Force
+        $script:VmrSetup = { Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $mKeep -Destination $project -Recurse -Force }
+        Assert-SrRow (Invoke-SgRow SR-M1-replay @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing' }) replay
+        $script:VmrSetup = $mixedSetup
+        Assert-SrRow (Invoke-SgRow SR-M2 $mixed) pass
+    } finally { $script:VmrSetup = { Initialize-SgFixture } }
+    Write-Host '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay, M1, M1-replay, M2'
 }
 function Test-SgvRow([string]$Row, [int]$Rc, [string]$Want, [byte[]]$Bytes) {
     $file = "$tempRoot\sgv.reply"; [IO.File]::WriteAllBytes($file, $Bytes)

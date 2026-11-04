@@ -1149,7 +1149,28 @@ VMR_SETUP=sr_restore
 vmr_run SR-T5-replay worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CLAIM_MODE=finalizing FAKE_EVIDENCE_MODE=receipt-conflict
 VMR_SETUP=sg_fixture
 sr_check SR-T5-replay lost-replay
-echo "[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay"
+# M1-M2 (task-edf2162b): an observe pin whose task's newest attempt record ties at
+# generation 7 as verified-local, so strong_landing_task journals the landing strong.
+# The finalize keys on that journal, not on the pin. The record is closed, so no
+# open-attempt or finalizing scan reads it.
+echo '[strong receipt] M1, M1-replay, M2: an observe pin with a strong journal finalizes as a strong landing'
+sr_mixed() {
+  sg_fixture; mkdir -p "$PROJECT/.moe/attempts"
+  printf '%s\n' '{"id":"attempt-tie","taskId":"task-postflight","generation":7,"workerId":"worker-old","phase":"closed","executionPolicySnapshot":{"version":2,"profile":"verified-local","planRevision":1}}' > "$PROJECT/.moe/attempts/attempt-tie.json"
+}
+SR_MIXED=(FAKE_ATTEMPT_PROFILE=observe MOE_CHECK_DISPATCH_PATH="$SG_FAKE")
+VMR_SETUP=sr_mixed
+vmr_run SR-M1 worker codex "$SG_READY" on 0 "${SR_MIXED[@]}" FAKE_CHECK_DISPATCH=pass FAKE_EVIDENCE_MODE=receipt-refused
+sr_check SR-M1 deferred
+rm -rf "$TMP_DIR/sr-keep"; cp -a "$PROJECT" "$TMP_DIR/sr-keep"
+VMR_SETUP=sr_restore
+vmr_run SR-M1-replay worker codex "$SG_READY" on 0 "${SR_MIXED[@]}" FAKE_CLAIM_MODE=finalizing
+VMR_SETUP=sr_mixed
+sr_check SR-M1-replay replay
+vmr_run SR-M2 worker codex "$SG_READY" on 0 "${SR_MIXED[@]}" FAKE_CHECK_DISPATCH=pass
+sr_check SR-M2 pass
+VMR_SETUP=sg_fixture
+echo "[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay, M1, M1-replay, M2"
 )
 
 echo "PASS postflight-vm-route.sh"
