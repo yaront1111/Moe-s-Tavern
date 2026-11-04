@@ -141,6 +141,12 @@ const planned = tasks.filter((t) => (t.metrics?.plannedStepCount ?? (t.implement
 function stepCount(t) {
   return t.metrics?.plannedStepCount ?? t.implementationPlan?.length ?? 0;
 }
+// Twin of packages/moe-daemon/src/util/metrics.ts isDelivered (task-83cf11f5); a .mjs cannot import the TS module, so the rule is inlined. Keep the two in step.
+function isDelivered(t) {
+  if (t?.status === 'DONE') return true;
+  const doneAt = t?.metrics?.doneAt;
+  return t?.status === 'ARCHIVED' && typeof doneAt === 'string' && doneAt.trim() !== '';
+}
 function distinctFiles(t) {
   if (typeof t.metrics?.plannedDistinctFileCount === 'number') return t.metrics.plannedDistinctFileCount;
   const set = new Set();
@@ -160,7 +166,7 @@ const BUCKETS = [
 
 const rows = BUCKETS.map((b) => {
   const inBucket = planned.filter((t) => stepCount(t) >= b.min && stepCount(t) <= b.max);
-  const done = inBucket.filter((t) => t.status === 'DONE');
+  const done = inBucket.filter(isDelivered);
   const totalReopens = inBucket.reduce((n, t) => n + (t.reopenCount || 0), 0);
   const totalRejects = inBucket.reduce((n, t) => n + rejects(t), 0);
   const reopened = inBucket.filter((t) => (t.reopenCount || 0) > 0);
