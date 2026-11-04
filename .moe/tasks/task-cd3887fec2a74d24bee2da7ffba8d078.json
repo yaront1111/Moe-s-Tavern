@@ -95,8 +95,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -112,7 +112,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:06:21.135Z",
-  "updatedAt": "2026-11-04T12:32:26.020Z",
+  "updatedAt": "2026-11-04T12:55:15.754Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:57.567Z",
@@ -122,7 +122,9 @@
     "firstClaimAt": "2026-11-04T10:57:11.313Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T12:54:32.723Z",
+    "wallClockMs": 7041410
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -224,10 +226,11 @@
   "planApprovedAt": "2026-11-04T11:23:55.680Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T11:42:47Z",
-    "at": "2026-11-04T12:31:52.624Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T12:32:09Z",
+    "at": "2026-11-04T12:55:15.754Z"
   },
   "workStartedAt": "2026-11-04T11:44:17.913Z",
   "reviewStartedAt": "2026-11-04T12:30:58.011Z",
@@ -266,5 +269,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T12:54:32.723Z",
+  "reviewCompletedAt": "2026-11-04T12:54:32.723Z",
+  "reviewSummary": "Reviewed completion 4c7d6464 (pushed; on moe/work-2026-10-24 and origin). 5 files, +144/-47, net 97, all in approvedScope.\n\nRe-ran task.verification verbatim (scratch dirs renamed to /mnt/d/moe-scratch/qa-cd38/*) from a clean clone at 4c7d6464, BASE_REV=7f83a3cd: CHAIN_EXIT=0.\n- C1: bash -n, ParseFile 0, BOM, parity-check sh+ps1 PASS, importee-guard 53/0.\n- C2: WSL 41/39/0/2skip; Windows node.exe 129/129.\n- C3: vm-route PASS on sh, PS 5.1 and pwsh 7.\n- C4b: both base runs fail with 'the CLI env carries MOE_USAGE_RECEIPT_FILE'. The receipt line is byte-identical in all 5 logs (sha256 d6ab75cb21c8d2d3).\n- qualityGate rc 0.\n\nOwn checks:\n- usage-launcher with the base launchers is RED, 6/10 on WSL.\n- A mutant that drops the sh codex-stream prefix fails both codex tests, so the wrapper's own writes are pinned.\n\nDoD:\n1. Neither launcher exports the pair. sh uses unexported shell vars plus inline prefixes on all 4 helper calls (no set -a). ps1 keeps it in $script: scope; Invoke-MoeUsageHelper sets $env: around one call, and the codex $psi carries it. Pinned per engine by the CLI-child tests, the new interactive test and the CHILD_ENV probe.\n2. The receipt is unchanged before/after; parity passes.\n3. Results for both twins are quoted.\n\nFail-open and the LASTEXITCODE restore are kept, and the loop-top resets cover both vars. No other consumer reads the pair. The test refactor is equivalent. ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

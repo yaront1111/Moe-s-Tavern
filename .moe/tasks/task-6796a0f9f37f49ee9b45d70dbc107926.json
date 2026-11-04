@@ -45,20 +45,27 @@
     {
       "stepId": "step-3",
       "description": "Verification, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease): moe.acquire_resource { resourceId: \"jetbrains-gradle\" } first, and release it on every path.\n\nRun this exact command from the task worktree. Its fresh output is the complete_task evidence.\n- Expected: BUILD SUCCESSFUL, MoeDaemonSupervisorTest tests=\"100\" (6 PN), MoeProjectForeignDaemonTest tests=\"14\" (2 PN), and the Models.kt pidNamespace line.\n- Baseline: 94 (2 skipped) and 12.\n- Never kill a process you did not start.\n\ncd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"PN' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) PN=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 8 ] || r=1; grep -n pidNamespace moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
       ],
-      "startedAt": "2026-11-04T12:50:53.558Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "note": "Gate run under the jetbrains-gradle lease (acquired 12:50:55Z), from the task worktree, verbatim: BUILD SUCCESSFUL in 1m 37s; xml tests=695 skipped=6 failures=0 errors=0; MoeDaemonSupervisorTest tests=100 skipped=2 (94+6 PN, baseline skips unchanged), MoeProjectForeignDaemonTest tests=14 (12+2 PN); Models.kt:298 pidNamespace. No compiler warnings for the touched files. No new edits in this step; it re-lists the test files.",
+      "startedAt": "2026-11-04T12:50:53.558Z",
+      "completedAt": "2026-11-04T12:53:39.075Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review, scoped to this task's diff (skill adversarial-self-review). Run the mutants below in a git-archive copy, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, worker variant). Hold the lease the whole time. Each mutant must turn the named tests red:\n- M1: drop `|| isOtherPidNamespace(info)` from pidUnjudgeable. PN2, PN3, PN5, PN7 and PN8 fail.\n- M2: delete the namespaced refusal in stopDaemonForRestart. PN4 fails: LEGACY destroys the handle.\n- M3: make PID_NAMESPACE match anything (`Regex(\".*\")`). PN1 and PN6 fail.\n- M4: in isOtherPidNamespace, change `recorded != ownPidNamespace()` to `true`. PN6 (own namespace) and the PN4 own-namespace branch fail.\nRecord each mutant's failing test names in the complete_step note, then confirm the restore with sha256sum -c.\nChecklist:\n- No path signals or probes a namespaced pid: grep every isProcessAlive and processLookup call.\n- The WSL other-side tests pass unchanged.\n- A Windows or macOS IDE has no own namespace, so any well-formed record goes to the port and identity check.\n- A record without the field behaves exactly as before.\n- The field name pidNamespace and the pid:[N] format match task-da89f620. Never rename either.\n- Error handling: no new throw paths.\n- All edits are made with the editing tool, never shell writes (project customRules).\nFix anything found, re-run step 3's command, then complete_task.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "startedAt": "2026-11-04T12:53:39.927Z"
     }
   ],
   "planRevision": 1,
@@ -78,12 +85,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:17.897Z",
-  "updatedAt": "2026-11-04T12:50:53.558Z",
+  "updatedAt": "2026-11-04T12:53:39.927Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:25:31.605Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -95,7 +102,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:32:18.264Z",
