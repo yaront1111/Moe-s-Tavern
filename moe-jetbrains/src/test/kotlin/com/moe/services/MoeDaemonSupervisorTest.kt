@@ -437,6 +437,123 @@ class MoeDaemonSupervisorTest {
         }
     }
 
+    // A daemon.json from another pid namespace (a container) is judged as the WSL other side is (task-6796a0f9).
+    // Records use pid:[1] as another namespace; supervisor() reads pid:[7] as this IDE's.
+    @Test
+    fun `PN1 isOtherPidNamespace counts only a well-formed namespace that is not this IDE's`() {
+        val root = temporaryFolder.newFolder("pid-namespace-rule")
+        val info = DaemonInfo(9876, 42, "now", root.canonicalPath)
+        val service = supervisor(root)
+        assertTrue(service.isOtherPidNamespace(info.copy(pidNamespace = "pid:[1]")))
+        val notOther = listOf(null, "pid:[7]", "pid:[x]", "pid:[1", "net:[1]", " pid:[1]", "pid:[1]\n", "pid:[" + "1".repeat(21) + "]")
+        for (ns in notOther) assertFalse("$ns", service.isOtherPidNamespace(info.copy(pidNamespace = ns)))
+        // With no readable own namespace (not Linux), any well-formed value differs.
+        val unreadable = MoeDaemonSupervisor(root.canonicalPath, "Test", ownPidNamespace = { null })
+        assertTrue(unreadable.isOtherPidNamespace(info.copy(pidNamespace = "pid:[7]")))
+        assertFalse(unreadable.isOtherPidNamespace(info))
+        assertEquals("pid:[7]", MoeDaemonSupervisor.readOwnPidNamespace { "pid:[7]" })
+        assertNull(MoeDaemonSupervisor.readOwnPidNamespace { "garbage" })
+        assertNull(MoeDaemonSupervisor.readOwnPidNamespace { throw java.nio.file.NoSuchFileException("/proc/self/ns/pid") })
+    }
+
+    @Test
+    fun `PN2 isReachable uses only the port for a record from another pid namespace`() {
+        val root = temporaryFolder.newFolder("pid-namespace-reachability")
+        val local = DaemonInfo(9876, 42, "now", root.canonicalPath, pidNamespace = "pid:[7]")
+        val namespaced = local.copy(pid = 43, pidNamespace = "pid:[1]")
+        for (alive in listOf(false, true)) for (open in listOf(false, true)) {
+            val probed = mutableListOf<Int>()
+            val service = supervisor(root, processAliveProbe = { probed += it; alive }, portProbe = { _, _ -> open })
+            assertEquals("$alive/$open", alive && open, service.isReachable(local))
+            assertEquals("$alive/$open", open, service.isReachable(namespaced))
+            assertEquals("$alive/$open", listOf(42), probed)
+        }
+    }
+
+    @Test
+    fun `PN3 ensureDaemonRunning leaves an open daemon from another pid namespace alone and replaces a closed one`() {
+        for (open in listOf(true, false)) {
+            val root = initializedRoot("pid-namespace-$open")
+            val file = writeDaemonInfo(root, DaemonInfo(9876, 42, "now", root.canonicalPath, pidNamespace = "pid:[1]"))
+            val before = file.readBytes()
+            var starts = 0
+            val probed = mutableListOf<Int>()
+            val service = supervisor(root, processAliveProbe = { probed += it; false }, portProbe = { _, _ -> open },
+                processStarter = { starts++; FakeProcess() })
+            assertEquals("$open", !open, service.ensureDaemonRunning())
+            assertEquals("$open", if (open) 0 else 1, starts)
+            assertTrue("$open: $probed", probed.isEmpty())
+            if (open) assertArrayEquals(before, file.readBytes()) else assertFalse(file.exists())
+            service.killSpawnedDaemon()
+        }
+    }
+
+    @Test
+    fun `PN4 restart refuses metadata from another pid namespace without touching any process under either profile`() {
+        val root = temporaryFolder.newFolder("pid-namespace-restart")
+        val namespaced = DaemonInfo(9876, 42, "now", root.canonicalPath, pidNamespace = "pid:[1]")
+        for (profile in RuntimeProfile.values()) for (windows in listOf(false, true)) {
+            val probes = mutableListOf<Int>()
+            val lookups = mutableListOf<Long>()
+            var destroys = 0
+            val handle = Proxy.newProxyInstance(ProcessHandle::class.java.classLoader, arrayOf(ProcessHandle::class.java)) { _, method, _ ->
+                if (method.name == "destroy") { destroys++; true } else error("unexpected ${method.name}")
+            } as ProcessHandle
+            val service = MoeDaemonSupervisor(root.canonicalPath, "Test", profile = { profile },
+                processAliveProbe = { probes += it; true }, processLookup = { lookups += it; handle }, windowsRestart = { windows },
+                ownPidNamespace = { "pid:[7]" })
+            assertEquals("Restart Daemon did not stop pid 42, which .moe/daemon.json records in another pid namespace (for example a container): " +
+                "this IDE can neither see nor signal that process. Stop that daemon where it runs (for example with docker stop), " +
+                "then use Restart Daemon.", service.stopDaemonForRestart(namespaced))
+            assertTrue("$profile/$windows", probes.isEmpty())
+            assertTrue("$profile/$windows", lookups.isEmpty())
+            assertEquals("$profile/$windows", 0, destroys)
+            if (profile == RuntimeProfile.LEGACY && !windows) {
+                assertNull(service.stopDaemonForRestart(namespaced.copy(pidNamespace = "pid:[7]")))
+                assertEquals(listOf(42), probes)
+                assertEquals(listOf(42L), lookups)
+                assertEquals(1, destroys)
+            }
+        }
+    }
+
+    @Test
+    fun `PN5 a record from another pid namespace bound off loopback never has its pid probed`() {
+        for (open in listOf(true, false)) {
+            val root = initializedRoot("pid-namespace-bound-$open")
+            val file = writeDaemonInfo(root, DaemonInfo(9876, 42, "now", root.canonicalPath, bindHost = "::1", pidNamespace = "pid:[1]"))
+            val before = file.readBytes()
+            var starts = 0
+            val probed = mutableListOf<Int>()
+            val service = supervisor(root, processAliveProbe = { probed += it; true }, portProbe = { _, _ -> open },
+                processStarter = { starts++; FakeProcess() })
+            assertEquals("$open", !open, service.ensureDaemonRunning())
+            assertEquals("$open", if (open) 0 else 1, starts)
+            assertTrue("$open: $probed", probed.isEmpty())
+            if (open) assertArrayEquals(before, file.readBytes()) else assertFalse(file.exists())
+            service.killSpawnedDaemon()
+        }
+    }
+
+    @Test
+    fun `PN6 a record without pidNamespace, malformed, or with this IDE's own keeps the pid rules`() {
+        for ((index, ns) in listOf(null, "pid:[7]", "pid:[x]").withIndex()) {
+            val root = initializedRoot("pid-namespace-pid-rules-$index")
+            val info = DaemonInfo(9876, 42, "now", root.canonicalPath, pidNamespace = ns)
+            val file = writeDaemonInfo(root, info)
+            var starts = 0
+            val probed = mutableListOf<Int>()
+            val service = supervisor(root, processAliveProbe = { probed += it; false }, portProbe = { _, _ -> true },
+                processStarter = { starts++; FakeProcess() })
+            assertFalse("$ns", service.isReachable(info))
+            assertTrue("$ns", service.ensureDaemonRunning())
+            assertEquals("$ns", 1, starts)
+            assertFalse("$ns", file.exists())
+            assertTrue("$ns: $probed", 42 in probed)
+            service.killSpawnedDaemon()
+        }
+    }
+
     @Test
     fun `ensureDaemonRunning refuses to spawn after maximum attempts`() {
         val root = initializedRoot("attempts")
@@ -1693,7 +1810,8 @@ class MoeDaemonSupervisorTest {
         portProbe: (Int, Int) -> Boolean = { _, _ -> false },
         processAliveProbe: (Int) -> Boolean = { false },
         processStarter: (ProcessBuilder) -> Process = { FakeProcess() },
-        docSync: (File, Boolean) -> Unit = { _, _ -> }
+        docSync: (File, Boolean) -> Unit = { _, _ -> },
+        ownPidNamespace: () -> String? = { "pid:[7]" }
     ): MoeDaemonSupervisor = MoeDaemonSupervisor(
         root.canonicalPath,
         "Test Project",
@@ -1701,7 +1819,8 @@ class MoeDaemonSupervisorTest {
         portProbe,
         processAliveProbe,
         processStarter,
-        docSync = docSync
+        docSync = docSync,
+        ownPidNamespace = ownPidNamespace
     )
 
     private fun otherSideSpelling(base: String): String {

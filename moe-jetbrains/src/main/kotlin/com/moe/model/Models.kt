@@ -293,7 +293,9 @@ data class DaemonInfo(
     val startedAt: String,
     val projectPath: String,
     // The daemon records it only for a --host or MOE_BIND_HOST other than 127.0.0.1 (packages/moe-daemon/src/index.ts startDaemon).
-    val bindHost: String? = null
+    val bindHost: String? = null,
+    // A Linux daemon records its pid namespace, `pid:[N]` (packages/moe-daemon/src/index.ts buildDaemonInfo, task-da89f620).
+    val pidNamespace: String? = null
 )
 
 data class ActivityEvent(

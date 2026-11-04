@@ -49,7 +49,9 @@ class MoeDaemonSupervisor(
     private val sleep: (Long) -> Unit = Thread::sleep,
     private val exitTimeoutMs: Long = EXIT_TIMEOUT_MS,
     private val windowsRestart: () -> Boolean = ::isWindowsHost,
-    private val docSync: (File, Boolean) -> Unit = ::syncBundledDocs
+    private val docSync: (File, Boolean) -> Unit = ::syncBundledDocs,
+    // This IDE's own pid namespace, injected by tests; null when it cannot be read (not Linux).
+    private val ownPidNamespace: () -> String? = { readOwnPidNamespace() }
 ) {
     private val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
     private val gson = Gson()
@@ -158,7 +160,7 @@ class MoeDaemonSupervisor(
             null
         }
         if (info != null && sameProject == true && isReachable(info)) {
-            if (isOtherSideOfWsl(info.projectPath, isWindows())) return false
+            if (pidUnjudgeable(info)) return false
             if (!replacedUnverified(info)) return false
         }
 
@@ -314,7 +316,7 @@ class MoeDaemonSupervisor(
         val file = File(basePath, ".moe/daemon.json")
         if (Files.notExists(file.toPath())) true else {
             val info = parseDaemonInfo(file)
-            info != null && !isOtherSideOfWsl(info.projectPath, isWindows()) && info.pid > 0 && !isProcessAlive(info.pid)
+            info != null && !pidUnjudgeable(info) && info.pid > 0 && !isProcessAlive(info.pid)
         }
     } catch (_: Exception) {
         false
@@ -350,6 +352,11 @@ class MoeDaemonSupervisor(
         if (info != null && isOtherSideOfWsl(info.projectPath, isWindows())) {
             return "Restart Daemon did not stop pid ${info.pid}, which .moe/daemon.json names on the other side of the Windows/WSL boundary: " +
                 "this IDE can neither see nor signal processes there. Check what that process is and stop it there yourself if it is a Moe daemon, " +
+                "then use Restart Daemon."
+        }
+        if (info != null && isOtherPidNamespace(info)) {
+            return "Restart Daemon did not stop pid ${info.pid}, which .moe/daemon.json records in another pid namespace (for example a container): " +
+                "this IDE can neither see nor signal that process. Stop that daemon where it runs (for example with docker stop), " +
                 "then use Restart Daemon."
         }
         if (windowsRestart()) return stopWindowsRestart(info)
@@ -946,11 +953,26 @@ class MoeDaemonSupervisor(
     fun isPortOpen(port: Int): Boolean = portProbe(port, PORT_CHECK_TIMEOUT_MS)
 
     fun isReachable(info: DaemonInfo): Boolean = try {
-        (isOtherSideOfWsl(info.projectPath, isWindows()) || isProcessAlive(info.pid)) && isPortOpen(info.port)
+        (pidUnjudgeable(info) || isProcessAlive(info.pid)) && isPortOpen(info.port)
     } catch (ex: Exception) {
         log.debug("Failed to check daemon reachability: ${ex.message}")
         false
     }
+
+    /**
+     * True when [info] was written in another pid namespace than this IDE's (a container, another WSL distro), so
+     * its pid names no process here. As for [isOtherSideOfWsl], that pid is never probed or signalled and the port
+     * alone judges the record. Only a well-formed `pid:[N]` counts, because daemon.json is repository content. An
+     * absent or malformed value, or this IDE's own namespace, keeps the pid rules. With no readable own namespace
+     * (not Linux), any recorded value differs.
+     */
+    fun isOtherPidNamespace(info: DaemonInfo): Boolean {
+        val recorded = info.pidNamespace ?: return false
+        return PID_NAMESPACE.matches(recorded) && recorded != ownPidNamespace()
+    }
+
+    private fun pidUnjudgeable(info: DaemonInfo): Boolean =
+        isOtherSideOfWsl(info.projectPath, isWindows()) || isOtherPidNamespace(info)
 
     /**
      * Why the daemon [info] names must be kept although [isReachable] failed; null to go on as before. A live
@@ -959,14 +981,15 @@ class MoeDaemonSupervisor(
      *
      * bindHost is only compared and shown, never dialed, resolved or probed: daemon.json is repository content.
      * An absent, empty or loopback-serving bind, a pid <= 0 (no daemon has it; on Windows 0 is the idle process),
-     * a record from the other side of the WSL boundary (its pid lives in another namespace and is never probed)
-     * or a dead pid all read as null. The pid is probed last. Any failure also reads as null, as in [isReachable].
+     * a record from the other side of the WSL boundary or from another pid namespace ([isOtherPidNamespace]; either
+     * way its pid lives in another namespace and is never probed) or a dead pid all read as null. The pid is probed
+     * last. Any failure also reads as null, as in [isReachable].
      */
     fun offLoopbackBindRefusal(info: DaemonInfo): String? = try {
         val host = info.bindHost
         when {
             host.isNullOrEmpty() || host in LOOPBACK_SERVING_BIND_HOSTS -> null
-            info.pid <= 0 || isOtherSideOfWsl(info.projectPath, isWindows()) || !isProcessAlive(info.pid) -> null
+            info.pid <= 0 || pidUnjudgeable(info) || !isProcessAlive(info.pid) -> null
             // Fixed words first, never the host, so a Swing label never renders repository text as HTML.
             else -> "The Moe daemon for this project (pid ${info.pid}) listens on $host, but this IDE connects on 127.0.0.1 only, " +
                 "so Moe kept .moe/daemon.json and started no second daemon. Stop that daemon, or restart it without --host " +
@@ -1025,6 +1048,18 @@ class MoeDaemonSupervisor(
         internal fun isOtherSideOfWsl(projectPath: String, windows: Boolean): Boolean =
             (if (windows) Regex("""^/(?![\\/])""") else Regex("""^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])"""))
                 .containsMatchIn(projectPath)
+
+        // The daemon's pidNamespace format (packages/moe-daemon/src/server/probeHost.ts PID_NAMESPACE, task-da89f620).
+        internal val PID_NAMESPACE = Regex("""^pid:\[[0-9]{1,20}\]$""")
+
+        /** This process's pid namespace, readlink /proc/self/ns/pid on Linux; null when unreadable (not Linux) or malformed. Never throws. */
+        internal fun readOwnPidNamespace(
+            link: () -> String = { Files.readSymbolicLink(File("/proc/self/ns/pid").toPath()).toString() }
+        ): String? = try {
+            link().takeIf { PID_NAMESPACE.matches(it) }
+        } catch (_: Exception) {
+            null
+        }
 
         internal fun isSameProject(path: String, base: String): Boolean = DaemonIdentityProbe.isSameProjectPath(path, base)
         private const val STOP_TIMEOUT_MS = 20_000L

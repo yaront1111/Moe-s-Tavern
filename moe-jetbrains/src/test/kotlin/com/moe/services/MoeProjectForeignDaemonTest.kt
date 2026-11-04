@@ -137,6 +137,44 @@ class MoeProjectForeignDaemonTest {
         }
     }
 
+    // A daemon.json from another pid namespace (a container) is judged by its port alone (task-6796a0f9).
+    @Test
+    fun `PN7 connect keeps a reachable daemon json from another pid namespace and connects as today`() = withFixture { f ->
+        f.healthReply(200, f.health(f.basePath))
+        f.daemonJson.writeText(Gson().toJson(f.writeDaemonJson("S1").copy(pidNamespace = "pid:[1]")))
+        val before = f.daemonJson.readText()
+        val probed = CopyOnWriteArrayList<Int>()
+        injectSupervisor(f, MoeDaemonSupervisor(f.basePath, "Test", portProbe = { _, _ -> true },
+            processAliveProbe = { probed += it; false }, processStarter = { error("must not spawn") },
+            ownPidNamespace = { "pid:[7]" }))
+
+        f.service.connect()
+
+        f.awaitWebSocketRequest()
+        assertEquals(before, f.daemonJson.takeIf { it.exists() }?.readText())
+        assertTrue("$probed", probed.isEmpty())
+    }
+
+    @Test
+    fun `PN8 connect removes a daemon json from another pid namespace whose port is closed`() = withFixture { f ->
+        f.daemonJson.writeText(Gson().toJson(f.writeDaemonJson("S1").copy(pidNamespace = "pid:[1]")))
+        val probed = CopyOnWriteArrayList<Int>()
+        // A host process that happens to hold the container's pid number answers alive.
+        val supervisor = MoeDaemonSupervisor(f.basePath, "Test", portProbe = { _, _ -> false },
+            processAliveProbe = { probed += it; true }, processStarter = { error("must not spawn") },
+            ownPidNamespace = { "pid:[7]" })
+        // ensureDaemonRunning then returns before it reads daemon.json, so connect()'s own branch decides alone.
+        (MoeDaemonSupervisor::class.java.getDeclaredField("windowsRestartInFlight").apply { isAccessible = true }
+            .get(supervisor) as java.util.concurrent.atomic.AtomicBoolean).set(true)
+        injectSupervisor(f, supervisor)
+
+        f.service.connect()
+
+        assertFalse(f.daemonJson.exists())
+        assertTrue("$probed", probed.isEmpty())
+        assertNotNull(f.service.field("reconnectFuture"))
+    }
+
     private fun injectSupervisor(f: Fixture, supervisor: MoeDaemonSupervisor) =
         MoeProjectService::class.java.getDeclaredField("daemonSupervisor").apply { isAccessible = true }.set(f.service, supervisor)
 
