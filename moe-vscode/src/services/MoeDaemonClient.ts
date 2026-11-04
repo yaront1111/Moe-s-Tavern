@@ -239,6 +239,42 @@ export function removeDaemonJsonIfUnchanged(file: string, expected: Pick<DaemonE
     } catch (error) { log(`Kept daemon.json: ${String(error)}`); }
 }
 
+// The binds that serve 127.0.0.1, the only address this extension dials: the daemon's probeHostFor set
+// (packages/moe-daemon/src/server/probeHost.ts) and JetBrains' LOOPBACK_SERVING_BIND_HOSTS. The daemon never records 127.0.0.1 itself.
+const LOOPBACK_SERVING_BIND_HOSTS = new Set(['127.0.0.1', '0.0.0.0', '::', 'wsl']);
+// VS Code toasts render [text](link) markup, so only a host with no brackets, parentheses or spaces may be shown.
+const SHOWABLE_HOST = /^[0-9A-Za-z.:%_-]{1,255}$/;
+const MAX_PID = 0x7fffffff; // process.kill takes an int32 pid and throws on a larger one
+
+/** A project path from the other side of the WSL boundary: its pid lives in another namespace and is never probed. */
+export function isOtherSideOfWsl(projectPath: string, windows: boolean): boolean {
+    return (windows ? /^\/(?![\\/])/ : /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/).test(projectPath);
+}
+
+/**
+ * Why the daemon that daemon.json names must be kept although this extension cannot dial it; null to go on as before.
+ * A live same-project daemon bound off loopback is out of reach, not stale: deleting its daemon.json and spawning
+ * would start a second writer on the same .moe/. bindHost is only compared and shown, never dialed, resolved or
+ * probed: daemon.json is repository content. Fixed words come first, and the host only when SHOWABLE_HOST allows it.
+ * Never throws: any malformed record, or failure, reads as null.
+ */
+export function offLoopbackBindRefusal(record: unknown, workspace: string, windows: boolean): string | null {
+    try {
+        if (!isPlainObject(record)) { return null; }
+        const { bindHost, projectPath, pid } = record;
+        if (typeof bindHost !== 'string' || bindHost.trim() === '' || LOOPBACK_SERVING_BIND_HOSTS.has(bindHost)) { return null; }
+        // An absent or empty projectPath is this workspace's own .moe/, as ensureDaemonRunning already reads it.
+        if (typeof projectPath === 'string') {
+            if (projectPath !== '' && (isOtherSideOfWsl(projectPath, windows) || !pathsMatch(projectPath, workspace))) { return null; }
+        } else if (projectPath !== undefined && projectPath !== null) { return null; }
+        if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid > MAX_PID) { return null; }
+        try { process.kill(pid, 0); } catch (err) { if (errorCode(err) === 'ESRCH') { return null; } }
+        const shown = SHOWABLE_HOST.test(bindHost) ? bindHost : 'an address other than 127.0.0.1';
+        return `Moe kept .moe/daemon.json and started no second daemon: this project's daemon (pid ${pid}) listens on ${shown}, `
+            + 'but VS Code connects on 127.0.0.1 only. Stop that daemon, or restart it without --host or MOE_BIND_HOST, then reconnect.';
+    } catch { return null; }
+}
+
 function readCappedText(filePath: string, cap: number, tooLarge: string): string {
     const fd = fs.openSync(filePath, 'r');
     try { return readCappedFd(fd, cap, tooLarge); } finally { fs.closeSync(fd); }
@@ -912,6 +948,16 @@ export class MoeDaemonClient implements vscode.Disposable {
         try {
             this.daemonShuttingDown = false;
 
+            // A live daemon bound off loopback is out of reach, not stale: refuse before the startup work below can
+            // spawn a second daemon or delete its daemon.json. JetBrains parity: no automatic retry; moe.connect asks again.
+            const bindRefusal = this.daemonBindRefusal();
+            if (bindRefusal) {
+                this.manualDisconnect = true;
+                log(bindRefusal);
+                vscode.window.showErrorMessage(bindRefusal);
+                throw new Error(bindRefusal);
+            }
+
             await this.ensureDaemonRunning();
             if (this.connectCancelled()) {
                 log('Connect cancelled during daemon startup');
@@ -1522,6 +1568,22 @@ export class MoeDaemonClient implements vscode.Disposable {
             remaining -= delay;
         }
         return false;
+    }
+
+    /**
+     * The off-loopback refusal for this workspace's own live daemon, or null to go on as before. A configured port or
+     * host is the user's own choice of endpoint, and an unreadable, oversized or unparseable daemon.json keeps today's
+     * startup path. Synchronous and never throws.
+     */
+    private daemonBindRefusal(): string | null {
+        try {
+            const config = vscode.workspace.getConfiguration('moe');
+            if (config.get<number>('daemon.port', 0) > 0 || config.get<string>('daemon.host', '127.0.0.1') !== '127.0.0.1') { return null; }
+            const workspace = this.getWorkspacePath();
+            if (!workspace) { return null; }
+            const record: unknown = JSON.parse(readDaemonJsonText(path.join(workspace, '.moe', 'daemon.json')));
+            return offLoopbackBindRefusal(record, workspace, process.platform === 'win32');
+        } catch { return null; }
     }
 
     private async getVerifiedDaemonInfo(): Promise<DaemonEndpoint | undefined> {
