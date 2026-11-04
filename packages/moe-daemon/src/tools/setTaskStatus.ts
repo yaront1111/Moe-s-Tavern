@@ -1,4 +1,4 @@
-import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
+import { carriedBlockQuestion, parkedHoldOwner } from '../state/dependencyUnblock.js';
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ActivityEventType, TaskStatus } from '../types/schema.js';
@@ -186,10 +186,10 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       // Block bookkeeping. Entering BLOCKED via this tool (human/board path —
       // agents use report_blocked) records where to restore to; leaving BLOCKED
       // by any route clears every blocked field so a later grant/sweep cannot
-      // act on stale block state. Assignment is preserved EXPLICITLY on both
-      // edges (updateTask clears it on any status change when omitted): a
-      // parked worker keeps its task through block-and-unblock — except the
-      // BLOCKED → BACKLOG park, which keeps the normal clear-on-move semantics.
+      // act on stale block state. Assignment is EXPLICIT on entry and return
+      // (updateTask clears it on a status change when omitted): entry keeps
+      // the seat; return keeps only a genuine hold, as both auto-unblocks do.
+      // Other exits keep the normal clear-on-move semantics.
       if (newStatus === 'BLOCKED' && task.status !== 'BLOCKED') {
         updates.blockedFromStatus = task.status;
         updates.blockedAt = new Date().toISOString();
@@ -206,12 +206,11 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         updates.blockedOnTaskIds = null;
         updates.blockedFromStatus = null;
         updates.blockedAt = null;
-        // Preserve the parked worker only when the task RETURNS to where it was
-        // blocked from; any other exit (park to BACKLOG, reopen to WORKING from
-        // a blocked REVIEW) keeps the normal clear-on-move semantics so the
-        // right role re-claims it.
+        // Returning to where the task was blocked from keeps only a genuine
+        // hold, as both auto-unblocks do. Other exits (park to BACKLOG, reopen
+        // to WORKING from a blocked REVIEW) clear the seat for the right role.
         if (newStatus === effectiveFrom) {
-          updates.assignedWorkerId = task.assignedWorkerId;
+          updates.assignedWorkerId = parkedHoldOwner(state, task);
         }
       }
 

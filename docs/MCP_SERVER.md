@@ -1669,7 +1669,7 @@ on exit.
 
 **Execution profile:** an upward move (to a column ranked above where the row stands, in the order BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING, REVIEW, DONE; a `BLOCKED` row stands at its `blockedFromStatus`) of a task whose effective execution profile is `verified-local` is refused `-32003` / `EXECUTION_PROFILE_NOT_READY` before any write, and one with a malformed snapshot or setting `INVALID_INPUT`. Backward moves, `BLOCKED`, `ARCHIVED` and releases are not refused, so a strict task can always be moved back or shelved.
 
-**Attempts:** a transition that clears the assignee closes the task's `running`/`reconciling` attempts in the same write (see **Close on hand-back** under Ownership & Ordering). Entering `BLOCKED`, and returning from `BLOCKED` to `blockedFromStatus`, keep the seat and so keep its attempt. While the task has a `finalizing` attempt (a `complete_task` landing not yet acknowledged), a move into `DONE` or `ARCHIVED` is **refused with retryable `-32002` / `ATTEMPT_FINALIZING`** before any write — nothing ever claims a terminal row, so the hold would never end; retry after `moe.finalize_attempt`. The guard sits in the daemon's one task-write path, so `moe.archive_task`, `moe.archive_epic` and the board refuse the same way; a reopening move (`WORKING`/`PLANNING`/`BACKLOG`/`BLOCKED`) stays legal.
+**Attempts:** a transition that clears the assignee closes the task's `running`/`reconciling` attempts in the same write (see **Close on hand-back** under Ownership & Ordering). Entering `BLOCKED` keeps the seat and so its attempt. Returning from `BLOCKED` to `blockedFromStatus` keeps the seat, and its attempt, only while that worker exists, is not `DEAD` and its `currentTaskId` still names the task (the rule the dependency and resource auto-unblocks apply). Otherwise the row returns unassigned and claimable, and that write closes the seat's `running`/`reconciling` attempt. While the task has a `finalizing` attempt (a `complete_task` landing not yet acknowledged), a move into `DONE` or `ARCHIVED` is **refused with retryable `-32002` / `ATTEMPT_FINALIZING`** before any write — nothing ever claims a terminal row, so the hold would never end; retry after `moe.finalize_attempt`. The guard sits in the daemon's one task-write path, so `moe.archive_task`, `moe.archive_epic` and the board refuse the same way; a reopening move (`WORKING`/`PLANNING`/`BACKLOG`/`BLOCKED`) stays legal.
 
 Exits are additionally judged against **`blockedFromStatus`**: leaving
 `BLOCKED` to any status other than the one the task was blocked from requires
@@ -1679,11 +1679,12 @@ that `blockedFromStatus → target` be itself a legal transition — a two-hop
 blocked from.
 Reopen accounting also keys on `blockedFromStatus` (a blocked `REVIEW` task
 sent to `WORKING` increments `reopenCount` and scrubs completion signals like
-a direct `REVIEW → WORKING` would). Assignment: entering `BLOCKED` and
-returning to `blockedFromStatus` both **preserve** `assignedWorkerId` (the
-parked worker keeps its hold); any other exit keeps the normal
-clear-on-move semantics. The plugin `/ws` board-move handler enforces the
-same rules.
+a direct `REVIEW → WORKING` would). Assignment: entering `BLOCKED` preserves
+`assignedWorkerId`; returning to `blockedFromStatus` preserves it only while
+that worker exists, is not `DEAD` and still points at the task. Any other exit
+keeps the normal clear-on-move semantics. The plugin `/ws` board-move handler
+enforces the same transition rules, but its return to `blockedFromStatus`
+still restores the recorded assignee without that owner check.
 
 ---
 

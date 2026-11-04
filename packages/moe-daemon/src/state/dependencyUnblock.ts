@@ -226,6 +226,22 @@ async function repairParkedSeat(state: StateManager, workerId: string, taskId: s
 }
 
 /**
+ * Shared by runDependencyUnblock and set_task_status's return edge. A
+ * still-assigned hold (resource-style, third-party block, legacy row) returns
+ * to its worker ONLY while that worker exists, is not DEAD, and its own
+ * pointer still names this task — the genuine two-pointer hold. Otherwise
+ * the task returns UNASSIGNED: restoring it onto a missing/DEAD/IDLE-with-no-
+ * pointer record would make it permanently unclaimable (isTaskClaimable needs
+ * the owner missing or DEAD; an IDLE corpse is neither) while the Layer-3
+ * prune refuses to delete a worker that "owns active work" — starvation until
+ * a daemon restart, with no alert. Seat-freeing already leaves the seat null.
+ */
+export function parkedHoldOwner(state: StateManager, task: Pick<Task, 'id' | 'assignedWorkerId'>): string | null {
+  const owner = task.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null;
+  return owner && owner.status !== 'DEAD' && owner.currentTaskId === task.id ? owner.id : null;
+}
+
+/**
  * Scan every BLOCKED task carrying blockedOnTaskIds (and no blockedResourceId)
  * and restore the ones whose dependencies are now ALL satisfied. Returns the
  * ids of the tasks that were unblocked. Never throws — one bad row must not
@@ -250,21 +266,8 @@ export async function runDependencyUnblock(state: StateManager, triggerTaskId?: 
       // restore itself would be nonsense) — route it to WORKING instead.
       const safeRestored: TaskStatus =
         restored === 'DONE' || restored === 'ARCHIVED' || restored === 'BLOCKED' ? 'WORKING' : restored;
-      // assignedWorkerId passed explicitly, mirroring grantNextLeases:
-      // updateTask would otherwise clear the assignment on the status change.
-      // Under seat-freeing the seat is already null (task returns unassigned
-      // and claimable). A still-assigned hold (resource-style, third-party
-      // block, legacy row) returns to its worker ONLY while that worker still
-      // exists, is not DEAD, and its own pointer still names this task — the
-      // genuine two-pointer hold. Otherwise the task returns UNASSIGNED:
-      // restoring it onto a missing/DEAD/IDLE-with-no-pointer record would
-      // make it permanently unclaimable (isTaskClaimable needs the owner
-      // missing or DEAD; an IDLE corpse is neither) while the Layer-3 prune
-      // refuses to delete a worker that "owns active work" — starvation until
-      // a daemon restart, with no alert.
-      const owner = task.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null;
-      const restoreTo =
-        owner && owner.status !== 'DEAD' && owner.currentTaskId === task.id ? owner.id : null;
+      // Explicit assignment keeps only the genuine hold (see parkedHoldOwner).
+      const restoreTo = parkedHoldOwner(state, task);
       try {
         await state.updateTask(task.id, {
           status: safeRestored,
