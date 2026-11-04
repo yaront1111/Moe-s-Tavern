@@ -61,11 +61,16 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review, scoped to this task's diff (skill adversarial-self-review). Run the mutants below in a git-archive copy, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, worker variant). Hold the lease the whole time. Each mutant must turn the named tests red:\n- M1: drop `|| isOtherPidNamespace(info)` from pidUnjudgeable. PN2, PN3, PN5, PN7 and PN8 fail.\n- M2: delete the namespaced refusal in stopDaemonForRestart. PN4 fails: LEGACY destroys the handle.\n- M3: make PID_NAMESPACE match anything (`Regex(\".*\")`). PN1 and PN6 fail.\n- M4: in isOtherPidNamespace, change `recorded != ownPidNamespace()` to `true`. PN6 (own namespace) and the PN4 own-namespace branch fail.\nRecord each mutant's failing test names in the complete_step note, then confirm the restore with sha256sum -c.\nChecklist:\n- No path signals or probes a namespaced pid: grep every isProcessAlive and processLookup call.\n- The WSL other-side tests pass unchanged.\n- A Windows or macOS IDE has no own namespace, so any well-formed record goes to the port and identity check.\n- A record without the field behaves exactly as before.\n- The field name pidNamespace and the pid:[N] format match task-da89f620. Never rename either.\n- Error handling: no new throw paths.\n- All edits are made with the editing tool, never shell writes (project customRules).\nFix anything found, re-run step 3's command, then complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
       ],
-      "startedAt": "2026-11-04T12:53:39.927Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Mutants ran in a git-archive copy (/mnt/d/moe-scratch/m-6796, HEAD plus the uncommitted diff), under the lease. Each failed its named tests:\n- M1 (pidUnjudgeable drops the namespace branch): PN2, PN3, PN5, PN7, PN8.\n- M2 (restart refusal neutralized with `&& info.pid < 0`): PN4. A first `if (false && ...)` form did not compile (smart cast), so the harness was fixed to show compile errors and use strict XML freshness.\n- M3 (PID_NAMESPACE = `.*`): PN1, PN6.\n- M4 (`recorded != own` replaced by `true`): PN1, PN2, PN4, PN6.\nsha256sum -c confirmed the copy restored (120 src files) and the worktree untouched.\n\nChecklist:\n- Every isProcessAlive/processLookup site is guarded: :266 sits behind the start-path early return, :319/:956/:992 use pidUnjudgeable, and :365/:370/:393/:395 come after the restart early return.\n- WSL tests are unedited and green.\n- An own namespace of null (Windows, macOS) counts any well-formed record as other (PN1).\n- A record without the field keeps the pid rules (PN6 and all existing tests).\n- The field name and regex are identical to probeHost.ts:103.\n- No new throw path: readOwnPidNamespace catches Exception.\n- All edits were made with the Edit tool.\n\nNon-blocking, out of approvedScope: under PROTECTED, doConnect→activationRefusal→verifyProvenance reads host ProcessHandle facts (never a signal) for the recorded pid. WSL other-side records behave the same today. It refuses unless the pid matches this IDE's recorded spawn.\n\nFresh gate rerun: EXIT=0, BUILD SUCCESSFUL, 695 tests, 0 failures. Lease released. No code changes in this step.",
+      "startedAt": "2026-11-04T12:53:39.927Z",
+      "completedAt": "2026-11-04T13:02:19.278Z"
     }
   ],
   "planRevision": 1,
@@ -85,12 +90,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:17.897Z",
-  "updatedAt": "2026-11-04T12:53:39.927Z",
+  "updatedAt": "2026-11-04T13:02:19.278Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:25:31.605Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -103,7 +108,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:32:18.264Z",
