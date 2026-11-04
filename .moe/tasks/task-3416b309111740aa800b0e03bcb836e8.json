@@ -43,26 +43,39 @@
     {
       "stepId": "step-3",
       "description": "ps1 twin (DoD 1, 2), the scripts/moe-agent.ps1 hunks of code.diff, ported with the Edit tool. Keep the UTF-8 BOM, then ParseFile must report 0 errors. Leave Stop-MoeWorktreeSeat untouched.\n(a) Invoke-MoeQaControlPreflight.\n- Set `$script:MoeQaLandB = ''` first.\n- When Get-MoeGitTop answers:\n  - `$remote = -not (Test-MoeNoRemote $git.Top)`;\n  - `$L = @{ Remote = $remote; B = ''; Msg = '' }`;\n  - `$script:MoeQaLandB = [string](Sync-MoeLandTarget $git.Top $target $res $L)`. Use the RETURN value: it is '' on any failure, even when $L.B was set (diverged).\n- Print the existing WARN only when `$remote -and -not $script:MoeQaLandB`.\n- Then Invoke-MoeControlFollow.\n(b) New `Invoke-MoeQaGatePark([string]$Detail)` before Assert-MoeQaLandedCommit.\n- Inside try/catch: Invoke-MoeRpc report_blocked @{ taskId = $preflightTaskId; workerId = $WorkerId; reason = \"MOE_CONTROL_CHECKOUT_BEHIND: $Detail\"; blockedOnTaskIds = @() }. PS 5.1 serializes @() as [], and the harness asserts it.\n- Non-null reply → the same two [WARN] lines, `$script:MoeQaGateParked = $true`, return.\n- Error handling: a null reply or a throw → the [ERROR] line, '[WARN] moe.report_blocked failed for <tid>; the seat stops anyway.', Stop-HeartbeatSidecar, exit 1.\n(c) Assert-MoeQaLandedCommit, the same split.\n- `$task = Get-MoeProp $Context 'task'; $id = Get-MoeProp $task 'id'; if (-not ($id -is [string] -and $id -ceq $TaskId))` → Stop-MoeWorktreeSeat with the no-context detail. Use the -is [string] guard because an array on the left of -cne filters instead of comparing.\n- Bad sha → Invoke-MoeQaGatePark <detail>; return, with nothing on the pipeline.\n- Not a commit, or not an ancestor → $why. `$rc -ne 1` → Stop.\n- `$b = [string]$script:MoeQaLandB; if ($b -and ($b -ceq $head -or (Invoke-MoeGit ... 'merge-base','--is-ancestor',$b,$head).Rc -eq 0))` → park and return; else Stop.\n- Passing returns the dynamic-context string as today. Use the same detail strings as sh.\n(d) Call site:\n```\n$qaReview = Assert-MoeQaLandedCommit $preflightContext $preflightTaskId\nif ($script:MoeQaGateParked) { continue }\n$dynamicContext += $qaReview\n```\n(e) Loop top: `$script:MoeQaGateParked = $false` right after the in-loop `$script:AccountRelaunch = $false` (the 'Read once, just above' block, about :9540).\n(f) The do-while condition (about :11672) gains `-or $script:MoeQaGateParked`, and the comment above it is extended. PowerShell's continue in a do-while jumps to the condition, so without this a -NoLoop run ends after the park; mutant m5 proved it.\n- Green check: the ps1 leg via Windows node.exe, with WSLENV=MOE_WORKTREE_ONLY, MOE_WORKTREE_ONLY=wt-qa-gate,wt-qa-park and the fixture parent on /mnt/d → 2 ok.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-04T06:57:55.758Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Ported the moe-agent.ps1 hunks with the Edit tool. The result is byte-identical to the reference (cmp) and keeps the UTF-8 BOM. Changes: $script:MoeQaLandB from Sync-MoeLandTarget's return value; new Invoke-MoeQaGatePark (blockedOnTaskIds @()); the Assert-MoeQaLandedCommit row/seat split with the task.id -is [string] -ceq guard; the call site's $qaReview plus `if ($script:MoeQaGateParked) { continue }`; the loop-top reset; and `-or $script:MoeQaGateParked` in the do-while. Stop-MoeWorktreeSeat is unchanged. ParseFile: 0 errors. PS 5.1 RED on the pre-edit ps1: 0 ok / 2 failed (wt-qa-none exit 1; wt-qa-park exit 1). GREEN: 2 ok / 0 failed.",
+      "startedAt": "2026-11-04T06:57:55.758Z",
+      "completedAt": "2026-11-04T07:01:30.851Z"
     },
     {
       "stepId": "step-4",
       "description": "Docs (DoD 2), exact text in /mnt/d/moe-scratch/plan-3416b309/docs.diff, ported with the Edit tool.\n(a) scripts/CLAUDE.md, the **Control follow** bullet: replace the sentence that begins 'QA reviews landed bytes only: `qa_landed_gate` / `Assert-MoeQaLandedCommit` stops the QA seat…' with the row/seat split. It names qa_gate_park / Invoke-MoeQaGatePark, the [WARN], the seat staying registered and claiming again even under --no-loop, and the seat-level list.\n(b) docs/plans/2026-10-30-per-task-worktrees.md §6 item 4 ('QA reviews what landed'): insert the split, with a task-3416b309 reference, before its closing 'The reviewed diff is `git diff <sha>^ <sha>`.' sentence.\nNo new MOE_* code, so docs/CONFIGURATION.md's code table stays as it is.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/CLAUDE.md",
         "docs/plans/2026-10-30-per-task-worktrees.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Ported docs.diff with the Edit tool. In scripts/CLAUDE.md, the Control-follow QA sentence now states the row/seat split (qa_gate_park / Invoke-MoeQaGatePark, the [WARN], the seat staying registered even under --no-loop, the seat-level list). In design doc §6 item 4, the split with its task-3416b309 reference goes before the closing diff sentence. Both are byte-identical to the reference. There is no new MOE_* code, so CONFIGURATION.md is unchanged.",
+      "startedAt": "2026-11-04T07:01:32.097Z",
+      "completedAt": "2026-11-04T07:01:55.928Z"
     },
     {
       "stepId": "step-5",
       "description": "Verify and run the adversarial self-review (the adversarial-self-review skill), once, at the end.\n- Run the plan's one verification command fresh, from the task worktree root, and submit its output as complete_task evidence. It runs bash -n, ParseFile, parity sh/ps1, the full postflight-worktree suite on sh (fixture parent under /tmp, because of mkfifo) and PS 5.1, and worktree-landing sh/ps1.\n- The architect's prototype of these legs, run concurrently: 24 min, 77/77 worktree arms and 18/18 landing cases on each engine. Run sequentially, expect about 40-50 min. Launch it detached with a log and an `EXIT=` line (mem:convention-postflight-scratch-harness).\n- Kill only PIDs you started, by recorded PID; never kill by pattern.\nSelf-review checklist:\n1. Can a park loop? Only if report_blocked succeeds without blocking the row, and blockedOnTaskIds [] closes the dependenciesSatisfied path. A failed call exits.\n2. Can a seat-level condition now park rows en masse? Not when HEAD lacks QA_LAND_B (a failed fetch or follow), with an unreadable HEAD, on a git error, or with no context for this task.\n3. Are both twins spelled the same? Same strings, and no new MOE_* code; parity passes.\n4. Did anything set up before the gate need undoing at the continue? It must not.\n5. Do the hunks stay in your own functions? 561d347c (WORKING) and e76f32a0 edit other functions of these files; a landing conflict takes the unlanded route.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T07:01:57.077Z"
     }
   ],
   "planRevision": 1,
@@ -79,12 +92,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:54:04.824Z",
-  "updatedAt": "2026-11-04T06:57:55.758Z",
+  "updatedAt": "2026-11-04T07:01:57.077Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T05:54:07.529Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -99,7 +112,9 @@
   ],
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:50:15.717Z",

@@ -9,10 +9,90 @@
     "docs/TROUBLESHOOTING.md's control-branch and target rows state the ancestry and origin conditions (grep 'ancestor' and 'refs/remotes/origin' hit them), and `npx vitest run src/commands/doctor.test.ts src/commands/doctor.bindHost.test.ts` passes in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-c33f294e",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (test-driven-development): add the regression rows to packages/moe-daemon/src/commands/doctor.test.ts.\n\nHow to write them:\n- Use the Edit tool. Per the project rail, a cp into the tree leaves no TOOL witness.\n- Reproduce the architect's prototype at /mnt/d/moe-scratch/plan-3950184e/doctor.test.ts; its hunks against the base are in prototype.diff in the same folder.\n- The prototype is RED-verified at 9d5c8924 (11 failed | 64 passed) and GREEN-verified with the prototype fix.\n- Keep every new title prefixed 'W<n>: '. The gate counts them.\n\n(a) Stub harness, in describe 'runDoctor — worktree readiness probes':\n- GitCall gains 'remote' | 'originTarget' | 'controlAncestor' | 'targetAncestor'.\n- callOf maps:\n  - args[0] 'remote' to remote;\n  - args[0] 'merge-base' to controlAncestor when args[2] is 'refs/heads/moe/control', else to targetAncestor;\n  - args[1] '--verify' to originTarget when args[3] starts with 'refs/remotes/origin/', else to target.\n- stubGit's ready defaults: remote '' (no remote = local mode), originTarget 'c'.repeat(40), controlAncestor '' and targetAncestor '' (exit 0). Every existing case then keeps its meaning.\n\n(b) The case 'runs only bounded read-only Git commands, never the quality gate': its expected list becomes [version], [rev-parse --show-toplevel], [symbolic-ref -q HEAD], [merge-base --is-ancestor refs/heads/moe/control refs/heads/main], [worktree list --porcelain -z], [rev-parse --verify --quiet refs/heads/main^{commit}], [remote]. These are the two new reads only, with no fetch (DoD 1; see the architect's task comment).\n\n(c) W4: with remote 'origin\\n', the '[OK] worktree target' line matches /refs\\/remotes\\/origin\\/main contains it/ and exitCode is 0. The exact call list is (b) plus [rev-parse --verify --quiet refs/remotes/origin/main^{commit}] and [merge-base --is-ancestor refs/heads/main refs/remotes/origin/main].\n\n(d) An it.each('%s') table refFailures. Every row runs with ON settings; its probe line must match its pattern, every other LABELS line is [OK], and exitCode is 1.\n- W1: remote 'origin\\n' and originTarget gitError(1). [FAIL] worktree target naming refs/remotes/origin/main and MOE_WORKTREE_CREATE_FAILED.\n- W2: remote 'origin\\n' and targetAncestor gitError(1). 'refs/heads/main holds commits refs/remotes/origin/main lacks' plus MOE_LAND_TARGET_DIVERGED.\n- W3: remote 'origin\\n' and targetAncestor gitError(128, 'fatal: bad object'). 'exit 128: fatal: bad object'.\n- W5: remote gitError(129, 'usage: git remote'). 'cannot list remotes (exit 129: usage: git remote)'.\n- W6: controlAncestor gitError(1). [FAIL] worktree control branch with 'refs/heads/moe/control holds commits main lacks' plus MOE_CONTROL_CHECKOUT_DIVERGED.\n- W7: controlAncestor gitError(128, 'fatal: Not a valid object name refs/heads/main'). 'exit 128: fatal: Not a valid object name'.\n\n(e) W8: worktreeMode 'off', with remote 'origin\\n', originTarget gitError(1) and controlAncestor gitError(1). The control line matches ^[INFO] and names MOE_CONTROL_CHECKOUT_DIVERGED. The target line matches ^[INFO] and names MOE_WORKTREE_CREATE_FAILED. exitCode is 0.\n\n(f) In describe 'runDoctor — worktree probes against a real repository', add a helper controlProject(name): init -b main, an --allow-empty commit, switch -c moe/control, then scaffoldMoe plus project.json {settings: ON}.\n- W9: add one more empty commit on moe/control.\n  - Expect [FAIL] worktree control branch naming MOE_CONTROL_CHECKOUT_DIVERGED, every other label [OK], and exit 1.\n  - Then `git update-ref refs/heads/main $(git commit-tree HEAD^{tree} -p HEAD -m landed)`. Expect [OK] and exit 0, because behind is normal.\n- W10: `git init -q --bare <base>/origin.git`, then `git remote add origin <it>`.\n  - Expect [FAIL] worktree target naming refs/remotes/origin/main and MOE_WORKTREE_CREATE_FAILED, and exit 1.\n  - Then `git push -q origin main`, which also writes refs/remotes/origin/main. Expect [OK] and exit 0.\n\n(g) Capture RED: run step 5's gate against the base doctorWorktree.ts. The architect's run gave 11 failed (W1-W10 plus the call-list case) | 64 passed. Post the counts as a task comment.\n\nSee mem:gotcha-daemon-linux-snapshot-gate (snapshot, NO_COLOR, grep -a) and mem:gotcha-daemon-subprocess-tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "note": "Added W1-W10 plus the extended call-list case to doctor.test.ts via Edit (byte-identical to the architect's prototype). RED against base source: 11 failed | 64 passed in doctor.test.ts (84 with bindHost); posted as a task comment.",
+      "startedAt": "2026-11-04T07:02:24.193Z",
+      "completedAt": "2026-11-04T07:03:19.053Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Control ancestry, in packages/moe-daemon/src/commands/doctorWorktree.ts. The prototype is /mnt/d/moe-scratch/plan-3950184e/doctorWorktree.ts.\n\n(1) The `Git` type's failure branch gains `code?: number`, with a one-line comment that it is git's numeric exit status.\n- In probeWorktreeReadiness's git wrapper catch, keep why: describeGitFailure(err).\n- Add code only when (err as { code?: unknown } | null)?.code is a number. That is execFile's exit status; ENOENT and the maxBuffer code are strings and stay out.\n\n(2) Add isAncestor(git, ancestor, descendant): Promise<boolean | string>. It runs ['merge-base', '--is-ancestor', ancestor, descendant]:\n- ok gives true;\n- code 1 gives false;\n- any other failure gives its why.\n\n(3) probeControlBranch:\n- When HEAD is not CONTROL_REF, keep today's message.\n- When HEAD is CONTROL_REF and cachedPlanRef(target) is undefined, keep today's pass 'control checkout is on refs/heads/moe/control'. The target line already fails a non-literal name.\n- Otherwise, follows = isAncestor(CONTROL_REF, `refs/heads/${target}`):\n  - true: pass 'control checkout is on refs/heads/moe/control, an ancestor of <target>';\n  - false: fail '<CONTROL_REF> holds commits <target> lacks, so the control checkout cannot follow the target (MOE_CONTROL_CHECKOUT_DIVERGED) and QA's landed gate stops every claim; reconcile moe/control by hand';\n  - a why: fail 'cannot tell whether <CONTROL_REF> is an ancestor of <target> (<why>)'.\n- Behind or equal passes. Between a landing and the follow, moe/control is legitimately behind, and moe-agent.sh:7019-7021 refuses only exit 1.\n\nError handling: every git failure becomes one bounded line through verdict(), [FAIL] while worktree mode is on and [INFO] while it is off. Nothing throws. Doctor stays read-only: runGit keeps --no-optional-locks and protocol.allow=never, and merge-base and remote write nothing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctorWorktree.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctorWorktree.ts"
+      ],
+      "note": "Control ancestry in doctorWorktree.ts: Git failure branch gains numeric code (execFile exit status only), new isAncestor() maps merge-base --is-ancestor exit 0/1/other to true/false/why, probeControlBranch fails MOE_CONTROL_CHECKOUT_DIVERGED on exit 1 and as unreadable on any other failure, passes behind-or-equal. Edit tool only; read-only git reads, no fetch.",
+      "startedAt": "2026-11-04T07:03:21.489Z",
+      "completedAt": "2026-11-04T07:03:41.719Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Remote mode for the target probe, in the same file (same prototype).\n\nKeep probeTarget's literal-name, local rev-parse and checked-out checks. Bind `const origin = cachedPlanRef(target)`: it is the existing literal-branch-name rule AND returns refs/remotes/origin/<target>, so reuse it and hand-build nothing. When the checked-out check passes, return probeOriginTarget(git, target, ref, origin, hard).\n\nprobeOriginTarget:\n1. git(['remote']).\n   - A failure fails 'target <t>: cannot list remotes (<why>)'.\n   - Empty output passes with today's message, 'target <t> exists and is not checked out in any worktree'. That is local mode, unchanged.\n2. Any output is remote mode: the launchers' no_git_remote rule, moe-agent.sh:6062-6065.\n   - `rev-parse --verify --quiet ${origin}^{commit}` failing fails 'target <t>: remote mode cuts every task worktree from <origin>, which does not resolve (<why>), so each worker seat would stop with MOE_WORKTREE_CREATE_FAILED; push <t> to origin, or fetch it'. This is moe-agent.sh:3450-3455.\n3. Then contained = isAncestor(ref, origin):\n   - true passes 'target <t> exists, is not checked out in any worktree, and <origin> contains it';\n   - false fails 'target <t>: <ref> holds commits <origin> lacks, so every landing would stop with MOE_LAND_TARGET_DIVERGED; push or reconcile it (fetch first if origin moved elsewhere)'. This is sync_land_target, moe-agent.sh:7387-7391;\n   - a why fails 'target <t>: cannot tell whether <ref> is an ancestor of <origin> (<why>)'.\n\nGive probeOriginTarget a doc comment saying that remote mode is the launchers' any-remote rule, that they cut and land from origin's copy, and that doctor never fetches, so it reads that copy as last fetched.\n\nError handling: as in step 2. Every outcome is one verdict() line, and no git call can write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctorWorktree.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctorWorktree.ts"
+      ],
+      "note": "Remote mode in probeTarget: origin bound from cachedPlanRef, checked-out failure kept, then new probeOriginTarget (git remote; empty = local mode, unchanged [OK]; else rev-parse refs/remotes/origin/<t> must resolve, MOE_WORKTREE_CREATE_FAILED; then isAncestor(local, origin), MOE_LAND_TARGET_DIVERGED on exit 1, unreadable on other failures). Doc comment states the any-remote rule and that doctor never fetches. Edit tool only.",
+      "startedAt": "2026-11-04T07:03:43.916Z",
+      "completedAt": "2026-11-04T07:03:56.994Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs: in docs/TROUBLESHOOTING.md, change the worktree-mode readiness table rows `worktree control branch` (:1254) and `worktree target` (:1255) only. Keep each row one table line and change no other line. The prototype text is the last hunk of /mnt/d/moe-scratch/plan-3950184e/prototype.diff.\n\nControl row:\n- HEAD is exactly `refs/heads/moe/control`, AND `moe/control` is an ancestor of the target (behind or equal is normal between a landing and the follow).\n- A `moe/control` holding commits the target lacks fails as `MOE_CONTROL_CHECKOUT_DIVERGED`. The control checkout never follows and QA's landed gate stops every claim, until a human reconciles it.\n\nTarget row:\n- Today's rule stays.\n- Add: with any Git remote (remote mode), `refs/remotes/origin/<target>` must also resolve and contain the local target. The launchers cut every task worktree from it (else `MOE_WORKTREE_CREATE_FAILED`) and land onto it (a local target holding commits origin lacks is `MOE_LAND_TARGET_DIVERGED`).\n- Doctor never fetches, so it reads origin's copy as last fetched: fetch first if origin moved elsewhere.\n\nThe gate greps the control row for 'ancestor' and MOE_CONTROL_CHECKOUT_DIVERGED, and the target row for 'refs/remotes/origin/' and MOE_WORKTREE_CREATE_FAILED.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Rewrote only the `worktree control branch` and `worktree target` readiness rows (one table line each, +2/-2, one hunk): ancestor of the target, MOE_CONTROL_CHECKOUT_DIVERGED; remote mode needs refs/remotes/origin/<target> that resolves and contains the local target, MOE_WORKTREE_CREATE_FAILED / MOE_LAND_TARGET_DIVERGED, doctor never fetches. Edit tool only.",
+      "startedAt": "2026-11-04T07:03:59.608Z",
+      "completedAt": "2026-11-04T07:04:13.454Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run once, from your worktree root. Never run npm in the shared checkout (project rail). Run this command exactly; it is also at /mnt/d/moe-scratch/plan-3950184e/gate.sh:\n\n( set -o pipefail; R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/m3950g.XXXX) && P=packages/moe-daemon && git -C \"$R\" archive HEAD $P | tar -x -C \"$S\" && (cd \"$R/$P/src\" && cp --parents commands/doctorWorktree.ts commands/doctor.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"include\":[\"src/commands/doctor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json --noEmit && npx vitest run src/commands/doctor.test.ts src/commands/doctor.bindHost.test.ts --reporter=verbose > ../v.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; G=$(grep -acE '✓ src/commands/doctor.test.ts > .* > W([1-9]|10): ' ../v.log); echo \"W rows passed: $G/10\"; D1=$(grep -E '^\\| `worktree control branch` \\|' \"$R/docs/TROUBLESHOOTING.md\" | grep ancestor | grep -c MOE_CONTROL_CHECKOUT_DIVERGED); D2=$(grep -E '^\\| `worktree target` \\|' \"$R/docs/TROUBLESHOOTING.md\" | grep 'refs/remotes/origin/' | grep -c MOE_WORKTREE_CREATE_FAILED); echo \"doc rows: control=$D1 target=$D2\"; [ $E = 0 ] && [ \"$G\" = 10 ] && [ \"$D1\" = 1 ] && [ \"$D2\" = 1 ] || { echo \"FAIL $S\"; tail -40 ../v.log; exit 1; } )\n\nWhat it does:\n- archives HEAD's packages/moe-daemon to /tmp and overlays your two source files;\n- runs npm ci, tsc on the package and tsc on the test file (the package tsconfig excludes tests);\n- runs both doctor suites verbose;\n- requires vitest exit 0, 'W rows passed: 10/10', and both doc rows.\n\nThe architect's dry run of the prototype in a clean clone took about 4 s. It printed 'Test Files 2 passed (2)', 'Tests 84 passed (84)', 'W rows passed: 10/10' and 'doc rows: control=1 target=1', with exit 0.\n\nSubmit this command, its exitCode and the output tail as complete_task verification.\n\nError handling for a red run: the gate prints the ../v.log tail and its snapshot path. Fix the code; never weaken, skip or rename a W row. On a LANDING-RETRY merge, build the snapshot from this worktree's tracked files as the prompt says, and disclose that.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate GREEN, exit 0: tsc clean (package and test file), Test Files 2 passed (2), Tests 84 passed (84), W rows passed 10/10, doc rows control=1 target=1. Snapshot kept in /tmp for step 6 mutants.",
+      "startedAt": "2026-11-04T07:04:17.603Z",
+      "completedAt": "2026-11-04T07:04:32.336Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's own diff (adversarial-self-review skill). It is the last step: if it changes a file, re-run step 5 and submit that fresh output.\n\nMutants, in the gate's snapshot only, never in the worktree. Run `python3 /mnt/d/moe-scratch/plan-3950184e/mutate.py <snapshot>/packages/moe-daemon/src/commands/doctorWorktree.ts <name>`, then run doctor.test.ts. Back the file up ONCE before the first mutant and restore it after each (mem:gotcha-daemon-linux-snapshot-gate). The architect's run killed each one:\n- M1_code_ignored: W3 and W7.\n- M2_no_control_ancestry: the call-list case, W4, W6, W7, W8 and W9.\n- M3_no_remote_mode: W1, W2, W3, W4, W8 and W10.\n- M4_reversed_containment: W4.\nThe script's anchors match the prototype text; if your text differs, adapt the anchors, not the tests.\n\nChecklist:\n(a) Local mode (no remote) and a healthy setup print the same [OK] target message as today. The live project from WSL prints all [OK], exit 0: the architect ran the prototype read-only against /mnt/d/projexts/moes with GIT_OPTIONAL_LOCKS=0.\n(b) Exit 1 from merge-base is the only 'no'. 128, a timeout or ENOENT stays 'unreadable' and is never read as divergence.\n(c) No new git call can fetch or write: remote, rev-parse and merge-base only, through runGit.\n(d) Off mode stays [INFO] and never changes the exit code (W8).\n(e) A missing target fails both the control line and the target line. That is accepted, because the target line names the cause.\n(f) Messages stay bounded. Target names already pass cachedPlanRef's literal rule.\n(g) No added line contains a project.json globalRails.forbiddenPatterns string.\n(h) The RED comment is on the task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctorWorktree.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Self-review, no file changed (step 5's gate stays valid; the gated snapshot was cmp'd byte-equal to the worktree). Mutants in the snapshot only, one backup, restored after each: M1_code_ignored killed by W3+W7; M2_no_control_ancestry by call-list case, W4, W6, W7, W8, W9; M3_no_remote_mode by W1, W2, W3, W4, W8, W10; M4_reversed_containment by W4 (same as the architect's run). Checklist: (a) live project read-only via tsx from the snapshot: all 7 worktree lines [OK], exit 0; (b) only merge-base exit 1 means 'no', and moe-agent.sh also refuses DIVERGED only on rc==1 (control follow :7044, land target :7413), so 128/timeout/ENOENT are 'unreadable'; (c) git calls are version, rev-parse, merge-base, symbolic-ref, remote, worktree list only: no fetch or write; (d) off mode [INFO], exit 0 (W8); (e) a missing target fails both lines, accepted; (f) branch names pass cachedPlanRef (alnum start, no '..', no '//'), argv-only execFile, so no option or shell injection; (g) 0 forbidden-pattern hits in added lines, daemonGitDocs phrase guard 0. Theoretical only: refs can move between the doctor's reads (diagnostic snapshot, documented as last fetched); worst case is now 8 bounded 2 s git calls instead of 5. RED comment is on the task.",
+      "startedAt": "2026-11-04T07:05:28.232Z",
+      "completedAt": "2026-11-04T07:05:58.063Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -27,15 +107,104 @@
       "author": "architect-c33f294e",
       "content": "DoD clarification (architect, who filed this row). DoD 1 says the existing case \"runs only bounded read-only Git commands, never the quality gate\" still passes. That case asserts the EXACT git call list, so the fix must extend its expected list with exactly the two new read-only calls: `merge-base --is-ancestor refs/heads/moe/control refs/heads/main` after symbolic-ref, and `remote` after the target rev-parse. It must add nothing else and no fetch. The new W4 case pins the remote-mode list: those calls plus `rev-parse --verify --quiet refs/remotes/origin/main^{commit}` and `merge-base --is-ancestor refs/heads/main refs/remotes/origin/main`. Extending the list that way is what \"still passes, with no fetch\" means; QA should not read it as \"byte-unchanged\".",
       "timestamp": "2026-11-04T07:00:21.709Z"
+    },
+    {
+      "id": "comment-c12d3b46a2b247ea9434e5f3e2052835",
+      "author": "worker-593560ee",
+      "content": "RED captured (worker, step 1): step 5's gate against the base doctorWorktree.ts with the new doctor.test.ts gives `Test Files 1 failed | 1 passed (2)`, `Tests 11 failed | 73 passed (84)` (doctor.test.ts 11 failed | 64 passed; bindHost 9 passed), `W rows passed: 0/10`, `doc rows: control=0 target=0`. The 11 failures are W1-W10 plus the extended 'runs only bounded read-only Git commands' call-list case. tsc on the package and on the test file was clean.",
+      "timestamp": "2026-11-04T07:03:17.296Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:51:17.766Z",
-  "updatedAt": "2026-11-04T07:00:21.709Z",
+  "updatedAt": "2026-11-04T07:07:39.801Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T06:52:35.559Z"
+    "firstClaimAt": "2026-11-04T06:52:35.559Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-c33f294e"
-  ]
+    "architect-c33f294e",
+    "worker-593560ee"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T07:01:20.234Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Fetch in doctor to see origin's live state. Rejected: doctor is offline and read-only by contract (TROUBLESHOOTING's readiness intro; runGit's protocol.allow=never). It reads origin's copy as last fetched, and the messages say to fetch.\n(2) Add new probe lines (e.g. 'worktree origin target'). Rejected: it changes LABELS and the doc table's shape. The two existing lines are exactly where the launchers fail (worktree create, follow, landing).\n(3) Check `git remote get-url origin` only. Rejected: the launchers key remote mode on ANY remote (no_git_remote) and always use origin. A repo whose only remote is not origin must FAIL, and the chosen rev-parse of refs/remotes/origin/<t> does so.\n(4) Read the control ancestry inside probeTarget. Rejected: the failure belongs to the control line the launchers' follow guards.",
+    "codebaseInsights": "Prototype: /mnt/d/moe-scratch/plan-3950184e/ (doctorWorktree.ts, doctor.test.ts, prototype.diff, red.log, green.log, gate.sh, mutate.py). BASE.txt = 9d5c8924; none of the three files changed since bb0bc17e.\n- RED (new tests, base code): 11 failed | 64 passed (75).\n- GREEN: tsc clean (package plus test-file tsconfig), 84 passed (doctor 75 + bindHost 9), W rows 10/10.\n- Gate dry run in a clean shared clone at 9d5c8924 with the prototype applied: exit 0, about 4 s. Diff size +144/-15 across 3 files.\n- Prototype dist run live (read-only): all 7 worktree lines [OK], exit 0. moe/control, the local target and refs/remotes/origin/moe/work-2026-10-24 were all 5eb4ae06.\n- On the hunt fixtures (/tmp/hunt-3488-B/fixtures/wt1; mine/doctor-worktree-refs-rerun.txt) it prints the two new FAILs.\n- cachedPlanRef (util/cachedPlanPaths.ts:25-30) already returns refs/remotes/origin/<branch> for a literal name.\n- describeGitFailure keeps 'exit N: <stderr line>' text, so messages carry git's reason.\n- isEpicFinal reads true only through the max-order fallback: epic-be924fb8 has no finalTaskId. This is a standalone bug row, so the gate is the two doctor suites plus tsc, as 576e3005, 590b98bd and cb272f68 did.",
+    "risks": "- A clone that never fetched the target fails until `git fetch origin <target>`. Accepted: the message says push or fetch, and the launchers fetch at claim time anyway.\n- A missing local target makes the control line FAIL too (merge-base exit 128).\n- The stub harness's callOf must keep throwing on any other git call, so a stray fetch shows up as a failing case.\n- Keep W-row titles stable: the gate counts '✓ ... > W1..W10: '.",
+    "keyFiles": [
+      "packages/moe-daemon/src/commands/doctorWorktree.ts",
+      "packages/moe-daemon/src/commands/doctor.test.ts",
+      "docs/TROUBLESHOOTING.md",
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "821478d615e5679afcd327c0ea5995ffe6e9e2ce",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T07:01:20.264Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T07:02:24.193Z",
+  "reviewStartedAt": "2026-11-04T07:06:40.157Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/m3950g.XXXX) && P=packages/moe-daemon && git -C \"$R\" archive HEAD $P | tar -x -C \"$S\" && (cd \"$R/$P/src\" && cp --parents commands/doctorWorktree.ts commands/doctor.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"include\":[\"src/commands/doctor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json --noEmit && npx vitest run src/commands/doctor.test.ts src/commands/doctor.bindHost.test.ts --reporter=verbose > ../v.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; G=$(grep -acE '✓ src/commands/doctor.test.ts > .* > W([1-9]|10): ' ../v.log); echo \"W rows passed: $G/10\"; D1=$(grep -E '^\\| `worktree control branch` \\|' \"$R/docs/TROUBLESHOOTING.md\" | grep ancestor | grep -c MOE_CONTROL_CHECKOUT_DIVERGED); D2=$(grep -E '^\\| `worktree target` \\|' \"$R/docs/TROUBLESHOOTING.md\" | grep 'refs/remotes/origin/' | grep -c MOE_WORKTREE_CREATE_FAILED); echo \"doc rows: control=$D1 target=$D2\"; [ $E = 0 ] && [ \"$G\" = 10 ] && [ \"$D1\" = 1 ] && [ \"$D2\" = 1 ] || { echo \"FAIL $S\"; tail -40 ../v.log; exit 1; } )",
+    "exitCode": 0,
+    "outputTail": "npm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json --noEmit\n Test Files  2 passed (2)\n      Tests  84 passed (84)\nW rows passed: 10/10\ndoc rows: control=1 target=1\n(then, project qualityGate in the same session: PASS parity-check.sh; npm run lint: OK architect.md 39/40, worker.md 30/40, qa.md 36/40, exit 0)",
+    "reportedAt": "2026-11-04T07:06:40.157Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/commands/doctor.test.ts",
+    "packages/moe-daemon/src/commands/doctorWorktree.ts",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completionSummary": "doctor's worktree control-branch and target probes now catch the two fleet-stopping states they passed before. (1) probeControlBranch: when HEAD is moe/control it runs `git merge-base --is-ancestor refs/heads/moe/control refs/heads/<target>`; exit 0 passes (behind or equal is normal), exit 1 FAILs naming MOE_CONTROL_CHECKOUT_DIVERGED, any other failure FAILs as unreadable with git's reason. (2) probeTarget: after the local-branch and checked-out checks, new probeOriginTarget reads `git remote` (empty = local mode, unchanged [OK] text); with any remote, refs/remotes/origin/<target> must resolve (else FAIL naming it and MOE_WORKTREE_CREATE_FAILED) and contain the local target (merge-base exit 1 FAILs naming MOE_LAND_TARGET_DIVERGED; other failures unreadable). Git wrapper keeps execFile's numeric exit code so only exit 1 means 'no'. Offline: reads only (remote, rev-parse, merge-base through runGit), no fetch; off mode stays [INFO], exit 0. Tests: doctor.test.ts gains W1-W10 plus the extended call-list case (stub harness and real-repo cases). RED vs base source: 11 failed | 64 passed in doctor.test.ts (comment on task); GREEN: tsc clean, Test Files 2 passed, Tests 84 passed (84), W rows 10/10. Mutants M1-M4 each killed by the expected rows. TROUBLESHOOTING.md: the two readiness rows (+2/-2) state the ancestor and refs/remotes/origin conditions. Live project read-only: all 7 worktree lines [OK], exit 0. Quality gate: parity-check.sh PASS, npm run lint OK. Gate ran in a /tmp git-archive snapshot of HEAD with the two overlaid source files, not in the shared checkout.",
+  "commits": [
+    {
+      "sha": "320918dce4e7993a57d03004b90dc350e449d333",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T07:01:20Z",
+      "paths": [
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctorWorktree.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T07:07:39.801Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T07:01:20Z",
+    "at": "2026-11-04T07:07:39.801Z"
+  }
 }
