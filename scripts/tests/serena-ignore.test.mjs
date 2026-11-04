@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { convertGitignore, parseIgnoredPaths, renderBlock } from '../moe-serena-ignore.mjs';
+import { convertGitignore, parseIgnoredPaths, parseStringSequence, renderBlock } from '../moe-serena-ignore.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'moe-serena-ignore.mjs');
 const WIN = process.platform === 'win32';
@@ -61,6 +61,38 @@ test('U4: renderBlock escapes characters YAML forbids raw', () => {
   assert.deepStrictEqual(lines.slice(-5), ['  - "q\\"\\\\"', '  - "a\\u007fb"', '  - "\\ufeffx"', '# <<< moe serena-ignore <<<', '']);
 });
 
+const MEMORY = 'ignored_memory_patterns';
+const U5_ROWS = [
+  ['', []],
+  ['project_name: x\n', []],
+  ['ignored_memory_patterns: []\n', []],
+  ['ignored_memory_patterns:\nproject_name: x\n', []],
+  ['project_name: x\nignored_memory_patterns:\n- x\n- "_archive/.*"\nread_only: false\n', ['x', '_archive/.*']],
+  ['"ignored_memory_patterns": [x, "_archive/.*"] # c\n', ['x', '_archive/.*']],
+  ["'ignored_memory_patterns':\r\n  - _archive/.*\r\n  - 'it''s'\r\n", ['_archive/.*', "it's"]],
+  ['ignored_paths:\n- zzz\nignored_memory_patterns: [y]\n', ['y']],
+  ['ignored_memory_patterns_x: [z]\n', []],
+  ['ignored_memory_patterns:\n- *alias\n', null],
+  ['ignored_memory_patterns: []\nignored_memory_patterns: []\n', null],
+  ['ignored_memory_patterns:\n- ^a|b\n', null],
+  ['ignored_memory_patterns:\n- !tag x\n', null],
+  ['ignored_memory_patterns: [x, ]\n', null],
+];
+
+test('U5: parseStringSequence reads any top-level key, and parseIgnoredPaths is its ignored_paths case', () => {
+  for (const [text, expected] of U5_ROWS) assert.deepStrictEqual(parseStringSequence(text, MEMORY), expected, JSON.stringify(text));
+  for (const [text] of U3_ROWS) assert.deepStrictEqual(parseStringSequence(text, 'ignored_paths'), parseIgnoredPaths(text), JSON.stringify(text));
+  assert.deepStrictEqual(parseStringSequence('ignored_paths: [a]\n', MEMORY), []);
+});
+
+test('U6: renderBlock appends the memory list after ignored_paths, and omits it by default', () => {
+  const tail = ['# <<< moe serena-ignore <<<', ''];
+  assert.deepStrictEqual(renderBlock(['a']).split('\n').slice(-4), ['ignored_paths:', '  - "a"', ...tail]);
+  assert.deepStrictEqual(renderBlock(['a'], null).split('\n').slice(-4), ['ignored_paths:', '  - "a"', ...tail]);
+  assert.deepStrictEqual(renderBlock(['a'], ['^t-.*', 'q"\\', '\u{feff}x']).split('\n').slice(-8),
+    ['ignored_paths:', '  - "a"', 'ignored_memory_patterns:', '  - "^t-.*"', '  - "q\\"\\\\"', '  - "\\ufeffx"', ...tail]);
+});
+
 // ---- F rows: the CLI against fixture repositories ----
 
 const BEGIN_LINE = "# >>> moe serena-ignore (managed by Moe's scripts/moe-serena-ignore.mjs; edits inside are overwritten) >>>";
@@ -70,12 +102,18 @@ const EXPECTED = [BEGIN_LINE,
   "# directory they exclude. Moe turns that walk off and lists the same patterns, plus git's, below.",
   '# To opt out, set MOE_SERENA_IGNORE_OVERRIDE=0, or set ignore_all_files_in_gitignore or ignored_paths',
   '# yourself outside this block; Moe then removes this block.',
+  '# Moe also hides QA-archived memories (_archive/.*); set ignored_memory_patterns yourself outside',
+  '# this block to keep your own list instead.',
   'ignore_all_files_in_gitignore: false',
   'ignored_paths:',
   ...['/.git', '.moe', 'docs/**', "it's", '*.swp', 'big/', 'node_modules/', '*.log', '!keep.log', '/vend/', '.serena/cache',
     '.serena/project.local.yml', '.venv/**/*', 'sub/**/*.tmp', 'sub/anchored', 'sub/**/deep', 'sub/**/#hash'].map((p) => `  - "${p}"`),
   '  - "sub/inner/**/\\u' + 'feffx"',
+  'ignored_memory_patterns:',
+  '  - "_archive/.*"',
   '# <<< moe serena-ignore <<<', ''].join('\n');
+// The same block when the memory key is left out (a user key, or an unreadable project.yml list); a literal edit, never renderBlock.
+const NO_MEMORY = EXPECTED.replace('ignored_memory_patterns:\n  - "_archive/.*"\n', '');
 const U = '\u{feff}# user\r\nread_only: false\r\n';
 const OK = (file, n = 18) => `[OK] MOE_SERENA_IGNORE_OVERRIDE: wrote ${file} (${n} patterns; Serena's .gitignore walk is off)`;
 const SKIP = (reason) => `[info] MOE_SERENA_IGNORE_SKIPPED: ${reason}; Serena keeps its own .gitignore walk`;
@@ -308,6 +346,101 @@ test('F6: check-ignore gets ./-prefixed paths, so a leading ":" is no pathspec m
   assert.equal(run(fx), OK(fx.file, 19));
   assert.ok(read(fx.file).includes('  - ":x/"\n'));
   assert.ok(!read(fx.file).includes('nope'));
+});
+
+const MEMORY_KEY_LINE = /^["']?ignored_memory_patterns["']?[ \t]*:/;
+const memoryKeys = (text) => text.split(/\r?\n/).filter((line) => MEMORY_KEY_LINE.test(line.replace(/^\u{feff}/u, ''))).length;
+const PROJECT_YML = "project_name: fx\nignored_paths:\n- .moe\n- \"docs/**\"\n- 'it''s'\n";
+const UP_TO_DATE = (file) => `[info] MOE_SERENA_IGNORE_OVERRIDE: ${file} is up to date (18 patterns)`;
+
+// project.yml's own memory list, then the list the block must carry (Serena replaces the whole key, so the block merges).
+const F8_ROWS = [
+  ['an empty list', 'ignored_memory_patterns: []\n', ['_archive/.*']],
+  ['no key', '', ['_archive/.*']],
+  ['one pattern', 'ignored_memory_patterns:\n- x\n', ['x', '_archive/.*']],
+  ['_archive already last', 'ignored_memory_patterns: [x, "_archive/.*"]\n', ['x', '_archive/.*']],
+  ['_archive already first', "ignored_memory_patterns:\n  - '_archive/.*'\n  - x\n", ['_archive/.*', 'x']],
+  ['regexes that need quoting', 'ignored_memory_patterns:\n- "^task-.*"\n- "a|b"\n- \'q"\\\'\n', ['^task-.*', 'a|b', 'q"\\', '_archive/.*']],
+];
+
+test('F8 (DoD 1): the block carries project.yml\'s memory list plus _archive/.*, once, and is then up to date', async (t) => {
+  for (const [name, yml, expected] of F8_ROWS) {
+    await t.test(name, (st) => {
+      const fx = fixture(st);
+      fx.put('.serena/project.yml', PROJECT_YML + yml);
+      assert.equal(run(fx), OK(fx.file));
+      const text = read(fx.file);
+      assert.deepStrictEqual(parseStringSequence(text, MEMORY), expected);
+      assert.equal(memoryKeys(text), 1);
+      assert.equal(parseStringSequence(text, 'ignored_paths').length, 18); // the walk list is untouched
+      assert.equal(run(fx), UP_TO_DATE(fx.file));
+      assert.equal(read(fx.file), text);
+    });
+  }
+});
+
+test('F8: the default fixture (no memory key in project.yml) writes exactly the EXPECTED block', (t) => {
+  const fx = fixture(t);
+  assert.equal(run(fx), OK(fx.file));
+  assert.equal(read(fx.file), EXPECTED);
+  assert.equal(memoryKeys(read(fx.file)), 1);
+});
+
+// A user's own key outside the block is the opt-out for that key: its bytes stay, and the block drops the key (never a duplicate).
+const F9_USER = [
+  ['a flow list', `${U}${MEMORY}: [mine]\n`],
+  ['a BOM before the key', `\u{feff}${MEMORY}: [mine]\n`],
+  ['a double-quoted key', `${U}"${MEMORY}": [mine]\n`],
+  ["a single-quoted key with an indented list", `${U}'${MEMORY}':\n  - mine\nread_only: false\n`],
+  ['an empty list and no trailing newline', `${U}${MEMORY}: []`],
+];
+
+test('F9 (DoD 2): a user ignored_memory_patterns stays byte-identical, the block stays without that key', async (t) => {
+  for (const [name, user] of F9_USER) {
+    await t.test(name, (st) => {
+      const fx = fixture(st);
+      fx.put('.serena/project.yml', `${PROJECT_YML}${MEMORY}:\n- x\n`);
+      fx.put('.serena/project.local.yml', user);
+      const sep = user.endsWith('\n') ? '' : '\n';
+      assert.equal(run(fx), OK(fx.file));
+      assert.equal(read(fx.file), `${user}${sep}${NO_MEMORY}`);
+      assert.equal(memoryKeys(read(fx.file)), 1); // the user's own, and no other
+      assert.equal(parseStringSequence(read(fx.file), 'ignored_paths').length, 18);
+      assert.equal(run(fx), UP_TO_DATE(fx.file));
+    });
+  }
+  await t.test('an earlier block that carried the key is rewritten without it', (st) => {
+    const fx = fixture(st);
+    fx.put('.serena/project.local.yml', `${U}${MEMORY}: [mine]\n${EXPECTED}`);
+    assert.equal(run(fx), OK(fx.file));
+    assert.equal(read(fx.file), `${U}${MEMORY}: [mine]\n${NO_MEMORY}`);
+    assert.equal(memoryKeys(read(fx.file)), 1);
+  });
+  await t.test('a user ignored_paths still removes the block, with or without a memory key', (st) => {
+    const fx = fixture(st);
+    const user = `${U}ignored_paths: ["mine/"]\n${MEMORY}: [mine]\n`;
+    fx.put('.serena/project.local.yml', `${user}${EXPECTED}`);
+    assert.equal(run(fx), SKIP(`${fx.file} sets ignore_all_files_in_gitignore or ignored_paths itself${removed(fx.file)}`));
+    assert.equal(read(fx.file), user);
+  });
+});
+
+test('F9: a project.yml memory list that cannot be read safely gives a block with no memory key', async (t) => {
+  for (const [name, list] of [['an alias', '- *alias\n'], ['an unquoted regex', '- ^a|b\n'], ['a bare dash', '-\n'], ['a continuation', '- a\n  b\n']]) {
+    await t.test(name, (st) => {
+      const fx = fixture(st);
+      fx.put('.serena/project.yml', `${PROJECT_YML}${MEMORY}:\n${list}`);
+      assert.equal(run(fx), OK(fx.file));
+      assert.equal(read(fx.file), NO_MEMORY);
+      assert.equal(memoryKeys(read(fx.file)), 0);
+    });
+  }
+  await t.test('a duplicate key', (st) => {
+    const fx = fixture(st);
+    fx.put('.serena/project.yml', `${PROJECT_YML}${MEMORY}: [a]\n${MEMORY}: [b]\n`);
+    assert.equal(run(fx), OK(fx.file));
+    assert.equal(read(fx.file), NO_MEMORY);
+  });
 });
 
 test('F7 (DoD 4): both IDE bundles ship the script, which imports only node: builtins', () => {
