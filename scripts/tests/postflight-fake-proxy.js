@@ -625,8 +625,11 @@ switch (tool) {
     // FAKE_CTX_LANDING: task.landing as getContext.ts buildLanding serves it (a JSON
     // object: {lastCompletion?: {sha, ref, pushed, recordedAt}, lastCheckpoint?: {sha,
     // recordedAt}}), which a worktree-mode QA pre-flight reads (WT-13). Unset: no field.
-    const ctxLanding = jsonKnob('FAKE_CTX_LANDING');
-    if (ctxLanding !== undefined) {
+    // FAKE_CTX_LANDING_FROM_CLAIM=N: no field before the Nth claim (the .moe/claim-count that FAKE_CLAIM_ONCE and
+    // FAKE_CLAIM_LIMIT keep), so a seat's later claim finds a landed completion its first one lacked (task-3416b309).
+    const ctxLanding = jsonKnob('FAKE_CTX_LANDING'), landingFrom = Number(process.env.FAKE_CTX_LANDING_FROM_CLAIM || 0);
+    const claimsSoFar = landingFrom > 0 && fs.existsSync(path.join(moe, 'claim-count')) ? Number(fs.readFileSync(path.join(moe, 'claim-count'), 'utf8')) : 0;
+    if (ctxLanding !== undefined && claimsSoFar >= landingFrom) {
       if (!ctxLanding || typeof ctxLanding !== 'object' || Array.isArray(ctxLanding)) throw new Error('FAKE_CTX_LANDING must be a JSON object');
       ctxPayload.task.landing = ctxLanding;
     }
@@ -651,7 +654,14 @@ switch (tool) {
     break;
   }
   // report_blocked: logged in order with the other RPCs; the task parks.
-  case 'report_blocked': appendRpc(); ok({ success: true, status: 'BLOCKED' }); break;
+  // FAKE_REPORT_BLOCKED_FAIL=1: logged, then refused, so the task never parks (task-3416b309).
+  case 'report_blocked':
+    appendRpc();
+    if (process.env.FAKE_REPORT_BLOCKED_FAIL === '1') {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id||1,error:{code:-32603,message:'fixture: report_blocked failed'}}) + '\n');
+      break;
+    }
+    ok({ success: true, status: 'BLOCKED' }); break;
   case 'list_tasks': {
     const epicTasks = [
       { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },

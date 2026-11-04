@@ -7069,42 +7069,101 @@ follow_control_checkout() {
 # checkout, after its claim: in remote mode L4's fetch and mirror first
 # (sync_land_target, on local copies of its globals), so a commit landed from
 # another clone counts; then the follow. A failed sync warns and the follow uses
-# the local target. Twin: Invoke-MoeQaControlPreflight.
+# the local target. Sets QA_LAND_B for qa_landed_gate: the target tip this
+# pre-flight synced (origin's as just fetched; in local mode the local target,
+# read before the follow), or "" when the sync failed or the target does not
+# resolve. Twin: Invoke-MoeQaControlPreflight.
 qa_control_preflight() {
     local target="${CS_CONSOLIDATION_BRANCH:-main}" LAND_WT_PUB=remote LAND_B="" LAND_CODE="" LAND_MESSAGE="" LAND_FETCH_ERR=""
     case "$target" in *'?'*|*'['*) target=main ;; esac
+    QA_LAND_B=""
     no_git_remote && LAND_WT_PUB=local
-    if [ "$LAND_WT_PUB" = remote ] && ! sync_land_target "$target"; then
+    if sync_land_target "$target"; then
+        QA_LAND_B="$LAND_B"
+    elif [ "$LAND_WT_PUB" = remote ]; then
         echo -e "${YELLOW}[WARN]${NC} ${LAND_CODE:-MOE_LAND_FETCH_FAILED}: the QA pre-flight could not sync origin's $target (${LAND_MESSAGE:-no detail}); the follow uses the local $target."
     fi
     follow_control_checkout
+}
+
+# qa_gate_park DETAIL -- qa_landed_gate's row-level miss: this task, not the
+# seat, has no landed completion to review. One moe.report_blocked parks the task
+# (a non-resource block by its assignee frees the seat; blockedOnTaskIds [] so no
+# task id in DETAIL can make it a dependency wait), a [WARN] line says so,
+# and the caller launches no CLI and goes back to the loop top for a fresh
+# pre-flight and claim. A report_blocked that fails stops the seat as
+# worktree_stop does, without a second call, so a row the daemon never parked is
+# not claimed again in a loop. Main shell only. Twin: Invoke-MoeQaGatePark.
+qa_gate_park() {
+    local args
+    if args=$($PYTHON_CMD -c 'import json,sys; t,w,r=sys.argv[1:]; print(json.dumps({"taskId":t,"workerId":w,"reason":r,"blockedOnTaskIds":[]}))' "$PREFLIGHT_TASK_ID" "$WORKER_ID" "MOE_CONTROL_CHECKOUT_BEHIND: $1" 2>/dev/null) \
+        && moe_rpc report_blocked "$args" > /dev/null 2>&1; then
+        printf '%b[WARN]%b MOE_CONTROL_CHECKOUT_BEHIND: %s\n' "$YELLOW" "$NC" "$1"
+        printf '%b[WARN]%b task %s is parked with no CLI run; this seat goes on to its next claim.\n' "$YELLOW" "$NC" "$PREFLIGHT_TASK_ID"
+        return 0
+    fi
+    printf '%b[ERROR]%b MOE_CONTROL_CHECKOUT_BEHIND: %s\n' "$RED" "$NC" "$1"
+    printf '%b[WARN]%b moe.report_blocked failed for %s; the seat stops anyway.\n' "$YELLOW" "$NC" "$PREFLIGHT_TASK_ID"
+    stop_heartbeat_sidecar
+    exit 1
 }
 
 # qa_landed_gate -- design §6.4, after qa_control_preflight: QA reviews only
 # landed bytes. The task's recorded completion C (get_context
 # task.landing.lastCompletion.sha; never a checkpoint, rescue ref or task-branch
 # tip) must be a commit and an ancestor of the control HEAD, which may be later.
-# Anything else, a git failure included, stops the seat before any CLI with
-# MOE_CONTROL_CHECKOUT_BEHIND and one report_blocked (worktree_stop). Passing
-# names C's own diff in the dynamic context. Main shell only (worktree_stop
-# exits). Twin: Assert-MoeQaLandedCommit.
+# A miss is MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI, split by
+# what it is a fact about:
+# - the row (qa_gate_park, then 1: the caller goes back to the loop top): this
+#   task's context records no usable completion; or C is not a commit here, or
+#   not in HEAD, while HEAD holds QA_LAND_B, so C is not on the target;
+# - the seat (worktree_stop, exit 1): no context for this task, an unreadable
+#   control HEAD, an ancestry check that fails with a git error, or a C miss
+#   while HEAD does not hold QA_LAND_B (a failed sync or follow, which every row
+#   would hit).
+# Passing names C's own diff in the dynamic context and returns 0. Main shell
+# only (both stops exit). Twin: Assert-MoeQaLandedCommit.
 qa_landed_gate() {
-    local tid="$PREFLIGHT_TASK_ID" sha head rc=0
+    local tid="$PREFLIGHT_TASK_ID" sha head why="" rc=0
     sha=$(printf '%s' "${PREFLIGHT_CONTEXT:-}" | $PYTHON_CMD -c '
 import json, re, sys
 try:
-    s = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))["task"]["landing"]["lastCompletion"]["sha"]
+    t = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))["task"]
+    if t["id"] != sys.argv[1]:
+        raise ValueError
+except Exception:
+    sys.exit(0)
+try:
+    s = t["landing"]["lastCompletion"]["sha"]
 except Exception:
     s = ""
-print(s if isinstance(s, str) and re.fullmatch(r"[0-9a-f]{40}", s) else "")
-' 2>/dev/null) || sha=""
-    [ -n "$sha" ] || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only"
+print(s if isinstance(s, str) and re.fullmatch(r"[0-9a-f]{40}", s) else "none")
+' "$tid" 2>/dev/null) || sha=""
+    [ -n "$sha" ] || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: the pre-flight get_context did not answer for this task, so its recorded completion is unknown"
+    if [ "$sha" = none ]; then
+        qa_gate_park "task $tid: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only"
+        return 1
+    fi
     { [ -n "${MOE_TOP:-}" ] || git_top; } && head=$(git -C "$MOE_TOP" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) \
         || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: cannot read the control HEAD to review completion $sha"
-    git -C "$MOE_TOP" cat-file -e "$sha^{commit}" 2>/dev/null \
-        || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: completion $sha is not a commit in $MOE_TOP"
-    git -C "$MOE_TOP" merge-base --is-ancestor "$sha" "$head" 2>/dev/null || rc=$?
-    [ "$rc" -eq 0 ] || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: completion $sha is not in the control HEAD $head (git merge-base --is-ancestor exited $rc); QA reviews landed bytes only"
+    if ! git -C "$MOE_TOP" cat-file -e "$sha^{commit}" 2>/dev/null; then
+        why="task $tid: completion $sha is not a commit in $MOE_TOP"
+    else
+        git -C "$MOE_TOP" merge-base --is-ancestor "$sha" "$head" 2>/dev/null || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            why="task $tid: completion $sha is not in the control HEAD $head (git merge-base --is-ancestor exited $rc); QA reviews landed bytes only"
+            # Exit 1 is git's "not an ancestor"; any other code is a git error.
+            [ "$rc" -eq 1 ] || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "$why"
+        fi
+    fi
+    if [ -n "$why" ]; then
+        # HEAD holds the target tip this pre-flight synced, so C is not on the target.
+        if [ -n "${QA_LAND_B:-}" ] && { [ "$QA_LAND_B" = "$head" ] || git -C "$MOE_TOP" merge-base --is-ancestor "$QA_LAND_B" "$head" 2>/dev/null; }; then
+            qa_gate_park "$why"
+            return 1
+        fi
+        worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "$why"
+    fi
     DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
 
 Review commit $sha: the landed completion of task $tid, contained in this checkout's HEAD $head. Its diff is 'git diff $sha^ $sha'; HEAD may be later, so never read 'git diff HEAD~1' or the working tree as this task's change."
@@ -11055,9 +11114,11 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         verified_local_refuse MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED "the claim for $PREFLIGHT_TASK_ID is in shared mode; the VM route runs only in worktree mode, so no job runs."
     fi
     # WT-13 (§6.4): a QA claim in a worktree-mode control checkout reviews what landed.
+    # A row the gate parked launches no CLI: back to the loop top for a fresh
+    # pre-flight and claim (the continue skips the --no-loop break, too).
     if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$ROLE" = qa ] && control_worktree_mode; then
         qa_control_preflight
-        qa_landed_gate
+        qa_landed_gate || continue
     fi
     if [ "${MOE_WT_MODE:-}" = worktree ]; then
         # Twin: $moeWtStatus, the pre-flight get_context's task.status; RESUME_TASK_STATUS is empty on a fresh claim.

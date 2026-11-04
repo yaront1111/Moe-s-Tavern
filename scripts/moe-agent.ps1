@@ -6537,14 +6537,20 @@ function Invoke-MoeControlFollow([switch]$Switch) {
 # Design §6.4, a QA seat in a worktree-mode control checkout, after its claim:
 # in remote mode L4's fetch and mirror first (Sync-MoeLandTarget), so a commit
 # landed from another clone counts; then the follow. A failed sync warns and the
-# follow uses the local target. Twin: qa_control_preflight.
+# follow uses the local target. Sets $script:MoeQaLandB for
+# Assert-MoeQaLandedCommit: the target tip this pre-flight synced (origin's as
+# just fetched; in local mode the local target, read before the follow), or ''
+# when the sync failed or the target does not resolve. Twin: qa_control_preflight.
 function Invoke-MoeQaControlPreflight {
     $cb = [string](Read-MoeCommitSettings).consolidationBranch
     $target = if ($cb -and $cb -notmatch '[?\[]') { $cb } else { 'main' }
+    $script:MoeQaLandB = ''
     $git = Get-MoeGitTop
-    if ($git -and -not (Test-MoeNoRemote $git.Top)) {
-        $res = @{ Code = '' }; $L = @{ Remote = $true; B = ''; Msg = '' }
-        if (-not (Sync-MoeLandTarget $git.Top $target $res $L)) {
+    if ($git) {
+        $remote = -not (Test-MoeNoRemote $git.Top)
+        $res = @{ Code = '' }; $L = @{ Remote = $remote; B = ''; Msg = '' }
+        $script:MoeQaLandB = [string](Sync-MoeLandTarget $git.Top $target $res $L)
+        if ($remote -and -not $script:MoeQaLandB) {
             $code = if ($res.Code) { $res.Code } else { 'MOE_LAND_FETCH_FAILED' }
             $why = if ($L.Msg) { $L.Msg } else { 'no detail' }
             Write-Host "[WARN] ${code}: the QA pre-flight could not sync origin's $target ($why); the follow uses the local $target." -ForegroundColor Yellow
@@ -6553,28 +6559,79 @@ function Invoke-MoeQaControlPreflight {
     Invoke-MoeControlFollow
 }
 
+# Assert-MoeQaLandedCommit's row-level miss: this task, not the seat, has no
+# landed completion to review. One moe.report_blocked parks the task (a
+# non-resource block by its assignee frees the seat; blockedOnTaskIds @() so no
+# task id in $Detail can make it a dependency wait), a [WARN] line says so, and
+# $script:MoeQaGateParked tells the caller to launch no CLI and go back to the
+# loop top for a fresh pre-flight and claim (it also keeps a -NoLoop run going).
+# A report_blocked that fails stops the seat as Stop-MoeWorktreeSeat does,
+# without a second call, so a row the daemon never parked is not claimed again
+# in a loop. Twin: qa_gate_park.
+function Invoke-MoeQaGatePark([string]$Detail) {
+    $blocked = $null
+    try { $blocked = Invoke-MoeRpc -Tool 'report_blocked' -Args @{ taskId = $preflightTaskId; workerId = $WorkerId; reason = "MOE_CONTROL_CHECKOUT_BEHIND: $Detail"; blockedOnTaskIds = @() } } catch { $blocked = $null }
+    if ($null -ne $blocked) {
+        Write-Host "[WARN] MOE_CONTROL_CHECKOUT_BEHIND: $Detail" -ForegroundColor Yellow
+        Write-Host "[WARN] task $preflightTaskId is parked with no CLI run; this seat goes on to its next claim." -ForegroundColor Yellow
+        $script:MoeQaGateParked = $true
+        return
+    }
+    Write-Host "[ERROR] MOE_CONTROL_CHECKOUT_BEHIND: $Detail" -ForegroundColor Red
+    Write-Host "[WARN] moe.report_blocked failed for $preflightTaskId; the seat stops anyway." -ForegroundColor Yellow
+    Stop-HeartbeatSidecar
+    exit 1
+}
+
 # Design §6.4, after Invoke-MoeQaControlPreflight: QA reviews only landed bytes.
 # The task's recorded completion C (get_context task.landing.lastCompletion.sha;
 # never a checkpoint, rescue ref or task-branch tip) must be a commit and an
-# ancestor of the control HEAD, which may be later. Anything else, a git
-# failure included, stops the seat before any CLI with
-# MOE_CONTROL_CHECKOUT_BEHIND and one report_blocked (Stop-MoeWorktreeSeat).
-# Returns the dynamic-context line naming C's own diff. Twin: qa_landed_gate.
+# ancestor of the control HEAD, which may be later. A miss is
+# MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI, split by what it
+# is a fact about:
+# - the row (Invoke-MoeQaGatePark, then nothing returned and
+#   $script:MoeQaGateParked set): this task's context records no usable
+#   completion; or C is not a commit here, or not in HEAD, while HEAD holds
+#   $script:MoeQaLandB, so C is not on the target;
+# - the seat (Stop-MoeWorktreeSeat, exit 1): no context for this task, an
+#   unreadable control HEAD, an ancestry check that fails with a git error, or
+#   a C miss while HEAD does not hold $script:MoeQaLandB (a failed sync or
+#   follow, which every row would hit).
+# Passing returns the dynamic-context line naming C's own diff. Twin: qa_landed_gate.
 function Assert-MoeQaLandedCommit($Context, [string]$TaskId) {
-    $sha = Get-MoeProp (Get-MoeProp (Get-MoeProp (Get-MoeProp $Context 'task') 'landing') 'lastCompletion') 'sha'
+    $task = Get-MoeProp $Context 'task'
+    $id = Get-MoeProp $task 'id'
+    if (-not ($id -is [string] -and $id -ceq $TaskId)) {
+        Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: the pre-flight get_context did not answer for this task, so its recorded completion is unknown"
+    }
+    $sha = Get-MoeProp (Get-MoeProp (Get-MoeProp $task 'landing') 'lastCompletion') 'sha'
     if (-not ($sha -is [string] -and $sha -cmatch '^[0-9a-f]{40}$')) {
-        Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only"
+        Invoke-MoeQaGatePark "task ${TaskId}: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only"
+        return
     }
     $git = Get-MoeGitTop
     $r = if ($git) { Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD^{commit}') } else { $null }
     $head = if ($r -and $r.Rc -eq 0) { "$(@($r.Out) | Select-Object -First 1)".Trim() } else { '' }
     if (-not $head) { Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: cannot read the control HEAD to review completion $sha" }
+    $why = ''
     if ((Invoke-MoeGit -Top $git.Top -GitArgs @('cat-file', '-e', "$sha^{commit}")).Rc -ne 0) {
-        Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: completion $sha is not a commit in $($git.Top)"
+        $why = "task ${TaskId}: completion $sha is not a commit in $($git.Top)"
+    } else {
+        $rc = (Invoke-MoeGit -Top $git.Top -GitArgs @('merge-base', '--is-ancestor', $sha, $head)).Rc
+        if ($rc -ne 0) {
+            $why = "task ${TaskId}: completion $sha is not in the control HEAD $head (git merge-base --is-ancestor exited $rc); QA reviews landed bytes only"
+            # Exit 1 is git's "not an ancestor"; any other code is a git error.
+            if ($rc -ne 1) { Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' $why }
+        }
     }
-    $rc = (Invoke-MoeGit -Top $git.Top -GitArgs @('merge-base', '--is-ancestor', $sha, $head)).Rc
-    if ($rc -ne 0) {
-        Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: completion $sha is not in the control HEAD $head (git merge-base --is-ancestor exited $rc); QA reviews landed bytes only"
+    if ($why) {
+        # HEAD holds the target tip this pre-flight synced, so C is not on the target.
+        $b = [string]$script:MoeQaLandB
+        if ($b -and ($b -ceq $head -or (Invoke-MoeGit -Top $git.Top -GitArgs @('merge-base', '--is-ancestor', $b, $head)).Rc -eq 0)) {
+            Invoke-MoeQaGatePark $why
+            return
+        }
+        Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' $why
     }
     return "`n`nReview commit ${sha}: the landed completion of task $TaskId, contained in this checkout's HEAD $head. Its diff is 'git diff $sha^ $sha'; HEAD may be later, so never read 'git diff HEAD~1' or the working tree as this task's change."
 }
@@ -9596,6 +9653,8 @@ do {
     # account relaunch must not skip it again (the reload deferral below
     # `continue`s straight back here).
     $script:AccountRelaunch = $false
+    # Set only by this pass's Invoke-MoeQaGatePark; the do-while below reads it.
+    $script:MoeQaGateParked = $false
 
     # WT-13 (§6.2): a worktree-mode control checkout (HEAD on moe/control) follows
     # the target BEFORE the hash check, so a landed wrapper change reaches the
@@ -10297,9 +10356,13 @@ If moe.wait_for_task returns hasChatMessage:true, call moe.chat_read on chatMess
         Stop-MoeVerifiedLocalSeat MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED "the claim for $preflightTaskId is in shared mode; the VM route runs only in worktree mode, so no job runs."
     }
     # WT-13 (§6.4): a QA claim in a worktree-mode control checkout reviews what landed.
+    # A row the gate parked launches no CLI: back to the loop top for a fresh
+    # pre-flight and claim ($script:MoeQaGateParked keeps a -NoLoop run going).
     if ($AutoClaim -and $preflightOk -and $preflightTaskId -and $Role -eq 'qa' -and (Test-MoeControlWorktreeMode)) {
         Invoke-MoeQaControlPreflight
-        $dynamicContext += Assert-MoeQaLandedCommit $preflightContext $preflightTaskId
+        $qaReview = Assert-MoeQaLandedCommit $preflightContext $preflightTaskId
+        if ($script:MoeQaGateParked) { continue }
+        $dynamicContext += $qaReview
     }
 
     # -------- Pre-flight baseline (land-on-every-exit) --------
@@ -11726,8 +11789,9 @@ $mentionsJson
     # started one either: once it launches, the seat goes on to claim the
     # session it is for. An account relaunch (the account ran out or signed
     # out) never finished its session either, so it relaunches too, at once,
-    # even under -NoLoop.
-} while ($loopEnabled -or (($moeCurrentLaunchFailed -or $moeLaunchProbe) -and -not $NoLoop) -or $script:AccountRelaunch)
+    # even under -NoLoop. Neither did a QA pre-flight whose row the landed gate
+    # parked: it goes on to a fresh pre-flight and claim, even under -NoLoop.
+} while ($loopEnabled -or (($moeCurrentLaunchFailed -or $moeLaunchProbe) -and -not $NoLoop) -or $script:AccountRelaunch -or $script:MoeQaGateParked)
 } catch {
     # A pipeline stop is operator Ctrl+C, not an unexpected failure. Record
     # terminating errors but rethrow them without changing teardown behavior.

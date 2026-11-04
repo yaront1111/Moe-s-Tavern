@@ -1711,14 +1711,11 @@ async function wtFollowLock(){
 }
 // WT-13 §6.4: a QA claim in the control checkout launches only once the task's recorded completion C
 // (get_context task.landing.lastCompletion, never its checkpoint) is in the control HEAD after the follow;
-// otherwise MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI. The prompt names C's own diff, since
-// HEAD may be later. A QA seat off moe/control (shared mode) has no gate.
+// otherwise MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI: the row is parked and the seat goes on
+// (qaParked) when the miss is a fact about the row, and the seat stops (refused) when its control checkout did not
+// follow. The prompt names C's own diff, since HEAD may be later. A QA seat off moe/control (shared mode) has no gate.
 async function wtQaGate(){
-  const run=async(p,name,knobs)=>{
-    const rec=path.join(root,name+'.cli.jsonl');
-    const r=await launch(p,name,{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'REVIEW',WT_CLI_RECORD:rec,...knobs},{role:'qa',type:'claude'});
-    return {...r,prompt:(rows(rec).pop()||{}).context||''};
-  };
+  const run=qaRun;
   const reviewed=(r,c,head)=>{
     assert.ok(r.code===0&&r.cliRan&&r.blocked.length===0,`exit ${r.code}; the CLI ran: ${r.cliRan}; report_blocked calls: ${r.blocked.length}`+tail(r.log));
     assert.equal(r.prompt.split(`Review commit ${c}: `).length,2,'the prompt does not name the review commit once'+tail(r.log));
@@ -1726,10 +1723,11 @@ async function wtQaGate(){
     assert.equal(revOf(r.top,'HEAD'),head,'the control HEAD');
   };
   const why=(r,re)=>{refused(r,'MOE_CONTROL_CHECKOUT_BEHIND');assert.match(r.blocked[0].args.reason,re,'the report_blocked reason');};
-  // The follow is refused (a human edit to the landed file), so C stays out of the control HEAD.
+  // The follow is refused (a human edit to the landed file), so C stays out of the control HEAD, which lacks main's
+  // tip: a fact about the seat, which stops (one claim only, so a park would end the run at once).
   let p=repo('wt-qa-behind');write(path.join(p.top,'src','a.txt'),'human edit\n');
   const old=mainOf(p),cb=commitOn(p,'refs/heads/main',{'src/a.txt':'landed\n'});
-  let r=await run(p,'wt-qa-behind',landed(cb));
+  let r=await run(p,'wt-qa-behind',{FAKE_CLAIM_ONCE:'1',...landed(cb)});
   why(r,new RegExp(`^MOE_CONTROL_CHECKOUT_BEHIND: task ${TASK}: completion ${cb} is not in the control HEAD ${old} `));
   assert.equal(revOf(p.top,'HEAD'),old,'the control HEAD moved');
   // The follow fast-forwards onto C, then onto a later D: both launch, both prompts name C.
@@ -1739,19 +1737,67 @@ async function wtQaGate(){
   r=await run(p,'wt-qa-later',landed(c));reviewed({...r,top:p.top},c,d);
   // No usable completion: none recorded, a checkpoint at HEAD only, a malformed sha, a sha no object has, and a
   // failing ancestry check (the git stub fails every --is-ancestor; HEAD is already at C, so the follow skips it).
-  const head=revOf(p.top,'HEAD'),none=/no recorded completion commit/;
+  // HEAD holds main's tip, so each is a fact about the row: parked, and the seat claims again. The fake's second
+  // claim answers idle, so the single-shot seat launches nothing and exits 0.
+  const head=revOf(p.top,'HEAD'),none=/no recorded completion commit/,once={FAKE_CLAIM_ONCE:'1'};
   for(const [name,knobs,re] of [['wt-qa-none',{},none],
     ['wt-qa-checkpoint',{FAKE_CTX_LANDING:JSON.stringify({lastCheckpoint:{sha:head,recordedAt:'2026-11-02T00:00:00.000Z'}})},none],
     ['wt-qa-malformed',landed(head.slice(0,12)),none],['wt-qa-upper',landed(head.toUpperCase()),none],
     ['wt-qa-unknown',landed('0123456789abcdef0123456789abcdef01234567'),/completion 0123456789abcdef0123456789abcdef01234567 is not a commit/],
     ['wt-qa-git-fail',{...landed(head),WT_GIT_FAIL:'--is-ancestor'},new RegExp(`completion ${head} is not in the control HEAD ${head} `)]]){
-    r=await run(p,name,knobs);
-    try{why(r,re);}catch(e){e.message=`${name}: ${e.message}`;throw e;}
+    r=await run(p,name,{...once,...knobs});
+    try{qaParked(p,r,re);assert.ok(!r.cliRan,'the CLI ran for a parked row');}catch(e){e.message=`${name}: ${e.message}`;throw e;}
   }
   // Shared mode: no follow, no gate, no review line.
   git(p.top,'switch','-q','-c','moe/work-2026-11-02');
   r=await run(p,'wt-qa-shared',{});
   assert.ok(r.code===0&&r.cliRan&&!/MOE_CONTROL_/.test(r.log)&&!r.prompt.includes('Review commit '),'shared mode QA changed'+tail(r.log));
+}
+
+// A QA launch for WT-13's gate: a fresh claim count (FAKE_CLAIM_ONCE/LIMIT), the CLI's prompts recorded, and a 5 s
+// single-shot wait after an idle claim, so a seat that claims past its limit ends at once.
+async function qaRun(p,name,knobs){
+  const rec=path.join(root,name+'.cli.jsonl');
+  for(const f of ['claim-count','second-claim'])fs.rmSync(path.join(p.dir,'.moe',f),{force:true});
+  const r=await launch(p,name,{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'REVIEW',WT_CLI_RECORD:rec,MOE_TASKLESS_WAIT_SEC:'5',...knobs},{role:'qa',type:'claude'});
+  return {...r,prompt:(rows(rec).pop()||{}).context||'',launches:rows(rec).length};
+}
+// A row-level miss of the QA gate (task-3416b309): exit 0, one [WARN] code line and no [ERROR] one, exactly one
+// report_blocked naming the task, the seat and the code with blockedOnTaskIds [] (no reason-id parsing that could
+// leave the row claimable), and the seat's next claim_next_task after it with no
+// deregister_worker before that claim: the seat stayed registered and went on.
+function qaParked(p,r,re){
+  const why=m=>m+tail(r.log),tools=rpcs(p).map(x=>x.tool),at=tools.indexOf('report_blocked'),next=tools.indexOf('claim_next_task',at+1);
+  assert.equal(r.code,0,why(`exit code ${r.code}, expected 0`));
+  assert.ok(r.log.includes('[WARN] MOE_CONTROL_CHECKOUT_BEHIND: ')&&!r.log.includes('[ERROR] MOE_CONTROL_CHECKOUT_BEHIND'),why('no [WARN] park line, or an [ERROR] stop line'));
+  assert.equal(r.blocked.length,1,why(`${r.blocked.length} report_blocked calls, expected 1`));
+  const a=r.blocked[0].args||{};
+  assert.deepEqual([a.taskId,a.workerId,a.blockedOnTaskIds],[TASK,WID,[]],`report_blocked args ${JSON.stringify(a)}`);
+  assert.ok(typeof a.reason==='string'&&a.reason.startsWith('MOE_CONTROL_CHECKOUT_BEHIND: ')&&re.test(a.reason),`report_blocked reason ${JSON.stringify(a.reason)}`);
+  assert.ok(tools.indexOf('claim_next_task')<at&&next>at,why(`no claim before and after the park: ${tools.join(',')}`));
+  assert.ok(!tools.slice(0,next).includes('deregister_worker'),why('the seat deregistered before it claimed again'));
+}
+// task-3416b309: a row-level miss parks the row and the same seat goes on to its next claim, which it reviews; a
+// seat-level miss still stops the seat (exit 1). The fake hands out one task id, so its second claim stands for the
+// next REVIEW row: FAKE_CTX_LANDING_FROM_CLAIM gives only that claim a landed completion.
+async function wtQaPark(){
+  const p=repo('wt-qa-park'),c=commitOn(p,'refs/heads/main',{'src/p.txt':'p\n'}),moe=f=>path.join(p.dir,'.moe',f);
+  let r=await qaRun(p,'wt-qa-park',{...landed(c),FAKE_CTX_LANDING_FROM_CLAIM:'2',FAKE_CLAIM_LIMIT:'2'});
+  qaParked(p,r,/no recorded completion commit/);
+  assert.equal(r.launches,1,`${r.launches} CLI launches, expected 1, for the second row`+tail(r.log));
+  assert.equal(r.prompt.split(`Review commit ${c}: `).length,2,"the second row's prompt does not name its review commit once"+tail(r.log));
+  assert.deepEqual([readOr(moe('claim-count')),present(moe('second-claim'))],['2',false],'the seat did not claim exactly twice');
+  // A park the daemon refuses leaves the row claimable, so the seat stops instead of claiming it again.
+  r=await qaRun(p,'wt-qa-park-refused',{FAKE_CLAIM_ONCE:'1',FAKE_REPORT_BLOCKED_FAIL:'1'});
+  refused(r,'MOE_CONTROL_CHECKOUT_BEHIND');
+  assert.ok(/no recorded completion commit/.test(r.blocked[0].args.reason)&&r.log.includes('moe.report_blocked failed'),'not the failed park'+tail(r.log));
+  assert.equal(readOr(moe('claim-count')),'1','the seat claimed again after a failed park');
+  // No context for this task (the read failed, or it answered another task): the completion is unknown, a seat-level stop.
+  for(const fail of ['error','mismatch']){
+    r=await qaRun(p,'wt-qa-park-ctx-'+fail,{...landed(c),FAKE_CLAIM_ONCE:'1',FAKE_GET_CONTEXT_FAIL:fail});
+    try{refused(r,'MOE_CONTROL_CHECKOUT_BEHIND');assert.match(r.blocked[0].args.reason,/did not answer for this task/);}
+    catch(e){e.message=`wt-qa-park-ctx-${fail}: ${e.message}`;throw e;}
+  }
 }
 
 // task-e3e81c45: each Serena launch runs scripts/moe-serena-ignore.mjs on Serena's root, which hands
@@ -1866,7 +1912,7 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'wt-serena-yml':wtSerenaYml,'serena-ignore':serenaIgnore,'serena-ignore-off':serenaIgnoreOff,'serena-ignore-wt':serenaIgnoreWt,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
   'wt-unlanded':wtUnlanded,'wt-remote-rejected':wtRemoteRejected,'wt-resume':wtResume,'wt-resume-unmerged':wtResumeUnmerged,'wt-resume-retry-path':wtResumeRetryPath,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
-  'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});
+  'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,'wt-qa-park':wtQaPark,codes});
 cases['wt-follow-lock']=wtFollowLock;
 cases['wt-settings']=wtSettings;
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
