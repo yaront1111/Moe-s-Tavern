@@ -1,0 +1,31 @@
+{
+  "id": "task-bbd7ad2d9b3b498eb581f760d0e75a4d",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: a launch outage carried into a verified-local iteration never ends in moe-agent.ps1: the VM route turns every launch probe into a no-launch while the outage suppresses every claim (ps1 twin of task-cc4213c0)",
+  "description": "Repro: a legacy-profile ps1 worker seat reaches 3 fast launch failures (LaunchOutage=true, task released); the project flips to verified-local (ready) while the wrapper lives; every later iteration prints MOE_LAUNCH_PROBE, then the VM route's taskless skip suppresses the probe, so the seat never claims again. Fix: port sh 8ca6a40b (task-cc4213c0): right after Invoke-MoeVerifiedLocalGate, when $script:MoeVmRoute -and $script:LaunchOutage, print the same [launch-outage] line, post one best-effort #general line and reset the six launch-success variables; port its postflight-vm-route row (and fake-proxy knob) to postflight-vm-route.ps1. Hand-forward: comment from architect-1dd28c7c on task-62ec51f1 (CQ-M07n), which lands the ps1 outage exemption.",
+  "definitionOfDone": [
+    "moe-agent.ps1 ends a carried-over launch outage on the first VM-route iteration with the sh twin's strings (8ca6a40b), resetting the streak, backoff and four outage variables",
+    "A postflight-vm-route.ps1 row reproduces the carry-over (legacy outage, then verified-local ready) and proves the seat claims again with no host CLI launch",
+    "postflight-vm-route.ps1 passes on powershell.exe and pwsh.exe; parity-check.sh passes; moe-agent.ps1 keeps its UTF-8 BOM"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-62ec51f179494706a39045154d07e544"
+  ],
+  "priority": "MEDIUM",
+  "order": 239.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:53:40.368Z",
+  "updatedAt": "2026-11-04T07:53:40.368Z"
+}

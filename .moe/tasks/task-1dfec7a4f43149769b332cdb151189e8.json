@@ -1,0 +1,31 @@
+{
+  "id": "task-1dfec7a4f43149769b332cdb151189e8",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: the PowerShell VM taskless skip prints a second misleading idle reason (ps1 twin of task-1ccae85c)",
+  "description": "Repro: verified-local seat, no task, a routed mention: moe-agent.ps1 prints MOE_TASKLESS_NO_LAUNCH reason=vm-route (the $script:MoeVmRoute block) and then reason=idle ('nothing to answer') from the if ($moeSkipLaunch) chain. Fix: port sh 3586957f (task-1ccae85c): the vm-route block sets a flag and prints nothing; the skip chain prints the unchanged vm-route line as its first branch, then claim-failed, teamless or idle, so every skipped iteration prints exactly one reason; legacy unchanged. Port its VR-taskless/VR-reload assertions to postflight-vm-route.ps1. Hand-forward: comment from architect-24611a0a on task-62ec51f1 (CQ-M07n).",
+  "definitionOfDone": [
+    "Every skipped VM-route iteration of moe-agent.ps1 prints exactly one MOE_TASKLESS_NO_LAUNCH reason, vm-route first, with the sh twin's text (3586957f)",
+    "postflight-vm-route.ps1's taskless and reload rows assert no reason other than vm-route on a VM-route taskless iteration; legacy rows unchanged",
+    "postflight-vm-route.ps1 passes on powershell.exe and pwsh.exe; parity-check.sh passes; moe-agent.ps1 keeps its UTF-8 BOM"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-62ec51f179494706a39045154d07e544"
+  ],
+  "priority": "LOW",
+  "order": 240.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:53:45.785Z",
+  "updatedAt": "2026-11-04T07:53:45.785Z"
+}

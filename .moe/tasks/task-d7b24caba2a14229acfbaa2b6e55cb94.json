@@ -92,7 +92,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,7 +108,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:53:41.394Z",
-  "updatedAt": "2026-11-04T07:50:52.868Z",
+  "updatedAt": "2026-11-04T07:54:04.080Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T07:23:09.861Z",
@@ -118,11 +118,14 @@
     "firstClaimAt": "2026-11-04T07:23:11.926Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T07:53:42.426Z",
+    "wallClockMs": 1830500
   },
   "contextFetchedBy": [
     "architect-67c762f6",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -207,10 +210,11 @@
   "planApprovedAt": "2026-11-04T07:41:50.767Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T07:41:50Z",
-    "at": "2026-11-04T07:50:52.867Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T07:51:11Z",
+    "at": "2026-11-04T07:54:04.080Z"
   },
   "workStartedAt": "2026-11-04T07:43:22.921Z",
   "reviewStartedAt": "2026-11-04T07:50:07.172Z",
@@ -249,5 +253,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T07:53:42.426Z",
+  "reviewCompletedAt": "2026-11-04T07:53:42.426Z",
+  "reviewSummary": "Reviewed completion 90c499e1 (on moe/work-2026-10-24; HEAD == it; owned paths clean vs HEAD). Diff: 5 files, +293/-63 (net 230, under the 400 cap), all inside approvedScope; TROUBLESHOOTING edit is only the '#### daemon.json is stale' body, anchor kept.\n\nRe-ran task.verification verbatim in a /tmp snapshot: lint OK; tsc --noEmit and tsc -p tt.json (doctor.test.ts) clean; Test Files 3 passed, Tests 169 passed | 1 skipped; F rows 6/6; doc stale section 3/3; exit 0. parity-check.sh (qualityGate) PASS.\n\nDoD1: F1 (loopback /health for this project -> [OK] naming 127.0.0.1:port, never stale, exit 0), F2 (gateway beats loopback for another project), F3 x2 (no answer, dead or live-here pid -> '(stale)' naming endpoints, no reachability line, exit 0), F4 (other project only -> exit 1), F5 (503 never stale) all present. DoD2: doc tells reader to curl /health (127.0.0.1/bindHost plus WSL gateway) before rm and says never to remove while /health answers for this project. DoD3 met as above.\n\nMutants against the snapshot (8, restore cmp-verified): killed 503-as-no-answer (F5), no port guard (F6 x3), bindHost dialed without isLocalAddress (F8), non-string projectPath foreign (F7), foreignReachability ignored (F2/F4/F5), gateway dropped (F2), index.ts foreign hosts emptied (X3, X7, bindHost row). Survivor, not a DoD item: 'answered ??=' -> '=' (which of several non-confirming answers is reported) has no row.\n\nRead-only e2e from WSL with a snapshot dist against the live Windows daemon.json (pid 36176): '[OK] daemon.json ... /health answered on 172.26.208.1:9876' plus '[OK] reachability', exit 0; daemon.json hash unchanged.\n\nNot verified: Windows-native doctor run (F2 is linux-only). Follow-up already filed by the worker: task-11a9a663 (local-record bad-port crash, pre-existing).",
+  "requiredCheckAtDone": null
 }
