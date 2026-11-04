@@ -158,6 +158,8 @@ describe('moe.set_task_status', () => {
 
     it('BLOCKED → blockedFromStatus restores the parked worker and clears bookkeeping', async () => {
       await h.state.updateTask('task-1', { status: 'WORKING', assignedWorkerId: 'worker-1' });
+      h.createWorker({ id: 'worker-1', status: 'CODING', currentTaskId: 'task-1' });
+      await h.state.load();
       const tool = setTaskStatusTool(h.state);
       await tool.handler({ taskId: 'task-1', status: 'BLOCKED' }, h.state);
       await tool.handler({ taskId: 'task-1', status: 'WORKING' }, h.state);

@@ -8,8 +8,10 @@
 // live daemon. Side effects land under <project>/.moe: messages/<channel>.jsonl
 // (chat_send), heartbeat.log, record_commit.jsonl, deregister.log,
 // evidence-rpcs.jsonl, account-rpcs.jsonl, served-context.json
-// (FAKE_CTX_PAD_BYTES) and the attempts/, candidates/,
-// checks/ and receipts/ records.
+// (FAKE_CTX_PAD_BYTES), reload-hold.holder and claim-answers.jsonl
+// (FAKE_CLAIM_MODE=reload-hold) and the attempts/, candidates/,
+// checks/, receipts/ and resources/ records. FAKE_CALL_LOG (a log of every
+// call) and FAKE_READINESS (the get_execution_readiness answer) are inert unset.
 const fs = require('fs');
 const path = require('path');
 const raw = fs.readFileSync(0, 'utf8').trim();
@@ -18,6 +20,10 @@ const tool = String(req.params?.name || '').replace(/^moe\./, '');
 const args = req.params?.arguments || {};
 const project = process.env.MOE_PROJECT_PATH || process.cwd();
 const moe = path.join(project, '.moe');
+// FAKE_CALL_LOG=<file> (opt-in): every call appends {tool, args} before any
+// handler, hold or early exit runs, so a row can prove what the wrapper did NOT
+// call. Kept apart from evidence-rpcs.jsonl, whose order other rows assert.
+if (process.env.FAKE_CALL_LOG) fs.appendFileSync(process.env.FAKE_CALL_LOG, JSON.stringify({ tool, args }) + '\n');
 function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
 function ok(payload) {
   process.stdout.write(JSON.stringify({
@@ -75,6 +81,9 @@ function attemptFixture() {
   // openAttempt records the runner's pair exactly as the claim sent it.
   // FAKE_ATTEMPT_PHASE=reconciling: a daemon restart parked the attempt before
   // the wrapper pinned it (the window a resume after a restart lands in).
+  // FAKE_ATTEMPT_PROFILE=<profile> (inert unset): openAttempt's
+  // executionPolicySnapshot {version: 2, profile, planRevision: 1}, which
+  // pin_attempt_identity pins (CQ-M07r's [strong gate] rows: verified-local, observe).
   // A FAKE_CLAIM_LIMIT loop claims again after a landing closed the attempt:
   // like openAttempt, that claim persists a running attempt before it answers.
   const reopen = claimLimit > 1 && fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).phase === 'closed';
@@ -82,7 +91,8 @@ function attemptFixture() {
     id, generation, taskId, workerId: args.workerId, runnerId: args.workerId,
     phase: process.env.FAKE_ATTEMPT_PHASE || 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString(),
     ...(args.processStartedAt === undefined ? {} : {processStartedAt: args.processStartedAt, host: args.host}),
-    ...(claimWorkspace ? {workspace: claimWorkspace.path, workspaceMode: claimWorkspace.mode} : {})
+    ...(claimWorkspace ? {workspace: claimWorkspace.path, workspaceMode: claimWorkspace.mode} : {}),
+    ...(process.env.FAKE_ATTEMPT_PROFILE ? {executionPolicySnapshot: {version: 2, profile: process.env.FAKE_ATTEMPT_PROFILE, planRevision: 1}} : {})
   }));
   if (process.env.FROZEN_MODE === 'claim-missing' || process.env.FAKE_CLAIM_TOKENS === 'missing') return {};
   return {attemptId: id, generation: process.env.FROZEN_MODE === 'claim-malformed' ? '7' : generation};
@@ -117,6 +127,13 @@ function checkReply() {
   assert.ok(typeof args.command === 'string' && args.command.trim() && args.command.length <= 500);
   assert.ok(typeof args.outputTail === 'string' && Buffer.byteLength(args.outputTail,'utf8') <= 16384);
   assert.ok(!args.outputTail.includes('\ufffd'));
+  // The daemon's CQ-V02 rule (state/checkRunStore.ts): a declared outcome is one of
+  // six values, 'passed' needs exit 0 and 'code-failure' a nonzero exit.
+  if (args.outcome !== undefined) {
+    assert.ok(['passed','code-failure','infra-failure','timeout','skipped','inconclusive'].includes(args.outcome),'unknown outcome '+args.outcome);
+    if (args.outcome === 'passed') assert.equal(args.exitCode,0,'passed requires exitCode 0');
+    if (args.outcome === 'code-failure') assert.notEqual(args.exitCode,0,'code-failure requires a nonzero exitCode');
+  }
   const {workerId,...checkRun} = args;
   payload = {success:true,checkRun:{...checkRun,createdAt:new Date().toISOString()},duplicate:false};
   ensureDir(path.join(moe,'checks'));
@@ -131,19 +148,44 @@ function finalizeReply() {
   assert.equal(args.taskId,a.taskId); assert.equal(args.workerId,a.workerId);
   assert.equal(args.generation,a.generation); assert.ok(safeId(args.runnerId));
   assert.ok(['finalizing','closed'].includes(a.phase));
-  assert.ok(['landed','nothing-to-commit','rescued','failed'].includes(args.outcome));
+  assert.ok(['landed','nothing-to-commit','rescued','failed','unlanded'].includes(args.outcome));
   if (args.outcome === 'landed') {
     assert.ok(sha(args.landedRevision));
     const rows = readRows(rpcLog);
     assert.ok(rows.some(r => r.tool === 'record_commit' && r.args.outcome === 'committed'
       && r.args.kind === 'completion' && r.args.sha === args.landedRevision));
-  } else assert.equal(args.landedRevision,undefined);
+  } else if (args.outcome === 'unlanded') unlandedCheck(a);
+  else assert.equal(args.landedRevision,undefined);
+  // finalizeAttempt.ts: an unlanded close stores task.landingRetry (count + 1), landed and
+  // nothing-to-commit clear it; a closed replay answers again and routes nothing.
+  const retry = path.join(moe,'landing-retry.json');
+  if (a.phase === 'finalizing' && args.outcome === 'unlanded') fs.writeFileSync(retry,JSON.stringify({reason:args.unlandedReason,
+    paths:args.conflictPaths || [],rescueRef:args.rescueRef,targetTip:args.targetTip || null,
+    count:(fs.existsSync(retry) ? JSON.parse(fs.readFileSync(retry,'utf8')).count : 0) + 1,at:new Date().toISOString()}));
+  else if (a.phase === 'finalizing' && ['landed','nothing-to-commit'].includes(args.outcome)) fs.rmSync(retry,{force:true});
   a.phase = 'closed'; fs.writeFileSync(file,JSON.stringify(a));
   payload = {success:true,taskId:a.taskId,attemptId:a.id,generation:a.generation,phase:'closed',
     outcome:args.outcome,landedRevision:args.landedRevision || null};
   if (mode === 'finalize-loss' || (mode === 'finalize-loss-once'
     && readRows(rpcLog).filter(r=>r.tool === tool).length === 1)) return null;
   return payload;
+}
+// WT-03's unlanded contract (finalizeAttempt.ts validateUnlanded): a worktree attempt only,
+// landedRevision null, one of five reasons, a rescue ref of this task, a 40-hex or null
+// targetTip, at most 500 distinct relative conflict paths, and nothing published before it:
+// this session's completion rows are all failed, coded and pushed:false.
+function unlandedCheck(a) {
+  assert.equal(a.workspaceMode,'worktree','"unlanded" is only valid for a worktree attempt');
+  assert.equal(args.landedRevision,null);
+  assert.ok(['conflict','contention','gate','diverged','remote'].includes(args.unlandedReason),'unlandedReason '+args.unlandedReason);
+  const pre = `refs/moe/rescue/${args.taskId}/`, cp = args.conflictPaths === undefined ? [] : args.conflictPaths;
+  assert.ok(typeof args.rescueRef === 'string' && args.rescueRef.length <= 255 && args.rescueRef.startsWith(pre)
+    && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(args.rescueRef.slice(pre.length)),'rescueRef '+args.rescueRef);
+  assert.ok(args.targetTip === undefined || args.targetTip === null || sha(args.targetTip),'targetTip '+args.targetTip);
+  assert.ok(Array.isArray(cp) && cp.length <= 500 && new Set(cp).size === cp.length && cp.every(p => typeof p === 'string'
+    && !/[\\\x00-\x1f\x7f]/.test(p) && p.split('/').every(s => s && s !== '.' && s !== '..')),'conflictPaths '+JSON.stringify(cp));
+  const done = readRows(rpcLog).filter(r => r.tool === 'record_commit' && r.args.kind === 'completion').map(r => r.args);
+  assert.ok(done.length > 0 && done.every(r => r.outcome === 'failed' && r.code && r.pushed === false),'completion rows '+JSON.stringify(done));
 }
 // receiptStore.ts in miniature: one receipt per candidate, an identical replay
 // writes nothing (duplicate), a differing one is DELIVERY_RECEIPT_CONFLICT.
@@ -197,6 +239,8 @@ function holdForInterrupt() {
   const ledger = tool === 'record_commit' && args.kind === 'completion'
     && args.outcome === {'teardown-landed': 'committed', 'teardown-nothing': 'nothing'}[mode];
   if (!(scope || ledger) || fs.existsSync(ready)) return;
+  // FAKE_HOLD_DRAIN=1: the held call outlives a Ctrl+C on its console, as moe-proxy drains a pending call on SIGINT.
+  if (process.env.FAKE_HOLD_DRAIN === '1') process.on('SIGINT', () => {});
   fs.writeFileSync(ready, 'ready');
   for (let i = 0; i < 1200 && !fs.existsSync(ready + '.sent'); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
 }
@@ -242,6 +286,65 @@ holdForInterrupt();
 holdLedgerForCrash();
 if (['record_candidate','record_check_run','record_delivery_receipt','finalize_attempt','record_commit','deregister_worker','add_comment','reattach_attempt'].includes(tool)) {
   if (evidenceRpc()) process.exit(0);
+}
+// The land lease (WT-10, design §2.2 L3 and L14) in miniature: acquire_resource,
+// wait_for_resource and release_resource are logged in order with the RPCs above,
+// each with the MOE_PROXY_ONESHOT_DEADLINE_MS it carried (null: none). The caller
+// must be the claimed attempt's task and worker and the resource exactly
+// FAKE_LEASE_RESOURCE (default git-land-main); a wait's timeoutMs is 1000..600000;
+// a release never forces, and one pinned by ifAcquiredAt must name the held grant.
+// A grant persists in .moe/resources/<id>.json until released. FAKE_LEASE_MODE
+// (unset: acquire grants at once):
+//   queued    acquire queues; the first wait grants after 2.5s (past the old
+//             proxy's 2s drain)
+//   timeout   acquire queues; every wait answers timedOut after its timeoutMs
+//   late      acquire queues; the wait grants 1.5s after its timeoutMs
+//   withheld  acquire queues; the wait never answers: the proxy's deadline error
+//             at MOE_PROXY_ONESHOT_DEADLINE_MS, then exit 1
+//   refuse    acquire is refused; malformed: acquire answers granted:"true"
+//   release-fail-once  the first release is refused (counted in the RPC log)
+function leaseRpc() {
+  const deadline = process.env.MOE_PROXY_ONESHOT_DEADLINE_MS || null, mode = process.env.FAKE_LEASE_MODE || '';
+  fs.appendFileSync(rpcLog, JSON.stringify({tool, args, deadline}) + '\n');
+  const rid = process.env.FAKE_LEASE_RESOURCE || 'git-land-main', file = path.join(moe, 'resources', rid + '.json');
+  const held = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).holders : [];
+  const hold = holders => { ensureDir(path.dirname(file)); fs.writeFileSync(file, JSON.stringify({id: rid, holders})); };
+  const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, ms));
+  const a = JSON.parse(fs.readFileSync(path.join(moe, 'attempts', 'attempt-postflight.json'), 'utf8'));
+  assert.deepEqual([args.taskId, args.workerId, args.resourceId], [a.taskId, a.workerId, rid], 'the lease caller');
+  if (tool === 'release_resource') {
+    assert.equal(args.force, undefined, 'a forced release');
+    if (args.ifAcquiredAt !== undefined) assert.ok(held.some(h => h.acquiredAt === args.ifAcquiredAt), 'ifAcquiredAt names no held grant');
+    if (mode === 'release-fail-once' && readRows(rpcLog).filter(r => r.tool === tool).length === 1) throw new Error('fixture release refused');
+    hold(held.filter(h => h.taskId !== args.taskId));
+    return {success: true, resourceId: rid, released: held.filter(h => h.taskId === args.taskId).map(h => h.taskId), removedFromQueue: [], grantedTo: []};
+  }
+  const grant = () => {
+    const lease = {taskId: args.taskId, workerId: args.workerId, acquiredAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 7200000).toISOString()};
+    hold([lease]);
+    return {granted: true, resourceId: rid, lease};
+  };
+  if (tool === 'acquire_resource') {
+    if (mode === 'refuse') throw new Error('fixture acquire refused');
+    if (mode === 'malformed') return {success: true, granted: 'true', resourceId: rid};
+    return mode && mode !== 'release-fail-once' ? {success: true, granted: false, resourceId: rid, position: 1, queueLength: 1, holders: []} : {success: true, ...grant()};
+  }
+  assert.ok(Number.isSafeInteger(args.timeoutMs) && args.timeoutMs >= 1000 && args.timeoutMs <= 600000, 'timeoutMs ' + args.timeoutMs);
+  if (mode === 'withheld') {
+    assert.match(String(deadline), /^[0-9]+$/, 'a withheld wait with no proxy deadline');
+    sleep(Number(deadline) - Date.now());
+    process.stdout.write(JSON.stringify({jsonrpc: '2.0', id: req.id, error: {code: -32000, message: 'Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)'}}) + '\n');
+    process.exit(1);
+  }
+  if (mode === 'timeout') { sleep(args.timeoutMs); return {granted: false, timedOut: true, resourceId: rid, position: 1}; }
+  sleep(mode === 'late' ? args.timeoutMs + 1500 : mode === 'queued' ? 2500 : 0);
+  return grant();
+}
+if (['acquire_resource', 'wait_for_resource', 'release_resource'].includes(tool)) {
+  try { ok(leaseRpc()); } catch (e) {
+    process.stdout.write(JSON.stringify({jsonrpc: '2.0', id: req.id, error: {code: -32002, message: e.message, data: {codeName: 'FIXTURE_REFUSED'}}}) + '\n');
+  }
+  process.exit(0);
 }
 // claimNextTask.ts readProcessIdentity in miniature: the runner's pair is
 // both-or-neither, non-blank, bounded (200 / 255) and free of control
@@ -296,7 +399,52 @@ if (tool === 'claim_next_task' && claimLimit > 0) {
   fs.writeFileSync(claimCount, String(claimN));
   if (claimN > claimLimit) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
 }
-if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam','noteam-until-joined'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
+if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam','noteam-until-joined','reload-hold'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
+// FAKE_CLAIM_MODE=reload-hold ([hot reload hold]): task-4ddbfb31's reload hold
+// (workerLifecycle.ts beginReloadHold) for two seats sharing this fake. The
+// first claimant becomes the holder of task-postflight: .moe/reload-hold.holder,
+// created with 'wx' so two seats can never both win. The holder's later claims
+// answer alreadyAssigned (the resume shape), and any other seat's claim answers
+// idle. Each answer appends {workerId, answer: claimed|resumed|none} to
+// .moe/claim-answers.jsonl. deregister_worker below keeps the holder on its
+// wrapper_restart and deletes the file (a release) on any other reason.
+const reloadHoldFile = path.join(moe, 'reload-hold.holder');
+function reloadHolder() {
+  // A holder file deleted mid-read, or created but not yet written, is no
+  // holder: the reader fails toward 'none'. Any other fs error throws.
+  try { return fs.readFileSync(reloadHoldFile, 'utf8').trim() || null; }
+  catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+}
+function reloadHoldClaim() {
+  const me = String(args.workerId || '');
+  let answer = 'none';
+  if (me) {
+    try { fs.writeFileSync(reloadHoldFile, me, { flag: 'wx' }); answer = 'claimed'; }
+    catch (e) { if (e.code !== 'EEXIST') throw e; if (reloadHolder() === me) answer = 'resumed'; }
+  }
+  fs.appendFileSync(path.join(moe, 'claim-answers.jsonl'), JSON.stringify({ workerId: me, answer }) + '\n');
+  if (answer === 'claimed') return { ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } };
+  if (answer === 'none') return { hasNext: false };
+  return {
+    hasNext: false,
+    alreadyAssigned: { taskId: 'task-postflight', title: 'Postflight smoke', status: 'WORKING' },
+    nextAction: { tool: 'moe.get_context', args: { taskId: 'task-postflight', workerId: me }, reason: 'One task per worker: you already hold task-postflight (WORKING).' }
+  };
+}
+// FAKE_TASK_STATUS_MAP=taskId=STATUS,...: a get_context view 'status' read (WT-14's
+// orphan sweep; no wrapper sent one before) answers {contextScope:'status',
+// task:{id,status}}, WORKING for an unmapped id. NOT_FOUND refuses as the daemon
+// refuses an unknown taskId (data.codeName TASK_NOT_FOUND); FAIL is an error with
+// no codeName. Answered here, so the context-count block below never sees it.
+if (tool === 'get_context' && args.view === 'status') {
+  const status = Object.fromEntries(csv(process.env.FAKE_TASK_STATUS_MAP).map((kv) => kv.split('=')))[args.taskId] || 'WORKING';
+  if (status === 'NOT_FOUND' || status === 'FAIL') {
+    const error = status === 'FAIL' ? { code: -32603, message: 'fake get_context failure' }
+      : { code: -32001, message: `Task not found: ${args.taskId}`, data: { tool: 'moe.get_context', codeName: 'TASK_NOT_FOUND' } };
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id || 1, error }) + '\n');
+  } else ok({ contextScope: 'status', task: { id: args.taskId, status } });
+  process.exit(0);
+}
 if (tool === 'get_context' && args.taskId) {
   const countFile = path.join(moe,'context-count');
   const count = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile,'utf8') : 0) + 1;
@@ -306,6 +454,34 @@ if (tool === 'get_context' && args.taskId) {
     const a = JSON.parse(fs.readFileSync(file,'utf8'));
     if (a.phase === 'running') { a.phase = 'finalizing'; fs.writeFileSync(file,JSON.stringify(a)); }
   }
+}
+// moe.get_execution_readiness (CQ-M07d's {profile, ready, missingCapabilities,
+// evaluatedAt}) from FAKE_READINESS. Unset: the default ok({success:true}) below,
+// a malformed reply. `unknown`: McpAdapter's -32601 for an older daemon.
+// `refuse`: a MoeError frame. `fail`: no reply at all (a transport failure).
+// Anything else is JSON served as the tool text; unparseable JSON throws.
+// FAKE_READINESS_AFTER=<n>:<mode> (inert unset): a profile flipping while the
+// wrapper lives. .moe/readiness-count counts the reads; from read n+1 on the
+// answer is FAKE_READINESS=<mode>. A malformed value throws.
+if (tool === 'get_execution_readiness' && process.env.FAKE_READINESS_AFTER) {
+  const m = /^(\d+):([\s\S]+)$/.exec(process.env.FAKE_READINESS_AFTER);
+  if (!m) throw new Error('FAKE_READINESS_AFTER must be <n>:<mode>');
+  ensureDir(moe);
+  const counter = path.join(moe, 'readiness-count');
+  let n = 0;
+  try { n = Number(fs.readFileSync(counter, 'utf8')) || 0; } catch {}
+  fs.writeFileSync(counter, String(++n));
+  if (n > Number(m[1])) process.env.FAKE_READINESS = m[2];
+}
+if (tool === 'get_execution_readiness' && process.env.FAKE_READINESS) {
+  const mode = process.env.FAKE_READINESS;
+  const error = mode === 'unknown' ? { code: -32601, message: 'Tool not found: moe.get_execution_readiness' }
+    : mode === 'refuse' ? { code: -32000, message: 'fixture readiness refused', data: { tool: 'moe.get_execution_readiness', codeName: 'FIXTURE_REFUSED' } }
+    : null;
+  if (mode === 'fail') process.exit(1);
+  if (error) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id || 1, error }) + '\n');
+  else ok(JSON.parse(mode));
+  process.exit(0);
 }
 
 switch (tool) {
@@ -333,8 +509,16 @@ switch (tool) {
     // FAKE_MENTION=1 models one unread message tagging the caller. The record
     // is also appended to the store the wrapper re-reads bodies from, so the
     // mention passes provenance instead of degrading to a delivery marker.
-    if (process.env.FAKE_MENTION === '1' && args.channel === 'chan-general') {
-      const msg = { id: 'msg-fake-1', channel: 'chan-general', sender: 'human', content: 'ping', mentions: [args.workerId || 'all'], timestamp: new Date().toISOString() };
+    // FAKE_MENTION=self (task-ecf78687) is the seat's OWN message tagging
+    // itself, @all and its role group: the wrappers must skip it. FAKE_MENTION=
+    // group is another sender's @all + role-group tag, which must still route.
+    const fm = process.env.FAKE_MENTION;
+    const m = fm === '1' ? { id: 'msg-fake-1', sender: 'human', mentions: [args.workerId || 'all'] }
+      : fm === 'self' ? { id: 'msg-fake-self', sender: args.workerId, mentions: [args.workerId, 'all', 'workers'] }
+      : fm === 'group' ? { id: 'msg-fake-group', sender: 'human', mentions: ['all', 'workers'] }
+      : null;
+    if (m && args.channel === 'chan-general') {
+      const msg = { id: m.id, channel: 'chan-general', sender: m.sender, content: 'ping', mentions: m.mentions, timestamp: new Date().toISOString() };
       const dir = path.join(moe, 'messages');
       ensureDir(dir);
       fs.appendFileSync(path.join(dir, 'chan-general.jsonl'), JSON.stringify(msg) + '\n');
@@ -347,6 +531,9 @@ switch (tool) {
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
   case 'claim_next_task': {
     if (claimOnceIdle) { ok({ hasNext: false }); break; }
+    if (process.env.FAKE_SEAT_JOBS && readRows(rpcLog).filter(r => r.tool === 'claim_next_task').length > 1) {
+      ok({ hasNext: false, alreadyAssigned: { taskId: 'task-postflight', title: 'VM retry', status: 'WORKING' } }); break;
+    }
     if (process.env.FAKE_CLAIM_MODE === 'resume') {
       // One-task-per-worker guard shape (util/claimEligibility.ts
       // heldTaskRefusal): the worker already holds an active task from a CLI
@@ -378,6 +565,8 @@ switch (tool) {
       // Nothing claimable and nothing held: the board state that used to make
       // the wrapper launch a CLI and tell it to claim itself.
       ok({ hasNext: false });
+    } else if (process.env.FAKE_CLAIM_MODE === 'reload-hold') {
+      ok(reloadHoldClaim());
     } else {
       ok({ ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' },
         ...(claimWorkspace ? { workspace: claimWorkspace } : {}) });
@@ -392,6 +581,7 @@ switch (tool) {
     // answered with a different task.
     // 'empty'    => daemon answered but carried no task.
     // 'mismatch' => the pre-fix fallback: some OTHER task comes back.
+    // 'error'    => the read fails (a JSON-RPC error), as moe-proxy answers a daemon that is down.
     // get_context with NO taskId is the post-flight adoption probe
     // (getContext.ts falls back to the caller's currentTaskId). Every other
     // caller passes a taskId, so this cannot disturb the other scenarios.
@@ -401,6 +591,10 @@ switch (tool) {
       break;
     }
     if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
+    if (process.env.FAKE_GET_CONTEXT_FAIL === 'error') {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id||1,error:{code:-32603,message:'fixture: get_context failed'}}) + '\n');
+      break;
+    }
     const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
       ? 'task-someone-elses'
       : (args.taskId || 'task-postflight');
@@ -432,6 +626,20 @@ switch (tool) {
       if (!Array.isArray(ctxCommits)) throw new Error('FAKE_CTX_COMMITS must be a JSON array');
       ctxPayload.task.commits = ctxCommits;
     }
+    // FAKE_CTX_LANDING: task.landing as getContext.ts buildLanding serves it (a JSON
+    // object: {lastCompletion?: {sha, ref, pushed, recordedAt}, lastCheckpoint?: {sha,
+    // recordedAt}}), which a worktree-mode QA pre-flight reads (WT-13). Unset: no field.
+    // FAKE_CTX_LANDING_FROM_CLAIM=N: no field before the Nth claim (the .moe/claim-count that FAKE_CLAIM_ONCE and
+    // FAKE_CLAIM_LIMIT keep), so a seat's later claim finds a landed completion its first one lacked (task-3416b309).
+    const ctxLanding = jsonKnob('FAKE_CTX_LANDING'), landingFrom = Number(process.env.FAKE_CTX_LANDING_FROM_CLAIM || 0);
+    const claimsSoFar = landingFrom > 0 && fs.existsSync(path.join(moe, 'claim-count')) ? Number(fs.readFileSync(path.join(moe, 'claim-count'), 'utf8')) : 0;
+    if (ctxLanding !== undefined && claimsSoFar >= landingFrom) {
+      if (!ctxLanding || typeof ctxLanding !== 'object' || Array.isArray(ctxLanding)) throw new Error('FAKE_CTX_LANDING must be a JSON object');
+      ctxPayload.task.landing = ctxLanding;
+    }
+    // task.landingRetry (WT-03): present only while the finalize_attempt store above holds one.
+    const retryFile = path.join(moe, 'landing-retry.json');
+    if (fs.existsSync(retryFile)) ctxPayload.task.landingRetry = JSON.parse(fs.readFileSync(retryFile, 'utf8'));
     // FAKE_CTX_PAD_BYTES: pad task.description with ~N bytes of multibyte text so
     // the served context passes the 128 KiB single-argv limit (env vars cap there
     // too, so the harness cannot carry it in one). The unit is 25 UTF-8 bytes but
@@ -450,7 +658,14 @@ switch (tool) {
     break;
   }
   // report_blocked: logged in order with the other RPCs; the task parks.
-  case 'report_blocked': appendRpc(); ok({ success: true, status: 'BLOCKED' }); break;
+  // FAKE_REPORT_BLOCKED_FAIL=1: logged, then refused, so the task never parks (task-3416b309).
+  case 'report_blocked':
+    appendRpc();
+    if (process.env.FAKE_REPORT_BLOCKED_FAIL === '1') {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id||1,error:{code:-32603,message:'fixture: report_blocked failed'}}) + '\n');
+      break;
+    }
+    ok({ success: true, status: 'BLOCKED' }); break;
   case 'list_tasks': {
     const epicTasks = [
       { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
@@ -519,9 +734,12 @@ switch (tool) {
     //                                is the same as unset because PowerShell
     //                                deletes a variable set to '', so the named
     //                                sentinel carries "unassigned" on every engine.
-    //                                A caller that is not the assignee joins
-    //                                activePeerIds and makes peersActive true,
-    //                                as the daemon's orphan rule does.
+    //                                A caller that is neither the assignee nor the holder
+    //                                of the task's finalizing attempt (read from
+    //                                .moe/attempts, whatever FAKE_SCOPE_FINALIZING
+    //                                serves) joins activePeerIds and makes peersActive
+    //                                true, as the daemon's orphan rule does since
+    //                                task-7d3428d1.
     //   FAKE_SCOPE_ASSIGNEE_ALIVE=0|1  assigneeAlive. Default true, false for `none`.
     //   FAKE_SCOPE_ASSIGNEE_PROTECTED=0|1  assigneeProtected. Default: true when
     //                                a worker holds the task, false when none does
@@ -565,25 +783,25 @@ switch (tool) {
     const taskId = args.taskId || 'task-postflight';
     const rec = readTask(taskId);
     const { asserted, planned } = rec ? declaredSets(rec) : { asserted: [], planned: [] };
-    let finalizingAttempt = null;
-    if (finalizingMode !== null) {
-      // isHoldingFinalizingAttempt: phase finalizing, non-blank id/workerId,
-      // safe-integer generation >= 1; the highest generation wins.
-      const nonBlank = (v) => typeof v === 'string' && v.trim() !== '';
-      let best = null;
-      let attemptFiles = [];
-      try { attemptFiles = fs.readdirSync(path.join(moe, 'attempts')).filter((f) => f.endsWith('.json')).sort(); } catch {}
-      for (const f of attemptFiles) {
-        let a;
-        try { a = JSON.parse(fs.readFileSync(path.join(moe, 'attempts', f), 'utf8').replace(/^\uFEFF/, '')); } catch { continue; }
-        if (!a || a.phase !== 'finalizing' || a.taskId !== taskId || !nonBlank(a.id) || !nonBlank(a.workerId)
-          || !Number.isSafeInteger(a.generation) || a.generation < 1) continue;
-        if (!best || a.generation >= best.generation) best = a;
-      }
-      const named = best && { attemptId: best.id, workerId: best.workerId, generation: best.generation };
-      if (finalizingMode === 'computed') finalizingAttempt = named || null;
-      if (finalizingMode === 'malformed') finalizingAttempt = named ? { ...named, generation: String(named.generation) } : 'null';
+    // The task's finalizing attempt, read from .moe/attempts in every
+    // FAKE_SCOPE_FINALIZING mode: the orphan rule below exempts its holder.
+    // isHoldingFinalizingAttempt: phase finalizing, non-blank id/workerId,
+    // safe-integer generation >= 1; the highest generation wins.
+    const nonBlank = (v) => typeof v === 'string' && v.trim() !== '';
+    let best = null;
+    let attemptFiles = [];
+    try { attemptFiles = fs.readdirSync(path.join(moe, 'attempts')).filter((f) => f.endsWith('.json')).sort(); } catch {}
+    for (const f of attemptFiles) {
+      let a;
+      try { a = JSON.parse(fs.readFileSync(path.join(moe, 'attempts', f), 'utf8').replace(/^\uFEFF/, '')); } catch { continue; }
+      if (!a || a.phase !== 'finalizing' || a.taskId !== taskId || !nonBlank(a.id) || !nonBlank(a.workerId)
+        || !Number.isSafeInteger(a.generation) || a.generation < 1) continue;
+      if (!best || a.generation >= best.generation) best = a;
     }
+    const named = best && { attemptId: best.id, workerId: best.workerId, generation: best.generation };
+    let finalizingAttempt = null;
+    if (finalizingMode === 'computed') finalizingAttempt = named || null;
+    if (finalizingMode === 'malformed') finalizingAttempt = named ? { ...named, generation: String(named.generation) } : 'null';
     const peerDeclared = [];
     const peerIds = [];
     const addPeer = (p, id) => { if (p && !peerDeclared.some((e) => e.path === p)) peerDeclared.push({ path: p, taskId: id }); };
@@ -604,7 +822,7 @@ switch (tool) {
     if (peerActive === '0' || peerActive === '1') for (const e of peerDeclared) e.peerActive = peerActive === '1';
     if (process.env.FAKE_SCOPE_PEER_FIELDS) for (const e of peerDeclared) Object.assign(e, JSON.parse(process.env.FAKE_SCOPE_PEER_FIELDS));
     const livePeers = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
-    const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId;
+    const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId && named?.workerId !== args.workerId;
     const activePeerIds = [...(livePeers ? ['worker-peer'] : []), ...(orphanCaller ? [args.workerId] : [])];
     ok({
       taskId,
@@ -658,7 +876,27 @@ switch (tool) {
     // The EXIT-trap deregister; scenario W proves it still runs after the
     // teardown rescue.
     fs.appendFileSync(path.join(moe, 'deregister.log'), `${new Date().toISOString()} ${args.workerId} ${args.reason || ''}\n`);
-    ok({ success: true });
+    // [hot reload race]: FAKE_RELOAD_RACE_SRC's bytes overwrite FAKE_RELOAD_RACE_DST
+    // in place, once, inside a hot reload's own deregister: after the wrapper
+    // checked its bytes are committed, before it loads them. An fs error throws.
+    const raceSrc = process.env.FAKE_RELOAD_RACE_SRC;
+    if (args.reason === 'wrapper_restart' && raceSrc && fs.existsSync(raceSrc)) {
+      fs.writeFileSync(process.env.FAKE_RELOAD_RACE_DST, fs.readFileSync(raceSrc));
+      fs.unlinkSync(raceSrc);
+    }
+    if (process.env.FAKE_CLAIM_MODE !== 'reload-hold') { ok({ success: true }); break; }
+    // reload-hold: deregisterWorker.ts's answer. The holder's wrapper_restart
+    // keeps its task (heldTaskIds + holdUntil, the 120 s default); any other
+    // reason releases it, and a seat holding nothing releases nothing.
+    const holderId = reloadHolder() === args.workerId ? args.workerId : null;
+    const keepsHold = holderId !== null && args.reason === 'wrapper_restart';
+    if (holderId !== null && !keepsHold) fs.rmSync(reloadHoldFile, { force: true });
+    const released = holderId !== null && !keepsHold ? ['task-postflight'] : [];
+    const holdUntil = keepsHold ? new Date(Date.now() + 120000).toISOString() : undefined;
+    ok({ success: true, workerId: args.workerId, alreadyDead: false, releasedTaskIds: released, releasedCount: released.length,
+      heldTaskIds: keepsHold ? ['task-postflight'] : [], ...(keepsHold ? { holdUntil } : {}),
+      message: keepsHold ? `${args.workerId} reloading; holding 1 task(s) for its relaunch until ${holdUntil}`
+        : `${args.workerId} deregistered; released ${released.length} task(s)` });
     break;
   }
   case 'lease_account':

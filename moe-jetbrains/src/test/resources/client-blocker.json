@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "id": "B01",
+      "note": "a resource wait: BLOCKED with a blockedResourceId",
+      "task": {
+        "id": "task-b01",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedResourceId": "jetbrains-gradle",
+        "blockedFromStatus": "WORKING",
+        "blockedReason": "Waiting on the gradle lease.",
+        "blockedAt": "2026-11-02T10:00:00.000Z"
+      },
+      "cause": "RESOURCE_WAIT",
+      "prerequisiteIds": [],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B02",
+      "note": "a dependency wait: BLOCKED with two blockedOnTaskIds",
+      "task": {
+        "id": "task-b02",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedOnTaskIds": ["task-0123456789abcdef0123456789abcdef", "task-fedcba9876543210fedcba9876543210"],
+        "blockedFromStatus": "PLANNING",
+        "blockedReason": "Waiting on two prerequisites."
+      },
+      "cause": "DEPENDENCY_WAIT",
+      "prerequisiteIds": ["task-0123456789abcdef0123456789abcdef", "task-fedcba9876543210fedcba9876543210"],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B03",
+      "note": "an external block: BLOCKED with only a reason",
+      "task": {
+        "id": "task-b03",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedFromStatus": "REVIEW",
+        "blockedReason": "A human has to decide."
+      },
+      "cause": "EXTERNAL_BLOCK",
+      "prerequisiteIds": [],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B04",
+      "note": "WORKING task carrying stale block fields: no cause, but the recorded ids are still reported",
+      "task": {
+        "id": "task-b04",
+        "epicId": "epic-corpus",
+        "status": "WORKING",
+        "blockedResourceId": "jetbrains-gradle",
+        "blockedOnTaskIds": ["task-0123456789abcdef0123456789abcdef"],
+        "blockedReason": "Old block.",
+        "blockedFromStatus": "WORKING"
+      },
+      "cause": null,
+      "prerequisiteIds": ["task-0123456789abcdef0123456789abcdef"],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B05",
+      "note": "BACKLOG task with no block fields",
+      "task": {
+        "id": "task-b05",
+        "epicId": "epic-corpus",
+        "status": "BACKLOG"
+      },
+      "cause": null,
+      "prerequisiteIds": [],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B06",
+      "note": "needsHumanReview on a REVIEW task: attention without a block cause",
+      "task": {
+        "id": "task-b06",
+        "epicId": "epic-corpus",
+        "status": "REVIEW",
+        "needsHumanReview": true
+      },
+      "cause": null,
+      "prerequisiteIds": [],
+      "needsHumanReview": true
+    },
+    {
+      "id": "B07",
+      "note": "needsHumanReview on a BLOCKED task: attention is independent of the cause",
+      "task": {
+        "id": "task-b07",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedReason": "Needs a decision.",
+        "needsHumanReview": true
+      },
+      "cause": "EXTERNAL_BLOCK",
+      "prerequisiteIds": [],
+      "needsHumanReview": true
+    },
+    {
+      "id": "B08",
+      "note": "a reason naming a task id with no blockedOnTaskIds: the reason is never parsed",
+      "task": {
+        "id": "task-b08",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedReason": "Waiting on task-0123456789abcdef0123456789abcdef to land."
+      },
+      "cause": "EXTERNAL_BLOCK",
+      "prerequisiteIds": [],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B09",
+      "note": "a reason naming one id while blockedOnTaskIds lists another: only the recorded list counts",
+      "task": {
+        "id": "task-b09",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedOnTaskIds": ["task-1111aaaa2222bbbb3333cccc4444dddd"],
+        "blockedReason": "Waiting on task-0123456789abcdef0123456789abcdef as well."
+      },
+      "cause": "DEPENDENCY_WAIT",
+      "prerequisiteIds": ["task-1111aaaa2222bbbb3333cccc4444dddd"],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B10",
+      "note": "duplicate, blank and padded ids: duplicates and padding kept verbatim, blanks dropped",
+      "task": {
+        "id": "task-b10",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedOnTaskIds": [
+          "task-0123456789abcdef0123456789abcdef",
+          "",
+          "task-fedcba9876543210fedcba9876543210",
+          "   ",
+          "task-0123456789abcdef0123456789abcdef",
+          "\t",
+          " task-1111aaaa2222bbbb3333cccc4444dddd "
+        ]
+      },
+      "cause": "DEPENDENCY_WAIT",
+      "prerequisiteIds": [
+        "task-0123456789abcdef0123456789abcdef",
+        "task-fedcba9876543210fedcba9876543210",
+        "task-0123456789abcdef0123456789abcdef",
+        " task-1111aaaa2222bbbb3333cccc4444dddd "
+      ],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B11",
+      "note": "only blank ids: no dependency wait, falls through to an external block",
+      "task": {
+        "id": "task-b11",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedOnTaskIds": ["", " ", "\n"]
+      },
+      "cause": "EXTERNAL_BLOCK",
+      "prerequisiteIds": [],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B12",
+      "note": "resourceId together with task ids: the resource wins, the ids are still reported",
+      "task": {
+        "id": "task-b12",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedResourceId": "bench-box-1",
+        "blockedOnTaskIds": ["task-0123456789abcdef0123456789abcdef"]
+      },
+      "cause": "RESOURCE_WAIT",
+      "prerequisiteIds": ["task-0123456789abcdef0123456789abcdef"],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B13",
+      "note": "a blank resourceId does not count: falls through to the dependency wait",
+      "task": {
+        "id": "task-b13",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedResourceId": "   ",
+        "blockedOnTaskIds": ["task-0123456789abcdef0123456789abcdef"]
+      },
+      "cause": "DEPENDENCY_WAIT",
+      "prerequisiteIds": ["task-0123456789abcdef0123456789abcdef"],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B14",
+      "note": "BLOCKED and nothing else: every optional member missing",
+      "task": {
+        "id": "task-b14",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED"
+      },
+      "cause": "EXTERNAL_BLOCK",
+      "prerequisiteIds": [],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B15",
+      "note": "every block member present as JSON null",
+      "task": {
+        "id": "task-b15",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedResourceId": null,
+        "blockedOnTaskIds": null,
+        "blockedReason": null,
+        "blockedFromStatus": null,
+        "blockedAt": null
+      },
+      "cause": "EXTERNAL_BLOCK",
+      "prerequisiteIds": [],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B16",
+      "note": "an empty blockedOnTaskIds array",
+      "task": {
+        "id": "task-b16",
+        "epicId": "epic-corpus",
+        "status": "BLOCKED",
+        "blockedOnTaskIds": []
+      },
+      "cause": "EXTERNAL_BLOCK",
+      "prerequisiteIds": [],
+      "needsHumanReview": false
+    },
+    {
+      "id": "B17",
+      "note": "REVIEW task with stale block fields and needsHumanReview: no cause, ids still reported, attention kept",
+      "task": {
+        "id": "task-b17",
+        "epicId": "epic-corpus",
+        "status": "REVIEW",
+        "blockedOnTaskIds": ["task-0123456789abcdef0123456789abcdef"],
+        "blockedReason": "Old block.",
+        "blockedFromStatus": "WORKING",
+        "needsHumanReview": true
+      },
+      "cause": null,
+      "prerequisiteIds": ["task-0123456789abcdef0123456789abcdef"],
+      "needsHumanReview": true
+    }
+  ]
+}

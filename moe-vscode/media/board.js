@@ -315,9 +315,8 @@
             deleteItem.addEventListener('click', function(ev) {
                 ev.stopPropagation();
                 closeContextMenu();
-                if (window.confirm('Delete this task?')) {
-                    vscode.postMessage({ type: 'deleteTask', taskId: taskId });
-                }
+                // The extension host asks first: a webview's sandbox cannot show a modal dialog.
+                vscode.postMessage({ type: 'deleteTask', taskId: taskId });
             });
             menu.appendChild(deleteItem);
 
@@ -362,6 +361,15 @@
         });
 
         const workflowOrder = ['BACKLOG','PLANNING','AWAITING_APPROVAL','WORKING','REVIEW','DONE'];
+
+        // Twin: TaskDetailPanel.ts 'prev' and JetBrains BoardMoves.previous.
+        // WORKING goes back to PLANNING, never AWAITING_APPROVAL: /ws refuses WORKING -> AWAITING_APPROVAL.
+        function previousMove(status) {
+            if (status === 'WORKING' || status === 'AWAITING_APPROVAL') { return { status: 'PLANNING' }; }
+            if (status === 'PLANNING') { return { status: 'BACKLOG' }; }
+            if (status === 'REVIEW' || status === 'DONE') { return { reopen: true }; }
+            return null;
+        }
 
         function updateEpicFilter(epics) {
             var filterEl = document.getElementById('epicFilter');
@@ -624,7 +632,7 @@
                             ? '<button class="create-task-btn" data-action="createTask" title="Create Task">+</button>'
                             : '';
                         var archiveBtn = (status === 'DONE' && colTasks.length > 0)
-                            ? '<button class="archive-btn" data-action="archiveDone" data-count="' + colTasks.length + '" title="Archive done tasks">&times;</button>'
+                            ? '<button class="archive-btn" data-action="archiveDone" title="Archive done tasks">&times;</button>'
                             : '';
                         html += '<div class="column" id="column-' + escapeHtml(status) + '" data-status="' + escapeHtml(status) + '"'
                             + ' data-drop="column">'
@@ -664,7 +672,7 @@
                             ? '<button class="create-task-btn" data-action="createTask" title="Create Task">+</button>'
                             : '';
                         var archiveBtn = (status === 'DONE' && colTasks.length > 0)
-                            ? '<button class="archive-btn" data-action="archiveDone" data-count="' + colTasks.length + '" title="Archive done tasks">&times;</button>'
+                            ? '<button class="archive-btn" data-action="archiveDone" title="Archive done tasks">&times;</button>'
                             : '';
 
                         var colHtml = '<div class="column-header">'
@@ -696,7 +704,7 @@
                         ? '<button class="create-task-btn" data-action="createTask" title="Create Task">+</button>'
                         : '';
                     var archiveBtn = (status === 'DONE' && colTasks.length > 0)
-                        ? '<button class="archive-btn" data-action="archiveDone" data-count="' + colTasks.length + '" title="Archive done tasks">&times;</button>'
+                        ? '<button class="archive-btn" data-action="archiveDone" title="Archive done tasks">&times;</button>'
                         : '';
                     fallbackHtml += '<div class="column" id="column-' + escapeHtml(status) + '" data-status="' + escapeHtml(status) + '"'
                         + ' data-drop="column">'
@@ -992,7 +1000,7 @@
             // Nav arrows
             const statusIdx = workflowOrder.indexOf(task.status);
             let navHtml = '';
-            const showPrev = statusIdx > 0;
+            const showPrev = previousMove(task.status) !== null;
             const showNext = statusIdx >= 0 && statusIdx < workflowOrder.length - 1;
             if (showPrev || showNext) {
                 navHtml = '<div class="task-nav-arrows">';
@@ -1117,12 +1125,11 @@
             vscode.postMessage({ type: 'createTask' });
         }
 
-        function archiveDone(event, count) {
+        // The extension host asks first (a webview cannot show a modal dialog) and counts what
+        // ARCHIVE_DONE_TASKS archives: every DONE task in the epic filter, whatever the search hides.
+        function archiveDone(event) {
             event.stopPropagation();
-            if (count <= 0) { return; }
-            if (window.confirm('Archive ' + count + ' done task' + (count > 1 ? 's' : '') + '?')) {
-                vscode.postMessage({ type: 'archiveDoneTasks', epicId: selectedEpicFilter || undefined });
-            }
+            vscode.postMessage({ type: 'archiveDoneTasks', epicId: selectedEpicFilter || undefined });
         }
 
         function openTask(taskId) {
@@ -1143,16 +1150,12 @@
                 // From AWAITING_APPROVAL the next status is WORKING: an approval.
                 vscode.postMessage(moveMessage(task, workflowOrder[idx + 1]));
             } else if (direction === 'prev') {
-                if (idx <= 0) { return; }
-                if (task.status === 'REVIEW' || task.status === 'DONE') {
-                    const reason = prompt('Reason for reopening:');
-                    if (reason) {
-                        vscode.postMessage({ type: 'reopenTask', taskId: taskId, reason: reason });
-                    }
-                } else {
-                    const newStatus = workflowOrder[idx - 1];
-                    vscode.postMessage({ type: 'updateTaskStatus', taskId: taskId, status: newStatus });
-                }
+                const move = previousMove(task.status);
+                if (!move) { return; }
+                // The webview sandbox has no allow-modals, so the host asks for the reopen reason.
+                vscode.postMessage(move.reopen
+                    ? { type: 'reopenTask', taskId: taskId }
+                    : { type: 'updateTaskStatus', taskId: taskId, status: move.status });
             }
         }
 
@@ -1230,11 +1233,7 @@
                 var action = actionEl.getAttribute('data-action');
                 switch (action) {
                     case 'createTask': createTask(e); break;
-                    case 'archiveDone': {
-                        var count = parseInt(actionEl.getAttribute('data-count') || '0', 10);
-                        archiveDone(e, count);
-                        break;
-                    }
+                    case 'archiveDone': archiveDone(e); break;
                     case 'navTask': {
                         var card = actionEl.closest('.task-card');
                         var tid = card ? card.getAttribute('data-task-id') : null;

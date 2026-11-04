@@ -11,6 +11,7 @@ import { constants, readFileSync } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import path from 'node:path';
 import { loadCertifiedProvider } from './doctor.mjs';
+import { authorizedKeyLine } from './guest-ssh.mjs';
 
 export const GUEST_LAYOUT = Object.freeze({
   supervisor: '/opt/moe/bin/moe-supervisor',
@@ -104,25 +105,61 @@ function readAsset(name) {
   return bytes;
 }
 
+const TRANSPORT_KEYS = Object.freeze(['hostPrivateKey', 'hostPublicKey', 'clientPublicKey']);
+// Every character is base64 or fixed text, so no value can end a YAML scalar, dedent the literal block or start a comment.
+const HOST_PRIVATE_KEY = /^-----BEGIN OPENSSH PRIVATE KEY-----\n(?:[A-Za-z0-9+/=]{1,70}\n)+-----END OPENSSH PRIVATE KEY-----\n$/;
+const HOST_PUBLIC_KEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/;
+// The cloud-config tail for a transport; any invalid input is BOOTSTRAP_INPUT_INVALID and no message carries a value.
+function transportLines(transport) {
+  const keys = transport !== null && typeof transport === 'object' && !Array.isArray(transport) ? Reflect.ownKeys(transport) : [];
+  if (keys.length !== TRANSPORT_KEYS.length || !TRANSPORT_KEYS.every(key => keys.includes(key))) throw bootstrapError('BOOTSTRAP_INPUT_INVALID');
+  const { hostPrivateKey, hostPublicKey, clientPublicKey } = transport;
+  if (typeof hostPrivateKey !== 'string' || !HOST_PRIVATE_KEY.test(hostPrivateKey)
+      || typeof hostPublicKey !== 'string' || !HOST_PUBLIC_KEY.test(hostPublicKey)) throw bootstrapError('BOOTSTRAP_INPUT_INVALID');
+  let authorized;
+  try { authorized = authorizedKeyLine(clientPublicKey); } catch { throw bootstrapError('BOOTSTRAP_INPUT_INVALID'); }
+  return [
+    'ssh_keys:', '  ed25519_private: |', ...hostPrivateKey.trimEnd().split('\n').map(line => `    ${line}`),
+    `  ed25519_public: '${hostPublicKey}'`, 'ssh_authorized_keys:', `  - '${authorized}'`,
+  ];
+}
+
 /**
  * Deterministic user-data built only from constants and base64. '- default' stays: Multipass execs as the
  * default user and injects its key through its own cloud-init data. Job identities get no groups or sudo.
+ * mounts lists only cloud-init's two built-in defaults (ephemeral0 for /mnt, and swap) as fs_spec-only entries: in
+ * cloud-init 26.1 cc_mounts such an entry is skipped and drops the default of the same name, and on NoCloud, which
+ * Multipass seeds, neither name maps to a device anyway (DataSource.device_name_to_device returns None). As user-data
+ * the list also outranks any vendor or system mounts. 26.1's schema refuses `mounts: []` (minItems 1), and that
+ * warning ends boot "degraded done", which readiness reports as BOOTSTRAP_FAILED.
+ * no_ssh_fingerprints: true makes cloud-init 26.1's modules-final ssh_authkey_fingerprints return before it reads any
+ * user. Otherwise its handle calls ssh_util.extract_authorized_keys for every entry in users, which writes a missing
+ * ~/.ssh/authorized_keys as an empty 0600 file, and readiness's keys:<id> existence probe refuses that file on a job
+ * identity as IDENTITY_LOGIN_ENABLED. The module only logs key fingerprints to the console; Moe reads none of it.
+ * An optional transport {hostPrivateKey, hostPublicKey, clientPublicKey} appends ssh_keys and ssh_authorized_keys after
+ * write_files, so the no-transport bytes stay an exact prefix. cloud-init 26.1 facts, read in source:
+ * - cc_ssh deletes the image's host keys (ssh_deletekeys, default true) and generates none when ssh_keys is present, so
+ *   the guest's only host key is the pinned ed25519 pair, written 0600 and 0644;
+ * - setup_user_keys keeps a key line's own options, so only the default user gets `restrict,command=...`; disable_root
+ *   also copies the key to root under cloud-init's own 'login as ubuntu' command, which grants nothing.
  */
 export function buildUserData(input) {
-  const { supervisor, credential } = input ?? {};
+  const { supervisor, credential, transport } = input ?? {};
   if (!validPayload(supervisor, MAX_SUPERVISOR_BYTES) || !validPayload(credential, MAX_CREDENTIAL_BYTES)) {
     throw bootstrapError('BOOTSTRAP_INPUT_INVALID');
   }
+  const transportBlock = transport === undefined ? [] : transportLines(transport);
   const shim = readAsset('guest-mcp-shim.py');
   const shimTools = readAsset('guest-mcp-tools.json');
   const lines = [
-    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: []', 'users:', '  - default',
+    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'no_ssh_fingerprints: true', 'mounts: [[ephemeral0], [swap]]', 'users:', '  - default',
     ...JOB_IDENTITIES.flatMap(name => [`  - name: ${name}`, '    lock_passwd: true', '    shell: /bin/bash']),
     'write_files:',
     ...writeFile(GUEST_LAYOUT.supervisor, '0500', supervisor),
     ...writeFile(GUEST_LAYOUT.shim, '0555', shim),
     ...writeFile(GUEST_LAYOUT.shimTools, '0444', shimTools),
     ...writeFile(GUEST_LAYOUT.credential, '0400', credential),
+    ...transportBlock,
   ];
   return Object.freeze({ userData: `${lines.join('\n')}\n`, supervisorSha256: sha256(supervisor), shimSha256: sha256(shim), shimToolsSha256: sha256(shimTools) });
 }

@@ -27,8 +27,10 @@
 // restore, but a hand-edited task file with garbage in blockedFromStatus must
 // not be able to build a recursion tower either.
 
+import path from 'path';
 import type { StateManager } from './StateManager.js';
-import type { Task, TaskStatus } from '../types/schema.js';
+import type { ChatMessage, Task, TaskStatus } from '../types/schema.js';
+import { CHAT_READ_WINDOW_BYTES, readTailJsonl } from './chatStore.js';
 import { EVIDENCE_TOKENS, evaluateDeliveryEvidence } from '../delivery/policy.js';
 import { readExecutionPolicySnapshot, resolveTaskExecutionProfile } from '../delivery/executionProfile.js';
 import { listCandidatesForTask } from './candidateStore.js';
@@ -202,6 +204,46 @@ export function formatDependencyCycle(taskId: string, pathFromDep: string[]): st
 const scanning = new WeakSet<StateManager>();
 
 /**
+ * Un-park the worker of a still-assigned hold just restored onto it — the twin
+ * of the seat repair in grantNextLeases (07af3ca5). Without it list_workers
+ * shows a BLOCKED seat on a WORKING task, and runBlockedTimeoutSweep times the
+ * seat out and parks the resumed row to BACKLOG. lastActivityAt is passed
+ * through unchanged: an unblock is not a heartbeat. Best-effort and isolated:
+ * a failed write never undoes the task restore, and there is no retry (the row
+ * is no longer BLOCKED, so later scans skip it; the seat's next moe call
+ * refreshes it).
+ */
+async function repairParkedSeat(state: StateManager, workerId: string, taskId: string): Promise<void> {
+  const seat = state.getWorker(workerId);
+  if (!seat || seat.status !== 'BLOCKED' || seat.currentTaskId !== taskId) return;
+  try {
+    await state.updateWorker(
+      seat.id,
+      { status: 'READING_CONTEXT', lastError: null, lastActivityAt: seat.lastActivityAt },
+      'WORKER_UNBLOCKED'
+    );
+  } catch (err) {
+    logger.warn({ taskId, workerId: seat.id, error: err }, 'dependencyUnblock: failed to un-block worker');
+  }
+}
+
+/**
+ * Shared by runDependencyUnblock and set_task_status's return edge. A
+ * still-assigned hold (resource-style, third-party block, legacy row) returns
+ * to its worker ONLY while that worker exists, is not DEAD, and its own
+ * pointer still names this task — the genuine two-pointer hold. Otherwise
+ * the task returns UNASSIGNED: restoring it onto a missing/DEAD/IDLE-with-no-
+ * pointer record would make it permanently unclaimable (isTaskClaimable needs
+ * the owner missing or DEAD; an IDLE corpse is neither) while the Layer-3
+ * prune refuses to delete a worker that "owns active work" — starvation until
+ * a daemon restart, with no alert. Seat-freeing already leaves the seat null.
+ */
+export function parkedHoldOwner(state: StateManager, task: Pick<Task, 'id' | 'assignedWorkerId'>): string | null {
+  const owner = task.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null;
+  return owner && owner.status !== 'DEAD' && owner.currentTaskId === task.id ? owner.id : null;
+}
+
+/**
  * Scan every BLOCKED task carrying blockedOnTaskIds (and no blockedResourceId)
  * and restore the ones whose dependencies are now ALL satisfied. Returns the
  * ids of the tasks that were unblocked. Never throws — one bad row must not
@@ -226,21 +268,8 @@ export async function runDependencyUnblock(state: StateManager, triggerTaskId?: 
       // restore itself would be nonsense) — route it to WORKING instead.
       const safeRestored: TaskStatus =
         restored === 'DONE' || restored === 'ARCHIVED' || restored === 'BLOCKED' ? 'WORKING' : restored;
-      // assignedWorkerId passed explicitly, mirroring grantNextLeases:
-      // updateTask would otherwise clear the assignment on the status change.
-      // Under seat-freeing the seat is already null (task returns unassigned
-      // and claimable). A still-assigned hold (resource-style, third-party
-      // block, legacy row) returns to its worker ONLY while that worker still
-      // exists, is not DEAD, and its own pointer still names this task — the
-      // genuine two-pointer hold. Otherwise the task returns UNASSIGNED:
-      // restoring it onto a missing/DEAD/IDLE-with-no-pointer record would
-      // make it permanently unclaimable (isTaskClaimable needs the owner
-      // missing or DEAD; an IDLE corpse is neither) while the Layer-3 prune
-      // refuses to delete a worker that "owns active work" — starvation until
-      // a daemon restart, with no alert.
-      const owner = task.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null;
-      const restoreTo =
-        owner && owner.status !== 'DEAD' && owner.currentTaskId === task.id ? owner.id : null;
+      // Explicit assignment keeps only the genuine hold (see parkedHoldOwner).
+      const restoreTo = parkedHoldOwner(state, task);
       try {
         await state.updateTask(task.id, {
           status: safeRestored,
@@ -252,6 +281,7 @@ export async function runDependencyUnblock(state: StateManager, triggerTaskId?: 
           blockedAt: null,
         }, 'TASK_UNBLOCKED');
         unblocked.push(task.id);
+        if (restoreTo) await repairParkedSeat(state, restoreTo, task.id);
         const via = triggerTaskId ? ` (${triggerTaskId} landed)` : ' (dependency sweep)';
         const msg = `🟢 ${task.id} un-blocked → ${safeRestored}: all blockedOnTaskIds [${ids.join(', ')}] are DONE/ARCHIVED${via}.`;
         try { await state.postToGeneral(msg); } catch { /* best-effort */ }
@@ -266,10 +296,61 @@ export async function runDependencyUnblock(state: StateManager, triggerTaskId?: 
 }
 
 /**
- * Memo of #governors alerts already posted, keyed `taskId:blockedAt` so a
- * re-block (new blockedAt) alerts again while a standing block alerts once.
+ * Memo of #governors alerts already posted, keyed `taskId:blockedAt` (one block
+ * instance) so a re-block (new blockedAt) alerts again while a standing block
+ * alerts once: a key lives while its row stays BLOCKED under that blockedAt,
+ * whether or not the row qualifies on a given pass. A fresh daemon seeds it from
+ * #governors (seedAlertedStaleBlocks), so a restart is not a new instance either.
  */
 const alertedStaleBlocks = new WeakMap<StateManager, Set<string>>();
+
+/** The memo key of one block instance. */
+function staleBlockKey(task: Pick<Task, 'id' | 'blockedAt'>): string {
+  return `${task.id}:${task.blockedAt}`;
+}
+
+/** Every stale-block page reads `⚠️ <taskId> (<title>) has been BLOCKED …`. */
+const STALE_BLOCK_PAGE_RE = /^⚠️ (\S+) \(.*?\) has been BLOCKED /su;
+
+/**
+ * Seed a fresh daemon's memo from #governors: a standing block whose page the
+ * daemon already posted (sender 'system', strictly after the row's blockedAt) is
+ * not paged again after a restart. Reads the newest CHAT_READ_WINDOW_BYTES, the
+ * window chat_read serves: a page that has left it is shown to no reader, so a
+ * restart pages that block once more, as it does a page that never landed. Never
+ * throws: an unreadable log seeds nothing (one repeat page, never silence).
+ */
+function seedAlertedStaleBlocks(state: StateManager): Set<string> {
+  const memo = new Set<string>();
+  const channel = Array.from(state.channels.values()).find((ch) => ch.type === 'role' && ch.name === 'governors');
+  if (!channel) return memo;
+  let raw: string;
+  try {
+    raw = readTailJsonl(state, path.join(state.moePath, 'messages', `${channel.id}.jsonl`), CHAT_READ_WINDOW_BYTES);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.warn({ error, channelId: channel.id }, 'dependencyUnblock: #governors unreadable; a restart re-pages standing stale blocks');
+    }
+    return memo;
+  }
+  const lastPagedAt = new Map<string, number>();
+  for (const line of raw.split('\n')) {
+    if (!line.includes(' has been BLOCKED ')) continue;
+    let message: Partial<ChatMessage> | null;
+    try { message = JSON.parse(line) as Partial<ChatMessage> | null; } catch { continue; }
+    if (message?.sender !== 'system' || typeof message.content !== 'string') continue;
+    const taskId = STALE_BLOCK_PAGE_RE.exec(message.content)?.[1];
+    const pagedAt = Date.parse(String(message.timestamp));
+    if (!taskId || Number.isNaN(pagedAt)) continue;
+    lastPagedAt.set(taskId, Math.max(pagedAt, lastPagedAt.get(taskId) ?? pagedAt));
+  }
+  for (const task of state.tasks.values()) {
+    if (task.status !== 'BLOCKED' || !task.blockedAt) continue;
+    const pagedAt = lastPagedAt.get(task.id);
+    if (pagedAt !== undefined && pagedAt > Date.parse(task.blockedAt)) memo.add(staleBlockKey(task));
+  }
+  return memo;
+}
 
 /** Prerequisite statuses that make no progress on their own — a human must move them. */
 const NON_PROGRESSING_STATUSES = new Set<TaskStatus>(['BLOCKED', 'BACKLOG']);
@@ -303,7 +384,7 @@ export function describeUnmetDependency(state: StateManager, taskId: string, con
 /**
  * Visibility pass for stale blocks (resource-parked rows excluded — the lease
  * reaper bounds those). Four classes draw one line in #governors per block
- * instance; alert ONLY — never auto-park, the un-park decision is human triage
+ * instance (a restart included); alert ONLY — never auto-park, the un-park decision is human triage
  * (set_task_status / unblock paths / promote the prerequisite):
  *   - dep-less rows past blockedTimeoutMs: no machine is on their side, nothing
  *     will ever auto-unblock them;
@@ -323,7 +404,7 @@ export function describeUnmetDependency(state: StateManager, taskId: string, con
 export async function alertStaleBlocks(state: StateManager, nowMs: number = Date.now()): Promise<number> {
   let memo = alertedStaleBlocks.get(state);
   if (!memo) {
-    memo = new Set<string>();
+    memo = seedAlertedStaleBlocks(state);
     alertedStaleBlocks.set(state, memo);
   }
 
@@ -331,9 +412,13 @@ export async function alertStaleBlocks(state: StateManager, nowMs: number = Date
   let alerted = 0;
   for (const task of state.tasks.values()) {
     if (task.status !== 'BLOCKED') continue;
-    if (task.blockedResourceId) continue;
     const blockedAtMs = task.blockedAt ? Date.parse(task.blockedAt) : NaN;
     if (Number.isNaN(blockedAtMs)) continue;
+    // Live whether or not the row qualifies this pass: the prune below drops
+    // only resolved or re-blocked instances, never a row that missed one pass.
+    const key = staleBlockKey(task);
+    liveKeys.add(key);
+    if (task.blockedResourceId || memo.has(key)) continue;
     const ageMs = nowMs - blockedAtMs;
     if (ageMs <= state.blockedTimeoutMs) continue;
     const ageMin = Math.floor(ageMs / 60_000);
@@ -377,10 +462,6 @@ export async function alertStaleBlocks(state: StateManager, nowMs: number = Date
         continue;
       }
     }
-
-    const key = `${task.id}:${task.blockedAt}`;
-    liveKeys.add(key);
-    if (memo.has(key)) continue;
 
     try {
       await state.postToRoleChannel('governors', alert);

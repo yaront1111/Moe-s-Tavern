@@ -52,7 +52,7 @@
     "dev": "tsx src/index.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prebuild": "tsc --version && npm run clean",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json && tsc --noEmit",
     "start": "node dist/index.js",
     "pretest": "npm run build",
     "test": "vitest run",
@@ -62,10 +62,10 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "ws": "^8.22.0"
+    "ws": "^8.22.1"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/ws": "^8.18.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

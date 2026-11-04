@@ -1,0 +1,32 @@
+{
+  "id": "task-45ce1ac033324959a6164399f2185a79",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: JetBrains drops latestCheckRun.outcome, so a non-passed exit-0 check displays as passed",
+  "description": "Filed by governor-693b7073 on architect-8419009e's report (#architects msg-b280b4ba, 16:36Z). It is V12's client hand-forward, and nothing owned it: searching the board for 'latestCheckRun' finds only V12b.\n\n**Daemon side (landed).** V12b (task-6339299a, DONE) projects `latestCheckRun.outcome` in the task's delivery projection (packages/moe-daemon/src/state/deliveryProjection.ts, checkFor). The values are CHECK_OUTCOMES: passed, code-failure, infra-failure, timeout, skipped, inconclusive. The field is omitted when the row has no outcome.\n\n**JetBrains side (the bug).** The client reads only command, exitCode and source:\n- `data class DeliveryCheckRun(command, exitCode, source)` in moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt;\n- parsing in moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt (around :440);\n- rendering in moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt (around :22-29).\nSo an exit-0 check whose outcome is timeout, infra-failure, skipped or inconclusive renders like a pass.\n\n**Scope: JetBrains only.**\n- Models.kt, MoeJson.kt, DeliveryPresentation.kt, moe-jetbrains/src/main/resources/messages/MoeBundle.properties, plus a JetBrains unit test.\n- An absent outcome (an older daemon, or a row recorded without one) keeps today's exitCode-based rendering.\n- VS Code renders no latestCheckRun at all. Whether it should gain a delivery-check view is a parity decision for the human, so it is out of scope here; note it in the completion summary.\n\n**Ordering.** This row dependsOn CQ-I06f (task-426a012e). I06f's whole-epic review may fix residuals forward in MoeBundle.properties (for example the stale PROVIDER_NOT_FOUND \"on PATH\" text, comment-ca3c8ccb on I06), so the two rows must not edit that file at the same time. Run the gradle gate in an isolated copy under the `jetbrains-gradle` lease (GLOBAL rule 0).",
+  "definitionOfDone": [
+    "JetBrains parses latestCheckRun.outcome: DeliveryCheckRun gains outcome, and MoeJson reads it. DeliveryPresentation renders every non-passed outcome (code-failure, infra-failure, timeout, skipped, inconclusive) distinctly from passed, even when exitCode is 0. The user-visible strings live in MoeBundle.properties.",
+    "A JetBrains unit test pins three cases: an exit-0 check with a non-passed outcome renders as not passed; outcome passed renders as passed; and an absent outcome falls back to today's exitCode rendering.",
+    "A fresh `cd moe-jetbrains && ./gradlew test` passes, run in an isolated copy under the jetbrains-gradle lease (the labelled Windows equivalent on this host), and its output is supplied to complete_task.",
+    "VS Code is untouched, and the completion summary notes the VS Code delivery-check parity question for the human."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Duplicate of task-344a0acb42744047a4cce259cc2717c4: the same bug, filed 11 s earlier and already being planned by architect-8419009e. Both governors filed it at the same moment from architect-8419009e's msg-b280b4ba. Any extra spec from this copy goes onto 344a0acb as a comment.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-426a012ecc374cdaa7454742bc5a552a"
+  ],
+  "priority": "MEDIUM",
+  "order": 286.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T16:37:34.853Z",
+  "updatedAt": "2026-10-31T16:37:55.458Z"
+}

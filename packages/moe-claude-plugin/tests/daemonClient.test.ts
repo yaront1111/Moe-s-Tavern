@@ -5,7 +5,8 @@ import path from 'node:path';
 import { createServer, type Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 
-import { callTool, findDaemonInfo, DaemonError } from '../src/daemonClient.js';
+import net, { type AddressInfo } from 'node:net';
+import { callTool, postEvent, findDaemonInfo, DaemonError } from '../src/daemonClient.js';
 
 function makeProjectWithDaemon(port: number): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-plugin-test-'));
@@ -22,6 +23,120 @@ function makeProjectWithDaemon(port: number): string {
   );
   return tmp;
 }
+
+// moe-agent exports MOE_DAEMON_HOST (the Windows host address) to WSL seats.
+// Clear it so the loopback fixtures never dial that address.
+beforeEach(() => { vi.stubEnv('MOE_DAEMON_HOST', undefined); });
+afterEach(() => { vi.unstubAllEnvs(); });
+
+function makeProjectWithDaemonFields(port: number, extra: Record<string, unknown>): string {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-plugin-host-'));
+  fs.mkdirSync(path.join(tmp, '.moe'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, '.moe', 'daemon.json'), JSON.stringify({
+    port, pid: process.pid, startedAt: new Date().toISOString(), projectPath: tmp, ...extra,
+  }));
+  return tmp;
+}
+
+describe('connect host', () => {
+  it('uses a non-blank MOE_DAEMON_HOST instead of loopback', () => {
+    vi.stubEnv('MOE_DAEMON_HOST', '172.26.208.1');
+    const projectPath = makeProjectWithDaemonFields(54321, { bindHost: 'wsl' });
+    expect(findDaemonInfo({ projectPath }).host).toBe('172.26.208.1');
+    vi.stubEnv('MOE_DAEMON_HOST', ' 172.26.208.1 ');
+    expect(findDaemonInfo({ projectPath }).host).toBe('172.26.208.1');
+    vi.stubEnv('MOE_DAEMON_HOST', '   ');
+    const paddedHost = makeProjectWithDaemonFields(54321, { host: ' 10.1.2.3 ' });
+    expect(findDaemonInfo({ projectPath: paddedHost }).host).toBe('10.1.2.3');
+    const blankHost = makeProjectWithDaemonFields(54321, { host: '   ', bindHost: 'wsl' });
+    expect(findDaemonInfo({ projectPath: blankHost }).host).toBe('127.0.0.1');
+  });
+
+  it('puts MOE_DAEMON_HOST ahead of the legacy host', () => {
+    vi.stubEnv('MOE_DAEMON_HOST', '172.26.208.1');
+    const projectPath = makeProjectWithDaemonFields(54321, { host: '10.1.2.3' });
+    expect(findDaemonInfo({ projectPath }).host).toBe('172.26.208.1');
+  });
+
+  it('falls back to the legacy host with an unset or whitespace env', () => {
+    const projectPath = makeProjectWithDaemonFields(54321, { host: '10.1.2.3' });
+    expect(findDaemonInfo({ projectPath }).host).toBe('10.1.2.3');
+    vi.stubEnv('MOE_DAEMON_HOST', '   ');
+    expect(findDaemonInfo({ projectPath }).host).toBe('10.1.2.3');
+  });
+
+  it('never dials bindHost, even when it looks like an address', () => {
+    vi.stubEnv('MOE_DAEMON_HOST', '');
+    for (const bindHost of ['wsl', '192.0.2.7']) {
+      const projectPath = makeProjectWithDaemonFields(54321, { bindHost });
+      expect(findDaemonInfo({ projectPath }).host).toBe('127.0.0.1');
+    }
+  });
+});
+
+const ALT_LOOPBACK = '127.0.0.2';
+
+async function canListenOn(host: string): Promise<boolean> {
+  const probe = net.createServer();
+  try {
+    return await new Promise<boolean>((resolve, reject) => {
+      probe.once('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRNOTAVAIL') resolve(false);
+        else reject(err);
+      });
+      probe.listen(0, host, () => resolve(true));
+    });
+  } finally {
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+  }
+}
+
+const altLoopbackBindable = await canListenOn(ALT_LOOPBACK);
+
+describe.skipIf(!altLoopbackBindable)('MOE_DAEMON_HOST end to end (WSL agent mode)', () => {
+  let server: Server;
+  let wss: WebSocketServer;
+  let port: number;
+  let frames: Array<{ url: string | undefined; text: string }>;
+
+  beforeEach(async () => {
+    frames = [];
+    server = createServer();
+    wss = new WebSocketServer({ server });
+    wss.on('connection', (ws, req) => {
+      ws.on('message', (data) => {
+        const text = data.toString();
+        frames.push({ url: req.url, text });
+        if (req.url === '/mcp') {
+          const request = JSON.parse(text) as { id: number };
+          ws.send(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { ok: true } }));
+        }
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, ALT_LOOPBACK, resolve);
+    });
+    port = (server.address() as AddressInfo).port;
+    vi.stubEnv('MOE_DAEMON_HOST', ALT_LOOPBACK);
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('routes callTool and postEvent to the WSL host override', async () => {
+    const projectPath = makeProjectWithDaemonFields(port, { bindHost: 'wsl' });
+    await expect(callTool('moe.list_tasks', {}, { projectPath, timeoutMs: 2000 }))
+      .resolves.toEqual({ ok: true });
+    const event = { type: 'AGENT_TOOL_EVENT', payload: { tool: 'moe.list_tasks' } };
+    await postEvent(event, { projectPath, timeoutMs: 2000 });
+    await vi.waitFor(() => expect(frames.some((f) => f.url === '/ws')).toBe(true), { timeout: 1000 });
+    expect(frames.filter((f) => f.url === '/mcp')).toHaveLength(1);
+    expect(JSON.parse(frames.find((f) => f.url === '/ws')!.text)).toEqual(event);
+  });
+});
 
 describe('findDaemonInfo', () => {
   it('throws DAEMON_NOT_FOUND when no daemon.json exists', () => {

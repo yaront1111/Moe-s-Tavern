@@ -6,7 +6,7 @@ import { StateManager } from '../state/StateManager.js';
 import { completeStepTool } from './completeStep.js';
 import { startStepTool } from './startStep.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
-import type { Task, Epic, Project } from '../types/schema.js';
+import type { Task, Epic, Project, ChatMessage } from '../types/schema.js';
 import { MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 
 describe('moe.complete_step ownership + stepsCompleted tracking', () => {
@@ -320,6 +320,7 @@ describe('moe.complete_step ownership + stepsCompleted tracking', () => {
 
 // ---- migrated from tools.test.ts ----
 import { ToolTestHarness } from './toolTestHarness.js';
+import { chatReadTool } from './chatRead.js';
 import { vi } from 'vitest';
 
 describe('moe.complete_step', () => {
@@ -505,6 +506,99 @@ describe('moe.complete_step', () => {
     const worker = h.state.getWorker('worker-x')!;
     expect(worker.status).toBe('IDLE');
     expect(worker.currentTaskId).toBeNull();
+  });
+});
+
+// The "Step N completed" notice echoes plan text an agent wrote. A tag that text
+// spells (all-hands, a role group, a worker id) must not be read as the daemon
+// addressing those seats: msg-ee54f9ed woke four idle seats that way. Every tag
+// is built at runtime so this source never spells one in prose.
+describe('moe.complete_step chat notice', () => {
+  const h = new ToolTestHarness();
+  const at = String.fromCharCode(64);
+  // Group tokens only address at the start of a line, so the description has
+  // both a mid-prose spelling and an addressing-position one, plus a quoted one.
+  const description = [
+    `Fixture prose: the sender tags itself, ${at}all and its role group ${at}workers, then ${at}worker-busy.`,
+    `${at}all ${at}workers ${at}worker-busy opening a line`,
+    `quoted \`${at}qa\` stays quoted`,
+  ].join('\n');
+  let general: string;
+  let workersChannel: string;
+  let events: Array<{ message: ChatMessage; routingTargets: string[] }>;
+  let unsubscribe: () => void;
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({
+      status: 'WORKING',
+      implementationPlan: [
+        { stepId: 'step-1', description, status: 'IN_PROGRESS', affectedFiles: [] },
+        { stepId: 'step-2', description: 'Second', status: 'PENDING', affectedFiles: [] },
+      ],
+    });
+    h.createWorker({ id: 'worker-busy', status: 'CODING' });
+    h.createWorker({ id: 'worker-idle', status: 'IDLE' });
+    await h.state.load();
+    general = h.state.getChannels().find((channel) => channel.name === 'general')!.id;
+    workersChannel = h.state.getChannels().find((channel) => channel.name === 'workers')!.id;
+    events = [];
+    unsubscribe = h.state.subscribe((event) => {
+      if (event.type === 'MESSAGE_CREATED') {
+        events.push({ message: event.payload, routingTargets: event.routingTargets ?? [] });
+      }
+    });
+  });
+  afterEach(() => { unsubscribe(); vi.restoreAllMocks(); h.cleanup(); });
+
+  it('the Step N completed notice echoes the text but addresses no seat', async () => {
+    await completeStepTool(h.state).handler({ taskId: 'task-1', stepId: 'step-1' }, h.state);
+
+    const expected = `task-1: Step 1 completed: ${description}`;
+    const notices = events.filter((e) => e.message.content.startsWith('task-1: Step 1 completed: '));
+    // Exactly one line, readable: stored verbatim, nothing escaped or wrapped.
+    expect(notices).toHaveLength(1);
+    expect(notices[0].message.content).toBe(expected);
+    expect(notices[0].message.channel).toBe(general);
+    // It pages nobody.
+    expect(notices[0].routingTargets).toEqual([]);
+    const stored = (await h.state.getMessages(general)).find((m) => m.content === expected);
+    expect(stored?.mentions).toEqual([]);
+    expect(h.state.getUnreadSummary('worker-busy')?.channels?.[general] ?? 0).toBe(0);
+    // And the line is feed: agent reads do not return it.
+    const read = await chatReadTool(h.state).handler({ workerId: 'worker-busy', channel: general }, h.state) as {
+      messages: ChatMessage[];
+    };
+    expect(read.messages.map((m) => m.content)).not.toContain(expected);
+  });
+
+  it('a system post without the option still routes its tags exactly as before', async () => {
+    const content = `${at}worker-busy please check`;
+    await h.state.postSystemMessage('task-1', content);
+
+    const posted = events.find((e) => e.message.content === `task-1: ${content}`);
+    expect(posted?.message.mentions).toEqual(['worker-busy']);
+    expect(posted?.routingTargets).toEqual(['worker-busy']);
+  });
+
+  it('the option routes to no seat in a role channel too', async () => {
+    const content = `${at}all ${at}worker-busy x`;
+    // Control: without the option this addresses the busy seat.
+    const addressed = await h.state.sendMessage({ channel: workersChannel, sender: 'system', content });
+    expect(addressed.message.mentions).toEqual(['all', 'worker-busy']);
+    expect(addressed.routingTargets).toContain('worker-busy');
+
+    // Without the skip a mention-less system line in a role channel would still
+    // broadcast to busy seats, so clearing only the recorded mentions is not enough.
+    const result = await h.state.sendMessage({
+      channel: workersChannel, sender: 'system', content, parseMentions: false,
+    });
+    expect(result.routingTargets).toEqual([]);
+    expect(result.message.mentions).toEqual([]);
+    expect(result.message.content).toBe(content);
+    expect(events.filter((e) => e.message.id === result.message.id)[0].routingTargets).toEqual([]);
   });
 });
 

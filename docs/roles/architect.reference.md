@@ -44,7 +44,7 @@ The full sizing table (daemon-enforced; thresholds tunable via `project.json` `s
 | DoD items | 3–7, mechanically checkable | >7 (`create_task` warning) | — |
 | Net changed LOC | ≤200 | — | >400 (QA rejects as oversized) |
 
-One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones (past `taskSizing.maxTasksPerEpic`, default 40, `create_task` warns: re-slice into sub-epics). Only file-disjoint tasks are parallel-claimable. When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — `moe-epic-breakdown` has the procedure.
+One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones (past `taskSizing.maxTasksPerEpic`, default 40, `create_task` warns: re-slice into sub-epics). Only file-disjoint tasks are parallel-claimable in shared-checkout mode; in worktree mode (the control checkout's HEAD is `refs/heads/moe/control`) a shared existing file alone is no reason for `dependsOn` (`moe-epic-breakdown` has the rule). When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — `moe-epic-breakdown` has the procedure.
 
 ## Dependencies and evidence at breakdown time
 
@@ -68,7 +68,9 @@ moe.propose_rail {
 }
 ```
 
-The proposal lands in `.moe/proposals/` for human Approve/Reject. Do NOT loop between `submit_plan` and `propose_rail` — pick one and commit.
+Only a GLOBAL `MODIFY_RAIL` or `REMOVE_RAIL` whose `currentValue` is the exact `forbiddenPatterns` or `requiredPatterns` entry lifts a `submit_plan` rail refusal; the refusal names that entry, and the change applies to every task. EPIC and TASK proposals change guidance rails only (`epicRails`, `taskRails`): seats and QA read them, the plan check never does, and a `MODIFY_RAIL` or `REMOVE_RAIL` there that quotes a global rail is refused `NOT_FOUND`.
+
+The proposal lands in `.moe/proposals/` for human Approve/Reject; its decision posts nothing to chat, and `moe.get_activity_log { taskId, eventTypes: ["PROPOSAL_APPROVED", "PROPOSAL_REJECTED"] }` shows it. Do NOT loop between `submit_plan` and `propose_rail` — pick one and commit.
 
 ## Checkpoint commits of architect sessions
 
@@ -81,6 +83,8 @@ Some machines run claude seats across several Claude subscription accounts. The 
 - The plan you just submitted is recorded; the switch never interrupts one.
 - Write that task's handoff memory if you have not, then end the turn. Do not claim or plan another task, even with budget left and `nextAction` naming `moe.claim_next_task`.
 - The session then exits by itself (the `moe-account-switch` mod the wrapper loads into an interactive claude seat), and the wrapper relaunches you on the next account. The new session claims the next PLANNING task.
+
+A row you end without `moe.submit_plan` (`moe.archive_task` on a defect-hunt row, for example) gets no such reply, so the switch comes at your next in-session `moe.claim_next_task`: it answers `hasNext:false` with the same `accountSwitch`, claims nothing and names no `nextAction`. Write the handoff memory of the row you just ended if it needs one and you have not, then end the turn. The session then exits by itself, as above, and the new session on the next account claims the next PLANNING task.
 
 A switch is not a failure: report nothing and block nothing. A claim made anyway is refused, and the turn is ended for you. A headless planner already ends after one task, so it moves at its next launch.
 

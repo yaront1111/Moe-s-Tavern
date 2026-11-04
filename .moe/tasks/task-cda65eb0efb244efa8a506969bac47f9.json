@@ -75,7 +75,8 @@
     "task-48f0b3aaa82c4b938d3a15f3710a66e5",
     "task-a4ca766a67184630842d4a6d12338cf8",
     "task-2c95c5d1d2bd4dcc9d16fbff1fdb9654",
-    "task-d88bb99057b54b3bb02241557886aa85"
+    "task-d88bb99057b54b3bb02241557886aa85",
+    "task-6e0902aa67764a94bc008b27ce490ab0"
   ],
   "priority": "MEDIUM",
   "order": 25,
@@ -103,11 +104,29 @@
       "author": "worker-0062feec",
       "content": "Spike self-review note (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L6, §7.3). For docs/CONFIGURATION.md:\n\n- In worktree mode, qualityGateScope is ignored: every completion landing runs settings.qualityGate (rail 1).\n- Worktree mode needs a qualityGate; the doctor fails without one.\n- The git-land-main lease is taken on every landing while a gate is set.\n\nNo new MCP parameter or schema field came out of this round.",
       "timestamp": "2026-10-30T13:53:27.640Z"
+    },
+    {
+      "id": "comment-364c0de2cef74cdab711b51c283bf699",
+      "author": "architect-b58e1112",
+      "content": "Split note from architect-b58e1112, 2026-10-31, after a governor re-slice request. WT-17a (task-6e0902aa) now owns this row's docs/MCP_SERVER.md and docs/SCHEMA.md content, which is plan steps 2-3. Those contracts landed with WT-01, WT-02, WT-03 and WT-03b, so the work could start before WT-14 and WT-16.\n\nOnce WT-17a lands:\n- Re-verify those two docs against the code. Add text only for a contract a later slice changed. Do not write a second copy.\n- New work here is the step-1 inventory, docs/CONFIGURATION.md (step 4), and the verification and review steps.\n\nGovernor-693b7073 is asked to add the edge cda65eb0 dependsOn task-6e0902aa.",
+      "timestamp": "2026-10-31T15:22:03.417Z"
+    },
+    {
+      "id": "comment-251f69ef848f4822b2be66212e4a57af",
+      "author": "worker-c0a1ac70",
+      "content": "WT-17a (task-6e0902aa) drift audit: docs/plans/2026-10-30-per-task-worktrees.md versus the landed WT-01/02/03/03b code. The code won in docs/MCP_SERVER.md and docs/SCHEMA.md. Format per item: plan text -> code -> file:symbol.\n\n1. Worktree path root. Plan §1.1 and L18: W = `<git top>/.worktrees/<taskId>`. Code: `path.join(state.projectPath, '.worktrees', taskId)`, the project path. It matches only because worktree mode requires the project to be the repo top. -> tools/claimNextTask.ts (attempt-open block, ~L155-158).\n2. landingRetry clearing. Plan §2.5: cleared \"on the next `landed` finalize\". Code also clears it on `nothing-to-commit`, and no other outcome (`rescued`, `failed`) touches it. -> tools/finalizeAttempt.ts:applyTaskOutcome.\n3. Non-REVIEW task. Plan §2.5: \"moves the task out of REVIEW\". Code does that only for a REVIEW task. Any other status is kept, with assignment unchanged, and still gets landingRetry and the comment. -> tools/finalizeAttempt.ts:applyTaskOutcome (`task.status !== 'REVIEW'`).\n4. targetTip omitted. Plan §2.5 and the contract list show the call as `{outcome:'unlanded', landedRevision:null, unlandedReason, conflictPaths, rescueRef}`. Code also accepts optional `targetTip` (40 hex or null), stored as landingRetry.targetTip. -> tools/finalizeAttempt.ts:validateUnlanded.\n5. rescueRef shape. Plan: `rescueRef: string`. Code: at most 255 chars, exactly `refs/moe/rescue/<taskId>/<segment>`, segment matching /^[A-Za-z0-9][A-Za-z0-9._-]*$/. Anything else is INVALID_INPUT. -> tools/finalizeAttempt.ts:validateUnlanded.\n6. conflictPaths. Plan: `conflictPaths: string[]`. Code: normalized via PathSet and capped at 500. The stored field is `LandingRetry.paths`. -> tools/finalizeAttempt.ts:validateUnlanded.\n7. Unlanded refused outside worktree mode. Plan §2.5 and WT-03 row: only \"refused for shared attempts\" (row text). Code: INVALID_INPUT before any write when attempt.workspaceMode !== 'worktree'. -> tools/finalizeAttempt.ts (~L251).\n8. Pinned mode vs live target. Plan §7.2: claim_next_task and get_context both expose `workspace` \"pinned per attempt\". Code pins only mode and path on the attempt. `target` is recomputed from the live consolidationBranch on every claim and get_context read, so it can change mid-attempt. -> state/validators.ts:resolveAttemptWorkspace.\n9. When `workspace` appears. Plan §7.2 implies it is always exposed. Code: claim carries it only when a worker is named and an attempt is opened or adopted. get_context carries it only when a current attempt decodes, and `view:'status'` never carries it. -> tools/claimNextTask.ts (~L885-889); tools/getContext.ts (~L553, L689).\n10. complete_task branch rule. Plan §2.8 words it as `checkBranchPolicy` \"expects\" moe/task/<taskId>. Code runs it for every worktree attempt regardless of consolidationBranch, and a match returns branchPolicy {pattern: moe/task/<taskId>, currentBranch, matched:true}. A missing branch warns (matched:null). -> tools/completeTask.ts:checkWorktreeBranchPolicy.\n11. BLOCKED shape. Plan §2.5 says only \"BLOCKED\". Code sets blockedFromStatus 'WORKING', blockedResourceId null, blockedOnTaskIds null, and a blockedReason naming the rescue ref. -> tools/finalizeAttempt.ts:applyTaskOutcome.\n12. WT-03b is not in the plan. A board UPDATE_TASK echo of landingRetry is stripped (tools-side denylist), and nextStatusForRelease keeps a WORKING task with landingRetry set in WORKING even when every step is complete. -> server/WebSocketServer.ts (denylist ~L96); state/workerLifecycle.ts:nextStatusForRelease.\n\nNone of these needs a code change. The plan doc was not edited (out of scope); WT-17 can decide whether to leave it. This row documented 1-12 only where they touch the MCP_SERVER/SCHEMA contracts.",
+      "timestamp": "2026-10-31T15:28:12.001Z"
+    },
+    {
+      "id": "comment-9f1e0e1e41404841a0ebecf3d16bfbdc",
+      "author": "governor-978922c1",
+      "content": "Governor, for whoever claims this row: two rows landed edits to docs/MCP_SERVER.md after this plan was written.\n- 435e8989 (975ae6c8): the requiredCheckSnapshot paragraph near line 189 and the Packet manifest CQ-C01 paragraph near line 309.\n- CQ-M06 (ac4716bf): Execution policy context near line 330, Strict completion CQ-F08 near line 579, and a new PROJECT_SETTINGS_UPDATED block after line 3056.\n\nEdit from HEAD at or after ac4716bf and keep both rows' text. Any line numbers in this plan are stale.",
+      "timestamp": "2026-11-01T22:40:23.555Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:50.521Z",
-  "updatedAt": "2026-10-31T06:12:40.709Z",
+  "updatedAt": "2026-11-01T22:40:23.555Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:23.102Z",

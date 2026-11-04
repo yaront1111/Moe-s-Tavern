@@ -1,8 +1,9 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage } from '../types/schema.js';
-import { invalidInput } from '../util/errors.js';
+import { invalidInput, notFound } from '../util/errors.js';
 import {
+  capChatMessagesToResponseBudget,
   countTruncatedMessages,
   DEFAULT_CHAT_CONTENT_CHARS,
   DEFAULT_CHAT_RESYNC_LIMIT,
@@ -19,7 +20,10 @@ export function chatResyncTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         workerId: { type: 'string', description: 'Worker whose cursors to reset' },
-        channel: { type: 'string', description: 'Specific channel to resync (omit for all)' },
+        channel: {
+          type: 'string',
+          description: 'Specific channel to resync (omit for all). Channel id, or name in either "general" or "#general" form'
+        },
         limit: { type: 'number', description: 'Max messages per channel (default 20, max 200)' },
         maxContentChars: {
           type: 'number',
@@ -63,10 +67,22 @@ export function chatResyncTool(_state: StateManager): ToolDefinition {
         ? Math.min(Math.floor(params.maxContentChars), MAX_CHAT_CONTENT_CHARS)
         : DEFAULT_CHAT_CONTENT_CHARS;
 
+      // Resolve the channel reference (id, "general" or "#general") BEFORE the
+      // first write, so a refused resync clears no cursor. Cursors are keyed by
+      // canonical channel id (chat_read and chat_wait store them that way), and
+      // getMessages throws an uncoded Error for a channel it does not know.
+      let channelId: string | undefined;
+      if (params.channel) {
+        if (typeof params.channel !== 'string') throw invalidInput('channel', 'must be a string');
+        const channel = state.resolveChannelRef(params.channel);
+        if (!channel) throw notFound('Channel', params.channel);
+        channelId = channel.id;
+      }
+
       // Clear cursors
       const clearedCursors = { ...(worker.chatCursors || {}) };
-      if (params.channel) {
-        delete clearedCursors[params.channel];
+      if (channelId) {
+        delete clearedCursors[channelId];
       } else {
         Object.keys(clearedCursors).forEach(k => delete clearedCursors[k]);
       }
@@ -74,8 +90,8 @@ export function chatResyncTool(_state: StateManager): ToolDefinition {
 
       // Fetch messages from beginning (no sinceId)
       let messages: ChatMessage[];
-      if (params.channel) {
-        messages = await state.getMessages(params.channel, { limit, hideSystemFeed: true });
+      if (channelId) {
+        messages = await state.getMessages(channelId, { limit, hideSystemFeed: true });
       } else {
         const channels = state.getChannels();
         const allMessages: ChatMessage[] = [];
@@ -87,6 +103,16 @@ export function chatResyncTool(_state: StateManager): ToolDefinition {
           .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
           .slice(-limit);
       }
+
+      // Bound the RESPONSE, not just each message: with maxContentChars: 0 a
+      // 200-message window overflowed an MCP client's payload limit. Keep the
+      // NEWEST messages that fit (chat_read's trim). The helper keeps the
+      // oldest prefix, so run it on the reversed window, and always keeps one
+      // message, so a single oversized message still comes back alone. Applied
+      // BEFORE the cursors below, which then point at the newest message
+      // actually returned, never past one that was dropped.
+      messages = capChatMessagesToResponseBudget([...messages].reverse(), maxContentChars)
+        .delivered.reverse();
 
       // Update cursors to latest message per channel
       const newCursors: Record<string, string> = { ...clearedCursors };

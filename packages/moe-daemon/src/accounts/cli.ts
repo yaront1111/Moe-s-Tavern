@@ -11,9 +11,17 @@
 //   logout <id>               sign that account out
 //   check [<id>]              re-check sign-ins; exit 0 only when every checked account is on a subscription
 //   remove <id> [--sign-out]  unregister (signing out first with --sign-out); the directory stays
+//   vm-token <id> [--remove]  mint (or delete) the account's long-lived token for Moe VM jobs
 //
 // --accounts-file <path> picks the registry (else MOE_ACCOUNTS_FILE, else
 // ~/.moe/claude-accounts.json). MOE_CLAUDE_BIN picks the claude binary.
+//
+// --protected-project <path> (task-55710898) is the IDEs' protected-profile
+// contract, so USAGE leaves it out: JetBrains passes it
+// (TerminalAgentLauncher.PROTECTED_PROJECT_OPTION), and so does VS Code (AccountsTreeProvider.runCli).
+// Each command that runs claude then takes it only from outside that project
+// (protectedClaudeCommand), or exits 1 with MOE_PROTECTED_CLAUDE_REFUSED or
+// MOE_PROTECTED_CLAUDE_NOT_FOUND before any folder, prompt, registry write or run.
 //
 // The JetBrains Accounts tab runs these commands in an IDE terminal, so the
 // person sees and answers Claude's own sign-in prompts. This file imports only
@@ -35,12 +43,15 @@ import {
   type RegistryAccount,
   type SignInState,
 } from './registry.js';
-import { accountEnv, claudeCommand, probeSignIn, runClaude } from './claudeAuth.js';
+import { ProtectedClaudeRefused, accountEnv, claudeCommand, probeSignIn, protectedClaudeCommand, runClaude, type ClaudeCommand } from './claudeAuth.js';
+import { VM_TOKEN_RE, readHiddenLine, removeVmToken, writeVmToken } from './vmTokens.js';
 
 export interface CliIo {
   out(line: string): void;
   err(line: string): void;
   env: NodeJS.ProcessEnv;
+  /** One line typed with echo off (tests inject it); default readHiddenLine. */
+  readSecret?(prompt: string): string | null;
 }
 
 const defaultIo: CliIo = {
@@ -57,6 +68,7 @@ const USAGE = [
   '  logout <id>               sign the account out',
   '  check [<id>]              check which accounts are signed in',
   '  remove <id> [--sign-out]  remove the account (sign it out first with --sign-out)',
+  "  vm-token <id> [--remove]  mint (or delete) the account's long-lived token for Moe VM jobs",
 ];
 
 interface ParsedArgs {
@@ -64,13 +76,18 @@ interface ParsedArgs {
   positional: string[];
   label?: string;
   accountsFile?: string;
+  protectedProject?: string;
   signOut: boolean;
+  remove: boolean;
 }
+
+/** The claude this run uses, resolved only by the commands that run it. */
+type Claude = () => ClaudeCommand;
 
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = { command: undefined, positional: [], signOut: false };
+  const parsed: ParsedArgs = { command: undefined, positional: [], signOut: false, remove: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -80,8 +97,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       return next;
     };
     if (flag === '--accounts-file') parsed.accountsFile = value();
+    else if (flag === '--protected-project') parsed.protectedProject = value();
     else if (flag === '--label') parsed.label = value();
     else if (flag === '--sign-out') parsed.signOut = true;
+    else if (flag === '--remove') parsed.remove = true;
     else if (flag.startsWith('-')) throw new UsageError(`unknown option ${flag}`);
     else if (parsed.command === undefined) parsed.command = arg;
     else parsed.positional.push(arg);
@@ -107,20 +126,20 @@ function notFoundMessage(io: CliIo): string {
 }
 
 /** Ask claude whether the account is signed in, and record the answer. */
-function check(io: CliIo, file: string, account: RegistryAccount): SignInState | 'unknown' | 'not-found' {
-  const { state, notFound } = probeSignIn(claudeCommand(io.env), accountEnv(io.env, accountConfigDir(file, account.id)));
+function check(io: CliIo, file: string, account: RegistryAccount, claude: Claude): SignInState | 'unknown' | 'not-found' {
+  const { state, notFound } = probeSignIn(claude(), accountEnv(io.env, accountConfigDir(file, account.id)));
   if (notFound) return 'not-found';
   if (state !== 'unknown') recordSignIn(file, account.id, state);
   return state;
 }
 
-function signOut(io: CliIo, file: string, account: RegistryAccount): number {
-  const run = runClaude(claudeCommand(io.env), ['auth', 'logout'], accountEnv(io.env, accountConfigDir(file, account.id)), true);
+function signOut(io: CliIo, file: string, account: RegistryAccount, claude: Claude): number {
+  const run = runClaude(claude(), ['auth', 'logout'], accountEnv(io.env, accountConfigDir(file, account.id)), true);
   if (run.notFound) {
     io.err(notFoundMessage(io));
     return 1;
   }
-  const state = check(io, file, account);
+  const state = check(io, file, account, claude);
   if (state !== 'signed_out') {
     io.err(`MOE_ACCOUNT_LOGOUT_FAILED: ${describe(account)} is still signed in (sign-in check: ${state}).`);
     return 1;
@@ -129,17 +148,18 @@ function signOut(io: CliIo, file: string, account: RegistryAccount): number {
   return 0;
 }
 
-function login(io: CliIo, file: string, account: RegistryAccount): number {
+function login(io: CliIo, file: string, account: RegistryAccount, claude: Claude): number {
+  const command = claude(); // a protected refusal comes before the folder and the sign-in lines
   const dir = accountConfigDir(file, account.id);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   io.err(`Signing in ${describe(account)} with your Claude subscription.`);
   io.err('Claude opens a sign-in page in your browser (or prints a link). Sign in with the Claude account you want in this slot, then come back here.');
-  const run = runClaude(claudeCommand(io.env), ['auth', 'login', '--claudeai'], accountEnv(io.env, dir), true);
+  const run = runClaude(command, ['auth', 'login', '--claudeai'], accountEnv(io.env, dir), true);
   if (run.notFound) {
     io.err(notFoundMessage(io));
     return 1;
   }
-  const state = check(io, file, account);
+  const state = check(io, file, account, claude);
   if (state === 'not-found') {
     io.err(notFoundMessage(io));
     return 1;
@@ -156,9 +176,53 @@ function login(io: CliIo, file: string, account: RegistryAccount): number {
   return 1;
 }
 
+/**
+ * Claude's own `claude setup-token`, run interactively in the account folder,
+ * then the token pasted at a hidden prompt: capturing the TUI's output is
+ * unreliable. No message ever includes the token.
+ */
+function vmToken(io: CliIo, file: string, account: RegistryAccount, claude: Claude): number {
+  const command = claude(); // a protected refusal comes before the folder and the prompts
+  const dir = accountConfigDir(file, account.id);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  io.err(`Minting a long-lived token for ${describe(account)} for Moe VM jobs. Claude opens its sign-in page (or prints a link). Sign in with the SAME Claude account as this slot: Moe cannot check which account a token belongs to.`);
+  io.err('When claude prints the token, copy it; you paste it here next (input hidden).');
+  const run = runClaude(command, ['setup-token'], accountEnv(io.env, dir), true);
+  if (run.notFound) {
+    io.err(notFoundMessage(io));
+    return 1;
+  }
+  if (run.status !== 0) {
+    io.err(`MOE_VM_TOKEN_MINT_FAILED: claude setup-token exited with ${run.status ?? 'no exit code'}; nothing was stored.`);
+    return 1;
+  }
+  const prompt = 'Paste the token (input hidden): ';
+  const token = (io.readSecret ? io.readSecret(prompt) : readHiddenLine(prompt))?.trim();
+  if (!token) {
+    io.err('MOE_VM_TOKEN_NOT_STORED: no token was entered; nothing was stored.');
+    return 1;
+  }
+  if (!VM_TOKEN_RE.test(token)) {
+    io.err('MOE_VM_TOKEN_INVALID: that is not a Claude long-lived token (sk-ant-oat…); nothing was stored.');
+    return 1;
+  }
+  accountFor(file, account.id); // removed while the prompt waited: MOE_ACCOUNT_UNKNOWN, nothing stored
+  try {
+    writeVmToken(file, account.id, token);
+  } catch (error) {
+    io.err(`MOE_VM_TOKEN_NOT_STORED: the token store could not be written (${(error as NodeJS.ErrnoException).code ?? 'not a real folder'}); nothing was stored.`);
+    return 1;
+  }
+  io.out(`Stored a VM token for ${describe(account)}. Moe uses it only to run this account's agent jobs in a Moe VM.`);
+  return 0;
+}
+
 function run(argv: string[], io: CliIo): number {
   const args = parseArgs(argv);
   const file = args.accountsFile ? path.resolve(args.accountsFile) : registryFilePath(io.env);
+  const project = args.protectedProject;
+  let pinned: ClaudeCommand | undefined;
+  const claude: Claude = () => (project === undefined ? claudeCommand(io.env) : (pinned ??= protectedClaudeCommand(io.env, project)));
   switch (args.command) {
     case 'list': {
       const registry = readRegistry(file);
@@ -178,9 +242,9 @@ function run(argv: string[], io: CliIo): number {
       return 0;
     }
     case 'login':
-      return login(io, file, accountFor(file, args.positional[0]));
+      return login(io, file, accountFor(file, args.positional[0]), claude);
     case 'logout':
-      return signOut(io, file, accountFor(file, args.positional[0]));
+      return signOut(io, file, accountFor(file, args.positional[0]), claude);
     case 'check': {
       const registry = readRegistry(file);
       const accounts = args.positional[0] ? [accountFor(file, args.positional[0])] : registry?.accounts ?? [];
@@ -190,7 +254,7 @@ function run(argv: string[], io: CliIo): number {
       }
       let allSubscription = true;
       for (const account of accounts) {
-        const state = check(io, file, account);
+        const state = check(io, file, account, claude);
         if (state === 'not-found') {
           io.err(notFoundMessage(io));
           return 1;
@@ -203,11 +267,17 @@ function run(argv: string[], io: CliIo): number {
     case 'remove': {
       const account = accountFor(file, args.positional[0]);
       if (args.signOut) {
-        const signedOut = signOut(io, file, account);
+        const signedOut = signOut(io, file, account, claude);
         if (signedOut !== 0) return signedOut;
       }
       removeAccount(file, account.id);
       io.out(`Removed ${describe(account)}. Its Claude folder stays at ${accountConfigDir(file, account.id)}; delete it yourself if you no longer need it.`);
+      return 0;
+    }
+    case 'vm-token': {
+      const account = accountFor(file, args.positional[0]);
+      if (!args.remove) return vmToken(io, file, account, claude);
+      io.out(removeVmToken(file, account.id) ? `Removed the VM token for ${describe(account)}.` : `${describe(account)} has no VM token.`);
       return 0;
     }
     case undefined:
@@ -229,7 +299,8 @@ export function runAccountsCli(argv: string[], io: CliIo = defaultIo): number {
       for (const line of USAGE) io.err(line);
       return 2;
     }
-    io.err(error instanceof RegistryError ? error.message : `accounts: ${(error as Error).message}`);
+    const coded = error instanceof RegistryError || error instanceof ProtectedClaudeRefused;
+    io.err(coded ? error.message : `accounts: ${(error as Error).message}`);
     return 1;
   }
 }

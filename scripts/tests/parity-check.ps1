@@ -22,26 +22,45 @@ $failures = New-Object System.Collections.Generic.List[string]
 
 # 1. Dynamic symmetry: every reason-code token found in either file must be
 #    present in the other (catches a code added to one wrapper only).
+#    The worktree-mode families follow the land-on-every-exit ones. MOE_WRAPPER_
+#    is not a family: moe-agent.sh carries sh-only internal MOE_WRAPPER_* names
+#    (its hot-reload plumbing), so section 2 requires its codes by name.
 $dynamicPatterns = @(
     'MOE_COMMIT_[A-Z_]+',
     'MOE_ATTR_[A-Z_]+',
     'MOE_CHECKPOINT_[A-Z_]+',
     'MOE_ATTRIBUTION_[A-Z_]+',
     'MOE_ACCOUNT_[A-Z_]+',
-    'MOE_RESCUE_REF'
+    'MOE_RESCUE_REF',
+    'MOE_WORKTREE_[A-Z_]+',
+    'MOE_LAND_[A-Z_]+',
+    'MOE_CONTROL_[A-Z_]+',
+    'MOE_BOARD_[A-Z_]+',
+    'MOE_PUSH_[A-Z_]+',
+    'MOE_MIGRATION_[A-Z_]+',
+    # The verified-local VM route's families (CQ-M07m/M07n), then its check-VM gate's (CQ-M07r/M07s).
+    'MOE_VERIFIED_LOCAL_[A-Z_]+',
+    'MOE_SEAT_[A-Z_]+',
+    'MOE_VM_[A-Z_]+',
+    'MOE_CHECK_DISPATCH_[A-Z_]+'
 )
-# NOTE: the sh wrapper's internal MOE_LAND_* names (env plumbing between bash
-# and its inline python attribution) are deliberately NOT compared — they are
-# internal, not operator-facing. The MOE_ATTR_*/MOE_COMMIT_* namespaces are the
-# contract and any spill into them is flagged.
-# moe-agent.sh bridges its attribution policy to an inline python snippet via
-# process-env names that share the MOE_ATTR_/MOE_COMMIT_ prefixes but are never
-# emitted to a transcript, chat, or commit. They are exempt from the symmetry
-# rule; everything the operator can grep for still is compared.
-$internalPlumbing = @('MOE_ATTR_UNDECLARED', 'MOE_ATTR_EXCLUDE', 'MOE_ATTR_POLICY_OVERRIDE', 'MOE_COMMIT_BOARD_STATE')
+# $shOnly names a printed code whose condition only moe-agent.sh can meet: the
+# verified-local WSL refusal (a ps1 seat never runs inside WSL). Keep it in BOTH
+# scripts (parity-check.sh's SH_ONLY), and never exempt a whole family.
+$shOnly = @('MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED')
+# NOTE: moe-agent.sh bridges its attribution policy to an inline python snippet
+# through process-env names it never prints. They are MOE_PY_* names, which is
+# not a compared family, so nothing needs an exemption today. $internalPlumbing
+# exempts a wrapper-internal env name that shares a compared prefix from the
+# symmetry rule: add such a name to BOTH scripts (parity-check.sh's
+# INTERNAL_PLUMBING) with a comment, and never exempt a whole family.
+# Everything the operator can grep for is compared.
+$internalPlumbing = @()
 foreach ($pat in $dynamicPatterns) {
-    $inPs1 = @([regex]::Matches($ps1, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { $internalPlumbing -notcontains $_ })
-    $inSh = @([regex]::Matches($sh, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { $internalPlumbing -notcontains $_ })
+    $inPs1 = @([regex]::Matches($ps1, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { ($internalPlumbing + $shOnly) -notcontains $_ })
+    $inSh = @([regex]::Matches($sh, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { ($internalPlumbing + $shOnly) -notcontains $_ })
+    # An empty family compares nothing (a renamed prefix would pass silently).
+    if ($inPs1.Count -eq 0 -and $inSh.Count -eq 0) { $failures.Add("no '$pat' tokens found in either wrapper") }
     foreach ($t in $inPs1) { if ($inSh -notcontains $t) { $failures.Add("token '$t' is in moe-agent.ps1 but not in moe-agent.sh") } }
     foreach ($t in $inSh) { if ($inPs1 -notcontains $t) { $failures.Add("token '$t' is in moe-agent.sh but not in moe-agent.ps1") } }
 }
@@ -55,7 +74,8 @@ $required = [ordered]@{
         'MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY',
         'MOE_ATTR_EXCLUDED', 'MOE_ATTR_CONTESTED', 'MOE_ATTR_PEER_DECLARED', 'MOE_ATTR_PREEXISTING', 'MOE_ATTR_MISSING', 'MOE_ATTR_CONCURRENT',
         'MOE_ATTR_ASSERTED_FOREIGN',
-        'MOE_CHECKPOINT_RECOVERED', 'MOE_RESCUE_REF', 'MOE_ATTRIBUTION_UNRESOLVED'
+        'MOE_CHECKPOINT_RECOVERED', 'MOE_RESCUE_REF', 'MOE_ATTRIBUTION_UNRESOLVED',
+        'MOE_WRAPPER_IN_WORKTREE'
     )
     # The gate-failure line's marker (the status-lookup line carries none in
     # either), spelled by code point: this file has no BOM for PS 5.1 to go by.
@@ -65,6 +85,7 @@ $required = [ordered]@{
     'commit subjects' = @('wip(', 'rescue(', 'Completed via Moe worker session.', 'not a completion.', 'Checkpoint via Moe', 'Rescue snapshot via Moe', 'refs/moe/rescue/', 'retry after qa_reject #')
     'settings keys' = @('autoCommit', 'checkpointCommits', 'checkpointPush', 'commitBoardState', 'commitHooks', 'attribution', 'undeclared', 'contested', 'exclude', 'qualityGate', 'qualityGateScope', 'consolidationBranch')
     'env names' = @('GIT_TERMINAL_PROMPT', 'MOE_DISABLE_CHECKPOINT', 'MOE_ATTRIBUTION', 'MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF', 'MOE_DISABLE_QUALITY_GATE', 'MOE_RESUME_MAX_ATTEMPTS',
+        'MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER',
         'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC',
         'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC',
         'CLAUDE_CODE_PROMPT_CACHE_TTL', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
@@ -90,11 +111,18 @@ $required = [ordered]@{
         '), so this seat did no work in those launches; earlier progress on the task ', '(completed steps, commits, handoff notes) is untouched.',
         'Everything the task had left before those launches: continue from its context, completed steps and earlier handoffs.', 'NO_ANSWER')
     'resume-budget prose' = @('resume budget re-armed')
+    # Verified-local VM route (CQ-M07m/M07n): the readiness read, the claim
+    # marker, the seat CLI and account helper verbs, the job outcome marker and
+    # the capacity wait.
+    'vm route' = @('get_execution_readiness', 'executionRoute', 'seat-start', 'seat-job', 'seat-stop', 'vm-credential', 'seatJob', 'MOE_AGENT_SEAT_PATH', 'retry-sec', 'no task is claimed; retrying in')
+    # The check-VM gate (CQ-M07r/M07s): its start, pass, refusal and ignored-override lines.
+    'check dispatch' = @('Post-flight: owed checks in check VMs: task', 'check VMs passed every owed check of candidate',
+        'was not frozen, recorded and passed by the check VMs', 'only the bundled local-runner/check-dispatch.mjs runs.')
     # Claude account rotation: the helper both wrappers call and the lease, wait
     # and relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are
     # compared above).
     'account rotation prose' = @('moe-account-lease.mjs', '[account] ', 'launching without rotation.', 'every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', 'relaunching on the next account; the held task stays held.', 'Relaunching now on the next account.')
-    'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
+    'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-skip-worktree -z --stdin', 'update-index --no-assume-unchanged -z --stdin')
     'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt', 'lease_account', 'report_account_usage', 'release_task')
     'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
     # The landing outcomes finalize_attempt carries: both wrappers map every exit

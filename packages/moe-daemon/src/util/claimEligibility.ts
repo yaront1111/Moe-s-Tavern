@@ -8,7 +8,7 @@ import {
   resolveTaskExecutionProfile
 } from '../delivery/executionProfile.js';
 import { ATTEMPT_FINALIZING } from './claimGuards.js';
-import { MoeError, MoeErrorCode } from './errors.js';
+import { MoeError, MoeErrorCode, invalidInput } from './errors.js';
 
 /**
  * One definition of "this worker is encumbered", shared by claim_next_task and
@@ -60,26 +60,73 @@ export function isClaimGatedByDependsOn(state: StateManager, task: Task): boolea
  * successor claim records a fresh identity (CQ-M01d).
  *
  * It grants nothing: null is not approval, readiness or trust. No environment
- * flag or caller label is read; the leaf's assertExecutionProfileReady stays
- * the only readiness authority.
+ * flag is read; the leaf's assertExecutionProfileReady stays the only readiness
+ * authority. The one caller field read is `executionRoute`, and it can only
+ * REFUSE: a verified-local WORKING or REVIEW row is refused to any claim that
+ * does not carry 'vm' (EXECUTION_ROUTE_REQUIRED), checked AFTER readiness, so the
+ * marker never satisfies or skips readiness or any other claim check. It is a
+ * guard against an accidental host run (an older wrapper, a hand-run CLI), not
+ * authentication: CQ-M07m/n's wrapper VM route is what sends it. PLANNING rows
+ * (architects stay on the host) and legacy/observe rows are never asked for it.
  *
- * Error handling: returns the refusal — EXECUTION_PROFILE_NOT_READY, or
- * INVALID_INPUT naming the malformed snapshot or setting (fail closed). Only a
- * non-MoeError propagates. Never writes.
+ * Error handling: returns the refusal — EXECUTION_PROFILE_NOT_READY,
+ * EXECUTION_ROUTE_REQUIRED, or INVALID_INPUT naming the malformed snapshot or
+ * setting (fail closed). Only a non-MoeError propagates. Never writes.
  */
-export function executionAdmissionRefusal(state: StateManager, task: Task, workerId?: string): MoeError | null {
+export function executionAdmissionRefusal(
+  state: StateManager,
+  task: Task,
+  workerId?: string,
+  executionRoute?: ExecutionRoute
+): MoeError | null {
   try {
-    assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
+    const profile = resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot);
+    assertExecutionProfileReady(profile);
+    let strict = profile === 'verified-local';
     if (workerId && task.assignedWorkerId === workerId) {
       const own = currentAttempt(state, task.id);
       const recorded = own?.workerId === workerId ? readExecutionPolicySnapshot(own.executionPolicySnapshot) : undefined;
-      if (recorded) assertExecutionProfileReady(recorded.profile);
+      if (recorded) {
+        assertExecutionProfileReady(recorded.profile);
+        strict = strict || recorded.profile === 'verified-local';
+      }
+    }
+    if (strict && (task.status === 'WORKING' || task.status === 'REVIEW') && executionRoute !== 'vm') {
+      return routeRequiredRefusal(task);
     }
     return null;
   } catch (err: unknown) {
     if (err instanceof MoeError) return err;
     throw err;
   }
+}
+
+/** The only value `executionRoute` may carry: the wrapper's Moe VM route (CQ-M07m/n). */
+export type ExecutionRoute = 'vm';
+
+/** Codename of the refusal a strict WORKING/REVIEW claim gets without the VM-route marker. */
+export const EXECUTION_ROUTE_REQUIRED = 'EXECUTION_ROUTE_REQUIRED';
+
+/**
+ * Parse the optional `executionRoute` claim/wait argument: absent stays
+ * undefined, exactly 'vm' passes, anything else (including null, '' and 'VM') is
+ * INVALID_INPUT. Call it at the top of a handler, before any read-modify-write,
+ * so a malformed value writes nothing.
+ */
+export function parseExecutionRoute(value: unknown): ExecutionRoute | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'vm') return 'vm';
+  throw invalidInput('executionRoute', "must be 'vm' when present");
+}
+
+function routeRequiredRefusal(task: Task): MoeError {
+  return new MoeError(
+    MoeErrorCode.NOT_ALLOWED,
+    `Task ${task.id} runs under verified-local: only a VM-route seat may claim it in ${task.status} ` +
+      '(claim_next_task executionRoute "vm"). A seat that runs its agent CLI on the host must not claim it.',
+    { taskId: task.id, status: task.status, executionProfile: 'verified-local', requiredRoute: 'vm' },
+    EXECUTION_ROUTE_REQUIRED
+  );
 }
 
 /**
@@ -135,13 +182,28 @@ function isNonBlankString(value: unknown): boolean {
  * O(tasks × attempts). Records arrive in generation order, so a task that somehow
  * holds two keeps the highest.
  */
-export function finalizingAttemptsByTask(state: StateManager): Map<string, ExecutionAttempt> {
+export function finalizingAttemptsByTask(state: StateManager): ReadonlyMap<string, ExecutionAttempt> {
+  // One build per state change, not one per waiter: emit() runs every wait_for_task
+  // matcher synchronously, and at fleet scale (190 waiters, 2.6k attempts) that was a
+  // 1 s event-loop stall per task event. A stale index is bounded to one event and
+  // only costs a spurious wake, which claim_next_task re-validates.
+  // Keyed on stateVersion: every production edit of state.attempts follows an awaited writeEntity
+  // (its bump) in the same microtask chain; a test that edits the map directly bumps stateVersion itself.
+  const memo = finalizingIndexMemo.get(state);
+  if (memo && memo.version === state.stateVersion && memo.attempts === state.attempts && memo.size === state.attempts.size) {
+    return memo.index;
+  }
   const index = new Map<string, ExecutionAttempt>();
   for (const attempt of listAttempts(state)) {
     if (isHoldingFinalizingAttempt(attempt)) index.set(attempt.taskId, attempt);
   }
+  finalizingIndexMemo.set(state, { version: state.stateVersion, attempts: state.attempts, size: state.attempts.size, index });
   return index;
 }
+
+const finalizingIndexMemo = new WeakMap<StateManager, {
+  version: number; attempts: Map<string, ExecutionAttempt>; size: number; index: Map<string, ExecutionAttempt>;
+}>();
 
 /**
  * The task's finalizing attempt when it belongs to a worker other than the
@@ -222,6 +284,25 @@ export function blockingHold(
     .getActiveTasksAssignedToWorker(workerId)
     .filter((t) => t.id !== exceptTaskId);
   return held[0] ?? null;
+}
+
+/**
+ * THIS worker's finalizing attempt, or null: the worker-scoped hold. While its
+ * own landing is open, claim_next_task refuses the worker every claim
+ * (ATTEMPT_FINALIZING) and wait_for_task wakes it for nothing, so both read
+ * this one predicate (the wake→claim→refuse spin otherwise). The answer is the
+ * one `listAttempts(state).find(...)` gave — lowest generation, earliest stored
+ * on a tie — but in one pass over the store, without copying or sorting it:
+ * wait_for_task runs this for every waiter on every task event. Read-only: the
+ * stored record is returned, so callers must not mutate it.
+ */
+export function ownFinalizingAttempt(state: StateManager, workerId: string): ExecutionAttempt | null {
+  let found: ExecutionAttempt | null = null;
+  for (const attempt of state.attempts.values()) {
+    if (attempt.workerId !== workerId || attempt.phase !== 'finalizing') continue;
+    if (!found || attempt.generation < found.generation) found = attempt;
+  }
+  return found;
 }
 
 /**

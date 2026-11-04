@@ -88,6 +88,7 @@ function fixture(t, cli, hooks, status = 'REVIEW', mode = '') {
     MOE_ACCOUNT_ROTATION: 'off', MOE_DISABLE_HEARTBEAT: '1', FAKE_TASK_STATUS: status, FAKE_SCOPE_PEERS_ACTIVE: '1',
     GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: f.original,
     GIT_CONFIG_KEY_1: 'guard.caller', GIT_CONFIG_VALUE_1: 'preserved', GIT_CONFIG_KEY_2: 'unused.key', GIT_CONFIG_VALUE_2: 'unused'  };
+  f.env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // `clean` drops MOE_*: WT-13's guard refuses scripts/moe-agent.* when this suite runs from a task worktree (task-86431c31)
   return f;
 }
 function launch(f, cli, interactive, concurrent = false) {
@@ -99,18 +100,32 @@ function launch(f, cli, interactive, concurrent = false) {
   else if (['codex', 'gemini', 'grok'].includes(cli)) args.push(win ? `-${cli[0].toUpperCase() + cli.slice(1)}Exec` : `--${cli}-exec`);
   if (win) {
     const driver = f.cli + '.driver.ps1', keys = ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_2', 'GIT_CONFIG_VALUE_2'];
-    write(driver, '\ufeff$global:MoeWrapperSupervised=$true; try { & ' + args.slice(4).map(a => a.startsWith('-') ? a : psquote(a)).join(' ') +
-      ' } finally { @(' + keys.map(k => '$env:' + k).join(',') + ') | ConvertTo-Json | Set-Content -LiteralPath ' + psquote(f.result + '.restored') + ' -Encoding UTF8 }');
+    const pin = f.mode === 'non-ascii-temp';
+    write(driver, '\ufeff' + (pin ? '$guardEncoding=[Console]::OutputEncoding; [Console]::OutputEncoding=[Text.Encoding]::GetEncoding(850); ' : '') +
+      '$global:MoeWrapperSupervised=$true; try { & ' + args.slice(4).map(a => a.startsWith('-') ? a : psquote(a)).join(' ') +
+      ' } finally { ' + (pin ? 'try { [Console]::OutputEncoding.CodePage | Set-Content -LiteralPath ' + psquote(f.result + '.exit-codepage') + ' -Encoding ASCII; ' : '') +
+      '@(' + keys.map(k => '$env:' + k).join(',') + ') | ConvertTo-Json | Set-Content -LiteralPath ' + psquote(f.result + '.restored') + ' -Encoding UTF8' +
+      (pin ? ' } finally { [Console]::OutputEncoding=$guardEncoding }' : '') + ' }');
     args.splice(4, args.length, driver);
   }
   if (concurrent) return new Promise(resolve => execFile(shell, args, { cwd: f.repo, env: f.env, timeout: 90000, maxBuffer: 1048576 }, e => resolve(e?.code || 0)));
   return run(shell, args, f.repo, f.env, f.mode === 'non-git' ? 'cli stdin\n' : undefined);
 }
 if (process.argv[2] === 'cli') agent();
-else for (const [cli, interactive, hooks, status, opts = {}] of ['custom', 'claude', 'codex', 'gemini', 'grok'].flatMap(cli => [[cli, true, false, 'WORKING'], [cli, false, true, 'REVIEW']]).concat([['custom', false, false, 'REVIEW']], win ? [['custom', false, false, 'REVIEW', { engine: 'pwsh.exe' }]] : [])) {
-  test(`${opts.engine ? 'PS7' : win ? 'PS5.1' : 'bash'} ${cli} ${interactive ? 'interactive checkpoint' : `headless ${hooks ? 'hookful' : 'plumbing'} completion`} refuses failed-cd commit and push before wrapper landing`, { skip: opts.engine && !pwsh && 'pwsh.exe not found' }, t => {
-    const f = Object.assign(fixture(t, cli, hooks, status), opts), before = snapshot(f), config = fs.readFileSync(path.join(f.gitdir, 'config'));
+else for (const [cli, interactive, hooks, status, opts = {}] of ['custom', 'claude', 'codex', 'gemini', 'grok'].flatMap(cli => [[cli, true, false, 'WORKING'], [cli, false, true, 'REVIEW']]).concat([['custom', false, false, 'REVIEW']], win ? [['custom', false, false, 'REVIEW', { engine: 'pwsh.exe' }]] : [], ['gemini', 'grok'].map(cli => [cli, false, false, 'REVIEW', { mode: 'non-ascii-temp' }]), [['custom', false, false, 'REVIEW', { mode: 'spaced-temp' }]])) {
+  test(`${opts.engine ? 'PS7' : win ? 'PS5.1' : 'bash'} ${cli} ${interactive ? 'interactive checkpoint' : `headless ${hooks ? 'hookful' : 'plumbing'} completion`}${{ 'non-ascii-temp': ' non-ASCII temp', 'spaced-temp': ' spaced temp' }[opts.mode] ?? ''} refuses failed-cd commit and push before wrapper landing`, { skip: opts.engine && !pwsh && 'pwsh.exe not found' }, t => {
+    const f = Object.assign(fixture(t, cli, hooks, status, opts.mode), opts), before = snapshot(f), config = fs.readFileSync(path.join(f.gitdir, 'config'));
+    const tempName = { 'non-ascii-temp': 'témp', 'spaced-temp': 'My Temp' }[f.mode];
+    if (tempName) {
+      f.temp = path.join(path.dirname(f.result), tempName); fs.mkdirSync(f.temp);
+      if (win) {
+        for (const key of Object.keys(f.env)) if (/^(TMP|TEMP)$/i.test(key)) delete f.env[key];
+        Object.assign(f.env, { TMP: f.temp, TEMP: f.temp });
+        if (f.mode === 'non-ascii-temp') write(f.cli, `[Console]::OutputEncoding.CodePage | Set-Content -LiteralPath ${psquote(f.result + '.codepage')} -Encoding ASCII\n` + fs.readFileSync(f.cli, 'utf8'));
+      } else f.env.TMPDIR = f.temp;
+    }
     const r = launch(f, cli, interactive);
+    if (f.temp && !fs.existsSync(f.result)) t.diagnostic(r.stdout + r.stderr);
     assert.ok(fs.existsSync(f.result), `CLI did not run: exit=${r.status}; codes=${((r.stdout ?? '') + (r.stderr ?? '')).match(/MOE_[A-Z_]+/g)}`);
     const observed = JSON.parse(fs.readFileSync(f.result, 'utf8'));
     assert.deepEqual(observed.results, Array(4).fill({ status: 1, refused: true, wrapper: true }));
@@ -121,6 +136,12 @@ else for (const [cli, interactive, hooks, status, opts = {}] of ['custom', 'clau
     assert.equal(r.status, 0); assert.deepEqual(observed.scratch, [0, 0]); assert.equal(observed.bypass, 23);
     assert.equal(observed.forwarded, 0); assert.equal(fs.readFileSync(f.hooklog, 'utf8'), 'resource\na\nb\n1\npayload\n');
     assert.equal(fs.existsSync(observed.hooks), false, 'only the seat temp is cleaned');
+    if (f.temp) {
+      const normalize = p => win ? path.resolve(p).toLowerCase() : path.resolve(p);
+      assert.ok(normalize(observed.hooks).startsWith(normalize(f.temp) + path.sep), 'hooks belong under the seat temp');
+      assert.deepEqual(fs.readdirSync(f.temp, { recursive: true, withFileTypes: true }).filter(e => e.name.startsWith('moe-git-guard-')), []);
+      if (win && f.mode === 'non-ascii-temp') for (const suffix of ['.codepage', '.exit-codepage']) assert.equal(fs.readFileSync(f.result + suffix, 'ascii').trim(), '850');
+    }
     assert.deepEqual(fs.readFileSync(path.join(f.gitdir, 'config')), config);
     assert.match(git(f.repo, ['log', '-1', '--format=%s']), status === 'REVIEW' ? /^fix\(|^feat\(/ : /^wip\(/);
     assert.equal(git(f.repo, ['show', 'HEAD:owned.txt']), 'task edit');

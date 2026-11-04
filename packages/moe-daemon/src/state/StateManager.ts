@@ -65,7 +65,7 @@ import type {
 } from '../types/schema.js';
 import { CURRENT_SCHEMA_VERSION, ACTIVITY_EVENT_TYPES } from '../types/schema.js';
 import { invalidInput, notAllowed } from '../util/errors.js';
-import { findRailIndex } from './railChange.js';
+import { applyGlobalRailChange, findRailIndex } from './railChange.js';
 import { generateId } from '../util/ids.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { logger, createContextLogger } from '../util/logger.js';
@@ -79,7 +79,6 @@ import {
   sanitizeNumber,
   sanitizePatternPreservingPlaceholders,
   sanitizeBoolean,
-  sanitizeEnum,
   sanitizeUrl,
   validateEntityId
 } from '../util/sanitize.js';
@@ -159,6 +158,7 @@ import {
   getPins,
   getUnreadSummary,
   incrementUnread,
+  messageExistsAnywhereInChannel,
   messageExistsInChannel,
   pinMessage,
   postSystemMessage,
@@ -169,6 +169,7 @@ import {
   sendMessage,
   togglePinDone,
   unpinMessage,
+  type SystemPostOptions,
 } from './chatStore.js';
 import {
   acquireResource,
@@ -218,7 +219,6 @@ import {
   validateIntegerValue,
   validateMemberIds,
   validatePatternSetting,
-  validateSettingsUpdate,
   validateStringArrayValue,
   validateStringValue,
   validateTeamMaxSize,
@@ -228,6 +228,7 @@ import {
 } from './validators.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
 import { accountRotationView } from './accountStore.js';
+import { updateProjectSettings } from './profileRollout.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -379,6 +380,10 @@ export class StateManager {
   readonly moePath: string;
 
   project: Project | null = null;
+  /** Bumped after every persisted write, event and load (the per-event memo key); seeded per process so a restart never repeats a value. */
+  stateVersion = Date.now();
+  /** Bumped only when the plugins' board (tasks, epics, their delivery evidence) changes: the GET_STATE etag. */
+  boardVersion = Date.now();
   epics = new Map<string, Epic>();
   tasks = new Map<string, Task>();
   workers = new Map<string, Worker>();
@@ -663,16 +668,16 @@ export class StateManager {
   // generated from the extracted functions, never hand-written.
   // ---------------------------------------------------------------------------
 
-  async createTask(input: Partial<Task>): Promise<Task> {
-    return createTask(this, input);
+  async createTask(input: Partial<Task>, actorWorkerId?: string): Promise<Task> {
+    return createTask(this, input, actorWorkerId);
   }
 
   async updateTask(taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {
     return updateTask(this, taskId, updates, event, actorWorkerId);
   }
 
-  async deleteTask(taskId: string): Promise<Task> {
-    return deleteTask(this, taskId);
+  async deleteTask(taskId: string, actorWorkerId?: string): Promise<Task> {
+    return deleteTask(this, taskId, actorWorkerId);
   }
 
   /**
@@ -856,6 +861,7 @@ export class StateManager {
   content: string;
   replyTo?: string;
   decisionId?: string;
+  parseMentions?: boolean;
 }): Promise<{ message: ChatMessage; routingTargets: string[] }> {
     return sendMessage(this, opts);
   }
@@ -869,16 +875,20 @@ export class StateManager {
     return messageExistsInChannel(this, channelId, messageId);
   }
 
-  async postSystemMessage(entityId: string, content: string): Promise<void> {
-    return postSystemMessage(this, entityId, content);
+  messageExistsAnywhereInChannel(channelId: string, messageId: string): boolean {
+    return messageExistsAnywhereInChannel(this, channelId, messageId);
   }
 
-  async postToGeneral(content: string): Promise<void> {
-    return postToGeneral(this, content);
+  async postSystemMessage(entityId: string, content: string, opts?: SystemPostOptions): Promise<void> {
+    return opts ? postSystemMessage(this, entityId, content, opts) : postSystemMessage(this, entityId, content);
   }
 
-  async postToRoleChannel(roleName: string, content: string): Promise<void> {
-    return postToRoleChannel(this, roleName, content);
+  async postToGeneral(content: string, opts?: SystemPostOptions): Promise<void> {
+    return opts ? postToGeneral(this, content, opts) : postToGeneral(this, content);
+  }
+
+  async postToRoleChannel(roleName: string, content: string, opts?: SystemPostOptions): Promise<void> {
+    return opts ? postToRoleChannel(this, roleName, content, opts) : postToRoleChannel(this, roleName, content);
   }
 
   async deleteChannel(channelId: string): Promise<void> {
@@ -923,8 +933,8 @@ export class StateManager {
     return pinMessage(this, channelId, messageId, pinnedBy);
   }
 
-  async unpinMessage(channelId: string, messageId: string): Promise<void> {
-    return unpinMessage(this, channelId, messageId);
+  async unpinMessage(channelId: string, messageId: string, actorWorkerId?: string): Promise<void> {
+    return unpinMessage(this, channelId, messageId, actorWorkerId);
   }
 
   async togglePinDone(channelId: string, messageId: string): Promise<PinEntry> {
@@ -981,6 +991,8 @@ export class StateManager {
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emit(event: StateChangeEvent) {
+    this.stateVersion++;
+    if (event.type.startsWith('TASK_') || event.type.startsWith('EPIC_')) this.boardVersion++;
     if (this.emitter) {
       try {
         this.emitter(event);
@@ -1062,11 +1074,14 @@ export class StateManager {
 
       this.epics = loadEntities<Epic>(path.join(this.moePath, 'epics'));
       this.tasks = loadEntities<Task>(path.join(this.moePath, 'tasks'));
-      // Backfill priority and comments for existing tasks
+      // Backfill priority, comments and reopenCount for existing tasks
       for (const [id, task] of this.tasks) {
         const updates: Partial<Task> = {};
         if (!task.priority) updates.priority = 'MEDIUM' as TaskPriority;
         if (!Array.isArray(task.comments)) updates.comments = [];
+        // A file written before reopenCount existed has no key or null: default it as
+        // createTask does (taskStore.ts:338) so every reopen path's `reopenCount + 1` stays a number.
+        if (!Number.isInteger(task.reopenCount) || task.reopenCount < 0) updates.reopenCount = 0;
         if (task.contextFetchedBy !== undefined && !Array.isArray(task.contextFetchedBy)) {
           updates.contextFetchedBy = [];
         }
@@ -1127,8 +1142,10 @@ export class StateManager {
       const activityLogPath = path.join(this.moePath, 'activity.log');
       this.logRotator = new LogRotator(activityLogPath);
 
-      // Re-initialize MentionRouter with project-configured maxHops
-      this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4);
+      // Keep the one router: a new one here cleared every pause and hop count.
+      this.mentionRouter.setMaxHops(this.project?.settings?.chatMaxAgentHops);
+      this.stateVersion++;
+      this.boardVersion++;
 
     });
 
@@ -1240,7 +1257,7 @@ export class StateManager {
 
   // ---- Team methods ----
 
-  async createEpic(input: Partial<Epic>): Promise<Epic> {
+  async createEpic(input: Partial<Epic>, actorWorkerId?: string): Promise<Epic> {
     if (!this.project) {
       throw new Error('Project not loaded');
     }
@@ -1249,10 +1266,15 @@ export class StateManager {
     const title = sanitizeString(input.title, 'epicTitle', 500, 'Untitled epic');
     const description = sanitizeString(input.description, 'epicDescription', 10000, '');
     const architectureNotes = sanitizeString(input.architectureNotes, 'architectureNotes', 50000, '');
-    // Same rule as updateEpic: refuse (INVALID_INPUT), never truncate or drop.
-    const epicRails = validateEpicUpdates({ epicRails: input.epicRails }).epicRails ?? [];
-    const validStatuses = ['PLANNED', 'ACTIVE', 'COMPLETED'] as const;
-    const status = sanitizeEnum(input.status, validStatuses, 'PLANNED');
+    // Same rule as updateEpic: refuse (INVALID_INPUT), never truncate, drop or coerce.
+    // null counts as omitted, as it did before status and order were validated here.
+    const validated = validateEpicUpdates({
+      epicRails: input.epicRails,
+      status: input.status ?? undefined,
+      order: input.order ?? undefined,
+    });
+    const epicRails = validated.epicRails ?? [];
+    const status = validated.status ?? 'PLANNED';
 
     const now = new Date().toISOString();
     const epic: Epic = {
@@ -1263,20 +1285,22 @@ export class StateManager {
       architectureNotes,
       epicRails,
       status,
-      order: input.order ?? this.nextEpicOrder(),
+      order: validated.order ?? this.nextEpicOrder(),
       createdAt: now,
       updatedAt: now
     };
 
     await this.writeEntity('epics', epic.id, epic);
     this.epics.set(epic.id, epic);
-    this.appendActivity('EPIC_CREATED', epicCreatedActivityPayload(epic), undefined, undefined, undefined, epic);
+    // The actor is a parameter, never read from `input`: the board passes its raw /ws
+    // payload as `input`, and a payload must not name its own actor.
+    this.appendActivity('EPIC_CREATED', epicCreatedActivityPayload(epic), undefined, undefined, undefined, epic, actorWorkerId);
     this.emit({ type: 'EPIC_CREATED', payload: epic });
 
     return epic;
   }
 
-  async updateEpic(epicId: string, updates: Partial<Epic>): Promise<Epic> {
+  async updateEpic(epicId: string, updates: Partial<Epic>, actorWorkerId?: string): Promise<Epic> {
     const epic = this.epics.get(epicId);
     if (!epic) {
       throw new Error(`Epic not found: ${epicId}`);
@@ -1291,34 +1315,17 @@ export class StateManager {
 
     await this.writeEntity('epics', epicId, updated);
     this.epics.set(epicId, updated);
-    this.appendActivity('EPIC_UPDATED', epicUpdatedActivityPayload(updated, sanitizedUpdates), undefined, undefined, undefined, updated);
+    this.appendActivity('EPIC_UPDATED', epicUpdatedActivityPayload(updated, sanitizedUpdates), undefined, undefined, undefined, updated, actorWorkerId);
     this.emit({ type: 'EPIC_UPDATED', payload: updated });
     return updated;
   }
 
+  /** Validate, write, record the executionProfile transition (CQ-M05), emit: see state/profileRollout.ts. */
   async updateSettings(settings: Partial<ProjectSettings>): Promise<Project> {
-    if (!this.project) {
-      throw new Error('Project not loaded');
-    }
-
-    const updatedSettings = validateSettingsUpdate(this.project, settings);
-
-    const updatedProject: Project = {
-      ...this.project,
-      settings: updatedSettings,
-      updatedAt: new Date().toISOString()
-    };
-
-    await atomicWriteJsonAsync(
-      path.join(this.moePath, 'project.json'),
-      updatedProject
-    );
-    this.project = updatedProject;
-    this.emit({ type: 'SETTINGS_UPDATED', payload: updatedProject });
-    return updatedProject;
+    return updateProjectSettings(this, settings);
   }
 
-  async deleteEpic(epicId: string): Promise<Epic> {
+  async deleteEpic(epicId: string, actorWorkerId?: string): Promise<Epic> {
     const epic = this.epics.get(epicId);
     if (!epic) {
       throw new Error(`Epic not found: ${epicId}`);
@@ -1327,7 +1334,7 @@ export class StateManager {
     // Delete all tasks in this epic
     const tasksToDelete = Array.from(this.tasks.values()).filter((t) => t.epicId === epicId);
     for (const task of tasksToDelete) {
-      await this.deleteTask(task.id);
+      await this.deleteTask(task.id, actorWorkerId);
     }
 
     // Delete epic file
@@ -1346,7 +1353,8 @@ export class StateManager {
     }
     this.epics.delete(epicId);
 
-    this.appendActivity('EPIC_DELETED' as ActivityEventType, { title: epic.title });
+    // No epic entity: EPIC_DELETED keeps its shape (no top-level epicId), only the actor is new.
+    this.appendActivity('EPIC_DELETED' as ActivityEventType, { title: epic.title }, undefined, undefined, undefined, undefined, actorWorkerId);
     this.emit({ type: 'EPIC_DELETED', payload: epic });
     return epic;
   }
@@ -1403,27 +1411,14 @@ export class StateManager {
 
     if (targetScope === 'GLOBAL') {
       if (!this.project) throw new Error('Project not loaded');
-      const rails = [...(this.project.globalRails.customRules || [])];
-
-      if (proposalType === 'ADD_RAIL') {
-        rails.push(proposedValue);
-      } else if (proposalType === 'MODIFY_RAIL' && currentValue) {
-        const idx = findRailIndex(rails, currentValue, proposal.id);
-        if (idx !== -1) rails[idx] = proposedValue;
-      } else if (proposalType === 'REMOVE_RAIL' && currentValue) {
-        const idx = findRailIndex(rails, currentValue, proposal.id);
-        if (idx !== -1) rails.splice(idx, 1);
-      }
-
-      this.project = {
+      const project = {
         ...this.project,
-        globalRails: { ...this.project.globalRails, customRules: rails },
+        globalRails: applyGlobalRailChange(this.project.globalRails, proposal),
         updatedAt: new Date().toISOString()
       };
-      await atomicWriteJsonAsync(
-        path.join(this.moePath, 'project.json'),
-        this.project
-      );
+      // Written before it is adopted: a failed write leaves memory and the proposal unchanged.
+      await atomicWriteJsonAsync(path.join(this.moePath, 'project.json'), project);
+      this.project = project;
     } else if (targetScope === 'EPIC') {
       const task = this.tasks.get(taskId);
       if (!task) throw new Error(`Task not found: ${taskId}`);
@@ -1490,8 +1485,12 @@ export class StateManager {
   }
 
   nextEpicOrder(): number {
-    const epics = Array.from(this.epics.values());
-    if (epics.length === 0) return 1;
-    return Math.max(...epics.map((e) => e.order)) + 1;
+    // Skip non-finite orders: a legacy or hand-edited non-numeric order made every
+    // later default NaN, which JSON writes as null.
+    const orders = Array.from(this.epics.values())
+      .map((e) => e.order)
+      .filter((o) => typeof o === 'number' && Number.isFinite(o));
+    if (orders.length === 0) return 1;
+    return Math.max(...orders) + 1;
   }
 }

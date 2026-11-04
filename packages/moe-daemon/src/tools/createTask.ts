@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskStatus, TaskPriority } from '../types/schema.js';
 import { missingRequired, invalidInput } from '../util/errors.js';
 import { MAX_TASK_DEPENDENCY_IDS } from '../state/taskStore.js';
+import { validateStringArrayValue, MAX_EPIC_RAIL_CHARS } from '../state/validators.js';
 import { resolveMaxTasksPerEpic } from '../util/planSize.js';
 import { findDependencyPath, formatDependencyCycle } from '../state/dependencyUnblock.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
@@ -54,12 +55,12 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
         epicId?: string;
         title?: string;
         description?: string;
-        definitionOfDone?: string[];
-        taskRails?: string[];
+        definitionOfDone?: unknown;
+        taskRails?: unknown;
         status?: TaskStatus;
         priority?: TaskPriority;
         parentTaskId?: string;
-        order?: number;
+        order?: unknown;
         createdBy?: Task['createdBy'];
         workerId?: string;
         dependsOn?: unknown;
@@ -81,6 +82,35 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
       if (params.priority && !validPriorities.includes(params.priority)) {
         throw invalidInput('priority', `must be one of: ${validPriorities.join(', ')}`);
       }
+
+      // A stored string or null order made every later default-order row in the
+      // epic NaN (null on disk). Fractional orders (231.164) are how rows are placed
+      // between neighbours, so this is NOT create_epic's integer rule.
+      let order: number | undefined;
+      if (params.order !== undefined) {
+        if (typeof params.order !== 'number' || !Number.isFinite(params.order)) {
+          throw invalidInput('order', 'must be a finite number');
+        }
+        order = params.order;
+      }
+
+      // A non-array DoD used to be sanitized to the placeholder and WRITTEN, after
+      // which the dodCount line threw an uncoded TypeError: the caller saw an
+      // error for a row that existed and its retry filed a duplicate. Refuse
+      // shape errors before the write; null still means absent.
+      let definitionOfDone: string[] | undefined;
+      if (params.definitionOfDone != null) {
+        const dod = params.definitionOfDone;
+        if (!Array.isArray(dod)) throw invalidInput('definitionOfDone', 'must be an array of strings');
+        dod.forEach((entry, i) => {
+          if (typeof entry !== 'string') throw invalidInput(`definitionOfDone[${i}]`, 'must be a string');
+        });
+        definitionOfDone = dod as string[];
+      }
+      // Same bounds create_epic applies to epicRails (an over-long rail is refused, not cut).
+      const taskRails = params.taskRails == null
+        ? undefined
+        : validateStringArrayValue(params.taskRails, 'taskRails', 100, MAX_EPIC_RAIL_CHARS, false);
 
       const warnings: string[] = [];
 
@@ -158,15 +188,15 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
         epicId: params.epicId,
         title: params.title,
         description: params.description,
-        definitionOfDone: params.definitionOfDone,
-        taskRails: params.taskRails,
+        definitionOfDone,
+        taskRails,
         status: params.status,
         priority: params.priority,
         parentTaskId: params.parentTaskId,
-        order: params.order,
+        order,
         createdBy: resolvedCreatedBy,
         ...(dependsOn ? { dependsOn } : {}),
-      });
+      }, params.workerId);
 
       // Cycle check (dependsOn ∪ blockedOnTaskIds), the same invariant
       // set_task_dependencies rejects on and report_blocked drops on. The id
@@ -194,7 +224,7 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
       // Advisory sizing feedback at creation time — the hard gate lives in
       // submit_plan (step/file counts are only machine-visible there), but
       // surfacing shape problems now is cheaper than bouncing a plan later.
-      const dodCount = params.definitionOfDone?.filter((d) => typeof d === 'string' && d.trim().length > 0).length ?? 0;
+      const dodCount = definitionOfDone?.filter((d) => typeof d === 'string' && d.trim().length > 0).length ?? 0;
       if (dodCount === 0) {
         warnings.push(
           'definitionOfDone is empty (a placeholder was substituted). Give every task 3-7 mechanically checkable items — a command to run or a test to pass — so the worker has a stopping condition and QA has a rubric.'

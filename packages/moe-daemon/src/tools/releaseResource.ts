@@ -1,7 +1,8 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { missingRequired, invalidInput, invalidState } from '../util/errors.js';
+import { missingRequired, invalidInput, invalidState, notAllowed } from '../util/errors.js';
 import { RESOURCE_ID_RE } from '../state/resourceStore.js';
+import { workerHasRole } from '../util/workerRole.js';
 import type { ResourceLease } from '../types/schema.js';
 
 /** One-line identity of a lease, for precondition-failure messages. */
@@ -12,18 +13,18 @@ function describeLease(lease: ResourceLease): string {
 export function releaseResourceTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.release_resource',
-    description: 'Release your lease on a shared resource (and/or leave its queue). The freed capacity is granted to the next waiter immediately, auto-unblocking its task. Idempotent: releasing a resource you do not hold is a no-op. force=true (governor/human) releases another holder\'s lease — pass ifHolderWorkerId to make that force conditional on the lease still belonging to the holder you measured.',
+    description: 'Release your lease on a shared resource (and/or leave its queue). The freed capacity is granted to the next waiter immediately, auto-unblocking its task. Idempotent: releasing a resource you do not hold is a no-op. force=true (governor or human only) releases another holder\'s lease — pass ifHolderWorkerId to make that force conditional on the lease still belonging to the holder you measured.',
     inputSchema: {
       type: 'object',
       properties: {
         resourceId: { type: 'string', description: 'The shared resource whose lease to release' },
-        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); required unless force:true from a human, who omits it' },
         taskId: { type: 'string', description: 'Limit the release to this task\'s lease/queue entry. Default: everything held by workerId. NOTE: taskId scopes a TASK, not a lease generation — the same task\'s lease may since have passed to a different worker. Use ifHolderWorkerId to pin the generation.' },
-        force: { type: 'boolean', description: 'Release regardless of ownership (governor/human intervention). With taskId: that lease; without: ALL leases and queue entries.' },
+        force: { type: 'boolean', description: 'Release regardless of ownership (governor/human intervention). With taskId: that lease; without: ALL leases and queue entries. A caller whose workerId resolves to no governor role (team role, else the id prefix) is refused NOT_ALLOWED.' },
         ifHolderWorkerId: { type: 'string', description: 'Precondition: proceed only if EVERY lease this call would release is still held by this worker — including, under force with no taskId, peer leases the call would also strip. Otherwise nothing is released and the error names the current holder. Guards leases, not queue entries. Use it whenever time passed between reading list_resources and calling this — a human-in-the-loop pause is the common case.' },
         ifAcquiredAt: { type: 'string', description: 'Precondition: proceed only if the targeted lease was acquired at exactly this ISO timestamp (as reported by list_resources). Pins the exact lease generation.' }
       },
-      required: ['resourceId', 'workerId'],
+      required: ['resourceId'],
       additionalProperties: false
     },
     handler: async (args, state) => {
@@ -32,11 +33,23 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
         ifHolderWorkerId?: string; ifAcquiredAt?: string;
       };
       if (!params.resourceId) throw missingRequired('resourceId');
-      if (!params.workerId) throw missingRequired('workerId');
+      // The store forces on any truthy value (args are not schema-validated),
+      // so the gate must read force the same way or `force: 1` slips past it.
+      const force = Boolean(params.force);
+      const workerId = typeof params.workerId === 'string' ? params.workerId : '';
+      if (!workerId.trim() && !force) throw missingRequired('workerId');
       if (!RESOURCE_ID_RE.test(params.resourceId)) {
         throw invalidInput('resourceId', 'use 1-64 chars of letters, digits, ".", "_", "-"');
       }
-      await state.touchWorker(params.workerId);
+      // Only an omitted workerId is the human path. Blank/non-string values
+      // skip proxy injection, but must be refused before any read or write.
+      if (force && params.workerId !== undefined && !workerHasRole(state, workerId, 'governor')) {
+        throw notAllowed(
+          'release_resource',
+          `force is the governor/human override (worker ${workerId || '(none)'} is not a governor)`
+        );
+      }
+      if (workerId.trim()) await state.touchWorker(workerId);
 
       // ATOMICITY. Nothing can move the lease between this check and the
       // release below, because McpAdapter dispatches every tool without
@@ -62,7 +75,7 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
         const callerOwns = (l: ResourceLease): boolean =>
           l.workerId === params.workerId ||
           state.getTask(l.taskId)?.assignedWorkerId === params.workerId;
-        const targeted = params.force
+        const targeted = force
           ? (params.taskId ? holders.filter((l) => l.taskId === params.taskId) : holders)
           : (params.taskId
               ? holders.filter((l) => l.taskId === params.taskId && callerOwns(l))
@@ -75,7 +88,7 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
           throw invalidState(
             `resource ${params.resourceId}`,
             held,
-            `a lease for ${params.taskId ?? params.workerId} matching the stated precondition`
+            `a lease for ${params.taskId ?? params.workerId ?? 'every holder'} matching the stated precondition`
           );
         }
 
@@ -97,11 +110,13 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
         }
       }
 
+      // workerId is absent only on a human's force call, where the store's
+      // matchesCaller matches by taskId or every holder and never reads it.
       const result = await state.releaseResource({
         resourceId: params.resourceId,
-        workerId: params.workerId,
+        workerId,
         taskId: params.taskId,
-        force: params.force,
+        force,
       });
 
       const releasedIds = result.released.map((l) => l.taskId);
@@ -120,7 +135,7 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
         grantedTo: grantedIds,
         message:
           releasedIds.length === 0 && result.removedFromQueue.length === 0
-            ? `Nothing to release on ${params.resourceId} for ${params.taskId ?? params.workerId}.`
+            ? `Nothing to release on ${params.resourceId} for ${params.taskId ?? params.workerId ?? 'every holder'}.`
             : `Released ${params.resourceId}${releasedHolders.length > 0 ? ` (was held by ${releasedHolders.map((l) => l.workerId).join(', ')})` : ''}${grantedIds.length > 0 ? `; granted to ${grantedIds.join(', ')}` : ''}.`,
       };
     }

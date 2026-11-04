@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "id": "D01",
+      "note": "a task with no delivery renders no rows",
+      "delivery": null,
+      "expect": []
+    },
+    {
+      "id": "D02",
+      "note": "attempt phase alone; requiredCheckSatisfied absent gives no policy row",
+      "delivery": { "attemptPhase": "running" },
+      "expect": [
+        { "labelKey": "moe.delivery.attemptPhase", "value": "running", "fullValue": "running", "outcome": null }
+      ]
+    },
+    {
+      "id": "D03",
+      "note": "treeSha is preferred over a disagreeing shortSha; SHAs cut to 8 chars with the full value kept; id never renders",
+      "delivery": {
+        "currentCandidate": {
+          "id": "cand-d03",
+          "treeSha": "0123456789abcdef0123456789abcdef01234567",
+          "shortSha": "ffffffff",
+          "baseRevision": "fedcba9876543210fedcba9876543210fedcba98"
+        }
+      },
+      "expect": [
+        { "labelKey": "moe.delivery.candidateSha", "value": "01234567", "fullValue": "0123456789abcdef0123456789abcdef01234567", "outcome": null },
+        { "labelKey": "moe.delivery.candidateBase", "value": "fedcba98", "fullValue": "fedcba9876543210fedcba9876543210fedcba98", "outcome": null }
+      ]
+    },
+    {
+      "id": "D04",
+      "note": "an empty treeSha falls back to shortSha",
+      "delivery": { "currentCandidate": { "id": "cand-d04", "treeSha": "", "shortSha": "1a2b3c4" } },
+      "expect": [
+        { "labelKey": "moe.delivery.candidateSha", "value": "1a2b3c4", "fullValue": "1a2b3c4", "outcome": null }
+      ]
+    },
+    {
+      "id": "D05",
+      "note": "store-valid 12-char and 7-char SHAs; 8 chars or fewer keeps value equal to fullValue",
+      "delivery": {
+        "currentCandidate": { "id": "cand-d05", "treeSha": "0123456789ab", "shortSha": "01234567", "baseRevision": "fedcba9" }
+      },
+      "expect": [
+        { "labelKey": "moe.delivery.candidateSha", "value": "01234567", "fullValue": "0123456789ab", "outcome": null },
+        { "labelKey": "moe.delivery.candidateBase", "value": "fedcba9", "fullValue": "fedcba9", "outcome": null }
+      ]
+    },
+    {
+      "id": "D06",
+      "note": "every empty string is skipped",
+      "delivery": {
+        "currentCandidate": { "id": "", "treeSha": "", "shortSha": "", "baseRevision": "" },
+        "latestCheckRun": { "command": "", "source": "", "outcome": "" },
+        "deliveryReceipt": { "target": "", "landedRevision": "" },
+        "attemptPhase": ""
+      },
+      "expect": []
+    },
+    {
+      "id": "D07",
+      "note": "exit 0 with no outcome passes; reported text is never trimmed or stripped; requiredCheckSatisfied absent",
+      "delivery": { "latestCheckRun": { "command": " <b>npm test</b> ", "exitCode": 0, "source": "runner-observed" } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": " <b>npm test</b> ", "fullValue": " <b>npm test</b> ", "outcome": null },
+        { "labelKey": "moe.delivery.checkPassed", "value": "0", "fullValue": "0", "outcome": "PASS" },
+        { "labelKey": "moe.delivery.checkSource", "value": "runner-observed", "fullValue": "runner-observed", "outcome": null }
+      ]
+    },
+    {
+      "id": "D08",
+      "note": "exit 0 with outcome passed passes",
+      "delivery": { "latestCheckRun": { "command": "npm test", "exitCode": 0, "source": "agent-reported", "outcome": "passed" } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": "npm test", "fullValue": "npm test", "outcome": null },
+        { "labelKey": "moe.delivery.checkPassed", "value": "0", "fullValue": "0", "outcome": "PASS" },
+        { "labelKey": "moe.delivery.checkOutcome", "value": "passed", "fullValue": "passed", "outcome": null },
+        { "labelKey": "moe.delivery.checkSource", "value": "agent-reported", "fullValue": "agent-reported", "outcome": null }
+      ]
+    },
+    {
+      "id": "D09",
+      "note": "exit 0 with a non-passed outcome (timeout) is not a pass",
+      "delivery": { "latestCheckRun": { "command": "npm test", "exitCode": 0, "source": "runner-observed", "outcome": "timeout" } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": "npm test", "fullValue": "npm test", "outcome": null },
+        { "labelKey": "moe.delivery.checkNotPassed", "value": "0", "fullValue": "0", "outcome": "FAIL" },
+        { "labelKey": "moe.delivery.checkOutcome", "value": "timeout", "fullValue": "timeout", "outcome": null },
+        { "labelKey": "moe.delivery.checkSource", "value": "runner-observed", "fullValue": "runner-observed", "outcome": null }
+      ]
+    },
+    {
+      "id": "D10",
+      "note": "an outcome the client does not know fails closed; only exactly passed passes",
+      "delivery": { "latestCheckRun": { "exitCode": 0, "outcome": "cancelled" } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkNotPassed", "value": "0", "fullValue": "0", "outcome": "FAIL" },
+        { "labelKey": "moe.delivery.checkOutcome", "value": "cancelled", "fullValue": "cancelled", "outcome": null }
+      ]
+    },
+    {
+      "id": "D11",
+      "note": "a non-zero exit with code-failure fails",
+      "delivery": { "latestCheckRun": { "command": "npm test", "exitCode": 1, "outcome": "code-failure" } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": "npm test", "fullValue": "npm test", "outcome": null },
+        { "labelKey": "moe.delivery.checkFailed", "value": "1", "fullValue": "1", "outcome": "FAIL" },
+        { "labelKey": "moe.delivery.checkOutcome", "value": "code-failure", "fullValue": "code-failure", "outcome": null }
+      ]
+    },
+    {
+      "id": "D12",
+      "note": "a signed Windows crash code renders as-is",
+      "delivery": { "latestCheckRun": { "command": "pwsh -File gate.ps1", "exitCode": -1073741819, "source": "agent-reported" } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": "pwsh -File gate.ps1", "fullValue": "pwsh -File gate.ps1", "outcome": null },
+        { "labelKey": "moe.delivery.checkFailed", "value": "-1073741819", "fullValue": "-1073741819", "outcome": "FAIL" },
+        { "labelKey": "moe.delivery.checkSource", "value": "agent-reported", "fullValue": "agent-reported", "outcome": null }
+      ]
+    },
+    {
+      "id": "D13",
+      "note": "requiredCheckSatisfied true counts the check even when the last run failed; the policy verdict is never inferred from the run",
+      "delivery": {
+        "latestCheckRun": { "command": "node lint.cjs", "exitCode": 1, "source": "runner-observed", "outcome": "code-failure" },
+        "requiredCheckSatisfied": true
+      },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": "node lint.cjs", "fullValue": "node lint.cjs", "outcome": null },
+        { "labelKey": "moe.delivery.checkFailed", "value": "1", "fullValue": "1", "outcome": "FAIL" },
+        { "labelKey": "moe.delivery.checkOutcome", "value": "code-failure", "fullValue": "code-failure", "outcome": null },
+        { "labelKey": "moe.delivery.checkSource", "value": "runner-observed", "fullValue": "runner-observed", "outcome": null },
+        { "labelKey": "moe.delivery.requiredCheckCounted", "value": "yes", "fullValue": "yes", "outcome": "PASS" }
+      ]
+    },
+    {
+      "id": "D14",
+      "note": "requiredCheckSatisfied false does not count the check even when the last run passed",
+      "delivery": {
+        "latestCheckRun": { "command": "node gate.cjs", "exitCode": 0, "source": "agent-reported", "outcome": "passed" },
+        "requiredCheckSatisfied": false
+      },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": "node gate.cjs", "fullValue": "node gate.cjs", "outcome": null },
+        { "labelKey": "moe.delivery.checkPassed", "value": "0", "fullValue": "0", "outcome": "PASS" },
+        { "labelKey": "moe.delivery.checkOutcome", "value": "passed", "fullValue": "passed", "outcome": null },
+        { "labelKey": "moe.delivery.checkSource", "value": "agent-reported", "fullValue": "agent-reported", "outcome": null },
+        { "labelKey": "moe.delivery.requiredCheckNotCounted", "value": "no", "fullValue": "no", "outcome": "FAIL" }
+      ]
+    },
+    {
+      "id": "D15",
+      "note": "receipt target is never cut; landed revision is cut to 8 chars with its case and full value kept",
+      "delivery": {
+        "currentCandidate": {
+          "id": "cand-d15",
+          "treeSha": "0123456789abcdef0123456789abcdef01234567",
+          "shortSha": "01234567",
+          "baseRevision": "fedcba9876543210fedcba9876543210fedcba98"
+        },
+        "deliveryReceipt": { "target": "refs/heads/moe/work-2026-10-24", "landedRevision": "AbCdEf0123456789AbCdEf0123456789AbCdEf01" }
+      },
+      "expect": [
+        { "labelKey": "moe.delivery.candidateSha", "value": "01234567", "fullValue": "0123456789abcdef0123456789abcdef01234567", "outcome": null },
+        { "labelKey": "moe.delivery.candidateBase", "value": "fedcba98", "fullValue": "fedcba9876543210fedcba9876543210fedcba98", "outcome": null },
+        { "labelKey": "moe.delivery.receiptTarget", "value": "refs/heads/moe/work-2026-10-24", "fullValue": "refs/heads/moe/work-2026-10-24", "outcome": null },
+        { "labelKey": "moe.delivery.landedRevision", "value": "AbCdEf01", "fullValue": "AbCdEf0123456789AbCdEf0123456789AbCdEf01", "outcome": null }
+      ]
+    },
+    {
+      "id": "D16",
+      "note": "fully populated, JSON members in reverse display order; rows follow the display order, not the member order",
+      "delivery": {
+        "attemptPhase": "closed",
+        "deliveryReceipt": { "landedRevision": "AbCdEf0123456789AbCdEf0123456789AbCdEf01", "target": "refs/heads/main" },
+        "requiredCheckSatisfied": true,
+        "latestCheckRun": { "outcome": "passed", "source": "runner-observed", "exitCode": 0, "command": "npm.cmd test" },
+        "currentCandidate": {
+          "baseRevision": "fedcba9876543210fedcba9876543210fedcba98",
+          "shortSha": "01234567",
+          "treeSha": "0123456789abcdef0123456789abcdef01234567",
+          "id": "cand-d16"
+        }
+      },
+      "expect": [
+        { "labelKey": "moe.delivery.candidateSha", "value": "01234567", "fullValue": "0123456789abcdef0123456789abcdef01234567", "outcome": null },
+        { "labelKey": "moe.delivery.candidateBase", "value": "fedcba98", "fullValue": "fedcba9876543210fedcba9876543210fedcba98", "outcome": null },
+        { "labelKey": "moe.delivery.checkCommand", "value": "npm.cmd test", "fullValue": "npm.cmd test", "outcome": null },
+        { "labelKey": "moe.delivery.checkPassed", "value": "0", "fullValue": "0", "outcome": "PASS" },
+        { "labelKey": "moe.delivery.checkOutcome", "value": "passed", "fullValue": "passed", "outcome": null },
+        { "labelKey": "moe.delivery.checkSource", "value": "runner-observed", "fullValue": "runner-observed", "outcome": null },
+        { "labelKey": "moe.delivery.requiredCheckCounted", "value": "yes", "fullValue": "yes", "outcome": "PASS" },
+        { "labelKey": "moe.delivery.receiptTarget", "value": "refs/heads/main", "fullValue": "refs/heads/main", "outcome": null },
+        { "labelKey": "moe.delivery.landedRevision", "value": "AbCdEf01", "fullValue": "AbCdEf0123456789AbCdEf0123456789AbCdEf01", "outcome": null },
+        { "labelKey": "moe.delivery.attemptPhase", "value": "closed", "fullValue": "closed", "outcome": null }
+      ]
+    },
+    {
+      "id": "D17",
+      "note": "the same Windows crash as D12 reported unsigned (0xC0000005 = 3221225477, outside the Int range) still renders and fails",
+      "delivery": { "latestCheckRun": { "command": "gradlew.bat test", "exitCode": 3221225477, "source": "runner-observed" } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": "gradlew.bat test", "fullValue": "gradlew.bat test", "outcome": null },
+        { "labelKey": "moe.delivery.checkFailed", "value": "3221225477", "fullValue": "3221225477", "outcome": "FAIL" },
+        { "labelKey": "moe.delivery.checkSource", "value": "runner-observed", "fullValue": "runner-observed", "outcome": null }
+      ]
+    },
+    {
+      "id": "D18",
+      "note": "the largest exit code the daemon accepts (Number.MAX_SAFE_INTEGER) renders exactly and fails",
+      "delivery": { "latestCheckRun": { "exitCode": 9007199254740991 } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkFailed", "value": "9007199254740991", "fullValue": "9007199254740991", "outcome": "FAIL" }
+      ]
+    }
+  ]
+}

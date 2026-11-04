@@ -42,9 +42,16 @@ export function resetPlanStepsToPending(plan: ImplementationStep[]): Implementat
  *    call get_context again (assertContextFetched) — i.e. actually re-read the
  *    rejectionDetails/reopenReason instead of resuming on a stale context stamp
  *    and re-doing the same work the same way
+ *  - keep metrics.reopenCount, the mirror qa_reject also writes (qaReject.ts),
+ *    at task.reopenCount + 1 (only on a row that already has a metrics object):
+ *    list_metrics, GET_METRICS and both IDE Reopens KPIs read the mirror first,
+ *    so a reopen outside qa_reject (set_task_status, StateManager.reopenTask,
+ *    the board drag) must not leave it behind
  *
- * Returns a Partial<Task> to be merged into the reopen update payload. Does NOT
- * set status / reopenCount / reopenReason — the caller owns those.
+ * Returns a Partial<Task> to be merged into the reopen update payload. The
+ * caller owns status / reopenCount / reopenReason and must set reopenCount to
+ * task.reopenCount + 1, as all three callers do (setTaskStatus.ts, taskStore.ts
+ * reopenTask, WebSocketServer.ts UPDATE_TASK), so the mirror stays in step.
  */
 export function buildReopenClearingUpdates(task: Task): Partial<Task> {
   const updates: Partial<Task> = {
@@ -58,9 +65,15 @@ export function buildReopenClearingUpdates(task: Task): Partial<Task> {
     contextFetchedBy: [],
   };
 
-  if (task.metrics && (task.metrics.doneAt || task.metrics.wallClockMs)) {
-    const { doneAt: _doneAt, wallClockMs: _wallClockMs, ...restMetrics } = task.metrics;
-    updates.metrics = restMetrics;
+  // A string/array metrics (a hand-edited row) and a row with no metrics object
+  // keep today's result: the helper never creates a metrics object and never throws.
+  const metrics = task.metrics;
+  if (metrics && typeof metrics === 'object' && !Array.isArray(metrics)) {
+    const keepMirror = Number.isInteger(task.reopenCount) && task.reopenCount >= 0;
+    if (keepMirror || metrics.doneAt || metrics.wallClockMs) {
+      const { doneAt: _doneAt, wallClockMs: _wallClockMs, ...restMetrics } = metrics;
+      updates.metrics = keepMirror ? { ...restMetrics, reopenCount: task.reopenCount + 1 } : restMetrics;
+    }
   }
 
   if (Array.isArray(task.implementationPlan) && task.implementationPlan.length > 0) {

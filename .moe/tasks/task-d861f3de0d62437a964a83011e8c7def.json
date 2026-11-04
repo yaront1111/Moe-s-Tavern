@@ -1,0 +1,160 @@
+{
+  "id": "task-d861f3de0d62437a964a83011e8c7def",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07n2] Commit a VM job's admitted tree onto the task branch (moe-agent.ps1)",
+  "description": "SPIDR split out of CQ-M07n (task-62ec51f179494706a39045154d07e544) by architect-30d804be on 2026-11-01. This is the PowerShell twin of CQ-M07m2 (task-91ee455a). Chain: mem:task-task-62ec51f179494706a39045154d07e544-handoff and mem:task-task-828e7d21602e4cf2a0f242e024db7dea-handoff.\n\nIt carries CQ-M07 DoD 5 for moe-agent.ps1: \"An agent job's changes reach the branch only through export and host admission, then the wrapper's landing.\" Human decision, 2026-11-01: worktree mode only. This row lands on the task branch and never touches the shared checkout.\n\n**Depends on:**\n- CQ-M07m2 (task-91ee455a). Its landed sh helper (e.g. land_vm_candidate) is the source of every code, refusal order, commit message and trailer, CAS and W-sync command. Port it; never re-derive it.\n- CQ-M07n1 (task-65b3e023): the same files, so the two rows run in order.\n\n**Contract consumed** (CQ-M07j, mem:task-task-1dc49ae27e22494a95e15ada3e9c1fe9-handoff). A worker seat-job's outcome line resolves:\n`{ok: true, role: 'worker', commit, baseTree, tree, digest, paths: [{path, kind}], exitCode, signal, lease, executionReady: false}`\n- `commit` is the head of the task worktree W (branch moe/task/<id>) when the job started.\n- admitCandidate already wrote `tree` into this repository's object store.\n\n**Objective.** Add the ps1 twin of the sh helper to scripts/moe-agent.ps1, named for its sh name (e.g. Invoke-MoeVmCandidateLanding). It turns one admitted tree into a commit on moe/task/<id>, so that the existing worktree-mode landing lands that commit exactly as it lands a host worker's work.\n\n**Behavior** (as CQ-M07m2 landed it):\n- **Refusals.** Each returns a fixed MOE_VM_CANDIDATE_* code and writes nothing. The helper refuses when:\n  - the workspace is not worktree mode;\n  - W's HEAD is not `commit`;\n  - W has a tracked or untracked change;\n  - `tree` is not a tree object.\n- **Empty candidate.** When `tree` equals `baseTree`, the helper does nothing. This is not an error.\n- **Effect.**\n  1. commit-tree with parent `commit`. Use the landing's message, trailers and settings.commitHooks rules, reusing the ps1 helpers the worktree landing already uses (New-MoeCommitMessage, Invoke-MoeWorktreeCommit's neighbours).\n  2. CAS refs/heads/moe/task/<id> from `commit`.\n  3. Sync W's index and files.\n- **Lost CAS or failed sync.** Park the new commit with Invoke-MoeRescueRef (refs/moe/rescue/<taskId>/<ts>) and return the fixed code.\n- The function is not wired into the loop; CQ-M07n3 calls it.\n\n**PowerShell specifics.**\n- Run git through the wrapper's existing Invoke-MoeGit / `& git -C` patterns, with explicit exit-code checks.\n- Under 5.1, relax $ErrorActionPreference around native stderr, as Invoke-MoeAccountHelper does.\n- Pass every ref, sha and path as its own argument.\n- Keep moe-agent.ps1 UTF-8 with a BOM.\n\n**Tests.** Rows go in scripts/tests/postflight-vm-route.ps1, which CQ-M07n1 creates.\n- Slice the function and its helpers out of moe-agent.ps1 with the PowerShell parser, as postflight.ps1 already does (`[Parser]::ParseFile` + FindAll FunctionDefinitionAst, then dot-source).\n- Drive the function in a temp repo with a real linked worktree.\n\n**NOT in scope:**\n- the seat VM, the seat-job call and the claim (CQ-M07n3);\n- the error paths (CQ-M07n);\n- shared mode (refused by CQ-M07n1);\n- moe-agent.sh.\n\n**Verification.** `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\postflight-vm-route.ps1`, then the same with pwsh.exe, run from WSL per mem:gotcha-pwsh7-reachable-from-wsl. Then `bash scripts/tests/parity-check.sh`. The full postflight.ps1 is not needed: the function is unwired, and CQ-M07n3 runs the full harness.",
+  "definitionOfDone": [
+    "An admitted tree with one changed file becomes exactly one commit on moe/task/<id> whose parent is the job's base commit and whose tree is the admitted tree, and W's index and files then match it (row).",
+    "W's HEAD not the base commit, a dirty W, a missing tree, or shared mode: CQ-M07m2's fixed MOE_VM_CANDIDATE_* code, with every ref, W and the shared checkout byte-identical before and after (rows).",
+    "A lost CAS on moe/task/<id>: the admitted commit is kept on a refs/moe/rescue/<taskId>/ ref and the code is returned; nothing else moves. An empty candidate (tree equal to baseTree) writes nothing and is not an error (rows).",
+    "No row sees the function write the shared checkout, its index or the target branch (asserted in every row).",
+    "postflight-vm-route.ps1 passes alone under Windows PowerShell 5.1 and pwsh 7, bash scripts/tests/parity-check.sh passes, and moe-agent.ps1 keeps its UTF-8 BOM."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host under verified-local.",
+    "Legacy stays byte-for-byte unchanged in behavior.",
+    "Port CQ-M07m2's landed helper verbatim in behavior and codes; never move the landing target or the shared checkout."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Port land_vm_candidate as Invoke-MoeVmCandidateLanding, with its rows (DoD 1-4).\n\nPORT SOURCE, never re-derived. CQ-M07m2's own completion: `git log -1 --format=%H moe/work-2026-10-24 --grep 'Moe-Task: task-91ee455a601b411f97d5d951cc5f241c' -- scripts/moe-agent.sh`, then `git show <sha>` for land_vm_candidate and its [vm candidate] rows in scripts/tests/postflight-vm-route.sh. Copy every code, refusal order, message text, ledger field, rescue reason, return value and command. Also read mem:task-task-91ee455a601b411f97d5d951cc5f241c-handoff, and the planner note on this row.\n\nTHE FILE. scripts/tests/postflight-vm-route.ps1 is created by CQ-M07n1 (a dependency, landed first). It sits under newFiles only because it did not exist at planning time: EXTEND it, never recreate it.\n\nFUNCTION `Invoke-MoeVmCandidateLanding([string]$Commit, [string]$BaseTree, [string]$Tree, [hashtable]$M)`.\n- Place it next to Invoke-MoeWorktreeCheckpoint, with a `Twin: land_vm_candidate` comment. Nothing calls it yet (CQ-M07n3 will).\n- $M is Invoke-MoeWorktreeCommit's shape: TaskId, Title, Status, ReopenCount, CliExit, Sid.\n- It reads $script:MoeWtMode, $script:MoeWtPath and $script:MoeWtBranch (Initialize-MoeWorktree), the twins of MOE_WT_*.\n- It returns @{ Rc; Outcome; Code; Sha; Ref; RescueRef; RescueSha; PathCount }. Rc is the sh return code (0, 1 or 2); Outcome and Code are what the sh sets in LAND_OUTCOME and LAND_CODE.\n\nPOWERSHELL RULES.\n- Every git call goes through Invoke-MoeGit -Top <W> -GitArgs @(...), which already relaxes $ErrorActionPreference for native stderr under 5.1. Add -MergeStderr where a message tail is printed. Check .Rc explicitly on every call.\n- Every ref, sha and path is its own array element.\n- Status: @('--no-optional-locks','status','--porcelain','--untracked-files=all'). Any output, or a non-zero Rc, is DIRTY.\n- W's git dir comes from rev-parse --absolute-git-dir, compared with the control checkout's for NOT_WORKTREE.\n- Message: New-MoeCommitMessage -Kind 'checkpoint' ... -Recovered $false -PathCount <n> -InferredCount 0 -Contested @() -Reason '', then Write-MoeMessageFile into W's git dir, removed in a finally.\n- Commands, as in the sh: commit-tree TREE -p COMMIT -F <file>; `read-tree -m -u COMMIT NEW`; the seam; `update-ref -m \"moe: vm candidate <id>\" refs/heads/<branch> NEW COMMIT`; on a lost CAS, the rollback `read-tree -m -u NEW COMMIT`.\n- The seam is the existing ps1 form, `& $env:ComSpec /d /s /c $hook` in Push-Location W, cleared after one use and skipped when $script:MoeRuntimeProtected.\n- Rescue: Invoke-MoeRescueRef -Git @{Top=W; GitDir=<W git dir>} -TaskId -Reason <the sh reason> -Title -Status -Sid -Sha NEW.\n- Success: one Send-MoeRecordCommit, the committed checkpoint record that Invoke-MoeWorktreeCheckpoint sends (outcome committed, kind checkpoint, sha, treeId, ref refs/heads/<branch>, pushed $false, paths = the diff paths, empty inferred and unattributed), carrying the sh's fields.\n- Write-Host lines match the sh text.\n- Error handling: no throw escapes. Wrap the body in try/catch, and a catch returns Rc 1 with nothing written if it fires before commit-tree, or Rc 2 with the rescue if it fires after.\n- Edit moe-agent.ps1 only with Edit, ASCII only, and keep the UTF-8 BOM.\n\nROWS, in a `[vm candidate]` section in that file's style, mirroring m2's R1-R9 one for one.\n- Import every function through [Parser]::ParseFile and FindAll(FunctionDefinitionAst), then dot-source, as postflight.sh's WT_PS1 does. AFTER the import, redefine Send-MoeRecordCommit and Send-MoeGeneralChat as stubs that append to a log.\n- Set the script variables the functions read: $Role='worker', $myPid, $preflightTaskId, $projectPath, $WorkerId, $script:MoeRuntimeProtected and $script:MoeWt*.\n- The fixture is a temp repo under $env:TEMP: control checkout on main; tracked .moe/tasks/<id>.json, src/a.txt and lib/keep.txt; a linked sparse W (worktree add --no-checkout -b moe/task/<id>, then `sparse-checkout set --no-cone '/*' '!/.moe/'`, then read-tree -mu HEAD; PowerShell argv is not MSYS-converted); TREE built with a private GIT_INDEX_FILE.\n- Run the harness's own git with a relaxed ErrorActionPreference.\n- Every row asserts the control checkout (HEAD, index file Get-FileHash, --no-optional-locks status) and refs/heads/main unchanged (DoD 4).\n- Refusal rows also assert for-each-ref, W's index hash and W's files byte-identical.\n- Use W's index.lock for the SYNC_FAILED row.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Port wt_strong_intent as Test-MoeWorktreeStrongIntent, the strong-profile intent rule that CQ-M07m2 added to the sh worktree completion rounds. Port it from the same m2 commit.\n\nFUNCTION `Test-MoeWorktreeStrongIntent([string]$M, [string]$B)`, with a `Twin: wt_strong_intent` comment.\n- If `Test-MoeStrongLandingTask $preflightTaskId $Git.GitDir` is false, it returns $true. Legacy and observe are byte-for-byte unchanged, and so is an empty task id.\n- Otherwise it requires $script:MoeFrozen.CandidateId, $script:MoeFrozen.Tree -ceq $M, $script:MoeFrozen.Base -ceq $B, $script:MoeAttemptId and $script:PinnedAttemptPlanRevision. These are the same globals Invoke-MoeLanding's CQ-V07 check reads, near line ~5735.\n- Else it sets $Res.Outcome='refused', $Res.Code='MOE_COMMIT_REFUSED_INTENT_INCOMPLETE' and $L.Msg, with the sh message text, and returns $false. Pass $Res and $L, or return the pieces, matching how Invoke-MoeWorktreeRounds reports refusals.\n\nCALL SITE. In Invoke-MoeWorktreeRounds, once per round: after the .moe diff-tree guard and the WT-10 L6 gate call, before New-MoeCommitMessage -Kind 'completion', commit-tree, Write-MoeWorktreeJournal and the CAS or Publish-MoeWorktreeLanding. Use the same position as the sh call. Invoke-MoeWorktreeCompletion already maps refused to 'nothing moves, no rescue ref' (as for MOE_COMMIT_REFUSED_UNRECONCILED_INTENT); keep that path unchanged.\n\nROWS. A `[strong intent]` section mirroring m2's G1-G8. Use a scratch $projectPath with a .moe/attempts record for the attempt-record case. G8 is a source check on Invoke-MoeWorktreeRounds' AST text: exactly one call, after the gate and before the first commit-tree, Write-MoeWorktreeJournal, update-ref and Publish-MoeWorktreeLanding.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. One verification gate, at the end, run once, from WSL in /mnt/d/projexts/moes, in place (launcher harnesses run in place per the global rail). Remove the seat's MOE_*, CLAUDE* and FAKE_* variables (mem:gotcha-qa-ps1-postflight-from-wsl; mem:gotcha-pwsh7-reachable-from-wsl for pwsh.exe), and launch it in the background with job control. The exact command:\n`powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight-vm-route.ps1' && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight-vm-route.ps1' && powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\worktree-landing.ps1' && bash scripts/tests/parity-check.sh && [ \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d ' \\n')\" = efbbbf ]`\nRequired:\n- exit 0;\n- each PowerShell leg prints its PASS marker with every [vm candidate] and [strong intent] row run. A SKIP line, or an EXIT=0 without the marker, is a failure, never green (see that memory's false-green note);\n- worktree-landing.ps1 green and unedited, proving the legacy rounds are unchanged;\n- parity PASS: the MOE_VM_ family is not compared until CQ-M07n, and no compared-family code is added;\n- the BOM is intact.\nThe fresh command, exitCode and outputTail are the complete_task evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Adversarial self-review, once (load adversarial-self-review), scoped to this diff. Check each of these:\n- A line-by-line comparison with m2's sh functions: same codes, order, messages, return values and git argv. List any intentional difference in the completion summary; there should be none beyond the PowerShell idiom.\n- PS 5.1: native stderr under ErrorActionPreference Stop, $LASTEXITCODE after a pipeline, a $null Out, -ceq vs -eq on shas and codes, and a git output array vs a string.\n- A throw anywhere leaves either nothing written or the commit on a rescue ref.\n- The seam is skipped when protected.\n- No write goes through the control checkout except Invoke-MoeRescueRef's refs/moe/rescue ref.\n- Test-MoeWorktreeStrongIntent cannot pass on a stale $script:MoeFrozen from an earlier round, and it is a no-op for legacy.\n- BOM and ASCII are intact.\nSize: measure `git diff --numstat -- scripts/`. If it is over 400 net changed lines, file the epic size waiver with moe.propose_rail before complete_task (CQ-M05 template, exact per-file numstat; mem:gotcha-cq-plan-size-vs-qa-cap). Re-run step 3's exact command after any fix. Report every modified path in complete_step.modifiedFiles. Never commit by hand.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-91ee455a601b411f97d5d951cc5f241c",
+    "task-65b3e023923e4ab6b71cb94e7bea2f9b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.164,
+  "comments": [
+    {
+      "id": "comment-2c4d1c4180764814a534632644991679",
+      "author": "architect-1a34a669",
+      "content": "Planner note from CQ-M07m2 (task-91ee455a, plan revision 1). The sh row now carries TWO functions. This ps1 twin must port both.\n\n1. land_vm_candidate COMMIT BASE_TREE TREE, in this order:\n   - Refusals, all prefixed MOE_VM_CANDIDATE_: NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY, TREE_INVALID.\n   - EMPTY is a no-op.\n   - The commit is a checkpoint-kind commit-tree.\n   - W takes the new tree via `read-tree -m -u COMMIT NEW` BEFORE the CAS. Then the CAS: update-ref of the task branch from COMMIT. On a lost CAS, roll W back and park the commit on a rescue ref.\n   - Return codes: 0 committed or empty, 1 nothing written, 2 rescued.\n2. wt_strong_intent M B, called each wt_land_rounds round before L7. Under the strong profile it refuses with MOE_COMMIT_REFUSED_INTENT_INCOMPLETE unless the frozen candidate is exactly M on B and the attempt and plan revision are pinned. The ps1 home is the worktree completion rounds in Invoke-MoeWorktreeCompletion.\n\nPort from the landed sh bytes; never re-derive them. Rationale and probe results: mem:task-task-91ee455a601b411f97d5d951cc5f241c-handoff and mem:decision-worktree-strong-intent.",
+      "timestamp": "2026-11-01T18:51:16.651Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T14:32:51.655Z",
+  "updatedAt": "2026-11-01T18:56:58.460Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T18:54:05.533Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-1a34a669"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T18:56:58.433Z",
+  "executionContract": {
+    "intendedBehavior": "moe-agent.ps1 gains Invoke-MoeVmCandidateLanding, the exact PowerShell twin of CQ-M07m2's land_vm_candidate: same refusals and codes, same order, same commit, W sync, CAS, rollback, rescue and ledger row, and never a write to the control checkout, its index or the target. It also gains Test-MoeWorktreeStrongIntent, called in each Invoke-MoeWorktreeRounds round before L7, the twin of wt_strong_intent. Nothing calls the landing function yet; CQ-M07n3 will.",
+    "acceptanceCriteria": [
+      "Rows R1-R9 mirror m2's: one-file commit; the shared, HEAD-moved, base-mismatch, dirty and missing-tree refusals; lost CAS with a rescue ref; sync failure with a rescue ref; the empty no-op; the protected seam skip. Same codes and assertions, under 5.1 and pwsh 7.",
+      "Rows G1-G8 mirror m2's strong-intent rows.",
+      "Every vm-candidate row asserts the control checkout and refs/heads/main are unchanged.",
+      "worktree-landing.ps1 is green and unedited, parity PASS, and moe-agent.ps1 keeps its UTF-8 BOM."
+    ],
+    "invariants": [
+      "Codes, order and messages are identical to the landed sh.",
+      "No write through the control checkout except the rescue ref.",
+      "Legacy and observe rounds are unchanged.",
+      "The BOM is kept, and the new code is ASCII only."
+    ],
+    "compatibility": [
+      "The MOE_VM_ codes stay uncompared until CQ-M07n. MOE_COMMIT_REFUSED_INTENT_INCOMPLETE already exists in both twins."
+    ],
+    "approvedScope": [
+      "moe-agent.ps1: new Invoke-MoeVmCandidateLanding (unwired)",
+      "moe-agent.ps1: new Test-MoeWorktreeStrongIntent, plus one call per Invoke-MoeWorktreeRounds round",
+      "postflight-vm-route.ps1: [vm candidate] and [strong intent] sections"
+    ],
+    "reuse": [
+      "Invoke-MoeGit, New-MoeCommitMessage, Write-MoeMessageFile, Invoke-MoeRescueRef -Sha, Send-MoeRecordCommit, Test-MoeStrongLandingTask and $script:MoeFrozen",
+      "postflight.sh's WT_PS1 AST import"
+    ],
+    "sourceAssumptions": [
+      "CQ-M07m2's completion on moe/work-2026-10-24 carries land_vm_candidate, wt_strong_intent and their rows.",
+      "moe-agent.ps1 Invoke-MoeWorktreeRounds is the twin of wt_land_rounds; Invoke-MoeRescueRef accepts -Sha.",
+      "CQ-M07n1 creates scripts/tests/postflight-vm-route.ps1."
+    ],
+    "checkRefs": [
+      "powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight-vm-route.ps1' && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight-vm-route.ps1' && powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\worktree-landing.ps1' && bash scripts/tests/parity-check.sh && [ \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d ' \\n')\" = efbbbf ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Re-deriving the ps1 helper from the task text: rejected. The task rail says to port m2's landed bytes verbatim.\n2. Leaving out wt_strong_intent: rejected. CQ-M07m2's plan added it to the sh rounds as the planner adjustment ('never let an unverified commit reach the target'), and the ps1 twin must not let the ps1 worktree completion CAS an ungated verified-local merge.\n3. Signal deferral (Set-MoeCtrlCDeferred) around read-tree and the CAS: mirror the sh. m2's order is crash-safe without deferral; add it only if m2's landed sh did.",
+    "codebaseInsights": "ps1 twins:\n- land_worktree_checkpoint = Invoke-MoeWorktreeCheckpoint, whose L2 is Invoke-MoeWorktreeCommit;\n- wt_land_rounds = Invoke-MoeWorktreeRounds;\n- write_commit_message = New-MoeCommitMessage;\n- rescue_ref_from_commit = Invoke-MoeRescueRef -Sha;\n- record_commit_rpc = Send-MoeRecordCommit;\n- strong_landing_task = Test-MoeStrongLandingTask $TaskId $GitDir;\n- MOE_WT_* = $script:MoeWt{Mode,Path,Branch,Target};\n- RUNTIME_PROTECTED = $script:MoeRuntimeProtected;\n- the shared-mode V07 check sits near moe-agent.ps1 ~line 5735, and $script:MoeFrozen carries CandidateId, Tree and Base.\nThe existing ps1 PRE_UPDATE_REF seam runs the hook through cmd (`& $env:ComSpec /d /s /c`). Invoke-MoeGit returns @{Out; Rc}.",
+    "risks": "- WT-10..14 and CQ-M07n1 reshape moe-agent.ps1 and the ps1 harness first; anchor everything by function name, never by line.\n- PS 5.1 Test-Path follows junctions.\n- False-green harness runs (a SKIP or a missing PASS marker).\n- Size: about 85 runtime plus about 250 test lines; pre-file the waiver if over 400.\n- The BOM must survive the edits.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-vm-route.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/worktree-landing.ps1",
+      "scripts/tests/parity-check.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3761931b07ac7a51fc282bae73c220d17ceb0387",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T18:56:58.460Z",
+  "approvedPlanRevision": 1
+}

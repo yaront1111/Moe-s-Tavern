@@ -215,6 +215,7 @@ class ChatPanel(private val project: Project) : JBPanel<ChatPanel>(BorderLayout(
                 if (disposed) return
                 if (connected) {
                     service.requestChannels()
+                    service.requestDecisions()
                 }
             }
 
@@ -311,19 +312,15 @@ class ChatPanel(private val project: Project) : JBPanel<ChatPanel>(BorderLayout(
             channelModel.removeAllElements()
             channels.sortedBy { it.name }.forEach { channelModel.addElement(it) }
 
-            if (channelModel.size > 0) {
-                val toSelect = if (previousId != null) {
-                    channels.find { it.id == previousId }
-                } else {
-                    channels.find { it.type == "general" } ?: channels.firstOrNull()
-                }
+            val toSelect = ChatChannelSelection.choose(channels, previousId)
+            if (toSelect != null) channelCombo.selectedItem = toSelect
+            currentChannelId = toSelect?.id
+            if (currentChannelId != previousId) {
+                refreshMessages()
+                refreshPinnedPanel()
                 if (toSelect != null) {
-                    channelCombo.selectedItem = toSelect
-                    currentChannelId = toSelect.id
-                    if (toSelect.id != previousId) {
-                        service.requestMessages(toSelect.id)
-                        service.requestPins(toSelect.id)
-                    }
+                    service.requestMessages(toSelect.id)
+                    service.requestPins(toSelect.id)
                 }
             }
         } finally {

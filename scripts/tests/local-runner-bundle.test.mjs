@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -8,13 +8,17 @@ import { test } from 'node:test';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const required = ['certified-provider.json', 'multipass.mjs', 'doctor.mjs', 'cli.mjs', 'vm-control.mjs'];
-// CQ-R10d2's agent cache, CQ-R11e1's toolchain cache and CQ-R13d/R13e1/R13f1/R13h/R13g's certify modules must ship too. Nothing wires them yet, so onboarding.mjs does not
-// check them and they stay out of `required`, which the onboarding refusal row walks.
+// CQ-R10d2's agent cache, CQ-R11e1's toolchain cache, CQ-R13d/R13e1/R13f1/R13h/R13g's certify modules, CQ-R14a's guest SSH primitives and
+// CQ-R14d1's stream opener (vm-control reaches it through guest-session since CQ-R14d2), CQ-M07h's seat VM cap and CQ-M07i's seat entry must ship too.
+// Nothing wires them yet, so onboarding.mjs does not check them and they stay out of `required`, which the onboarding refusal row walks.
 const shipped = [...required, 'agent-binaries.json', 'agent-cache.mjs', 'toolchain.json', 'toolchain-cache.mjs', 'certify.mjs', 'certify-bridge.mjs', 'certify-containment.mjs',
-  'certify-lifecycle.mjs', 'certify-recovery-child.mjs', 'certify-canary.mjs'];
+  'certify-lifecycle.mjs', 'certify-recovery-child.mjs', 'certify-canary.mjs', 'guest-ssh.mjs', 'guest-stream.mjs', 'seat-capacity.mjs', 'agent-seat.mjs'];
 const excluded = ['sentinel.test.mjs', 'nested/sentinel.spec.mjs', 'nested/tests/data.json',
   'nested/__tests__/data.json', 'nested/fixtures/data.json', 'nested/__fixtures__/data.json'];
 const excludedPatterns = ['**/*.test.*', '**/*.spec.*', '**/tests/**', '**/__tests__/**', '**/fixtures/**', '**/__fixtures__/**'];
+const roles = ['architect', 'qa', 'worker', 'governor', 'worker.reference'];
+const manifestFile = 'scripts/bundle-manifest.json';
+const manifest = () => JSON.parse(readFileSync(path.join(root, manifestFile), 'utf8'));
 
 function fixture(t) {
   const scratch = mkdtempSync(path.join(tmpdir(), 'moe runner bundle '));
@@ -36,12 +40,23 @@ function fixture(t) {
     'packages/moe-proxy/dist/utils.spec.js', 'packages/moe-daemon/dist/tools/sample.test.js']) put(name, 'export {};\n');
   for (const name of ['packages/moe-proxy/dist/latest.js', 'packages/moe-daemon/dist/tools/attestation.js']) put(name, 'export {};\n');
   for (const name of ['moe-agent.ps1', 'moe-agent.sh', 'moe-call.sh', 'prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs',
-    'prompt-cache-witness.mjs', 'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs']) {
+    'prompt-cache-witness.mjs', 'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs',
+    'moe-serena-ignore.mjs']) {
     put(`scripts/${name}`, readFileSync(path.join(root, 'scripts', name)));
+  }
+  put(manifestFile, readFileSync(path.join(root, manifestFile)));
+  // Both bundlers read each package's production set from its lockfile (task-864103f3, task-c76a8bf8) and refuse a
+  // missing lockfile or a listed package with no installed package.json.
+  for (const name of ['moe-daemon', 'moe-proxy']) {
+    put(`packages/${name}/package-lock.json`, JSON.stringify({ name, lockfileVersion: 3, requires: true,
+      packages: { '': { name }, 'node_modules/dependency': { version: '0.0.0-fixture' } } }));
+    put(`packages/${name}/node_modules/dependency/package.json`, '{"name":"dependency","version":"0.0.0-fixture"}');
   }
   put('scripts/mods/example/runtime.mjs');
   put('scripts/mods/example/runtime.test.ts');
-  for (const name of ['architect', 'qa', 'worker']) put(`docs/roles/${name}.md`);
+  for (const name of ['plugin.json', 'types/index.d.ts', 'hook.test.ts']) put(`scripts/mods/example/.claude-plugin/${name}`);
+  for (const name of roles) put(`docs/roles/${name}.md`);
+  put('docs/skills/example/SKILL.md');
   cpSync(path.join(root, 'scripts/local-runner'), path.join(scratch, 'scripts/local-runner'), { recursive: true });
   put('scripts/local-runner/nested/production.mjs', 'export const copied = true;\n');
   for (const name of excluded) put(`scripts/local-runner/${name}`, 'test-only fixture\n');
@@ -101,10 +116,11 @@ test('actual bundler ships the codex witness helper that prompt-cache.mjs import
   const missing = codex();
   assert.notEqual(missing.status, 0, 'codex-stream ran without its witness module');
   assert.match(missing.stderr, /prompt-cache-witness\.mjs/);
-  const gradle = readFileSync(path.join(root, 'moe-jetbrains/build.gradle.kts'), 'utf8');
-  const block = gradle.match(/from\(repoRoot\.resolve\("scripts"\)\)\s*\{([\s\S]*?)into\("\$pluginContentRoot\/scripts"\)/)?.[1];
-  assert.ok(block, 'Missing actual production scripts copy block');
-  assert.ok(block.includes('include("prompt-cache*.mjs")'), 'Gradle must ship every prompt-cache*.mjs helper');
+  // Gradle once shipped scripts/prompt-cache*.mjs by glob; the manifest lists names, so every helper must be listed.
+  const listed = manifest().copies.find(copy => copy.from === 'scripts').files;
+  for (const name of readdirSync(path.join(root, 'scripts')).filter(name => /^prompt-cache.*\.mjs$/.test(name))) {
+    assert.ok(listed.includes(name), `The bundle manifest's scripts entry must list ${name}`);
+  }
 });
 
 test('actual bundler excludes root and nested tests/spec fixtures while retaining existing exclusions', t => {
@@ -113,6 +129,40 @@ test('actual bundler excludes root and nested tests/spec fixtures while retainin
   for (const name of excluded) assert.equal(existsSync(path.join(work.output, 'scripts/local-runner', name)), false, `Leaked test asset ${name}`);
   assert.equal(existsSync(path.join(work.output, 'scripts/mods/example/runtime.test.ts')), false);
   assert.equal(existsSync(path.join(work.output, 'daemon/node_modules/.bin/not-production')), false);
+  // Dot-directory rows: Gradle (Ant) excludes both, and path.matchesGlob would not.
+  const plugin = path.join(work.output, 'scripts/mods/example/.claude-plugin');
+  for (const name of ['hook.test.ts', 'types/index.d.ts']) assert.equal(existsSync(path.join(plugin, name)), false, `Leaked mods asset ${name}`);
+  assert.ok(existsSync(path.join(plugin, 'plugin.json')), 'Dropped mods plugin.json');
+});
+
+test('actual bundler ships every docs/roles file and LF shell scripts, as the JetBrains build does', t => {
+  const work = fixture(t);
+  work.put('scripts/moe-call.sh', '#!/usr/bin/env bash\r\necho ok\r\n');
+  chmodSync(path.join(work.scratch, 'scripts/moe-call.sh'), 0o755);
+  requireBundle(work);
+  for (const name of roles) assert.ok(existsSync(path.join(work.output, 'docs/roles', `${name}.md`)), `Missing bundled role doc ${name}.md`);
+  const script = path.join(work.output, 'scripts/moe-call.sh');
+  assert.equal(readFileSync(script, 'utf8'), '#!/usr/bin/env bash\necho ok\n');
+  if (process.platform !== 'win32') assert.equal(statSync(script).mode & 0o777, 0o755, 'Dropped the shell script exec bit');
+});
+
+test('actual bundler refuses a missing manifest source or a malformed manifest before copying', t => {
+  const escape = manifest();
+  escape.copies[0].into = '../escape';
+  for (const [subject, breakIt] of [
+    [/scripts\/moe-call\.sh/, work => rmSync(path.join(work.scratch, 'scripts/moe-call.sh'))],
+    [/docs\/skills/, work => rmSync(path.join(work.scratch, 'docs/skills'), { recursive: true })],
+    [/bundle-manifest\.json/, work => work.put(manifestFile, '{"copies":[]}')],
+    [/bundle-manifest\.json/, work => work.put(manifestFile, JSON.stringify(escape))],
+  ]) {
+    const work = fixture(t);
+    breakIt(work);
+    const run = bundle(work);
+    assert.equal(run.status, 1, run.stdout + run.stderr);
+    assert.match(run.stderr, subject);
+    assert.equal(existsSync(path.join(work.output, 'daemon')), false, `Copied before refusing: ${run.stderr}`);
+    assert.equal(existsSync(path.join(work.scratch, 'moe-vscode/escape')), false);
+  }
 });
 
 test('actual bundler drops compiled tests and specs from both dists', t => {
@@ -146,12 +196,18 @@ test('actual bundler refuses a directory masquerading as a required module', t =
   assert.match(run.stderr, /local-runner.*doctor\.mjs/);
 });
 
-test('Gradle production script copy explicitly includes provider assets and excludes nested tests', () => {
-  const source = readFileSync(path.join(root, 'moe-jetbrains/build.gradle.kts'), 'utf8');
-  const block = source.match(/from\(repoRoot\.resolve\("scripts"\)\)\s*\{([\s\S]*?)into\("\$pluginContentRoot\/scripts"\)/)?.[1];
-  assert.ok(block, 'Missing actual production scripts copy block');
-  assert.ok(block.includes('include("local-runner/**")'), 'Gradle must copy the provider directory');
-  for (const pattern of excludedPatterns) assert.ok(block.includes(`"local-runner/${pattern}"`), `Missing Gradle exclusion ${pattern}`);
+test('both builds read the bundle manifest, its provider entry is complete, and neither build re-lists it', () => {
+  const { copies } = manifest();
+  const runner = copies.find(copy => copy.from === 'scripts/local-runner');
+  for (const pattern of excludedPatterns) assert.ok(runner.exclude.includes(pattern), `Missing local-runner exclusion ${pattern}`);
+  assert.deepEqual(runner.required, required);
+  const listed = [...copies.flatMap(copy => [...(copy.files ?? []), ...(copy.required ?? [])]),
+    ...copies.map(copy => copy.from).filter(from => from.includes('/'))];
+  for (const file of ['moe-jetbrains/build.gradle.kts', 'moe-vscode/scripts/bundle-assets.mjs']) {
+    const source = readFileSync(path.join(root, file), 'utf8');
+    assert.ok(source.includes(manifestFile), `${file} must read ${manifestFile}`);
+    for (const name of listed) assert.ok(!source.includes(name), `${file} re-lists ${name}`);
+  }
 });
 
 // Bundles the fixture for real, then returns the packaged-bundle half of onboarding.mjs as a re-runnable check.
@@ -228,15 +284,17 @@ test('bundled onboarding refuses any test artifact outside node_modules', t => {
   assert.equal(ignored.status, 0, ignored.stdout + ignored.stderr);
 });
 
-test('Gradle requires vm-control and drops compiled tests from the daemon and proxy dist copies', () => {
+test('Gradle drops compiled tests from the daemon and proxy dist copies', () => {
   const source = readFileSync(path.join(root, 'moe-jetbrains/build.gradle.kts'), 'utf8');
-  const assets = source.match(/listOf\(([^)]*)\)\.forEach \{ name ->\s*check\(bundledLocalRunnerDir/)?.[1];
-  assert.ok(assets, 'Missing requireBundledAssets local-runner list');
-  assert.ok(assets.includes('"vm-control.mjs"'), 'requireBundledAssets must name vm-control.mjs');
+  // The dist copies and the import scan share one list (task-864103f3): check its patterns, then that each copy applies it.
+  const list = source.match(/^val distTestExcludes = listOf\(([^)]*)\)$/m)?.[1];
+  assert.ok(list, 'Missing Gradle distTestExcludes list');
+  const patterns = [...list.matchAll(/"([^"]*)"/g)].map(match => match[1]);
+  for (const pattern of ['**/*.test.*', '**/*.spec.*']) assert.ok(patterns.includes(pattern), `distTestExcludes must list ${pattern}`);
   for (const dir of ['bundledDaemonDir', 'bundledProxyDir']) {
     const block = source.match(new RegExp(`from\\(${dir}\\) \\{([\\s\\S]*?)\\n\\s*\\}`))?.[1];
     assert.ok(block, `Missing Gradle from(${dir}) block`);
-    assert.ok(block.includes('exclude("**/*.test.*", "**/*.spec.*")'), `${dir} copy must exclude compiled tests and specs`);
+    assert.ok(block.includes('exclude(distTestExcludes)'), `${dir} copy must exclude compiled tests and specs`);
   }
 });
 

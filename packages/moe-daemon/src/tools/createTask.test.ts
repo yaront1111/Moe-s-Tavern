@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { createTaskTool } from './createTask.js';
@@ -35,6 +37,24 @@ describe('moe.create_task', () => {
   it('throws for missing title', async () => {
     const tool = createTaskTool(h.state);
     await expect(tool.handler({ epicId: 'epic-1' }, h.state)).rejects.toThrow('Missing required field: title');
+  });
+
+  it('refuses a status it cannot create and writes no task; an omitted status gives BACKLOG', async () => {
+    const tool = createTaskTool(h.state);
+    for (const status of ['BLOCKED', 'ARCHIVED']) {
+      const err = await tool.handler({ epicId: 'epic-1', title: `parked ${status}`, status }, h.state).then(
+        () => null,
+        (e: unknown) => e as { codeName?: string; message: string },
+      );
+      expect(err?.codeName).toBe('INVALID_INPUT');
+      expect(err?.message).toContain('status');
+    }
+    expect(h.state.tasks.size).toBe(0);
+    expect(fs.readdirSync(path.join(h.moePath, 'tasks'))).toEqual([]);
+
+    const result = await tool.handler({ epicId: 'epic-1', title: 'No status given' }, h.state) as { task: Task };
+    expect(result.task.status).toBe('BACKLOG');
+    expect(h.state.getTask(result.task.id)?.status).toBe('BACKLOG');
   });
 });
 

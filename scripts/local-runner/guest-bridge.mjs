@@ -3,8 +3,6 @@
 // CQ-R08 host session implement and consume this module as the protocol source of truth.
 // Frame: a 4-byte unsigned big-endian length L, then exactly L bytes of UTF-8 JSON encoding one plain object.
 // Guest frames allow 1 <= L <= MAX_GUEST_FRAME_BYTES, host frames 1 <= L <= MAX_HOST_FRAME_BYTES.
-import { GUEST_LAYOUT } from './guest-bootstrap.mjs';
-import { isOwnedInstanceName } from './lifecycle.mjs';
 
 export const MAX_GUEST_FRAME_BYTES = 262_144;
 // The daemon's WebSocket maxPayload is 2 MiB (packages/moe-daemon/src/server/WebSocketServer.ts).
@@ -197,17 +195,6 @@ export function jobFrame(job) {
   } catch { /* refused below */ }
   throw bridgeError('BRIDGE_INPUT_INVALID');
 }
-
-// The one Multipass argv that opens the bridge. Every element except the validated owned name is a constant, so
-// no caller data reaches the guest command. --no-map-working-directory stops Multipass mapping the host cwd
-// (see the exec.cpp note in guest-readiness.mjs).
-export function bridgeArgv(name) {
-  if (!isOwnedInstanceName(name)) throw bridgeError('BRIDGE_INPUT_INVALID');
-  return Object.freeze(['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', GUEST_LAYOUT.supervisor, 'bridge']);
-}
-
-// The one Multipass argv that runs a CQ-R11 check: bridgeArgv's, in the supervisor's check mode.
-export const checkArgv = name => Object.freeze([...bridgeArgv(name).slice(0, -1), 'check']);
 
 // The CQ-R11a check frame, the first and only bytes the host writes on a check session's stdin. Its rules are the
 // supervisor's read_check, which mirrors the daemon's validateRequiredChecks; C2 pins the two sides together. It is

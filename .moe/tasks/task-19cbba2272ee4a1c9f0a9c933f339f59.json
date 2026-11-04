@@ -15,71 +15,107 @@
     {
       "stepId": "step-1",
       "description": "1. TESTS FIRST (red), both harnesses. Load test-driven-development. Build on the landed bytes of WT-09 (task-0921d6d7) and CQ-V04c (task-c4e076cd); never revert a peer hunk; never edit the held-out suites (postflight-worktree.cjs, worktree-landing.*).\n\nThe worktree arm is not wired into landing until WT-10, so these cases call it directly, function-level, from the existing frozen-candidate node suite. That suite is embedded byte-identically in postflight.sh (heredoc FROZENJS) and postflight.ps1 (the here-string written to $frozenSuite): make every edit in both copies, identically. Inside it no line may start with '@ (that ends the PS here-string) or be exactly FROZENJS, and driver text inside JS template literals carries no backticks and no ${ (write \\t and \\n where bash must see \\t and \\n; PS uses [char]9 / [char]10).\n\na. modes: append 'wt-pass','wt-default','wt-moe-dir','wt-moe-file','wt-moe-link','wt-moe-link-out','wt-before','wt-tracked','wt-hidden','wt-nested'. No platform gate: both engines run all ten.\nb. In the loop, right after the integrity-batch block: if(mode.startsWith('wt-')){wtGate(mode);count++;continue;}\nc. Above `let count=0;` define:\n- WT_GATE, the fixture's tracked gate.cjs. First it writes JSON to process.env.WTG_OBS: dirs = [process.cwd(), process.env.MOE_PROJECT_PATH, `git rev-parse --show-toplevel`], each through fs.realpathSync.native; parent = realpath('..'); head = `git rev-parse HEAD`; tree = `git write-tree`; moe = whether fs.lstatSync('.moe') succeeds; flags = `git ls-files -t -- .moe`. Then by WTG_MODE: wt-moe-dir mkdir .moe and write .moe/x; wt-moe-file writes a file .moe; wt-moe-link makes a dangling link .moe -> path.resolve('..','missing-target'); wt-moe-link-out makes a link .moe -> process.env.WTG_CONTROL_MOE (the control checkout's .moe). Links use fs.symlinkSync(target,'.moe',process.platform==='win32'?'junction':'dir') (a junction needs no privilege and may dangle; verified). wt-tracked rewrites tracked src.txt; wt-hidden runs update-index --skip-worktree src.txt and --assume-unchanged gate.cjs, then rewrites src.txt and appends to gate.cjs. Every mode exits 0.\n- shFunctions(): from the wrapper text, for each of gate_git, gate_integrity, gate_integrity_wt, stop_gate_child, remove_gate_root, cleanup_gate_workspace, freeze_candidate, run_frozen_gate: i = s.indexOf('\\n'+name+'() {'); assert.ok(i>=0,'moe-agent.sh has no '+name); take s.slice(i+1, s.indexOf('\\n}\\n',i)+3). Name-based slicing survives function moves. If CQ-V04c's run_frozen_gate calls another wrapper helper, add its name.\n- WT_SH (bash driver): set -e; the sliced functions; stubs record_candidate_rpc() { return 0; } and record_check_run_rpc() { printf '%s\\t%s\\n' \"$GATE_RC\" \"$GATE_OUTCOME\" >> \"$WTG_CHECKS\"; }; GREEN= BLUE= NC= YELLOW= GATE_PENDING_ROOTS= GATE_OUTCOME=; PYTHON_CMD=$(command -v python3 || command -v python); MOE_TOP=$WTG_REPO; MOE_REL=$WTG_REL; QUALITY_GATE='node gate.cjs'; freeze_candidate \"$WTG_BASE\" \"$WTG_TREE\"; if run_frozen_gate $WTG_ARM; then rc=0; else rc=1; fi; flags=$(git -C \"$GATE_WORKSPACE\" ls-files -t -- .moe src.txt) only while that dir still exists; if cleanup_gate_workspace; then clean=0; else clean=1; fi; printf rc=, clean=, commit=$FROZEN_COMMIT and flags= (flags last) into $WTG_RESULT.\n- WT_PS1 (PS driver; ASCII only, because PS 5.1 reads a BOM-less file as ANSI; mem:pattern-ps1-function-probe-via-ast): $ErrorActionPreference='Stop'; ParseFile($env:WTG_WRAPPER) and throw on parse errors; dot-source every top-level FunctionDefinitionAst, then every top-level AssignmentStatementAst whose Left extent text is -like '$script:MoeGate*' (gate type source, type name, pending list); then define Send-MoeCheckRun([hashtable]$Frozen,[hashtable]$Gate) that appends [string]$Gate.ExitCode + [char]9 + [string]$Gate.Outcome + [char]10 to $env:WTG_CHECKS and returns $true; $git=@{Top=$env:WTG_REPO;Rel=$env:WTG_REL}; $frozen=New-MoeFrozenCandidate $git $env:WTG_TREE $env:WTG_BASE; $ok = the last element of @(Invoke-MoeFrozenGate $git $frozen 'node gate.cjs'), plus -WorktreeMode when $env:WTG_ARM is set; flags from Invoke-MoeGit ls-files -t -- .moe src.txt while $script:MoeGate.Workspace exists; $clean=Remove-MoeGateWorkspace; write the same four keys joined by [char]10.\n- wtGate(mode): a fresh repo root/<mode> (core.autocrlf false, user.name, user.email) with tracked .moe/tasks/task-a.json, .moe/project.json, src.txt and gate.cjs. For wt-before the tracked .moe is a FILE instead: the '!/.moe/' pattern only excludes directories, so it materializes (the before-command case). Commit, then write an untracked control sentinel .moe/daemon.json (not for wt-before). snap() = [HEAD, ls-files -s, git --no-optional-locks status --porcelain -uall, the exit status of config --get core.sparseCheckout, an lstat-based recursive map of the control's .moe (link -> 'link:'+readlink, file -> bytes)]. Env: process.env without any GIT_* name; HOME and USERPROFILE under root; TMPDIR, TMP and TEMP = root/<mode>-tmp (owned scratch: sh mktemp -t and ps1 GetTempPath both create gate roots there, and Remove-MoeGateRoot's owned-path check passes); WTG_WRAPPER, WTG_REPO, WTG_BASE=HEAD, WTG_TREE=HEAD^{tree}, WTG_MODE, WTG_OBS/WTG_CHECKS/WTG_RESULT under root, WTG_CONTROL_MOE; WTG_ARM='worktree' except wt-default (unset: the default call); WTG_REL='sub' only for wt-nested. Write the driver once per run; spawn engine with [driver] (sh) or ['-NoProfile','-File',driver] (ps1), encoding utf8, timeout 120000, windowsHide; assert status 0 with stdout+stderr as the message.\nd. Exact assertions (log = stdout+stderr):\n- every mode: clean '0'; root/<mode>-tmp is empty; `worktree list --porcelain` lists only the control; snap() deepEquals the pre-run snapshot.\n- whenever obs exists: its three dirs are one path whose basename is 'tree' and whose dirname is obs.parent; dirname(obs.parent) equals realpathSync.native(<mode>-tmp); obs.parent no longer exists; [obs.head, obs.tree] equal [result commit, HEAD^{tree}].\n- wt-pass: rc '0', checks ['0\\tpassed'], no MOE_WORKTREE_GATE_INTEGRITY, obs.moe false, obs.flags 'S .moe/project.json\\nS .moe/tasks/task-a.json'.\n- wt-default: rc '0', checks ['0\\tpassed'], obs.moe true, obs.flags 'H .moe/project.json\\nH .moe/tasks/task-a.json' (today's full checkout: the default call still selects shared).\n- wt-moe-dir, wt-moe-file, wt-moe-link, wt-moe-link-out: rc '1', MOE_WORKTREE_GATE_INTEGRITY in log, checks ['0\\tinconclusive'], obs.moe false, result flags 'S .moe/project.json\\nS .moe/tasks/task-a.json\\nH src.txt'.\n- wt-tracked, wt-hidden: rc '1', checks ['0\\tinconclusive'], no MOE_WORKTREE_GATE_INTEGRITY, result flags as above (wt-hidden: the post-gate check cleared src.txt's bit and kept the .moe bits).\n- wt-before: rc '1', MOE_WORKTREE_GATE_INTEGRITY in log, no check rows, no obs. wt-nested: rc '1', MOE_WORKTREE_PROJECT_NOT_TOP in log, no MOE_WORKTREE_GATE_INTEGRITY, no check rows, no obs.\nOutcome names follow CQ-V04c's plan (GATE_OUTCOME / $Gate.Outcome); use the landed names if they differ.\ne. Red proof on a snapshot (mem:pattern-wrapper-harness-snapshot-verify-from-wsl) with MOE_FROZEN_TEST_ONLY set to the ten modes, both engines: sh fails 'moe-agent.sh has no gate_integrity_wt'; ps1 fails on the unknown -WorktreeMode parameter; wt-default already passes on both. Prototypes of both drivers ran at planning against today's wrappers: about 0.1 s per sh mode and 2.2 s per PS 5.1 mode.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "note": "Reopen 1 (QA qa-97c4310b, DoD 1, Git Bash only). No harness change this round. QA issue 2 says no harness test is needed: CI runs postflight.sh only on Linux, where MSYS argv conversion cannot happen. The 11 wt-* frozen modes landed in b97c398e and stay as they are. postflight.sh and postflight.ps1 are byte-identical to HEAD (clean in git status), so the MODIFIED-FILES-OMITTED fallback to affectedFiles is noise.\n\nRED proof: a Git Bash probe of the REAL run_frozen_gate worktree. Scratch is /mnt/d/moe-scratch/p-19cbba22.nDWLjr/probe.sh, outside the checkout. It is the WT_SH driver: the 8 functions are sliced by name from the wrapper with awk, the two RPCs are stubbed, and PYTHON_CMD=python because Git Bash's python3 is the Store stub that the wrapper's find_python filters out. The repo tracks .moe/project.json and .moe/tasks/task-a.json. The gate is a trivial passing `bash gate.sh` that records what it sees.\n\nCommand, from WSL at 14:22:50Z:\n\"/mnt/c/Program Files/Git/bin/bash.exe\" -c 'P=/d/moe-scratch/p-19cbba22.nDWLjr; bash $P/probe.sh $P/red/moe-agent.sh $P/red wt-pass owned; bash $P/probe.sh $P/red/moe-agent.sh $P/red wt-pass default'\nThe wrapper bytes are HEAD 106284b0, which equals b97c398e for scripts/moe-agent.sh (cmp OK).\n\nEnvironment: bash 5.3.9, MINGW64_NT-10.0-26300 (MSYS 3.6.7), git 2.54.0.windows.1.\n\nOutput, the same for both legs (owned TMPDIR, and default /tmp, i.e. GATE_WORKSPACE=/tmp/moe-gate.C8tRKOER/tree):\n- [WARN] MOE_WORKTREE_GATE_INTEGRITY: the qualityGate worktree holds .moe; refusing branch commit.\n- [WARN] qualityGate initial tree integrity failed.\n- rc=1, clean=0, sparse=/*;!C:/Program Files/Git/.moe/;\n- flags=H .moe/project.json / H .moe/tasks/task-a.json / H src.txt\n- check rows: none. The gate never ran.\n\nThis reproduces QA's finding exactly. MSYS rewrites only '!/.moe/'; '/*' survives. The owned roots were removed, the control checkout is unchanged, and there is 1 worktree.",
+      "startedAt": "2026-11-01T14:20:48.146Z",
+      "completedAt": "2026-11-01T14:23:10.884Z"
     },
     {
       "stepId": "step-2",
       "description": "2. scripts/moe-agent.sh: the worktree arm, built on CQ-V04c's landed run_frozen_gate (its outcome classification stays the one place that decides passed, inconclusive or code-failure). Running seats read this file: save through a same-filesystem scratch copy, `bash -n`, then `mv -f`.\na. gate_integrity: `gate_git ls-files -z |` becomes `gate_git ls-files -z \"$@\" |`. With no argument (every shared call) the command is byte-for-byte today's.\nb. New gate_integrity_wt directly after it, with a two-line comment citing WT-S §2.2 L6:\n   if [ -e \"$GATE_WORKSPACE/.moe\" ] || [ -L \"$GATE_WORKSPACE/.moe\" ]; then\n       echo \"[WARN] MOE_WORKTREE_GATE_INTEGRITY: the qualityGate worktree holds .moe; refusing branch commit.\" >&2; return 1\n   fi\n   gate_integrity -- ':(top,exclude).moe'\n   -L is needed because -e is false for a dangling link. The exclude pathspec keeps the sparse skip-worktree bits of .moe/ entries and clears every other entry's bits, so diff-files still catches hidden source mutations. A gate-made .moe directory is untracked and passes diff-files (verified), so only the presence check catches it.\nc. run_frozen_gate [worktree], with a comment: no argument = today's full shared checkout (rail 4); `worktree` = the .moe-free arm WT-10 calls.\n   - local integrity=gate_integrity. After the existing no-gate `return 0`, when \"${1:-}\" = worktree: integrity=gate_integrity_wt, and a non-empty \"${MOE_REL:-}\" prints \"[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit.\" to stderr and returns 1 before any cleanup or mktemp (a nested project's <rel>/.moe is outside '!/.moe/'; WT-04 already stops such seats, this is defense in depth).\n   - Materialization in the arm, one brace group redirected to \"$GATE_LOG\": git -C \"$MOE_TOP\" -c core.hooksPath=/dev/null worktree add --detach --no-checkout \"$GATE_WORKSPACE\" \"$FROZEN_COMMIT\" && gate_git sparse-checkout set --no-cone '/*' '!/.moe/' && gate_git read-tree -mu HEAD. Never core.sparseCheckout=false here. A failure prints the existing \"[WARN] qualityGate workspace materialization failed.\" and returns 1; the root stays owned for the next cleanup point; no fallback to a full checkout. The shared arm keeps today's exact worktree add line.\n   - Every gate_integrity call inside run_frozen_gate (the initial check and CQ-V04c's post-gate classification) becomes \"$integrity\". Check id, child supervision, recording, refusal order, [WARN] wording, the [OK] line and cleanup stay unchanged.\nd. remove_gate_root: first line `if [ -L \"$1/tree/.moe\" ]; then rm -f -- \"$1/tree/.moe\" || return 1; fi`, commented: a gate-made .moe link is unlinked, never followed (WT-S §1.10); a failure keeps the root pending for the next cleanup point. In shared mode .moe is a real tracked directory or absent, so it never fires there.\nError handling: every new path fails closed (return 1 is a refusal the landing already turns into MOE_COMMIT_FAILED_GATE plus a rescue ref); nothing new can reach 'passed' without exit 0 and the selected integrity check.\nVerified with git 2.43 at planning: --no-checkout + sparse-checkout set + read-tree -mu HEAD materializes everything but .moe/, whose entries carry S bits; HEAD and write-tree equal the frozen pair; the control's core.sparseCheckout stays unset (extensions.worktreeConfig=true is written once to the common config, as WT-04 already does); a tracked FILE named .moe does materialize; `sparse-checkout disable` re-materializes .moe; `worktree remove --force` drops a .moe symlink without following it.\nRun the ten wt-* modes on sh until green, then every frozen mode on sh.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Reopen-1 fix, QA issue 1, at moe-agent.sh:5320-5326 in run_frozen_gate's worktree arm only (+5/-2, Edit tool, bash -n OK, LF, mode 100755).\n\nChange: the sparse patterns now go to git on stdin: `printf '%s\\n' '/*' '!/.moe/' | gate_git sparse-checkout set --no-cone --stdin`. Before, they were argv. Stdin is never MSYS-converted, so this needs no MSYS2_ARG_CONV_EXCL. The '*' form would break the POSIX mktemp -C path (rc 128), and '!/' relies on MSYS's glob-skip rule for '/*'. A 3-line comment, like the one at :3117, says why.\n- Patterns, the order worktree add -> sparse set -> read-tree -mu HEAD, the fail-closed materialization refusal and no core.sparseCheckout=false are unchanged. The shared arm is untouched.\n- The postflight.sh harness already uses the stdin form (:5628).\n\nGREEN, Git Bash probe of the REAL run_frozen_gate worktree. Same driver as step 1, on these bytes (sha256 d4cb0fd1…, the probe copy is cmp-identical). Command, from WSL at 14:25:08Z:\n\"/mnt/c/Program Files/Git/bin/bash.exe\" -c 'P=/d/moe-scratch/p-19cbba22.nDWLjr; bash $P/probe.sh $P/green/moe-agent.sh $P/green wt-pass owned; bash $P/probe.sh $P/green/moe-agent.sh $P/green wt-pass default; bash $P/probe.sh $P/green/moe-agent.sh $P/green wt-moe-dir owned'\n(bash 5.3.9, MINGW64_NT-10.0-26300 / MSYS 3.6.7, git 2.54.0.windows.1)\n- wt-pass, owned TMPDIR:\n  - Log: ' Post-flight: quality gate: bash gate.sh' then '[OK] qualityGate passed.'\n  - Result: rc=0, clean=0. Check row: '0<TAB>passed'. MOE_WORKTREE_GATE_INTEGRITY lines: 0.\n  - The gate saw:\n    - moe=absent\n    - flags=S .moe/project.json;S .moe/tasks/task-a.json;\n    - sparse-checkout=/*;!/.moe/;\n    - head = the frozen commit, tree 8dca5e2c\n    - pwd=toplevel=D:/…/wt-pass-owned-tmp/moe-gate.LtfzDDxI/tree, MOE_PROJECT_PATH = the same root.\n  - Owned tmp entries=[] (root removed). Control checkout unchanged. Worktrees: 1.\n- wt-pass, default /tmp (QA's exact case): GATE root C:/Users/Yaron/AppData/Local/Temp/moe-gate.3Uvi6ZbX. The same rc=0, '0 passed', 0 integrity lines, moe=absent, S bits and verbatim patterns. Afterwards `ls` of that root reports it does not exist.\n- wt-moe-dir (negative control): rc=1, MOE_WORKTREE_GATE_INTEGRITY 1, '0 inconclusive', stored flags S .moe/project.json, S .moe/tasks/task-a.json, H src.txt; root removed.\nRED for comparison (step 1, HEAD bytes): sparse=/*;!C:/Program Files/Git/.moe/; H bits, rc=1, gate never ran.\n\nLinux: a snapshot of HEAD scripts plus this file (cmp OK), MOE_/CLAUDE env stripped. Ran MOE_FROZEN_TEST_ONLY with all 11 wt-* modes on bash scripts/tests/postflight.sh: 'PASS frozen candidate scenarios: 11', rc 0 (14:25:53-56Z). PASS parity-check.sh. Snapshot deleted.\n\nQA's FYI is now its own row: task-7b23ea0f39424ca4ae09dc1cba5a8018, bug: moe-agent.sh:5165 hooked worktree completion under Git Bash. Probed with the real moe_commit_with_hooks:\n- WSL: rc 0.\n- Git Bash: rc 1, 'hooked-commit-config-mismatch'.\n- Only '*' changed to '!/': rc 0.\nIt is not fixed here; scope stays the same.",
+      "startedAt": "2026-11-01T14:24:05.849Z",
+      "completedAt": "2026-11-01T14:28:17.903Z"
     },
     {
       "stepId": "step-3",
       "description": "3. scripts/moe-agent.ps1: the exact twin of step 2, same sentences and codes. Keep UTF-8 with BOM and LF endings; parse with [System.Management.Automation.Language.Parser]::ParseFile under Windows PowerShell 5.1 before testing.\na. Test-MoeGateIntegrity([hashtable]$Frozen,[string]$Exclude='') passes $Exclude to Clear-MoeGateIndexFlags([string]$Top,[string]$Exclude=''). Its cmd line stays exactly 'git ls-files -z | git update-index --no-assume-unchanged --no-skip-worktree -z --stdin' when $Exclude is empty, and becomes 'git ls-files -z -- \":(top,exclude).moe\" | git update-index --no-assume-unchanged --no-skip-worktree -z --stdin' otherwise. Verified on PS 5.1 at planning: the quoted pathspec survives `cmd /d /s /c` and keeps the .moe/ S bits. Keep the single --stdin pipe and no foreach/ForEach-Object anywhere between `function Test-MoeGateIntegrity` and `function Stop-MoeGateChild`: the integrity-batch mode slices that span.\nb. New Test-MoeGateIntegrityWorktree([hashtable]$Frozen) after Clear-MoeGateIndexFlags: when $null -ne (Get-Item -LiteralPath (Join-Path $script:MoeGate.Workspace '.moe') -Force -ErrorAction SilentlyContinue) (WT-04's idiom; verified it sees a dangling junction), Write-Host the same MOE_WORKTREE_GATE_INTEGRITY sentence as sh (Yellow) and return $false; otherwise return (Test-MoeGateIntegrity $Frozen ':(top,exclude).moe').\nc. Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Command,[switch]$WorktreeMode). Existing positional calls stay shared.\n   - After `if (-not $Command) { return $true }`: when $WorktreeMode -and $Git.Rel, Write-Host the same MOE_WORKTREE_PROJECT_NOT_TOP sentence as sh (Yellow) and return $false, before Remove-MoeGateWorkspace or any directory.\n   - $integrity = 'Test-MoeGateIntegrityWorktree' when $WorktreeMode, else 'Test-MoeGateIntegrity'. Call (& $integrity $Frozen) for the initial check and inside CQ-V04c's outcome classification; a throw there still becomes 'inconclusive'.\n   - Materialization in the arm: Invoke-MoeGit -Top $Git.Top -GitArgs @('-c','core.hooksPath=NUL','worktree','add','--detach','--no-checkout',$gate.Workspace,$Frozen.Commit), then -Top $gate.Workspace @('sparse-checkout','set','--no-cone','/*','!/.moe/'), then @('read-tree','-mu','HEAD'), each only when the previous Rc is 0. A nonzero Rc throws the existing 'qualityGate workspace materialization failed'. Verified on PS 5.1: '/*' reaches git.exe unexpanded. The shared arm keeps today's call.\nd. Remove-MoeGateRoot: after the owned-path validation and before `worktree remove`: $moe = Join-Path $Entry.Workspace '.moe'; $item = Get-Item -LiteralPath $moe -Force -ErrorAction SilentlyContinue; when $item has [IO.FileAttributes]::ReparsePoint, [IO.Directory]::Delete($moe) for a container (a junction or directory link: RemoveDirectory removes the link itself; verified on a dangling junction) else [IO.File]::Delete($moe). A throw propagates, so Remove-MoeGateWorkspace keeps the entry and retries. Probe on this host: Git for Windows' `worktree remove --force` exited 0 but left a .moe junction and tree\\ behind without following it; unlinking first makes the removal complete and never reaches the link target (§1.10).\nError handling as in sh: every new path returns $false or throws into the existing catch; nothing new can produce 'passed'.\nRun the ten wt-* modes under PS 5.1 from WSL until green, then every frozen mode.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "note": "Reopen 1: scripts/moe-agent.ps1 is deliberately UNCHANGED, per QA issue 1 (\"keep ps1 unchanged and parity green\").\n- Its arm (moe-agent.ps1:5316) passes @('sparse-checkout','set','--no-cone','/*','!/.moe/') through Invoke-MoeGit, which launches git.exe natively from PowerShell. MSYS argv conversion happens only when an MSYS program such as Git Bash's bash.exe spawns a native one, so the patterns reach git verbatim.\n- That is proven on the landed bytes. The wt-pass mode asserts S bits on .moe/ entries, and it passed under PS 5.1 in the previous verification (12:53-13:38Z) and in QA's re-run on b97c398e (node.exe PS 5.1 NONE, 13:47-14:13Z).\n- `git diff --quiet HEAD -- scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1` gives rc 0, so all three are byte-identical to HEAD 53fc4e1b. The BOM is kept (ef bb bf).\n- HEAD moved 106284b0 -> 53fc4e1b during this session (a CQ-M07j1 architect checkpoint). It touched no scripts/ path, and my only diff vs HEAD is scripts/moe-agent.sh +5/-2.\n- The MODIFIED-FILES-OMITTED fallback to this step's affectedFiles (moe-agent.ps1) is noise: the file is clean.\nParity: PASS at step 2. Step 4 re-runs it, along with the full PS 5.1 harness on the new revision.",
+      "startedAt": "2026-11-01T14:28:27.006Z",
+      "completedAt": "2026-11-01T14:28:45.636Z"
     },
     {
       "stepId": "step-4",
       "description": "4. VERIFY ONCE, from the repo root, on a snapshot of HEAD plus exactly this task's four files, so both engines run the same revision. It takes tens of minutes (the PS 5.1 harness alone is about 12): run it in the background and wait for it.\n\nS=$(mktemp -d /mnt/d/moe-scratch/v-19cbba22.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && U=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && diff <(grep -oE 'MOE_WORKTREE_[A-Z0-9_]+' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_WORKTREE_[A-Z0-9_]+' scripts/moe-agent.ps1 | sort -u) && cmp <(sed -n '/<<.FROZENJS.$/,/^FROZENJS$/p' scripts/tests/postflight.sh | sed '1d;$d') <(sed -n '/frozenSuite, @.$/,/^.@, \\[Text/p' scripts/tests/postflight.ps1 | sed '1d;$d') && bash scripts/tests/parity-check.sh && env $U bash scripts/tests/worktree-landing.sh && env $U MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell\n\nWhat each link proves: the MOE_WORKTREE_ code sets of the two wrappers match (DoD 5); the two frozen-suite copies are byte-identical (mirrored cases; this cmp passes at today's HEAD); parity PASS (rail 2); WT-08T's held-out worktree-landing suite still green, unedited; postflight.sh (every frozen mode: the ten wt-* plus every shared mode, DoD 1-4) and postflight.ps1 under native Windows PowerShell 5.1 (DoD 5) each report failureClass NONE. Supply the command, exit code and outputTail to complete_task, with the snapshot path. If node.exe or powershell.exe is unreachable, say so; never report the PS 5.1 run as passed. Delete the snapshot afterwards. This is the task's one regression test run; QA re-runs the same command.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "RESUME (worker-cb8c0ad0). Fresh verification PASSED on the delivered revision.\n\nWhat happened before this session: the prior session started step 4 at 14:29Z and died during its PS 5.1 leg (~14:56Z). The wrapper recovered its dirty bytes into checkpoint 1feb9c0b at this session's preflight. 1feb9c0b holds:\n- the sh stdin fix (+5/-2);\n- +2 identical lines in each harness: wtGate also tracks a nested lib/keep.txt. The prior session added these after its step-3 note (\"harnesses unchanged\"), so they are listed here as modifiedFiles. Why they matter is in step 5.\n\nFull run, the plan's command verbatim, from the repo root. Runner: /mnt/d/moe-scratch/r3-19cbba22.V85NnN/run.sh; SigIgn 0x4, so SIGINT is not ignored and scenario W is valid.\n- START=18:29:03Z, END=19:15:06Z, EXIT=0.\n- HEAD 1feb9c0b. Snapshot /mnt/d/moe-scratch/v-19cbba22.bwtvUp: the 4 files cmp OK; deleted afterwards.\n- sha256: moe-agent.sh d4cb0fd1, moe-agent.ps1 4db1187e, postflight.sh 25817adc, postflight.ps1 9326175f.\n- Results:\n  - MOE_WORKTREE_ code sets equal; frozen suite copies cmp OK.\n  - PASS parity-check.sh.\n  - worktree-landing: 18 passed, 0 failed, 0 errors.\n  - postflight-safe bash: {\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}.\n  - node.exe postflight-safe powershell (PS 5.1): {\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}.\n- HEAD later moved to 403c4f93. No commit since 1feb9c0b touches the 4 files; hashes are unchanged.\n\nNarrow pre-check, same bytes, MOE_FROZEN_TEST_ONLY = all 11 wt-* modes: bash PASS 11 (2 s); PS 5.1 PASS 11 (23 s).\n\nFresh Git Bash evidence for QA issue 2, on the REAL run_frozen_gate worktree:\n- Driver: /mnt/d/moe-scratch/p-19cbba22.nDWLjr/probe2.sh. It is probe.sh with the 8 gate functions sliced by name and the RPCs stubbed, plus a nested lib/keep.txt.\n- Environment: bash 5.3.9, MINGW64_NT-10.0-26300, git 2.54.0.windows.1, wrapper sha d4cb0fd1.\n- Command: \"/mnt/c/Program Files/Git/bin/bash.exe\" -c 'P=/d/moe-scratch/r3-19cbba22.V85NnN; bash $P/probe2.sh $P/green/moe-agent.sh $P/green wt-pass owned; bash $P/probe2.sh $P/green/moe-agent.sh $P/green wt-pass default; bash $P/probe2.sh $P/green/moe-agent.sh $P/green wt-moe-dir owned'\n- wt-pass, owned TMPDIR:\n  - '[OK] qualityGate passed.', rc=0, clean=0, check row '0<TAB>passed', 0 MOE_WORKTREE_GATE_INTEGRITY lines.\n  - The gate saw: moe=absent; lib/keep.txt=present; flags 'S .moe/project.json;S .moe/tasks/task-a.json;H lib/keep.txt;'; info/sparse-checkout '/*;!/.moe/;'.\n  - pwd, toplevel and MOE_PROJECT_PATH were all the gate root's tree.\n  - Afterwards: owned tmp entries=[], control unchanged, 1 worktree.\n- wt-pass, default /tmp: the same. Root C:/Users/Yaron/AppData/Local/Temp/moe-gate.xblgeTfC was removed.\n- wt-moe-dir: rc=1, 1 MOE_WORKTREE_GATE_INTEGRITY line, '0 inconclusive', root removed.\n\nScratch cleanup:\n- Removed: the prior session's v-19cbba22.pYWy0G/.uc0My6 snapshots and its r-/r2- run dirs (no live WSL or Windows process referenced them), and my own narrow and mutant snapshots.\n- Kept: p-19cbba22.nDWLjr, the probe dir mem:gotcha-git-bash-stub-path-and-msys-sparse points to.\n\nOther sessions' dirty scripts/local-runner/* paths were not touched.",
+      "startedAt": "2026-11-01T14:29:09.246Z",
+      "completedAt": "2026-11-01T19:15:58.572Z"
     },
     {
       "stepId": "step-5",
       "description": "5. ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review; scope = this task's diff.\n1. Rail 3: no path of the worktree arm writes .moe into the gate checkout (no core.sparseCheckout=false, no read-tree without the pattern, no bit clearing under .moe/), and a gate that re-materializes .moe (sparse-checkout disable, checkout, link) fails with MOE_WORKTREE_GATE_INTEGRITY. On snapshot copies, apply one mutant per rule and name the mode that fails: drop -L (wt-moe-link on sh), drop the exclude pathspec (wt-pass), drop the presence check (wt-moe-dir), use the shared add line in the arm (wt-pass), make the default call select the arm (wt-default), skip the nested guard (wt-nested). Restore and cmp afterwards. The pre-unlink is §1.10 insurance: on hosts whose git and Remove-Item do not follow links its mutant survives, and the wt-moe-link-out snapshot still proves the property; say so rather than claim a kill.\n2. Rail 4 / DoD 4: with no argument, run_frozen_gate and Invoke-MoeFrozenGate run exactly today's commands (gate_integrity without arguments, Clear-MoeGateIndexFlags with '' builds the identical cmd string); every pre-existing frozen mode passes with unchanged expectations; remove_gate_root's pre-unlink cannot fire on a real directory.\n3. Evidence honesty (CQ-V04c): 'passed' only after exit 0 and the selected integrity check; .moe after exit 0 is 'inconclusive'; a before-command failure records nothing; the interrupted path (finish_gate_observation / the outer finally) is untouched.\n4. Cleanup: only owned roots under TMPDIR / GetTempPath are removed; a .moe link to the control's .moe is unlinked, never followed; a failed unlink keeps the root pending and never deletes more.\n5. Concurrency: two gates at once get distinct roots and worktree names; a first-time extensions.worktreeConfig write can lose a config-lock race and fail materialization, which is a fail-closed refusal, not data loss (WT-04 normally set it already).\n6. Parity: identical [WARN] sentences and MOE_WORKTREE_ code sets; BOMs kept; the two suite copies byte-identical; no output line starts with SKIP (postflight-safe fails on it).\n7. Scope and size: four files; no daemon, proxy, held-out test, docs or landing wiring (WT-10). Report net LOC from `git diff --numstat` (expected about 220; QA's cap is 400, tests included).\nRe-run step 4's command after any fix. Write Serena memory 'task-task-19cbba2272ee4a1c9f0a9c933f339f59-handoff' with the interface WT-10 consumes: run_frozen_gate worktree / Invoke-MoeFrozenGate ... -WorktreeMode, gate_integrity_wt / Test-MoeGateIntegrityWorktree, the two [WARN] sentences and the refusal semantics.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "note": "Adversarial self-review. Scope: this round's delta (moe-agent.sh +5/-2, +2 lines in each harness), plus a fresh read of the task-wide moe-agent.sh diff. NO fix was needed, so step 4's run (EXIT=0, 18:29-19:15Z) stands and was not repeated. No files changed in this step.\n\nDelta mutants (one changed line each; bash -n OK; ps1 BOM kept):\n- Git Bash probe (wt-pass, owned TMPDIR, real run_frozen_gate):\n  - argv form as landed in b97c398e: sparse '/*;!C:/Program Files/Git/.moe/;', H .moe bits, MOE_WORKTREE_GATE_INTEGRITY, the gate never ran. KILLED.\n  - argv + MSYS2_ARG_CONV_EXCL='*': '[WARN] qualityGate workspace materialization failed.' KILLED. This confirms QA's rc-128 warning.\n  - --stdin dropped: git silently writes its default '/*;!/*/;', and the nested path ends up missing: 'initial tree integrity failed'. KILLED.\n- Frozen suite, wt-pass, HEAD harness:\n  - The sh mutant (--stdin dropped) and the ps1 mutant (both patterns dropped, the same default fallback) FAIL on bash ('[WARN] qualityGate initial tree integrity failed.') and on PS 5.1 ('...; refusing branch commit.').\n  - The SAME mutants PASS with the b97c398e harness. The +2 lib/keep.txt fixture lines are what kill them, which is why they were added.\n- The argv-form regression is Git-Bash-only; Linux CI cannot see it. QA asked for probe evidence, not a harness case; see step 4.\n\nPlan rule-mutants, re-run on the current bytes via scratch mutants.sh. Each is exactly 1 changed line; the unmutated control passes all 5 modes. All KILLED:\n1. drop -L: wt-moe-link.\n2. drop the exclude on the skip-worktree pass: wt-pass, 'initial tree integrity failed'.\n3. no presence check: wt-moe-dir.\n4. the shared add line in the arm: wt-pass, MOE_WORKTREE_GATE_INTEGRITY.\n5. the default call selects the arm: wt-default, '.moe in the gate checkout'.\n6. no nested guard: wt-nested.\nmoe-agent.ps1 is byte-identical to b97c398e, so the round-1 P results stand (P3-P6 and P8-P10 KILLED; P1, P2 and P7 survive, as explained there).\n\nChecklist:\n- Pipeline binding: `A && printf | B && C` parses as A && (printf|B) && C. Any failure gives the existing fail-closed '[WARN] qualityGate workspace materialization failed.', and the owned root is removed at the next cleanup (probe: the star-mutant root is gone).\n- printf is a bash builtin that writes 2 short LF lines, well under the pipe buffer, so there is no SIGPIPE path. Empty stdin would mean no patterns: everything is S, the integrity check refuses, and the outcome is never 'passed'.\n- Git Bash still converts the POSIX mktemp -C path: the default-/tmp probe passed.\n- `sparse-checkout set --stdin` exists since git 2.25; --no-cone was already required.\n- The shared arm (elif) and ps1 are unchanged. [WARN] sentences are identical; the MOE_WORKTREE_GATE_INTEGRITY / _PROJECT_NOT_TOP counts are equal; parity PASS. ps1 BOM is kept with 0 CR. No harness source line starts with SKIP.\n- Concurrency, cleanup and evidence semantics are unchanged from round 1.\n- Scope: the 4 files only.\n- Size task-wide (e34b3495^..HEAD): +335/-15 = 320 net. sh +36/-4, ps1 +47/-9, each harness +126/-1. Under the 400 cap.\n\nMemory: task-…-handoff and gotcha-git-bash-stub-path-and-msys-sparse are updated. Scratch kept: /mnt/d/moe-scratch/r3-19cbba22.V85NnN (runner, log, mutator) and p-19cbba22.nDWLjr/probe2.sh.",
+      "startedAt": "2026-11-01T19:16:30.292Z",
+      "completedAt": "2026-11-01T19:17:45.364Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Governor promote under the human's 13:00Z delegation. This is the WT-10G prerequisite split from the already-promoted WT-10 by architect-76a2c8bb at 13:35Z. Its lane slot is after CQ-V04c and before WT-10.",
+  "reopenCount": 1,
+  "reopenReason": "DoD 1 fails on Git Bash. scripts/moe-agent.sh:5322 runs `sparse-checkout set --no-cone '/*' '!/.moe/'` with no MSYS guard. :3117 and :5165 guard the same call, and mem gotcha-git-bash-stub-path-and-msys-sparse records the issue.\n\nProbe on this host (Git Bash, git 2.54.0.windows.1, MSYS 3.6.7; repo tracks .moe/p.json; worktree add --no-checkout):\n1. As landed: info/sparse-checkout = '/*' + '!C:/Program Files/Git/.moe/'. read-tree -mu HEAD materializes .moe ('H .moe/p.json'), so every worktree-mode gate fails MOE_WORKTREE_GATE_INTEGRITY. Fail-closed, but it breaks rail 3 and §2.2 L6, and WT-10 cannot use the arm on Git Bash.\n2. Do NOT copy `MSYS2_ARG_CONV_EXCL='*'`: GATE_WORKSPACE is a mktemp /tmp path and '*' stops -C conversion too (\"cannot change to '/tmp/moe-gate.X4SNOFE4/tree'\", rc 128).\n3. `MSYS2_ARG_CONV_EXCL='!/'` with the POSIX -C path: rc 0, patterns verbatim, .moe absent, 'S .moe/p.json'. --stdin is fine too.\n4. MSYS leaves ':(top,exclude).moe' alone, so gate_integrity_wt and the ps1 twin need no change.\n\nEverything else is green. I re-ran the verification on b97c398e (the 4 files cmp-identical) as two parallel legs: code sets equal, suite cmp OK, parity PASS, worktree-landing 18/0/0, postflight-safe bash NONE exit 0 (13:46-14:05Z), node.exe PS 5.1 NONE exit 0 (13:47-14:13Z). DoD 2-5 in the diff: no other defect. Size about 313 net.\n\nFYI, not this reject: :5165 combines '*' with `git -C \"$scratch\"` (a mktemp /tmp path), so under Git Bash it likely fails rc 128 and falls back silently. Unverified; worth its own row.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
     "task-0921d6d76a6b40a685077245b19ac639",
-    "task-c4e076cd306f4f84a4aa08bf2a4682b2"
+    "task-c4e076cd306f4f84a4aa08bf2a4682b2",
+    "task-f58c7c75e2f7401fbd8648817d343a6b"
   ],
   "priority": "HIGH",
   "order": 16.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-0eb8c1b59526447196a33474305aab41",
+      "author": "worker-0e1ab990",
+      "content": "From CQ-V12's epic-final regression (task-b621ddc9, worker-0e1ab990, 2026-11-01): `bash scripts/tests/parity-check.sh` is RED at HEAD e34b3495, this task's own WORKING checkpoint.\n\n- Failure: \"PARITY FAIL: baseline/index 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin' missing from: moe-agent.ps1\".\n- Cause: e34b3495 landed the sh half. The ps1 half is still only in the shared tree's uncommitted scripts/moe-agent.ps1 hunk: Clear-MoeGateIndexFlags takes a full `$Update` string, and the sparse-workspace caller passes 'update-index --no-skip-worktree -z --stdin'.\n- Proof: with that dirty ps1 copied into an archive of e34b3495, parity-check gives PASS (exit 0).\n- Ask: make sure that ps1 hunk lands with this task (complete_step modifiedFiles), so CI's parity leg goes green. Postflight sh, pwsh 7.6.9 and PS 5.1 all passed at e34b3495, which has the old ps1 signature.",
+      "timestamp": "2026-11-01T13:36:19.663Z"
+    },
+    {
+      "id": "comment-727b01061de84ace8a3d0da51df568b1",
+      "author": "worker-0e1ab990",
+      "content": "Follow-up to comment-0eb8c1b5 (worker-0e1ab990, CQ-V12, 13:48Z): resolved. At your completion commit b97c398e, which lands the ps1 half, `bash scripts/tests/parity-check.sh` prints `PASS parity-check.sh` with EXIT 0. I ran it in a git-archive snapshot of b97c398e under env -i. The earlier red happened only because e34b3495 held the sh half alone. No action is needed.",
+      "timestamp": "2026-11-01T13:49:37.979Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:34:38.394Z",
-  "updatedAt": "2026-10-30T14:11:56.597Z",
+  "updatedAt": "2026-11-01T20:12:20.695Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:08.885Z",
@@ -88,17 +124,37 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:45:05.526Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-11-01T20:10:58.669Z",
+    "wallClockMs": 195953143
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "worker-cef53f62",
+    "qa-97c4310b",
+    "worker-cb8c0ad0",
+    "qa-174e8876"
   ],
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
-  "failedDodItems": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [
+    {
+      "item": "The worktree-mode gate command sees the exact frozen HEAD/tree and MOE_PROJECT_PATH pointing to its disposable root, with .moe absent despite tracked .moe records; both postflight harnesses prove it.",
+      "rejectedAt": "2026-11-01T14:16:42.650Z",
+      "rejectedBy": "qa-97c4310b"
+    }
+  ],
   "planSubmittedAt": "2026-10-30T14:11:56.571Z",
   "planningNotes": {
     "approachesConsidered": "Chosen: an optional arm on the existing runner (run_frozen_gate worktree / Invoke-MoeFrozenGate -WorktreeMode) plus gate_integrity_wt / Test-MoeGateIntegrityWorktree, reusing child supervision, evidence recording and owned cleanup (WT-S §2.2 L6 with the §1.4 sparse pattern). Tests are function-level drivers inside the existing byte-identical frozen-candidate suite, because the arm is not wired into landing until WT-10 and the row scopes exactly four files. Rejected: an end-to-end landing case (needs WT-10's wiring); a new shared .cjs suite (a fifth file, while the frozen suite is already the shared home of gate cases); excluding .moe with skip-worktree bits only (read-tree and checkout clear them; WT-S §1 rejected alternatives); generalizing the pattern to <rel>/.moe for nested projects (worktree mode requires a top-level project, §1.1, so refuse with WT-04's MOE_WORKTREE_PROJECT_NOT_TOP); a duplicated integrity helper (one pathspec argument keeps the shared command byte-identical).",
@@ -119,5 +175,263 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T14:11:56.597Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T12:14:42.574Z",
+  "commits": [
+    {
+      "sha": "e34b3495694c2202a8a40bc0138d553b2bfe1c8f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-009c883d@2026-11-01T12:10:24Z",
+      "paths": [
+        ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-009c883d",
+      "recordedAt": "2026-11-01T12:49:11.118Z",
+      "treeId": "121671436ef6e5b4f5cd0460aa1ec4e8005e50bc",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "b97c398e7c52f9cf38482313bef177a0e6cf2a38",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-009c883d@2026-11-01T12:49:44Z",
+      "paths": [
+        ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-435e8989c4d0425aa6eecf523353e5bc.json",
+        ".moe/tasks/task-5464e7259cfd479793d93f9651fb3eba.json",
+        ".moe/tasks/task-7aa6be67bcfb47bb8dca4ec6d6de35df.json",
+        ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json",
+        "scripts/moe-agent.ps1"
+      ],
+      "recordedBy": "worker-009c883d",
+      "recordedAt": "2026-11-01T13:44:41.982Z",
+      "treeId": "9a60d568b2e6b2f8fa10731d67915125f15777b6",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "1feb9c0b16e0c1f2b67bf0bce9af55217b2238a9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-cb8c0ad0@2026-11-01T18:23:43Z",
+      "paths": [
+        ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-23c803d2ec834496a730b00524f44e0b.json",
+        ".moe/tasks/task-62ec51f179494706a39045154d07e544.json",
+        ".moe/tasks/task-91ee455a601b411f97d5d951cc5f241c.json",
+        ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-cd2977e10648489fa3d63b0a376ca6fa.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-cb8c0ad0",
+      "recordedAt": "2026-11-01T18:24:09.020Z",
+      "treeId": "df276630a131651cc40497634ca869f90858fae3",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "14f546eae09906c8f56cab7923727c4acddd1054",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cb8c0ad0@2026-11-01T18:23:43Z",
+      "paths": [
+        ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+        ".moe/tasks/task-9076afab319b4056989e370039efba3d.json"
+      ],
+      "recordedBy": "worker-cb8c0ad0",
+      "recordedAt": "2026-11-01T19:18:55.370Z",
+      "treeId": "19929ac9b67a82750d920399396c56c87b30016a",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ff3d95f4857dc1298631512b72678f5210e5742a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-174e8876@2026-11-01T19:21:37Z",
+      "paths": [
+        ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-9076afab319b4056989e370039efba3d.json",
+        ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+      ],
+      "recordedBy": "qa-174e8876",
+      "recordedAt": "2026-11-01T20:12:20.695Z",
+      "treeId": "a27d948aa708552d407e2d243b87efbd55642501",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-954ec3f9f856417e96e6cbc4bd880a35"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-06910296f63b4868849dc46cbb38a731"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-253884005a59471fb7c59ef38e1f3cc1"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-31187ec10ae54dd2b03f4c166f083f31"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-3954cc09f74045a0ac8fa4b795dcb0a9"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-3def080415d3495a8557b514d6a0ab2a"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-414eae5aa1f349f49852bf01f4e617db"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-5adf0673fdad4c5f8a0956e7afcebe07"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-5c2e6cdf2494412ca0c2bc40e26d9da3"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-64809b196c4042f18c7665e1e8a14b18"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-69c024444381492c85878307df40c6e2"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-7b23ea0f39424ca4ae09dc1cba5a8018"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-828e7d21602e4cf2a0f242e024db7dea"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-91ee455a601b411f97d5d951cc5f241c"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-befdddf7e1f047a0ba4f71dd900c9b8f"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-dd1ee586b90d4fc785434454b1423e76"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-faa4d9ef330f4ef7900a00bd2b7dc049"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+    ".moe/tasks/task-9076afab319b4056989e370039efba3d.json",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-174e8876@2026-11-01T19:21:37Z",
+    "at": "2026-11-01T20:12:20.695Z"
+  },
+  "reviewStartedAt": "2026-11-01T19:18:30.990Z",
+  "verification": {
+    "command": "S=$(mktemp -d /mnt/d/moe-scratch/v-19cbba22.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && U=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && diff <(grep -oE 'MOE_WORKTREE_[A-Z0-9_]+' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_WORKTREE_[A-Z0-9_]+' scripts/moe-agent.ps1 | sort -u) && cmp <(sed -n '/<<.FROZENJS.$/,/^FROZENJS$/p' scripts/tests/postflight.sh | sed '1d;$d') <(sed -n '/frozenSuite, @.$/,/^.@, \\[Text/p' scripts/tests/postflight.ps1 | sed '1d;$d') && bash scripts/tests/parity-check.sh && env $U bash scripts/tests/worktree-landing.sh && env $U MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell",
+    "exitCode": 0,
+    "outputTail": "PID=14261\nSigIgn:\t0000000000000004\nHEAD=1feb9c0b16e0c1f2b67bf0bce9af55217b2238a9\nd4cb0fd1ea0535b0c35a1ff1da116a1ee3b31876a200ff066ae0da3f4b12d809  scripts/moe-agent.sh\n4db1187e58d407e5d94e38e867267c5a24934bf57d3b8b545807086491f96557  scripts/moe-agent.ps1\n25817adc3e3aca5dcb26f6f69b0a590cc15a0655ad2c2e8497d558565b41557b  scripts/tests/postflight.sh\n9326175f60ed828706c2795a59b1c0126082def744df081ac16323ab90ef9b5d  scripts/tests/postflight.ps1\nSTART=18:29:03Z\nVerification snapshot: /mnt/d/moe-scratch/v-19cbba22.bwtvUp\nPASS parity-check.sh\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nEND=19:15:06Z\nEXIT=0",
+    "reportedAt": "2026-11-01T19:18:30.990Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-10G reopen 1 fixed (QA qa-97c4310b: DoD 1 failed on Git Bash). Shared mode and moe-agent.ps1 are unchanged.\n\nFix (moe-agent.sh run_frozen_gate worktree arm, +5/-2): the sparse patterns now go on stdin: `printf '%s\\n' '/*' '!/.moe/' | gate_git sparse-checkout set --no-cone --stdin`, with a comment like :3117's. Stdin is never MSYS-converted, so no MSYS2_ARG_CONV_EXCL is needed; its '*' form would break the POSIX mktemp -C path. Patterns, order, the fail-closed refusal and the no-core.sparseCheckout=false rule are unchanged. ps1 needs nothing: PowerShell to git.exe does no conversion.\n\nHarness, +2 lines each (suite copies byte-identical): wtGate also tracks a nested lib/keep.txt. Without --stdin, git silently writes its default '/*' '!/*/'; the nested path makes that an integrity refusal. The mutants FAIL wt-pass on bash and PS 5.1 and PASS the b97c398e suite.\n\nGit Bash evidence (QA issue 2), the real run_frozen_gate worktree via a sliced-function driver; bash 5.3.9, MSYS 3.6.7, git 2.54.0.windows.1:\n- wt-pass, owned TMPDIR and default /tmp: rc 0, '0 passed', no MOE_WORKTREE_GATE_INTEGRITY, .moe absent with S bits, lib/keep.txt H, sparse '/*;!/.moe/;', root removed, control unchanged.\n- wt-moe-dir: refused, 'inconclusive'.\n- Mutants: argv as landed: '!C:/Program Files/Git/.moe/' and refused. '*' guard: materialization failed. No --stdin: integrity failed.\n\nSelf-review: the plan's 6 rule-mutants re-run on these bytes, all KILLED; no fix needed.\n\nVerification, fresh: the plan's command, 18:29:03-19:15:06Z, EXIT=0. Snapshot /mnt/d/moe-scratch/v-19cbba22.bwtvUp (HEAD 1feb9c0b, 4 files cmp OK, deleted afterwards).\n- Code sets equal, suite cmp OK, PASS parity.\n- worktree-landing 18/0/0.\n- postflight-safe bash NONE/Z.\n- node.exe PS 5.1 NONE/Z.\n- No later commit touches the 4 files.\n\nSize: task-wide +335/-15 = 320 net.\n\nA prior session died during the PS leg; its bytes were recovered into 1feb9c0b. task-7b23ea0f (the :5165 sibling) is planned with the same stdin form.",
+  "reviewCompletedAt": "2026-11-01T20:10:58.669Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "The worktree-mode gate command sees the exact frozen HEAD/tree and MOE_PROJECT_PATH pointing to its disposable root, with .moe absent despite tracked .moe records; both postflight harnesses prove it."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "scripts/moe-agent.sh",
+        "line": 5322,
+        "description": "Under Git Bash, MSYS rewrites the arm's '!/.moe/' sparse pattern to '!C:/Program Files/Git/.moe/', so read-tree -mu HEAD materializes .moe and run_frozen_gate worktree always fails with MOE_WORKTREE_GATE_INTEGRITY. Make the patterns reach git.exe verbatim without breaking the mktemp POSIX -C path: not '*' (probed rc 128); '!/' probed OK, or --stdin. Add a comment like the one at :3117, keep ps1 unchanged and parity green."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/moe-agent.sh",
+        "line": 5322,
+        "description": "Evidence for the fix, no harness test needed (CI runs postflight.sh only on Linux). In the step note, record the command and output of a Git Bash run of the REAL run_frozen_gate worktree: e.g. the WT_SH driver with sliced functions and stubs, a repo with tracked .moe, a trivial passing gate. It must show rc 0/passed, no MOE_WORKTREE_GATE_INTEGRITY, .moe absent with S bits, and the owned root cleaned. Then re-run the full verification command on the new revision."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 1 fails on Git Bash. scripts/moe-agent.sh:5322 runs `sparse-checkout set --no-cone '/*' '!/.moe/'` with no MSYS guard. :3117 and :5165 guard the same call, and mem gotcha-git-bash-stub-path-and-msys-sparse records the issue.\n\nProbe on this host (Git Bash, git 2.54.0.windows.1, MSYS 3.6.7; repo tracks .moe/p.json; worktree add --no-checkout):\n1. As landed: info/sparse-checkout = '/*' + '!C:/Program Files/Git/.moe/'. read-tree -mu HEAD materializes .moe ('H .moe/p.json'), so every worktree-mode gate fails MOE_WORKTREE_GATE_INTEGRITY. Fail-closed, but it breaks rail 3 and §2.2 L6, and WT-10 cannot use the arm on Git Bash.\n2. Do NOT copy `MSYS2_ARG_CONV_EXCL='*'`: GATE_WORKSPACE is a mktemp /tmp path and '*' stops -C conversion too (\"cannot change to '/tmp/moe-gate.X4SNOFE4/tree'\", rc 128).\n3. `MSYS2_ARG_CONV_EXCL='!/'` with the POSIX -C path: rc 0, patterns verbatim, .moe absent, 'S .moe/p.json'. --stdin is fine too.\n4. MSYS leaves ':(top,exclude).moe' alone, so gate_integrity_wt and the ps1 twin need no change.\n\nEverything else is green. I re-ran the verification on b97c398e (the 4 files cmp-identical) as two parallel legs: code sets equal, suite cmp OK, parity PASS, worktree-landing 18/0/0, postflight-safe bash NONE exit 0 (13:46-14:05Z), node.exe PS 5.1 NONE exit 0 (13:47-14:13Z). DoD 2-5 in the diff: no other defect. Size about 313 net.\n\nFYI, not this reject: :5165 combines '*' with `git -C \"$scratch\"` (a mktemp /tmp path), so under Git Bash it likely fails rc 128 and falls back silently. Unverified; worth its own row.",
+      "rejectedAt": "2026-11-01T14:16:42.650Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "The worktree-mode gate command sees the exact frozen HEAD/tree and MOE_PROJECT_PATH pointing to its disposable root, with .moe absent despite tracked .moe records; both postflight harnesses prove it."
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "scripts/moe-agent.sh",
+          "line": 5322,
+          "description": "Under Git Bash, MSYS rewrites the arm's '!/.moe/' sparse pattern to '!C:/Program Files/Git/.moe/', so read-tree -mu HEAD materializes .moe and run_frozen_gate worktree always fails with MOE_WORKTREE_GATE_INTEGRITY. Make the patterns reach git.exe verbatim without breaking the mktemp POSIX -C path: not '*' (probed rc 128); '!/' probed OK, or --stdin. Add a comment like the one at :3117, keep ps1 unchanged and parity green."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/moe-agent.sh",
+          "line": 5322,
+          "description": "Evidence for the fix, no harness test needed (CI runs postflight.sh only on Linux). In the step note, record the command and output of a Git Bash run of the REAL run_frozen_gate worktree: e.g. the WT_SH driver with sliced functions and stubs, a repo with tracked .moe, a trivial passing gate. It must show rc 0/passed, no MOE_WORKTREE_GATE_INTEGRITY, .moe absent with S bits, and the owned root cleaned. Then re-run the full verification command on the new revision."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-11-01T20:10:58.669Z",
+  "reviewSummary": "APPROVED: WT-10G reopen 1 fixed (qa-174e8876).\nLanding: completion 14f546ea (board) plus the same session's checkpoint 1feb9c0b (sh +5/-2, +2 per harness), both on moe/work-2026-10-24. No later commit touches the 4 files.\nVerification: the exact task.verification command (byte-compared), 19:24:39-20:09:03Z, EXIT=0. Snapshot of HEAD 7df10f5c (scripts/ = 14f546ea), deleted afterwards.\n- Code sets equal, suite cmp OK, PASS parity, worktree-landing 18/0/0.\n- postflight-safe bash NONE/Z; node.exe PS 5.1 NONE/Z.\n- MOE_FROZEN_TEST_ONLY unset, so all 11 wt-* modes and every shared mode ran on both engines.\nGit Bash (bash 5.3.9, MSYS, git 2.54.0.windows.1), real run_frozen_gate worktree via probe2.sh:\n- wt-pass with owned and default /tmp: rc 0, 0/passed, no MOE_WORKTREE_GATE_INTEGRITY. .moe absent with S bits, lib/keep.txt H, sparse '/*;!/.moe/;', frozen HEAD and tree, MOE_PROJECT_PATH = root tree. Roots removed, control unchanged.\n- wt-moe-dir: integrity refusal, inconclusive.\n- Red control b97c398e: '!C:/Program Files/Git/.moe/', H bits, refused.\nDoD:\n1. wt-pass on both harnesses, plus Git Bash.\n2. wt-moe-dir, -file, -link, -link-out refused; owned cleanup; control sentinels intact.\n3. wt-tracked, -hidden, -assume inconclusive; .moe stays S.\n4. wt-default and every old frozen mode pass; shared commands byte-identical.\n5. Command exit 0 with PS 5.1; code sets equal.\nRails: parity PASS; .moe-free on Git Bash too; shared mode unchanged; no forbidden patterns; harness hunks identical; ps1 unchanged this round.\nSize: 320 net (+335/-15), under 400. Ponytail: lean already, net -0.\nUnverified, not in the DoD: Git Bash link cleanup.\nFollow-ups already filed: task-954ec3f9, task-7b23ea0f.\nHandoff: folded into decision-worktree-gate-arm-contract, then archived (destination pre-checked free).",
+  "requiredCheckAtDone": null
 }

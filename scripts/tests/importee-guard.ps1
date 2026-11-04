@@ -219,6 +219,29 @@ export const element = <div title="import './fake-attribute'">Don't import './fa
     Send-ReviewStreamEvent @{ type='stream_event'; event=@{ type='content_block_stop' } }
     Send-ReviewToolResult 'partial-write' $false
     Assert-ReviewWitnessCount 'partial-events-are-display-only' 2
+    # A path holding a control character is dropped whole (a line break would forge a second witness).
+    $script:MoeToolWritten = @{}; $script:MoeToolPending = [hashtable]::new([StringComparer]::Ordinal)
+    $script:MoeToolSettled = [hashtable]::new([StringComparer]::Ordinal); $script:MoeToolHarvestSaturated = $false
+    $serenaProject = $fixtureRoot
+    $controlCases = @(
+        @{ Id='ctrl-edit'; Name='Edit'; Input=@{ file_path="ok.txt`nforged.txt" }; Raw="ok.txt`nforged.txt" },
+        @{ Id='ctrl-write'; Name='Write'; Input=@{ file_path=(Join-Path $fixtureRoot "a.txt`rforged.txt") }; Raw=(Join-Path $fixtureRoot "a.txt`rforged.txt") },
+        @{ Id='ctrl-serena'; Name='mcp__serena__create_text_file'; Input=@{ relative_path="b.py`nforged.py" }; Raw="b.py`nforged.py" }
+    )
+    # Not $case: the script's -Case parameter is the same variable (PowerShell names are case-insensitive).
+    foreach ($ctrl in $controlCases) {
+        $shown = @(Send-ReviewToolUse $ctrl.Id $ctrl.Name $ctrl.Input 6>&1 | Out-String)
+        Send-ReviewToolResult $ctrl.Id $false
+        # Out-String rewrites a line break, so compare with line breaks removed from both sides.
+        $flat = ($shown -join '') -replace '[\r\n]', ''
+        if (-not $flat.Contains('tool path outside the repo dropped: ' + ($ctrl.Raw -replace '[\r\n]', ''))) {
+            $failures.Add("control-character-path-dropped-line-$($ctrl.Id)"); Write-Host "FAIL importee-guard: control-character-path-dropped-line-$($ctrl.Id)"
+        } else { $passed++ }
+    }
+    Assert-ReviewWitnessCount 'control-character-path-refused' 0
+    Send-ReviewToolUse 'ctrl-plain' 'Write' @{ file_path=(Join-Path $fixtureRoot 'plain.txt') }
+    Send-ReviewToolResult 'ctrl-plain' $false
+    Assert-ReviewWitnessCount 'plain-path-after-control-refusals-is-witnessed' 1
     Write-Host "importee-guard.ps1: $passed passed, $($failures.Count) failed"
     if ($failures.Count) { exit 1 }
 } finally {

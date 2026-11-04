@@ -1,6 +1,7 @@
 package com.moe.services
 
 import com.google.gson.JsonObject
+import com.intellij.ide.lightEdit.LightEdit
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -9,6 +10,8 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project as IdeaProject
 import com.moe.model.DaemonInfo
 import com.moe.model.MoeState
+import com.moe.model.ReadinessFailure
+import com.moe.model.ReadinessReply
 import com.moe.util.MoeDaemonRegistrationTracker
 import com.moe.util.MoeProjectRegistry
 import com.moe.util.TerminalAgentLauncher
@@ -16,6 +19,7 @@ import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ServerHandshake
 import java.io.File
 import java.net.URI
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -45,6 +49,11 @@ class MoeProjectService @JvmOverloads constructor(
     @Volatile private var clientDaemonInfo: DaemonInfo? = null
     @Volatile private var connected = false
     @Volatile private var state: MoeState? = null
+    /**
+     * The daemon's board version behind [state]; null until a snapshot names one and
+     * again whenever the socket changes, so the first poll of every connection is full.
+     */
+    @Volatile private var boardVersion: Long? = null
     @Volatile private var connecting = false
     private val disposed = AtomicBoolean(false)
     private val messageDispatcher = MoeMessageDispatcher(
@@ -70,8 +79,13 @@ class MoeProjectService @JvmOverloads constructor(
             isManualDisconnect = true
             stopAutoRefresh()
         },
-        onWorkerDeregistered = { workerId -> agentSeats.acked(workerId) }
+        onWorkerDeregistered = { workerId -> agentSeats.acked(workerId) },
+        onExecutionReadiness = { reply -> completeReadiness(reply) },
+        onBoardVersion = { boardVersion = it }
     )
+    // Readiness requests awaiting the daemon's answer. The reply carries no
+    // correlation id, so one fresh answer completes every waiter.
+    private val pendingReadiness = ConcurrentLinkedQueue<CompletableFuture<ReadinessReply>>()
     private val commandSender = MoeCommandSender(
         connectedCheck = { connected && wsClient != null },
         onDisconnected = { publishStatus(false, "Not connected to daemon") },
@@ -131,7 +145,8 @@ class MoeProjectService @JvmOverloads constructor(
     }
 
     fun connect() {
-        if (disposed.get()) return
+        // LightEdit pseudo-project: never scaffold .moe/ or spawn a daemon for it.
+        if (disposed.get() || LightEdit.owns(project)) return
         // Atomic check-and-set: the open-listener and a pooled panel init can both
         // race here, so guard the connecting/connected flags under wsLock instead of
         // a non-atomic check-then-set on the @Volatile flags.
@@ -166,6 +181,13 @@ class MoeProjectService @JvmOverloads constructor(
             return
         }
         if (!daemonSupervisor.isReachable(daemonInfo)) {
+            // A live daemon bound off 127.0.0.1 is out of reach, not stale. Its bind is the operator's choice: keep its daemon.json
+            // and schedule no reconnect, which would only overwrite this status. Restart Daemon tries again.
+            daemonSupervisor.offLoopbackBindRefusal(daemonInfo)?.let {
+                connecting = false
+                publishStatus(false, it)
+                return
+            }
             // Clean up stale daemon.json so next reconnect can spawn a fresh daemon
             val deleted = daemonSupervisor.deleteDaemonInfoIfUnchanged(daemonInfo)
             log.info("Removed stale daemon.json in connect() (PID ${daemonInfo.pid} not reachable): $deleted")
@@ -319,6 +341,7 @@ class MoeProjectService @JvmOverloads constructor(
         wsLock.withLock {
             val oldClient = wsClient
             wsClient = null
+            boardVersion = null
             closeQuietly(oldClient)
 
             val uri = URI("ws://127.0.0.1:${daemonInfo.port}/ws")
@@ -330,6 +353,10 @@ class MoeProjectService @JvmOverloads constructor(
                             closeQuietly(this)
                             return
                         }
+                        // The socket's first frame, once per socket (a second hello is
+                        // refused CLIENT_CAPABILITIES_LOCKED). Sent before `connected`
+                        // flips, so no ensureConnected command can precede it.
+                        commandSender.sendClientHello()
                         connecting = false
                         connected = true
                         reconnectAttempts = 0
@@ -374,12 +401,14 @@ class MoeProjectService @JvmOverloads constructor(
                             connecting = false
                             connected = false
                             wsClient = null
+                            boardVersion = null
                             stopAutoRefresh()
                         } else {
                             log.debug("Ignoring onClose from stale WebSocket client")
                             return
                         }
                     }
+                    failPendingReadiness(ReadinessFailure.DISCONNECTED)
                     publishStatus(false, reason ?: "Disconnected")
                     scheduleReconnect()
                 }
@@ -390,12 +419,14 @@ class MoeProjectService @JvmOverloads constructor(
                             connecting = false
                             connected = false
                             wsClient = null
+                            boardVersion = null
                             stopAutoRefresh()
                         } else {
                             log.debug("Ignoring onError from stale WebSocket client")
                             return
                         }
                     }
+                    failPendingReadiness(ReadinessFailure.DISCONNECTED)
                     closeQuietly(this)
                     publishStatus(false, ex?.message ?: "WebSocket error")
                     scheduleReconnect()
@@ -414,6 +445,7 @@ class MoeProjectService @JvmOverloads constructor(
                 connected = false
                 closeQuietly(wsClient)
                 wsClient = null
+                boardVersion = null
             }
             publishStatus(false, ex.message ?: "Failed to connect")
             scheduleReconnect()
@@ -432,15 +464,49 @@ class MoeProjectService @JvmOverloads constructor(
             cancelConnectionTimers()
             val client = wsClient
             wsClient = null
+            boardVersion = null
             connected = false
             connecting = false
             client
         }
         closeQuietly(currentClient)
+        failPendingReadiness(ReadinessFailure.DISCONNECTED)
         if (notifyStatus) {
             publishStatus(false, "Disconnected")
         }
     }
+
+    /**
+     * Asks the daemon for its execution readiness ({refresh:true}). The future
+     * never completes exceptionally and never outlives [timeoutMs]: it gives
+     * Answered on a strictly parsed EXECUTION_READINESS, otherwise Failed with
+     * NOT_CONNECTED, DISCONNECTED, TIMEOUT, DAEMON_ERROR or MALFORMED.
+     */
+    fun requestExecutionReadiness(timeoutMs: Long = READINESS_TIMEOUT_MS): CompletableFuture<ReadinessReply> {
+        if (disposed.get() || !connected || wsClient == null) {
+            return CompletableFuture.completedFuture(ReadinessReply.Failed(ReadinessFailure.NOT_CONNECTED))
+        }
+        val future = CompletableFuture<ReadinessReply>()
+        // Registered before the send, so a fast reply cannot be missed, and before
+        // the timeout and removal hooks, so a completed future cannot stay pending.
+        pendingReadiness.add(future)
+        future.whenComplete { _, _ -> pendingReadiness.remove(future) }
+        future.completeOnTimeout(ReadinessReply.Failed(ReadinessFailure.TIMEOUT), timeoutMs, TimeUnit.MILLISECONDS)
+        if (!commandSender.requestExecutionReadiness()) {
+            future.complete(ReadinessReply.Failed(ReadinessFailure.NOT_CONNECTED))
+        }
+        return future
+    }
+
+    private fun completeReadiness(reply: ReadinessReply) {
+        while (true) {
+            val future = pendingReadiness.poll() ?: break
+            future.complete(reply)
+        }
+    }
+
+    private fun failPendingReadiness(reason: ReadinessFailure) =
+        completeReadiness(ReadinessReply.Failed(reason))
 
     private fun cancelConnectionTimers() {
         try {
@@ -506,7 +572,8 @@ class MoeProjectService @JvmOverloads constructor(
     fun approveTask(taskId: String, expectedPlanRevision: Long): Boolean =
         commandSender.approveTask(taskId, expectedPlanRevision)
 
-    fun releaseTask(taskId: String, reason: String? = null) = commandSender.releaseTask(taskId, reason)
+    fun releaseTask(taskId: String, reason: String? = null, force: Boolean = false) =
+        commandSender.releaseTask(taskId, reason, force)
 
     fun rejectTask(taskId: String, reason: String) = commandSender.rejectTask(taskId, reason)
 
@@ -643,7 +710,10 @@ class MoeProjectService @JvmOverloads constructor(
         refreshFuture = scheduler.scheduleAtFixedRate({
             if (disposed.get() || !connected) return@scheduleAtFixedRate
             try {
-                sendMessage("GET_STATE", JsonObject())
+                // ifBoardVersion: the daemon answers a current board without tasks/epics.
+                sendMessage("GET_STATE", JsonObject().apply {
+                    if (state != null) boardVersion?.let { addProperty("ifBoardVersion", it) }
+                })
             } catch (ex: Exception) {
                 log.debug("Auto-refresh failed: ${ex.message}")
             }
@@ -736,6 +806,8 @@ class MoeProjectService @JvmOverloads constructor(
 
     companion object {
         private const val AGENT_SEATS_KEY = "moe.launchedAgentSeats"
+        /** Covers the daemon evaluator's 11 s provider-probe guard. */
+        const val READINESS_TIMEOUT_MS = 20_000L
 
         fun getInstance(project: IdeaProject): MoeProjectService {
             return project.getService(MoeProjectService::class.java)

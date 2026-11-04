@@ -11,11 +11,12 @@ import { MAX_HOST_FRAME_BYTES, createFrameDecoder, encodeFrame, parseGuestFrame 
 import { spawn as spawnChild } from 'node:child_process';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { checkArgv, checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
+import { checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
 import {
   DEPENDENCIES_CANDIDATE_INVALID, DEPENDENCIES_FAILED, MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession,
 } from '../local-runner/check-session.mjs';
 import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
+import { sshExecutable, sshStreamArgv, transportFiles } from '../local-runner/guest-ssh.mjs';
 import {
   MAX_DEPENDENCY_BYTES, MAX_DEPENDENCY_PACKAGES, MAX_LOCKFILE_BYTES, MAX_LOCKFILES, MAX_PACKAGE_BYTES, OFFLINE_INSTALL_ARGS, admitLockfiles,
   buildDependencyCache, dependencyError,
@@ -528,9 +529,10 @@ os.open = swapping
   });
 
 // The probe reports on the job. dash forks the last command of sh -c and exports PWD to it, so the job is the probe's
-// parent: its /proc environ is the environment it was started with.
+// parent: its /proc environ is the environment it was started with. Its pid is procfs's ppid field (global): under a
+// root runner os.getppid() is a pid in GUARD's PID namespace.
 const PROBE = `import json, os
-job = os.getppid()
+job = int(open('/proc/self/stat').read().rsplit(')', 1)[1].split()[1])
 def read(name):
     return open('/proc/%d/%s' % (job, name), 'rb').read().decode()
 print(json.dumps({'cmdline': read('cmdline').split('\\0')[:-1], 'cwd': os.readlink('/proc/%d/cwd' % job),
@@ -845,9 +847,11 @@ test('K8 a real check job that removes its protected file is observed exiting 0,
 // CQ-R11e5: the check mode's offline dependency install phase. The fake toolchain's node, a /bin/sh script, logs one line
 // per install: pid, cwd, umask, open-file limit, NoNewPrivs, PATH, HOME and argv. It then hangs if its cwd holds `hang`,
 // else exits with the status in `status` (default 0). The real GUARD runs it as the test user (groups None, netns False);
-// relay() stays CHECK_RECORD's recorder, and `logged` hands it the installs logged by then.
+// relay() stays CHECK_RECORD's recorder, and `logged` hands it the installs logged by then. The pid is the global one
+// from procfs: the read builtin opens /proc/self/stat in the shell itself, whereas $$ is namespace-local as root.
 const FAKE_NODE = `#!/bin/sh
-echo "$$|$PWD|$(umask)|$(ulimit -n)|$(grep -c '^NoNewPrivs:.1' /proc/$$/status)|$PATH|$HOME|$*" >> BASE/install.log
+read -r pid rest < /proc/self/stat
+echo "$pid|$PWD|$(umask)|$(ulimit -n)|$(grep -c '^NoNewPrivs:.1' /proc/$pid/status)|$PATH|$HOME|$*" >> BASE/install.log
 [ -e hang ] && exec sleep 30
 [ -e status ] && read s < status && exit $s
 exit 0
@@ -1159,7 +1163,7 @@ test('KI9 a fault that is not the candidate\'s in any directory, or a package.js
     }
   });
 
-// CQ-R11c: the host check session. C1-C2 cover guest-bridge.mjs's checkArgv and checkFrame, C3-C6 runCheckSession through
+// CQ-R11c: the host check session. C1-C2 cover guest-bridge.mjs's checkFrame, C3-C6 runCheckSession through
 // a spawn-compatible fake provider, and C7 runCheckSession through the real supervisor's check mode.
 const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
 const OID = 'a'.repeat(40);
@@ -1168,12 +1172,22 @@ const withCheck = patch => ({ ...HOST_CHECK, ...patch });
 const entries = (...paths) => paths.map(path => ({ path, oid: OID }));
 const many = count => entries(...Array.from({ length: count }, (_, i) => `p${String(i).padStart(4, '0')}`));
 const literalFrame = check => framed(JSON.stringify({ kind: 'check', version: 1, id: check.id, command: check.command, protected: check.protected }));
+// CQ-R14d3: the session opens its check stream over the SSH route (guest-stream.mjs). Its one info read gets this fake
+// answer; the ssh client and the key directory are strings only, so no row runs a real ssh or multipass.
+const CHECK_SSH = join(tmpdir(), 'moe-stream', 'ssh');
+const CHECK_KEYS = join(tmpdir(), 'moe-stream', 'keys');
+const INFO = { state: 'Running', image_hash: 'a'.repeat(64), image_release: '24.04 LTS', cpu_count: '2', memory: {}, disks: { sda1: {} }, mounts: {},
+  ipv4: ['10.0.0.2'] };
+const infoOf = info => async (executable, args) => {
+  if (JSON.stringify(args) !== JSON.stringify(['info', NAME, '--format', 'json'])) throw new Error('unexpected provider call');
+  return { stdout: JSON.stringify({ errors: [], info: { [NAME]: info } }), stderr: '' };
+};
+const infoRun = infoOf(INFO);
+const CHECK_ROUTE = Object.freeze({ run: infoRun, ssh: CHECK_SSH, keyDir: CHECK_KEYS });
+const checkCall = (name = NAME) => [CHECK_SSH, sshStreamArgv({ ...transportFiles(name, CHECK_KEYS), name, address: '10.0.0.2', mode: 'check' }),
+  { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
 
-test('C1 checkArgv is the fixed check argv for owned names only, and checkFrame is the exact check frame or BRIDGE_INPUT_INVALID', () => {
-  const argv = checkArgv(NAME);
-  assert.deepEqual(argv, ['exec', '--no-map-working-directory', NAME, '--', 'sudo', '-n', '/opt/moe/bin/moe-supervisor', 'check']);
-  assert.ok(Object.isFrozen(argv));
-  for (const name of ['vm', '', 'moe-x', `${NAME}0`, 42, undefined]) assert.throws(() => checkArgv(name), { code: 'BRIDGE_INPUT_INVALID' }, String(name));
+test('C1 checkFrame is the exact check frame or BRIDGE_INPUT_INVALID', () => {
   assert.deepEqual(hostCheckFrame(HOST_CHECK), literalFrame(HOST_CHECK));
   for (const check of [withCheck({ id: 'a'.padEnd(64, '9._-Z') }), withCheck({ command: 'x'.repeat(1000) }), withCheck({ command: ' a\xa0b ' }),
     ...[many(2000), [], entries('a'.repeat(500)), entries('\u{1F600}'.repeat(250)), entries('a.b', 'a/b'), entries('\uffff', '\u{10000}')]
@@ -1242,10 +1256,10 @@ const exited = (code, signal = null) => ({ kind: 'observation', type: 'exit', co
 const OBS = exited(0);
 const out = (data, stream = 'stdout') => ({ kind: 'output', stream, data: Buffer.from(data).toString('base64') });
 const ended = (outcome, exitCode = null, signal = null, outputTail = '') => ({ outcome, exitCode, signal, outputTail });
-const hostCheck = (proc, options = {}) => runCheckSession({ name: NAME, check: HOST_CHECK, provider: { spawn: proc.spawn }, budgetMs: 5_000, timeoutMs: 1_000, ...options });
+const hostCheck = (proc, options = {}) => runCheckSession({ name: NAME, check: HOST_CHECK, provider: { ...CHECK_ROUTE, spawn: proc.spawn }, budgetMs: 5_000, timeoutMs: 1_000, ...options });
 
 test('C3 invalid input rejects with CHECK_SESSION_INPUT_INVALID before any spawn; an abort, spawn failure or bad child is infra-failure', async () => {
-  const provider = patch => spawn => ({ provider: { spawn, ...patch } });
+  const provider = patch => spawn => ({ provider: { ...CHECK_ROUTE, spawn, ...patch } });
   const rows = [{ name: 'vm' }, { name: undefined }, { check: withCheck({ id: '' }) }, { check: null }, { provider: null }, { provider: 'multipass' },
     provider({ spawn: 'spawn' }), provider({ executable: ' ' }), provider({ executable: 'multi\npass' }), provider({ executable: 7 }),
     ...[0, 1.5, '1', MAX_BUDGET_MS + 1, undefined].map(budgetMs => ({ budgetMs })), ...[0, 60_001, null].map(timeoutMs => ({ timeoutMs })), { signal: {} }];
@@ -1260,7 +1274,7 @@ test('C3 invalid input rejects with CHECK_SESSION_INPUT_INVALID before any spawn
   assert.deepEqual(await hostCheck(aborted, { signal: AbortSignal.abort() }), ended('infra-failure'));
   assert.equal(aborted.calls.length, 0);
   for (const spawn of [() => { throw new Error('ENOENT'); }, () => null, () => ({ ...checkProvider(), kill: undefined }), () => ({ ...checkProvider(), stderr: null })]) {
-    assert.deepEqual(await hostCheck(checkProvider(), { provider: { spawn } }), ended('infra-failure'));
+    assert.deepEqual(await hostCheck(checkProvider(), { provider: { ...CHECK_ROUTE, spawn } }), ended('infra-failure'));
   }
 });
 
@@ -1273,7 +1287,7 @@ test('C4 the check frame is the first and only stdin write, under the fixed argv
   assert.deepEqual([proc.stdin.writableEnded, proc.stdin.destroyed], [false, false]);
   proc.exit(0);
   assert.deepEqual(await promise, ended('passed', 0, null, 'ok\n'));
-  assert.deepEqual(proc.calls, [['multipass', checkArgv(NAME), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }]]);
+  assert.deepEqual(proc.calls, [checkCall()]);
   assert.deepEqual([proc.written, proc.kills, getEventListeners(signal, 'abort').length], [[hostCheckFrame(HOST_CHECK)], [], 0]);
 });
 
@@ -1312,6 +1326,7 @@ test('C5 each outcome arises only from its condition, and only hello, one observ
     fake.prepare?.(proc);
     const controller = new AbortController();
     const promise = hostCheck(proc, { signal: controller.signal, ...options });
+    await new Promise(setImmediate); // CQ-R14d3: the spawn follows the info read, so script the child once it is watched
     script(proc, controller);
     assert.deepEqual(await promise, expected, label);
     assert.deepEqual(proc.kills, fake.hung ? ['SIGKILL'] : [], label);
@@ -1398,6 +1413,7 @@ test('C8 exit 82 keeps every infra-failure and timeout precedence: any fault, fr
     fake.prepare?.(proc);
     const controller = new AbortController();
     const promise = hostCheck(proc, { signal: controller.signal, ...options });
+    await new Promise(setImmediate); // CQ-R14d3: the spawn follows the info read, so script the child once it is watched
     script(proc, controller);
     assert.deepEqual(await promise, expected, label);
     assert.deepEqual(proc.kills, label === 'EOF, then a hung provider killed' ? ['SIGKILL'] : [], label);
@@ -1456,9 +1472,9 @@ test('C7 through the real supervisor check mode, real exit codes give passed, co
         children.push(child);
         return child;
       };
-      const result = await runCheckSession({ name: NAME, check: { id: 'unit-1', command, protected: list }, provider: { spawn }, budgetMs: 20_000, timeoutMs: 5_000 });
+      const result = await runCheckSession({ name: NAME, check: { id: 'unit-1', command, protected: list }, provider: { ...CHECK_ROUTE, spawn }, budgetMs: 20_000, timeoutMs: 5_000 });
       assert.deepEqual(result, expected, command);
-      assert.deepEqual(calls.map(([executable, argv]) => [executable, argv]), [['multipass', checkArgv(NAME)]]);
+      assert.deepEqual(calls.map(([executable, argv]) => [executable, argv]), [checkCall().slice(0, 2)]);
       assert.deepEqual(existsSync(join(dir, 'sessions')) ? readdirSync(join(dir, 'sessions')).length : 0, homes, command);
     }
   });
@@ -1507,12 +1523,12 @@ test('C9 through the real supervisor, a candidate dependency refusal is code-fai
         children.push(child);
         return child;
       };
-      const result = await runCheckSession({ name: NAME, check: { id: 'unit-1', command: 'touch ran; echo ok', protected: [] }, provider: { spawn }, budgetMs: 20_000, timeoutMs: 5_000 });
+      const result = await runCheckSession({ name: NAME, check: { id: 'unit-1', command: 'touch ran; echo ok', protected: [] }, provider: { ...CHECK_ROUTE, spawn }, budgetMs: 20_000, timeoutMs: 5_000 });
       assert.deepEqual(result, expected, label);
       assert.ok(Buffer.byteLength(result.outputTail) <= 512 && /^[\x20-\x7e\n]*$/.test(result.outputTail), label);
       const log = join(dir, 'install.log');
       assert.deepEqual([calls.map(([executable, argv]) => [executable, argv]), existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0,
-        existsSync(join(dir, 'ws', 'ran'))], [[['multipass', checkArgv(NAME)]], installs, label === 'the honest project'], label);
+        existsSync(join(dir, 'ws', 'ran'))], [[checkCall().slice(0, 2)], installs, label === 'the honest project'], label);
     }
   });
 
@@ -2346,4 +2362,149 @@ test('DA10 with the real npm, a bundled dependency inside an admitted tarball in
   const bundled = join(result.dir, 'ws', 'node_modules', a, 'node_modules', e, 'bundled.txt');
   assert.deepEqual([result.status, result.relays.length, tree.entries.length, existsSync(bundled) && readFileSync(bundled, 'utf8')], [42, 1, 2, 'inside a\n'],
     String(result.stderr));
+});
+
+// CQ-R14d3 check over the SSH route. runCheckSession's one spawn is openGuestStream's ssh client, after one info read
+// through provider.run. Each carrier failure measured on Multipass 1.17.0 `exec` stdio (DESIGN comment-350cb4d0 on
+// task-fd196d13) ends in 'infra-failure' or 'timeout', never 'passed' or 'code-failure'.
+import { watchedSession } from '../local-runner/certify-bridge.mjs';
+
+const failedAs = (result, expected, label) => {
+  assert.deepEqual(result, expected, label);
+  assert.equal(['passed', 'code-failure'].includes(result.outcome), false, label);
+};
+// The child is watched only after the async info read: script it once the session holds it.
+const watching = () => new Promise(setImmediate);
+
+test('CS1 the check session spawns only the pinned ssh client with sshStreamArgv, after one info read, never `multipass exec`', async () => {
+  for (const pinned of [false, true]) {
+    const proc = checkProvider();
+    const log = [];
+    const provider = { run: async (executable, args) => { log.push([executable, ...args]); return infoRun(executable, args); }, keyDir: CHECK_KEYS,
+      spawn: (...args) => { log.push(['spawn']); return proc.spawn(...args); }, ...(pinned ? {} : { ssh: CHECK_SSH }) };
+    const promise = hostCheck(proc, { provider });
+    await watching();
+    proc.send(HELLO, OBS);
+    proc.exit(0);
+    assert.deepEqual(await promise, ended('passed', 0), String(pinned));
+    // Without provider.ssh the client is the platform's pinned in-box OpenSSH.
+    assert.deepEqual(proc.calls, [[pinned ? sshExecutable(process.platform) : CHECK_SSH, checkCall()[1], checkCall()[2]]], String(pinned));
+    assert.deepEqual(log, [['multipass', 'info', NAME, '--format', 'json'], ['spawn']], String(pinned));
+    assert.equal([...proc.calls[0][1], ...log.flat()].includes('exec'), false, String(pinned));
+    assert.deepEqual(proc.written, [hostCheckFrame(HOST_CHECK)], String(pinned));
+  }
+});
+
+test('CS2 a transport refusal is infra-failure with nothing spawned and no frame written', async () => {
+  const refusals = [['run rejects', { run: async () => { throw new Error('ENOENT'); } }], ['no ipv4', { run: infoOf({ ...INFO, ipv4: [] }) }],
+    ['relative keyDir', { keyDir: 'keys' }], ['empty ssh', { ssh: '' }]];
+  for (const [label, route] of refusals) {
+    const proc = checkProvider();
+    failedAs(await hostCheck(proc, { provider: { ...CHECK_ROUTE, ...route, spawn: proc.spawn } }), ended('infra-failure'), label);
+    assert.deepEqual([proc.calls, proc.written, proc.kills], [[], [], []], label);
+  }
+});
+
+// The Linux carrier fault (#5478): this carrier forwards only the first half of the check frame to the real supervisor's
+// check mode and then ends its stdin. The supervisor refuses before hello with its host-EOF code, 74, which reaches the
+// session only as the provider's exit, never as a frame.
+function cutCarrier(real) {
+  const carrier = Object.assign(new EventEmitter(), { stdout: real.stdout, stderr: real.stderr, kill: signal => real.kill(signal) });
+  let cut = false;
+  carrier.stdin = new Writable({ write(chunk, encoding, done) {
+    if (!cut) { cut = true; real.stdin.end(chunk.subarray(0, chunk.length >> 1)); }
+    done();
+  } });
+  real.stdin.on('error', () => {}); // the supervisor may exit before it reads the half frame
+  real.on('error', error => carrier.emit('error', error));
+  real.on('close', (code, signal) => carrier.emit('close', code, signal));
+  return carrier;
+}
+
+test('CS3 a check frame cut short reaches the real supervisor, which refuses with 74, and the session is infra-failure',
+  { skip: NO_GUEST || (process.platform !== 'linux' && 'the busy-host guard reads /proc'), timeout: 60_000 }, async t => {
+    if (busy(t)) return;
+    const dir = mkdtempSync(join(tmpdir(), 'moe-r14d3-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const [calls, children] = [[], []];
+    t.after(() => { for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+    const spawn = (executable, argv, options) => {
+      calls.push([executable, argv, options]);
+      const child = spawnChild('python3', ['-I', '-B', '-c', `${PY_LOAD}${CHECK_DIRS}${SESSION_HARNESS}`, SUPERVISOR, dir, 'ws'], { stdio: 'pipe' });
+      children.push(child);
+      return cutCarrier(child);
+    };
+    const result = await runCheckSession({ name: NAME, check: HOST_CHECK, provider: { ...CHECK_ROUTE, spawn }, budgetMs: 20_000, timeoutMs: 5_000 });
+    failedAs(result, ended('infra-failure'), 'cut');
+    assert.deepEqual([calls, children[0].exitCode, children[0].signalCode], [[checkCall()], 74, null]);
+    assert.equal(existsSync(join(dir, 'sessions')) ? readdirSync(join(dir, 'sessions')).length : 0, 0);
+  });
+
+test('CS4 a dead stdin (the Windows carrier, #3749) with no hello is timeout when the budget fires, and the hung client is killed', { timeout: 30_000 }, async () => {
+  const proc = checkProvider({ hung: true, write: () => {} }); // the write callback never fires
+  const promise = hostCheck(proc, { budgetMs: 100, timeoutMs: 1_000 });
+  failedAs(await promise, ended('timeout'), 'dead stdin');
+  assert.deepEqual([proc.calls, proc.written, proc.kills], [[checkCall()], [hostCheckFrame(HOST_CHECK)], ['SIGKILL']]);
+});
+
+test('CS5 a stdout stall after hello, mid output frame, is timeout and delivers none of that frame', { timeout: 30_000 }, async () => {
+  const proc = checkProvider({ hung: true });
+  const promise = hostCheck(proc, { budgetMs: 100, timeoutMs: 200 });
+  await watching();
+  const frame = encodeFrame(out('x'.repeat(4_096)));
+  proc.send(HELLO, frame.subarray(0, frame.length >> 1)); // then silence
+  failedAs(await promise, ended('timeout'), 'stall');
+  assert.deepEqual([proc.calls, proc.kills], [[checkCall()], ['SIGKILL']]);
+});
+
+test('CS6 ssh\'s own exit 255 is infra-failure with exitCode null before and after hello; 79, 80, 81 and 82 keep their outcomes', { timeout: 30_000 }, async () => {
+  const rows = [['255 before hello', proc => proc.exit(255), ended('infra-failure')],
+    ['255 after hello and a failing observation', proc => { proc.send(HELLO, exited(3)); proc.exit(255); }, ended('infra-failure')],
+    ['255 after hello and a passing observation', proc => { proc.send(HELLO, OBS); proc.exit(255); }, ended('infra-failure')],
+    ['79, no frame', proc => proc.exit(PROTECTED_MISMATCH), ended('skipped')],
+    ['80 after the observation', proc => { proc.send(HELLO, OBS); proc.exit(PROTECTED_CHANGED); }, ended('inconclusive', 0)],
+    ['81, no frame', proc => proc.exit(DEPENDENCIES_FAILED), ended('infra-failure')],
+    ['82, no frame', proc => proc.exit(DEPENDENCIES_CANDIDATE_INVALID), refusedCandidate]];
+  for (const [label, script, expected] of rows) {
+    const proc = checkProvider();
+    const promise = hostCheck(proc);
+    await watching();
+    script(proc);
+    const result = await promise;
+    if (label.startsWith('255')) failedAs(result, expected, label);
+    else assert.deepEqual(result, expected, label);
+    assert.deepEqual([proc.calls, proc.kills], [[checkCall()], []], label);
+  }
+});
+
+test('CS7 an abort during the info read is infra-failure: the check frame is never written and the client is killed', { timeout: 30_000 }, async () => {
+  const proc = checkProvider({ hung: true });
+  const writes = []; // every stdin.write call, even one a destroyed stream would refuse
+  const write = proc.stdin.write.bind(proc.stdin);
+  proc.stdin.write = (chunk, ...rest) => { writes.push(chunk); return write(chunk, ...rest); };
+  let release;
+  const reading = new Promise(resolve => { release = resolve; });
+  let asked = false;
+  const controller = new AbortController();
+  const promise = hostCheck(proc, { signal: controller.signal, timeoutMs: 100, provider: { ...CHECK_ROUTE, spawn: proc.spawn,
+    run: async (executable, args) => { asked = true; await reading; return infoRun(executable, args); } } });
+  await watching();
+  assert.equal(asked, true);
+  controller.abort();
+  release();
+  failedAs(await promise, ended('infra-failure'), 'abort');
+  assert.deepEqual([proc.calls, writes, proc.written, proc.kills, getEventListeners(controller.signal, 'abort').length],
+    [[checkCall()], [], [], ['SIGKILL'], 0]);
+});
+
+test('CS8 certify\'s watchedSession forwards provider.run, ssh and keyDir to the route, with its own watched spawn', { timeout: 30_000 }, async () => {
+  const executable = join(tmpdir(), 'moe-stream', 'multipass');
+  const proc = checkProvider({ write: (chunk, done) => { done(); setImmediate(() => { proc.send(HELLO, out('ok\n'), OBS); proc.exit(0); }); } });
+  const log = [];
+  const run = async (file, args) => { log.push([file, ...args]); return infoRun(file, args); };
+  const context = { name: NAME, provider: { executable, run, ssh: CHECK_SSH, keyDir: CHECK_KEYS, spawn: proc.spawn }, bounds: { sessionMs: 2_000, exitMs: 200 } };
+  const session = await watchedSession(context, 'unit-1', 'true', { limit: 64 });
+  assert.deepEqual([session.outcome, session.exitCode, session.exit, session.stdout, session.overflow, session.broken],
+    ['passed', 0, { code: 0, signal: null }, Buffer.from('ok\n'), false, false]);
+  assert.deepEqual([proc.calls, log], [[checkCall()], [[executable, 'info', NAME, '--format', 'json']]]);
 });

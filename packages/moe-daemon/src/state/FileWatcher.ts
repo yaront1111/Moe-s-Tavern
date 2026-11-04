@@ -19,7 +19,8 @@ export class FileWatcher {
   private isProcessing = false;
   private stopped = false;
   private readonly debounceMs = 150;
-  private ignorePaths = new Set<string>();
+  /** Self-write tokens: one entry and one expiry timer per path. */
+  private ignorePaths = new Map<string, NodeJS.Timeout>();
   private canonicalMoePath: string | null = null;
 
   constructor(
@@ -49,10 +50,17 @@ export class FileWatcher {
    */
   ignorePath(filePath: string): void {
     const normalized = this.normalizeEventPath(filePath);
-    this.ignorePaths.add(normalized);
-    // Auto-expire after 500ms to prevent leaks
-    const t = setTimeout(() => this.ignorePaths.delete(normalized), 500);
+    // Re-arm, never stack. An earlier call's timer must not delete the token a
+    // later write to the same file just registered, or that write's event
+    // reloads the whole store as an external edit (task-bed60fca).
+    const prior = this.ignorePaths.get(normalized);
+    if (prior) clearTimeout(prior);
+    // Auto-expire after 500ms to prevent leaks; only the current token deletes itself.
+    const t = setTimeout(() => {
+      if (this.ignorePaths.get(normalized) === t) this.ignorePaths.delete(normalized);
+    }, 500);
     if (t.unref) t.unref();
+    this.ignorePaths.set(normalized, t);
   }
 
   start(): void {
@@ -99,7 +107,9 @@ export class FileWatcher {
     if (this.stopped) return;
 
     const normalized = this.normalizeEventPath(event.path);
-    if (this.ignorePaths.has(normalized)) {
+    const token = this.ignorePaths.get(normalized);
+    if (token) {
+      clearTimeout(token);
       this.ignorePaths.delete(normalized);
       return; // Skip self-writes
     }
@@ -138,6 +148,8 @@ export class FileWatcher {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    for (const t of this.ignorePaths.values()) clearTimeout(t);
+    this.ignorePaths.clear();
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;

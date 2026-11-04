@@ -5,20 +5,31 @@ import { BoardViewProvider } from './providers/BoardViewProvider';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MetricsViewProvider } from './providers/MetricsViewProvider';
 import { ManagedVmTreeProvider } from './providers/ManagedVmTreeProvider';
-import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';
+import { AccountsTreeProvider } from './providers/AccountsTreeProvider';
+import { MoeDaemonClient, readDaemonJsonText, useProtectedStateRoot } from './services/MoeDaemonClient';
+import type { ReadinessReply } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
 import { PlanReviewPanel } from './panels/PlanReviewPanel';
 import { TaskCreatePanel } from './panels/TaskCreatePanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 import { TaskDetailPanel } from './panels/TaskDetailPanel';
-import { launchAgent, launchAllAgents, AgentProvider, AgentRole } from './util/AgentLauncher';
+import { launchAgent, launchAllAgents, AgentProvider, AgentRole, protectedAccountsTerminal } from './util/AgentLauncher';
 import { isAntigravity, registerMcpServer } from './util/AntigravityIntegration';
+import { registerTaskNotifier } from './util/TaskNotifier';
+import { AgentSeatTracker, wireAgentSeats } from './util/AgentSeatTracker';
+import { SeatPids, isProcessAlive } from './util/SeatSurvival';
 
 let daemonClient: MoeDaemonClient | undefined;
 let statusBar: ConnectionStatusBar | undefined;
 
+/** The launcher's readiness source for verified-local worker and QA seats; no client refuses. */
+const readiness = (): Promise<ReadinessReply> =>
+    daemonClient ? daemonClient.requestExecutionReadiness() : Promise.resolve({ failed: 'NOT_CONNECTED' });
+
 export function activate(context: vscode.ExtensionContext) {
+    // Before anything reads runtimeProfile: the persisted protected pin lives per user, outside every workspace.
+    useProtectedStateRoot(path.join(context.globalStorageUri.fsPath, 'protected-state'));
     const outputChannel = vscode.window.createOutputChannel('Moe');
     outputChannel.appendLine('Moe extension is activating...');
 
@@ -29,6 +40,53 @@ export function activate(context: vscode.ExtensionContext) {
     // Initialize status bar
     statusBar = new ConnectionStatusBar(daemonClient);
     context.subscriptions.push(statusBar);
+
+    // Task status notices, matching JetBrains MoeMessageDispatcher (VSC-1). Registered once per activation.
+    context.subscriptions.push(registerTaskNotifier(daemonClient, vscode.window, vscode.commands));
+
+    // Agent seats (VSC-21, matching JetBrains MoeProjectService.agentSeats). A wrapper killed with its terminal never
+    // runs the exit trap that deregisters it, so this window deregisters the seats whose terminal it lost.
+    const persist = (key: string, value: unknown): void => {
+        context.workspaceState.update(key, value).then(undefined, err =>
+            outputChannel.appendLine(`Moe could not save ${key}: ${err instanceof Error ? err.message : String(err)}`));
+    };
+    const seatPids = new SeatPids(
+        () => context.workspaceState.get('moe.agentSeatPids'),
+        pids => persist('moe.agentSeatPids', pids)
+    );
+    const seatTracker = new AgentSeatTracker(
+        () => context.workspaceState.get<string[]>('moe.agentSeats', []),
+        ids => { persist('moe.agentSeats', ids); seatPids.keep(ids); },
+        workerId => { daemonClient?.deregisterWorker(workerId, 'terminal_closed'); }
+    );
+    // Unlike a JetBrains restart, a window reload (persistent terminal sessions) or Restart Extensions leaves seat
+    // terminals running. A saved seat whose shell is still alive is open in this session too, so the first connect
+    // must not deregister it.
+    for (const workerId of seatPids.surviving(context.workspaceState.get<string[]>('moe.agentSeats', []), isProcessAlive)) {
+        seatTracker.launched(workerId);
+    }
+    const seatTerminals = new WeakMap<vscode.Terminal, string>();
+    const mapSurvivor = (terminal: vscode.Terminal): void => {
+        terminal.processId.then(pid => {
+            const workerId = seatPids.seatOf(pid);
+            if (workerId && !seatTerminals.has(terminal)) { seatTerminals.set(terminal, workerId); }
+        }, () => undefined);
+    };
+    vscode.window.terminals.forEach(mapSurvivor);
+    // A persistent terminal can reconnect after activation.
+    context.subscriptions.push(vscode.window.onDidOpenTerminal(mapSurvivor));
+    context.subscriptions.push(wireAgentSeats({
+        tracker: seatTracker,
+        onDidCloseTerminal: vscode.window.onDidCloseTerminal,
+        workerIdOf: terminal => seatTerminals.get(terminal),
+        onConnected: daemonClient.onConnectionChanged,
+        onAcked: daemonClient.onWorkerDeregistered,
+    }));
+    const onLaunched = (workerId: string, terminal: vscode.Terminal): void => {
+        seatTerminals.set(terminal, workerId);
+        seatTracker.launched(workerId);
+        terminal.processId.then(pid => seatPids.record(workerId, pid), () => undefined);
+    };
 
     // Initialize board view provider
     const boardProvider = new BoardViewProvider(context.extensionUri, daemonClient);
@@ -64,6 +122,12 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('moe.managedVms.reconcile', () => managedVms.reconcile()),
         vscode.commands.registerCommand('moe.managedVms.cleanup', () => managedVms.cleanup())
     );
+    // Claude accounts: the read-only rotation view (VSC-14); a TreeView, because the chips line and the note go in its description and message
+    const accountsProvider = new AccountsTreeProvider(daemonClient, undefined, protectedAccountsTerminal);
+    const accountsView = vscode.window.createTreeView('moe.accounts', { treeDataProvider: accountsProvider });
+    accountsProvider.attach(accountsView);
+    context.subscriptions.push(accountsProvider, accountsView, vscode.commands.registerCommand('moe.accounts.refresh', () => accountsProvider.refresh()));
+    context.subscriptions.push(...accountsProvider.registerCommands());
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('moe.connect', async () => {
@@ -334,12 +398,16 @@ export function activate(context: vscode.ExtensionContext) {
                     launchAllAgents(providerChoice.provider, context.extensionPath, {
                         customCommand: providerChoice.customCommand,
                         teamName,
+                        readiness,
+                        onLaunched,
                     });
                     vscode.window.showInformationMessage('Starting all agents...');
                 } else if (selected.role) {
-                    launchAgent(selected.role, providerChoice.provider, context.extensionPath, {
+                    void launchAgent(selected.role, providerChoice.provider, context.extensionPath, {
                         customCommand: providerChoice.customCommand,
                         teamName,
+                        readiness,
+                        onLaunched,
                     });
                 }
             } catch (err) {
@@ -359,6 +427,8 @@ export function activate(context: vscode.ExtensionContext) {
                 launchAllAgents(providerChoice.provider, context.extensionPath, {
                     customCommand: providerChoice.customCommand,
                     teamName,
+                    readiness,
+                    onLaunched,
                 });
                 vscode.window.showInformationMessage('Starting all agents (architect, worker, qa, governor)...');
             } catch (err) {

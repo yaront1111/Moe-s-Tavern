@@ -1,6 +1,6 @@
 [Setup]
 AppName=Moe
-AppVersion=0.1.0
+AppVersion=0.8.0
 AppId={{1D3A4E9B-2B35-4DD0-9D71-60C7D55D2B0A}}
 DefaultDirName={pf}\Moe
 DefaultGroupName=Moe

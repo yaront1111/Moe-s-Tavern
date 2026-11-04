@@ -39,6 +39,7 @@ import {
   readRegistry,
   recordSignIn,
   registryFilePath,
+  RegistryError,
   writeJsonAtomic,
   type Registry,
   type RegistryAccount,
@@ -53,6 +54,17 @@ import {
   type AccountUsage,
   type ParsedWindow,
 } from '../accounts/usageWindows.js';
+import { hasVmToken } from '../accounts/vmTokens.js';
+
+/**
+ * An account view plus whether the account has a VM token (an lstat: the
+ * daemon never opens the token file). Always a boolean, since a missing flag
+ * means an older daemon. The M07 integration folds vmToken into AccountView
+ * once WT-19's types/schema.ts change lands.
+ */
+export interface AccountViewWithVmToken extends AccountView {
+  vmToken: boolean;
+}
 
 /** The `accounts` CLI next to this build (dist/accounts/cli.js); the IDE runs sign-in through it. */
 const CLI_SCRIPT = fileURLToPath(new URL('../accounts/cli.js', import.meta.url));
@@ -143,32 +155,54 @@ function statKey(file: string): string {
 
 function loadRegistry(fleet: Fleet, file: string): RegistryRead {
   const key = `${file}|${statKey(file)}`;
-  if (fleet.registry?.key !== key) {
-    let value: RegistryRead;
-    try {
-      value = { registry: readRegistry(file), error: null };
-    } catch (error) {
-      value = { registry: null, error: (error as Error).message };
-    }
-    fleet.registry = { key, value };
+  if (fleet.registry?.key === key) return fleet.registry.value;
+  let value: RegistryRead;
+  try {
+    value = { registry: readRegistry(file), error: null };
+  } catch (error) {
+    value = { registry: null, error: (error as Error).message };
+    // An I/O failure (EACCES, EBUSY, EMFILE, EIO) clears without changing the
+    // file's inode, mtime or size, so a cached one would keep rotation off until
+    // the list is rewritten. Report it for this call; the next call reads again.
+    // A content error (bad JSON, failed validation) stays cached.
+    if (error instanceof RegistryError && error.readFailed) return value;
   }
-  return fleet.registry.value;
+  fleet.registry = { key, value };
+  return value;
 }
 
-function readUsage(usageFile: string, id: string): AccountUsage | null {
+/** A usage file that exists but could not be read (`unreadable` is the errno code). It says nothing about the content, so it is never cached. */
+interface UnreadableUsage {
+  unreadable: string;
+}
+
+function isUnreadable(read: AccountUsage | null | UnreadableUsage): read is UnreadableUsage {
+  return read !== null && 'unreadable' in read;
+}
+
+function readUsage(usageFile: string, id: string): AccountUsage | null | UnreadableUsage {
+  let text: string;
   try {
-    return validateUsage(JSON.parse(fs.readFileSync(usageFile, 'utf8')), id);
+    text = fs.readFileSync(usageFile, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' ? null : { unreadable: code ?? 'UNKNOWN' };
+  }
+  try {
+    return validateUsage(JSON.parse(text), id);
   } catch {
     return null;
   }
 }
 
+/** The usage of the account; while its file cannot be read, the last good sample (null when there is none), read again on the next call. */
 function loadUsage(fleet: Fleet, registryFile: string, id: string): AccountUsage | null {
   const usageFile = accountUsageFile(registryFile, id);
   const key = statKey(usageFile);
   const cached = fleet.usage.get(usageFile);
   if (cached?.key === key) return cached.value;
   const value = key === 'missing' ? null : readUsage(usageFile, id);
+  if (isUnreadable(value)) return cached?.value ?? null;
   fleet.usage.set(usageFile, { key, value });
   return value;
 }
@@ -190,7 +224,7 @@ function choose(fleet: Fleet, file: string, registry: Registry, nowMs: number): 
   return registry.accounts.find(eligible)?.id ?? null;
 }
 
-export function accountRotationView(state: StateManager, nowMs: number = Date.now()): AccountRotationView {
+export function accountRotationView(state: StateManager, nowMs: number = Date.now()): AccountRotationView & { accounts: AccountViewWithVmToken[] } {
   const fleet = fleetOf(state);
   const file = registryFilePath();
   const { registry, error } = loadRegistry(fleet, file);
@@ -206,7 +240,7 @@ export function accountRotationView(state: StateManager, nowMs: number = Date.no
     switchAtPercent: threshold,
     error,
     cli: { node: process.execPath, script: CLI_SCRIPT },
-    accounts: (registry?.accounts ?? []).map((account): AccountView => {
+    accounts: (registry?.accounts ?? []).map((account): AccountViewWithVmToken => {
       const usage = loadUsage(fleet, file, account.id);
       const until = usage ? blockedUntilMs(usage, threshold, nowMs) : null;
       return {
@@ -219,6 +253,7 @@ export function accountRotationView(state: StateManager, nowMs: number = Date.no
         blockedUntil: until === null ? null : iso(until),
         active: account.id === next,
         seats: (seats.get(account.id) ?? []).sort(),
+        vmToken: hasVmToken(file, account.id),
       };
     }),
   };
@@ -282,9 +317,13 @@ function switchReason(fleet: Fleet, file: string, registry: Registry, id: string
 async function settleLease(state: StateManager, fleet: Fleet, workerId: string, accountId: string | null, nowMs: number): Promise<void> {
   if (accountId === null) fleet.leases.delete(workerId);
   else fleet.leases.set(workerId, accountId);
-  if ((state.getWorker(workerId)?.accountId ?? null) !== accountId) {
-    await state.touchWorker(workerId, { accountId });
-  }
+  // Every lease call is the seat's presence, whatever it returns: a wrapper in
+  // MOE_ACCOUNT_WAIT runs no CLI and no heartbeat sidecar, so its lease polls are
+  // all it has. Without them the REVIEW self-heal released a waiting QA seat's row
+  // (2026-11-03). accountId is still written only when it changes; touchWorker
+  // creates no record and never refreshes a DEAD one.
+  const changed = (state.getWorker(workerId)?.accountId ?? null) !== accountId;
+  await state.touchWorker(workerId, changed ? { accountId } : {});
   refreshAccounts(state, nowMs);
 }
 
@@ -379,20 +418,9 @@ export async function recordAccountReport(state: StateManager, report: AccountRe
     }. Sign it in again in the Moe tool window (Accounts); seats use the next account meanwhile.`);
   }
 
-  // Read fresh, not from the cache: another project's daemon may have written it a moment ago.
-  const usageFile = accountUsageFile(file, account.id);
-  const { usage, changed } = mergeSample(
-    readUsage(usageFile, account.id),
-    account.id,
-    { windows: report.windows, refused: report.refused },
-    threshold,
-    nowMs
-  );
-  if (changed) {
-    writeJsonAtomic(usageFile, usage);
-    fleet.usage.delete(usageFile);
-    recorded = true;
-  }
+  const merged = mergeReportUsage(fleet, file, account.id, report, threshold, nowMs);
+  const usage = merged.usage;
+  recorded = recorded || merged.written;
   // A restart forgets every lease. The wrapper only reports the account its
   // running claude was launched under, so learn it back (after the merge, so
   // the one broadcast carries both); a lease is never replaced.
@@ -400,8 +428,38 @@ export async function recordAccountReport(state: StateManager, report: AccountRe
     await settleLease(state, fleet, report.workerId, account.id, nowMs);
   }
   refreshAccounts(state, nowMs);
-  const until = blockedUntilMs(usage, threshold, nowMs);
-  return { recorded, blockedUntil: until === null ? null : iso(until), peakPercent: peakPercent(usage, nowMs) };
+  const until = usage ? blockedUntilMs(usage, threshold, nowMs) : null;
+  return { recorded, blockedUntil: until === null ? null : iso(until), peakPercent: usage ? peakPercent(usage, nowMs) : null };
+}
+
+/**
+ * Merge a report into the account's usage file. Reads the file fresh, not from
+ * the cache: another project's daemon may have written it a moment ago. While
+ * the file cannot be read (an I/O error) nothing is merged or written: a merge
+ * from an empty base would overwrite its stored windows and refusal. The reply
+ * then reports the last good sample (null when there is none), and the next
+ * report reads the file again.
+ */
+function mergeReportUsage(
+  fleet: Fleet,
+  registryFile: string,
+  id: string,
+  report: AccountReport,
+  threshold: number,
+  nowMs: number
+): { usage: AccountUsage | null; written: boolean } {
+  const usageFile = accountUsageFile(registryFile, id);
+  const stored = readUsage(usageFile, id);
+  if (isUnreadable(stored)) {
+    logger.warn({ accountId: id, code: stored.unreadable }, 'Account usage file cannot be read; report not merged');
+    return { usage: fleet.usage.get(usageFile)?.value ?? null, written: false };
+  }
+  const { usage, changed } = mergeSample(stored, id, { windows: report.windows, refused: report.refused }, threshold, nowMs);
+  if (changed) {
+    writeJsonAtomic(usageFile, usage);
+    fleet.usage.delete(usageFile);
+  }
+  return { usage, written: changed };
 }
 
 /**
@@ -450,10 +508,10 @@ export function accountSwitchCause(change: AccountSwitch): string {
 }
 
 /**
- * The input the moe-account-switch mod adds to submit_plan and chat_wait. Only
- * a session that ends itself and is relaunched by its wrapper's loop can act
- * on a switch between tasks; every other seat keeps its account until its
- * next launch, as before.
+ * The input the moe-account-switch mod adds to submit_plan, chat_wait and
+ * claim_next_task. Only a session that ends itself and is relaunched by its
+ * wrapper's loop can act on a switch between tasks; every other seat keeps its
+ * account until its next launch, as before.
  */
 export const ACCEPTS_ACCOUNT_SWITCH = {
   type: 'boolean',
@@ -461,7 +519,8 @@ export const ACCEPTS_ACCOUNT_SWITCH = {
 } as const;
 
 /**
- * The switch for a seat between tasks: an architect after submit_plan, a
+ * The switch for a seat between tasks: an architect after submit_plan or at
+ * its next claim_next_task (a row it ended without one, e.g. archive_task), a
  * governor in chat_wait. A seat holding a task waits for its step boundary.
  */
 export function idleSwitchFor(state: StateManager, workerId: string | undefined, nowMs: number = Date.now()): AccountSwitch | null {

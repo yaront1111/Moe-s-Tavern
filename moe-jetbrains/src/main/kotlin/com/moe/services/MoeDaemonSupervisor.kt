@@ -18,9 +18,11 @@ import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Owns daemon discovery, spawn backoff, and the lifecycle of the process started by the plugin.
@@ -39,12 +41,17 @@ class MoeDaemonSupervisor(
     private val installedRoot: () -> File? = { RuntimeSelectionPolicy.installedRoot() },
     private val nodeExecutable: (() -> String?)? = null,
     private val processLookup: (Long) -> ProcessHandle? = { ProcessHandle.of(it).orElse(null) },
+    // MOE_DAEMON_COMMAND, injected by tests because a JVM cannot change its own environment.
+    private val daemonCommandOverride: () -> String? = { System.getenv("MOE_DAEMON_COMMAND") },
     private val replaceConfirmer: (String, Int) -> Boolean = ::confirmDaemonReplacement,
     private val runStop: (ProcessBuilder) -> Int? = { runStopProcess(it, processStarter) },
     private val onDispatchThread: () -> Boolean = { ApplicationManager.getApplication()?.isDispatchThread == true },
     private val sleep: (Long) -> Unit = Thread::sleep,
     private val exitTimeoutMs: Long = EXIT_TIMEOUT_MS,
-    private val windowsRestart: () -> Boolean = ::isWindowsHost
+    private val windowsRestart: () -> Boolean = ::isWindowsHost,
+    private val docSync: (File, Boolean) -> Unit = ::syncBundledDocs,
+    // This IDE's own pid namespace, injected by tests; null when it cannot be read (not Linux).
+    private val ownPidNamespace: () -> String? = { readOwnPidNamespace() }
 ) {
     private val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
     private val gson = Gson()
@@ -57,6 +64,8 @@ class MoeDaemonSupervisor(
     private val replacementInFlight = AtomicBoolean()
     // Held while a Windows restart stops the old tree: a daemon spawned meanwhile would be orphaned by the next spawn.
     private val windowsRestartInFlight = AtomicBoolean()
+    // Starts in progress. Each side sets its own atomic before reading the other's, so a start and a Windows restart never overlap.
+    private val startsInFlight = AtomicInteger()
     // A refused restart retains its captured authority until a later restart confirms the entire tree gone.
     @Volatile private var unresolvedWindowsTree: OldTree? = null
     private var pendingReplacement: ReplacementTarget? = null
@@ -65,10 +74,16 @@ class MoeDaemonSupervisor(
         fun alive(): Boolean = target.isAlive || parent?.isAlive == true
     }
 
+    // Only a regular file reached without a final link is opened: a link, FIFO, directory or device reads as absent
+    // unread, and so is never deleted. Residual: a live local process that swaps the file after the check can still block.
     private fun parseDaemonInfo(file: File): DaemonInfo? {
         return try {
-            if (!file.exists()) return null
-            val bytes = file.inputStream().use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }
+            val path = file.toPath()
+            if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) log.warn("Ignoring .moe/daemon.json: not a regular file")
+                return null
+            }
+            val bytes = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS).use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }
             if (bytes.size > MAX_DAEMON_JSON_BYTES) {
                 log.warn("Ignoring .moe/daemon.json: larger than ${MAX_DAEMON_JSON_BYTES / 1024} KiB")
                 return null
@@ -104,6 +119,15 @@ class MoeDaemonSupervisor(
     }
 
     fun ensureDaemonRunning(): Boolean {
+        startsInFlight.incrementAndGet()
+        return try {
+            ensureDaemonRunningUnlessRestarting()
+        } finally {
+            startsInFlight.decrementAndGet()
+        }
+    }
+
+    private fun ensureDaemonRunningUnlessRestarting(): Boolean {
         if (windowsRestartInFlight.get() || unresolvedWindowsTree != null) return false
         if (profile() != RuntimeProfile.PROTECTED) return ensureDaemonRunningImpl()
         // Cover the fall-through spawn too: stop may remove metadata before the old processes exit.
@@ -136,8 +160,16 @@ class MoeDaemonSupervisor(
             null
         }
         if (info != null && sameProject == true && isReachable(info)) {
-            if (isOtherSideOfWsl(info.projectPath, isWindows())) return false
+            if (pidUnjudgeable(info)) return false
             if (!replacedUnverified(info)) return false
+        }
+
+        // A live daemon bound off 127.0.0.1 is out of reach, not stale: keep its daemon.json and start no second daemon.
+        val bindRefusal = if (info != null && sameProject == true) offLoopbackBindRefusal(info) else null
+        if (bindRefusal != null) {
+            log.warn(bindRefusal)
+            onStatus(false, bindRefusal)
+            return false
         }
 
         // Clean up stale daemon.json so connectWithRetry reads fresh data from the new daemon
@@ -159,13 +191,21 @@ class MoeDaemonSupervisor(
 
         val projectBasePath = basePath.ifBlank { return false }
         val isProtected = profile() == RuntimeProfile.PROTECTED
-        val direct = if (isProtected) protectedCommandOrRefuse(projectBasePath) ?: return false else buildDirectDaemonCommand(projectBasePath)
+        // A set MOE_DAEMON_COMMAND wins over every daemon script; the protected profile never reads the environment.
+        val overrideCommand = if (isProtected) null else daemonCommandOverrideOrNull()
+        val direct = when {
+            isProtected -> protectedCommandOrRefuse(projectBasePath) ?: return false
+            overrideCommand != null -> null
+            else -> buildDirectDaemonCommand(projectBasePath)
+        }
+        // This plugin is about to start its own daemon, which serves the plugin's bundled docs.
+        syncDocs(File(projectBasePath, ".moe"), upgrade = true)
 
         try {
             val pb = if (direct != null) {
                 ProcessBuilder(direct)
             } else {
-                val command = buildDaemonCommand(projectBasePath)
+                val command = buildDaemonCommand(projectBasePath, overrideCommand)
                 if (isWindows()) {
                     ProcessBuilder("cmd", "/c", command)
                 } else {
@@ -276,7 +316,7 @@ class MoeDaemonSupervisor(
         val file = File(basePath, ".moe/daemon.json")
         if (Files.notExists(file.toPath())) true else {
             val info = parseDaemonInfo(file)
-            info != null && !isOtherSideOfWsl(info.projectPath, isWindows()) && info.pid > 0 && !isProcessAlive(info.pid)
+            info != null && !pidUnjudgeable(info) && info.pid > 0 && !isProcessAlive(info.pid)
         }
     } catch (_: Exception) {
         false
@@ -314,6 +354,11 @@ class MoeDaemonSupervisor(
                 "this IDE can neither see nor signal processes there. Check what that process is and stop it there yourself if it is a Moe daemon, " +
                 "then use Restart Daemon."
         }
+        if (info != null && isOtherPidNamespace(info)) {
+            return "Restart Daemon did not stop pid ${info.pid}, which .moe/daemon.json records in another pid namespace (for example a container): " +
+                "this IDE can neither see nor signal that process. Stop that daemon where it runs (for example with docker stop), " +
+                "then use Restart Daemon."
+        }
         if (windowsRestart()) return stopWindowsRestart(info)
         if (info == null) return null
         // An absent pid reads as 0, and kill(2) takes 0 and -1 as process groups: neither names a daemon.
@@ -341,8 +386,9 @@ class MoeDaemonSupervisor(
     // Today's guards pick the daemon.json process; signals then reach only this IDE's spawn tree or a PROTECTED-verified one.
     private fun stopWindowsRestart(info: DaemonInfo?): String? {
         if (!windowsRestartInFlight.compareAndSet(false, true)) return RESTART_IN_PROGRESS
-        val isProtected = profile() == RuntimeProfile.PROTECTED
         return try {
+            if (startsInFlight.get() > 0) return START_IN_PROGRESS
+            val isProtected = profile() == RuntimeProfile.PROTECTED
             // An absent pid reads as 0; a dead pid may be reused: neither is ever signaled.
             val pid = info?.pid?.takeIf { it > 0 && isProcessAlive(it) }
             val run = try {
@@ -625,47 +671,65 @@ class MoeDaemonSupervisor(
                 false
             }
         }
-        // Always sync role docs and skills to ensure agents get latest production-ready versions
-        try {
-            MoeProjectInitializer.syncRoleDocs(moeDir)
-        } catch (ex: Exception) {
-            log.debug("Failed to sync role docs: ${ex.message}")
-        }
-        try {
-            MoeProjectInitializer.syncSkills(moeDir)
-        } catch (ex: Exception) {
-            log.debug("Failed to sync skills: ${ex.message}")
-        }
+        // Create missing docs only: a live daemon rewrote these at its own start and may be newer than this
+        // plugin's bundle. Stale copies are upgraded by the daemon at every start, or by the spawn path below.
+        syncDocs(moeDir, upgrade = false)
         return true
     }
 
-    internal fun buildDaemonCommand(basePath: String): String {
-        val raw = System.getenv("MOE_DAEMON_COMMAND")?.trim()
-        if (!raw.isNullOrBlank()) {
-            val normalized = raw.trim().trim('"')
-            if (raw.contains("{projectPath}")) {
-                return raw.replace("{projectPath}", basePath)
+    private fun syncDocs(moeDir: File, upgrade: Boolean) {
+        try {
+            docSync(moeDir, upgrade)
+        } catch (ex: Exception) {
+            log.debug("Failed to sync bundled docs: ${ex.message}")
+        }
+    }
+
+    /**
+     * The shell command that starts the daemon. A non-blank [overrideCommand] (MOE_DAEMON_COMMAND) is rewritten:
+     * `{projectPath}` is substituted, and a command carrying it or `--project` is otherwise used as written. Any other
+     * command gets `start` unless a word after the first is a daemon subcommand, then `--project "<basePath>"`.
+     * `start` is only appended: the daemon reads its subcommand only as its first argument (packages/moe-daemon
+     * parseArgs, `args[0] || 'start'`), so nothing appended fixes a command with arguments of its own, and
+     * CONFIGURATION.md tells the operator to name it. WSL agent mode appends ` --host wsl` unless a word of the
+     * command is `--host`. With no override the installed start-daemon.cmd, else `moe-daemon start`, is used.
+     */
+    internal fun buildDaemonCommand(basePath: String, overrideCommand: String? = daemonCommandOverrideOrNull()): String {
+        val hostSuffix = if (wslAgentsEnabled()) " --host $WSL_BIND_HOST" else ""
+        val raw = overrideCommand?.trim()?.takeIf { it.isNotEmpty() }
+        if (raw != null) {
+            val words = commandWords(raw)
+            val command = when {
+                raw.contains("{projectPath}") -> raw.replace("{projectPath}", basePath)
+                raw.contains("--project") -> raw
+                words.drop(1).any { it in daemonSubcommands } -> "$raw --project \"$basePath\""
+                else -> "$raw start --project \"$basePath\""
             }
-            val hasProject = raw.contains("--project")
-            if (!hasProject) {
-                val needsStart = normalized.endsWith(".cmd", true) ||
-                    normalized.endsWith(".ps1", true) ||
-                    normalized.endsWith(".js", true) ||
-                    normalized.equals("moe-daemon", true)
-                val withStart = if (needsStart && !raw.contains(" start")) "$raw start" else raw
-                return "$withStart --project \"$basePath\""
-            }
-            return raw
+            return if ("--host" in words) command else command + hostSuffix
         }
 
         val installed = resolveInstalledDaemonCommand(basePath)
-        val hostSuffix = if (wslAgentsEnabled()) " --host $WSL_BIND_HOST" else ""
         if (installed != null) {
             return installed + hostSuffix
         }
 
         return "moe-daemon start --project \"$basePath\"$hostSuffix"
     }
+
+    private fun daemonCommandOverrideOrNull(): String? = try {
+        daemonCommandOverride()?.trim()?.takeIf { it.isNotEmpty() }
+    } catch (ex: Exception) {
+        log.warn("Cannot read MOE_DAEMON_COMMAND; starting the daemon without it", ex)
+        null
+    }
+
+    // The daemon CLI's subcommands: the word cases of main() in packages/moe-daemon/src/index.ts, plus accounts.
+    private val daemonSubcommands =
+        setOf("start", "stop", "status", "init", "doctor", "version", "accounts", "check-architecture", "_run")
+
+    /** The command's words as a shell splits them, quotes removed: a quoted path with spaces is one word. */
+    private fun commandWords(command: String): List<String> =
+        Regex("\"[^\"]*\"|'[^']*'|\\S+").findAll(command).map { it.value.trim('"', '\'') }.toList()
 
     private fun buildDirectDaemonCommand(basePath: String): List<String>? {
         val script = resolveLocalDaemonScript(basePath) ?: return null
@@ -889,10 +953,51 @@ class MoeDaemonSupervisor(
     fun isPortOpen(port: Int): Boolean = portProbe(port, PORT_CHECK_TIMEOUT_MS)
 
     fun isReachable(info: DaemonInfo): Boolean = try {
-        (isOtherSideOfWsl(info.projectPath, isWindows()) || isProcessAlive(info.pid)) && isPortOpen(info.port)
+        (pidUnjudgeable(info) || isProcessAlive(info.pid)) && isPortOpen(info.port)
     } catch (ex: Exception) {
         log.debug("Failed to check daemon reachability: ${ex.message}")
         false
+    }
+
+    /**
+     * True when [info] was written in another pid namespace than this IDE's (a container, another WSL distro), so
+     * its pid names no process here. As for [isOtherSideOfWsl], that pid is never probed or signalled and the port
+     * alone judges the record. Only a well-formed `pid:[N]` counts, because daemon.json is repository content. An
+     * absent or malformed value, or this IDE's own namespace, keeps the pid rules. With no readable own namespace
+     * (not Linux), any recorded value differs.
+     */
+    fun isOtherPidNamespace(info: DaemonInfo): Boolean {
+        val recorded = info.pidNamespace ?: return false
+        return PID_NAMESPACE.matches(recorded) && recorded != ownPidNamespace()
+    }
+
+    private fun pidUnjudgeable(info: DaemonInfo): Boolean =
+        isOtherSideOfWsl(info.projectPath, isWindows()) || isOtherPidNamespace(info)
+
+    /**
+     * Why the daemon [info] names must be kept although [isReachable] failed; null to go on as before. A live
+     * daemon whose recorded bindHost does not serve 127.0.0.1 (the only address this plugin dials) is out of
+     * reach, not stale: deleting its daemon.json and spawning would start a second writer on the same .moe/.
+     *
+     * bindHost is only compared and shown, never dialed, resolved or probed: daemon.json is repository content.
+     * An absent, empty or loopback-serving bind, a pid <= 0 (no daemon has it; on Windows 0 is the idle process),
+     * a record from the other side of the WSL boundary or from another pid namespace ([isOtherPidNamespace]; either
+     * way its pid lives in another namespace and is never probed) or a dead pid all read as null. The pid is probed
+     * last. Any failure also reads as null, as in [isReachable].
+     */
+    fun offLoopbackBindRefusal(info: DaemonInfo): String? = try {
+        val host = info.bindHost
+        when {
+            host.isNullOrEmpty() || host in LOOPBACK_SERVING_BIND_HOSTS -> null
+            info.pid <= 0 || pidUnjudgeable(info) || !isProcessAlive(info.pid) -> null
+            // Fixed words first, never the host, so a Swing label never renders repository text as HTML.
+            else -> "The Moe daemon for this project (pid ${info.pid}) listens on $host, but this IDE connects on 127.0.0.1 only, " +
+                "so Moe kept .moe/daemon.json and started no second daemon. Stop that daemon, or restart it without --host " +
+                "or MOE_BIND_HOST, then use Restart Daemon."
+        }
+    } catch (ex: Exception) {
+        log.debug("Failed to check the daemon.json bindHost: ${ex.message}")
+        null
     }
 
     /**
@@ -944,15 +1049,26 @@ class MoeDaemonSupervisor(
             (if (windows) Regex("""^/(?![\\/])""") else Regex("""^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])"""))
                 .containsMatchIn(projectPath)
 
-        internal fun isSameProject(path: String, base: String): Boolean =
-            DaemonIdentityProbe.comparableProjectPath(path) == DaemonIdentityProbe.comparableProjectPath(base) ||
-                File(path).canonicalPath == File(base).canonicalPath
+        // The daemon's pidNamespace format (packages/moe-daemon/src/server/probeHost.ts PID_NAMESPACE, task-da89f620).
+        internal val PID_NAMESPACE = Regex("""^pid:\[[0-9]{1,20}\]$""")
+
+        /** This process's pid namespace, readlink /proc/self/ns/pid on Linux; null when unreadable (not Linux) or malformed. Never throws. */
+        internal fun readOwnPidNamespace(
+            link: () -> String = { Files.readSymbolicLink(File("/proc/self/ns/pid").toPath()).toString() }
+        ): String? = try {
+            link().takeIf { PID_NAMESPACE.matches(it) }
+        } catch (_: Exception) {
+            null
+        }
+
+        internal fun isSameProject(path: String, base: String): Boolean = DaemonIdentityProbe.isSameProjectPath(path, base)
         private const val STOP_TIMEOUT_MS = 20_000L
         private const val NOT_STARTED_HERE = "this IDE did not start it from the installed Moe runtime"
         private const val STOP_FAILED = "the stop request failed"
         private const val INCOMPLETE_RESTART = "Restart Daemon did not start a new Moe daemon: it could not confirm that the old one stopped. " +
             "Use Restart Daemon again."
         private const val RESTART_IN_PROGRESS = "Restart Daemon is already stopping the old Moe daemon. Wait for it to finish."
+        private const val START_IN_PROGRESS = "Restart Daemon did not run: Moe is starting the daemon. Wait for it to finish, then use Restart Daemon."
         private const val MAX_ANCESTORS = 64
         private const val EXIT_TIMEOUT_MS = 15_000L
         private const val POLL_MS = 250L
@@ -990,11 +1106,30 @@ class MoeDaemonSupervisor(
         // The daemon's symbolic bind host: loopback plus the WSL virtual adapter, never every interface.
         private const val WSL_BIND_HOST = "wsl"
 
+        // The binds that serve 127.0.0.1, the only address this plugin dials: the daemon's probeHostFor
+        // (packages/moe-daemon/src/server/probeHost.ts) probes each at 127.0.0.1. The daemon never records 127.0.0.1 itself.
+        private val LOOPBACK_SERVING_BIND_HOSTS = setOf("127.0.0.1", "0.0.0.0", "::", WSL_BIND_HOST)
+
         // The daemon writes a few hundred bytes; 64 KiB still fits a 32K-character project path.
         internal const val MAX_DAEMON_JSON_BYTES = 64 * 1024
 
         private val PORT_CHECK_TIMEOUT_MS: Int =
             System.getProperty("moe.portCheckTimeoutMs")?.toIntOrNull() ?: 200
+
+        /** Each sync logs its own failure, so a role-doc failure never skips the skills or blocks the caller. */
+        private fun syncBundledDocs(moeDir: File, upgrade: Boolean) {
+            val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
+            try {
+                MoeProjectInitializer.syncRoleDocs(moeDir, upgrade)
+            } catch (ex: Exception) {
+                log.debug("Failed to sync role docs: ${ex.message}")
+            }
+            try {
+                MoeProjectInitializer.syncSkills(moeDir, upgrade = upgrade)
+            } catch (ex: Exception) {
+                log.debug("Failed to sync skills: ${ex.message}")
+            }
+        }
 
         private fun defaultProcessAliveProbe(pid: Int): Boolean {
             val handle = ProcessHandle.of(pid.toLong())

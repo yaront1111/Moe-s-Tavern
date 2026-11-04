@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ActivityEvent } from '../types/schema.js';
+import { ACTIVITY_EVENT_TYPES } from '../types/schema.js';
 import { invalidInput, invalidState } from '../util/errors.js';
 
 export const ACTIVITY_LOG_DEFAULT_LIMIT = 10;
@@ -9,6 +10,10 @@ export const ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS = 500;
 export const ACTIVITY_LOG_MAX_PAYLOAD_CHARS = 2000;
 export const ACTIVITY_LOG_MAX_OFFSET = 10000;
 export const ACTIVITY_LOG_FILTER_SCAN_LIMIT = 5000;
+
+// The only event types a query can return: the log reader skips any line whose
+// event is not one of these (state/activityLog.ts), so no other value can match.
+const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set(ACTIVITY_EVENT_TYPES);
 
 interface ActivityLogParams {
   taskId?: string;
@@ -135,6 +140,9 @@ export function queryActivityLog(state: StateManager, params: NormalizedActivity
     const types = new Set(params.eventTypes);
     events = events.filter(e => types.has(e.event));
   }
+  // Reported, never refused (additive contract): an unknown value matches
+  // nothing, so name it rather than let an empty page read as "no such events".
+  const unknownEventTypes = [...new Set(params.eventTypes ?? [])].filter(t => !KNOWN_EVENT_TYPES.has(t));
 
   const matchingWithinScan = events.length;
   // hasMore must be filter-AWARE: it reports whether more MATCHING events exist
@@ -151,6 +159,7 @@ export function queryActivityLog(state: StateManager, params: NormalizedActivity
     events,
     count: events.length,
     hasMore,
+    ...(unknownEventTypes.length > 0 ? { unknownEventTypes } : {}),
     filters: {
       taskId: params.taskId || null,
       epicId: params.epicId || null,
@@ -189,7 +198,7 @@ export function getActivityLogTool(_state: StateManager): ToolDefinition {
         eventTypes: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Filter by event types (e.g. STEP_COMPLETED, TASK_STATUS_CHANGED)'
+          description: 'Filter by event types (e.g. STEP_COMPLETED, TASK_UPDATED, TASK_BLOCKED). A value that is not an activity event type matches nothing and is echoed back in unknownEventTypes.'
         },
         limit: { type: 'number', description: `Max events to return (default ${ACTIVITY_LOG_DEFAULT_LIMIT}, max ${ACTIVITY_LOG_MAX_LIMIT}). Narrow with taskId/epicId/eventTypes for cheaper queries.` },
         offset: { type: 'number', description: `Skip first N matching events (default 0, max ${ACTIVITY_LOG_MAX_OFFSET})` },

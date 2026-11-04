@@ -74,6 +74,8 @@ If neither is available, the hook silently skips the event.
 
 **Port mismatch** — `.moe/daemon.json` records the port the daemon picked. If you see `CONNECT_FAILED`, the daemon probably crashed without cleaning up the file. Stop it (`moe-daemon stop --project <path>`) and start again.
 
+**WSL agent mode** — The plugin dials `MOE_DAEMON_HOST` when it is set, else a `host` recorded in `.moe/daemon.json`, else 127.0.0.1; `moe-agent.sh` exports `MOE_DAEMON_HOST` for the WSL seats it launches. It never dials daemon.json's `bindHost` (`wsl` is a bind mode, not an address). Loopback inside WSL is not the Windows host, so on WSL a `CONNECT_FAILED` means `MOE_DAEMON_HOST` is unset or wrong: set it to the address the Windows daemon is reachable at (the WSL gateway in NAT mode, `127.0.0.1` in mirrored mode).
+
 **Hook is silent** — Set `MOE_DISABLE_TOOL_HOOK=0` and verify `MOE_WORKER_ID` is set, then re-run an MCP tool. The hook logs failures to stderr (visible in Claude Code's logs).
 
 **Wrong project picked up** — Set `MOE_PROJECT_PATH=<absolute path>` to force the plugin to use a specific project. This overrides cwd-walk and the registry fallback.

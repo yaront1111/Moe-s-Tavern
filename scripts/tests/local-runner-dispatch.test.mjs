@@ -135,6 +135,33 @@ test('E: an environment outside settings.checkEnvironments is never dispatched a
   }
 });
 
+const WELL_FORMED = `moe-local-vm-v1:${'ab01'.repeat(16)}`;
+test('E2: an unlisted environment of the fixed form is named in the stop; nothing is dispatched', async () => {
+  const h = harness(context({ envs: [ENV] }), { environment: WELL_FORMED });
+  const summary = await run(h);
+  assert.deepEqual(summary, { taskId: TASK, candidateId: 'cand-1', results: [], stopped: { code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: WELL_FORMED } });
+  assert.deepEqual(h.trace(), ['get_context', 'create', 'delete']);
+  assert.deepEqual([Object.isFrozen(summary), Object.isFrozen(summary.stopped)], [true, true]);
+});
+
+test('E3: an unlisted environment of any other form stops with the code alone', async () => {
+  const hex = 'ab01'.repeat(16);
+  for (const [kind, environment] of [['wrong prefix', `moe-local-vm-v2:${hex}`], ['text before the prefix', `x moe-local-vm-v1:${hex}`],['uppercase hex', `moe-local-vm-v1:${hex.toUpperCase()}`],
+    ['63 hex', `moe-local-vm-v1:${hex.slice(1)}`], ['65 hex', `moe-local-vm-v1:${hex}a`], ['trailing newline', `moe-local-vm-v1:${hex}\n`],
+    ['control character', `moe-local-vm-v1:${hex.slice(1)}\x1b`], ['number', 7], ['null', null], ['object', { toString: () => WELL_FORMED }],
+    ['String object', new String(WELL_FORMED)]]) {
+    const h = harness(context({ envs: [ENV] }), { environment });
+    assert.deepEqual((await run(h)).stopped, { code: 'RUNNER_ENVIRONMENT_NOT_APPROVED' }, kind);
+    assert.deepEqual(h.trace(), ['get_context', 'create', 'delete'], kind);
+  }
+});
+
+test('E4: the CLI line names the unlisted environment and exits 2', async t => {
+  const log = [];
+  const { exit, report } = await dispatchCli(await landedSeam(t, log, { remove: 'deleted' }), log, { ctx: context({ envs: [ENV] }) });
+  assert.deepEqual([exit, report.stopped.code, report.stopped.environment], [2, 'RUNNER_ENVIRONMENT_NOT_APPROVED', JOB_ENV]);
+});
+
 test('F: a daemon refusal stops the run, naming its codeName, with no observation and no further check', async () => {
   const h = harness(context(), { tools: { 'moe.record_check_dispatch': [fail('RUNNER_TOOL_ERROR', 'CHECK_DEFINITION_NOT_APPROVED')] } });
   assert.deepEqual((await run(h)).stopped, { code: 'RUNNER_TOOL_ERROR', codeName: 'CHECK_DEFINITION_NOT_APPROVED' });
@@ -419,7 +446,7 @@ test('CD2 a deleted VM with an unverified workspace is ordinary inconclusive: it
 
 test('CD3 a run rejected before its dispatch is accepted reports the failed delete with its cause, and never an observation', async t => {
   for (const [label, ctx, tools, trace, cause] of [
-    ['unlisted environment', context({ envs: [ENV] }), () => ({}), UNREADY, { causeCode: 'RUNNER_ENVIRONMENT_NOT_APPROVED' }],
+    ['unlisted environment', context({ envs: [ENV] }), () => ({}), UNREADY, { causeCode: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: JOB_ENV }],
     ['dispatch refused', undefined, () => ({ 'moe.record_check_dispatch': [fail('RUNNER_TOOL_ERROR', 'CHECK_DEFINITION_NOT_APPROVED')] }),
       ['get_context', 'create', 'record_check_dispatch', 'remove', 'removed'], { causeCode: 'RUNNER_TOOL_ERROR', codeName: 'CHECK_DEFINITION_NOT_APPROVED' }],
   ]) {

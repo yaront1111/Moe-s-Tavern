@@ -53,7 +53,7 @@ process.stdin.on('end', () => {
     save();
     if (outcome === 'silent') return;
     if (outcome === 'error') return refuse('Team Workers is full (max 1 members)');
-    if (outcome === 'gone') return refuse('Team not found: ' + args.teamId);
+    if (outcome === 'gone') return reply({ error: { code: -32001, message: '[NOT_FOUND] Team not found: ' + args.teamId, data: { tool: 'moe.join_team', codeName: 'NOT_FOUND' } } });
     if (outcome === 'isError') return reply({ result: { isError: true, content: [{ type: 'text', text: 'refused' }] } });
     if (outcome === 'malformed') return ok({ success: true });
     if (outcome === 'foreign') return ok({ team: { id: args.teamId, memberIds: ['worker-other'] } });
@@ -77,24 +77,32 @@ process.stdin.on('end', () => {
 });
 `;
 
+// The taskless launch decision's first line, matched as a prefix, not a whole line:
+// 3586957f appended `; VM_TASKLESS_SKIP=false` to the sh one, and the whole-line
+// boundary then threw at import, so none of this file's cases ran.
+const DECIDE = {
+  sh: ['    MOE_SKIP_LAUNCH=false', '    if [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$CLI_TYPE" = claude ]'],
+  ps1: ['    $moeSkipLaunch = $false', '    if (-not $moeSkipLaunch -and $cliType -in'],
+};
+
 const SEGMENTS = {
   sh: {
     funcs: between(sh, '# moe_rpc TOOL ARGS_JSON', '# Candidate evidence is pinned outside the CLI'),
     chat: between(sh, 'echo -e "${BLUE}Pre-flight: joining chat, claiming task, loading context...${NC}"\n', '        # 3. Check pending questions'),
     routed: between(sh, '        ROLE_GROUP_TAG=""\n', '        # -------- Wrapper-side task wait'),
     mentions: between(sh, '        # Filter unread messages for ones routed at THIS worker.', '\n    fi\n    # -------- End pre-flight --------'),
-    decide: between(sh, '    MOE_SKIP_LAUNCH=false\n', '    if [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$CLI_TYPE" = claude ]'),
+    decide: between(sh, ...DECIDE.sh),
     outcome: between(sh, '    if [ "$MOE_SKIP_LAUNCH" = true ]; then\n', '    elif [ "$CLI_TYPE" = "codex" ]; then') + '    fi\n',
     tail: between(sh.slice(sh.lastIndexOf('\ndone\n') + 6), '\n# A one-shot run that ends teamless', '\n}\n'),
   },
   ps1: {
-    funcs: between(ps, 'function Invoke-MoeRpcRaw {', '\nif ($Team) {')
+    funcs: between(ps, 'function Invoke-MoeRpcRaw {', '\nif ($Team -and -not $moeMigration) {')
       + between(ps, '# Invoke-MoeRpc TOOL ARGS_HASHTABLE_OR_JSON', '# Immutable claim tokens belong to the runner')
       + between(ps, "$script:MoeMentionFailedMarker = 'MOE_MENTION_DELIVERY_FAILED'", 'function ConvertTo-MoeFencedJson'),
     chat: between(ps, 'Write-Host "Pre-flight: joining chat, claiming task, loading context..." -ForegroundColor Cyan\n', '        $preflightPending = Invoke-MoeRpc'),
     routed: between(ps, '        $roleGroupTag = switch ($Role)', '        # -------- Wrapper-side task wait'),
     mentions: between(ps, '        # Filter unread messages for ones routed at THIS worker. Claude otherwise', '\n    }\n    # -------- End pre-flight --------'),
-    decide: between(ps, '    $moeSkipLaunch = $false\n', '    if (-not $moeSkipLaunch -and $cliType -in'),
+    decide: between(ps, ...DECIDE.ps1),
     outcome: between(ps, '    if ($moeSkipLaunch) {\n', "        if ($cliType -eq 'codex' -and $script:CodexSessionContextFile)") + '    }\n',
     tail: ps.slice(ps.indexOf('if ($script:MoeWrapperRelaunchRequested)')),
   },
@@ -214,8 +222,20 @@ test('both launchers re-join before any chat call, exactly once per pre-flight, 
   }
 });
 
+test('a statement appended to the decide start line stays in both decide slices', () => {
+  for (const [label, source, [start, end], extra] of [
+    ['sh', sh, DECIDE.sh, '; MOE_FIXTURE_EXTRA=1'],
+    ['ps1', ps, DECIDE.ps1, '; $moeFixtureExtra = 1'],
+  ]) {
+    assert.equal(count(source, start), 1, `${label}: one decide start line`);
+    const eol = source.indexOf('\n', source.indexOf(start));
+    const appended = source.slice(0, eol) + extra + source.slice(eol);
+    assert.equal(between(appended, start, end), between(source, start, end).replace('\n', `${extra}\n`), label);
+  }
+});
+
 for (const engine of ENGINES) {
-  const t = (name, fn) => test(`${engine.name}: ${name}`, { skip: engine.skip }, fn);
+  const t =(name, fn) => test(`${engine.name}: ${name}`, { skip: engine.skip }, fn);
   if (engine.ext === 'ps1') {
     t('moe-agent.ps1 parses', () => {
       const r = spawnSync(engine.exe, ['-NoProfile', '-NonInteractive', '-Command',
@@ -256,6 +276,7 @@ for (const engine of ENGINES) {
         { registered: 'true', joined: 'true', mentions: 1, skip: 'false' },
       ]);
       assert.deepEqual(tools(run, 1), ['join_team'], 'one join per pre-flight, then no chat call at all');
+      assert.ok(!tools(run).includes('create_team'), 'only a deleted team drops its id');
       assert.equal(run.fake.cursor, 'msg-1', 'the mention is read only once the seat is registered');
     });
   }
@@ -271,7 +292,9 @@ for (const engine of ENGINES) {
   t('a seat whose team was deleted re-creates it by name on the next pre-flight', () => {
     const run = runSeat(engine, { joins: ['gone', 'ok'] });
     assert.deepEqual(tools(run, 1), ['join_team']);
+    assert.match(run.out, /MOE_SEAT_UNREGISTERED worker=worker-fixture team=Workers - moe\.join_team: \[NOT_FOUND\] Team not found: team-fixture;/);
     assert.deepEqual(tools(run, 2).slice(0, 3), ['create_team', 'join_team', 'chat_channels']);
+    assert.deepEqual(run.rpcs.find((r) => r.iter === 2 && r.tool === 'create_team').args, { name: 'Workers' });
     assert.deepEqual(run.states.map((s) => s.registered), ['false', 'true']);
   });
   for (const outcome of ['noid', 'silent']) {

@@ -1,10 +1,11 @@
-import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
+import { carriedBlockQuestion, parkedHoldOwner } from '../state/dependencyUnblock.js';
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ActivityEventType, TaskStatus } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, notAllowed } from '../util/errors.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { workerHasRole } from '../util/workerRole.js';
 
 /**
  * Valid task statuses for validation.
@@ -23,8 +24,10 @@ const VALID_STATUSES: TaskStatus[] = [
 /**
  * Defines valid state transitions for tasks.
  * Key is current status, value is array of valid target statuses.
+ * The one table: the /ws UPDATE_TASK board-move handler (server/WebSocketServer.ts)
+ * imports it too, so the board and this tool cannot drift apart again.
  */
-const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+export const VALID_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   // ARCHIVED is reachable from any *resting* status (BACKLOG / REVIEW / DONE) so
   // stale tickets can be shelved out of context — not from in-flight states
   // (PLANNING / AWAITING_APPROVAL / WORKING) where a worker may own the task;
@@ -65,7 +68,7 @@ function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
 export function setTaskStatusTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.set_task_status',
-    description: 'Set task status (optionally with a reopen reason)',
+    description: 'Architect/governor/human: set task status (optionally with a reopen reason). A caller whose workerId resolves to neither role (a worker or QA seat) is refused with NOT_ALLOWED and should ask a governor in #governors to move the row.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -92,6 +95,21 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       // Validate status is a known value
       if (!VALID_STATUSES.includes(params.status as TaskStatus)) {
         throw invalidInput('status', `${params.status} is not valid. Valid statuses are: ${VALID_STATUSES.join(', ')}`);
+      }
+
+      // TOOL_AUDIENCE only filters tools/list, so gate here like the sibling
+      // set_task_priority / set_task_dependencies. An absent workerId key is the
+      // human path (a seat's proxy injects MOE_WORKER_ID whenever the key is
+      // missing); a key set to '' or null skips that injection, so it is judged
+      // like any id and refused. Runs before the task lookup and any write.
+      if (params.workerId !== undefined) {
+        const callerId = typeof params.workerId === 'string' ? params.workerId : '';
+        if (!workerHasRole(state, callerId, 'architect', 'governor')) {
+          throw notAllowed(
+            'set_task_status',
+            `architect or governor role required (worker ${callerId || '(none)'} is not on an architect or governor team and its id declares neither role); ask a governor in #governors to move the row`
+          );
+        }
       }
 
       const task = state.getTask(params.taskId);
@@ -168,10 +186,10 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       // Block bookkeeping. Entering BLOCKED via this tool (human/board path —
       // agents use report_blocked) records where to restore to; leaving BLOCKED
       // by any route clears every blocked field so a later grant/sweep cannot
-      // act on stale block state. Assignment is preserved EXPLICITLY on both
-      // edges (updateTask clears it on any status change when omitted): a
-      // parked worker keeps its task through block-and-unblock — except the
-      // BLOCKED → BACKLOG park, which keeps the normal clear-on-move semantics.
+      // act on stale block state. Assignment is EXPLICIT on entry and return
+      // (updateTask clears it on a status change when omitted): entry keeps
+      // the seat; return keeps only a genuine hold, as both auto-unblocks do.
+      // Other exits keep the normal clear-on-move semantics.
       if (newStatus === 'BLOCKED' && task.status !== 'BLOCKED') {
         updates.blockedFromStatus = task.status;
         updates.blockedAt = new Date().toISOString();
@@ -188,12 +206,11 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         updates.blockedOnTaskIds = null;
         updates.blockedFromStatus = null;
         updates.blockedAt = null;
-        // Preserve the parked worker only when the task RETURNS to where it was
-        // blocked from; any other exit (park to BACKLOG, reopen to WORKING from
-        // a blocked REVIEW) keeps the normal clear-on-move semantics so the
-        // right role re-claims it.
+        // Returning to where the task was blocked from keeps only a genuine
+        // hold, as both auto-unblocks do. Other exits (park to BACKLOG, reopen
+        // to WORKING from a blocked REVIEW) clear the seat for the right role.
         if (newStatus === effectiveFrom) {
-          updates.assignedWorkerId = task.assignedWorkerId;
+          updates.assignedWorkerId = parkedHoldOwner(state, task);
         }
       }
 

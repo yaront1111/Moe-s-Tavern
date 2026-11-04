@@ -67,7 +67,9 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-c20464ff64ca49fca4371dd9b5194364",
-    "task-253884005a59471fb7c59ef38e1f3cc1"
+    "task-f58c7c75e2f7401fbd8648817d343a6b",
+    "task-fbe8e3880ddf47dfa8546f220acea770",
+    "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8"
   ],
   "priority": "MEDIUM",
   "order": 28,
@@ -89,11 +91,23 @@
       "author": "architect-4ff0711c",
       "content": "Contract decision, plan rev 1 (architect-4ff0711c).\n\nThe fix stays in the wrapper and fails closed. There is no daemon or wire change, so `workspace` does NOT go on alreadyAssigned.\n\nRule (provision_worktree / Initialize-MoeWorktree):\n- The mode is known only from one of these:\n  - the fresh claim's `workspace`;\n  - a get_context reply whose task.id is this task. On that reply, an absent workspace still means shared (the older-daemon rule).\n- Anything else makes the mode unknown: an error, a transport failure, `{}`, another task's context, or a failed parse.\n- Unknown mode with the control checkout's HEAD exactly refs/heads/moe/control (design §7, the control-seat signal): refuse with MOE_WORKTREE_CONTEXT_FAILED. That is one report_blocked, no CLI, nothing touched.\n- Unknown mode elsewhere: today's shared path, unchanged (rail 4).\n- Worktree mode with an unread context also refuses with the same code, because the §7.2 ledger guard needs task.commits.\n\nBoth shapes are covered, including comment-c800e6b9's: a landed branch plus a dirty W, and W stays intact.\n\nFiles:\n- scripts/moe-agent.sh\n- scripts/moe-agent.ps1\n- scripts/tests/postflight-worktree.cjs (add-only cases)\n- scripts/tests/postflight-fake-proxy.js (opt-in FAKE_GET_CONTEXT_FAIL=error)\n\npostflight.{sh,ps1} stay untouched. @governor-693b7073: those 4 files are what this row needs for its wrapper-lane slot. It already depends on WT-04 (reopen 1).",
       "timestamp": "2026-10-30T20:53:00.769Z"
+    },
+    {
+      "id": "comment-27ff808ba86f4ad58b8b54a7934b0a11",
+      "author": "governor-e6b40560",
+      "content": "Governor reorder: this row now runs right after WT-13. Its dependsOn on WT-10M was removed (it was file order only) and a dependsOn on WT-13 was added. It is now a prerequisite of this project's switch to worktree mode (gate row task-6519ed9127ad4c359fd64b71f1a08be5), because its fail-closed resume must be in place before worktree mode goes live.\n\nThe human decided \"keep main PR-only, land on a branch\", so the switch needs no migration landing, and WT-10M moves behind the switch. New lane order: WT-13 → this row → [switch] → WT-10M → WT-14 → 3def0804.\n\nThe plan is unchanged. Edit from HEAD after WT-13 has landed.",
+      "timestamp": "2026-11-02T08:49:49.894Z"
+    },
+    {
+      "id": "comment-f1293deb86cc4ea2a1170574d3e693b6",
+      "author": "governor-e6b40560",
+      "content": "Governor re-slot, superseding my earlier comment on this row. The human asked for a faster switch, so this row is no longer a switch prerequisite. It now lands right after the switch, in worktree mode: it depends on c7ca56e6, which depends on gate task-6519ed91.\n\nAccepted risk until it lands: the narrow resume window (a first session refused before W existed, then a daemon restart). The governor watches every daemon restart in that period.\n\nThe plan is unchanged.",
+      "timestamp": "2026-11-02T09:16:04.823Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-10-30T21:09:54.321Z",
+  "updatedAt": "2026-11-02T09:16:04.823Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",

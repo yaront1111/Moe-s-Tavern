@@ -1,0 +1,310 @@
+{
+  "id": "task-18809c69885f4af6bff87d7e764f269b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07i] Seat VM start and stop",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 5 (VM deleted on every exit path through the owned ledger). Design: mem:decision-cq-m07-verified-local-activation, decision 1. Depends on CQ-M07g (task-9076afab, seat owner) and CQ-M07h (task-eb783f59, cap); transitively on task-fd196d13's transport.\n\nGATE: BACKLOG until task-fd196d13's transport design is ruled and CQ-M07g/h have plans; then move it to PLANNING.\n\nObjective: the host side of one VM per seat. Provision the seat's owned VM once when a worker or QA seat starts, and delete it through the owned ledger when the seat stops, on every path.\n\nDeliverable: new scripts/local-runner/agent-seat.mjs with startSeat and stopSeat, plus a CLI entry the wrappers call (subcommands seat-start and seat-stop; one JSON line out; fixed codes; exit codes documented in the module header; the planner picks the entry file and names it for CQ-M07m/n).\n- startSeat: capacity admission (CQ-M07h) BEFORE any reserve or provider call; then provisionGuest (provision.mjs) into vm-control.mjs ownedLedgerDir(project) with the seat owner and this host's pinned client; R07 readiness; installAgents (pinned agent cache) and installToolchain (snapshot-transfer.mjs); then print the instance. Any failure after reserve deletes the VM with deleteOwned by its exact owned name; a failed delete keeps the record for cleanup (CQ-M07g).\n- stopSeat: deleteOwned by exact owned name, idempotent; it never touches another record.\n- Transport, keys and timeouts follow whatever task-fd196d13 lands.\n- Add the module to `shipped` in scripts/tests/local-runner-bundle.test.mjs.\n\nNOT in scope: running jobs (CQ-M07j); the wrappers (CQ-M07m/n).\n\nVerification: in a git-archive snapshot (mem:gotcha-local-runner-tests recipe) with this task's files overlaid: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test <the new test file> scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+  "definitionOfDone": [
+    "startSeat provisions exactly one owned VM with the seat owner and reports its instance; each refusal is a fixed code (fake-provider rows).",
+    "With the cap full, startSeat returns the capacity code before any ledger reserve or provider call (row).",
+    "A failure at any stage after reserve leaves no VM: deleteOwned runs with the exact owned name, and a failed delete keeps the record (table).",
+    "stopSeat deletes only the seat's VM and is idempotent (rows).",
+    "The named tests pass in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "No seat runs Multipass; tests use fakes, and the real-VM run is the human's or the governor's."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "startSeat happy path and admission, in the new scripts/local-runner/agent-seat.mjs. Rail: no seat runs Multipass, every test uses fakes. Read mem:gotcha-local-runner-tests first (no forbidden-pattern literals; numstat counts).\nThe production composer to mirror is check-dispatch.mjs landedRunCheck plus check-lifecycle.mjs runCheckJob.\nexport startSeat(input, steps = {}).\n- input is exactly { project, owner }. project is absolute with no control characters; owner passes validSeatOwner (CQ-M07g). Anything else is SEAT_INPUT_INVALID, before any read or step.\n- steps holds the injectable defaults: provision = provisionGuest, toolchain = fetchNodeToolchain, installToolchain and installAgents (snapshot-transfer.mjs), remove = deleteOwned, count = countSeatVms, cap = hostAgentVmCap, admit = admitSeatVm (CQ-M07h, seat-capacity.mjs), probe = runnerProbe (vm-control.mjs), supervisor = reading new URL('./guest-supervisor.py', import.meta.url).\nOrder:\n(1) platform = platformFor(process.platform), else SEAT_UNSUPPORTED_HOST. provider = { executable: platform.executable }; never a bare multipass.\n(2) { root, ledger } = seatAdmissionFor(project). cacheDir = path.join(path.dirname(ownedLedgerDir(project)), 'images'), the check-dispatch convention.\n(3) The own-record sweep (step 2).\n(4) The capacity pre-check: (await count(root)).count >= cap() returns SEAT_CAPACITY_FULL, with no ledger reserve and no provider call. A count throw is SEAT_CAPACITY_UNKNOWN.\n(5) Read the supervisor; failure is SEAT_SUPERVISOR_UNAVAILABLE.\n(6) provision({ platform, ledger: wrapped, owner, cacheDir, supervisor, credential: randomBytes(32), provider }). The wrapped ledger is { ...ledger, reserve: async who => { const record = await admit({ root, ledger, owner: who }); run.record = record; return record; } }. provisionGuest reserves exactly once, after its prerequisites, so the cap is re-checked under CQ-M07h's host lock together with the write. A race lost there throws SEAT_CAPACITY_FULL with nothing reserved.\n(7) Validate the result:\n  - provisioned !== true: SEAT_PROVISION_UNAVAILABLE;\n  - instance !== run.record.instance: SEAT_PROVISION_FAILED;\n  - bootstrapReady !== true or failures non-empty: SEAT_GUEST_NOT_READY (R07 readiness already ran inside provisionGuest);\n  - arch = image.source.arch, which must be in IMAGE_ARCHES: else SEAT_TOOLCHAIN_FAILED.\n(8) toolchain({ arch, cacheDir }), then installToolchain({ name, toolchain, provider }), then installAgents({ name, arch, cacheDir, provider }).\n(9) Resolve a frozen { ok: true, instance, executionReady: false }.\nCodes: a thrown error whose code matches /^[A-Z][A-Z0-9_]{0,63}$/ passes through (native-smoke stableCode); anything else becomes the stage's fixed code (SEAT_PROVISION_FAILED, SEAT_TOOLCHAIN_FAILED, SEAT_AGENTS_FAILED). Never message text, a path or a key.\nTests in the new scripts/tests/local-runner-seat.test.mjs. Use a real CQ-M07g ledger under MOE_RUNNER_STATE_DIR set to a scratch dir, registering the t.after restore BEFORE mutating env (gotcha). The fake provision reserves through the wrapped ledger, moves the record to owned with ledger.update, and returns { provisioned: true, instance, bootstrapReady: true, failures: [], image: { source: { arch: 'x64' } } }.\n- AS1 (DoD 1): ok with that instance. The ledger holds exactly one seat record, with this owner. The steps ran in order with the exact name. Refusals: a bad owner, a relative project and an extra key are SEAT_INPUT_INVALID with every step untouched; provisioned false is SEAT_PROVISION_UNAVAILABLE.\n- AS2 (DoD 2): count >= cap gives SEAT_CAPACITY_FULL. admit, provision and every provider-touching step are never called, and the ledger stays empty.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "note": "New scripts/local-runner/agent-seat.mjs. Steps 1-4 were written in one pass; this note covers startSeat.\n\nstartSeat(input, steps):\n- input is exactly {project, owner}; anything else is SEAT_INPUT_INVALID before any step.\n- kit(): platformFor(process.platform), else SEAT_UNSUPPORTED_HOST. provider = {...steps.provider (test seams only), executable: platform.executable}, so the executable is always pinned.\n- Order: seatAdmissionFor, then cacheDir = <ledger parent>/images, then the sweep, then the pre-check (count(root).count >= cap(), else SEAT_CAPACITY_FULL; a count throw is SEAT_CAPACITY_UNKNOWN), then the supervisor read (SEAT_SUPERVISOR_UNAVAILABLE), then provision.\n- provision gets the wrapped ledger. Its reserve is admit({root, ledger, owner, cap}) with the same cap value, so the pre-check and the locked count agree.\n- Result checks: SEAT_PROVISION_UNAVAILABLE, SEAT_PROVISION_FAILED (instance mismatch), SEAT_GUEST_NOT_READY, and an arch outside IMAGE_ARCHES gives SEAT_TOOLCHAIN_FAILED.\n- Then toolchain, installToolchain and installAgents. The result is frozen {ok:true, instance, executionReady:false}.\n- Codes: a thrown code matching /^[A-Z][A-Z0-9_]{0,63}$/ passes through; anything else becomes the stage's fixed code.\n\nTests:\n- AS1: 9 refusal rows, then the happy path: order, pinned provider, cacheDir, a 32-byte credential, one seat record.\n- AS2: the pre-check refuses with order ['count'] and zero provider calls. A race lost under the real locked admission reserves nothing.\n- Snapshot run (git archive HEAD plus the 4 overlays): seat and bundle tests 20/20 pass.\n\nOut of scope: filed task-7d7d6082 (LOW). waitForGuestReady's owner check passes any seat owner on a seat record, because the undefined attempt fields compare equal.\n\nShared tree: 29 pre-existing dirty paths belong to other sessions. I left them untouched.",
+      "startedAt": "2026-11-01T20:17:16.298Z",
+      "completedAt": "2026-11-01T20:28:02.559Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Failure cleanup and the own-record sweep (agent-seat.mjs).\n(a) Cleanup. Every failure once run.record is set ends with remove({ ledger, name: run.record.instance, owner, provider }) by that exact name. The real deleteOwned enforces the owner and purges the VM plus its guest-ssh key files only once the VM is verified absent.\n  - 'deleted' gives vm 'deleted'.\n  - 'not-launched' with a re-read phase of 'reserved' means it was reserved and never launched: ledger.retire(fresh record) (CQ-M07g), so the reservation stops counting toward the cap; vm 'retired'.\n  - 'not-launched' in collision: the name is foreign, so leave it; vm 'none'.\n  - A throw from remove or retire gives vm 'delete-failed'. The record is KEPT for CQ-M07g reconcile and cleanup; never retried in a loop, never forced.\n  Resolve a frozen { ok: false, code, vm }, where code is the stage's code (the original failure, never the cleanup's). A failure before any reserve gives vm 'none'.\n(b) The own-record sweep runs before the capacity pre-check, because a stale own record counts toward the cap. List the project ledger and pick seat records in reserved or a launched phase that are either:\n  - exactly this owner (same workerId, runner and host), left by a seat-start that was killed after reserving; or\n  - a previous incarnation of this seat: same workerId, a different runner, and probe(record) === false, meaning that runner is proven dead on this host and platform.\n  Remove each through (a)'s path, passing the record's own { workerId, runner, host } as owner. Any failure refuses SEAT_PREVIOUS_VM_UNREMOVED: never provision a second VM while an earlier one may live. Every other record (another worker, an alive or unknown runner, attempt-owned, collision, deleted) is never touched. With no such record the sweep is a ledger read only, so AS2 still sees zero provider calls.\nTests:\n- AS3 (DoD 3, table). Use real deleteOwned with a fake provider run (local-runner-vm-control.test.mjs fakeProvider style) and provider.keyDir set to a scratch dir. Fail once at each stage after reserve: provision throws after reserve and launch; bootstrapReady false; failures non-empty; toolchain fetch throws; installToolchain throws; installAgents throws. Each makes exactly one remove call with the captured name and owner and gives vm 'deleted'. Then:\n  - a reserve followed by a throw before launch: vm 'retired' and the record file is gone;\n  - a provider whose delete fails: vm 'delete-failed', and ledger.read(name) still returns the record;\n  - each code is the stage's.\n- AS5, the sweep:\n  - an own leftover owned record is deleted before the new VM is provisioned, leaving exactly one live seat record;\n  - a same-workerId record whose runner probe answers false is reclaimed;\n  - one answering true or undefined, and another worker's record, are untouched;\n  - a failing sweep delete gives SEAT_PREVIOUS_VM_UNREMOVED with no provision call.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "note": "Cleanup and the own-record sweep in agent-seat.mjs.\n\n(a) removeVm(ledger, name, owner, s):\n- remove (deleteOwned) by the exact name: 'deleted' gives 'deleted'.\n- 'not-launched' re-reads the record: reserved is ledger.retire(fresh), giving 'retired'; any other phase (collision) gives 'none'.\n- Any other answer, or any throw, propagates, and the record is kept.\n- startSeat's catch: code = codeOf(error, run.stage), the original failure. With run.record set, the cleanup is removeVm(...).catch(() => 'delete-failed'): one call, never a loop.\n\n(b) sweep() runs before the cap pre-check. It covers seat records in reserved, launching, owned, absent or failed with the same workerId, that are either:\n- the exact owner (runner and host); or\n- another runner with probe(record) === false.\nEach is removed with ownerOf(record). Any failure is SEAT_PREVIOUS_VM_UNREMOVED.\n\nTests (TDD on existing code; RED proven by mutation):\n- AS3, a 9-row table: provision throws, instance mismatch, bootstrapReady false, failures, bad arch, toolchain, installToolchain (opaque and coded TRANSFER_EXIT_FAILED), installAgents. Each has exactly one remove [w.reserved, SEAT], a record marked deleted, and the VM gone. Also: reserve then throw gives retired; a stuck delete gives delete-failed with the record kept and owned.\n- AS5: own owned, own reserved and a dead incarnation are swept. Live, unprovable, another worker's dead and this runner on another host are kept. A stuck own record gives SEAT_PREVIOUS_VM_UNREMOVED with only remove steps run.\n\nMutation sweep (/tmp/m07i-mut/run.mjs, scratch copies only): 26 of 26 mutants KILLED after adding the M18 collision row and the M19 unexpected-remove row. The baseline is green.\n\nSize: 182 + 211 + 4 + 2 = 399 of 400.",
+      "startedAt": "2026-11-01T20:28:05.584Z",
+      "completedAt": "2026-11-01T20:30:42.169Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "stopSeat (DoD 4).\nexport stopSeat(input, steps = {}). input is exactly { project, owner, instance }, where instance passes isOwnedInstanceName; else SEAT_INPUT_INVALID. With provider = { executable: platform.executable }:\n- If the record file ownedLedgerDir(project)/<instance>.json is absent (lstat ENOENT), resolve vm 'gone'. This is idempotent after a retire.\n- Otherwise remove({ ledger, name: instance, owner, provider }), the real deleteOwned:\n  - 'deleted', which deleteOwned also returns for an already-deleted record: vm 'deleted';\n  - 'not-launched' on a reserved record: ledger.retire, vm 'retired';\n  - collision: vm 'none' (foreign, untouched).\n- LIFECYCLE_NOT_OWNER passes through, so another seat's record is never touched.\n- Any other failure is SEAT_STOP_FAILED, and the record is kept.\nIt never lists, sweeps or touches any other record.\nTest AS4. With two seat records A and B:\n- stopSeat(A) deletes A, and every provider call names only A;\n- a second stopSeat(A) gives 'deleted' with no provider delete call;\n- after a retire it gives 'gone';\n- stopSeat(B's instance, A's owner) gives LIFECYCLE_NOT_OWNER, and B is unchanged byte for byte;\n- a failing provider delete gives SEAT_STOP_FAILED, with the record kept.\nerror handling: every result is one fixed code, never message text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "note": "stopSeat(input, steps):\n- input is exactly {project, owner, instance}, where instance passes isOwnedInstanceName; else SEAT_INPUT_INVALID.\n- kit() pins the provider executable.\n- An absent record file (lstat ENOENT on ownedLedgerDir(project)/<instance>.json) gives 'gone' with no provider call.\n- Otherwise removeVm via createLedger(dir) by that exact name and owner: deleted, retired or none (collision).\n- LIFECYCLE_NOT_OWNER passes through with vm 'none'. Every other failure is SEAT_STOP_FAILED with vm 'delete-failed', and the record is kept.\n- It never lists or sweeps.\n\nAS4 rows:\n- A is deleted, and every provider call names A.\n- A second stop of A gives 'deleted' with zero provider calls.\n- B (another worker) with SEAT's owner gives LIFECYCLE_NOT_OWNER; B's bytes and the call count are unchanged.\n- Reserved C gives 'retired', then 'gone'.\n- Stuck D gives SEAT_STOP_FAILED with the record kept and owned.\n- A bad instance gives SEAT_INPUT_INVALID.\n- A collision E gives ok with vm 'none' and stays collision.\n- An unexpected remove answer gives SEAT_STOP_FAILED.\n\nMutants M08 (NOT_OWNER mapped away), M18, M19 and M20 (lstat gone path) are all KILLED by AS4.",
+      "startedAt": "2026-11-01T20:30:42.903Z",
+      "completedAt": "2026-11-01T20:30:50.532Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "CLI entry for CQ-M07m/n, shipping and CI.\n(a) agent-seat.mjs is itself the entry, run directly as vm-control.mjs is (invokedDirectly via realpath). export runAgentSeat(argv, { write, ...steps }) returns the exit code. Exact argv, cli.mjs style, with nothing read or run before it passes:\n  - `seat-start --project <abs> --worker <workerId> --runner <pid@token> --host <host>`\n  - `seat-stop --project <abs> --worker <workerId> --runner <pid@token> --host <host> --instance <moe-vm-…>`\n  Fixed flag order; values may contain no control characters. The runner token may contain spaces, because moe-agent.sh falls back to `ps lstart`; the wrapper passes it as one argument.\n(b) Output is ONE JSON line under 64 KiB: startSeat's or stopSeat's frozen result. An internal throw gives {\"ok\":false,\"code\":\"SEAT_FAILED\"}, with no path, stack or stderr.\n(c) Exit codes:\n  - 0: ok;\n  - 75 (EX_TEMPFAIL): SEAT_CAPACITY_FULL or SEAT_CAPACITY_LOCK_BUSY, which the wrapper waits on and retries before claiming;\n  - 1: any other refusal or failure;\n  - 2: usage, printing {\"code\":\"SEAT_INPUT_INVALID\"}.\n(d) The module header documents the entry, both argv shapes, the JSON shapes, vm values and exit codes for CQ-M07m (moe-agent.sh) and CQ-M07n (moe-agent.ps1). It also notes that startSeat reclaims its own interrupted or previous-incarnation VM, and that executionReady is always false.\n(e) scripts/tests/local-runner-bundle.test.mjs: add 'agent-seat.mjs' to `shipped` (never `required`) and extend its comment.\n(f) .github/workflows/ci.yml:244: append scripts/tests/local-runner-seat.test.mjs to the local-runner node --test list. CI lists every file explicitly. CQ-M07h edits the same line first; this task dependsOn it.\nTests:\n- AS6. Usage errors exit 2 and run nothing: a wrong flag, a wrong order, a missing value, a relative project, a control char, a bad instance. Through injected steps: seat-start ok exits 0 with the instance line; capacity full exits 75; another failure exits 1; seat-stop ok exits 0. An injected throw prints only {\"ok\":false,\"code\":\"SEAT_FAILED\"}.\n- AS0 mirrors local-runner-pinned-client.test.mjs MX0: the CI local-runner run line names this file exactly once.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "CLI entry. agent-seat.mjs is itself the entry (invokedDirectly via realpath, as in vm-control.mjs).\n\nrunAgentSeat(argv, {write, ...steps}):\n- inputFor accepts exactly FLAGS[command] in order, one value each, then the same parse() as the API. Nothing runs before it passes. A usage error prints {\"code\":\"SEAT_INPUT_INVALID\"} and exits 2.\n- Otherwise it writes one JSON line: the frozen result. An internal throw gives {\"ok\":false,\"code\":\"SEAT_FAILED\"}.\n- Exit codes: 0 ok; 75 for SEAT_CAPACITY_FULL or SEAT_CAPACITY_LOCK_BUSY; 1 otherwise. A rejection of the entry promise sets exit 1.\n- The output is bounded by construction: a validated name and codes of at most 64 chars.\n\nThe 21-line module header documents both argv shapes, the JSON shapes, the vm values, the exit codes, the sweep, executionReady false and the concurrency residual. The runner token may hold spaces; SEAT.runner '4242@tok a' goes through the CLI as one argument.\n\nOther files:\n- local-runner-bundle.test.mjs: 'agent-seat.mjs' added to `shipped` (not `required`), comment extended (+2/-2).\n- ci.yml:244: the local-runner list appends scripts/tests/local-runner-seat.test.mjs (+1/-1).\n\nTests:\n- AS6: 11 usage rows (none, missing, unknown command, extra --instance, missing value, wrong order, renamed flag with valid values, relative project, control char, bad instance, stop without instance) all exit 2 with no step run. Then: start 0, stop 0 (deleted), full 75, supervisor 1, stop of an unknown VM 0 (gone), and a code-getter trap gives SEAT_FAILED, exit 1. Exact lines are asserted.\n- A real spawn of the entry with bad usage exits 2 with that line and empty stderr.\n- AS0: the CI line names the file once.\n\nMutants M09 (no 75) and M17 (no flag check) are KILLED. Bundle test: 13/13 in the snapshot.",
+      "startedAt": "2026-11-01T20:30:51.198Z",
+      "completedAt": "2026-11-01T20:31:01.981Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate, run once (DoD 5), in a git-archive snapshot outside the checkout, never in the shared tree (mem:gotcha-local-runner-tests recipe, with the bundle test's extra inputs):\nS=$(mktemp -d /tmp/m07i-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && for f in scripts/local-runner/agent-seat.mjs scripts/tests/local-runner-seat.test.mjs scripts/tests/local-runner-bundle.test.mjs .github/workflows/ci.yml; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs\nIt must report 0 fail. A row that also fails with HEAD-only bytes is pre-existing: report it, do not fix it here.\nThen measure: git diff --numstat HEAD for the two edited files, plus wc -l for the two new files. QA counts additions + deletions against 400. If over, merge rows that share setup first; if still over, file an EPIC ADD_RAIL size exception via moe.propose_rail, quoting the exact numbers, before complete_task.\nThe fresh gate output is the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Gate: the plan's exact command, at HEAD 5769775d with the 4 overlays, gives EXIT=0. 407 tests: 406 pass, 0 fail, 0 cancelled, 1 skip. The skip is the pre-existing opt-in macOS native-provider smoke. Log: /tmp/m07i-gate.log; snapshot /tmp/m07i-gate.leMcFy.\n\nNo commit since 0d826eec touches any of my 4 paths.\n\nSize (additions + deletions):\n- agent-seat.mjs: 182 (new, wc -l)\n- local-runner-seat.test.mjs: 211 (new)\n- local-runner-bundle.test.mjs: +2/-2\n- ci.yml: +1/-1\n- Total: 399, under 400, so no size-exception rail is needed.\n\nThe forbidden-pattern grep over both new files is clean.",
+      "startedAt": "2026-11-01T20:31:02.762Z",
+      "completedAt": "2026-11-01T20:33:17.446Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Can any failure path after the reserve leave a launched VM with no remove call, or remove a name other than the captured one?\n2. Can the sweep or stopSeat touch a record that is neither this owner's nor a proven-dead previous incarnation's?\n3. Does the cap pre-check precede every reserve and provider call, while the locked admission still guards the race?\n4. Is a reserved-but-never-launched record ever left counting toward the cap?\n5. A delete failure must keep the record and never loop.\n6. Does any output carry a path, key, credential or stderr? The credential is randomBytes, never logged.\n7. Is the provider always the pinned executable?\n8. Do tests ever run real multipass or signal a real process?\n9. Two seat-starts of one owner concurrently: the sweep plus the host lock must still give at most one live VM per owner. Name the residual if not.\nIf any byte changes, re-run step 5's exact command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "note": "Adversarial self-review found one real problem and fixed it. In startSeat's catch, codeOf(error, run.stage) ran BEFORE the cleanup. If provision reserved a VM and then threw an error whose `code` getter itself throws, the throw escaped the catch, the reserved VM was never deleted, and runAgentSeat could only report SEAT_FAILED. Fix: cleanup first, code second. The vm is removeVm(...).catch(() => 'delete-failed') when a record was reserved, else 'none', and only then failed(codeOf(error, run.stage), vm). The cleanup cannot be skipped, and the reported code is always the original failure's, never the cleanup's. I changed AS6's trap row to match: provision now reserves before throwing the trapped error. Before the fix it was RED: ledger phases ['deleted','reserved']. After the fix it is GREEN, with the phases exactly ['deleted'] and the exact 6 output lines. Mutation sweep (/tmp/m07i-mut, outside the checkout): 28 of 28 mutants KILLED. The M00 baseline is green. The killed mutants include M06 (no cleanup in the catch) and M28 (code read before cleanup). Since the bytes changed, I re-ran step 5's exact gate on a fresh git-archive snapshot at HEAD 830e8399 with the 4 overlays: exit 0, tests 407, pass 406, fail 0, skipped 1 (the macOS native smoke that was already skipped). Size is 398 against the 400 cap: agent-seat.mjs +181, local-runner-seat.test.mjs +211, bundle test +2/-2, ci.yml +1/-1. No forbidden patterns. Residuals I considered and documented, not fixed: (1) two concurrent seat-starts for the same owner are not serialized. The header says so, and wrappers launch seats one at a time. (2) In stopSeat, a concurrent retire between the lstat and the read gives SEAT_STOP_FAILED, and a retry then answers 'gone'. (3) The sweep can call the provider before the cap pre-check, by design. With no leftover records it only reads the ledger. (4) Tests never run Multipass, per the rail; the real-VM run is for the human or the governor. Out of scope: I filed bug task-7d7d608264164f98a46a69910284f98c. waitForGuestReady (guest-readiness.mjs:252) compares only taskId/attemptId/generation, so any owner passes the check on a seat record. It matters for CQ-M07m/n.",
+      "startedAt": "2026-11-01T20:33:18.346Z",
+      "completedAt": "2026-11-01T20:39:44.265Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by governor on the human's 2026-11-01 instruction (\"move from backlog whts needed\"). Part of the M07 seat-VM chain; dependsOn CQ-M07g and CQ-M07h still gate WORKING. Streams use the SSH route (fd196d13 ruling comment-d954b3df).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-9076afab319b4056989e370039efba3d",
+    "task-eb783f598086440f8e758445f8717ef8"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.14,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:09:29.478Z",
+  "updatedAt": "2026-11-01T20:48:56.295Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-01T11:42:01.899Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T11:58:27.244Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T20:47:49.813Z",
+    "wallClockMs": 31762569
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T12:03:19.496Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/local-runner/agent-seat.mjs provides startSeat, stopSeat and a CLI (seat-start/seat-stop, one JSON line, exit 0/1/2/75). startSeat first reclaims this seat's own leftover or proven-dead previous-incarnation VM. It refuses SEAT_CAPACITY_FULL before any reserve or provider call. It then provisions one seat-owned VM through provisionGuest, whose single reserve runs under CQ-M07h's locked admission, verifies R07 readiness and installs the pinned toolchain and agents. Any failure after reserve removes that exact VM, or retires a never-launched reservation; a failed delete keeps the record. stopSeat deletes only the named instance of this owner, idempotently.",
+    "invariants": [
+      "Exactly one live seat VM per owner after a successful startSeat; the capacity check and reserve are atomic under the host lock.",
+      "Every removal goes through deleteOwned (or ledger.retire for a reserved record) by an exact owned name; a failed delete never loses the record.",
+      "No output carries a path, key, credential or stderr; executionReady is always false.",
+      "Tests never run multipass and never signal a process."
+    ],
+    "compatibility": [
+      "provisionGuest, deleteOwned, installAgents and installToolchain are used unchanged; the bundle test gains a shipped entry and CI one test file."
+    ],
+    "sourceAssumptions": [
+      "provision.mjs provisionGuest({platform, ledger, owner, cacheDir, supervisor, credential, provider}) reserves exactly once, after prerequisites and the image cache, and writes transport files only once the VM is owned.",
+      "check-dispatch.mjs landedRunCheck is the production composer: platformFor, createLedger(ownedLedgerDir), guest-supervisor.py bytes, cacheDir <ledger parent>/images, credential randomBytes(32).",
+      "CQ-M07g supplies seat owners in provisionOwned/deleteOwned, ledger.retire, validSeatOwner, isSeatRecord, runnerProbe; CQ-M07h supplies seatAdmissionFor, countSeatVms, hostAgentVmCap, admitSeatVm (SEAT_CAPACITY_* codes)."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/m07i-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && for f in scripts/local-runner/agent-seat.mjs scripts/tests/local-runner-seat.test.mjs scripts/tests/local-runner-bundle.test.mjs .github/workflows/ci.yml; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Admitting (lock plus reserve) before provisionGuest and handing it a pre-reserved record: rejected. A prerequisite failure would strand a reservation, and the slot would be held during the ~600 MB image download. Instead an unlocked pre-check refuses early, and the locked admission runs at provisionGuest's own reserve.\n2. Reclaiming a previous incarnation only through vm-control cleanup: rejected. Cleanup holds it as 'seat-registered' while the new incarnation is registered (CQ-M07g handoff). startSeat reclaims it on the runner-dead proof instead.\n3. CLI subcommands in cli.mjs: rejected. cli.mjs is in `required`; a direct entry like vm-control.mjs is self-contained.",
+    "codebaseInsights": "- check-lifecycle.mjs runCheckJob shows the capture-reservation ledger wrapper and the finally-delete pattern; vm 'not-launched' leaves a reserved record.\n- provisionGuest writes the guest-ssh transport files after provisionOwned.\n- invoker defaults to a bare 'multipass', so always pass the pinned executable.\n- CI lists local-runner test files explicitly.",
+    "risks": "- A seat-start killed after reserve leaves a record until the same owner's next seat-start sweeps it, or until CQ-M07g cleanup once the seat is gone.\n- Two concurrent seat-starts of one owner: each sweep may miss the other's in-flight reservation. Wrappers run one seat-start at a time; name this residual in the header.\n- Real-VM proof is out of scope by rail (human or governor run).\n- The size is about 340 numstat lines; the step 5 fallback applies.",
+    "keyFiles": [
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/check-dispatch.mjs",
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/seat-capacity.mjs",
+      "scripts/local-runner/vm-control.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7e70cc18a5c97fdbe2259cc77901c7d62d98ca1e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T12:03:19.524Z",
+  "approvedPlanRevision": 1,
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-83c3fcad",
+    "qa-1b5727b1"
+  ],
+  "workStartedAt": "2026-11-01T20:17:16.298Z",
+  "reviewStartedAt": "2026-11-01T20:40:07.990Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/m07i-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && for f in scripts/local-runner/agent-seat.mjs scripts/tests/local-runner-seat.test.mjs scripts/tests/local-runner-bundle.test.mjs .github/workflows/ci.yml; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "HEAD 830e8399 + 4 overlays\n✔ AS0 the CI local-runner step runs this file once\n✔ AS1 startSeat provisions exactly one seat-owned VM in order with the pinned client; each refusal is one fixed code\n✔ AS2 a full cap refuses SEAT_CAPACITY_FULL before any reserve or provider call; a race lost under the lock reserves nothing\n✔ AS3 a failure at any stage after the reserve deletes exactly that VM by name; a failed delete keeps the record\n✔ AS4 stopSeat deletes only its own named VM, idempotently, and never touches another owner's record\n✔ AS5 startSeat first reclaims its own leftovers and a dead previous incarnation, never another record\n✔ AS6 the CLI: usage exits 2 before any step; one JSON line; exit 0 ok, 75 capacity, 1 any other failure\n...\n✔ SS9 all seven transfer modes spawn only the ssh client with exactly streamCall, never the Multipass executable or exec (18.760854ms)\n﹣ opt-in native provider smoke on real macOS hardware establishes support # native provider smoke not run: macOS support is NOT established by this run (pre-existing skip)\nℹ tests 407\nℹ suites 0\nℹ pass 406\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 89988.429231",
+    "reportedAt": "2026-11-01T20:40:07.990Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/agent-seat.mjs",
+    "scripts/tests/local-runner-seat.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    ".github/workflows/ci.yml",
+    ".moe/epics/epic-b8c6bbda4def46cbb8d1b351f8ea3eeb.json",
+    ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json",
+    ".moe/tasks/task-435e8989c4d0425aa6eecf523353e5bc.json",
+    ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json"
+  ],
+  "completionSummary": "CQ-M07i delivered: scripts/local-runner/agent-seat.mjs (new, 181 lines) exports startSeat, stopSeat and runAgentSeat, with a CLI. The CLI forms are `seat-start --project <abs> --worker <id> --runner <pid@token> --host <h>`, and seat-stop takes the same flags plus `--instance <moe-vm-…>`. Each call prints one JSON line and exits 0 on success, 75 on SEAT_CAPACITY_FULL or LOCK_BUSY, 1 on any other failure, and 2 on a usage error.\n\nstartSeat:\n- Sweeps the same worker's leftover seat records: its own, and a previous runner whose probe answers false.\n- Pre-checks the cap (count >= hostAgentVmCap gives SEAT_CAPACITY_FULL before any reserve or provider call).\n- Reads the supervisor.\n- Reserves through admitSeatVm under the host lock, inside provisionGuest.\n- Installs the toolchain, then the agents.\n- Returns {ok:true, instance, executionReady:false}.\n\nEvery failure after the reserve deletes exactly that VM by name through deleteOwned and reports vm deleted, retired or delete-failed. The record is kept if the delete fails. The cleanup runs before the code is read, so a hostile error cannot skip it.\n\nstopSeat:\n- Deletes only its own named VM and is idempotent: a missing record gives 'gone', a deleted one gives 'deleted', and a reserved one is retired.\n- Another owner's record gives LIFECYCLE_NOT_OWNER, and a collision gives 'none'.\n\nTests: scripts/tests/local-runner-seat.test.mjs (new, 211 lines) covers the DoD across AS0–AS6:\n- AS1: refusals and the happy path.\n- AS2: capacity.\n- AS3: cleanup at every failing stage.\n- AS4: stop.\n- AS5: the sweep.\n- AS6: the CLI and exit codes.\n\nFakes only, with no Multipass, per the rail. agent-seat.mjs is appended to the bundle test's `shipped` list, and ci.yml:244 runs the new file.\n\nGate: 407 tests, 406 pass, 0 fail, 1 macOS skip that was already there. 28 of 28 mutants killed. Size 398 of 400.\n\nResiduals, documented but not fixed:\n- Two concurrent seat-starts for the same owner are not serialized; wrappers launch one at a time.\n- A stopS",
+  "commits": [
+    {
+      "sha": "1a8e7999a4624f752c606a18a9a452e96fc64795",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-83c3fcad@2026-11-01T20:15:52Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/epics/epic-b8c6bbda4def46cbb8d1b351f8ea3eeb.json",
+        ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json",
+        ".moe/tasks/task-435e8989c4d0425aa6eecf523353e5bc.json",
+        ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json",
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "recordedBy": "worker-83c3fcad",
+      "recordedAt": "2026-11-01T20:41:24.468Z",
+      "treeId": "2a0f63fdd7b2df8180aac8624f3307ab21ef76c9",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-3ad573a754574dfd92083b2e813c0bff"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-4fdc7590cd054a45a379c477ffe45ac7"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-f622843305224cf49ca24478b26c3351"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "1a3876a145648a83354141e864af746beb7e11bd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1b5727b1@2026-11-01T20:41:24Z",
+      "paths": [
+        ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json"
+      ],
+      "recordedBy": "qa-1b5727b1",
+      "recordedAt": "2026-11-01T20:48:56.295Z",
+      "treeId": "70606e671dd43d185864692ce9586005c9f0afec",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/agent-seat.mjs",
+    "scripts/tests/local-runner-seat.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    ".github/workflows/ci.yml"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1b5727b1@2026-11-01T20:41:24Z",
+    "at": "2026-11-01T20:48:56.295Z"
+  },
+  "completedAt": "2026-11-01T20:47:49.813Z",
+  "reviewCompletedAt": "2026-11-01T20:47:49.813Z",
+  "reviewSummary": "Reviewed completion 1a8e7999 on moe/work-2026-10-24; the tree's task files are identical to it.\n\nGate: the plan's command on a git archive of 1a8e7999 under Node v24.21 exits 0. 407 tests: 406 pass, 0 fail, 1 macOS skip that was already there (84 s). On Windows Node v24.16, AS0-AS6 pass.\n\nDoD:\n1. AS1: 9 fixed-code refusals; one seat record with the right owner; steps in order with the pinned executable and a 32-byte credential.\n2. AS2: order is ['count'] only, with no provider calls; a race lost under the lock reserves nothing.\n3. AS3: in the 9-stage table each stage removes the exact name; a reserve then throw gives retired; a stuck delete gives delete-failed with the record kept.\n4. AS4: only A is deleted, idempotently; B gives NOT_OWNER with its bytes unchanged.\n5. Green.\n\nRail: no multipass; everything is faked. Dependency contracts checked: admit gets the raw ledger, the probe is synchronous, and the toolchain shape matches.\n\nQA mutants: 8 of 10 killed. Survivors:\n- cleanup owner: equivalent.\n- LOCK_BUSY dropped from exit 75: untested but non-blocking, since the plan pinned only FULL. CQ-M07m/n should add that row.\n\nSize: 398 of 400; forbidden-pattern grep clean. Residuals were documented and accepted.",
+  "requiredCheckAtDone": null
+}

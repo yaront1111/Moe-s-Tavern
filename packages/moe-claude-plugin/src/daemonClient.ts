@@ -14,6 +14,7 @@ export interface DaemonInfo {
   pid?: number;
   startedAt: string;
   projectPath: string;
+  /** The address to dial; see resolveConnectHost. */
   host?: string;
 }
 
@@ -146,8 +147,22 @@ function readDaemonJson(projectPath: string): DaemonInfo | null {
     pid: typeof obj.pid === 'number' ? obj.pid : undefined,
     startedAt: obj.startedAt,
     projectPath: obj.projectPath,
-    host: typeof obj.host === 'string' ? obj.host : '127.0.0.1',
+    host: resolveConnectHost(obj.host),
   };
+}
+
+/**
+ * Resolve like moe-proxy's getDaemonHost (packages/moe-proxy/src/utils.ts),
+ * with support for the legacy daemon.json host. moe-agent exports the Windows
+ * host address to WSL seats, where loopback is not the Windows host.
+ * bindHost is never dialed: it records how the daemon bound ('wsl' is a bind
+ * mode), not where a client can reach it.
+ */
+function resolveConnectHost(fileHost: unknown): string {
+  const envHost = process.env.MOE_DAEMON_HOST?.trim();
+  if (envHost) return envHost;
+  if (typeof fileHost === 'string' && fileHost.trim()) return fileHost.trim();
+  return '127.0.0.1';
 }
 
 function readRecentProject(): string | null {

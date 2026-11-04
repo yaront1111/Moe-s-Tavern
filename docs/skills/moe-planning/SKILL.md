@@ -11,7 +11,7 @@ Your job: turn the task in front of you into an implementation plan that a worke
 
 ## Size triage — before drafting steps
 
-Count before you draft. If an honest plan needs **more than 8 steps or more than 5 distinct `affectedFiles`**, the *task* is too big — no plan fixes that. Do not pad several actions into one step to duck the cap: the step still executes at its real size, and the daemon counts distinct files regardless. `moe.submit_plan` returns `warnings` past 8 steps / 5 distinct files and hard-rejects past 12 steps / 10 distinct files with `CONSTRAINT_VIOLATION` (thresholds: `project.json` `settings.taskSizing`). Right-sized is ≤60 min human-equivalent, 1–3 files, one deliverable.
+Count before you draft. If an honest plan needs **more than 8 steps or more than 5 distinct files** (the union of every step's `affectedFiles` and `newFiles`), the *task* is too big — no plan fixes that. Do not pad several actions into one step to duck the cap: the step still executes at its real size, and the daemon counts distinct files regardless. `moe.submit_plan` returns `warnings` past 8 steps / 5 distinct files and hard-rejects past 12 steps / 10 distinct files with `CONSTRAINT_VIOLATION` (thresholds: `project.json` `settings.taskSizing`). Right-sized is ≤60 min human-equivalent, 1–3 files, one deliverable.
 
 Oversized means go back to breakdown, not to a denser plan: create smaller sibling tasks via `moe-epic-breakdown` (SPIDR split) and narrow this task to the first slice — or `moe.report_blocked` with the proposed split if the task isn't yours to split. A project or epic rail that forbids splitting wins over this: plan the work as ONE task within the daemon's `taskSizing` limits instead.
 
@@ -80,7 +80,7 @@ One step per phase is a fine starting point for non-trivial work. For larger tas
 
 - Set `affectedFiles` tight per step.
 - When a Serena memory bears on a step, name it in that step's description as `mem:<name>` (for example `mem:gotcha-moe-doc-generated-artifacts`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.
-- Cite only live names. A name under `_archive/` is hidden from Serena by .serena/project.yml ignored_memory_patterns, and read_memory refuses it.
+- Cite only live names, and never another task's `task-<id>-handoff` or `task-<id>-qa-handoff`: QA retires those to `_archive/` at `moe.qa_approve`, and a dependsOn edge holds this task's claim until then, so the worker's read_memory finds nothing (task-62ec51f1's seat, 2026-11-04). Quote the fact the step needs, or cite a `gotcha-`/`pattern-`/`decision-` memory. Serena hides `_archive/` names, and read_memory refuses them.
 - Map every Definition-of-Done item to at least one step.
 - State non-obvious design choices in the step `description` so the worker doesn't re-derive them.
 

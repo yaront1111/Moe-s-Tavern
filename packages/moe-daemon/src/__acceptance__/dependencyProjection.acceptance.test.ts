@@ -34,7 +34,8 @@ const P = 'task-p';
 const GATE = 'npm run gate';
 const ENV = `moe-local-vm-v1:${'a'.repeat(64)}`;
 const TREE = 'a'.repeat(40);
-const IDENTITY = { processStartedAt: '4242@2026-10-30T00:00:00.0000000Z', host: 'box-1' };
+// executionRoute: a strict WORKING/REVIEW claim needs the VM-route marker (CQ-M07q); these seats stand in for one.
+const IDENTITY = { processStartedAt: '4242@2026-10-30T00:00:00.0000000Z', host: 'box-1', executionRoute: 'vm' };
 const STRICT: ExecutionPolicySnapshot = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'legacy' };
 const LEGACY: ExecutionPolicySnapshot = { ...STRICT, profile: 'legacy' };
 const KINDS = ['legacy', 'strict'] as const;
@@ -58,8 +59,9 @@ const snapshotOf = (kind: Kind) => (kind === 'strict' ? STRICT : LEGACY);
 beforeEach(async () => {
   h.init(); h.setupMoeFolder(); h.createEpic(); h.createEpic({ id: 'epic-2' }); seq = 0;
   await h.state.load();
+  // worktreeMode 'off': the shared-mode path; with a gate, unset now means 'on' (WT-19).
   h.state.project!.settings = { ...h.state.project!.settings, approvalMode: 'TURBO', deliveryPolicy: 'legacy', qualityGate: GATE,
-    qualityGateScope: 'everyTask', checkEnvironments: [ENV] };
+    qualityGateScope: 'everyTask', checkEnvironments: [ENV], worktreeMode: 'off' };
   const adapter = new McpAdapter(h.state);
   call = createMcpCaller(h.state, adapter).call;
   // Reuse the harness's runner options with an identity authenticated over a temporary host key.

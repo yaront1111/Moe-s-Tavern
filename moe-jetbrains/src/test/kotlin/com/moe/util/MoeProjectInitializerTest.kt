@@ -89,6 +89,102 @@ class MoeProjectInitializerTest {
         assertEquals(tampered, target.readText())
     }
 
+    // Connect-time sync is create-only: a live daemon rewrote its own docs at its
+    // start, and an older plugin bundle must never downgrade them (task-b1d7d104).
+    @Test
+    fun `create-only sync keeps a marked doc a newer daemon wrote`() {
+        val target = File(tempDir(), "worker.md")
+        val daemonWritten = MoeProjectInitializer.stampMarker("daemon v2 body")
+        target.writeText(daemonWritten)
+        MoeProjectInitializer.writeGeneratedDoc(target, MoeProjectInitializer.stampMarker("plugin v1 body"), upgrade = false)
+        assertEquals(daemonWritten, target.readText())
+    }
+
+    @Test
+    fun `upgrade sync replaces an older marked doc`() {
+        val target = File(tempDir(), "worker.md")
+        target.writeText(MoeProjectInitializer.stampMarker("v1"))
+        val bundled = MoeProjectInitializer.stampMarker("v2")
+        MoeProjectInitializer.writeGeneratedDoc(target, bundled, upgrade = true)
+        assertEquals(bundled, target.readText())
+    }
+
+    @Test
+    fun `both modes create a missing doc`() {
+        for (upgrade in listOf(false, true)) {
+            val target = File(tempDir(), "worker.md")
+            val stamped = MoeProjectInitializer.stampMarker("# Worker")
+            MoeProjectInitializer.writeGeneratedDoc(target, stamped, upgrade = upgrade)
+            assertEquals("upgrade=$upgrade", stamped, target.readText())
+        }
+    }
+
+    @Test
+    fun `both modes keep an unmarked doc`() {
+        for (upgrade in listOf(false, true)) {
+            val target = File(tempDir(), "worker.md")
+            val custom = "# My way\n\nDo it my way."
+            target.writeText(custom)
+            MoeProjectInitializer.writeGeneratedDoc(target, MoeProjectInitializer.stampMarker("# Bundled"), upgrade = upgrade)
+            assertEquals("upgrade=$upgrade", custom, target.readText())
+        }
+    }
+
+    @Test
+    fun `create-only threads through role docs and every skill file`() {
+        val moeDir = File(tempDir(), ".moe").apply { mkdirs() }
+        val roles = mapOf("worker.md" to "plugin worker", "qa.md" to "plugin qa")
+        File(moeDir, "roles").mkdirs()
+        val daemonWorker = MoeProjectInitializer.stampMarker("daemon worker")
+        File(moeDir, "roles/worker.md").writeText(daemonWorker)
+
+        val bundledSkills = File(tempDir(), "docs/skills").apply { mkdirs() }
+        File(bundledSkills, "moe-planning").mkdirs()
+        val skillRaw = "---\nname: moe-planning\n---\n\nPLUGIN BODY"
+        File(bundledSkills, "moe-planning/SKILL.md").writeText(skillRaw)
+        val manifestRaw = "{\n  \"version\": 2,\n  \"skills\": []\n}"
+        File(bundledSkills, "manifest.json").writeText(manifestRaw)
+        File(bundledSkills, "cpp/templates").mkdirs()
+        File(bundledSkills, "cpp/SKILL.md").writeText("---\nname: cpp\n---\n\nBody")
+        File(bundledSkills, "cpp/templates/CMakeLists.txt").writeText("cmake_minimum_required(VERSION 3.20)")
+
+        File(moeDir, "skills/moe-planning").mkdirs()
+        val daemonSkill = "---\n# moe-generated: sha=000000000000\nname: moe-planning\n---\n\nDAEMON BODY"
+        File(moeDir, "skills/moe-planning/SKILL.md").writeText(daemonSkill)
+        val daemonManifest = "{\n  \"moeGeneratedSha\": \"000000000000\",\n  \"version\": 3,\n  \"skills\": []\n}"
+        File(moeDir, "skills/manifest.json").writeText(daemonManifest)
+
+        MoeProjectInitializer.syncRoleDocs(moeDir, upgrade = false, bundled = roles)
+        MoeProjectInitializer.syncSkills(moeDir, bundledSkills, upgrade = false)
+
+        assertEquals(daemonWorker, File(moeDir, "roles/worker.md").readText())
+        assertEquals(MoeProjectInitializer.stampMarker("plugin qa"), File(moeDir, "roles/qa.md").readText())
+        assertEquals(daemonSkill, File(moeDir, "skills/moe-planning/SKILL.md").readText())
+        assertEquals(daemonManifest, File(moeDir, "skills/manifest.json").readText())
+        assertEquals(
+            MoeProjectInitializer.stampSkillFile("SKILL.md", "---\nname: cpp\n---\n\nBody"),
+            File(moeDir, "skills/cpp/SKILL.md").readText()
+        )
+        assertEquals(
+            "cmake_minimum_required(VERSION 3.20)",
+            File(moeDir, "skills/cpp/templates/CMakeLists.txt").readText()
+        )
+
+        // Same tree, upgrade = true: the flag is the only difference.
+        MoeProjectInitializer.syncRoleDocs(moeDir, upgrade = true, bundled = roles)
+        MoeProjectInitializer.syncSkills(moeDir, bundledSkills, upgrade = true)
+
+        assertEquals(MoeProjectInitializer.stampMarker("plugin worker"), File(moeDir, "roles/worker.md").readText())
+        assertEquals(
+            MoeProjectInitializer.stampSkillFile("SKILL.md", skillRaw),
+            File(moeDir, "skills/moe-planning/SKILL.md").readText()
+        )
+        assertEquals(
+            MoeProjectInitializer.stampSkillFile("manifest.json", manifestRaw),
+            File(moeDir, "skills/manifest.json").readText()
+        )
+    }
+
     // Skill files lead with YAML frontmatter, so the marker has to live INSIDE
     // the frontmatter — an HTML comment above `---` breaks the skill loader.
     // Format is pinned to the daemon's generate-skill-files.ts stampSkillFile:

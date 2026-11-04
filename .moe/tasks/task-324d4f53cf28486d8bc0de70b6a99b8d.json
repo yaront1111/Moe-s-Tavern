@@ -1,0 +1,424 @@
+{
+  "id": "task-324d4f53cf28486d8bc0de70b6a99b8d",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07k] Per-account VM tokens for rotation accounts",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation, decision 5 (human, 2026-11-01: per-account tokens).\n\nObjective: a VM agent job for a claude seat can use the seat's leased rotation account without the wrapper reading any Claude config folder. The human's 2026-10-26 sign-off forbids opening an account's .credentials.json, and the guest accepts only ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN for claude (scripts/local-runner/guest-bridge.mjs, the job frame).\n\nDeliverable:\n- accounts CLI (packages/moe-daemon/src/accounts/cli.ts) subcommand `vm-token <id>`: obtain a long-lived token for that rotation account and store it at <dir of the accounts list>/claude-vm-tokens/<id>.token, next to ~/.moe/claude-accounts.json (MOE_ACCOUNTS_FILE moves both in tests). Dir 0700 and file 0600 on POSIX; exclusive temp file then rename. The store is outside every Claude config folder and every project. `vm-token <id> --remove` deletes it.\n  - How the token is obtained is the planner's call, with the reason: run `claude setup-token` under that account's CLAUDE_CONFIG_DIR and capture the token from its output (MOE_CLAUDE_BIN fakes it in tests, as the existing CLI tests do), or a hidden paste prompt if capturing setup-token's interactive output is unreliable.\n  - The token is never printed, logged, put in an argv, put in an env (except the minting child's own) or sent to the daemon.\n  - Risk to answer in the plan: a minted token could belong to a different Claude account than the rotation entry. Say how the plan detects that, or document it.\n- Wrapper-side reader in scripts/moe-account-lease.mjs, subcommand `vm-credential <id>`: writes only the token to stdout, for a pipe into the VM job runner (never argv). It reads only from that store (regular file, no symlink, size cap, exact token shape); anything else prints nothing and exits with a fixed code.\n- The daemon's account projection (what the JetBrains Accounts tab reads) reports token presence as a boolean from a stat. The daemon never opens the token file.\n\nNOT in scope: the Accounts tab button (CQ-M07l), the wrappers' use (CQ-M07m/n), codex keys (they come from the wrapper's environment).\n\nVerification, in a git-archive snapshot with this task's files overlaid, under env -i with the nvm Node 24 PATH: cd <snapshot>/packages/moe-daemon && npm ci && npx vitest run src/accounts/ && cd <snapshot> && node --test scripts/tests/moe-account-lease.test.mjs",
+  "definitionOfDone": [
+    "`accounts vm-token <id>` with a fake claude stores the token at the store path with POSIX modes 0700/0600 and prints no token byte (vitest on cli.ts with MOE_CLAUDE_BIN).",
+    "`vm-token <id> --remove` deletes the file; an unknown id or a failed mint stores nothing and exits non-zero with a fixed message (vitest).",
+    "`moe-account-lease.mjs vm-credential <id>` prints exactly the stored token; a missing, symlinked, oversize or malformed token file prints nothing and exits with a fixed code (node --test rows).",
+    "The account projection reports vmToken true or false from a stat, and no daemon code path reads the token bytes (vitest).",
+    "Both named test commands pass in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "Never open a file inside a Claude config folder (claude-accounts/<id>) and never read .credentials.json.",
+    "No token byte in any argv, log line, chat message, task comment or daemon payload."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Build the token store, and make both registry removal paths delete it. Read `mem:decision-cq-m07-verified-local-activation` (decision 5) and `mem:task-task-324d4f53cf28486d8bc0de70b6a99b8d-handoff` first.\n\n**Size budget for the WHOLE task: at most 400 net changed lines (added minus deleted) across all 8 files.** QA rejects anything larger, and three CQ-M rows (M05, M07b, M07q) were size-rejected for exactly this (`mem:gotcha-cq-plan-size-vs-qa-cap`).\n- Targets, runtime ~175: registry.ts +10, vmTokens.ts ~70, cli.ts +40, accountStore.ts +8, moe-account-lease.mjs +45.\n- Targets, tests ~220: vmTokens.test.ts ~160, accountStore.test.ts +16, moe-account-lease.test.mjs +45.\n- Use it.each tables for the rows this plan lists, and add no other matrix. Step 5 says what to do if the total still ends up over.\n\n**1. packages/moe-daemon/src/accounts/registry.ts** (keep it under 300 lines).\n- Add `vmTokenFile(registryFile, id)` beside accountUsageFile: `path.join(path.dirname(registryFile), 'claude-vm-tokens', `${id}.token`)`.\n  - An id failing ACCOUNT_ID_RE throws RegistryError('MOE_ACCOUNT_UNKNOWN', 'not a valid account id'). Don't echo the id.\n  - The store sits beside claude-accounts.json, so it is outside every Claude config folder (claude-accounts/<id>) and every project.\n- Add `fs.rmSync(vmTokenFile(file, id), { force: true })` beside the existing usage-file rmSync, in BOTH places:\n  - addAccount (:230, inside the update), so a reused acct-n never inherits a stale token. Ids are reused once the config folder is gone (:227).\n  - removeAccount (:243, after the update). This covers the CLI's `remove` and also the Accounts tab's \"Remove only\": /ws REMOVE_ACCOUNT (server/accountMessages.ts:48) calls removeAccount and never goes through cli.ts.\n  - Update removeAccount's doc comment: its usage file and VM token are deleted; the config folder still stays.\n- Extract writeJsonAtomic's body (:165) into `writeTextAtomic(file, text)`, for reuse instead of a second hand-rolled atomic write.\n  - Keep the same mkdir, temp name, Windows rename retry (EPERM/EBUSY/EACCES) and temp removal on failure.\n  - The temp write gains flag 'wx', so an existing temp path (even a planted symlink) fails instead of being followed.\n  - writeJsonAtomic becomes one line that calls it. Registry and usage files keep exactly the same bytes.\n\n**2. New packages/moe-daemon/src/accounts/vmTokens.ts.** Runtime imports are node built-ins and ./registry.js only: accounts/ never imports daemon modules (packages/moe-daemon/CLAUDE.md). It exports NO function that reads a token; the only reader is the wrapper's helper (step 4).\n- `VM_TOKEN_RE = /^sk-ant-oat\\d{2}-[A-Za-z0-9_-]{20,1000}$/` and `MAX_VM_TOKEN_BYTES = 1100`.\n  - This matches a Claude long-lived OAuth token as `claude setup-token` prints it.\n  - If the format changes, the check refuses (fails closed), and step 4's drift row forces moe-account-lease.mjs to change in the same diff.\n- `writeVmToken(registryFile, id, token)`:\n  - A token failing VM_TOKEN_RE throws Error('MOE_VM_TOKEN_INVALID: not a Claude long-lived token'), never including the value.\n  - file = vmTokenFile(...), dir = path.dirname(file). mkdirSync(dir, { recursive: true, mode: 0o700 }).\n  - lstat(dir) must be a real directory. A symlink or a file refuses with MOE_VM_TOKEN_NOT_STORED naming the dir.\n  - On POSIX, chmodSync(dir, 0o700). Then writeTextAtomic(file, token), and on POSIX chmodSync(file, 0o600).\n- `removeVmToken(registryFile, id): boolean`: unlinkSync. ENOENT returns false; any other error is rethrown.\n- `hasVmToken(registryFile, id): boolean`: lstatSync(file).isFile() inside a try. A symlink, a directory, a missing file or an invalid id is false. It never opens the file.\n\n**3. Tests: new packages/moe-daemon/src/accounts/vmTokens.test.ts, part 1.** Use a mkdtemp registry per test and a token constant with a varied body, such as `sk-ant-oat01-${'Q7x_Lm2-Zp9K'.repeat(4)}`.\n- The written file holds exactly the token. On POSIX the dir is 0700 and the file 0600 (skip the mode asserts on win32). A rewrite replaces the file and leaves no *.tmp in the dir.\n- it.each refused tokens: '', 'sk-ant-api03-' plus 40 characters, the token plus '\\n', a token with an inner space, and a 1001-character body. Each throws MOE_VM_TOKEN_INVALID, the message doesn't contain the input, and no file exists.\n- it.each refused ids: '../x', 'a/b' and ''. Each throws RegistryError and nothing is written.\n- A symlinked store dir refuses (POSIX; skip on EPERM).\n- removeVmToken returns true, then false.\n- hasVmToken is true for the file, and false for a missing file, a directory and a symlink to a valid token file.\n- removeAccount: with acct-1 and acct-2 each holding a token, removing acct-1 deletes acct-1's token and leaves acct-2's.\n- addAccount: a stale acct-1 token written while no account exists is gone after addAccount returns acct-1.\n\nError handling: every fs failure surfaces as a thrown error carrying only an error code and a path, never the token, and writeTextAtomic removes its temp file on every failure path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/accounts/registry.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/accounts/vmTokens.ts",
+        "packages/moe-daemon/src/accounts/vmTokens.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/registry.ts",
+        "packages/moe-daemon/src/accounts/vmTokens.ts",
+        "packages/moe-daemon/src/accounts/vmTokens.test.ts"
+      ],
+      "note": "registry.ts: vmTokenFile (invalid id -> RegistryError MOE_ACCOUNT_UNKNOWN, no echo); token rmSync in addAccount (inside update) and removeAccount; writeTextAtomic extracted (wx temp, temp removed on non-EEXIST write failure and rename failure, Windows retry kept), writeJsonAtomic delegates with identical bytes. vmTokens.ts: VM_TOKEN_RE, MAX_VM_TOKEN_BYTES, writeVmToken (symlinked dir refused, chmod 0700/0600 on POSIX), removeVmToken, hasVmToken (lstat only); no reader exported. Iteration run in /tmp snapshot (env -i, nvm node 24): vmTokens.test.ts + registry.test.ts + atomicWrite.test.ts 41/41 passed. Mutants killed 4/4: drop removeAccount rm, drop addAccount rm, drop symlinked-dir check, lstat->stat in hasVmToken. Dirty peer paths in the shared tree (.moe/roles, .moe/skills, scripts/local-runner, other tasks' .moe/tasks) untouched.",
+      "startedAt": "2026-11-01T11:16:11.146Z",
+      "completedAt": "2026-11-01T11:19:37.263Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add `accounts vm-token <id> [--remove]` to packages/moe-daemon/src/accounts/cli.ts (keep it under 300 lines; it is 246 now). Add its rows to vmTokens.test.ts and the hidden reader to vmTokens.ts, both created in step 1.\n\n**How the token is obtained, and why.** `claude setup-token` is an interactive Ink TUI. With stdout piped, its sign-in link and code prompt may not render, and a token split across chunks could leak a prefix through any redaction. So the CLI runs it INTERACTIVELY (stdio inherited) under the account's CLAUDE_CONFIG_DIR, then asks the person to paste the token at a HIDDEN prompt. The task allows this choice.\n\n**1. Hidden reader, in vmTokens.ts.** Putting it there keeps cli.ts under 300 lines.\n- `HIDDEN_READER_SOURCE`: a static, single-line CommonJS snippet for `node -e`, containing no double quotes. It:\n  - writes process.argv[1] (the prompt) to stderr;\n  - creates readline.createInterface({ input: process.stdin, output: a stream.Writable whose write() drops the chunk, terminal: process.stdin.isTTY === true }). On a TTY readline sets raw mode, so nothing echoes;\n  - on the first 'line', writes the line to stdout and closes the interface;\n  - on rl 'SIGINT', closes the interface. In raw mode Ctrl-C reaches readline instead of the process, and with no listener readline only pauses, so the prompt would hang until the timeout;\n  - on 'close', writes '\\n' to stderr and sets process.exitCode to 0 if a line was read, else 1.\n  - It must NOT call process.exit: on POSIX a pipe write is asynchronous, and process.exit can drop it.\n- `readHiddenLine(prompt): string | null` = spawnSync(process.execPath, ['-e', HIDDEN_READER_SOURCE, prompt], { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8', timeout: 15 * 60_000 }). It returns stdout when the status is 0, else null.\n- The secret crosses only that pipe: never argv, an env, the screen or a log.\n\n**2. cli.ts.**\n- CliIo gains an OPTIONAL `readSecret?(prompt: string): string | null`, and vm-token uses `io.readSecret ?? readHiddenLine`. Optional keeps every existing CliIo literal valid (cli.test.ts:80, claudeAuth.test.ts:52). runAccountsCli stays synchronous, as index.ts:1213 needs.\n- ParsedArgs gains `remove`, and parseArgs accepts `--remove`.\n- USAGE and the header comment gain `vm-token <id> [--remove]  mint (or delete) the account's long-lived token for Moe VM jobs`.\n- `case 'vm-token'` starts with account = accountFor(file, positional[0]). An unknown id gives the existing MOE_ACCOUNT_UNKNOWN and exit 1; a missing id gives usage and exit 2.\n  - **--remove:** call removeVmToken. Print 'Removed the VM token for <describe>.' or '<describe> has no VM token.', then exit 0.\n  - **Mint:**\n    a. mkdirSync(accountConfigDir(file, id), { recursive: true, mode: 0o700 }), as login does. No file inside the folder is opened.\n    b. On stderr: 'Minting a long-lived token for <describe> for Moe VM jobs. Claude opens its sign-in page (or prints a link). Sign in with the SAME Claude account as this slot: Moe cannot check which account a token belongs to.' Then: 'When claude prints the token, copy it; you paste it here next (input hidden).'\n    c. run = runClaude(claudeCommand(io.env), ['setup-token'], accountEnv(io.env, dir), true). accountEnv drops TOKEN_ENV and PROVIDER_ENV, so no outer token reaches the minting child.\n    d. If run.notFound, print notFoundMessage and exit 1. If the status is not 0, print `MOE_VM_TOKEN_MINT_FAILED: claude setup-token exited with <status|no exit code>; nothing was stored.` and exit 1, without ever calling readSecret.\n    e. token = readSecret('Paste the token (input hidden): ')?.trim().\n       - Empty or null: `MOE_VM_TOKEN_NOT_STORED: no token was entered; nothing was stored.` and exit 1.\n       - Fails VM_TOKEN_RE: `MOE_VM_TOKEN_INVALID: that is not a Claude long-lived token (sk-ant-oat…); nothing was stored.` and exit 1. Never echo the input.\n    f. Call accountFor(file, id) again. If the account was removed while the prompt waited, the existing MOE_ACCOUNT_UNKNOWN fires and nothing is stored.\n    g. writeVmToken. A throw prints `MOE_VM_TOKEN_NOT_STORED: the token store could not be written (<error code>); nothing was stored.` and exits 1. On success, print on stdout 'Stored a VM token for <describe>. Moe uses it only to run this account's agent jobs in a Moe VM.' and exit 0.\n- `remove <id>` is NOT changed. registry.removeAccount deletes the token (step 1), and remove's output stays byte-for-byte the same.\n\n**3. Tests: vmTokens.test.ts, part 2.** Use cli.test.ts's MOE_CLAUDE_BIN pattern, and inject io.readSecret.\n- A minimal fake claude (.mjs) handles `setup-token`. It appends to a log file its CLAUDE_CONFIG_DIR and the NAMES (never the values) of the TOKEN_ENV and PROVIDER_ENV variables it received. It prints nothing token-like and exits FAKE_SETUP_EXIT (default 0). The outer env sets ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_USE_BEDROCK.\n- **Mint:** exit 0, and the store holds exactly the token with step 1's modes. No out or err line contains the token or any 12-character slice of it (DoD 1). The child saw the account's config dir and none of those names.\n- **Failed mint** (FAKE_SETUP_EXIT=1): exit 1 with MOE_VM_TOKEN_MINT_FAILED, readSecret never called, no file (DoD 2).\n- **Bad paste** (it.each): null and '' give NOT_STORED; 'sk-ant-api03-…' gives INVALID, and the message doesn't contain the input. Nothing is stored.\n- **Unknown id:** exit 1 with MOE_ACCOUNT_UNKNOWN, nothing stored (DoD 2).\n- **Account removed inside readSecret:** exit 1 with MOE_ACCOUNT_UNKNOWN, nothing stored.\n- **--remove:** deletes the file; a second run says there is none, exit 0.\n- **Hidden reader:** spawnSync(process.execPath, ['-e', HIDDEN_READER_SOURCE, 'P: '], { input: TOKEN + '\\n', encoding: 'utf8' }) gives status 0, stdout exactly TOKEN and stderr exactly 'P: \\n'. Input '' gives status 1 and an empty stdout.\n\nError handling: every failure prints one fixed MOE_* line and exits 1 with nothing stored, and no message interpolates the token.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/accounts/cli.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/cli.ts",
+        "packages/moe-daemon/src/accounts/vmTokens.ts",
+        "packages/moe-daemon/src/accounts/vmTokens.test.ts"
+      ],
+      "note": "cli.ts (299 lines): optional CliIo.readSecret, --remove flag, USAGE/header line, vmToken() runs `claude setup-token` interactively via accountEnv (TOKEN_ENV/PROVIDER_ENV dropped), then hidden paste, trim, VM_TOKEN_RE, registry re-check, writeVmToken; fixed MOE_VM_TOKEN_MINT_FAILED / NOT_STORED / INVALID lines, exit 1; `remove` unchanged. vmTokens.ts: HIDDEN_READER_SOURCE (single line, no double quotes, SIGINT closes, exitCode not process.exit) + readHiddenLine (spawnSync, stdout pipe, 15 min timeout). Tests (vmTokens.test.ts): mint (modes 0700/0600, no 12-char token slice in any output line, child saw account config dir and no credential names), failed mint (readSecret never called), bad paste x3, missing id exit 2 / unknown id / removed-during-prompt / broken store (EEXIST), --remove twice, hidden reader over a pipe. Snapshot run: tsc clean; vitest src/accounts/ 57 passed + 1 pre-existing skip. Mutants killed 4/4 (no trim, no registry re-check, no status check, outer env leak). Manual pty check via `script`: prompt shown, token NOT echoed, line only on child stdout; Ctrl-C -> exit 1, empty stdout. readHiddenLine itself (stdin inherit) is not unit-tested; its source is.",
+      "startedAt": "2026-11-01T11:19:40.511Z",
+      "completedAt": "2026-11-01T11:24:24.041Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Report token presence in the daemon's account projection: packages/moe-daemon/src/state/accountStore.ts accountRotationView (:193). This is the ACCOUNTS_UPDATED view, and the snapshot's accountRotation, that the JetBrains Accounts tab reads.\n\n**Where the type lives.** types/schema.ts AccountView is declared by WT-19 (task-b1ca54f2, WORKING), so do NOT edit it; this also keeps the change out of the shared schema.\n- Export from accountStore.ts `interface AccountViewWithVmToken extends AccountView { vmToken: boolean }`, and annotate the accounts .map callback with it.\n- Type accountRotationView's return as `AccountRotationView & { accounts: AccountViewWithVmToken[] }`, so callers see the field without a cast.\n- Add a comment that the M07 integration folds vmToken into AccountView once WT-19 lands.\n\n**The field.** Add `vmToken: hasVmToken(file, account.id)`, where file is the registryFilePath() already in scope.\n- It is an lstat only: the daemon never opens the token file.\n- Leave every other field and the change detection alone. A token appearing or disappearing changes the view's JSON, so the existing refresh broadcasts it.\n- Always send a boolean, never omit it: M07l (task-d56fb46e) reads a missing flag as an older daemon.\n- Today's plugin ignores unknown keys (moe-jetbrains MoeJson.kt parseClaudeAccount, :702-727), so the extra field is safe before M07l lands.\n\n**Tests in packages/moe-daemon/src/state/accountStore.test.ts (DoD 4).**\n- The exact `toEqual` on view.accounts[1] in describe('views') (:315-318) gains `vmToken: false`. Without it, the gate fails.\n- Add a new row in describe('views'), reusing threeAccounts() and accountsFile:\n  - writeVmToken(accountsFile, 'acct-1', TOKEN);\n  - put a symlink at acct-3's token path pointing to acct-1's file (skip just that part on EPERM);\n  - vi.spyOn fs.readFileSync and fs.openSync. The file's afterEach already calls vi.restoreAllMocks;\n  - then accounts.map(a => a.vmToken) toEqual [true, false, false], and no spied call's path contains 'claude-vm-tokens'. That proves the projection stats the store and never reads it;\n  - after removeVmToken(accountsFile, 'acct-1'), the next view reports false, which proves nothing is cached.\n\nError handling: hasVmToken never throws, so a broken store can only show false; it can never break the view or the broadcast.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/accountStore.ts",
+        "packages/moe-daemon/src/state/accountStore.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/accountStore.ts",
+        "packages/moe-daemon/src/state/accountStore.test.ts"
+      ],
+      "note": "accountStore.ts: exported AccountViewWithVmToken extends AccountView { vmToken: boolean } (comment: M07 integration folds it into AccountView after WT-19); accountRotationView returns AccountRotationView & { accounts: AccountViewWithVmToken[] }; vmToken: hasVmToken(file, id) (lstat only). types/schema.ts untouched. accountStore.test.ts: exact toEqual gains vmToken:false; new views row: token on acct-1, symlink at acct-3 -> [true,false,false], readFileSync/openSync spies saw the registry file and nothing under claude-vm-tokens, removal -> false next view. Snapshot: tsc clean, accountStore.test.ts 19/19. Mutant (hasVmToken also readFileSync's the token, same results) killed by the spy assertion.",
+      "startedAt": "2026-11-01T11:24:24.967Z",
+      "completedAt": "2026-11-01T11:26:48.091Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add the wrapper-side reader `vm-credential <id>` to scripts/moe-account-lease.mjs, plus its node --test rows and the drift row.\n\n**1. scripts/moe-account-lease.mjs.**\n- Add `import os from 'node:os'`.\n- Export `VM_TOKEN_RE` (the same source as vmTokens.ts) and `MAX_VM_TOKEN_BYTES = 1100`.\n- Export `accountsFile(env)`: MOE_ACCOUNTS_FILE trimmed and path.resolve'd, else path.join(os.homedir(), '.moe', 'claude-accounts.json'). That is registry.ts registryFilePath's rule.\n- Export `vmTokenPath(env, id)`: null for an id failing ACCOUNT_ID_RE, else path.join(path.dirname(accountsFile(env)), 'claude-vm-tokens', `${id}.token`).\n- Export `readVmCredential(env, id): string | null`. It never throws; every failure is null:\n  - lstat the store dir: it must be a real directory, not a symlink;\n  - lstat the file: it must be a regular file (a missing file, a symlink or a directory gives null);\n  - open it with O_RDONLY, plus O_NOFOLLOW when fs.constants has it;\n  - fstat must be a file of at most MAX_VM_TOKEN_BYTES;\n  - read it, decode utf8, and require VM_TOKEN_RE to match the whole content (a trailing newline fails);\n  - close in finally.\n  There is no mode check, because WSL drvfs reports 0777.\n- In main, add `case 'vm-credential'`:\n  - with no id, print USAGE on stderr and return 2;\n  - if the token is null, print 'MOE_VM_TOKEN_UNAVAILABLE' on stderr, write nothing on stdout, and return 3;\n  - otherwise process.stdout.write(token), with no newline, and return 0.\n  - The token goes only to stdout, for a pipe into the VM job runner; never argv.\n- USAGE and the header list gain `vm-credential <id>   the account's VM token on stdout (for a pipe), from <accounts dir>/claude-vm-tokens/`. The header's file-access paragraph must say the helper also reads that store, which is outside every Claude config folder.\n\n**2. scripts/tests/moe-account-lease.test.mjs (DoD 3).** Use tempDir, cleanEnv and helper (:34-48), with MOE_ACCOUNTS_FILE=<tmp>/claude-accounts.json.\n- A stored valid token gives status 0, stdout exactly the token and an empty stderr.\n- Each of these gives status 3, an empty stdout and stderr 'MOE_VM_TOKEN_UNAVAILABLE':\n  - a missing file;\n  - a symlink to a valid token (skip on win32 EPERM);\n  - a directory at the path;\n  - a symlinked store dir;\n  - MAX+1 bytes;\n  - 'sk-ant-api03-…';\n  - a valid token plus '\\n';\n  - id '../acct-1'.\n- No id gives status 2 and an empty stdout.\n\n**3. Drift row in packages/moe-daemon/src/accounts/vmTokens.test.ts.** Import the helper with `await import(new URL('../../../../scripts/moe-account-lease.mjs', import.meta.url).href)`. The precedent is src/benchmarks/baselineRun.test.ts:267. Assert:\n- VM_TOKEN_RE.source and its flags, MAX_VM_TOKEN_BYTES and ACCOUNT_ID_RE.source are equal on both sides;\n- lease.vmTokenPath({ MOE_ACCOUNTS_FILE: f }, 'acct-1') === vmTokenFile(f, 'acct-1') for an absolute f;\n- lease.vmTokenPath({ MOE_ACCOUNTS_FILE: f }, '../x') === null.\n\nError handling: every read failure becomes null, which means exit 3 with nothing on stdout. A usage error exits 2.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-account-lease.mjs",
+        "scripts/tests/moe-account-lease.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-account-lease.mjs",
+        "scripts/tests/moe-account-lease.test.mjs",
+        "packages/moe-daemon/src/accounts/vmTokens.test.ts"
+      ],
+      "note": "moe-account-lease.mjs: os import; exported VM_TOKEN_RE, MAX_VM_TOKEN_BYTES, accountsFile, vmTokenPath (null for bad/absent id: `id ?? ''` since ACCOUNT_ID_RE.test(undefined) would match \"undefined\"), readVmCredential (lstat dir real + file regular, O_RDONLY|O_NOFOLLOW, fstat file <= MAX, bounded readSync of MAX+1, exact regex, close in finally, never throws); `vm-credential <id>`: token to stdout no newline exit 0 / stderr MOE_VM_TOKEN_UNAVAILABLE exit 3 / usage exit 2. Header file-access paragraph, command list and USAGE extended (the one existing USAGE assertion is a prefix match). Tests: node --test row covers valid, missing, symlink, directory, symlinked store, MAX+1, api key, trailing newline, '../acct-1' (with a valid token planted where it would land), no id. Drift row in vmTokens.test.ts pins regex source/flags, cap, ACCOUNT_ID_RE and the path rule. Snapshot: node --test vm-credential 1/1; vitest vmTokens.test.ts 21/21. Mutants killed 3/3 (no id check, no store-dir check, trimmed newline accepted).",
+      "startedAt": "2026-11-01T11:26:48.910Z",
+      "completedAt": "2026-11-01T11:30:01.329Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE, fresh, after steps 1-4, in one git-archive snapshot. Never run npm ci, a build or a real claude in the shared checkout (global rail).\n\n**The gate.** Run exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-324d4f53-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/accounts/registry.ts packages/moe-daemon/src/accounts/vmTokens.ts packages/moe-daemon/src/accounts/vmTokens.test.ts packages/moe-daemon/src/accounts/cli.ts packages/moe-daemon/src/state/accountStore.ts packages/moe-daemon/src/state/accountStore.test.ts scripts/moe-account-lease.mjs scripts/tests/moe-account-lease.test.mjs \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/accounts/ src/state/accountStore.test.ts src/server/accountMessages.test.ts src/util/atomicWrite.test.ts' && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/moe-account-lease.test.mjs`\n\n- It covers both of the DoD's named commands, plus tsc and the suites that exercise the registry and writeJsonAtomic change: /ws add/remove and writeJsonAtomic's escape-and-mode test.\n- The env -i Linux-only PATH avoids the WSL PATH EACCES in the accounts CLI tests (`mem:gotcha-wsl-path-eacces-accounts-cli-test`).\n- Expect exit 0 and 0 failures. Cite the counts for each suite.\n\n**Then measure the size,** with no git writes:\n- `git diff --numstat HEAD -- packages/moe-daemon/src/accounts/registry.ts packages/moe-daemon/src/accounts/cli.ts packages/moe-daemon/src/state/accountStore.ts packages/moe-daemon/src/state/accountStore.test.ts scripts/moe-account-lease.mjs scripts/tests/moe-account-lease.test.mjs`;\n- plus `wc -l` of the two new files.\n- Net = added minus deleted, plus the new files' lines. Cite it in complete_task.\n\n**If the net is over 400:** do not drop DoD rows.\n- Before complete_task, file `moe.propose_rail` (ADD_RAIL, EPIC scope) with this text: 'CQ-M07k size exception: task-324d4f53cf28486d8bc0de70b6a99b8d may total at most <net> net changed lines (+<a>/-<d>) across exactly these 8 files: <per-file numstat>. Waives size only; every DoD item, the rails, substantive QA and fresh verification still apply.'\n- Cite the proposal id in the completion summary. QA can then park the row instead of size-rejecting it.\n\nThe real `claude setup-token` interaction is not run here; the first real proof is the M07 integration's real-board run. Say so in complete_task.\n\nError handling: if the gate fails, fix the cause and re-run the whole command fresh; never cite a partial or stale run.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification only, no file changes in this step. Ran the exact checkRefs gate fresh in /tmp/moe-324d4f53-1UbvKQ (git archive of HEAD 6ac51c42 + the 8 files overlaid; cmp confirmed the overlaid bytes equal the tree; no peer commit touched these paths since 56fb4b45): EXIT=0. npm ci + tsc --noEmit clean; vitest src/accounts/ + accountStore + accountMessages + atomicWrite: 8 files, 97 passed, 1 skipped (pre-existing Windows-only cli.test.ts row); node --test moe-account-lease.test.mjs: 41 tests, 40 pass, 0 fail, 1 skipped (pre-existing Windows-only claude.cmd row). Size: +493/-11, net 482 (runtime 216, tests 266) > 400, so the EPIC ADD_RAIL size exception was filed: prop-52a37017fb9e4216ab2d93a606202505 (PENDING). The adversarial read ran before this gate, so the gate covers the final bytes. The real `claude setup-token` interaction was not run; the first real proof is the M07 integration's real-board run.",
+      "startedAt": "2026-11-01T11:30:02.302Z",
+      "completedAt": "2026-11-01T11:33:00.351Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read the whole diff as an attacker hunting for the token:\n`git diff HEAD -- packages/moe-daemon/src/accounts/registry.ts packages/moe-daemon/src/accounts/cli.ts packages/moe-daemon/src/state/accountStore.ts packages/moe-daemon/src/state/accountStore.test.ts scripts/moe-account-lease.mjs scripts/tests/moe-account-lease.test.mjs`, plus the two new files.\n\n**Where the token may appear.** Only in the hidden reader's stdout pipe, writeTextAtomic's temp and final file, and vm-credential's stdout.\n- Never in argv, a child env (the minting child gets none), io.out/io.err, a thrown message, a log or the projection.\n- Grep every message for template strings that could interpolate it.\n\n**Claude config folders.** Nothing opens a file inside claude-accounts/<id>, and .credentials.json is never read (task rail). The CLI only mkdirs the account folder, as login does.\n\n**The daemon.** accountStore.ts only stats, and vmTokens.ts exports no reader. `grep -n \"readFileSync\\|openSync\\|createReadStream\" packages/moe-daemon/src/accounts/vmTokens.ts` finds nothing.\n\n**Removal paths.** The CLI's remove, /ws REMOVE_ACCOUNT and addAccount's id reuse all delete the token. remove's output is unchanged.\n\n**Paths.** The id is validated on both sides, so '../' never escapes the store. Symlinks are refused on write (the dir), on read (the dir and the file) and for presence.\n\n**Atomicity.** The write is 'wx' temp + rename with the Windows retry. A failure leaves neither a partial token nor a temp file, and registry and usage files keep identical bytes.\n\n**Concurrency.** Two concurrent mints each write their own temp, and the last rename wins. A mint racing a removal re-checks the registry before writing.\n\n**Ctrl-C** at the hidden prompt ends the reader with exit 1, which means NOT_STORED, and does not hang.\n\n**Drift.** VM_TOKEN_RE, the size cap, ACCOUNT_ID_RE and the path rule are equal in the TS and .mjs copies.\n\n**Account mismatch.** This is a documented limit, stated in the CLI's prompt. Moe cannot detect it without reading identity data it deliberately ignores: claudeAuth.ts takes only the exit code and authMethod.\n\n**Size.** Step 5's measured net is either at most 400, or a size-exception proposal is filed and cited.\n\nFix anything found, re-run step 5's gate, and submit its fresh output. Error handling and every test row must still hold after any fix.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Review only, no file changes (nothing found to fix, so no gate re-run; the step-5 gate ran on these final bytes). Checked: the token appears only in the hidden reader's stdout pipe, writeTextAtomic's temp and final file, and vm-credential's stdout. No template interpolates it (grep: the only `${token}` is RegistryError's pre-existing error-code field). vmTokens.ts has no readFileSync/openSync/createReadStream/readSync. The only config-folder access is the mkdir in vmToken, as login does; .credentials.json is never named. The daemon only lstats. All three removal paths delete the token (CLI remove and /ws REMOVE_ACCOUNT via registry.removeAccount, plus addAccount id reuse), and remove's output is unchanged. Ids are validated on both sides. Symlinks are refused on write (dir), read (dir, file, O_NOFOLLOW) and presence. wx temp + rename with Windows retry; temp removed on non-EEXIST write failure. The mint re-checks the registry before writing; Ctrl-C at the prompt exits 1 (pty-verified). Drift is pinned by test. Account mismatch is documented in the CLI prompt. Size: prop-52a37017fb9e4216ab2d93a606202505 filed. Theoretical, not fixed: (a) a directory planted at <id>.token makes the remove rmSync throw EISDIR after the registry write, the same pre-existing pattern as the usage file; (b) if the 15-min timeout kills the reader, the terminal can be left in raw mode; (c) NODE_OPTIONS can inject code into the reader child, a same-user threat outside the model.",
+      "startedAt": "2026-11-01T11:33:01.320Z",
+      "completedAt": "2026-11-01T11:33:42.841Z"
+    }
+  ],
+  "planRevision": 3,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Size waiver prop-52a37017 APPROVED by the human at 14:22:28Z. The CQ-M epic now carries the \"CQ-M07k size exception\" rail exactly once. The park reason is gone, so the row returns to REVIEW for QA. Substance was already green (all 5 DoD items mapped, gate exit 0).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.06,
+  "comments": [
+    {
+      "id": "comment-a6fcbd97866847aba3bf485122fa513d",
+      "author": "architect-b520bc90",
+      "content": "Replan note from architect-b520bc90, 2026-11-01. I pulled rev 1 back before any work started; priorAttempt holds it. My seat then hit an account switch, so the next architect plans rev 2. Rev 2 is rev 1 with ONE change; reuse everything else as written.\n\n**Declare packages/moe-daemon/src/accounts/registry.ts.** That makes 7 files, still heavy/Opus/xhigh (`mem:gotcha-submit-plan-file-count-tier-floor`).\n- Move the path helper `vmTokenFile(registryFile, id)` into registry.ts, beside accountUsageFile: `path.join(path.dirname(registryFile), 'claude-vm-tokens', `${id}.token`)`. An invalid id throws RegistryError.\n- vmTokens.ts imports vmTokenFile from registry.ts. There is no cycle, because registry.ts never imports vmTokens.ts.\n- In registry.removeAccount AND registry.addAccount, add `fs.rmSync(vmTokenFile(file, id), { force: true })` beside the existing usage-file rmSync.\n\n**Why.** The token is then deleted on BOTH removal paths:\n- the CLI's `remove`;\n- the Accounts tab's \"Remove only\", which is /ws REMOVE_ACCOUNT → registry.removeAccount (server/accountMessages.ts:48) and never goes through cli.ts.\nAnd a reused acct-n never inherits a stale token: addAccount reuses an id once its Claude folder is deleted, and the CLI's remove output tells people they may delete it.\n\n**Drop rev-1 step 2, item 4** (the cli.ts `remove` change). The registry handles it, and the CLI's remove output stays byte-for-byte unchanged.\n\n**Tests and gate.**\n- Add rows in vmTokens.test.ts:\n  - removeAccount deletes the account's token;\n  - addAccount reusing an id (its config dir removed) clears a stale token;\n  - another account's token is untouched.\n- The gate's cp list gains packages/moe-daemon/src/accounts/registry.ts.\n\nCQ-M07l (task-d56fb46e, now planned) rewords moe.accounts.remove.confirm on the assumption that Remove only deletes the VM token.",
+      "timestamp": "2026-11-01T10:41:05.511Z"
+    },
+    {
+      "id": "comment-0b2c9fd8a8df44da9497e586101c3da8",
+      "author": "qa-97c4310b",
+      "content": "QA review (qa-97c4310b, 12:10Z): substance GREEN. Parking on the pending size waiver prop-52a37017fb9e4216ab2d93a606202505, not rejecting.\n\nEvidence:\n- Completion 257e8ad8 is on moe/work-2026-10-24. None of the 8 files changed between 257e8ad8 and HEAD 13eafb5c, and the shared tree is clean for them.\n- Recorded checkRefs gate re-run fresh (/tmp/moe-324d4f53-qa-1yEhSR, HEAD archive + overlay): EXIT=0. npm ci OK, tsc clean, vitest 8 files 97 passed/1 skipped (pre-existing Windows-only row), node --test 41 tests 40 pass/0 fail/1 skipped (pre-existing Windows-only row).\n- DoD 1 (mint with fake claude, 0700/0600, no 12-char token slice in any output), DoD 2 (--remove, unknown id, failed mint, bad paste, removed-during-prompt, broken store), DoD 3 (vm-credential exact stdout; missing/symlink/dir/symlinked store/oversize/api-key/newline/../ give exit 3 + empty stdout; no id exit 2), DoD 4 (vmToken from lstat; readFileSync/openSync spies see nothing under claude-vm-tokens), DoD 5 (gate): all mapped to code + tests.\n- Rails: no file opened in claude-accounts/<id> (only the mkdir, as login does); no .credentials.json; minting child env built by accountEnv (TOKEN_ENV/PROVIDER_ENV dropped); no message interpolates the token; vmTokens.ts exports no reader.\n- QA mutants 10/12 killed: hasVmToken lstat->stat, removeAccount rm dropped, addAccount rm dropped, outer-env leak to the minting child, lease store-dir check dropped, lease newline, lease trim, regex drift, symlinked-dir check dropped, no trim in the CLI.\n- Survivors (advisory, not DoD): (a) the readline SIGINT listener has no unit test. I checked it in a pty with `script`: the prompt shows no echo, a line exits 0 with the line on stdout, and Ctrl-C exits 1 with empty stdout. (b) writeTextAtomic's new 'wx' flag has no test.\n- Advisory: registry.ts is now 303 lines (plan step 1 said keep it under 300).\n- Size: `git show --numstat` packages/+scripts/ = +493/-11, net 482 (runtime 216, tests 266), exactly the per-file numstat in the proposal text. No epic rail waives it yet, so I can't approve.\n\nResume path: on APPROVED, the governor adds the rail and runs set_task_status REVIEW; a fresh QA checks the rail text against `git show --numstat 257e8ad8`, re-runs the gate, and approves with no new bytes. On REJECTED, the row goes to PLANNING for a split that reuses these landed bytes.",
+      "timestamp": "2026-11-01T12:10:02.348Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:07:44.219Z",
+  "updatedAt": "2026-11-01T14:45:18.534Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T10:22:43.281Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T14:43:56.776Z",
+    "wallClockMs": 15673495
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-009c883d",
+    "qa-97c4310b"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T11:01:11.352Z",
+  "executionContract": {
+    "intendedBehavior": "`accounts vm-token <id>` runs `claude setup-token` interactively under the account's config folder, then takes the token at a hidden prompt, validates it and stores it atomically at <accounts dir>/claude-vm-tokens/<id>.token (0700/0600); `--remove` deletes it. registry.removeAccount (the CLI's remove and the Accounts tab's Remove only) and registry.addAccount (id reuse) delete the account's token. `moe-account-lease.mjs vm-credential <id>` prints exactly a valid stored token on stdout and nothing otherwise (exit 3). The daemon's account view reports vmToken from a stat.",
+    "acceptanceCriteria": [
+      "A mint with a fake claude stores the token with modes 0700/0600 and prints no token byte; the minting child sees the account's config dir and none of TOKEN_ENV/PROVIDER_ENV.",
+      "--remove deletes the token. An unknown id, a failed mint, an empty or malformed paste, or an account removed during the prompt stores nothing and exits 1 with a fixed MOE_* message.",
+      "registry.removeAccount deletes only that account's token, and addAccount clears a stale token for a reused id.",
+      "vm-credential prints exactly the stored token. A missing, symlinked, oversize or malformed file, a symlinked store dir or a bad id prints nothing and exits 3; no id exits 2.",
+      "accountRotationView reports vmToken true/false from an lstat and never reads the token file.",
+      "The checkRefs command passes in a git-archive snapshot."
+    ],
+    "invariants": [
+      "No token byte in argv, a child env, a log line, CLI output, an error message or a daemon payload.",
+      "No file inside claude-accounts/<id> is opened, and .credentials.json is never read.",
+      "The daemon never opens the token file; vmTokens.ts exports no reader.",
+      "VM_TOKEN_RE, MAX_VM_TOKEN_BYTES, ACCOUNT_ID_RE and the store-path rule are identical in the daemon (registry.ts, vmTokens.ts) and moe-account-lease.mjs.",
+      "The whole diff stays at or under 400 net changed lines, or a size-exception proposal is filed and cited before complete_task."
+    ],
+    "compatibility": [
+      "Every existing accounts command (remove included) and every lease subcommand keeps its output byte-for-byte.",
+      "runAccountsCli stays synchronous; CliIo.readSecret is optional, so existing CliIo literals stay valid.",
+      "Registry and usage files keep the same bytes: writeJsonAtomic delegates to writeTextAtomic.",
+      "types/schema.ts is untouched (WT-19). vmToken is an additive field, and today's plugin ignores unknown account keys."
+    ],
+    "approvedScope": [
+      "registry.ts: vmTokenFile, writeTextAtomic (extracted from writeJsonAtomic), and the token rmSync in addAccount and removeAccount.",
+      "vmTokens.ts: VM_TOKEN_RE, MAX_VM_TOKEN_BYTES, writeVmToken, removeVmToken, hasVmToken, HIDDEN_READER_SOURCE and readHiddenLine.",
+      "cli.ts: the vm-token command, --remove and the optional CliIo.readSecret.",
+      "accountStore.ts: AccountViewWithVmToken, the vmToken field and accountRotationView's return type.",
+      "moe-account-lease.mjs: VM_TOKEN_RE, MAX_VM_TOKEN_BYTES, accountsFile, vmTokenPath, readVmCredential and the vm-credential command."
+    ],
+    "reuse": [
+      "registry.ts registryFilePath, accountConfigDir, ACCOUNT_ID_RE and RegistryError, plus writeJsonAtomic's temp, rename and Windows retry, extracted as writeTextAtomic.",
+      "claudeAuth.ts runClaude (interactive), accountEnv and claudeCommand; cli.ts accountFor, describe and notFoundMessage.",
+      "moe-account-lease.test.mjs tempDir, cleanEnv and helper; baselineRun.test.ts's dynamic import of a scripts/*.mjs module."
+    ],
+    "sourceAssumptions": [
+      "registry.ts:29 ACCOUNT_ID_RE; :37-39 TOKEN_ENV and PROVIDER_ENV; :69-82 registryFilePath, accountConfigDir and accountUsageFile; :165-182 writeJsonAtomic.",
+      "registry.ts:219-245: addAccount reuses an id once its config dir is gone (:227), with the usage rmSync at :230; removeAccount's usage rmSync is at :243.",
+      "server/accountMessages.ts:45,48: /ws ADD_ACCOUNT and REMOVE_ACCOUNT call registry addAccount and removeAccount directly.",
+      "claudeAuth.ts:67-120: claudeCommand; accountEnv drops TOKEN_ENV and PROVIDER_ENV; runClaude with interactive=true inherits stdio and has no timeout.",
+      "cli.ts (246 lines): :40-50 CliIo and defaultIo, :72-90 parseArgs, :159-221 run(). index.ts:1213 calls runAccountsCli synchronously.",
+      "accountStore.ts:193-226 accountRotationView. accountStore.test.ts:315-318 does an exact toEqual of one account view. AccountView is at types/schema.ts:1260.",
+      "moe-account-lease.mjs:28 ACCOUNT_ID_RE and :473-521 main; moe-account-lease.test.mjs:34-48 tempDir, cleanEnv and helper.",
+      "moe-jetbrains MoeJson.kt:702-727 parseClaudeAccount reads only known keys."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-324d4f53-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/accounts/registry.ts packages/moe-daemon/src/accounts/vmTokens.ts packages/moe-daemon/src/accounts/vmTokens.test.ts packages/moe-daemon/src/accounts/cli.ts packages/moe-daemon/src/state/accountStore.ts packages/moe-daemon/src/state/accountStore.test.ts scripts/moe-account-lease.mjs scripts/tests/moe-account-lease.test.mjs \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/accounts/ src/state/accountStore.test.ts src/server/accountMessages.test.ts src/util/atomicWrite.test.ts' && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/moe-account-lease.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **Capturing the token from setup-token's output.** Rejected. It is an Ink TUI: with stdout piped its prompts may not render, and a token split across chunks could leak a prefix through redaction. The task allowed the hidden paste prompt for exactly this case.\n- **Making runAccountsCli async for readline.** Rejected: cli.test.ts, claudeAuth.test.ts and index.ts:1213 call it synchronously. A child `node -e` reader returns the line over a pipe instead.\n- **Comparing account identities.** Rejected: claudeAuth.ts deliberately keeps only the exit code and authMethod. The mismatch risk is stated in the CLI prompt instead.\n- **Validating the token with a claude child.** Rejected: the rail allows the token only in the minting child's env.\n- **Editing types/schema.ts AccountView.** Rejected: WT-19 declares it, and a shared-schema change would need broad regression. A local extended interface is used instead.\n- **Sending vmToken only when true.** Rejected: M07l reads a missing flag as an older daemon.\n- **Deleting the token only in the CLI's remove (rev 1).** Rejected: the Accounts tab's Remove only (/ws REMOVE_ACCOUNT) and addAccount's id reuse both bypass cli.ts.\n- **A second hand-rolled atomic write.** Rejected: writeJsonAtomic's temp, rename and Windows retry is extracted as writeTextAtomic and reused.\n- **The hidden reader in cli.ts.** Rejected: it would push cli.ts past worker.md's 300-line file guideline.\n- **Pre-filing a size waiver at plan time.** Rejected: there is no exact numstat yet. The plan budgets 400 lines and files the waiver at step 5 only if the measured diff is over.",
+    "codebaseInsights": "- **accountStore.test.ts:315-318** does an exact toEqual on one account view. Adding vmToken without updating it fails the gate; rev 1 missed this, which is why the file is now declared.\n- **The two removal paths.** /ws REMOVE_ACCOUNT goes straight to registry.removeAccount (server/accountMessages.ts:48). addAccount reuses the lowest acct-n once its config folder is gone (registry.ts:227).\n- **writeJsonAtomic callers.** It is used by registry writes, accountStore usage writes (:392), registry.test.ts and util/atomicWrite.test.ts:229. The gate runs those suites.\n- **The plugin parser.** MoeJson.kt parseClaudeAccount reads only known keys, so the additive vmToken is safe for today's plugin.\n- **accountRotationView** reads only state.workers plus a WeakMap fleet. accountStore.test.ts already sets MOE_ACCOUNTS_FILE and restores mocks in afterEach.\n- **Importing a script from vitest:** src/benchmarks/baselineRun.test.ts:267 imports scripts/*.mjs from a test via pathToFileURL.\n- **Test env.** vitest.config.ts points MOE_ACCOUNTS_FILE at a temp file that doesn't exist; CLI tests pass io.env instead.",
+    "risks": "- **Size.** Three CQ-M rows (M05, M07b, M07q) were size-rejected today. The budget is tight: follow step 5's fallback rather than dropping rows.\n- **Unverified setup-token behavior.** The real `claude setup-token` flow is untested here, and the first real run is the integration's. A token format change fails closed through VM_TOKEN_RE.\n- **The token in the terminal.** claude itself prints the token in the terminal, so the IDE terminal tab's scrollback holds it. Moe cannot suppress that without capturing output, which was rejected. Moe itself never prints it.\n- **Windows terminals.** Hidden input relies on readline raw mode. The M07 real-board run should check for no echo in the JetBrains PowerShell and WSL terminals.\n- **Ctrl-C at the prompt.** Raw mode routes Ctrl-C to readline. Without the SIGINT listener closing the interface, the prompt hangs until the 15-minute timeout.\n- **WSL drvfs.** Modes are advisory there, so the reader doesn't enforce them.\n- **WSL agent mode.** The helper's default store is the Linux home's. Verified-local seats launch natively (decision 3), and M07m can set MOE_ACCOUNTS_FILE if it ever needs to.\n- **Removal race.** The mint re-checks the registry before writing. The remaining window of milliseconds is closed by addAccount's cleanup when the id is reused.",
+    "keyFiles": [
+      "packages/moe-daemon/src/accounts/registry.ts",
+      "packages/moe-daemon/src/accounts/cli.ts",
+      "packages/moe-daemon/src/accounts/claudeAuth.ts",
+      "packages/moe-daemon/src/state/accountStore.ts",
+      "packages/moe-daemon/src/state/accountStore.test.ts",
+      "packages/moe-daemon/src/server/accountMessages.ts",
+      "scripts/moe-account-lease.mjs",
+      "scripts/tests/moe-account-lease.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 3,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "bf327c83140398262b911e235b37ff01318ef69b",
+    "planRevision": 3
+  },
+  "planApprovedAt": "2026-11-01T11:01:11.380Z",
+  "approvedPlanRevision": 3,
+  "priorAttempt": {
+    "attemptedAt": "2026-11-01T10:34:50.983Z",
+    "reason": "This is the architect correcting their own plan before any work started: no worker is assigned and every step is PENDING. The rev-1 plan removes the VM token only in the CLI's `remove` command, but two paths miss it:\n\n1. **The Accounts tab's \"Remove only\".** It sends /ws REMOVE_ACCOUNT, which calls registry.removeAccount directly (server/accountMessages.ts:48), so it would leave a live long-lived token orphaned.\n2. **Reused ids.** addAccount reuses the lowest acct-n once its Claude folder is deleted (registry.ts addAccount; the CLI's remove tells people they may delete that folder). A new account could then inherit the old account's token.\n\nThe fix is the usage-file pattern already used in accounts/registry.ts:\n- add a vmTokenFile path helper beside accountUsageFile;\n- rmSync the token in removeAccount and in addAccount.\n\nRev 1 does not declare registry.ts, so I am replanning to add it and drop the cli.ts remove change. Everything else in rev 1 stays.",
+    "implementationPlan": [
+      {
+        "stepId": "step-1",
+        "description": "Create the token store module packages/moe-daemon/src/accounts/vmTokens.ts and the first rows of its test file. Read `mem:decision-cq-m07-verified-local-activation` (decision 5) first.\n\n**Rules for the module.**\n- accounts/ never imports daemon modules (packages/moe-daemon/CLAUDE.md). Runtime imports are node built-ins and ./registry.js only.\n- No token byte ever reaches an error message, a log or a return value other than the stored file.\n\n**Exports.**\n1. `VM_TOKEN_RE = /^sk-ant-oat\\d{2}-[A-Za-z0-9_-]{20,1000}$/` and `MAX_VM_TOKEN_BYTES = 1100`.\n   - This is a Claude long-lived OAuth token as `claude setup-token` prints it.\n   - If the format changes, the check refuses (fail closed), and moe-account-lease.mjs's copy must change in the same diff; step 4's drift row enforces that.\n2. `vmTokenDir(registryFile)` = path.join(path.dirname(registryFile), 'claude-vm-tokens'). `vmTokenFile(registryFile, id)` = `<dir>/<id>.token`. An id that fails ACCOUNT_ID_RE throws RegistryError. The store sits beside claude-accounts.json, so it is outside every Claude config folder (claude-accounts/<id>) and every project.\n3. `writeVmToken(registryFile, id, token)`:\n   - Validate the id and VM_TOKEN_RE. The fixed error is 'not a Claude long-lived token' and never includes the value.\n   - mkdirSync(dir, { recursive: true, mode: 0o700 }). Then lstat the dir: a symlink or non-directory refuses. On POSIX, chmodSync(dir, 0o700).\n   - Write `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp` with { flag: 'wx', mode: 0o600 }, then renameSync over the file. On any failure, unlink the temp file and rethrow. On POSIX, chmodSync(file, 0o600) after.\n4. `removeVmToken(registryFile, id): boolean`: unlinkSync; ENOENT returns false.\n5. `hasVmToken(registryFile, id): boolean`: lstatSync(file).isFile() only. A symlink, a directory or a missing file is false. It NEVER opens the file, and an invalid id is false.\n\n**Tests: new packages/moe-daemon/src/accounts/vmTokens.test.ts, part 1.** Use a mkdtemp registry dir per test.\n- Content: the written file holds exactly the token.\n- Modes: the dir is 0700 and the file is 0600 (POSIX only; skip the mode asserts on win32).\n- Rewrites: a rewrite replaces the file and leaves no *.tmp.\n- Refused tokens, each storing nothing: '', 'sk-ant-api03-…', a token with a trailing newline or an inner space, and 1001+ body characters.\n- Refused ids: '../x', 'a/b' and ''.\n- removeVmToken returns true, then false.\n- hasVmToken is true for the file, false for a symlink to it, false for a missing file and false for a directory.\n- No error message ever contains the token text.\n\nError handling: every fs failure surfaces as a thrown error carrying the code only, never the token.",
+        "status": "PENDING",
+        "affectedFiles": [],
+        "newFiles": [
+          "packages/moe-daemon/src/accounts/vmTokens.ts",
+          "packages/moe-daemon/src/accounts/vmTokens.test.ts"
+        ]
+      },
+      {
+        "stepId": "step-2",
+        "description": "Add `accounts vm-token <id> [--remove]` to packages/moe-daemon/src/accounts/cli.ts, and its rows in vmTokens.test.ts.\n\n**How the token is obtained.**\n- claude setup-token is an interactive Ink TUI. With stdout piped, its prompts (the sign-in link, the code paste) don't render reliably, so capturing its output is unreliable.\n- The CLI therefore runs `claude setup-token` INTERACTIVELY (stdio inherited) under the account's CLAUDE_CONFIG_DIR, then asks the person to paste the token at a HIDDEN prompt.\n\n**1. Reading the secret.** CliIo gains `readSecret(prompt: string): string | null`.\n- Export `HIDDEN_READER_SOURCE`, a static CommonJS snippet for `node -e`:\n  - write process.argv[1] (the prompt) to stderr;\n  - run readline.createInterface({ input: process.stdin, output: <a Writable that drops writes>, terminal: process.stdin.isTTY === true }). On a TTY that sets raw mode, so nothing echoes;\n  - on the first line, write the line to stdout and exit 0; on close without a line, exit 1.\n- defaultIo.readSecret = spawnSync(process.execPath, ['-e', HIDDEN_READER_SOURCE, prompt], { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8', timeout: 15 * 60_000 }). It returns the stdout when the status is 0, else null.\n- The secret crosses only that pipe: never argv, env, the screen or a log. Keep runAccountsCli synchronous, because cli.test.ts and index.ts:1213 call it synchronously.\n\n**2. Arguments and usage.**\n- parseArgs gains `--remove` (parsed.remove = true).\n- USAGE and the header comment gain `vm-token <id> [--remove]  mint (or delete) the account's long-lived token for Moe VM jobs`.\n\n**3. `case 'vm-token'`:** account = accountFor(file, positional[0]). An unknown id gives the existing RegistryError and exit 1, with nothing stored.\n- **--remove:** removeVmToken. Print 'Removed the VM token for <describe>.' or '<describe> has no VM token.' and exit 0.\n- **Mint:**\n  a. mkdirSync(accountConfigDir(file, id), { recursive: true, mode: 0o700 }).\n  b. Print on stderr: 'Minting a long-lived token for <describe> for Moe VM jobs. Claude opens its sign-in page (or prints a link). Sign in with the SAME Claude account as this slot: Moe cannot check which account a token belongs to.' and 'When claude prints the token, copy it; you paste it here next (input hidden).'\n  c. run = runClaude(claudeCommand(io.env), ['setup-token'], accountEnv(io.env, dir), true). accountEnv drops TOKEN_ENV and PROVIDER_ENV and sets CLAUDE_CONFIG_DIR, so no outer token reaches the minting child.\n  d. If run.notFound, print notFoundMessage and exit 1. If the status is not 0, print `MOE_VM_TOKEN_MINT_FAILED: claude setup-token exited with <status|no exit code>; nothing was stored.` and exit 1.\n  e. Take token = io.readSecret('Paste the token (input hidden): ')?.trim().\n     - Empty or null: `MOE_VM_TOKEN_NOT_STORED: no token was entered; nothing was stored.` and exit 1.\n     - Fails VM_TOKEN_RE: `MOE_VM_TOKEN_INVALID: that is not a Claude long-lived token (sk-ant-oat…); nothing was stored.` and exit 1. Never echo the input.\n  f. writeVmToken. A throw gives `MOE_VM_TOKEN_NOT_STORED: the token store could not be written (<error code>); nothing was stored.` and exit 1. On success print 'Stored a VM token for <describe>. Moe uses it only to run this account's agent jobs in a Moe VM.' and exit 0.\n\n**4. `remove <id>`.** After removeAccount, also call removeVmToken(file, id). Only when one existed, add the line 'Its VM token was deleted too.' A later account that reuses the id must never inherit a stale token. Existing remove output lines stay unchanged.\n\n**Tests: vmTokens.test.ts, part 2.** Copy cli.test.ts's fake-claude setup (MOE_CLAUDE_BIN, marker file). The fake handles `setup-token`: it exits FAKE_SETUP_EXIT (default 0) and records its CLAUDE_CONFIG_DIR and whether CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN were set. It prints nothing token-like. Inject io.readSecret.\n- **Mint:** the mint stores exactly the token (modes as in step 1) and exits 0. NO out or err line contains the token or any 12-character slice of it (DoD 1).\n- **Child env:** the minting child saw the account's config dir and none of the three token variables, even though the outer env set all three.\n- **Failed mint:** the store is unchanged, readSecret is never called, and the exit is 1 with MOE_VM_TOKEN_MINT_FAILED (DoD 2).\n- **Bad paste:** null or '' gives NOT_STORED; 'sk-ant-api03-…' gives INVALID, and the message doesn't contain the input.\n- **Unknown id:** exit 1, nothing stored.\n- **--remove:** deletes the file, and a second run says there's none (exit 0). `remove <id>` deletes the token too.\n- **The hidden reader:** spawnSync(process.execPath, ['-e', HIDDEN_READER_SOURCE, 'P: '], { input: 'sk-ant-oat01-' + 'a'.repeat(40) + '\\n' }) gives exactly that line on stdout and only 'P: ' on stderr. Empty input exits 1.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "packages/moe-daemon/src/accounts/cli.ts"
+        ]
+      },
+      {
+        "stepId": "step-3",
+        "description": "Report token presence in the daemon's account projection: packages/moe-daemon/src/state/accountStore.ts accountRotationView, the ACCOUNTS_UPDATED payload the JetBrains Accounts tab reads.\n\n- The AccountView type lives in types/schema.ts, which WT-19 (task-b1ca54f2, open) declares. Do NOT edit it.\n  - Instead, export from accountStore.ts `interface AccountViewWithVmToken extends AccountView { vmToken: boolean }`.\n  - Annotate the accounts .map callback with it.\n  - Add `vmToken: hasVmToken(file, account.id)`, where file is the registryFilePath() already in scope. That is a stat only, and the daemon never opens the token file.\n- Leave every other field and the change-detection broadcast unchanged. A token appearing or disappearing changes the view, so the existing 2 s watch broadcasts it.\n- Add a comment that the M07 integration row folds vmToken into schema.ts's AccountView once WT-19 lands.\n\n**Tests: vmTokens.test.ts, part 3 (DoD 4).**\n- Use a StateManager over a temp project. vi.stubEnv('MOE_ACCOUNTS_FILE', <temp registry>) with two accounts added through addAccount, and a token written for the first.\n- accountRotationView(state).accounts.map(a => a.vmToken) toEqual [true, false].\n- POSIX only: after chmod 000 on the token file the first stays true. That proves the projection only stats; any read would fail EACCES.\n- A symlinked token file reports false.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "packages/moe-daemon/src/state/accountStore.ts"
+        ]
+      },
+      {
+        "stepId": "step-4",
+        "description": "Add the wrapper-side reader `vm-credential <id>` to scripts/moe-account-lease.mjs, plus its node --test rows and the drift row.\n\n**1. scripts/moe-account-lease.mjs.**\n- Add `import os from 'node:os'`.\n- Export:\n  - `VM_TOKEN_RE` (the same source as vmTokens.ts) and `MAX_VM_TOKEN_BYTES = 1100`;\n  - `accountsFile(env)`: MOE_ACCOUNTS_FILE trimmed and resolved, else path.join(os.homedir(), '.moe', 'claude-accounts.json'). That is registry.ts registryFilePath's rule;\n  - `vmTokenPath(env, id)`: null for an id failing ACCOUNT_ID_RE, else path.join(path.dirname(accountsFile(env)), 'claude-vm-tokens', `${id}.token`);\n  - `readVmCredential(env, id): string | null`. Every failure is null and nothing throws:\n    - lstat must be a regular file (missing, symlink or directory gives null);\n    - open with O_RDONLY, plus O_NOFOLLOW when fs.constants has it;\n    - fstat must be a file of at most MAX_VM_TOKEN_BYTES;\n    - read exactly that many bytes, decode utf8, and require VM_TOKEN_RE to match exactly;\n    - close in finally.\n  There is no mode check: WSL drvfs reports 0777 for /mnt/c registries.\n- main: `case 'vm-credential'`.\n  - With no id: USAGE on stderr, return 2.\n  - Else token = readVmCredential(env, args[0]). null: stderr 'MOE_VM_TOKEN_UNAVAILABLE', stdout empty, return 3. Otherwise process.stdout.write(token), with no newline, and return 0.\n  - The token goes only to stdout, for a pipe into the VM job runner; never argv.\n- Update USAGE and the header list: `vm-credential <id>   the account's VM token on stdout (for a pipe), from <accounts dir>/claude-vm-tokens/`. In the header's file-access paragraph, say the helper now also reads that token store, which is outside every Claude config folder.\n\n**2. scripts/tests/moe-account-lease.test.mjs.** New test() rows using the file's run(args, env, input) spawn helper, with env MOE_ACCOUNTS_FILE=<tmp>/claude-accounts.json (DoD 3):\n- a stored valid token gives stdout exactly the token, exit 0, empty stderr;\n- each of these gives stdout '', exit 3 and stderr 'MOE_VM_TOKEN_UNAVAILABLE':\n  - missing file;\n  - a symlink to a valid token (skip on win32 EPERM);\n  - a directory at the path;\n  - oversize (MAX+1 bytes);\n  - a malformed token ('sk-ant-api03-…', or a valid token plus '\\n');\n  - id '../acct-1';\n- no id gives exit 2.\n\n**3. Drift row in packages/moe-daemon/src/accounts/vmTokens.test.ts.** Import the helper via new URL('../../../../scripts/moe-account-lease.mjs', import.meta.url), as the certification tests import runner modules:\n- VM_TOKEN_RE.source, MAX_VM_TOKEN_BYTES and ACCOUNT_ID_RE.source are equal on both sides;\n- lease.vmTokenPath({ MOE_ACCOUNTS_FILE: f }, 'acct-1') === vmTokenFile(f, 'acct-1').",
+        "status": "PENDING",
+        "affectedFiles": [
+          "scripts/moe-account-lease.mjs",
+          "scripts/tests/moe-account-lease.test.mjs"
+        ]
+      },
+      {
+        "stepId": "step-5",
+        "description": "VERIFY ONCE, fresh, after steps 1-4. Run the task's two named commands, plus tsc and the existing accountStore suite, in one git-archive snapshot. Never npm ci or a build in the shared checkout (global rail), and never run a real claude.\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-324d4f53-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/accounts/vmTokens.ts packages/moe-daemon/src/accounts/vmTokens.test.ts packages/moe-daemon/src/accounts/cli.ts packages/moe-daemon/src/state/accountStore.ts scripts/moe-account-lease.mjs scripts/tests/moe-account-lease.test.mjs \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/accounts/ src/state/accountStore.test.ts' && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/moe-account-lease.test.mjs`\n\nThe Linux-only PATH avoids the inherited Windows-directory EACCES in the accounts CLI tests (epic note). Expect exit 0 and 0 failures across src/accounts/, accountStore.test.ts and the lease tests; cite the counts.\n\nThe real `claude setup-token` interaction is not run here; the first real proof is the M07 integration's real-board run, by the human or the governor. Say so in complete_task.",
+        "status": "PENDING",
+        "affectedFiles": []
+      },
+      {
+        "stepId": "step-6",
+        "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read the whole diff as an attacker hunting for the token:\n\n`git diff HEAD -- packages/moe-daemon/src/accounts/cli.ts packages/moe-daemon/src/state/accountStore.ts scripts/moe-account-lease.mjs scripts/tests/moe-account-lease.test.mjs`, plus the two new files.\n\n- **Where the token may appear.** Only in: the hidden reader's stdout pipe, writeVmToken's temp and final file, and vm-credential's stdout.\n  - Never in argv, a child env (the minting child gets none), io.out/io.err, a thrown message, a log or the projection.\n  - Grep the messages for template strings that could interpolate it.\n- **Claude config folders.** Nothing opens a file inside claude-accounts/<id>, and .credentials.json is never read (task rail). The CLI only mkdirs the account folder, as login does.\n- **The daemon.** accountStore.ts stats only. `grep -n \"readFile\\|openSync\\|createReadStream\" packages/moe-daemon/src/state/accountStore.ts` shows no token path.\n- **Paths.** The id is validated on both sides, so '../' never escapes the store. Symlinks are refused on read, write (the dir) and presence.\n- **Atomicity.** The write uses 'wx' + rename. A failure leaves neither a partial token nor a temp file.\n- **Drift.** VM_TOKEN_RE, the size cap and the path rule are equal in the TS and .mjs copies.\n- **Account mismatch.** It is documented in the CLI's prompt. Moe cannot detect it without reading identity data it deliberately ignores (claudeAuth.ts takes only the exit code and authMethod).\n\nFix anything found, re-run step 5's gate, and submit its fresh output.",
+        "status": "PENDING",
+        "affectedFiles": []
+      }
+    ],
+    "stepsCompleted": []
+  },
+  "planningEntry": {
+    "from": "WORKING",
+    "at": "2026-11-01T10:34:50.983Z",
+    "seq": 1
+  },
+  "workStartedAt": "2026-11-01T11:16:11.146Z",
+  "reviewStartedAt": "2026-11-01T11:34:53.537Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-324d4f53-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/accounts/registry.ts packages/moe-daemon/src/accounts/vmTokens.ts packages/moe-daemon/src/accounts/vmTokens.test.ts packages/moe-daemon/src/accounts/cli.ts packages/moe-daemon/src/state/accountStore.ts packages/moe-daemon/src/state/accountStore.test.ts scripts/moe-account-lease.mjs scripts/tests/moe-account-lease.test.mjs \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/accounts/ src/state/accountStore.test.ts src/server/accountMessages.test.ts src/util/atomicWrite.test.ts' && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/moe-account-lease.test.mjs",
+    "exitCode": 0,
+    "outputTail": "EXIT=0 (snapshot /tmp/moe-324d4f53-1UbvKQ, git archive of HEAD 6ac51c42 + the 8 task files overlaid; cmp confirms overlaid bytes == working tree)\nnpm ci OK; npx tsc --noEmit: no errors\nvitest:  Test Files  8 passed (8)\n         Tests  97 passed | 1 skipped (98)   [skip = pre-existing Windows-only row in src/accounts/cli.test.ts]\nnode --test scripts/tests/moe-account-lease.test.mjs:\n✔ vm-credential: exactly the stored token on stdout, else nothing and exit 3 (225.510606ms)\nℹ tests 41\nℹ suites 0\nℹ pass 40\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1   [﹣ signin-state runs an npm-style claude.cmd through cmd.exe # Windows only]\nℹ todo 0\nℹ duration_ms 2140.486188",
+    "reportedAt": "2026-11-01T11:34:53.537Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/accounts/registry.ts",
+    "packages/moe-daemon/src/accounts/vmTokens.ts",
+    "packages/moe-daemon/src/accounts/vmTokens.test.ts",
+    "packages/moe-daemon/src/accounts/cli.ts",
+    "packages/moe-daemon/src/state/accountStore.ts",
+    "packages/moe-daemon/src/state/accountStore.test.ts",
+    "scripts/moe-account-lease.mjs",
+    "scripts/tests/moe-account-lease.test.mjs",
+    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+    ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json",
+    ".moe/tasks/task-c4e076cd306f4f84a4aa08bf2a4682b2.json",
+    ".moe/tasks/task-1dc49ae27e22494a95e15ada3e9c1fe9.json",
+    ".moe/tasks/task-5bebd9d3a57049b2878a5068ac1f905e.json"
+  ],
+  "completionSummary": "CQ-M07k: per-account VM tokens. registry.ts: vmTokenFile (<accounts dir>/claude-vm-tokens/<id>.token; a bad id throws MOE_ACCOUNT_UNKNOWN). removeAccount (CLI remove and the /ws REMOVE_ACCOUNT behind the Accounts tab's Remove only) and addAccount (id reuse) delete the token. writeTextAtomic extracted ('wx' temp, cleanup, Windows retry); writeJsonAtomic delegates with the same bytes. vmTokens.ts: VM_TOKEN_RE, MAX_VM_TOKEN_BYTES, writeVmToken (symlinked dir refused, 0700/0600), removeVmToken, hasVmToken (lstat), hidden reader; no reader exported. cli.ts: `accounts vm-token <id> [--remove]` runs `claude setup-token` interactively under the account's CLAUDE_CONFIG_DIR with TOKEN_ENV/PROVIDER_ENV dropped, takes the token at a hidden paste prompt, trims and validates it, re-checks the registry, and stores it atomically. Fixed MOE_VM_TOKEN_* lines, exit 1; no message carries the token. accountStore.ts: vmToken boolean from an lstat (AccountViewWithVmToken; schema.ts untouched). moe-account-lease.mjs `vm-credential <id>`: exactly the token on stdout, else MOE_VM_TOKEN_UNAVAILABLE and exit 3 (no id: exit 2). Its read: real dir, regular file, O_NOFOLLOW, size cap, exact regex. A drift test pins the regex, cap, id rule and path. Gate EXIT=0: vitest 97 passed/1 pre-existing skip; node --test 40 pass/1 pre-existing skip; tsc clean. Mutants killed 12/12. A pty check confirmed no echo and that Ctrl-C exits 1. SIZE: net 482 (+493/-11; runtime 216, tests 266), over 400, so EPIC size waiver prop-52a37017fb9e4216ab2d93a606202505 was filed (PENDING) before completion. Please park on it rather than reject if the substance is green. NOT run: a real `claude setup-token` or JetBrains-terminal no-echo; first proof is the M07 real-board run. Account mismatch can't be detected; the CLI prompt warns about it.",
+  "commits": [
+    {
+      "sha": "257e8ad841eab8a7c30771a2874ac15e5b9e0646",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-009c883d@2026-11-01T11:15:17Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+        ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json",
+        "packages/moe-daemon/src/accounts/cli.ts",
+        "packages/moe-daemon/src/accounts/registry.ts",
+        "packages/moe-daemon/src/accounts/vmTokens.test.ts",
+        "packages/moe-daemon/src/accounts/vmTokens.ts",
+        "packages/moe-daemon/src/state/accountStore.test.ts",
+        "packages/moe-daemon/src/state/accountStore.ts",
+        "scripts/moe-account-lease.mjs",
+        "scripts/tests/moe-account-lease.test.mjs"
+      ],
+      "recordedBy": "worker-009c883d",
+      "recordedAt": "2026-11-01T11:35:17.951Z",
+      "treeId": "bf5d960b6f4188c4133b6ca2b98c59eb2a084fe7",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "3b1dd7f6fef7df4c42e384a8171072efd6b016be",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-97c4310b@2026-11-01T12:06:21Z",
+      "paths": [
+        ".moe/tasks/task-c4e076cd306f4f84a4aa08bf2a4682b2.json"
+      ],
+      "recordedBy": "qa-97c4310b",
+      "recordedAt": "2026-11-01T12:10:55.429Z",
+      "treeId": "461d9f55c6147329895ddb97f04961a512cc6d77",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "885e4c7aca493c4c4fa4a290c067d3ee7240a235",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-b520bc90@2026-11-01T10:42:40Z",
+      "paths": [
+        ".moe/tasks/task-1dc49ae27e22494a95e15ada3e9c1fe9.json",
+        ".moe/tasks/task-5bebd9d3a57049b2878a5068ac1f905e.json"
+      ],
+      "recordedBy": "architect-b520bc90",
+      "recordedAt": "2026-11-01T12:13:48.335Z",
+      "treeId": "f1dc21a5b7a15e49b891cc6e71beab9df589b587",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "4011d5e98fa6732405946a5ca866bc3b3732c6c1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-97c4310b@2026-11-01T14:41:57Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json"
+      ],
+      "recordedBy": "qa-97c4310b",
+      "recordedAt": "2026-11-01T14:45:18.534Z",
+      "treeId": "952e1027b5e1c1fea202364d6e6eafccc6ff7e17",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/accounts/vmTokens.test.ts",
+    "packages/moe-daemon/src/accounts/registry.ts",
+    "packages/moe-daemon/src/accounts/vmTokens.ts",
+    "packages/moe-daemon/src/accounts/cli.ts",
+    "packages/moe-daemon/src/state/accountStore.test.ts",
+    "packages/moe-daemon/src/state/accountStore.ts",
+    "scripts/tests/moe-account-lease.test.mjs",
+    "scripts/moe-account-lease.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-97c4310b@2026-11-01T14:41:57Z",
+    "at": "2026-11-01T14:45:18.534Z"
+  },
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA substance GREEN; parked only on the pending EPIC size waiver prop-52a37017fb9e4216ab2d93a606202505 (filed by the worker 11:32Z, still PENDING 12:10Z). Completion 257e8ad8 on moe/work-2026-10-24; the 8 files are unchanged since. Recorded checkRefs gate re-run fresh by QA: EXIT=0; tsc clean; vitest 97 passed/1 pre-existing skip; node --test 40 pass/0 fail/1 pre-existing skip. All 5 DoD items mapped to code and tests; both task rails hold (no file opened in an account config folder, no token byte in argv, env, output or payload; the daemon only lstats). QA mutants 10/12 killed; the 2 survivors are advisory (SIGINT path pty-checked by QA; the new wx flag is untested). Size: +493/-11, net 482 over packages/ and scripts/, exactly the proposal's per-file numstat; no epic rail waives it yet, so no approval. Full evidence is in the QA comment. Resume: on APPROVED, add the rail and set_task_status REVIEW; a fresh QA checks the rail against git show --numstat 257e8ad8, re-runs the gate and approves (no new bytes). On REJECTED, set_task_status PLANNING for a split that reuses the landed bytes.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-01T14:43:56.776Z",
+  "reviewCompletedAt": "2026-11-01T14:43:56.776Z",
+  "reviewSummary": "QA round 2 (qa-97c4310b): APPROVED.\n\nCompletion 257e8ad8 is on moe/work-2026-10-24. The 8 files are unchanged through HEAD 62f83b4c, so there are no new bytes since round 1.\n\nSize: git show --numstat 257e8ad8 gives +493/-11, net 482, with per-file numbers exactly matching the epic rail \"CQ-M07k size exception\" (prop-52a37017, approved by the human). The rail waives size only, so I reviewed on substance.\n\nFresh gate: the recorded checkRefs command (HEAD archive plus the 8 files, env -i nvm Node 24) gave EXIT=0. npm ci OK, tsc clean. vitest: 8 files, 97 passed, 1 pre-existing Windows skip. node --test: 40 pass, 0 fail, 1 pre-existing Windows skip.\n\nDoD:\n(1) A fake-claude mint stores exactly the token, dir 0700 and file 0600, with no 12-character token slice in any output. The child sees the account's config dir and no outer credentials.\n(2) --remove deletes the token. An unknown id, a failed mint, a bad paste, a removal during the prompt and a broken store all store nothing and exit 1 with a fixed MOE_* line.\n(3) vm-credential prints exactly the token. A missing, symlinked, directory, symlinked-store, oversize, malformed, trailing-newline or ../ case gives exit 3 and an empty stdout; no id gives exit 2.\n(4) vmToken comes from an lstat. A grep finds no daemon reader, and the spies saw no read under claude-vm-tokens.\n(5) The gate passes in a snapshot.\n\nRails hold: no file is opened in an account config folder, and no token reaches argv, env, output or payload. The drift test pins the regex, cap, id rule and path.\n\nAdvisory: the 'wx' flag is untested, registry.ts is 303 lines, and a real setup-token run waits for the M07 board run. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

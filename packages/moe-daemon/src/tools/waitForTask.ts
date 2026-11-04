@@ -10,9 +10,13 @@ import {
   finalizingAttemptsByTask,
   foreignFinalizingAttempt,
   heldTaskRefusal,
-  isClaimGatedByDependsOn
+  isClaimGatedByDependsOn,
+  ownFinalizingAttempt,
+  parseExecutionRoute,
+  type ExecutionRoute
 } from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
+import { unansweredHumanComments } from '../util/taskPayload.js';
 import { awaitingPlanReuse } from '../context/planReuseJob.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
@@ -81,22 +85,12 @@ function findPendingQuestion(
     // filtered there spins every idle agent in a hot wait→get→wait loop with
     // zero progress. (1) Archiving does not clear hasPendingQuestion, and
     // get_pending_questions skips ARCHIVED. (2) It also only surfaces human
-    // comments AFTER the last agent comment — a flag left set after an agent
+    // comments AFTER the last answering comment (the same helper, which skips
+    // the daemon's own comments) — a flag left set after an agent
     // already answered yields an empty result there.
     if (task.status === 'ARCHIVED') continue;
     if (epicId && task.epicId !== epicId) continue;
-    const comments = task.comments || [];
-    let lastAgentIdx = -1;
-    for (let i = comments.length - 1; i >= 0; i--) {
-      if (comments[i].author !== 'human') {
-        lastAgentIdx = i;
-        break;
-      }
-    }
-    const hasUnansweredHumanComment = comments
-      .slice(lastAgentIdx + 1)
-      .some((c) => c.author === 'human');
-    if (!hasUnansweredHumanComment) continue;
+    if (unansweredHumanComments(task.comments).length === 0) continue;
     return { taskId: task.id, title: task.title, status: task.status, epicId: task.epicId };
   }
   return null;
@@ -131,7 +125,8 @@ function findMatchingTask(
   state: StateManager,
   statuses: string[],
   epicId?: string,
-  workerId?: string
+  workerId?: string,
+  executionRoute?: ExecutionRoute
 ): MatchResult {
   // The caller's OWN held task wakes the waiter the moment it is in a
   // requested status — this is the un-block resume path: a worker parked on
@@ -149,7 +144,7 @@ function findMatchingTask(
         statuses.includes(t.status) &&
         (epicId ? t.epicId === epicId : true) &&
         !(t.status === 'REVIEW' && t.needsHumanReview === true) &&
-        !executionAdmissionRefusal(state, t, workerId)
+        !executionAdmissionRefusal(state, t, workerId, executionRoute)
     );
     if (own) {
       return {
@@ -164,6 +159,10 @@ function findMatchingTask(
   // agent-claimable and so can never be a requested status. Measured spin,
   // twice in one session (task-9d5dfec6).
   if (workerId && blockingHold(state, workerId)) return NO_MATCH;
+  // The caller's own finalizing landing holds its seat the same way: claim_next_task
+  // refuses it ATTEMPT_FINALIZING, so waking it would spin. finalize_attempt's close
+  // announces itself with a TASK_UPDATED (announceAttemptClosed), which re-runs this.
+  if (workerId && ownFinalizingAttempt(state, workerId)) return NO_MATCH;
   // Eligibility here must be at least as strict as claim_next_task's ranked
   // pool: any task that is wait-visible but claim-ineligible wakes the waiter
   // into a claim that declines straight back to wait_for_task — a hot
@@ -197,7 +196,7 @@ function findMatchingTask(
     // event, and builds an Error only for a strict or malformed row. It never
     // throws: a malformed setting matches nothing, and only an explicit claim
     // names the reason.
-    .filter((t) => !executionAdmissionRefusal(state, t, workerId))
+    .filter((t) => !executionAdmissionRefusal(state, t, workerId, executionRoute))
     // Approved-plan reuse (CQ-C07) — the SAME predicate as claim_next_task's
     // ranked pool; a drift here re-creates the wake→claim→refuse spin. A pending
     // row starts its assessment here too, and the job's record or resume write
@@ -259,17 +258,29 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
         },
         workerId: { type: 'string', description: 'Your worker ID (used for cleanup on disconnect)' },
         epicId: { type: 'string', description: 'Optional epic filter' },
-        timeoutMs: { type: 'number', description: 'Max wait time in ms (default 300000, max 600000)' }
+        timeoutMs: { type: 'number', description: 'Max wait time in ms (default 300000, max 600000)' },
+        executionRoute: {
+          type: 'string',
+          enum: ['vm'],
+          description: 'Set only by a wrapper that runs the claimed WORKING/REVIEW session in a Moe VM (CQ-M07m/n); pass the same value to moe.claim_next_task. A verified-local WORKING or REVIEW task matches only a waiter that sends it. It can only refuse: it never grants readiness or skips another check.'
+        }
       },
       required: ['statuses', 'workerId'],
       additionalProperties: false
     },
     handler: async (args, state, context) => {
-      const params = (args || {}) as { statuses?: string[]; workerId?: string; epicId?: string; timeoutMs?: number };
+      const params = (args || {}) as {
+        statuses?: string[]; workerId?: string; epicId?: string; timeoutMs?: number; executionRoute?: unknown;
+      };
       const statuses = params.statuses || [];
       if (statuses.length === 0) {
         throw missingRequired('statuses');
       }
+      // INVALID_INPUT before any write or waiter. Every match below, including each
+      // TASK_UPDATED re-match inside the subscription, closes over this one parsed
+      // value, so the wake and the claim read the same predicate with the same route.
+      const executionRoute = parseExecutionRoute(params.executionRoute);
+      const routeArg = executionRoute ? { executionRoute } : {};
       // Same vocabulary as claim_next_task: a waiter on a human-gated column
       // would either sleep forever or wake into a claim that is rejected.
       assertAgentClaimableStatuses(statuses);
@@ -292,14 +303,14 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       }
 
       // Check if a matching task already exists
-      const immediate = findMatchingTask(state, statuses, params.epicId, workerId);
+      const immediate = findMatchingTask(state, statuses, params.epicId, workerId, executionRoute);
       if (immediate.match) {
         return {
           hasNext: true,
           task: immediate.match,
           nextAction: {
             tool: 'moe.claim_next_task',
-            args: { statuses, workerId, epicId: params.epicId },
+            args: { statuses, workerId, epicId: params.epicId, ...routeArg },
             reason: 'Task is available; claim it, then call moe.get_context.'
           }
         };
@@ -376,7 +387,7 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
                 ...(refusal ?? {
                   nextAction: {
                     tool: 'moe.wait_for_task',
-                    args: { statuses, workerId, epicId: params.epicId, timeoutMs },
+                    args: { statuses, workerId, epicId: params.epicId, timeoutMs, ...routeArg },
                     reason: 'Timeout elapsed; re-enter wait to keep listening.'
                   }
                 })
@@ -416,10 +427,11 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
             return;
           }
 
-          // Only react to task creation/update events
-          if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED') return;
+          // Re-match on task creation, update and deletion: a delete can free a
+          // dependent, since a legacy consumer counts a missing dependsOn id as met.
+          if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED' && event.type !== 'TASK_DELETED') return;
 
-          const found = findMatchingTask(state, statuses, params.epicId, workerId);
+          const found = findMatchingTask(state, statuses, params.epicId, workerId, executionRoute);
           if (found.match) {
             cleanup();
             logger.info({ workerId, taskId: found.match.id }, 'Task available, waking worker');
@@ -428,7 +440,7 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
               task: found.match,
               nextAction: {
                 tool: 'moe.claim_next_task',
-                args: { statuses, workerId, epicId: params.epicId },
+                args: { statuses, workerId, epicId: params.epicId, ...routeArg },
                 reason: 'Matching task appeared; claim it, then call moe.get_context.'
               }
             });

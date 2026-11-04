@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import { spawn } from 'child_process';
+import { pathToFileURL } from 'url';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -243,6 +244,113 @@ describe('probeDaemonIdentity', () => {
   it.each([500, 404])('classifies a %i reply as unknown even when it names another project', async (status) => {
     const { port } = await listen(reply(status, JSON.stringify({ projectPath: OTHER_PROJECT })));
     await expect(probeDaemonIdentity(HOST, port, '/mnt/d/proj')).resolves.toEqual({ kind: 'unknown' });
+  });
+});
+
+// The daemon's own /health DNS-rebinding guard. A computed specifier, as in
+// workerType.integration.test.ts: a literal one would pull daemon source into this package's tsc build.
+const { isAllowedHealthHost } = (await import(
+  pathToFileURL(path.resolve(__dirname, '../../moe-daemon/src/server/healthHost.ts')).href
+)) as { isAllowedHealthHost: (host: string | undefined, localAddress: string | undefined) => boolean };
+
+// The daemon's /health admits only IP literals and localhost as Host (server/healthHost.ts), so a probe
+// that dialed a configured name read 403 and fell back to 'unknown' (task-86d66093).
+describe('probeDaemonIdentity with a host name', () => {
+  const NAME = 'moe-daemon.test'; // RFC 6761: never resolves in real DNS
+  const enotfound = () => Object.assign(new Error(`getaddrinfo ENOTFOUND ${NAME}`), { code: 'ENOTFOUND' });
+
+  /** /health guarded the way the daemon guards it (index.ts): 403 for a Host it does not own. */
+  async function guarded(projectPath: unknown, bind = HOST) {
+    const hosts: (string | undefined)[] = [];
+    let connections = 0;
+    const { server, port } = await listen((req, res) => {
+      hosts.push(req.headers.host);
+      if (!isAllowedHealthHost(req.headers.host, req.socket.localAddress)) {
+        reply(403, 'Forbidden')(req, res);
+        return;
+      }
+      healthy(projectPath)(req, res);
+    }, bind);
+    server.on('connection', () => { connections++; });
+    return { port, hosts, connections: () => connections };
+  }
+
+  it('the guarded fake refuses the name Host an unresolved probe sends, as the daemon does', async () => {
+    const { port } = await guarded(OTHER_PROJECT);
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      http.get({ hostname: HOST, port, path: '/health', headers: { host: `${NAME}:${port}` } }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      }).on('error', reject);
+    });
+    expect(status).toBe(403);
+  });
+
+  it.each([
+    [OTHER_PROJECT, { kind: 'foreign', projectPath: OTHER_PROJECT }],
+    ['/mnt/d/proj', { kind: 'same' }],
+  ])('resolves a name and dials the address, so a daemon serving %s reads as %j', async (served, expected) => {
+    const fake = await guarded(served);
+    const lookup = vi.fn(async (_hostname: string) => HOST);
+    await expect(probeDaemonIdentity(NAME, fake.port, '/mnt/d/proj', { lookup })).resolves.toEqual(expected);
+    expect(lookup.mock.calls).toEqual([[NAME]]);
+    expect(fake.hosts).toEqual([`${HOST}:${fake.port}`]);
+  });
+
+  itV6('sends a bracketed IPv6 literal Host for an IPv6 resolution, which the daemon admits', async () => {
+    const fake = await guarded(OTHER_PROJECT, '::1');
+    const lookup = vi.fn(async (_hostname: string) => '::1');
+    await expect(probeDaemonIdentity(NAME, fake.port, '/mnt/d/proj', { lookup }))
+      .resolves.toEqual({ kind: 'foreign', projectPath: OTHER_PROJECT });
+    expect(fake.hosts).toEqual([`[::1]:${fake.port}`]);
+  });
+
+  // localhost stays a name: Node dials it on both address families, and one lookup that
+  // answers ::1 first would miss a daemon bound to 127.0.0.1.
+  it.each(['localhost', 'LOCALHOST', HOST, '127.1', '%31%32%37.0.0.1', ...(V6 ? ['::1', '[::1]'] : [])])(
+    'never resolves %j and keeps today\'s request', async (host) => {
+      const bind = host.includes(':') ? '::1' : host.toLowerCase() === 'localhost' ? 'localhost' : HOST;
+      const fake = await guarded(OTHER_PROJECT, bind);
+      const lookup = vi.fn(async (_hostname: string): Promise<string> => { throw enotfound(); });
+      await expect(probeDaemonIdentity(host, fake.port, '/mnt/d/proj', { lookup }))
+        .resolves.toEqual({ kind: 'foreign', projectPath: OTHER_PROJECT });
+      expect(lookup).not.toHaveBeenCalled();
+    });
+
+  it('classifies a failed lookup as unknown at once and opens no socket', async () => {
+    const fake = await guarded(OTHER_PROJECT);
+    const t0 = Date.now();
+    await expect(probeDaemonIdentity(NAME, fake.port, '/mnt/d/proj', { timeoutMs: 2000, lookup: async () => { throw enotfound(); } }))
+      .resolves.toEqual({ kind: 'unknown' });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(fake.connections()).toBe(0);
+  });
+
+  it('classifies a hung lookup as unknown within the timeout and opens no socket', async () => {
+    const fake = await guarded(OTHER_PROJECT);
+    const t0 = Date.now();
+    await expect(probeDaemonIdentity(NAME, fake.port, '/mnt/d/proj', { timeoutMs: 150, lookup: () => new Promise<string>(() => {}) }))
+      .resolves.toEqual({ kind: 'unknown' });
+    expect(Date.now() - t0).toBeLessThan(1500);
+    expect(fake.connections()).toBe(0);
+  });
+
+  it('opens no socket when the lookup answers after the timeout', async () => {
+    const fake = await guarded(OTHER_PROJECT);
+    const lookup = () => new Promise<string>((resolve) => setTimeout(() => resolve(HOST), 300));
+    await expect(probeDaemonIdentity(NAME, fake.port, '/mnt/d/proj', { timeoutMs: 100, lookup }))
+      .resolves.toEqual({ kind: 'unknown' });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(fake.connections()).toBe(0);
+  });
+
+  it('bounds lookup and request together by one timeoutMs', async () => {
+    const { port } = await listen(() => { /* never answers */ });
+    const lookup = () => new Promise<string>((resolve) => setTimeout(() => resolve(HOST), 900));
+    const t0 = Date.now();
+    await expect(probeDaemonIdentity(NAME, port, '/mnt/d/proj', { timeoutMs: 1000, lookup }))
+      .resolves.toEqual({ kind: 'unknown' });
+    expect(Date.now() - t0).toBeLessThan(1800); // a fresh budget after the lookup ends at >= 1900
   });
 });
 

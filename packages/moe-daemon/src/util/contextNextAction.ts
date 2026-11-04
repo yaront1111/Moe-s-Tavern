@@ -1,5 +1,6 @@
 import type { StateManager } from '../state/StateManager.js';
 import type { Task } from '../types/schema.js';
+import { effectiveStepDescription } from './planAmendments.js';
 import { recommendSkillFor } from './recommendSkill.js';
 import { resolveWorkerRole } from './workerRole.js';
 
@@ -27,18 +28,44 @@ export function contextNextAction(state: StateManager, task: Task | null, worker
     };
   }
   if (task.status === 'WORKING') {
-    const nextStep = (task.implementationPlan || []).find(s => s.status === 'PENDING' || s.status === 'IN_PROGRESS');
+    const plan = task.implementationPlan || [];
+    // No plan: every step tool and complete_task refuse the row, so the one
+    // accepted route is back to an architect (request_replan accepts WORKING).
+    if (plan.length === 0) {
+      return {
+        tool: 'moe.request_replan',
+        args: {
+          taskId: task.id,
+          workerId: workerId || undefined,
+          reason: 'This WORKING task has no implementation plan; an architect must plan it before any step can start.',
+        },
+        reason: 'No implementation plan: request a plan instead of starting or completing work.',
+      };
+    }
+    const nextStep = plan.find(s => s.status === 'PENDING' || s.status === 'IN_PROGRESS');
     const reopenedSkill = (task.reopenCount || 0) > 0
       ? recommendSkillFor('worker', 'reopened')
       : undefined;
     if (nextStep) {
-      const isFirstStep = (task.implementationPlan || []).every(
+      // The amended instructions, never the superseded ones (planAmendments.ts).
+      const description = effectiveStepDescription(nextStep).slice(0, 80);
+      if (nextStep.status === 'IN_PROGRESS') {
+        // start_step accepts only PENDING; mirror complete_step's own hint.
+        return {
+          tool: 'moe.complete_step',
+          args: { taskId: task.id, stepId: nextStep.stepId, workerId: workerId || undefined },
+          reason: `Finish in-progress step ${nextStep.stepId}: ${description}`,
+          recommendedSkill: reopenedSkill
+            ?? (plan.indexOf(nextStep) === plan.length - 1 ? recommendSkillFor('worker', 'final_step') : undefined),
+        };
+      }
+      const isFirstStep = plan.every(
         s => s.status === 'PENDING' || s.stepId === nextStep.stepId,
       );
       return {
         tool: 'moe.start_step',
         args: { taskId: task.id, stepId: nextStep.stepId, workerId: workerId || undefined },
-        reason: `Begin step: ${nextStep.description.slice(0, 80)}`,
+        reason: `Begin step: ${description}`,
         // A reopen outranks the phase skill; otherwise the first step gets
         // explore-before-assume and every later step gets ponytail (that slot
         // was empty, so a mid-plan step was recommended nothing).
@@ -54,6 +81,9 @@ export function contextNextAction(state: StateManager, task: Task | null, worker
       recommendedSkill: reopenedSkill ?? recommendSkillFor('worker', 'before_complete_task'),
     };
   }
+  // A row parked for a human is no seat's verdict: qa_approve and qa_reject
+  // refuse a workerId caller on it, so offer no verdict hint.
+  if (task.status === 'REVIEW' && task.needsHumanReview === true) return undefined;
   if (task.status === 'REVIEW') {
     return {
       tool: 'moe.qa_approve',

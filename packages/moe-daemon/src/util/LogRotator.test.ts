@@ -3,8 +3,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
-import { PassThrough } from 'stream';
-import { LogRotator } from './LogRotator.js';
+import { PassThrough, Writable } from 'stream';
+import { DESTINATION_CLOSE_WAIT_MS, LogRotator } from './LogRotator.js';
 
 describe('LogRotator compressFile', () => {
   const tempDirs: string[] = [];
@@ -68,6 +68,34 @@ describe('LogRotator compressFile', () => {
     expect(destinationDestroySpy).toHaveBeenCalled();
     const warningMessages = warningSpy.mock.calls.map((call) => String(call[0]).toLowerCase());
     expect(warningMessages.some((message) => message.includes('write after destroy'))).toBe(false);
+  });
+
+  it('compressFile rejects only once the destroyed destination closes, and still rejects when it never does', async () => {
+    const dir = createTempDir();
+    const rotator = new LogRotator(path.join(dir, 'activity.log'));
+
+    const source = new PassThrough();
+    const gzip = new PassThrough();
+    // A destination whose close never returns, like an fs.WriteStream whose open hangs.
+    const destination = new Writable({
+      write(_chunk, _encoding, callback) { callback(); },
+      destroy() { /* never calls back: no 'close' */ },
+    });
+
+    vi.spyOn(fs, 'createReadStream').mockReturnValue(source as unknown as fs.ReadStream);
+    vi.spyOn(fs, 'createWriteStream').mockReturnValue(destination as unknown as fs.WriteStream);
+    vi.spyOn(zlib, 'createGzip').mockReturnValue(gzip as unknown as zlib.Gzip);
+
+    vi.useFakeTimers();
+    let settled = false;
+    const compression = (rotator as any).compressFile('source.log', 'dest.gz').finally(() => { settled = true; });
+    const rejectionAssertion = expect(compression).rejects.toThrow('read failure');
+    source.emit('error', new Error('read failure'));
+
+    await vi.advanceTimersByTimeAsync(DESTINATION_CLOSE_WAIT_MS - 1);
+    expect(settled).toBe(false); // still waiting for the destination to close
+    await vi.advanceTimersByTimeAsync(1);
+    await rejectionAssertion;
   });
 
   it('compressFile times out and cleans up stalled streams', async () => {

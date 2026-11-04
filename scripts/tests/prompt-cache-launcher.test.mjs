@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// The launcher exports the seat's live usage receipt to every child; this file's fixture provider streams must never append to it (task-03418dc2).
+delete process.env.MOE_USAGE_RECEIPT_FILE;
+delete process.env.MOE_USAGE_CONTEXT_JSON;
+
 const root = new URL('../../', import.meta.url);
 const read = ext => readFileSync(new URL(`scripts/moe-agent.${ext}`, root), 'utf8').replaceAll('\r\n', '\n');
 function between(source, start, end) {
@@ -416,7 +420,7 @@ for (const [ext, engine] of engines) {
         const block = between(read('ps1'), '            if (-not $env:CLAUDE_CODE_PROMPT_CACHE_TTL)', '            # Inline stream-json parser.');
         keeperDir = path.join(dir, 'mods', 'moe-compaction-keeper');
         switchDir = path.join(dir, 'mods', 'moe-account-switch');
-        script = `$ErrorActionPreference='Stop'\n$Role='${role}'\n$AutoClaim=$${autoClaim}\n$claudeInteractive=$${seat.interactive}\n$loopEnabled=$${seat.loop}\n${block}\n${block}\n[Console]::Write("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW|$env:MOE_COMPACT_WINDOW_DEFAULT|$env:CLAUDE_CODE_PLUGIN_DIRS|$env:MOE_SESSION_ENDS_WHEN_IDLE")`;
+        script = `$ErrorActionPreference='Stop'\n$script:MoeScriptRoot=$PSScriptRoot\n$Role='${role}'\n$AutoClaim=$${autoClaim}\n$claudeInteractive=$${seat.interactive}\n$loopEnabled=$${seat.loop}\n${block}\n${block}\n[Console]::Write("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW|$env:MOE_COMPACT_WINDOW_DEFAULT|$env:CLAUDE_CODE_PLUGIN_DIRS|$env:MOE_SESSION_ENDS_WHEN_IDLE")`;
       } else {
         const block = between(read('sh'), '        if [ "$CLI_TYPE" = "claude" ]; then\n            export CLAUDE_CODE_PROMPT_CACHE_TTL', '        # Per-task one-shot mode');
         keeperDir = `${dir.replaceAll('\\', '/')}/mods/moe-compaction-keeper`;
@@ -439,6 +443,10 @@ for (const [ext, engine] of engines) {
 // Worker type: the launcher exports the CLI it starts (never the role or model)
 // as MOE_WORKER_TYPE, replacing an inherited value; moe-proxy forwards it on
 // claim_next_task/join_team. An unknown command keeps claude's CLAUDE.
+// The sh cut starts below the launcher's top-of-file RUNTIME_PROTECTED, which the
+// cut's protected-command gate reads under set -u; the fixture sets 0, the value
+// the launcher has when MOE_RUNTIME_PROTECTED is unset. Refusals under protected
+// are covered by protected-agent-command.test.mjs.
 const typeCases = [['claude', 'CLAUDE'], ['bin/codex', 'CODEX'], ['C:/tools/gemini.cmd', 'GEMINI'], ['grok.exe', 'GROK'], ['aider', 'CLAUDE']];
 for (const [ext, engine] of engines) {
   for (const [command, expected] of typeCases) {
@@ -450,7 +458,7 @@ for (const [ext, engine] of engines) {
       const probe = `"process.stdout.write('MOE_WORKER_TYPE=' + process.env.MOE_WORKER_TYPE)"`;
       const result = ext === 'ps1'
         ? runPs(engine, dir, 'type.ps1', `$Command='${command}'\n${between(read('ps1'), '# Detect CLI type from command name', '\n# Shared policy applies')}\n& $env:MOE_TEST_NODE -e ${probe}`, env)
-        : runSh(engine, dir, 'type.sh', `COMMAND=${quote(command)}\n${between(read('sh'), 'parse_command_into_argv() {', '\n# Codex is interactive (TUI)')}\n"$MOE_TEST_NODE" -e ${probe}`, env);
+        : runSh(engine, dir, 'type.sh', `RUNTIME_PROTECTED=0\nCOMMAND=${quote(command)}\n${between(read('sh'), 'parse_command_into_argv() {', '\n# Codex is interactive (TUI)')}\n"$MOE_TEST_NODE" -e ${probe}`, env);
       assert.equal(result.status, 0, result.stdout + result.stderr);
       assert.equal(result.stdout, `MOE_WORKER_TYPE=${expected}`, 'the CLI child and every proxy RPC inherit the detected type');
     });

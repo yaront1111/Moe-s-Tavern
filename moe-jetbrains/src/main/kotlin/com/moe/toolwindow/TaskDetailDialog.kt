@@ -449,7 +449,7 @@ class TaskDetailDialog(
         }
         leftPanel.add(iconLabel)
 
-        val descLabel = JBLabel("$stepNumber. ${step.description}").apply {
+        val descLabel = JBLabel("$stepNumber. ${step.effectiveDescription}").apply {
             if (step.status == "IN_PROGRESS") {
                 foreground = statusColor
                 font = font.deriveFont(Font.BOLD)
@@ -458,6 +458,13 @@ class TaskDetailDialog(
             }
         }
         leftPanel.add(descLabel)
+        step.activeAmendment?.let { amendment ->
+            leftPanel.add(JBLabel(MoeBundle.message("moe.message.stepAmended", amendment.amendedBy ?: "unknown")).apply {
+                foreground = JBColor.GRAY
+                font = font.deriveFont(font.size - 1f)
+                toolTipText = MoeBundle.message("moe.message.stepAmendedOriginal", step.description)
+            })
+        }
 
         row.add(leftPanel, BorderLayout.CENTER)
 
@@ -719,14 +726,8 @@ class TaskDetailDialog(
         if (!task.assignedWorkerId.isNullOrBlank()) {
             actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.releaseAgent")) {
                 override fun doAction(e: java.awt.event.ActionEvent) {
-                    val result = Messages.showYesNoDialog(
-                        project,
-                        MoeBundle.message("moe.message.releaseAgent", task.assignedWorkerId ?: "", task.title),
-                        MoeBundle.message("moe.message.releaseAgentTitle"),
-                        Messages.getQuestionIcon()
-                    )
-                    if (result == Messages.YES) {
-                        service.releaseTask(task.id, MoeBundle.message("moe.message.releasedInUI"))
+                    // Same flow as the board card; declining either question keeps the dialog open.
+                    if (BoardRelease.releaseRendered(project, service, task) != BoardRelease.Outcome.CANCELLED) {
                         close(OK_EXIT_CODE)
                     }
                 }
@@ -912,9 +913,9 @@ class TaskDetailDialog(
                 HandoffBlock(
                     header = buildString {
                         append("#").append(i + 1)
-                        if (!h.from.isNullOrBlank()) append(" from ").append(h.from)
-                        if (!h.to.isNullOrBlank()) append(" → ").append(h.to)
-                        if (!h.createdAt.isNullOrBlank()) append("  (").append(h.createdAt).append(")")
+                        if (!h.releasedBy.isNullOrBlank()) append(" released by ").append(h.releasedBy)
+                        if (!h.releasedAt.isNullOrBlank()) append(" (").append(h.releasedAt).append(")")
+                        if (!h.reason.isNullOrBlank()) append(": ").append(h.reason)
                     },
                     whatIsDone = h.whatIsDone,
                     whatRemains = h.whatRemains,

@@ -2,9 +2,10 @@
 // WebSocketServer - plugin + MCP proxy connections
 // =============================================================================
 
-import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
+import { carriedBlockQuestion, parkedHoldOwner } from '../state/dependencyUnblock.js';
 import { deliveryProjection, type TaskDelivery } from '../state/deliveryProjection.js';
-import type { Task } from '../types/schema.js';
+import type { Task, TaskStatus } from '../types/schema.js';
+import { VALID_TRANSITIONS } from '../tools/setTaskStatus.js';
 import { WebSocketServer as WSS, WebSocket } from 'ws';
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { StateManager, StateChangeEvent } from '../state/StateManager.js';
@@ -16,7 +17,9 @@ import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import { activeResourceWaiters } from '../tools/waitForResource.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
+import { readExecutionReadiness, type ExecutionReadinessPayload } from '../tools/getExecutionReadiness.js';
 import { releaseTaskTool } from '../tools/releaseTask.js';
+import { applyEpicUpdate } from '../tools/updateEpic.js';
 import { deregisterWorkerTool } from '../tools/deregisterWorker.js';
 import {
   ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS,
@@ -140,7 +143,9 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
 export type PluginMessage =
   | { type: 'PING' }
   | { type: 'CLIENT_HELLO'; payload?: unknown }
-  | { type: 'GET_STATE' }
+  // ifBoardVersion: the boardVersion of the plugin's last STATE_SNAPSHOT; an unchanged
+  // board answers without tasks and epics (the bulk of the payload).
+  | { type: 'GET_STATE'; payload?: { ifBoardVersion?: number } }
   | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number; offset?: number; maxPayloadChars?: number } }
   | { type: 'CREATE_TASK'; payload: Record<string, unknown> }
   // expectedPlanRevision is the optional plan-approval compare-and-swap token.
@@ -169,6 +174,7 @@ export type PluginMessage =
   | { type: 'ADD_TASK_COMMENT'; payload: { taskId: string; content: string; author?: string } }
   | { type: 'GET_CHANNELS' }
   | { type: 'GET_METRICS'; payload?: { epicId?: string; sinceIso?: string } }
+  | { type: 'GET_EXECUTION_READINESS'; payload?: { refresh?: boolean } }
   | {
       type: 'AGENT_TOOL_EVENT';
       payload: {
@@ -210,6 +216,8 @@ const ALLOWED_WS_ORIGINS: readonly string[] = Object.freeze([]);
 /** ws reads Origin for a version-13 handshake and Sec-WebSocket-Origin for version 8; check both. */
 const ORIGIN_HEADERS = ['origin', 'sec-websocket-origin'] as const;
 const LOGGED_ORIGIN_MAX_CHARS = 120;
+/** Bytes a client may leave unread in this process before it is cut off (a few full board snapshots). */
+const WS_SEND_BACKLOG_LIMIT_BYTES = 64 * 1024 * 1024;
 
 /** True for an absent Origin (undefined) or an allowed one. A present 'null' or '' is refused. */
 export function isAllowedUpgradeOrigin(origin: string | undefined): boolean {
@@ -298,6 +306,13 @@ export class MoeWebSocketServer {
     if (ws.readyState !== WebSocket.OPEN) {
       return false;
     }
+    // A client that stopped reading (a frozen IDE, a paused debugger) would otherwise
+    // keep every further frame queued in this process without bound.
+    if (ws.bufferedAmount > WS_SEND_BACKLOG_LIMIT_BYTES) {
+      logger.warn({ bufferedAmount: ws.bufferedAmount }, 'WebSocket client is not draining; terminating it');
+      try { ws.terminate(); } catch { /* already gone */ }
+      return false;
+    }
     try {
       ws.send(message);
       return true;
@@ -380,7 +395,11 @@ export class MoeWebSocketServer {
     }
     const served = event.type === 'TASK_UPDATED'
       ? { ...event, payload: this.servedTask(event.payload) } : event;
-    const message = JSON.stringify(served);
+    // A board push names the version it brings the client to, so the client's next
+    // GET_STATE { ifBoardVersion } is answered without the task list it already holds.
+    const versioned = event.type.startsWith('TASK_') || event.type.startsWith('EPIC_')
+      ? { ...served, boardVersion: this.state.boardVersion } : served;
+    const message = JSON.stringify(versioned);
     // Iterate over a copy to avoid issues if Set is modified during iteration
     const clients = Array.from(this.pluginClients);
     for (const client of clients) {
@@ -388,14 +407,32 @@ export class MoeWebSocketServer {
     }
   }
 
-  sendStateSnapshot(ws: WebSocket): void {
+  sendStateSnapshot(ws: WebSocket, ifBoardVersion?: number): void {
+    this.safeSend(ws, this.snapshotFrame(ifBoardVersion));
+  }
+
+  /** The same filtered snapshot to every plugin client (a reload); never the raw, ARCHIVED-inclusive one. */
+  broadcastStateSnapshot(): void {
+    if (this.isClosed) return;
+    const message = this.snapshotFrame();
+    for (const client of Array.from(this.pluginClients)) this.safeSend(client, message);
+  }
+
+  /**
+   * Every frame carries the board's version. A client that passes the version of its
+   * last snapshot gets the payload without tasks and epics when the board has not
+   * changed: with a large DONE backlog those are ~99% of the bytes, and the IDE polls.
+   */
+  private snapshotFrame(ifBoardVersion?: number): string {
+    const boardVersion = this.state.boardVersion;
     const snapshot = this.state.getSnapshot();
-    const filtered = {
+    const { tasks, epics, ...rest } = snapshot;
+    const payload = ifBoardVersion !== undefined && ifBoardVersion === boardVersion ? rest : {
       ...snapshot,
-      tasks: snapshot.tasks.filter(t => t.status !== 'ARCHIVED').map(task => this.servedTask(task)),
-      epics: snapshot.epics.filter(e => e.status !== 'ARCHIVED'),
+      tasks: tasks.filter(t => t.status !== 'ARCHIVED').map(task => this.servedTask(task)),
+      epics: epics.filter(e => e.status !== 'ARCHIVED'),
     };
-    this.safeSend(ws, JSON.stringify({ type: 'STATE_SNAPSHOT', payload: filtered }));
+    return JSON.stringify({ type: 'STATE_SNAPSHOT', payload, boardVersion });
   }
 
   /** Direct mutation replies must match broadcasts or the sender briefly loses its evidence. */
@@ -427,9 +464,11 @@ export class MoeWebSocketServer {
         case 'PING':
           this.safeSend(ws, JSON.stringify({ type: 'PONG' }));
           return;
-        case 'GET_STATE':
-          this.sendStateSnapshot(ws);
+        case 'GET_STATE': {
+          const want = message.payload?.ifBoardVersion;
+          this.sendStateSnapshot(ws, typeof want === 'number' ? want : undefined);
           return;
+        }
         case 'GET_ACTIVITY_LOG': {
           const params = normalizeActivityLogParams(message.payload || {});
           // Plugin clients must always get a bounded payload; keep maxPayloadChars=0 as
@@ -490,20 +529,11 @@ export class MoeWebSocketServer {
             if ('status' in safeUpdates) {
               const existing = this.state.getTask(taskId);
               if (existing) {
-                // Keep in sync with VALID_TRANSITIONS in src/tools/setTaskStatus.ts.
-                // ARCHIVED is reachable from resting statuses (BACKLOG / REVIEW / DONE)
-                // and, as a shelf for rows that need no work, from PLANNING and BLOCKED.
-                const VALID_TRANSITIONS: Record<string, string[]> = {
-                  BACKLOG: ['PLANNING', 'WORKING', 'ARCHIVED'],
-                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG', 'BLOCKED', 'ARCHIVED'],
-                  AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
-                  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED'],
-                  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED', 'BLOCKED'],
-                  BLOCKED: ['WORKING', 'PLANNING', 'REVIEW', 'BACKLOG', 'ARCHIVED'],
-                  DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
-                  ARCHIVED: ['BACKLOG', 'WORKING']
-                };
-                const newStatus = safeUpdates.status as string;
+                // VALID_TRANSITIONS is moe.set_task_status's own table
+                // (src/tools/setTaskStatus.ts), so the board cannot drift from it.
+                // newStatus is an unvalidated client string: the table lookup
+                // below refuses anything it does not list.
+                const newStatus = safeUpdates.status as TaskStatus;
                 if (newStatus !== existing.status) {
                   const allowed = VALID_TRANSITIONS[existing.status];
                   if (!allowed || !allowed.includes(newStatus)) {
@@ -512,9 +542,9 @@ export class MoeWebSocketServer {
                   // BLOCKED is a parking state: judge exits against the status
                   // the task was blocked FROM (a two-hop BLOCKED hop must not
                   // launder past the direct transition's gates), clear the
-                  // block bookkeeping, and preserve the parked worker only
-                  // when returning to that same status. Mirrors
-                  // src/tools/setTaskStatus.ts.
+                  // block bookkeeping, and keep only a genuine parked hold
+                  // when returning to that same status (parkedHoldOwner, as
+                  // set_task_status and both auto-unblocks do).
                   if (existing.status === 'BLOCKED') {
                     const effectiveFrom = existing.blockedFromStatus ?? 'WORKING';
                     const carriedQuestion = carriedBlockQuestion(this.state, existing);
@@ -549,9 +579,17 @@ export class MoeWebSocketServer {
                       blockedOnTaskIds: null,
                       blockedFromStatus: null,
                       blockedAt: null,
-                      ...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {}),
+                      ...(newStatus === effectiveFrom ? { assignedWorkerId: parkedHoldOwner(this.state, existing) } : {}),
                     };
                     unblockedFromBoard = true;
+                  }
+                  // Mirrors set_task_status: a human putting a row parked for
+                  // human review back into REVIEW IS that review. Left set, the
+                  // flag fences the row out of every QA claim while the board
+                  // shows a normal REVIEW card. Reachable on /ws by BACKLOG -> REVIEW
+                  // and BLOCKED -> REVIEW; reopening moves clear it below.
+                  if (newStatus === 'REVIEW' && existing.needsHumanReview === true) {
+                    safeUpdates = { ...safeUpdates, needsHumanReview: false };
                   }
                   // Entering BLOCKED from the board parks the task in place:
                   // record the restore target and keep the assignee.
@@ -669,7 +707,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
             return;
           }
-          const epic = await this.withMutex(() => this.state.updateEpic(epicId, updates as Record<string, unknown>));
+          // moe.update_epic's path: a move to ARCHIVED follows moe.archive_epic
+          // (in-flight refusal, every task archived); a refusal is the ERROR frame.
+          const epic = await this.withMutex(() => applyEpicUpdate(this.state, epicId, updates as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_UPDATED', payload: epic }));
           return;
         }
@@ -991,6 +1031,24 @@ export class MoeWebSocketServer {
           const filtered = filterTasksForMetrics(this.state.tasks.values(), { epicId, sinceIso });
           const aggregate = computeDashboardAggregate(filtered, (id) => this.state.getEpic(id)?.title);
           this.safeSend(ws, JSON.stringify({ type: 'METRICS', payload: aggregate }));
+          return;
+        }
+        case 'GET_EXECUTION_READINESS': {
+          // Read-only like GET_METRICS: no withMutex (a refresh awaits a bounded evaluation), no state or activity write.
+          const refresh = (message.payload as { refresh?: unknown } | undefined | null)?.refresh;
+          if (refresh !== undefined && typeof refresh !== 'boolean') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'GET_EXECUTION_READINESS refresh must be a boolean' }));
+            return;
+          }
+          let payload: ExecutionReadinessPayload;
+          try {
+            payload = await readExecutionReadiness(this.state, { refresh });
+          } catch {
+            // No error detail, path or stack crosses /ws.
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'GET_EXECUTION_READINESS failed' }));
+            return;
+          }
+          this.safeSend(ws, JSON.stringify({ type: 'EXECUTION_READINESS', payload }));
           return;
         }
         case 'AGENT_TOOL_EVENT': {

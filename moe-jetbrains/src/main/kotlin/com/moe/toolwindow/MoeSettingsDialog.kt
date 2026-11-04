@@ -127,8 +127,10 @@ class MoeSettingsDialog(
                     agentCommand = (agentCommandCombo.selectedItem as? String)?.trim()?.ifEmpty { "claude" } ?: "claude",
                     enableAgentTeams = enableAgentTeamsCheckbox.isSelected
                 )
-                service.updateSettings(settings)
-                close(OK_EXIT_CODE)
+                when (val decision = saveDecision(settings, service::updateSettings)) {
+                    SaveDecision.Close -> close(OK_EXIT_CODE)
+                    is SaveDecision.StayOpen -> setErrorText(MoeBundle.message(decision.warningKey))
+                }
             }
         }
         return arrayOf(saveAction, cancelAction)
@@ -143,7 +145,23 @@ class MoeSettingsDialog(
     /** One rendered line of the effective landing/gate policy. */
     data class PolicyRow(val label: String, val value: String, val detail: String = "")
 
+    /** What Save does next. [StayOpen] keeps the dialog and the user's edits; it carries a MoeBundle key. */
+    sealed interface SaveDecision {
+        data object Close : SaveDecision
+        data class StayOpen(val warningKey: String) : SaveDecision
+    }
+
     companion object {
+        /** MoeBundle key shown when UPDATE_SETTINGS was not handed to the socket. */
+        const val NOT_CONNECTED_KEY = "moe.settings.notConnected"
+
+        /**
+         * Sends [settings] exactly once. Closes only when the message was handed to the
+         * socket; otherwise stays open. Pure (no [MoeBundle] lookup) for headless tests.
+         */
+        fun saveDecision(settings: ProjectSettings, send: (ProjectSettings) -> Boolean): SaveDecision =
+            if (send(settings)) SaveDecision.Close else SaveDecision.StayOpen(NOT_CONNECTED_KEY)
+
         private const val ON = "On"
         private const val OFF = "Off"
 
@@ -154,11 +172,13 @@ class MoeSettingsDialog(
          * The effective policy the daemon and wrappers will apply, in display order.
          *
          * A null [settings] means the board has not received a snapshot yet; falling back
-         * to [ProjectSettings] shows the daemon defaults rather than a blank panel.
+         * to [ProjectSettings] shows the daemon defaults rather than a blank panel. Worktree
+         * mode on adds a mode row and swaps in the worktree board, landing and scope rows.
          */
         fun effectivePolicyRows(settings: ProjectSettings?): List<PolicyRow> {
             val s = settings ?: ProjectSettings()
-            return listOf(
+            val wt = s.worktreeModeOn
+            return listOfNotNull(
                 PolicyRow(
                     "Auto-commit",
                     if (s.autoCommit) ON else OFF,
@@ -177,7 +197,7 @@ class MoeSettingsDialog(
                     if (s.checkpointPush) "Checkpoint commits are pushed to the remote."
                     else "Checkpoints stay local."
                 ),
-                PolicyRow(
+                if (wt) worktreeBoardRow(s.commitBoardState) else PolicyRow(
                     "Commit board state",
                     if (s.commitBoardState) ON else OFF,
                     if (s.commitBoardState) "Landing also stages this task's .moe/tasks/<id>.json."
@@ -189,14 +209,15 @@ class MoeSettingsDialog(
                     if (s.commitHooks) "Completion commits run git hooks; checkpoints stay plumbing."
                     else "Landing writes the commit directly, so no git hook runs."
                 ),
-                landingBranchRow(s.consolidationBranch),
+                if (wt) worktreeModeRow(s.worktreeModeFromDefault) else null,
+                if (wt) worktreeLandingRow(s) else landingBranchRow(s.consolidationBranch),
                 PolicyRow(
                     "Quality gate",
                     if (s.qualityGate.isEmpty()) "Disabled (no command configured)" else s.qualityGate,
                     if (s.qualityGate.isEmpty()) "Nothing gates the completion commit."
                     else "Must exit 0 before the completion commit lands."
                 ),
-                PolicyRow(
+                if (wt) WORKTREE_GATE_SCOPE_ROW else PolicyRow(
                     "Quality gate scope",
                     if (s.qualityGateScope == "everyTask") "Every task" else "Epic-final task only",
                     if (s.qualityGateScope == "everyTask") "The gate runs before every task's completion commit."
@@ -233,6 +254,30 @@ class MoeSettingsDialog(
                 "Peel target and the branch complete_task requires."
             )
         }
+
+        private val WORKTREE_GATE_SCOPE_ROW = PolicyRow("Quality gate scope", "Every completion (worktree mode)",
+            "Every worktree landing runs the gate, whatever qualityGateScope says.")
+
+        private fun worktreeModeRow(fromDefault: Boolean) = PolicyRow("Worktree mode",
+            if (fromDefault) "On (unset; a qualityGate is set)" else ON,
+            "Each WORKING claim works in .worktrees/<taskId> on moe/task/<taskId>.")
+
+        /** Worktree mode lands no `.moe/` path; commitBoardState only switches the refs/moe/board snapshot. */
+        private fun worktreeBoardRow(commitBoardState: Boolean) = PolicyRow(
+            "Commit board state", if (commitBoardState) ON else OFF,
+            if (commitBoardState) "Landings carry no .moe/ path; board history is snapshotted to refs/moe/board."
+            else "Landings carry no .moe/ path; no refs/moe/board snapshot is written."
+        )
+
+        /** The daemon's resolveWorktreeTarget: the literal consolidationBranch, else main (a glob reads main). */
+        private fun worktreeLandingRow(s: ProjectSettings) = PolicyRow(
+            "Landing branch", s.worktreeTarget,
+            when {
+                s.consolidationBranch.isEmpty() -> "No consolidationBranch set; each completion lands as one squash commit on main."
+                s.worktreeTarget == s.consolidationBranch -> "Each completion lands as one merge-tree squash commit on this branch."
+                else -> "A glob consolidationBranch is not a landing target; each completion lands on main."
+            }
+        )
 
         private fun attributionRow(undeclared: String): PolicyRow = when (undeclared) {
             "never" -> PolicyRow(

@@ -2,10 +2,11 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { Effort, ProjectSettings, RecipeInstance, TaskStatus } from '../types/schema.js';
 import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
-import { checkPlanRails, type RailsCheckResult } from '../util/rails.js';
+import { assertPlanRails, checkPlanRails, planRailText } from '../util/rails.js';
 import {
   validateExecutionContract, MAX_CONTRACT_BEHAVIOR_CHARS, MAX_CONTRACT_LIST_ITEMS, MAX_CONTRACT_ITEM_CHARS,
   MAX_REQUIRED_CHECKS, MAX_REQUIRED_CHECK_PATHS, MAX_REQUIRED_CHECK_COMMAND_CHARS,
+  validatePlanningNotes, MAX_PLANNING_NOTE_CHARS, MAX_PLANNING_KEY_FILES, MAX_PLANNING_KEY_FILE_CHARS, MAX_PLAN_STEPS,
 } from '../state/validators.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
@@ -104,7 +105,8 @@ function recordSpeedApprovalFailure(state: StateManager, taskId: string, error: 
  * Arm (or re-arm) the SPEED-mode delayed auto-approval for a task. Cancels any
  * prior pending timer for the task before scheduling so the old timer can't leak,
  * then approves inside the StateManager mutex with a re-check that the task is
- * still AWAITING_APPROVAL (TOCTOU-safe against concurrent manual approve/reject).
+ * still AWAITING_APPROVAL and that approvalMode is still SPEED or TURBO
+ * (TOCTOU-safe against concurrent manual approve/reject or a mode switch).
  * The approval is bound to `revision`, the plan revision the timer was armed
  * for: the store refuses it once the plan, DoD or contract has moved on, and the
  * timer then withholds instead of approving (a human approves or resubmits).
@@ -127,6 +129,11 @@ function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: numb
       await state.runExclusive(async () => {
         const currentTask = state.getTask(taskId);
         if (!currentTask || currentTask.status !== 'AWAITING_APPROVAL') return;
+        // A fired timer queued behind a CONTROL switch cannot be cancelled by
+        // clearAllSpeedModeTimeouts (task-8cb8ff4a, residual of task-42aeed8a).
+        // TURBO approves anyway; CONTROL or an unset mode leaves it for a human.
+        const mode = state.project?.settings?.approvalMode;
+        if (mode !== 'SPEED' && mode !== 'TURBO') return;
         try {
           await updateTask(state, taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() },
             'PLAN_AUTO_APPROVED', undefined, { approvedPlanRevision: revision });
@@ -190,35 +197,6 @@ export function rearmSpeedModeApprovals(state: StateManager): void {
   }
 }
 
-/** Keep step and contract rail refusals identical, including the escape hatch. */
-function assertPlanRails(railsCheck: RailsCheckResult, taskId: string): void {
-  if (!railsCheck.ok) {
-    // Steer the agent toward the escape hatch when the rail is wrong for
-    // this task (rare but legitimate). The default path is still to fix
-    // the plan — propose_rail is only for when the rail itself is the
-    // bug, not when the plan skipped a required pattern.
-    const v = railsCheck.violation || {};
-    const message =
-      `Rail violation: ${JSON.stringify(v)}. ` +
-      `Default action: revise the plan to satisfy this rail and resubmit moe.submit_plan. ` +
-      `Escape hatch: if this rail is genuinely wrong for task ${taskId} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +
-      `moe.propose_rail { proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL" | "EPIC" | "TASK", taskId: "${taskId}", currentValue, proposedValue, reason, workerId } ` +
-      `to request a human-approved rail change. Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
-    throw new MoeError(
-      MoeErrorCode.CONSTRAINT_VIOLATION,
-      message,
-      {
-        violation: v,
-        suggestedAction: {
-          tool: 'moe.propose_rail',
-          reason: 'Use this only if the rail itself is wrong for this task; otherwise fix the plan and resubmit.'
-        }
-      },
-      'CONSTRAINT_VIOLATION'
-    );
-  }
-}
-
 export function submitPlanTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.submit_plan',
@@ -236,6 +214,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         },
         steps: {
           type: 'array',
+          maxItems: MAX_PLAN_STEPS,
           description: 'Ordered implementation steps; each has a description and the files it edits (affectedFiles) or creates (newFiles)',
           items: {
             type: 'object',
@@ -303,10 +282,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           type: 'object',
           description: 'Architect reasoning notes for the worker (approaches considered, codebase insights, risks, key files)',
           properties: {
-            approachesConsidered: { type: 'string', description: 'What alternatives were evaluated and why rejected' },
-            codebaseInsights: { type: 'string', description: 'Patterns, conventions, architecture discovered' },
-            risks: { type: 'string', description: 'Edge cases and potential issues the worker should watch for' },
-            keyFiles: { type: 'array', items: { type: 'string' }, description: 'Critical files to understand' }
+            approachesConsidered: { type: 'string', maxLength: MAX_PLANNING_NOTE_CHARS, description: 'What alternatives were evaluated and why rejected' },
+            codebaseInsights: { type: 'string', maxLength: MAX_PLANNING_NOTE_CHARS, description: 'Patterns, conventions, architecture discovered' },
+            risks: { type: 'string', maxLength: MAX_PLANNING_NOTE_CHARS, description: 'Edge cases and potential issues the worker should watch for' },
+            keyFiles: { type: 'array', maxItems: MAX_PLANNING_KEY_FILES, items: { type: 'string', maxLength: MAX_PLANNING_KEY_FILE_CHARS }, description: 'Critical files to understand' }
           },
           additionalProperties: false
         },
@@ -323,6 +302,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       }
       const input = args as { executionContract?: unknown; requiredCheckRevision?: unknown };
       const measuredContract = validateExecutionContract(input.executionContract, 'executionContract');
+      // Refused before any I/O or write, like the contract: never clipped or coerced.
+      const planningNotes = validatePlanningNotes((args as { planningNotes?: unknown } | null)?.planningNotes);
       const revision = input.requiredCheckRevision;
       if (revision !== undefined && (typeof revision !== 'string' || !/^[0-9a-f]{40}$/.test(revision)
           || !measuredContract?.requiredChecks)) {
@@ -349,12 +330,6 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           acceptsAccountSwitch?: unknown;
           executionContract?: unknown;
           steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[];
-          planningNotes?: {
-            approachesConsidered?: string;
-            codebaseInsights?: string;
-            risks?: string;
-            keyFiles?: string[];
-          };
         };
 
         const task = state.getTask(params.taskId);
@@ -372,8 +347,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         }
 
         // Validate step count bounds
-        if (params.steps.length > 100) {
-          throw invalidInput('steps', 'maximum 100 steps allowed');
+        if (params.steps.length > MAX_PLAN_STEPS) {
+          throw invalidInput('steps', `maximum ${MAX_PLAN_STEPS} steps allowed`);
         }
 
         // Validate each step has a non-empty description + normalize affectedFiles.
@@ -430,9 +405,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
         // newFiles are part of the plan's file surface — fold them into the rail
         // text so declaring a path as "new" can't smuggle it past a rail.
-        const planText = normalizedSteps
-          .map((step) => `${step.description} ${step.affectedFiles.join(' ')} ${step.newFiles.join(' ')}`)
-          .join(' ');
+        const planText = planRailText(normalizedSteps);
 
         const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
         assertPlanRails(railsCheck, task.id);
@@ -545,7 +518,13 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             )
           : undefined;
         if (task.effort) {
-          effort = clampEffort(effort ? maxEffort(effort, task.effort) : task.effort, project.settings, lowEffortEligible);
+          // A kept stored effort still meets this tier's minimum: a re-plan that the
+          // size floor (or the planner) moves to a higher tier must not keep a lower
+          // tier's effort. effortFloor is undefined for a docs/tests-only plan.
+          effort = maxEffort(
+            clampEffort(effort ? maxEffort(effort, task.effort) : task.effort, project.settings, lowEffortEligible),
+            effortFloor(tier, project.settings, lowEffortEligible)
+          );
         }
         // Models (claude + codex): each must be its provider's catalog id allowed
         // for this tier. Omitted keeps a prior pick only while still allowed.
@@ -587,13 +566,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         if (executionContract !== undefined || task.executionContract !== undefined) {
           updatePayload.executionContract = executionContract ?? null;
         }
-        if (params.planningNotes) {
-          updatePayload.planningNotes = {
-            approachesConsidered: params.planningNotes.approachesConsidered?.slice(0, 5000),
-            codebaseInsights: params.planningNotes.codebaseInsights?.slice(0, 5000),
-            risks: params.planningNotes.risks?.slice(0, 5000),
-            keyFiles: params.planningNotes.keyFiles?.slice(0, 50),
-          };
+        if (planningNotes) {
+          updatePayload.planningNotes = planningNotes;
         }
         // Keep the Task this write returned: its planRevision is the value that
         // was actually committed with this plan. Reading the cache later would

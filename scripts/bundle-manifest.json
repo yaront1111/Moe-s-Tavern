@@ -1,0 +1,43 @@
+{
+  "comment": "The scripts and docs both IDE plugins bundle. moe-jetbrains/build.gradle.kts (prepareSandbox) and moe-vscode/scripts/bundle-assets.mjs both read this file. Each copy goes from `from` (repo-relative) to `into` (bundle-relative). With `files`, it copies exactly those files, each of which must exist, and LF-normalises any .sh among them. Without `files`, it copies the whole directory minus `exclude` (Ant-style patterns relative to `from`, the syntax Gradle's exclude() takes), and each `required` file must exist. A missing source, or a path that is absolute or has a .. segment, fails both builds. The daemon and proxy copies stay in each build, next to their fresh-dist checks.",
+  "copies": [
+    {
+      "from": "scripts",
+      "into": "scripts",
+      "files": [
+        "moe-agent.ps1",
+        "moe-agent.sh",
+        "moe-call.sh",
+        "prompt-cache.mjs",
+        "prompt-cache-policy.mjs",
+        "prompt-cache-usage.mjs",
+        "prompt-cache-witness.mjs",
+        "usage-receipt.mjs",
+        "usage-session.mjs",
+        "usage-report.mjs",
+        "analyze-usage.mjs",
+        "moe-account-lease.mjs",
+        "moe-serena-ignore.mjs"
+      ]
+    },
+    {
+      "from": "scripts/local-runner",
+      "into": "scripts/local-runner",
+      "required": ["certified-provider.json", "multipass.mjs", "doctor.mjs", "cli.mjs", "vm-control.mjs"],
+      "exclude": ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/__tests__/**", "**/fixtures/**", "**/__fixtures__/**"]
+    },
+    {
+      "from": "scripts/mods",
+      "into": "scripts/mods",
+      "exclude": ["**/*.test.ts", "*/.claude-plugin/types/**"]
+    },
+    {
+      "from": "docs/roles",
+      "into": "docs/roles"
+    },
+    {
+      "from": "docs/skills",
+      "into": "docs/skills"
+    }
+  ]
+}

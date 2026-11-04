@@ -21,6 +21,7 @@ import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import java.awt.event.HierarchyEvent
+import java.io.File
 import java.io.IOException
 import javax.swing.JButton
 import javax.swing.JPanel
@@ -111,10 +112,9 @@ class ManagedVmPanel(private val project: Project) : JBPanel<ManagedVmPanel>(Bor
 
     /** Background thread. A missing script or node starts no process. */
     private fun execute(command: ManagedVmCommand, progress: ProgressIndicator): ManagedVmReport {
-        val script = TerminalAgentLauncher.resolveBundledPath("scripts/local-runner/vm-control.mjs")
-            ?: return ManagedVmReport.Unreadable(ManagedVmKeys.SCRIPT_MISSING)
-        val supervisor = MoeDaemonSupervisor(basePath, project.name)
         val isProtected = RuntimeSelectionPolicy.profile(basePath) == RuntimeProfile.PROTECTED
+        val script = vmControlScript(basePath, isProtected) ?: return ManagedVmReport.Unreadable(ManagedVmKeys.SCRIPT_MISSING)
+        val supervisor = MoeDaemonSupervisor(basePath, project.name)
         val node = nodeCommand(supervisor, isProtected) ?: return ManagedVmReport.Unreadable(ManagedVmKeys.NODE_MISSING)
         val builder = ProcessBuilder(listOf(node) + command.args(script.path, basePath))
             .directory(script.parentFile)
@@ -177,5 +177,23 @@ class ManagedVmPanel(private val project: Project) : JBPanel<ManagedVmPanel>(Bor
         wrapStyleWord = true
         isOpaque = false
         font = JBUI.Fonts.label()
+    }
+
+    companion object {
+        private const val VM_CONTROL = "scripts/local-runner/vm-control.mjs"
+
+        /**
+         * LEGACY keeps the bundled script. PROTECTED takes only the installed artifact, as the daemon and proxy selection
+         * does: a plugin root inside the project (a runIde sandbox opened on this repository) or a link out of it is refused.
+         */
+        internal fun vmControlScript(
+            basePath: String,
+            isProtected: Boolean,
+            root: () -> File? = { RuntimeSelectionPolicy.installedRoot() },
+            bundled: () -> File? = { TerminalAgentLauncher.resolveBundledPath(VM_CONTROL) }
+        ): File? {
+            if (!isProtected) return bundled()
+            return (RuntimeSelectionPolicy.installedArtifact(root(), VM_CONTROL, basePath) as? RuntimeSelection.Accepted)?.file
+        }
     }
 }

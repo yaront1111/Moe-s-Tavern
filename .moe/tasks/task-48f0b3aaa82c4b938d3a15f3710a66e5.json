@@ -147,11 +147,23 @@
       "author": "governor-693b7073",
       "content": "Governor ruling, 06:10Z. The human asked to unblock idle coders, so this row gets an early partial run. I removed its dependsOn on WT-10M (task-253884005a59471fb7c59ef38e1f3cc1) and WT-10 (task-5c2e6cdf2494412ca0c2bc40e26d9da3). Steps 1 and 2 touch only packages/moe-daemon/src/commands/doctor.ts and doctor.test.ts, and no other open row plans those files.\n\n1. Do steps 1 and 2 as planned, including the comments above: worker-0062feec's spike correction (a missing qualityGate is a hard fail when worktreeMode is on) and architect-899a90d6's note (pass the whole parsed settings object to resolveWorktreeMode). Run doctor.test.ts in a snapshot. Never run `npm run build` or `npm ci` in the shared checkout (18:48Z comment; GLOBAL rule 0).\n2. Do NOT start step 3. Its runbook must come from WT-10M's landed migration CLI, and WT-10M has not landed. After complete_step on step 2, call moe.report_blocked { taskId: \"task-48f0b3aaa82c4b938d3a15f3710a66e5\", blockedOnTaskIds: [\"task-253884005a59471fb7c59ef38e1f3cc1\"], reason: \"steps 1-2 done; step 3 runbook needs WT-10M's landed migration CLI\" }, then end the session. The wrapper checkpoints your bytes, and the row auto-unblocks when WT-10M is DONE. WT-10M depends on WT-10, so that one id covers both.\n3. Whoever resumes the row starts at step 3. Steps 1 and 2 stay COMPLETED.",
       "timestamp": "2026-10-31T06:08:39.067Z"
+    },
+    {
+      "id": "comment-88c63ac56e2340778b544781af52156a",
+      "author": "governor-e6b40560",
+      "content": "Governor note, informational, no plan change. The human approved switching this project to worktree mode as soon as its pieces land (\"lets dop it\", 11-02; pinned #general msg-717a48e0).\n\nThe lane was reordered, so this row now unblocks right after WT-10M (task-253884005a59471fb7c59ef38e1f3cc1) instead of after WT-14. The doctor probes and the §7.3/§7.4 runbook from steps 3-5 will be used for the live switch soon after this row lands, so write the runbook as a human will run it that day.\n\nWT-14 (the orphan sweep) will land after the switch. Any runbook or rollback text that names the sweep should describe the landed contract, without assuming the sweep already ran.",
+      "timestamp": "2026-11-02T07:53:42.996Z"
+    },
+    {
+      "id": "comment-390bf32624174f5d9284ac584cb34e65",
+      "author": "governor-e6b40560",
+      "content": "Governor correction to my earlier note on this row. On 11-02 the human decided \"keep main PR-only, land on a branch\". So this project switches with consolidationBranch 'moe/work-2026-10-24' and without the migration landing, and the switch no longer waits for this row or for WT-10M. The switch is tracked by the gate row task-6519ed9127ad4c359fd64b71f1a08be5.\n\nThis row resumes after WT-10M as planned, and its plan and DoD are unchanged. Two notes for that session:\n- WT-10M now runs after the switch, in worktree mode.\n- The doctor probes from steps 1-2 are already on HEAD and will be used at the switch.\n\nIf step 3's runbook can add one line saying that step 4 (the migration) is skipped when consolidationBranch names a branch that already contains the work, that would match how this project actually switched. It is optional, and the DoD does not require it.",
+      "timestamp": "2026-11-02T08:49:46.736Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-10-31T06:25:31.452Z",
+  "updatedAt": "2026-11-02T08:49:46.736Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",

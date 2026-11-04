@@ -1,0 +1,271 @@
+{
+  "id": "task-e8255fb1ab274ca9bf67d49c34a9635e",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-11] VS Code: Release Agent action in task detail, matching JetBrains",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-6 (task-9f6a725ff14c4c08b4acb203884e7ae5), which adds MoeDaemonClient.releaseTask(taskId, reason?) for RELEASE_TASK.\n\nObjective: JetBrains lets the human free a seat from the task detail dialog (TaskDetailDialog.kt) and the board card (MoeToolWindowPanel.handleReleaseAgent). The action shows only when task.assignedWorkerId is non-blank; it asks a Yes/No question titled \"Release Agent\" (moe.message.releaseAgentTitle) with the moe.message.releaseAgent text (MoeBundle.properties: `Release agent \"{0}\" from \"{1}\"? ...`, worker id then task title); on Yes it sends releaseTask(task.id, \"Released from board\") (moe.message.releasedInUI). VS Code has no equivalent.\n\nDeliverable: in moe-vscode/src/panels/TaskDetailPanel.ts, a \"Release Agent\" button rendered only when assignedWorkerId is non-blank, and a 'releaseAgent' message handler that shows a modal warning with JetBrains' text and calls client.releaseTask(taskId, 'Released from board') only on confirmation, showing a not-connected warning when it returns false (as the reopen handler already does); in moe-vscode/media/taskDetail.js, the button posting {type:'releaseAgent'}; new moe-vscode/tests/task-release.test.cjs.\n\nHarness trap: three peer test files load TaskDetailPanel.ts with strict client stubs and require maps (mem:gotcha-vscode-vm-test-harness). Touch the new client member only inside the message handler, and add no value import.\n\nTaskDetailPanel.ts is shared with VSC-8 and VSC-9: in shared-checkout mode do not run concurrently with them; after the worktree switch they merge independently.\n\nNot in scope: a board-card release action (a follow-up if wanted), MoeDaemonClient.ts (VSC-6 owns it), any moe-jetbrains file.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/task-release.test.cjs renders the real TaskDetailPanel HTML and asserts the Release Agent button is present for assignedWorkerId 'w1' and absent for null, empty and whitespace-only ids.",
+    "Driving the panel's message handler with {type:'releaseAgent'}: confirming calls client.releaseTask exactly once with (taskId, 'Released from board'); dismissing calls it zero times; a false return shows the not-connected warning.",
+    "The confirmation text equals moe.message.releaseAgent from moe-jetbrains/src/main/resources/messages/MoeBundle.properties with the worker id and task title substituted, read from that file in the test.",
+    "task-blocker-visibility, task-time-budget and approval-paths pass unchanged.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write moe-vscode/tests/task-release.test.cjs FIRST, with the Write tool; it is red until steps 2-3 land. Copy the harness shapes into this file, never requiring a peer test:\n- transpile, strict, loadModule and panelDependencies with `vscode` and `./PlanReviewPanel` from tests/task-blocker-visibility.test.cjs;\n- loadDetailPage, makeNode and initialDataset from tests/approval-paths.test.cjs.\nmem:gotcha-vscode-vm-test-harness and mem:convention-vscode-renderer-tests cover the realm traps: compare vm-realm objects field by field or through JSON, never with deepStrictEqual.\n- Fake vscode: window.createWebviewPanel returns a fake panel whose webview captures the onDidReceiveMessage listener. window.showWarningMessage, showInformationMessage and showErrorMessage are recorders; showWarningMessage returns a per-test answer.\n- Fake client: a strict proxy with currentState, onStateChanged, onError, onConnectionChanged and a releaseTask recorder that returns a per-test boolean.\n- Fixture: a makeTask with id 'task-release' and title `Ship \"release\" <fast> & safe`, so the test proves the modal text is NOT HTML-escaped.\n- Read MoeBundle.properties as UTF-8 from `path.join(__dirname, '../../moe-jetbrains/src/main/resources/messages/MoeBundle.properties')` with `/^moe\\.(button\\.releaseAgent|message\\.releaseAgent|message\\.releasedInUI)=(.*?)\\r?$/gm`. Assert moe.message.releaseAgent holds no single quote, so a plain {0}/{1} substitution equals Java MessageFormat.\nIts error handling: a missing bundle line fails with a message naming the key.\nTests:\n1. Button: the real panel HTML (createOrShow) holds `<button class=\"btn btn-secondary\" id=\"releaseAgentBtn\">` + the bundle's moe.button.releaseAgent + `</button>` for assignedWorkerId 'w1'. It holds no `id=\"releaseAgentBtn\"` for null, '' or '   '.\n2. Confirm: invoke the captured listener with {type:'releaseAgent'} and await it, with the warning recorder answering the bundle's moe.button.releaseAgent.\n   - showWarningMessage got exactly (text, an options object whose modal === true, 'Release Agent'), where text = the bundle's moe.message.releaseAgent with {0} replaced by 'w1' and {1} by the raw title;\n   - releaseTask was called exactly once with ('task-release', the bundle's moe.message.releasedInUI = 'Released from board');\n   - no error message was shown.\n3. Dismiss: the recorder answers undefined. releaseTask is called zero times and nothing else is shown.\n4. Not connected: confirm, with releaseTask returning false. The second showWarningMessage call is exactly 'Not connected to Moe daemon — agent was not released.'\n5. Stale button: after rendering with 'w1', set currentState's task assignedWorkerId to null and invoke the listener. There is no modal and no releaseTask call, and showInformationMessage gets exactly 'No agent is assigned to this task.'\n6. Page wiring: loadDetailPage(rendered HTML) with a getElementById that returns null for an id absent from the HTML (as a real DOM does). For 'w1', click('releaseAgentBtn') posts exactly [{type:'releaseAgent'}]. For an unassigned task the page loads without throwing and posts nothing.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/task-release.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/task-release.test.cjs"
+      ],
+      "note": "Wrote tests/task-release.test.cjs (12 tests, Write tool). RED in a git-archive snapshot of HEAD (/tmp/vsc11-red-B4ec6o, npm ci exit 0, env -i node v24.21.0): 12 tests, 3 pass (bundle contract, no button for blank ids, unassigned page loads), 9 fail with ERR_ASSERTION / missing-button TypeError because the button and handler do not exist yet. File holds one non-ASCII char (the em dash in the not-connected text). Shared checkout dirty paths owned by peers (.moe roles/skills, SeatSurvival.ts, scripts) untouched.",
+      "startedAt": "2026-11-02T10:47:19.770Z",
+      "completedAt": "2026-11-02T10:49:12.919Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Panel side, in moe-vscode/src/panels/TaskDetailPanel.ts. Add no value import; touch client.releaseTask only inside the handler, because three peer tests load the panel with strict require maps and strict client stubs (mem:gotcha-vscode-panel-strict-require-map).\n- Module constants copied exactly from moe-jetbrains/src/main/resources/messages/MoeBundle.properties:\n  - RELEASE_AGENT_LABEL = 'Release Agent' (moe.button.releaseAgent);\n  - RELEASED_FROM_BOARD = 'Released from board' (moe.message.releasedInUI);\n  - RELEASE_AGENT_CONFIRM = the moe.message.releaseAgent template, kept with its {0}/{1} placeholders and its em dash.\n- Format it in ONE pass, `RELEASE_AGENT_CONFIRM.replace(/\\{([01])\\}/g, (_, i) => i === '0' ? workerId : title)`, so a worker id containing \"{1}\" or \"$&\" is never re-substituted. The modal is plain text, so never escapeHtml it.\n- In getWebviewContent's actions bar, render `<button class=\"btn btn-secondary\" id=\"releaseAgentBtn\">Release Agent</button>` right after the reopen button. Render it only when nonBlankString(task.assignedWorkerId) !== null; that is JetBrains' isNullOrBlank rule, for any status.\n- New `case 'releaseAgent':` in handleWebviewMessage, inside the existing try/catch:\n  - read the FRESH task with this.findTask(); the actions bar is static, so the button can outlive the assignment;\n  - if there is no task or its assignedWorkerId is blank, `vscode.window.showInformationMessage('No agent is assigned to this task.')` and stop;\n  - otherwise `const choice = await vscode.window.showWarningMessage(formatted text with the raw assignedWorkerId and task.title, { modal: true }, RELEASE_AGENT_LABEL)`;\n  - only when choice === RELEASE_AGENT_LABEL call `this.client.releaseTask(this.taskId, RELEASED_FROM_BOARD)`;\n  - when that returns false, `vscode.window.showWarningMessage('Not connected to Moe daemon — agent was not released.')`;\n  - show no success toast (JetBrains shows none; the board update is the feedback).\n- Error handling: an exception still lands in the handler's existing catch (showErrorMessage).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "note": "TaskDetailPanel.ts: module constants RELEASE_AGENT_LABEL / RELEASED_FROM_BOARD / RELEASE_AGENT_CONFIRM (bundle text, em dash kept, no value import), conditional #releaseAgentBtn after the reopen button gated on nonBlankString(assignedWorkerId), and case 'releaseAgent' in handleWebviewMessage (fresh findTask, info message when no agent, one-pass placeholder substitution, modal confirm, releaseTask only on confirm, not-connected warning on false). Verified green in the snapshot in step 3/4. SeatSurvival.ts and other dirty paths belong to peers, untouched.",
+      "startedAt": "2026-11-02T10:49:13.949Z",
+      "completedAt": "2026-11-02T10:49:38.196Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Page side, in moe-vscode/media/taskDetail.js, next to the Reopen block:\n```\nvar releaseAgentBtn = document.getElementById('releaseAgentBtn');\nif (releaseAgentBtn) {\n    releaseAgentBtn.addEventListener('click', function() {\n        vscodeApi.postMessage({ type: 'releaseAgent' });\n    });\n}\n```\n- The guard is required, because the button exists only for an assigned task. Its error handling is that guard: an unassigned page must load without throwing.\n- Send nothing else; the panel reads the worker id and title from fresh state.\n- Leave the live-update handler alone: the actions bar stays static, like approve, reject and reopen.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/media/taskDetail.js"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/media/taskDetail.js"
+      ],
+      "note": "taskDetail.js: guarded #releaseAgentBtn click listener posting {type:'releaseAgent'} next to the Reopen block; live-update handler untouched. GREEN in the snapshot with TaskDetailPanel.ts + taskDetail.js overlaid: tests/task-release.test.cjs 12/12 pass (was 3 pass / 9 fail at HEAD).",
+      "startedAt": "2026-11-02T10:49:39.272Z",
+      "completedAt": "2026-11-02T10:49:54.651Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Gate in fresh Linux-native snapshots. Never run npm or node tests in the shared checkout (GLOBAL rail; mem:gotcha-vscode-gate-from-wsl). Use the checkRef's env -i PATH for every node and npm call.\n1) Red/green: build a snapshot as the checkRef does, but overlay only tests/task-release.test.cjs. Run `npm ci --no-audit --no-fund`, then `node --test tests/task-release.test.cjs`. It must FAIL (there is no button or handler at HEAD). Then overlay TaskDetailPanel.ts and taskDetail.js and rerun: it passes.\n2) Mutant, in that snapshot copy only: make the handler call releaseTask without checking the modal answer, with an exact-string replace asserted to hit once. The dismiss test must fail. Then discard the snapshot.\n3) Run the checkRef verbatim (a new snapshot). Confirm exit 0 and 0 failures, and that task-blocker-visibility, task-time-budget (whose fixture is assigned to worker-1, so it now renders the button) and approval-paths pass unchanged. Report the test count.\nError handling for a red run:\n- A peer test that breaks on the new button means markup it pins changed: fix the panel, never the peer test.\n- A failure tied to a peer's wip checkpoint follows mem:gotcha-snapshot-gate-peer-wip-checkpoint.\nVSC-6 (task-9f6a725f) provides client.releaseTask and is a declared dependency. VSC-9 shares TaskDetailPanel.ts: in shared-checkout mode, do not run concurrently with it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/task-release.test.cjs",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/task-release.test.cjs",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js"
+      ],
+      "note": "Gate in Linux-native git-archive snapshots under env -i node v24.21.0 (nothing run in the shared checkout). (1) RED at HEAD with only the test overlaid: 12 tests, 3 pass, 9 fail. GREEN with TaskDetailPanel.ts + taskDetail.js overlaid: 12/12. (2) Mutants in the scratch snapshot only, exact replace asserted to hit once each: 13/13 killed by ERR_ASSERTION (release without modal answer check, truthiness button gate, stale render-time worker id, HTML-escaped modal, two-pass placeholders, dropped not-connected branch, wrong reason, non-modal, label drift, missing break after info, page null guard removed, page posts on load, wrong message type); first run had M11 killed only by a load TypeError, so I wrapped the load in assert.doesNotThrow and reran; restored snapshot green. (3) checkRef verbatim, new snapshot: EXIT=0, npm ci + lint + compile (dist emitted) + test all ran: 485 tests, 481 pass, 4 skip (Windows-only), 0 fail; task-blocker-visibility, task-time-budget and approval-paths pass unchanged.",
+      "startedAt": "2026-11-02T10:49:55.723Z",
+      "completedAt": "2026-11-02T10:50:58.092Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff, the only review step.\n- Would a test fail if:\n  - the button rendered for a whitespace-only id;\n  - the handler released on dismiss;\n  - it used the stale render-time worker id;\n  - the modal text were HTML-escaped (the title has quotes, < and &);\n  - placeholders were replaced in two passes;\n  - the not-connected branch were dropped;\n  - the page posted on load, or the button had no guard?\n- Any value import added, or a client member touched outside the handler?\n- Confirm with `git status --porcelain` that the task touched only moe-vscode/src/panels/TaskDetailPanel.ts, moe-vscode/media/taskDetail.js and moe-vscode/tests/task-release.test.cjs. Peers own every other dirty path: never revert, stage or commit them.\n- Report the three files in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/task-release.test.cjs",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/tests/task-release.test.cjs"
+      ],
+      "note": "Self-review of e71520cd (the checkpoint holds the whole diff; git status -- moe-vscode/ shows my 3 files clean). Product diff is 51 lines in TaskDetailPanel.ts (3 constants, one conditional button, one case) and 10 in taskDetail.js. Imports unchanged (vscode, MoeDaemonClient type use, PlanReviewPanel); client.releaseTask is touched only inside the 'releaseAgent' case. 0 forbidden tokens in all 3 files. Mutants from step 4 cover each attacker question: whitespace id button, release on dismiss, stale render-time id, HTML-escaped modal, two-pass placeholders, dropped not-connected branch, page posting on load, missing page guard (13/13 killed). Fresh checkRef rerun this session at HEAD e71520cd: EXIT=0; npm ci, lint, compile, test all ran; 485 tests, 481 pass, 4 skip (Windows-only), 0 fail, no failed rows. The only other moe-vscode path in git status is an untracked tests/accounts-wire.test.cjs that belongs to a peer; untouched.",
+      "startedAt": "2026-11-02T10:53:41.324Z",
+      "completedAt": "2026-11-02T10:54:18.166Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-9f6a725ff14c4c08b4acb203884e7ae5"
+  ],
+  "priority": "MEDIUM",
+  "order": 12,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:40:55.910Z",
+  "updatedAt": "2026-11-02T10:59:42.190Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:28:40.798Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T10:58:27.419Z",
+    "wallClockMs": 1786621
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-81a7999f",
+    "qa-564d8bce"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:31:29.686Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code's task detail offers JetBrains' Release Agent action. The button renders only when assignedWorkerId is non-blank. Clicking it shows a modal warning with the moe.message.releaseAgent text (worker id, task title), and only an explicit confirm sends client.releaseTask(taskId, 'Released from board'). A false return shows a not-connected warning; a task that lost its agent since render shows an info message instead.",
+    "acceptanceCriteria": [
+      "task-release.test.cjs: the button is present for 'w1' and absent for null, '' and '   ', with the label from moe.button.releaseAgent.",
+      "Confirm calls releaseTask exactly once with ('task-release', 'Released from board'); dismiss calls it zero times; a false return shows 'Not connected to Moe daemon — agent was not released.'",
+      "The modal text equals the bundle's moe.message.releaseAgent with {0}=worker id and {1}=raw title, read from MoeBundle.properties in the test.",
+      "Clicking #releaseAgentBtn on the real page script posts {type:'releaseAgent'}; an unassigned page loads without throwing.",
+      "The checkRef exits 0 with 0 failures; task-blocker-visibility, task-time-budget and approval-paths pass unchanged."
+    ],
+    "invariants": [
+      "No value import is added to TaskDetailPanel.ts; client.releaseTask is touched only inside the handler.",
+      "MoeDaemonClient.ts (VSC-6), every moe-jetbrains file and every peer test are unchanged.",
+      "releaseTask is never sent without an explicit modal confirm.",
+      "No npm or node test command runs in the shared checkout."
+    ],
+    "compatibility": [
+      "Tasks without an assigned worker render exactly as before."
+    ],
+    "approvedScope": [
+      "TaskDetailPanel.ts: module constants RELEASE_AGENT_LABEL, RELEASED_FROM_BOARD and RELEASE_AGENT_CONFIRM, the conditional #releaseAgentBtn in the actions bar, and case 'releaseAgent' in handleWebviewMessage.",
+      "media/taskDetail.js: the guarded click listener posting {type:'releaseAgent'}."
+    ],
+    "reuse": [
+      "MoeDaemonClient.releaseTask(taskId, reason?) from VSC-6.",
+      "The panel's existing nonBlankString, findTask and the reopen handler's not-connected pattern.",
+      "Harness shapes from task-blocker-visibility.test.cjs and approval-paths.test.cjs."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/services/MoeDaemonClient.ts releaseTask(taskId: string, reason?: string): boolean returns sendMessage's result.",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties lines 83 and 101-103 hold moe.button.releaseAgent, moe.message.releasedInUI, moe.message.releaseAgent and moe.message.releaseAgentTitle.",
+      "moe-jetbrains TaskDetailDialog.kt (line 719) and MoeToolWindowPanel.handleReleaseAgent gate on a non-blank assignedWorkerId and send releaseTask(task.id, releasedInUI) after Yes.",
+      "TaskDetailPanel's actions bar is rendered once; live updates go through postMessage updateTask and do not rebuild it."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc11-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/panels/TaskDetailPanel.ts moe-vscode/media/taskDetail.js moe-vscode/tests/task-release.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "The handler reads the task fresh at click time, because the VS Code actions bar is static: approve, reject and reopen share that staleness, and the daemon is the final arbiter. Rejected: a live show/hide of the button through taskDetail.js. It would need an always-rendered hidden button, which conflicts with DoD 1's 'absent', and the other buttons are static anyway. Rejected: a VS Code-specific title in the modal. VS Code's modal has no title line, so the JetBrains text is the message and 'Release Agent' is the confirm item. No success toast, matching JetBrains.",
+    "codebaseInsights": "TaskDetailPanel value-imports only vscode and ./PlanReviewPanel. Its message listener returns the handler's Promise, so a test can await it. nonBlankString already exists in the module. task-time-budget's fixture is assigned to worker-1, so its HTML gains the button; its assertions only target regions, so it should stay green. approval-paths' getElementById creates nodes on demand, so the new test needs a null-for-absent variant to prove the guard.",
+    "risks": "The bundle text contains an em dash: read the properties file as UTF-8 and keep the dash in the TS constant. The vm-realm options object ({modal:true}) needs a field comparison. VSC-6 must be DONE before a worker can claim this row (dependsOn). TaskDetailPanel.ts is shared with VSC-9. HEAD can carry a peer's red wip checkpoint (mem:gotcha-snapshot-gate-peer-wip-checkpoint).",
+    "keyFiles": [
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/media/taskDetail.js",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/task-blocker-visibility.test.cjs",
+      "moe-vscode/tests/approval-paths.test.cjs",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6fa401dc28d00dbdfd3d5b145341bd5c05c099fe",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:31:29.710Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T10:47:19.770Z",
+  "commits": [
+    {
+      "sha": "e71520cd46287998495d02dfacef84b41a86d737",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T10:46:31Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/tests/task-release.test.cjs"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T10:52:05.654Z",
+      "treeId": "37d7170609ddce7caa4c3181e1fbe7c3a86387e0",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "63e2961d17441624022c5cb96fa6582a1804e894",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T10:52:37Z",
+      "paths": [
+        ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T10:55:08.154Z",
+      "treeId": "6e687a46aeb5a5fff3d85d6a6ce0df6c9f6ad952",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-vscode/tests/task-release.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/media/taskDetail.js",
+    ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json"
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/task-release.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/media/taskDetail.js"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-564d8bce@2026-11-02T10:56:37Z",
+    "at": "2026-11-02T10:59:42.190Z"
+  },
+  "reviewStartedAt": "2026-11-02T10:54:30.970Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc11-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/panels/TaskDetailPanel.ts moe-vscode/media/taskDetail.js moe-vscode/tests/task-release.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "✔ files.watcherExclude keeps per-task worktrees out of the file watcher\n✔ search.exclude keeps per-task worktrees out of search and quick open\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees\nℹ tests 485\nℹ suites 0\nℹ pass 481\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\n(EXIT=0; npm ci, eslint src, tsc -p ./ and node --test all ran in a git-archive snapshot of HEAD e71520cd with the 3 task files overlaid)",
+    "reportedAt": "2026-11-02T10:54:30.970Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "VSC-11: VS Code task detail now has JetBrains' Release Agent action.\\n\\nTaskDetailPanel.ts: constants RELEASE_AGENT_LABEL ('Release Agent'), RELEASED_FROM_BOARD ('Released from board') and RELEASE_AGENT_CONFIRM, copied exactly from MoeBundle.properties (moe.button.releaseAgent, moe.message.releasedInUI, moe.message.releaseAgent). #releaseAgentBtn renders after the Reopen button only when nonBlankString(assignedWorkerId) is non-null, for any status. New case 'releaseAgent' reads the fresh task: a task with no agent now gets an info message 'No agent is assigned to this task.'. Otherwise it shows a modal warning with {0}=worker id and {1}=raw title, substituted in one pass and not HTML-escaped. Only on confirm does it call client.releaseTask(taskId, 'Released from board'); a false return shows 'Not connected to Moe daemon — agent was not released.'. No success toast, as in JetBrains. No value import added; client.releaseTask is touched only inside the handler.\\ntaskDetail.js: guarded click listener posting {type:'releaseAgent'}; an unassigned page loads without the button.\\ntests/task-release.test.cjs (new, 12 tests) reads the bundle at runtime and covers button present for 'w1' and absent for null/''/whitespace, confirm exactly once with ('task-release','Released from board'), dismiss zero calls, false return shows not-connected, stale button, current (not render-time) id/title, one-pass placeholders, an exception landing in the existing catch, and page wiring.\\n\\nEvidence: RED at HEAD with only the test overlaid (12 tests, 3 pass, 9 fail); GREEN 12/12 with the product files; 13/13 mutants killed. The plan's checkRef was re-run fresh this session: EXIT=0; npm ci, lint, compile and test all ran; 485 tests, 481 pass, 4 Windows-only skips, 0 fail. task-blocker-visibility, task-time-budget and approval-paths pass unchanged. Scope: only the 3 moe-vscode files; MoeDaemonClient.ts and every moe-jetbrains file unchanged. An untracked tests/accounts-wire.test.cjs in the check",
+  "completedAt": "2026-11-02T10:58:27.419Z",
+  "reviewCompletedAt": "2026-11-02T10:58:27.419Z",
+  "reviewSummary": "APPROVED. Delivery: checkpoint e71520cd holds the whole diff, completion 63e2961d (board json only) is recorded; both are on moe/work-2026-10-24. Product files: TaskDetailPanel.ts +40/-1, taskDetail.js +10, task-release.test.cjs +328 new (378 added, under 400). MoeDaemonClient.ts and moe-jetbrains untouched by the commit.\n\nRe-ran the checkRef in a fresh git-archive snapshot of HEAD 41a952b3 (outside the checkout, removed after) with the 3 files overlaid, env -i node v24.21.0: npm ci, lint, compile, test all ran, EXIT=0, 485 tests, 481 pass, 4 skip (Windows-only), 0 fail. `node --test` of task-release + task-blocker-visibility + task-time-budget + approval-paths: 72/72, so the peers pass unchanged. No npm/node tests ran in the shared checkout.\n\nDoD: (1) button present for 'w1' at PLANNING/WORKING/BLOCKED/REVIEW, absent for undefined/null/''/whitespace; gate is nonBlankString, JetBrains' isNullOrBlank. (2) confirm calls releaseTask once with ('task-release','Released from board'), modal:true, item 'Release Agent', no toast; dismiss 0 calls; false return shows the not-connected warning; stale button gives info message only; throw lands in the existing catch. (3) test reads the 3 bundle keys at runtime and builds the expected text with an independent split-based substitution; TS constants match bundle lines 83/101/102 incl. em dash; raw title not HTML-escaped; one-pass placeholders covered. (4)(5) as above.\n\nRails: no value import added (client.releaseTask only inside case 'releaseAgent'); no forbidden tokens in added lines; page click listener null-guarded and the page test's getElementById returns null for absent ids, so removing the guard fails; no epic avoid-list files touched. Mid-epic slice proven by focused tests. Ponytail pass: nothing to cut. Not verified: real VS Code modal rendering and the daemon's release_task effect (manual-test territory).",
+  "requiredCheckAtDone": null
+}

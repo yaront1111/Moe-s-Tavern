@@ -1,17 +1,45 @@
 name: CI
 
+# Pull requests and pushes to main run the fast set: every step below except the
+# ones guarded by `inputs.full`. The nightly (.github/workflows/nightly.yml) calls
+# this file with full: true, which adds the long suites: the bash, Windows
+# PowerShell 5.1 and PowerShell 7 wrapper postflights (about 45, 85-100 and
+# 90-110 min on hosted runners, too long for a per-push run).
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
+    inputs:
+      full:
+        description: Also run the long suites (the three wrapper postflights).
+        type: boolean
+        default: false
+      ref:
+        description: The branch, tag or SHA to check out; empty checks out the triggering event's ref.
+        type: string
+        default: ''
+      artifact-suffix:
+        description: Appended to every artifact name, so a run that calls this file more than once keeps the names unique.
+        type: string
+        default: ''
+  # A full run of a branch's own definitions, before nightly.yml is on main:
+  #   gh workflow run ci.yml --ref <branch> -f full=true
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Also run the long suites (the three wrapper postflights).
+        type: boolean
+        default: true
 
 # One run per PR (per branch for pushes) at a time: a newer push replaces the
 # queued run instead of stacking another full matrix behind it, and the run in
 # progress still finishes. The agent fleet lands a commit every few minutes,
 # faster than the Windows build completes, so without this the queue only grows.
+# A nightly call appends the ref it tests, so its refs never queue behind each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.ref }}
 
 jobs:
   fresh-linux-install:
@@ -20,6 +48,8 @@ jobs:
     container: ubuntu:24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       # Deliberately omit setup-node: the public installer must supply its dependencies.
       - name: Install dependencies and build Moe
@@ -39,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Lint role documentation
         run: bash scripts/lint-role-docs.sh
@@ -51,6 +83,9 @@ jobs:
           cache-dependency-path: |
             packages/moe-daemon/package-lock.json
             packages/moe-proxy/package-lock.json
+
+      - name: Test the PR and nightly workflow split
+        run: node --test scripts/tests/ci-workflows.test.mjs
 
       - name: Install and build daemon
         run: |
@@ -67,13 +102,13 @@ jobs:
       - name: Upload daemon build
         uses: actions/upload-artifact@v7
         with:
-          name: daemon-dist
+          name: daemon-dist${{ inputs.artifact-suffix }}
           path: packages/moe-daemon/dist/
 
       - name: Upload proxy build
         uses: actions/upload-artifact@v7
         with:
-          name: proxy-dist
+          name: proxy-dist${{ inputs.artifact-suffix }}
           path: packages/moe-proxy/dist/
 
   test-typescript:
@@ -81,6 +116,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -114,7 +151,7 @@ jobs:
       - name: Upload daemon coverage
         uses: actions/upload-artifact@v7
         with:
-          name: daemon-coverage
+          name: daemon-coverage${{ inputs.artifact-suffix }}
           path: packages/moe-daemon/coverage/
 
       - name: Install and build proxy
@@ -134,7 +171,7 @@ jobs:
       - name: Upload proxy coverage
         uses: actions/upload-artifact@v7
         with:
-          name: proxy-coverage
+          name: proxy-coverage${{ inputs.artifact-suffix }}
           path: packages/moe-proxy/coverage/
 
   build-plugin:
@@ -142,6 +179,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -192,7 +231,7 @@ jobs:
       - name: Upload plugin zip
         uses: actions/upload-artifact@v7
         with:
-          name: jetbrains-plugin
+          name: jetbrains-plugin${{ inputs.artifact-suffix }}
           path: moe-jetbrains/build/distributions/*.zip
 
   # Cross-platform build verification
@@ -205,6 +244,16 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Parse the Bash launcher with the stock macOS bash
+        # macOS /bin/bash is 3.2, and JetBrains launches Mac seats through it. Linux and Windows run bash 5,
+        # which parses constructs 3.2 rejects (a quoted heredoc inside $( ) is the known one).
+        if: runner.os == 'macOS'
+        run: |
+          /bin/bash --version
+          /bin/bash -n scripts/moe-agent.sh
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -233,20 +282,50 @@ jobs:
         run: node --test scripts/tests/installers.test.mjs scripts/tests/install-dependencies-windows.test.mjs scripts/tests/dependencies.test.mjs scripts/tests/runtime-requirements.test.mjs
 
       - name: Test local runner prerequisite bundles
-        run: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs
+        run: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs scripts/tests/local-runner-guard.test.mjs scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-seat.test.mjs
+
+      - name: Require every GUARD containment row on Linux
+        # local-runner-guard.test.mjs runs G1-G6, G8 and G9 as root of a user namespace it creates, and skips them
+        # on a host that refuses one. Ubuntu 24.04's AppArmor denies capabilities inside one unless
+        # kernel.apparmor_restrict_unprivileged_userns is 0, so lift that on this throwaway runner. A skipped or
+        # missing row fails here. GUARD containment is Linux-only: on macOS and Windows the step above skips
+        # all nine rows by the file's own reasons.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          tap="$RUNNER_TEMP/local-runner-guard.tap"
+          node --test --test-reporter=tap scripts/tests/local-runner-guard.test.mjs | tee "$tap"
+          grep -x '# pass 9' "$tap"
+          grep -x '# skipped 0' "$tap"
 
       - name: Test Moe CLI response transport
         run: node --test scripts/tests/moe-call.test.mjs
 
       - name: Test agent runtime discovery
-        run: node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs scripts/tests/taskless-binding-notice.test.mjs scripts/tests/push-failure-message.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/usage-attribution.test.mjs scripts/tests/resume-progress.test.mjs scripts/tests/moe-account-lease.test.mjs
+        run: node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs scripts/tests/taskless-binding-notice.test.mjs scripts/tests/push-failure-message.test.mjs scripts/tests/intent-journal.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/usage-attribution.test.mjs scripts/tests/resume-progress.test.mjs scripts/tests/moe-account-lease.test.mjs scripts/tests/account-wait-attempt.test.mjs scripts/tests/analyze-task-metrics.test.mjs
+
+      - name: Test launcher literal project paths
+        run: node --test scripts/tests/literal-project-path.test.mjs
 
       - name: Test launcher daemon.json cap and seat re-registration
         # Real launcher blocks: Linux runs bash and pwsh 7; Windows runs Git Bash,
         # PowerShell 5.1 and pwsh 7. Not macOS: its /bin/bash is 3.2 and these
         # suites have not been run there.
         if: runner.os != 'macOS'
-        run: node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs
+        run: node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/subagent-mirror.test.mjs
+
+      - name: Test PowerShell .moe-agent.json read
+        # PowerShell 5.1 reads a BOM-less file as ANSI unless told UTF-8; Linux runs pwsh 7.
+        if: runner.os != 'macOS'
+        run: node --test scripts/tests/serena-project-config.test.mjs
+
+      - name: Test PowerShell daemon autostart arguments
+        # Start-Process builds a native Windows command line (PowerShell 5.1 and 7).
+        if: runner.os == 'Windows'
+        run: node --test scripts/tests/daemon-autostart-argv.test.mjs
 
       - name: Test Bash landing and postflight runner
         run: node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/hook-isolation-bash.test.mjs scripts/tests/postflight-safe.test.mjs
@@ -257,6 +336,8 @@ jobs:
           powershell -NoProfile -File scripts/tests/importee-guard.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell -NoProfile -File scripts/tests/hooked-commit.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell -NoProfile -File scripts/tests/landing-ledger.ps1
 
       - name: Test PowerShell 7 landing guard
         if: runner.os == 'Windows'
@@ -264,23 +345,41 @@ jobs:
           pwsh -NoProfile -File scripts/tests/importee-guard.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File scripts/tests/hooked-commit.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/tests/landing-ledger.ps1
 
-      - name: Test Bash wrapper postflight and parity
+      - name: Test Bash worktree landing and parity
         if: runner.os == 'Linux'
         run: |
-          node scripts/tests/postflight-safe.mjs bash
+          bash scripts/tests/worktree-landing.sh
           bash scripts/tests/parity-check.sh
 
-      - name: Test Windows PowerShell wrapper postflight
+      - name: Test Bash wrapper postflight (nightly)
+        # About 45 min on ubuntu-latest: only the nightly runs it.
+        if: inputs.full && runner.os == 'Linux'
+        run: node scripts/tests/postflight-safe.mjs bash
+
+      - name: Test Windows PowerShell worktree landing
+        # About 4 min. PowerShell 7's run of the same file is nightly-only, to keep this job near 20 min.
         if: runner.os == 'Windows'
+        run: powershell -NoProfile -File scripts/tests/worktree-landing.ps1
+
+      - name: Test Windows PowerShell wrapper postflight (nightly)
+        # 85-100 min on windows-latest: only the nightly runs it.
+        if: inputs.full && runner.os == 'Windows'
         run: node scripts/tests/postflight-safe.mjs powershell
 
-      - name: Test PowerShell 7 wrapper postflight and parity
+      - name: Test PowerShell 7 parity
         if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File scripts/tests/parity-check.ps1
+
+      - name: Test PowerShell 7 worktree landing and wrapper postflight (nightly)
+        # 90-110 min on windows-latest: only the nightly runs it.
+        if: inputs.full && runner.os == 'Windows'
         run: |
-          node scripts/tests/postflight-safe.mjs pwsh
+          pwsh -NoProfile -File scripts/tests/worktree-landing.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pwsh -NoProfile -File scripts/tests/parity-check.ps1
+          node scripts/tests/postflight-safe.mjs pwsh
 
       - name: Test VS Code daemon startup
         # bash on every OS: Windows' default pwsh only fails on the last command, so a failing lint or compile passed.
@@ -291,3 +390,49 @@ jobs:
           npm run compile
           npm test
         working-directory: moe-vscode
+
+      - name: Package the VS Code extension and smoke-test its bundle
+        # One OS is enough for a packaging smoke. vsce's prepublish re-bundles the daemon and proxy built above, so a
+        # .vscodeignore or bundle-manifest.json regression fails the pull request instead of the release.
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          vsix="$RUNNER_TEMP/moe-vscode.vsix"
+          (cd moe-vscode && npm run package -- --out "$vsix")
+          unzip -Z1 "$vsix" > "$RUNNER_TEMP/moe-vscode.files"
+          # Every bundle-manifest.json target must ship: a file target itself, a directory target every file that
+          # bundle-assets.mjs staged under it. Reading the staged copy keeps the exclude rules in the bundler alone.
+          node --input-type=module - scripts/bundle-manifest.json "$RUNNER_TEMP/moe-vscode.files" moe-vscode/bundled <<'CHECK'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const [manifestFile, listingFile, stagedRoot] = process.argv.slice(2);
+          const shipped = new Set(fs.readFileSync(listingFile, 'utf8').split('\n').filter(Boolean));
+          // As bundle-assets.mjs reads a copy: with `files`, each <into>/<name> is a target; without, the whole <into> directory.
+          const { copies } = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+          const targets = (Array.isArray(copies) ? copies : []).flatMap(copy => Array.isArray(copy?.files) && copy.files.length > 0
+            ? copy.files.map(name => path.posix.join(String(copy.into), String(name))) : [copy?.into]);
+          if (shipped.size === 0 || targets.length === 0) {
+            console.error(`Nothing to compare: ${shipped.size} vsix entries, ${targets.length} targets in ${manifestFile}`);
+            process.exit(1);
+          }
+          const missing = [];
+          for (const to of targets) {
+            if (typeof to !== 'string' || !to || path.isAbsolute(to) || to.split('/').includes('..')) { missing.push(`${to} (not bundle-relative)`); continue; }
+            const staged = path.join(stagedRoot, to);
+            if (!fs.statSync(staged, { throwIfNoEntry: false })?.isDirectory()) {
+              if (!shipped.has(`extension/bundled/${to}`)) missing.push(to);
+              continue;
+            }
+            const files = fs.readdirSync(staged, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())
+              .map(entry => path.relative(stagedRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'));
+            if (files.length === 0) missing.push(`${to}/ (nothing staged)`);
+            for (const file of files) if (!shipped.has(`extension/bundled/${file}`)) missing.push(file);
+          }
+          for (const item of new Set(missing)) console.error(`Missing from the vsix: extension/bundled/${item}`);
+          if (missing.length > 0) process.exit(1);
+          console.log(`All ${targets.length} bundle-manifest.json targets are in the vsix`);
+          CHECK
+          smoke="$RUNNER_TEMP/moe-vscode-smoke"
+          unzip -oq "$vsix" -d "$smoke"
+          node scripts/tests/onboarding.mjs "$smoke/extension/bundled"

@@ -6,22 +6,25 @@ services:
       context: ./packages/moe-daemon
       dockerfile: Dockerfile
     container_name: moe-daemon
+    # Run as the project's owner so the daemon can write .moe/ (on Linux: MOE_UID=$(id -u) MOE_GID=$(id -g)).
+    user: "${MOE_UID:-1001}:${MOE_GID:-1001}"
     ports:
-      - "9876:9876"
+      # Host loopback only: /mcp has no authentication, and a port without an address is published on every host interface.
+      - "127.0.0.1:9876:9876"
     volumes:
-      # Mount your project directory
-      - ./:/project:rw
+      # The project at its own absolute path: moe-proxy and the IDE plugins refuse a daemon that reports another project's path.
+      - ${PWD}:${PWD}:rw
     environment:
-      - MOE_PROJECT_PATH=/project
+      - MOE_PROJECT_PATH=${PWD}
       - LOG_MAX_SIZE_MB=10
       - LOG_RETENTION_COUNT=5
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9876/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9876/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 5s
     restart: unless-stopped
 
-# Example for running with a different project:
-# docker-compose run -v /path/to/your/project:/project moe-daemon
+# Run it from the project's root: ${PWD} is mounted at its own absolute path and served as the project.
+# Another project: cd /path/to/your/project && MOE_UID=$(id -u) MOE_GID=$(id -g) docker-compose -f <moe checkout>/docker-compose.yml up -d

@@ -1,4 +1,5 @@
 import type { Team, Worker } from '../types/schema.js';
+import { roleFromWorkerId } from './workerRole.js';
 
 /**
  * The single liveness window for the whole daemon. A worker is "alive" if it
@@ -47,7 +48,13 @@ export interface FreshestLiveWorkerOptions {
  *
  * Role membership resolves through `worker.teamId`, NOT `team.memberIds`: a
  * worker dropped from memberIds out-of-band still points at its team, and
- * StateManager treats teamId as the single-valued source of truth. Liveness
+ * StateManager treats teamId as the single-valued source of truth. The role
+ * is the team's role first, then the id prefix (resolveWorkerRole's
+ * precedence, util/workerRole.ts): a roled team wins over the id, and a team
+ * with no role defers to `roleFromWorkerId`. That is the common case, not an
+ * edge: the launchers register every architect, worker and QA seat into one
+ * role-less project team. A worker with no team, or whose team is not in
+ * `teams`, is still skipped. Liveness
  * goes through `isWorkerAlive`, the one canonical predicate, so DEAD workers
  * and unparsable `lastActivityAt` values are excluded identically everywhere.
  *
@@ -66,16 +73,21 @@ export function findFreshestLiveWorkerByRole(
   const timeoutMs = opts.timeoutMs ?? LIVENESS_TIMEOUT_MS;
   const excluded = new Set(opts.excludeWorkerIds ?? []);
 
-  const roleTeamIds = new Set<string>();
+  const teamsById = new Map<string, Team>();
   for (const team of teams) {
-    if (team?.role === role) roleTeamIds.add(team.id);
+    if (team?.id) teamsById.set(team.id, team);
   }
-  if (roleTeamIds.size === 0) return null;
 
   let best: Worker | null = null;
   let bestMs = Number.NEGATIVE_INFINITY;
   for (const worker of workers) {
-    if (!worker?.teamId || !roleTeamIds.has(worker.teamId)) continue;
+    if (!worker?.teamId) continue;
+    const team = teamsById.get(worker.teamId);
+    if (!team) continue;
+    // A non-string id must not throw: report_blocked calls this outside its
+    // best-effort chat try/catch.
+    const seatRole = team.role || (typeof worker.id === 'string' ? roleFromWorkerId(worker.id) : null);
+    if (seatRole !== role) continue;
     if (excluded.has(worker.id)) continue;
     if (!isWorkerAlive(worker, nowMs, timeoutMs)) continue;
     // Finite by construction: isWorkerAlive already rejected unparsable values.

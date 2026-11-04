@@ -54,9 +54,11 @@ function fixture(t, protectedProfile = true, fsApi = fs) {
 test('D1 protected init uses installed real paths, start, installed cwd and a sanitized environment copy', async t => {
     const f = fixture(t), before = { ...f.env };
     await Promise.all([f.client.startDaemon('init', f.project), f.client.startDaemon('init', f.project)]);
+    // task-648a5916: each protected spawn gets a fresh 64-hex spawn-proof key.
+    const key = f.spawns[0]?.[2]?.env?.MOE_SPAWN_PROOF_KEY; assert.match(key, /^[0-9a-f]{64}$/);
     assert.deepEqual(plain(f.spawns), [[real(f.node), [real(f.daemon), 'start', '--project', f.project], {
         detached: true, stdio: 'ignore', windowsHide: true, cwd: path.dirname(real(f.daemon)),
-        env: { HOME: f.home, MOE_NODE_COMMAND: f.node, PATH: [path.dirname(real(f.node)), f.outside].join(path.delimiter) }
+        env: { HOME: f.home, MOE_NODE_COMMAND: f.node, MOE_SPAWN_PROOF_KEY: key, PATH: [path.dirname(real(f.node)), f.outside].join(path.delimiter) }
     }]]);
     assert.deepEqual(f.env, before);
     assert.deepEqual(f.errors, []);
@@ -263,6 +265,21 @@ test('Windows missing PATH leaves are judged by their nearest existing ancestor'
     }));
 });
 
+// task-20a64797: the POSIX twin of the Windows row above; a missing leaf below a link is judged where a folder created there later would land.
+test('POSIX missing PATH leaves are judged by their nearest existing ancestor', { skip: process.platform === 'win32' && 'the Windows row above covers junction, 8.3, subst and mapped forms' }, t => {
+    const f = fixture(t), api = f.api, p = f.project, out = f.outside;
+    const sub = path.join(p, 'sub'), later = path.join(p, 'later'); fs.mkdirSync(sub);
+    const link = (name, target) => { const at = path.join(out, name); fs.symlinkSync(target, at, 'dir'); return at; };
+    const [toProject, toSub, toHome] = [['to-project', p], ['to-sub', sub], ['to-home', f.home]].map(([n, to]) => link(n, to));
+    fs.mkdirSync(later); const dangling = link('dangling', later); fs.rmdirSync(later);
+    const inside = [path.join(toProject, 'later'), path.join(toSub, 'later', 'bin'), dangling, path.join(dangling, 'bin'), path.join(later, 'bin')];
+    const outside = [path.join(out, 'later'), path.join(out, 'later', 'deeper'), path.join(toHome, 'later')];
+    for (const entry of inside) { assert.equal(api.isOutsideProject(entry, p), false, entry); }
+    for (const entry of outside) { assert.equal(api.isOutsideProject(entry, p), true, entry); }
+    const env = api.protectedDaemonEnvironment({ PATH: [...inside, ...outside].join(':') }, p, f.node, false, undefined);
+    assert.equal(env.PATH, [path.dirname(f.node), ...outside].join(':'), 'protected PATH keeps exactly the outside entries');
+});
+
 for (const code of ['ENOENT', 'EACCES']) {
     test(`protected async ${code} resets the guard and does not poll readiness`, async t => {
         const f = fixture(t); f.failure = Object.assign(new Error(code), { code });
@@ -276,8 +293,9 @@ for (const code of ['ENOENT', 'EACCES']) {
 for (const how of ['disconnect', 'dispose']) {
     test(`protected async ENOENT after ${how} is logged without a notice`, async t => {
         const f = fixture(t); f.failure = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        // task-648a5916: the spawn now follows the async spawn-key step; cancel at the spawn, before its async ENOENT.
+        f.spawns.push = (...args) => { const count = Array.prototype.push.apply(f.spawns, args); f.client[how](); return count; };
         const startup = f.client.startDaemon('start', f.project);
-        f.client[how]();
         await startup;
         assert.equal(f.spawns.length, 1); assert.equal(f.client.startInProgress, false);
         assert.deepEqual(f.errors, []);

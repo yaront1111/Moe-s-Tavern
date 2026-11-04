@@ -7,7 +7,6 @@
 import fs from 'fs';
 import path from 'path';
 import net from 'net';
-import dns from 'dns';
 import http from 'http';
 import crypto from 'crypto';
 import { spawn, type ChildProcess } from 'child_process';
@@ -18,12 +17,15 @@ import { healMassDeletion } from './state/massDeletionHeal.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { ensureRunnerKey } from './server/runnerChannel.js';
+import { productionReadinessInputs, startReadinessEvaluation } from './delivery/readinessHolder.js';
 import { WSL_BIND_HOST, resolveBindHosts, listenOnHosts } from './server/bindHosts.js';
+import { DEFAULT_BIND_HOST, probeHostFor, recordedProbeHost, isLocalAddress, healthProbeAddress, isForeignDaemonInfo, foreignProbeHosts, isValidPort, ownPidNamespace, isOtherPidNamespace } from './server/probeHost.js';
 import { isAllowedHealthHost } from './server/healthHost.js';
+import { healthProofFields, parseHealthRequest, takeSpawnProofKey } from './server/spawnProof.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { reconcileRunningAttempts } from './state/attemptStore.js';
 import { runDoctor } from './commands/doctor.js';
-import { canonicalProjectPath, comparableProjectPath, isSameProjectPath } from './util/projectPath.js';
+import { absoluteProjectPath, canonicalProjectPath, comparableProjectPath, isSameProjectPath } from './util/projectPath.js';
 import { runCheckArchitecture } from './commands/checkArchitecture.js';
 import { logger } from './util/logger.js';
 import { VERSION } from './util/version.js';
@@ -54,32 +56,28 @@ const SUPERVISOR_RESTART_WINDOW_MS = 60_000;
 const SUPERVISOR_MAX_BACKOFF_MS = 30_000;
 const SUPERVISOR_CHILD_KILL_TIMEOUT_MS = 10_000;
 
-function parseArgs() {
-  const args = process.argv.slice(2);
+function parseArgs(args: string[] = process.argv.slice(2), env: NodeJS.ProcessEnv = process.env) {
   const command = args[0] || 'start';
   const projectIndex = args.indexOf('--project');
   const portIndex = args.indexOf('--port');
   const nameIndex = args.indexOf('--name');
   const hostIndex = args.indexOf('--host');
 
-  const projectPath = projectIndex >= 0 ? args[projectIndex + 1] : process.env.MOE_PROJECT_PATH || process.cwd();
+  const projectPath = absoluteProjectPath(projectIndex >= 0 ? args[projectIndex + 1] : env.MOE_PROJECT_PATH || process.cwd());
   const port = portIndex >= 0 ? Number(args[portIndex + 1]) : undefined;
   const name = nameIndex >= 0 ? args[nameIndex + 1] : undefined;
-  const host = hostIndex >= 0 ? args[hostIndex + 1] : process.env.MOE_BIND_HOST || undefined;
+  const host = hostIndex >= 0 ? args[hostIndex + 1] : env.MOE_BIND_HOST || undefined;
 
   return { command, projectPath, port, name, host };
 }
 
-const DEFAULT_BIND_HOST = '127.0.0.1';
 const LOOPBACK_PROBE_TIMEOUT_MS = 500;
 
-/**
- * Address local probes (port scans, readiness checks) should connect to for a
- * given bind host. Wildcard and WSL binds include loopback; a specific address does not.
- */
-function probeHostFor(bindHost: string): string {
-  return bindHost === '0.0.0.0' || bindHost === '::' || bindHost === WSL_BIND_HOST ? DEFAULT_BIND_HOST : bindHost;
-}
+/** validateDaemonInfoForProject's reason when daemon.json's bindHost resolves to an address that is not this machine. */
+const BIND_HOST_NOT_LOCAL = 'bindHost not local';
+
+/** validateDaemonInfoForProject's reason when a daemon.json from another pid namespace gets no confirming /health answer. */
+const PID_NAMESPACE_UNREACHABLE = 'pid namespace daemon unreachable';
 
 function daemonInfoPath(projectPath: string): string {
   return path.join(projectPath, '.moe', 'daemon.json');
@@ -87,21 +85,6 @@ function daemonInfoPath(projectPath: string): string {
 
 function lockFilePath(projectPath: string): string {
   return path.join(projectPath, '.moe', 'daemon.lock');
-}
-
-/**
- * True when daemon.json was written on the other side of the WSL/Windows
- * boundary: a drive or UNC projectPath read outside Windows, or a POSIX one read
- * on Windows. The writer's pid lives in another pid namespace, so
- * `process.kill(pid, 0)` proves nothing either way and only /health may judge
- * it. Mirrors moe-agent.sh's pre-flight, which detects a Windows-owned
- * daemon.json by its drive-letter projectPath. A relative projectPath (the
- * daemon records `--project` as given) names no side, so it stays local.
- */
-function isForeignDaemonInfo(info: Pick<DaemonInfo, 'projectPath'>, platform: NodeJS.Platform = process.platform): boolean {
-  return platform === 'win32'
-    ? /^\/(?![\\/])/.test(info.projectPath)
-    : /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(info.projectPath);
 }
 
 // path.resolve is lexical; native paths may also name our directory on disk.
@@ -116,27 +99,6 @@ function namesOwnProject(recorded: string, own: string): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * The WSL default gateway (the Windows host in NAT mode), read from
- * /proc/net/route without spawning anything; null on any error. Node twin of
- * moe-agent.sh wsl_gateway_host (`ip route show default`).
- */
-function wslGatewayHost(): string | null {
-  try {
-    for (const line of fs.readFileSync('/proc/net/route', 'utf-8').split('\n').slice(1)) {
-      const [, destination, gateway] = line.trim().split(/\s+/);
-      if (destination !== '00000000' || !/^[0-9A-Fa-f]{8}$/.test(gateway ?? '') || /^0{8}$/.test(gateway)) continue;
-      // Little-endian hex: 01D01AAC is 172.26.208.1.
-      return gateway.match(/../g)!.reverse().map((byte) => parseInt(byte, 16)).join('.');
-    }
-  } catch { /* not Linux, or no procfs */ }
-  return null;
-}
-
-function isValidPort(port: unknown): port is number {
-  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
 function isValidPid(pid: unknown): pid is number {
@@ -159,6 +121,8 @@ type DaemonValidationResult = {
   info?: DaemonInfo;
   /** daemon.json belongs to the other side of the WSL boundary (isForeignDaemonInfo). */
   foreign?: boolean;
+  /** The record's pidNamespace is not this reader's (isOtherPidNamespace); /health alone judged it. */
+  namespaced?: boolean;
 };
 
 type LockInfo = {
@@ -217,6 +181,12 @@ function removeStaleLock(projectPath: string, context: string): boolean {
   }
 }
 
+/**
+ * Take .moe/daemon.lock. False means another starter holds it (EEXIST that is
+ * not stale) or our own write failed and was cleaned up. Any other create error
+ * (ENOENT, EACCES, ENOTDIR...) is thrown, so a caller never reports it as a
+ * lock race.
+ */
 function acquireLock(projectPath: string): boolean {
   const lockPath = lockFilePath(projectPath);
   const MAX_ATTEMPTS = 3;
@@ -246,7 +216,7 @@ function acquireLock(projectPath: string): boolean {
         }
         continue;
       }
-      return false;
+      throw err;
     }
   }
   return false;
@@ -293,30 +263,6 @@ function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEO
   });
 }
 
-/**
- * The IP literal a health probe should dial for `target`. The /health Host rule (server/healthHost.ts)
- * admits IP literals and localhost, never a configured name, so a daemon bound by name is probed at the
- * address that name resolves to: that literal is the Host Node sends, and it is the connection's arrival
- * address, which the rule admits. Admitting the configured name instead would trust whoever controls its DNS.
- * Null when the lookup fails or outlasts the probe timeout.
- */
-async function healthProbeAddress(target: string, timeoutMs: number): Promise<string | null> {
-  if (net.isIP(target) !== 0) return target;
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    const timedOut = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), timeoutMs);
-      timer.unref();
-    });
-    const resolved = dns.promises.lookup(target).then((found) => found.address, () => null);
-    return await Promise.race([resolved, timedOut]);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function probeDaemonHealth(
   info: DaemonInfo,
   expectedProjectPath: string,
@@ -329,11 +275,9 @@ async function probeDaemonHealth(
     return false;
   }
 
-  const address = await healthProbeAddress(
-    host ?? (info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST),
-    timeoutMs,
-  );
-  if (address === null) return false;
+  const address = await healthProbeAddress(host ?? recordedProbeHost(info), timeoutMs);
+  // An explicit host is the caller's; daemon.json's own bindHost is dialed only when it names this machine.
+  if (address === null || (host === undefined && !isLocalAddress(address))) return false;
 
   return new Promise((resolve) => {
     const req = http.request({
@@ -391,19 +335,29 @@ async function validateDaemonInfoForProject(
     return { valid: false, reason: 'projectPath mismatch', ...(foreign ? { foreign } : {}) };
   }
   if (foreign) {
-    // Loopback (mirrored networking) first, then the WSL gateway (NAT mode).
-    const hosts = [info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST];
-    const gateway = process.platform === 'linux' ? wslGatewayHost() : null;
-    if (gateway && !hosts.includes(gateway)) hosts.push(gateway);
-    for (const host of hosts) {
+    // daemon.json's bindHost when it names this machine, then the WSL gateway (server/probeHost.ts, shared with doctor).
+    for (const host of await foreignProbeHosts(info, SOCKET_TIMEOUT_MS)) {
       if (await probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, host)) {
         return { valid: true, info, foreign: true };
       }
     }
     return { valid: false, reason: 'foreign daemon unreachable', foreign: true };
   }
+  if (isOtherPidNamespace(info.pidNamespace)) {
+    // A container's (or another distro's) pid means nothing here: never signal it; /health at the local address decides.
+    const address = await healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS);
+    if (address === null || !isLocalAddress(address)) return { valid: false, reason: BIND_HOST_NOT_LOCAL, namespaced: true };
+    return await probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, address)
+      ? { valid: true, info, namespaced: true }
+      : { valid: false, reason: PID_NAMESPACE_UNREACHABLE, namespaced: true };
+  }
   if (!isProcessAlive(info.pid)) return { valid: false, reason: 'pid not alive' };
-  if (!await probeDaemonHealth(info, own)) return { valid: false, reason: 'health check failed' };
+  // Resolved once, so the literal judged here is the one dialed.
+  const address = await healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS);
+  if (address !== null && !isLocalAddress(address)) return { valid: false, reason: BIND_HOST_NOT_LOCAL };
+  if (address === null || !await probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, address)) {
+    return { valid: false, reason: 'health check failed' };
+  }
   return { valid: true, info };
 }
 
@@ -607,11 +561,33 @@ function writeGlobalConfig(): void {
 }
 
 /**
+ * Runs before every other start check in `start`/`init` (supervisor) and `_run`:
+ * true when the project has no .moe/ directory, reported with exit code 1. No
+ * lock, spawn or crash-restart can follow, because a missing .moe/ is final.
+ * `init` creates .moe/ before it starts, so it never trips this.
+ */
+function missingMoeDirBlocksStart(projectPath: string): boolean {
+  const moeDir = path.join(projectPath, '.moe');
+  let isDirectory = false;
+  try {
+    isDirectory = fs.statSync(moeDir).isDirectory();
+  } catch {
+    // Missing, or not reachable: both refuse the start below.
+  }
+  if (isDirectory) return false;
+  logger.error({ projectPath, moeDir }, `.moe/ missing at ${projectPath}; run moe-daemon init --project ${projectPath}`);
+  process.exitCode = 1;
+  return true;
+}
+
+/**
  * Shared first gate of `start`/`init` (supervisor) and `_run`: true when an
  * existing daemon.json must stop this start. A live daemon, native or on the
  * other side of the WSL boundary, blocks it; so does a foreign daemon.json that
  * does not answer /health, which is reported (exit 1) and never removed. A
- * native stale daemon.json is cleaned up and the start proceeds.
+ * native stale daemon.json is cleaned up and the start proceeds, and so is one
+ * from another pid namespace that /health no longer confirms (a restarted
+ * container reads its predecessor's record from a new namespace).
  */
 async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> {
   const existing = readDaemonInfo(projectPath);
@@ -629,7 +605,10 @@ async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> 
   }
   if (existing) {
     const existingPid = isDaemonInfoShape(existing) ? existing.pid : null;
-    if (existingPid && !isProcessAlive(existingPid)) {
+    if (validation.namespaced) {
+      // Its pid is another namespace's: report what /health showed, never probe the pid here.
+      logger.info({ pid: existingPid, reason: validation.reason }, '[lock] cleaned stale daemon.json from another pid namespace');
+    } else if (existingPid && !isProcessAlive(existingPid)) {
       logger.info({ pid: existingPid }, '[lock] cleaned stale daemon.json (pid not running)');
     }
     cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
@@ -637,7 +616,26 @@ async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> 
   return false;
 }
 
+/**
+ * The record this daemon writes to .moe/daemon.json. bindHost only when it is not the loopback default; pidNamespace
+ * only where this process has one (Linux), so a reader in another pid namespace (the host, for a daemon in a
+ * container) knows its pid cannot be judged there.
+ */
+function buildDaemonInfo(port: number, projectPath: string, host: string): DaemonInfo {
+  const pidNamespace = ownPidNamespace();
+  return {
+    port,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    projectPath,
+    ...(host !== DEFAULT_BIND_HOST ? { bindHost: host } : {}),
+    ...(pidNamespace !== undefined ? { pidNamespace } : {}),
+  };
+}
+
 async function startDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
+  const { key: spawnProofKey, problem } = takeSpawnProofKey(process.env);
+  if (problem) logger.warn({ problem }, 'Ignoring invalid spawn proof key');
   const host = bindHost || DEFAULT_BIND_HOST;
   let hosts = [host];
   if (host === WSL_BIND_HOST) {
@@ -647,10 +645,19 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       hosts = [DEFAULT_BIND_HOST];
     }
   }
+  if (missingMoeDirBlocksStart(projectPath)) return;
   if (await existingDaemonBlocksStart(projectPath)) return;
 
   // Acquire lock to prevent race conditions
-  if (!acquireLock(projectPath)) {
+  let locked: boolean;
+  try {
+    locked = acquireLock(projectPath);
+  } catch (error) {
+    logger.error({ error, lockPath: lockFilePath(projectPath) }, 'Could not create the daemon lock');
+    process.exitCode = 1;
+    return;
+  }
+  if (!locked) {
     logger.info('Another process is starting the daemon, waiting...');
     // Wait a bit and check if daemon is now running
     await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
@@ -662,6 +669,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     }
     if (info && !validation.foreign) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info after lock wait');
     logger.error('Failed to acquire lock and daemon not running');
+    process.exitCode = 1;
     return;
   }
 
@@ -706,7 +714,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 
   // Create HTTP server for health endpoint
   const handler: http.RequestListener = (req, res) => {
-    if (req.method === 'GET' && req.url === '/health') {
+    const route = req.method === 'GET' ? parseHealthRequest(req.url) : { health: false } as const;
+    if (route.health) {
       // DNS-rebinding guard, before any check or stats work: see server/healthHost.ts.
       if (!isAllowedHealthHost(req.headers.host, req.socket.localAddress)) {
         res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -745,7 +754,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
         stats,
         checks,
         // The configured token, never server.address(): the local runner admits a daemon only on this field.
-        bindHost: host
+        bindHost: host,
+        ...healthProofFields(route, spawnProofKey)
       };
 
       const statusCode = isHealthy ? 200 : 503;
@@ -766,6 +776,15 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     logger.warn({ error: error instanceof Error ? error.message : String(error) },
       'Runner channel key unavailable; /runner refuses every connection');
   }
+  // verified-local readiness: evaluated now and every READINESS_INTERVAL_MS from
+  // daemon-owned facts, never awaited here. A failed evaluation leaves it refused.
+  const readiness = startReadinessEvaluation({
+    inputs: () => productionReadinessInputs(projectPath, state.project?.settings),
+    onChange: (held) => logger.info({ ready: held.ready, missingCapabilities: held.missingCapabilities },
+      'verified-local readiness evaluated'),
+  });
+  readiness.first.catch((error: unknown) => logger.warn({ error: error instanceof Error ? error.message : String(error) },
+    'verified-local readiness evaluation failed'));
   const wsServer = new MoeWebSocketServer(httpServer, state, mcpAdapter);
 
   // Wait for server to actually start listening
@@ -773,6 +792,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   try {
     servers = await listenOnHosts(httpServer, hosts, port, handler);
   } catch (error) {
+    readiness.stop();
     releaseLock(projectPath);
     await wsServer.close();
     throw error;
@@ -796,7 +816,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       // A wiped store (git clean / sparse-checkout / rm -rf) must not replace the in-memory board.
       if ((await healMassDeletion(state)) > 0) return;
       await state.load();
-      wsServer.broadcast({ type: 'STATE_SNAPSHOT', payload: state.getSnapshot() });
+      wsServer.broadcastStateSnapshot();
     } catch (error) {
       logger.error({ error }, 'Failed to reload state from file watcher');
     }
@@ -814,16 +834,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   // Re-arm them once from persisted state now that the emitter + WS are wired.
   rearmSpeedModeApprovals(state);
 
-  const info: DaemonInfo = {
-    port,
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-    projectPath,
-    ...(host !== DEFAULT_BIND_HOST ? { bindHost: host } : {})
-  };
-
   // Write daemon.json only after port is confirmed listening
-  writeDaemonInfo(projectPath, info);
+  writeDaemonInfo(projectPath, buildDaemonInfo(port, projectPath, host));
 
   // Write global install config so other projects can find this installation
   writeGlobalConfig();
@@ -861,6 +873,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       }
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
+
+    readiness.stop();
 
     try {
       await watcher.stop();
@@ -934,6 +948,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 }
 
 async function superviseDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
+  if (missingMoeDirBlocksStart(projectPath)) return;
   if (await existingDaemonBlocksStart(projectPath)) return;
 
   // Clean up stale stop sentinel from previous runs
@@ -953,6 +968,7 @@ async function superviseDaemon(projectPath: string, preferredPort?: number, bind
   let shuttingDown = false;
 
   function spawnChild(): void {
+    // Preserve the IDE spawn key for every _run, including crash restarts; only _run consumes it.
     child = spawn(process.execPath, [scriptPath, ...childArgs], {
       stdio: 'inherit',
       env: process.env,
@@ -1067,9 +1083,26 @@ async function stopDaemon(projectPath: string): Promise<void> {
       + '(no signal sent, nothing removed)');
     return;
   }
+  if (validation.namespaced && validation.valid) {
+    logger.error({ port: info.port, pid: info.pid },
+      'daemon.json belongs to a live daemon in another pid namespace (for example a container): stop it there, '
+      + 'for example with docker stop (no signal sent, nothing removed)');
+    process.exitCode = 1;
+    return;
+  }
   if (!validation.valid || !validation.info) {
+    if (validation.reason === BIND_HOST_NOT_LOCAL) {
+      // Its pid is alive (checked before the bindHost) or another pid namespace's, and nothing here can verify it.
+      logger.error({ pid: info.pid, bindHost: info.bindHost },
+        'daemon.json names a bindHost that is not an address of this machine, so its pid cannot be verified here: '
+        + 'no signal sent and nothing removed. Check what that process is and stop it yourself if it is a Moe daemon');
+      process.exitCode = 1;
+      return;
+    }
     const pid = isDaemonInfoShape(info) ? info.pid : null;
-    if (pid && !isProcessAlive(pid)) {
+    if (validation.namespaced) {
+      logger.info({ pid }, '[stop] daemon.json from another pid namespace got no /health answer; removing stale file');
+    } else if (pid && !isProcessAlive(pid)) {
       logger.info({ pid }, '[stop] daemon.json found but pid not running; removing stale file');
     }
     // Same backoff race: the supervisor may still be alive and waiting to
@@ -1095,15 +1128,21 @@ async function statusDaemon(projectPath: string): Promise<void> {
 
   const validation = await validateDaemonInfoForProject(projectPath, info);
   const shaped = isDaemonInfoShape(info);
-  // A query only deletes what is proven gone here: a local daemon.json whose pid is dead.
-  if (shaped && !validation.foreign && !isProcessAlive(info.pid)) {
+  // A query only deletes what is proven gone here: a local daemon.json whose pid is dead, or one from another pid
+  // namespace (a removed container) whose /health no longer answers. That namespace's pid is never probed.
+  if (validation.namespaced && validation.reason === PID_NAMESPACE_UNREACHABLE) {
+    logger.info({ pid: info.pid }, 'Daemon not running (stale daemon.json removed: no /health answer from its pid namespace)');
+    cleanupStaleDaemonFiles(projectPath, validation.reason);
+    return;
+  }
+  if (shaped && !validation.foreign && !validation.namespaced && !isProcessAlive(info.pid)) {
     logger.info({ pid: info.pid }, 'Daemon not running (stale daemon.json removed: pid dead)');
     cleanupStaleDaemonFiles(projectPath, validation.reason || 'pid not alive');
     return;
   }
   logger.info({
     status: validation.valid ? 'running' : validation.foreign ? 'unknown' : 'stopped',
-    owner: validation.foreign ? 'other side of the WSL boundary' : 'local',
+    owner: validation.foreign ? 'other side of the WSL boundary' : validation.namespaced ? 'another pid namespace' : 'local',
     reason: validation.reason,
     port: shaped ? info.port : undefined,
     pid: shaped ? info.pid : undefined,
@@ -1213,6 +1252,24 @@ async function main() {
     process.exitCode = runAccountsCli(process.argv.slice(3));
     return;
   }
+  // `check-architecture` prints one JSON line and exits 0 passed, 1 failed, 2 inconclusive or unavailable. It answers
+  // every bad argument itself, so it runs before parseArgs(), which throws on a trailing --project. process.cwd()
+  // throws in a deleted directory: that is an unavailable repository, not a crash.
+  if (process.argv[2] === 'check-architecture') {
+    let cwd: string;
+    try {
+      cwd = process.cwd();
+    } catch (error) {
+      const detail = (error instanceof Error ? error.message : String(error)).split(/\r?\n/)[0].slice(0, 500);
+      process.stdout.write(`${JSON.stringify({ detail, outcome: 'unavailable', reason: 'repository-unavailable' })}\n`);
+      process.exitCode = 2;
+      return;
+    }
+    const { exitCode, report } = await runCheckArchitecture(process.argv.slice(3), cwd);
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    process.exitCode = exitCode;
+    return;
+  }
   const { command, projectPath, port, name, host } = parseArgs();
 
   switch (command) {
@@ -1247,13 +1304,6 @@ async function main() {
       process.exit(result.exitCode);
       break;
     }
-    case 'check-architecture': {
-      // One JSON line on stdout; exit 0 passed, 1 failed, 2 inconclusive or unavailable.
-      const { exitCode, report } = await runCheckArchitecture(process.argv.slice(3), process.cwd());
-      process.stdout.write(`${JSON.stringify(report)}\n`);
-      process.exitCode = exitCode;
-      break;
-    }
     default:
       logger.info('Usage: moe-daemon [start|stop|status|init|doctor|version] [--project <path>] [--port <port>] [--host <addr>] [--name <name>]');
       logger.info('       moe-daemon accounts [list|add|login|logout|check|remove] (Claude subscription accounts; see `accounts help`)');
@@ -1263,11 +1313,13 @@ async function main() {
 }
 
 export {
+  parseArgs,
   canonicalProjectPath,
   comparableProjectPath,
   isSameProjectPath,
   isForeignDaemonInfo,
   isDaemonInfoShape,
+  buildDaemonInfo,
   probeDaemonHealth,
   validateDaemonInfoForProject,
   readDaemonInfo,
@@ -1287,7 +1339,24 @@ export {
   isPortAvailable,
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/**
+ * Whether this module is the process entry. npm's bin is a symlink off Windows (npm install -g, npm link,
+ * npx), and Node loads the main module by its real path, so argv[1] as written can name a link while
+ * import.meta.url names its target. Compare as written first, then through fs.realpathSync, the call
+ * Node's own main-entry resolution makes. Any error means not the entry, so importing this module
+ * never starts the daemon.
+ */
+export function isEntryModule(argv1: string | undefined, moduleUrl: string): boolean {
+  if (!argv1) return false;
+  if (moduleUrl === pathToFileURL(argv1).href) return true;
+  try {
+    return moduleUrl === pathToFileURL(fs.realpathSync(argv1)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryModule(process.argv[1], import.meta.url)) {
   main().catch((err) => {
     logger.fatal({ error: err }, 'Fatal error');
     process.exit(1);

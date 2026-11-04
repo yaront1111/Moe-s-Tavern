@@ -5,6 +5,8 @@ import type { ExecutionAttempt, ExecutionPolicySnapshot, ExecutionWorkspaceMode,
 import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidInput } from '../util/errors.js';
 import { WORKER_TYPE_SCHEMA, normalizeWorkerType, refreshWorkerType } from './joinTeam.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
+import { endReloadHold } from '../state/workerLifecycle.js';
+import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchReply, idleSwitchFor } from '../state/accountStore.js';
 import { planSubmissionSnapshot } from '../state/taskStore.js';
 import { resolveAttemptWorkspace, resolveWorktreeMode } from '../state/validators.js';
 import { validateEntityId } from '../util/sanitize.js';
@@ -17,11 +19,13 @@ import {
   foreignFinalizingRefusal,
   executionAdmissionRefusal,
   heldTaskRefusal,
-  isClaimGatedByDependsOn
+  isClaimGatedByDependsOn,
+  ownFinalizingAttempt,
+  parseExecutionRoute
 } from '../util/claimEligibility.js';
 import { resolveLaunch } from '../util/routing.js';
 import { dependencyShortfall, describeUnmetDependency, unmetDependsOn } from '../state/dependencyUnblock.js';
-import { describeMissingEvidence } from '../delivery/policy.js';
+import { describeMissingEvidence, isVerifiedLocal } from '../delivery/policy.js';
 import {
   assertNoLiveLease,
   claimLostRace,
@@ -247,17 +251,25 @@ function assertNotHeldByReconciliation(state: StateManager, task: Task, workerId
  * the delivery evidence it lacks (DEPENDENCY_EVIDENCE_MISSING). Evidence that
  * cannot be judged at all, an unrecognised deliveryPolicy, throws out of
  * dependencyShortfall as that INVALID_INPUT, ahead of both. The caller throws
- * the result before any write, like every other claim refusal.
+ * the result before any write, like every other claim refusal. For a
+ * verified-local consumer both refusals keep their code but state that rule
+ * instead: retained verified delivery, and a missing prerequisite never satisfies.
  */
 function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
   const unmet = unmetDependsOn(state, task).map((id) => ({ id, ...dependencyShortfall(state, id, task) }));
   const onEvidence = unmet.find((dep) => state.getTask(dep.id)?.status === 'DONE' && dep.missingEvidence.length > 0);
   const onStatus = unmet.filter((dep) => state.getTask(dep.id)?.status !== 'DONE' || dep.missingEvidence.length === 0)
     .map((dep) => dep.missingEvidence.length > 0 ? describeUnmetDependency(state, dep.id, task) : dep.id);
+  // Wording only; a profile that cannot be resolved counts as strict, as the predicate fails closed.
+  const strict = (() => { try { return isVerifiedLocal(state, task); } catch { return true; } })();
   if (onStatus.length > 0 || !onEvidence) {
+    const rule = strict
+      ? "a verified-local task's dependsOn gates WORKING claims until each prerequisite has retained verified delivery, " +
+        'not merely DONE/ARCHIVED, and a missing prerequisite never satisfies it'
+      : 'dependsOn gates WORKING claims until they are DONE/ARCHIVED';
     return notAllowed(
       'claim',
-      `Task ${task.id} has unmet dependencies: ${onStatus.join(', ')} (dependsOn gates WORKING claims until they are DONE/ARCHIVED). ` +
+      `Task ${task.id} has unmet dependencies: ${onStatus.join(', ')} (${rule}). ` +
       `An architect/governor can edit them with moe.set_task_dependencies.`
     );
   }
@@ -265,6 +277,7 @@ function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
     taskId: task.id,
     prerequisiteTaskId: onEvidence.id,
     missing: onEvidence.missingEvidence.map((token) => ({ token, reason: describeMissingEvidence(token) })),
+    verifiedLocal: strict,
   });
 }
 
@@ -319,10 +332,65 @@ function collisionNotice(taskId: string, collisions: CollisionEntry[], claimerId
   return `${page}⚠️ file collision on ${taskId}. Live: ${list(live)}${tail}. Coordinate before either of you lands.`;
 }
 
+/**
+ * True when the #workers heads-up has nothing to ask of anyone: the claimer's
+ * attempt and every LIVE colliding peer's open attempt run in a worktree.
+ * Each such task edits its own .worktrees/<taskId>, completions land one at a
+ * time (merge-tree + CAS), and a true conflict parks the bytes on a rescue ref
+ * and routes the row back, so "coordinate before either of you lands" asks for
+ * something no seat can do, and the page only costs each seat a turn.
+ *
+ * The notice is skipped, not posted without @mentions: a mention-less system
+ * line in a role channel routes to every busy seat (chatSystemFeed.test.ts
+ * 'keeps routing the file collision banner to busy seats'), so a quiet post
+ * would page MORE seats. Dormant-only collisions are skipped too: "every live
+ * peer" is vacuously true, and they route to every busy seat the same way.
+ *
+ * A live peer with no open attempt, or one without workspaceMode (a legacy
+ * record), counts as shared and keeps today's paging, as does every claimer
+ * that is not in a worktree (worktreeMode off, no workerId). A REVIEW/PLANNING
+ * claim is skipped by controlSeatClaim instead, since its shared attempt says
+ * nothing about the mode. The mode is pinned per attempt and the setting only
+ * picks a fresh attempt's mode, so this reads attempts, never the live setting.
+ */
+function worktreeOnlyCollision(
+  state: StateManager,
+  claimed: ExecutionAttempt | null,
+  collisions: CollisionEntry[]
+): boolean {
+  if (claimed?.workspaceMode !== 'worktree') return false;
+  return collisions.every((c) => !c.liveAssignee || currentAttempt(state, c.task)?.workspaceMode === 'worktree');
+}
+
+/**
+ * True for a REVIEW or PLANNING claim while worktree mode is on. Such a claim
+ * always opens a shared attempt (openClaimAttempt), so the attempt cannot say
+ * which mode the project runs, and this reads the live setting. In worktree mode
+ * those seats work in the control checkout on moe/control, which lands nothing,
+ * so "coordinate before either of you lands" asks them for nothing, and the
+ * mention-less lines that result route to every busy seat. An invalid setting
+ * keeps today's heads-up: a page is never suppressed on an unreadable mode.
+ */
+function controlSeatClaim(state: StateManager, task: Task): boolean {
+  if (task.status !== 'REVIEW' && task.status !== 'PLANNING') return false;
+  try {
+    return resolveWorktreeMode(state.project?.settings) === 'on';
+  } catch (error) {
+    logger.warn({ error, taskId: task.id }, 'claim_next_task: unreadable worktreeMode; keeping the #workers heads-up');
+    return false;
+  }
+}
+
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.claim_next_task',
-    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED. When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim.',
+    // Mutex opt-out (tools/index.ts ToolDefinition.blocking): once the claim's
+    // own state.runExclusive below releases, the stale-handoff recompute spawns
+    // `git status` (util/diskState.ts, killed at 3 s); a dispatch-level wrap
+    // would hold the fleet-wide mutex across it. Every read and write of the
+    // claim stays inside that runExclusive.
+    blocking: true,
+    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED (a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it). When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim. With acceptsAccountSwitch (set only by the moe-account-switch mod), a seat holding no task whose Claude account must switch gets hasNext:false with accountSwitch instead of a claim and must end its turn.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -342,12 +410,18 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           type: 'string',
           description: 'Optional; send together with processStartedAt or not at all. The host the runner process runs on: supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 255 chars.'
         },
+        executionRoute: {
+          type: 'string',
+          enum: ['vm'],
+          description: 'Set only by a wrapper that runs the claimed WORKING/REVIEW session in a Moe VM (CQ-M07m/n). A verified-local WORKING or REVIEW task is refused (explicit taskId) or skipped (ranked pool) without it. It can only refuse: it never grants readiness or skips another check.'
+        },
         replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' },
         taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' },
         preferAdjacentInEpic: {
           type: 'boolean',
           description: 'When true (default), among claimable tasks of EQUAL priority prefer those in the worker\'s current/last epic. A higher-priority task in another epic always wins. Lets a worker waiting on wait_for_task pick up the next claimable task in the same epic.'
-        }
+        },
+        acceptsAccountSwitch: ACCEPTS_ACCOUNT_SWITCH
       },
       required: ['statuses'],
       additionalProperties: false
@@ -371,6 +445,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           processStartedAt?: unknown;
           host?: unknown;
           workerType?: unknown;
+          executionRoute?: unknown;
+          acceptsAccountSwitch?: unknown;
         };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
@@ -379,6 +455,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // Refused here, before any other check or write, so a claim with a
         // malformed identity assigns nobody (see readProcessIdentity).
         const identity = readProcessIdentity(params.processStartedAt, params.host);
+        // Same rule for the VM-route marker: INVALID_INPUT before any write. It is
+        // read only by executionAdmissionRefusal and can only add a refusal.
+        const executionRoute = parseExecutionRoute(params.executionRoute);
+        // The no-match wait hints echo the marker so a hint-following VM seat waits marked.
+        const routeArg = executionRoute ? { executionRoute } : {};
 
         if (!state.project) {
           throw invalidState('StateManager', 'unloaded', 'loaded');
@@ -425,6 +506,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // above, and never creating a record: auto-registration stays on a
         // successful claim.
         await refreshWorkerType(state, params.workerId, params.workerType);
+        await endReloadHold(state, params.workerId);
 
         // One task per worker: a worker already holding an active task
         // (PLANNING/WORKING/REVIEW/BLOCKED — see workerStore's active set) must
@@ -459,9 +541,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // task-scoped third-party hold in the claim path below keeps every
           // other seat off that row (explicit-taskId refusal, ranked-pool skip —
           // util/claimEligibility.ts), as qa_approve's hold keeps approval off it.
-          const finalizing = listAttempts(state).find(
-            (a) => a.workerId === params.workerId && a.phase === 'finalizing'
-          );
+          const finalizing = ownFinalizingAttempt(state, params.workerId);
           if (finalizing) {
             throw attemptFinalizingRefusal({
               attemptId: finalizing.id,
@@ -469,6 +549,25 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               taskId: finalizing.taskId,
               workerId: finalizing.workerId,
             });
+          }
+
+          // A seat between tasks whose Claude account must switch (the
+          // moe-account-switch mod sets the flag on a session that ends
+          // itself) claims nothing: a new task would run on the spent account.
+          // After every answer above, so a held task's resume or refusal wins
+          // (idleSwitchFor is null while the seat holds one), and before any
+          // ranking or write. No nextAction: a claim or wait hint would put the
+          // next task on that account; the relaunched session claims it.
+          const change = params.acceptsAccountSwitch === true ? idleSwitchFor(state, params.workerId) : null;
+          if (change) {
+            logger.info({ workerId: params.workerId, to: change.to }, 'Claim skipped: Claude account switch due');
+            return {
+              hasNext: false,
+              accountSwitch: accountSwitchReply(
+                change,
+                `Claim nothing more and end your turn now: Moe restarts this seat on ${change.toLabel}, and the new session claims the next task.`
+              ),
+            };
           }
         }
 
@@ -516,7 +615,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // open or close and worker registration. Not inside a workerId block,
           // and no exemption for an own-seat resume: the predicate itself reads
           // the caller's own open attempt (util/claimEligibility.ts).
-          const admission = executionAdmissionRefusal(state, requested, params.workerId);
+          const admission = executionAdmissionRefusal(state, requested, params.workerId, executionRoute);
           if (admission) throw admission;
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
@@ -574,7 +673,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // matcher, and SKIPPED, never refused, for the finalizing hold's
             // reason: a thrown refusal here reads to the sh wrapper as a dead
             // daemon. Only an explicit-taskId claim names why.
-            .filter((t) => !executionAdmissionRefusal(state, t, params.workerId))
+            .filter((t) => !executionAdmissionRefusal(state, t, params.workerId, executionRoute))
             // Approved-plan reuse (CQ-C07): a PLANNING row whose current approved
             // plan awaits its source assessment is withheld from planners, and
             // evaluating it starts that assessment outside the lock
@@ -612,7 +711,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           hasNext: false,
           nextAction: {
             tool: 'moe.wait_for_task',
-            args: { statuses, workerId: params.workerId, epicId: params.epicId },
+            args: { statuses, workerId: params.workerId, epicId: params.epicId, ...routeArg },
             reason: 'No claimable task right now; block until one appears.'
           }
         };
@@ -776,7 +875,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           hasNext: false,
           nextAction: {
             tool: 'moe.wait_for_task',
-            args: { statuses, workerId: params.workerId, epicId: params.epicId },
+            args: { statuses, workerId: params.workerId, epicId: params.epicId, ...routeArg },
             reason: 'All candidate tasks were taken by concurrent workers; wait and retry.'
           }
         };
@@ -784,8 +883,9 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
 
       // Record firstClaimAt the first time a worker picks this task up, so
       // budget/aggregate metrics can compute wall-clock duration. Idempotent:
-      // we never overwrite an existing timestamp.
-      if (!task.metrics?.firstClaimAt) {
+      // we never overwrite an existing timestamp. A peek (no workerId) claimed
+      // nothing, so it stamps nothing: wall-clock starts at the real claim.
+      if (params.workerId && !task.metrics?.firstClaimAt) {
         const nextMetrics = { ...(task.metrics ?? {}), firstClaimAt: new Date().toISOString() };
         try {
           task = await state.updateTask(task.id, { metrics: nextMetrics }, undefined, params.workerId);
@@ -797,7 +897,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       // and a failure of it, like of the post, is swallowed (the claim already
       // wrote its assignment and attempt). We post a heads-up to #workers if
       // there's any overlap, @mentioning the seats live on a colliding peer and
-      // the claimer so they can coordinate before either lands.
+      // the claimer so they can coordinate before either lands. The exceptions
+      // are worktree mode: worktreeOnlyCollision (the claimer and every live peer
+      // each run in their own worktree) and controlSeatClaim (a REVIEW/PLANNING
+      // seat lands nothing from the control checkout). Neither has anything to
+      // coordinate, so nothing is posted and no seat is paged.
       // Append-only files (CHANGELOG.md by default) are filtered out so the
       // expected shared-file overlap doesn't drown the real ones. `??` — never
       // `||` — because an explicit `[]` deliberately disables suppression.
@@ -808,16 +912,25 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       } catch (error) {
         logger.warn({ error, taskId: task.id }, 'claim_next_task: file-collision scan failed; claim continues');
       }
-      if (fileCollision.length > 0) {
+      // A peek still reports fileCollision in its answer, but pages nobody.
+      if (params.workerId && fileCollision.length > 0) {
         try {
-          await state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId));
+          if (worktreeOnlyCollision(state, claimedAttempt, fileCollision) || controlSeatClaim(state, task)) {
+            logger.info(
+              { taskId: task.id, peers: fileCollision.map((c) => c.task) },
+              'claim_next_task: worktree-mode file collision; no #workers heads-up'
+            );
+          } else {
+            await state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId));
+          }
         } catch { /* never block tool */ }
       }
 
-      // Post system message to #general so the team sees who claimed it
+      // Post system message to #general so the team sees who claimed it. The
+      // title is agent text, echoed without parsing mentions out of it.
       if (params.workerId) {
         try {
-          await state.postToGeneral(`${params.workerId} claimed task: ${task.title}`);
+          await state.postToGeneral(`${params.workerId} claimed task: ${task.title}`, { parseMentions: false });
         } catch { /* never block tool */ }
       }
 

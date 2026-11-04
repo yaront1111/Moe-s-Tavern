@@ -1,26 +1,27 @@
 // Copy-only transfer of one SourceSnapshot (CQ-R09b's {version: 1, base, overlay} shape) into an owned guest over the
-// protected supervisor's stdin (CQ-R09c). Every guest byte is untrusted. `multipass exec --no-map-working-directory`
-// maps no host directory (the exec.cpp note in guest-readiness.mjs), so the only host bytes that reach the guest are
-// the frames written here, and no mount or transfer subcommand is ever run. Mounts are checked before and after.
+// protected supervisor's stdin (CQ-R09c). Every guest byte is untrusted. Every transfer runs over the pinned OpenSSH
+// client to the guest's forced-command supervisor (guest-stream.mjs: -T, no forwarding, CQ-R14d1), never over
+// `multipass exec` stdio and never with a fallback to it, so the only host bytes that reach the guest are the frames
+// written here, and no mount or transfer subcommand is ever run. Mounts are checked before and after.
 // This is local transfer logic, not isolation certification: executionReady is false and verified-local stays
 // unavailable. installAgents (CQ-R10d3) streams the cache-verified agent CLIs the same way, into the 'agents' mode.
 // installToolchain (CQ-R11e2) copies the pinned check toolchain the same way, still copy-only and mount-checked.
-import { spawn as spawnProcess } from 'node:child_process';
+// resetWorkspace (CQ-M07f) clears a reused VM's workspace and session homes through the 'reset' mode, mount-checked too.
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { AGENT_CLIS, fetchAgentBinary } from './agent-cache.mjs';
-import { GUEST_LAYOUT } from './guest-bootstrap.mjs';
 import { createFrameDecoder, encodeFrame, MAX_GUEST_FRAME_BYTES } from './guest-bridge.mjs';
 import { mountFailure, readGuestInfo, runGuestProbe } from './guest-readiness.mjs';
+import { openGuestStream } from './guest-stream.mjs';
 import { isOwnedInstanceName } from './lifecycle.mjs';
 import { validateImport } from './source-snapshot.mjs';
 
 // Raw bytes per data frame: base64 makes 1,398,104 characters, inside MAX_HOST_FRAME_BYTES with its JSON envelope.
 export const SNAPSHOT_CHUNK_BYTES = 1_048_576;
 export const MAX_TOOLCHAIN_BYTES = 134_217_728;
-const MODES = ['materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies'];
+const MODES = ['materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies', 'reset'];
 const MAX_TIMEOUT_MS = 600_000;
 const CONTROL = /[\x00-\x1f\x7f]/;
 // Fixed text only: a message never carries a path, guest text or snapshot byte.
@@ -34,7 +35,11 @@ const MESSAGES = {
   TRANSFER_FRAME_INVALID: 'The guest supervisor sent a malformed or unexpected frame.',
   TRANSFER_DIGEST_MISMATCH: 'The guest materialized a different snapshot digest.',
   TRANSFER_TOOLCHAIN_MISMATCH: 'The cached toolchain no longer matches its pin.',
+  TRANSFER_RESET_BUSY: 'The guest still runs a job identity process; its workspace was not reset.',
 };
+// The only exit status mapped to anything but TRANSFER_EXIT_FAILED: the reset mode's 69 (EX_UNAVAILABLE). Internal, so
+// no caller can map an exit (ssh's 255 included) to a supervisor outcome.
+const RESET_EXITS = Object.freeze({ 69: 'TRANSFER_RESET_BUSY' });
 const isRecord = value => value !== null && typeof value === 'object'
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 
@@ -64,12 +69,6 @@ export function workspaceEntries(snapshot) {
   return validateImport([...merged.values()].map(({ path, executable, data }) => ({ kind: 'file', path, executable, data })));
 }
 
-// The one Multipass argv per direction, mirroring bridgeArgv: every element but the validated owned name is constant.
-export function snapshotArgv(name, mode) {
-  if (!isOwnedInstanceName(name) || !MODES.includes(mode)) throw transferError('TRANSFER_INPUT_INVALID');
-  return Object.freeze(['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', GUEST_LAYOUT.supervisor, mode]);
-}
-
 // Zero Multipass mounts and no host-sharing filesystem in mountinfo, by R07's rule. Provider and lifecycle failures
 // propagate with their own fixed codes.
 export async function assertNoMounts(name, provider = {}) {
@@ -93,32 +92,39 @@ export function* hostFrames({ entries, digest }) {
   yield encodeFrame({ kind: 'end' });
 }
 
-// Every input is checked before any provider call or spawn.
-function streamOptions({ name, mode, provider = {}, timeoutMs = 120_000, input = [], onFrame }) {
-  const argv = snapshotArgv(name, mode);
-  const { executable = 'multipass', spawn = spawnProcess } = isRecord(provider) ? provider : { spawn: null };
-  if (typeof executable !== 'string' || executable.trim() === '' || CONTROL.test(executable) || typeof spawn !== 'function'
+// Every input here is checked before any provider call or spawn. The ssh client and keyDir are openGuestStream's,
+// refused after the mount check but still before any spawn, as TRANSFER_SPAWN_FAILED.
+// exits is RESET_EXITS for the reset mode, from resetWorkspace alone; any other value a caller supplies is refused.
+function streamOptions({ name, mode, provider = {}, timeoutMs = 120_000, input = [], onFrame, exits }) {
+  if (!isOwnedInstanceName(name) || !MODES.includes(mode)) throw transferError('TRANSFER_INPUT_INVALID');
+  if (exits !== undefined && !(exits === RESET_EXITS && mode === 'reset')) throw transferError('TRANSFER_INPUT_INVALID');
+  // executable drives only info and the mount probes; the stream itself is ssh (provider.ssh, keyDir, spawn).
+  const { executable = 'multipass', spawn } = isRecord(provider) ? provider : { spawn: null };
+  if (typeof executable !== 'string' || executable.trim() === '' || CONTROL.test(executable)
+    || (spawn !== undefined && typeof spawn !== 'function')
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS
     || typeof input !== 'object' || input === null || (typeof input[Symbol.asyncIterator] !== 'function' && typeof input[Symbol.iterator] !== 'function')
     || typeof onFrame !== 'function') {
     throw transferError('TRANSFER_INPUT_INVALID');
   }
-  return { argv, executable, spawn, timeoutMs, input, onFrame };
+  return { name, mode, provider, timeoutMs, input, onFrame, exits };
 }
 
 /**
  * One supervisor session in `mode`: writes the input frame Buffers to its stdin in order with backpressure, then ends
  * it, and passes each decoded guest frame to the synchronous onFrame. Resolves only after all input was written, a
  * clean stdout EOF and provider exit 0 within timeoutMs. Any other outcome kills the provider and rejects with a fixed
- * TRANSFER_* code; an error thrown by onFrame is rejected unchanged. provider: {executable = 'multipass', spawn}.
+ * TRANSFER_* code; an error thrown by onFrame is rejected unchanged.
+ * provider: {executable = 'multipass', run, spawn, ssh, keyDir}; executable and run serve info only (openGuestStream).
  */
 export async function runSupervisorStream(options) {
   return supervise(streamOptions(isRecord(options) ? options : {}));
 }
 
-function supervise({ argv, executable, spawn, timeoutMs, input, onFrame }) {
+async function supervise({ name, mode, provider, timeoutMs, input, onFrame, exits }) {
   let child;
-  try { child = spawn(executable, argv, { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); } catch { child = null; }
+  // A transport refusal (before any spawn) or a spawn throw is TRANSFER_SPAWN_FAILED. There is no exec stdio fallback.
+  try { child = await openGuestStream({ name, mode, provider }); } catch { child = null; }
   if (typeof child?.kill !== 'function' || ![child, child.stdin, child.stdout, child.stderr].every(item => typeof item?.on === 'function')) {
     throw transferError('TRANSFER_SPAWN_FAILED');
   }
@@ -138,7 +144,10 @@ function supervise({ argv, executable, spawn, timeoutMs, input, onFrame }) {
     const timer = setTimeout(() => finish(transferError('TRANSFER_TIMEOUT')), timeoutMs);
     child.on('error', () => finish(transferError('TRANSFER_SPAWN_FAILED')));
     child.on('close', code => {
-      if (code !== 0 || !state.fed) finish(transferError('TRANSFER_EXIT_FAILED'));
+      // ssh's own 255 (connect, auth, host-key mismatch, remote signal death) is TRANSFER_EXIT_FAILED like any non-zero
+      // exit: no supervisor code is ever derived from an exit status (ruling condition 5, task-fd196d13), except the
+      // reset mode's own 69 through the internal RESET_EXITS.
+      if (code !== 0 || !state.fed) finish(transferError(exits !== undefined && Object.hasOwn(exits, code) ? exits[code] : 'TRANSFER_EXIT_FAILED'));
       else finish(state.ended ? null : transferError('TRANSFER_FRAME_INVALID'));
     });
     child.stdin.on('error', () => {}); // a gone guest: its exit decides the outcome
@@ -254,6 +263,25 @@ export async function verifyWorkspace({ name, provider = {}, timeoutMs } = {}) {
   const options = streamOptions({ name, mode: 'verify', provider, timeoutMs, input: [], onFrame });
   await transfer(name, provider, options, () => changed !== null);
   return changed === 0 ? 'intact' : 'changed';
+}
+
+/**
+ * Returns a seat's reused VM to a clean workspace between jobs through the supervisor's root-only 'reset' mode
+ * (CQ-M07f): the guest removes its workspace, the workspace manifest and every per-job session home, never the
+ * toolchain, agent binaries, dependencies or bootstrap files. Sends no input, refuses unless the guest shows no mount
+ * before and after, and accepts only one {kind: 'reset'} frame. Exit 69, a live job identity process (nothing
+ * removed), is TRANSFER_RESET_BUSY; every other non-zero exit, ssh's 255 included, is TRANSFER_EXIT_FAILED. Over
+ * openGuestStream like every transfer, with no fallback. It does not decide when reset runs (CQ-M07j).
+ */
+export async function resetWorkspace({ name, provider = {}, timeoutMs } = {}) {
+  let reset = false;
+  const onFrame = frame => {
+    if (reset || frame.kind !== 'reset' || Object.keys(frame).join() !== 'kind') throw transferError('TRANSFER_FRAME_INVALID');
+    reset = true;
+  };
+  const options = streamOptions({ name, mode: 'reset', provider, timeoutMs, input: [], onFrame, exits: RESET_EXITS });
+  await transfer(name, provider, options, () => reset);
+  return 'reset';
 }
 
 // Host frames for the pinned binaries ({cli, file, sha256, size}): per binary its agent header, then its file's bytes as

@@ -37,7 +37,7 @@ import type {
 } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
 import { assertExecutionProfileReady, EXECUTION_PROFILES, resolveExecutionProfile } from '../delivery/executionProfile.js';
-import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
+import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_FILES, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { normalizeAffectedFile, normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
@@ -128,6 +128,14 @@ export const MAX_CONTRACT_LIST_ITEMS = 50;
 export const MAX_CONTRACT_ITEM_CHARS = 1000;
 
 export const MAX_REQUIRED_CHECKS = 20;
+/**
+ * Most steps one plan may hold. moe.submit_plan refuses more, taskSizing's
+ * warnSteps/maxSteps validate up to it, and sanitizeImplementationPlan keeps
+ * exactly this many on every write and reload. One number, like the step caps
+ * in util/planSize, so no accepted plan loses its tail on the next write: the
+ * sanitizer used to keep 50 while submit_plan accepted 100.
+ */
+export const MAX_PLAN_STEPS = 100;
 export const MAX_REQUIRED_CHECK_PATHS = 50;
 export const MAX_REQUIRED_CHECK_COMMAND_CHARS = 1000;
 const CHECK_PATH_KINDS = ['configs', 'scripts', 'assertionRoots'] as const;
@@ -222,6 +230,45 @@ export function validateExecutionContract(value: unknown, fieldName = 'execution
   return Object.keys(contract).length ? contract : undefined;
 }
 
+export const MAX_PLANNING_NOTE_CHARS = 5000;
+export const MAX_PLANNING_KEY_FILES = 50;
+export const MAX_PLANNING_KEY_FILE_CHARS = 1000;
+const PLANNING_NOTE_TEXT_FIELDS = ['approachesConsidered', 'codebaseInsights', 'risks'] as const;
+
+export interface PlanningNotes {
+  approachesConsidered?: string;
+  codebaseInsights?: string;
+  risks?: string;
+  keyFiles?: string[];
+}
+
+/**
+ * submit_plan's planningNotes, checked like the execution contract: a wrong
+ * type, an unknown key or an over-limit value is refused INVALID_INPUT, and
+ * nothing is clipped or coerced. Absent or null means no notes.
+ */
+export function validatePlanningNotes(value: unknown, fieldName = 'planningNotes'): PlanningNotes | undefined {
+  if (value === undefined || value === null) return undefined;
+  const input = requirePlainObject(value, fieldName);
+  rejectUnknownFields(input, [...PLANNING_NOTE_TEXT_FIELDS, 'keyFiles'], fieldName);
+  const notes: PlanningNotes = {};
+  for (const key of PLANNING_NOTE_TEXT_FIELDS) {
+    const item = input[key];
+    if (item === undefined || item === null) continue;
+    notes[key] = validateStringValue(item, `${fieldName}.${key}`, { maxLength: MAX_PLANNING_NOTE_CHARS, allowEmpty: true, allowNewlines: true });
+  }
+  const files = input.keyFiles;
+  if (files !== undefined && files !== null) {
+    if (!Array.isArray(files)) throw invalidInput(`${fieldName}.keyFiles`, 'must be an array of strings');
+    if (files.length > MAX_PLANNING_KEY_FILES) {
+      throw invalidInput(`${fieldName}.keyFiles`, `must contain ${MAX_PLANNING_KEY_FILES} items or fewer`);
+    }
+    notes.keyFiles = Array.from(files, (file, index) =>
+      validateStringValue(file, `${fieldName}.keyFiles[${index}]`, { maxLength: MAX_PLANNING_KEY_FILE_CHARS }));
+  }
+  return notes;
+}
+
 export function validateBooleanValue(value: unknown, fieldName: string): boolean {
   if (typeof value !== 'boolean') {
     throw invalidInput(fieldName, 'must be a boolean');
@@ -290,9 +337,19 @@ export function validatePatternSetting(value: unknown, fieldName: string): strin
 // Worktree contract: epic-dce3a64f §7.1/§2.7. Mode/path are pinned; target is live.
 const WORKTREE_MODES: readonly WorktreeMode[] = ['off', 'on'];
 
-export function resolveWorktreeMode(settings?: { worktreeMode?: unknown } | null): WorktreeMode {
+/**
+ * The one place the worktreeMode default lives (WT-19, decision dec-eb7b8337 (b)).
+ * A stored 'off'/'on' is honored as written; any other stored value, null
+ * included, is INVALID_INPUT and never read as the default. An unset key is
+ * 'on' only when qualityGate is a string that is non-blank after trim (the
+ * wrappers' own gate test), else 'off': a worktree landing moves the target
+ * only after the gate (epic rail 1), so a gate-less project keeps shared mode.
+ */
+export function resolveWorktreeMode(settings?: { worktreeMode?: unknown; qualityGate?: unknown } | null): WorktreeMode {
   const mode = settings?.worktreeMode;
-  return mode === undefined ? 'off' : validateEnumValue(mode, 'worktreeMode', WORKTREE_MODES);
+  if (mode !== undefined) return validateEnumValue(mode, 'worktreeMode', WORKTREE_MODES);
+  const gate = settings?.qualityGate;
+  return typeof gate === 'string' && gate.trim() !== '' ? 'on' : 'off';
 }
 
 export function resolveWorktreeTarget(settings?: { consolidationBranch?: unknown } | null): string {
@@ -477,10 +534,10 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     ], 'taskSizing setting');
     const merged: NonNullable<ProjectSettings['taskSizing']> = { ...(next.taskSizing || {}) };
     if (incoming.warnSteps !== undefined) {
-      merged.warnSteps = validateIntegerValue(incoming.warnSteps, 'taskSizing.warnSteps', 1, 100);
+      merged.warnSteps = validateIntegerValue(incoming.warnSteps, 'taskSizing.warnSteps', 1, MAX_PLAN_STEPS);
     }
     if (incoming.maxSteps !== undefined) {
-      merged.maxSteps = validateIntegerValue(incoming.maxSteps, 'taskSizing.maxSteps', 1, 100);
+      merged.maxSteps = validateIntegerValue(incoming.maxSteps, 'taskSizing.maxSteps', 1, MAX_PLAN_STEPS);
     }
     if (incoming.warnDistinctFiles !== undefined) {
       merged.warnDistinctFiles = validateIntegerValue(incoming.warnDistinctFiles, 'taskSizing.warnDistinctFiles', 1, 100);
@@ -762,7 +819,7 @@ export function sanitizeStepAmendments(value: unknown): StepAmendment[] {
 export function sanitizeImplementationPlan(plan: unknown): ImplementationStep[] {
   if (!Array.isArray(plan)) return [];
   const VALID_STEP_STATUSES = ['PENDING', 'IN_PROGRESS', 'COMPLETED'];
-  const capped = plan.slice(0, 50);
+  const capped = plan.slice(0, MAX_PLAN_STEPS);
   const result: ImplementationStep[] = [];
   for (const step of capped) {
     if (!step || typeof step !== 'object') continue;
@@ -775,9 +832,9 @@ export function sanitizeImplementationPlan(plan: unknown): ImplementationStep[] 
       // between those sizes was persisted cut mid-sentence on the next write.
       description: s.description.slice(0, MAX_STEP_DESCRIPTION_CHARS),
       status: (typeof s.status === 'string' && VALID_STEP_STATUSES.includes(s.status) ? s.status : 'PENDING') as StepStatus,
-      affectedFiles: Array.isArray(s.affectedFiles) ? (s.affectedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [],
-      ...(s.newFiles !== undefined ? { newFiles: Array.isArray(s.newFiles) ? (s.newFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
-      ...(s.modifiedFiles !== undefined ? { modifiedFiles: Array.isArray(s.modifiedFiles) ? (s.modifiedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
+      affectedFiles: Array.isArray(s.affectedFiles) ? (s.affectedFiles as string[]).filter(f => typeof f === 'string').slice(0, MAX_STEP_FILES) : [],
+      ...(s.newFiles !== undefined ? { newFiles: Array.isArray(s.newFiles) ? (s.newFiles as string[]).filter(f => typeof f === 'string').slice(0, MAX_STEP_FILES) : [] } : {}),
+      ...(s.modifiedFiles !== undefined ? { modifiedFiles: Array.isArray(s.modifiedFiles) ? (s.modifiedFiles as string[]).filter(f => typeof f === 'string').slice(0, MAX_STEP_FILES) : [] } : {}),
       ...(typeof s.note === 'string' ? { note: s.note.slice(0, MAX_STEP_NOTE_CHARS) } : {}),
       ...(typeof s.startedAt === 'string' ? { startedAt: s.startedAt } : {}),
       ...(typeof s.completedAt === 'string' ? { completedAt: s.completedAt } : {}),

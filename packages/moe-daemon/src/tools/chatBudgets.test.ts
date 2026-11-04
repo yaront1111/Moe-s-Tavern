@@ -5,6 +5,8 @@ import { chatResyncTool } from './chatResync.js';
 import { chatSendTool } from './chatSend.js';
 import { chatWaitTool } from './chatWait.js';
 import { MoeErrorCode } from '../util/errors.js';
+import { chatMessageResponseCost, MAX_CHAT_RESPONSE_CHARS } from '../util/chatPayload.js';
+import type { ChatMessage } from '../types/schema.js';
 import path from 'path';
 
 // These tests deliberately live together rather than in chatRead/chatWait/
@@ -163,6 +165,59 @@ describe('chat token budgets', () => {
     expect(result.messages[0].content.length).toBeLessThanOrEqual(1000);
     expect(result.messages[0].contentTruncated).toBe(true);
     expect(result.truncated).toBe(20);
+  });
+
+  describe('chat_resync total response budget', () => {
+    interface ResyncResult { messagesCount: number; messages: ChatMessage[] }
+    const cost = (messages: ChatMessage[]): number =>
+      messages.reduce((total, message) => total + chatMessageResponseCost(message, 0), 0);
+    // 40 x 9,000 chars is ~369,000 chars: far over the budget, so only the newest few fit.
+    const postBig = async (channel: string): Promise<string[]> => {
+      const ids: string[] = [];
+      for (let i = 0; i < 40; i++) {
+        const { message } = await h.state.sendMessage({ channel, sender: 'human', content: `${i} ${'x'.repeat(9000)}` });
+        ids.push(message.id);
+      }
+      return ids;
+    };
+
+    it('caps chat_resync at the total response budget, keeping the newest messages', async () => {
+      const channel = await setupChat();
+      const posted = await postBig(channel);
+
+      const oracle = await chatReadTool(h.state).handler(
+        { channel, limit: 40, maxContentChars: 0 }, h.state
+      ) as { messages: ChatMessage[] };
+      const result = await chatResyncTool(h.state).handler(
+        { workerId: 'worker-chat', channel, limit: 40, maxContentChars: 0 }, h.state
+      ) as ResyncResult;
+
+      expect(cost(result.messages)).toBeLessThanOrEqual(MAX_CHAT_RESPONSE_CHARS);
+      // The same newest window chat_read keeps under the same budget.
+      expect(result.messages.map((m) => m.id)).toEqual(oracle.messages.map((m) => m.id));
+      expect(result.messages.length).toBeGreaterThan(0);
+      expect(result.messages.length).toBeLessThan(40);
+      const lastId = result.messages[result.messages.length - 1].id;
+      expect(lastId).toBe(posted[39]);
+      expect(result.messagesCount).toBe(result.messages.length);
+      // The cursor points at the newest message actually returned, not past a dropped one.
+      expect(h.state.getWorker('worker-chat')?.chatCursors?.[channel]).toBe(lastId);
+    });
+
+    it('caps the all-channel window too, keeping the newest messages', async () => {
+      const channel = await setupChat();
+      const posted = await postBig(channel);
+
+      const result = await chatResyncTool(h.state).handler(
+        { workerId: 'worker-chat', limit: 40, maxContentChars: 0 }, h.state
+      ) as ResyncResult;
+
+      expect(cost(result.messages)).toBeLessThanOrEqual(MAX_CHAT_RESPONSE_CHARS);
+      expect(result.messages.length).toBeGreaterThan(0);
+      expect(result.messages.length).toBeLessThan(40);
+      expect(result.messages[result.messages.length - 1].id).toBe(posted[39]);
+      expect(h.state.getWorker('worker-chat')?.chatCursors?.[channel]).toBe(posted[39]);
+    });
   });
 
   it('chat_wait fires on ANY message in subscribed channels (no mention required)', async () => {

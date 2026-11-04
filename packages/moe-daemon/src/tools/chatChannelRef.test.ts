@@ -18,9 +18,13 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { StateManager } from '../state/StateManager.js';
-import { chatWaitTool } from './chatWait.js';
+import { activeChatWaiters, chatWaitTool } from './chatWait.js';
 import { chatReadTool } from './chatRead.js';
 import { chatSendTool } from './chatSend.js';
+import { chatWhoTool } from './chatWho.js';
+import { chatJoinTool } from './chatJoin.js';
+import { chatResyncTool } from './chatResync.js';
+import { MoeErrorCode } from '../util/errors.js';
 import type { ChatMessage, Worker } from '../types/schema.js';
 
 const WORKER_ID = 'governor-ref';
@@ -47,6 +51,21 @@ describe('chat tools accept a channel name as well as an id', () => {
     chatReadTool(state).handler(args, state) as Promise<ReadResult>;
   const send = (args: Record<string, unknown>): Promise<unknown> =>
     chatSendTool(state).handler(args, state);
+  const who = async (args: Record<string, unknown>): Promise<Array<{ workerId: string; source: string }>> => {
+    const { online } = await chatWhoTool(state).handler(args, state) as {
+      online: Array<{ workerId: string; source: string }>;
+    };
+    return online;
+  };
+  const join = (args: Record<string, unknown>): Promise<{ channel: string; channelName: string }> =>
+    chatJoinTool(state).handler(args, state) as Promise<{ channel: string; channelName: string }>;
+  const resync = (args: Record<string, unknown>): Promise<{ messagesCount: number; messages: Array<{ id: string }> }> =>
+    chatResyncTool(state).handler(args, state) as Promise<{ messagesCount: number; messages: Array<{ id: string }> }>;
+  // The system join lines chat_join has posted for WORKER_ID in a channel.
+  const joinLines = async (name: string): Promise<string[]> =>
+    (await state.getMessages(channels[name], { limit: 200 }))
+      .filter((m) => m.sender === 'system' && m.content === `${WORKER_ID} joined #${name}`)
+      .map((m) => m.id);
 
   const post = async (channel: string, content: string, sender = 'human'): Promise<ChatMessage> => {
     const { message } = await state.sendMessage({ channel, sender, content });
@@ -73,7 +92,8 @@ describe('chat tools accept a channel name as well as an id', () => {
       id: WORKER_ID,
       type: 'CLAUDE',
       projectId: 'proj-test',
-      epicId: null,
+      epicId: '',
+      teamId: null,
       currentTaskId: null,
       status: 'IDLE',
       branch: 'main',
@@ -193,6 +213,131 @@ describe('chat tools accept a channel name as well as an id', () => {
 
       const stored = await state.getMessages(channels.general, { limit: 10 });
       expect(stored.find((m) => m.content === 'child')?.replyTo).toBe(parent.id);
+    });
+  });
+
+  describe('moe.chat_who', () => {
+    afterEach(() => {
+      for (const waiter of activeChatWaiters.values()) clearTimeout(waiter.timer);
+      activeChatWaiters.clear();
+    });
+
+    it('lists the same seats for a channel id, its bare name and "#name"', async () => {
+      await post(channels.general, 'governor online');
+      // chat_read saves the cursor under the canonical id: that is the key chat_who matches.
+      await read({ channel: channels.general, workerId: WORKER_ID });
+
+      const ids = (await who({ channel: channels.general })).map((o) => o.workerId);
+      expect(ids).toEqual([WORKER_ID]);
+      expect((await who({ channel: 'general' })).map((o) => o.workerId)).toEqual(ids);
+      expect((await who({ channel: '#general' })).map((o) => o.workerId)).toEqual(ids);
+      // A channel the seat never read lists nobody: the filter is not a no-op.
+      expect(await who({ channel: '#governors' })).toEqual([]);
+    });
+
+    it('matches a chat_wait waiter on a name against the canonical ids in its channel set', async () => {
+      activeChatWaiters.set(WORKER_ID, {
+        resolve: () => {}, unsubscribe: () => {}, timer: setTimeout(() => {}, 60_000),
+        channels: new Set([channels.governors]),
+      });
+
+      expect((await who({ channel: '#governors' })).map((o) => [o.workerId, o.source]))
+        .toEqual([[WORKER_ID, 'waiting']]);
+      expect(await who({ channel: '#general' })).toEqual([]);
+    });
+
+    it('still lists every online seat when the channel is omitted or empty', async () => {
+      expect((await who({})).map((o) => o.workerId)).toEqual([WORKER_ID]);
+      expect((await who({ channel: '' })).map((o) => o.workerId)).toEqual([WORKER_ID]);
+    });
+
+    it('refuses a channel that does not exist, even for an all-channel waiter', async () => {
+      activeChatWaiters.set(WORKER_ID, {
+        resolve: () => {}, unsubscribe: () => {}, timer: setTimeout(() => {}, 60_000), channels: null,
+      });
+
+      await expect(who({ channel: '#no-such-channel' })).rejects.toMatchObject({ code: MoeErrorCode.NOT_FOUND });
+    });
+
+    it('refuses a non-string channel as INVALID_INPUT', async () => {
+      await expect(who({ channel: 5 })).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+    });
+  });
+
+  describe('moe.chat_join', () => {
+    it('joins "#general" and posts its join line in #general', async () => {
+      const result = await join({ channel: '#general', workerId: WORKER_ID });
+
+      expect(result.channel).toBe(channels.general);
+      expect(result.channelName).toBe('general');
+      expect(await joinLines('general')).toHaveLength(1);
+    });
+
+    it('is idempotent across the id, the bare name and "#name"', async () => {
+      // The marker is the same text whichever form joined first, so a join made
+      // by id before this change still counts as a membership.
+      await join({ channel: channels.general, workerId: WORKER_ID });
+      await join({ channel: 'general', workerId: WORKER_ID });
+      const third = await join({ channel: '#general', workerId: WORKER_ID });
+
+      expect(third.channel).toBe(channels.general);
+      expect(await joinLines('general')).toHaveLength(1);
+    });
+
+    it('refuses a channel that does not exist and posts nothing', async () => {
+      const before = (await state.getMessages(channels.general, { limit: 200 })).length;
+
+      await expect(join({ channel: '#nope', workerId: WORKER_ID })).rejects.toMatchObject({ code: MoeErrorCode.NOT_FOUND });
+
+      expect((await state.getMessages(channels.general, { limit: 200 })).length).toBe(before);
+    });
+
+    it('refuses a non-string channel as INVALID_INPUT', async () => {
+      await expect(join({ channel: 5, workerId: WORKER_ID })).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+    });
+  });
+
+  describe('moe.chat_resync', () => {
+    it('resyncs "#general": resets the cursor keyed by the id, then sets it again', async () => {
+      const first = await post(channels.general, 'first');
+      const second = await post(channels.general, 'second');
+      const governorMsg = await post(channels.governors, 'elsewhere');
+      await read({ channel: channels.general, workerId: WORKER_ID });
+      await read({ channel: channels.governors, workerId: WORKER_ID });
+      expect(state.getWorker(WORKER_ID)?.chatCursors?.[channels.general]).toBe(second.id);
+      const updateWorker = vi.spyOn(state, 'updateWorker');
+
+      const result = await resync({ workerId: WORKER_ID, channel: '#general' });
+
+      expect(result.messages.map((m) => m.id)).toEqual([first.id, second.id]);
+      expect(result.messagesCount).toBe(2);
+      // First write clears #general's cursor, keyed by the id; the second sets it again.
+      const writes = updateWorker.mock.calls.map((c) => c[1].chatCursors as Record<string, string>);
+      expect(writes).toHaveLength(2);
+      expect(channels.general in writes[0]).toBe(false);
+      expect(writes[0][channels.governors]).toBe(governorMsg.id);
+      expect(writes[1][channels.general]).toBe(second.id);
+      const cursors = state.getWorker(WORKER_ID)?.chatCursors ?? {};
+      expect(cursors[channels.general]).toBe(second.id);
+      expect(cursors['#general']).toBeUndefined();
+      expect(cursors[channels.governors]).toBe(governorMsg.id);
+    });
+
+    it('refuses a channel that does not exist and leaves every cursor alone', async () => {
+      await post(channels.general, 'first');
+      await read({ channel: channels.general, workerId: WORKER_ID });
+      const before = structuredClone(state.getWorker(WORKER_ID)?.chatCursors);
+      expect(before?.[channels.general]).toBeDefined();
+      const updateWorker = vi.spyOn(state, 'updateWorker');
+
+      await expect(resync({ workerId: WORKER_ID, channel: '#nope' })).rejects.toMatchObject({ code: MoeErrorCode.NOT_FOUND });
+
+      expect(updateWorker).not.toHaveBeenCalled();
+      expect(state.getWorker(WORKER_ID)?.chatCursors).toEqual(before);
+    });
+
+    it('refuses a non-string channel as INVALID_INPUT', async () => {
+      await expect(resync({ workerId: WORKER_ID, channel: 5 })).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
     });
   });
 });

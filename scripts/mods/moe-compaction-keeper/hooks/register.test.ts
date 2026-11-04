@@ -13,10 +13,26 @@ const TASK = {
   ],
   rejectionDetails: { issues: [{ type: 'test_failure', file: 'src/Login.test.ts', line: 12, description: 'empty password not covered' }] },
 }
+const AMEND = { reason: 'r', amendedBy: 'architect', amendedAt: '2026-11-03T00:00:00.000Z' }
+const AMENDED = {
+  id: 'task-amd', title: 'Amended plan', status: 'WORKING', reopenCount: 0,
+  implementationPlan: [
+    {
+      stepId: 'step-1', status: 'IN_PROGRESS', description: 'Original step text',
+      amendments: [{ amendmentId: 'amend-1', description: 'Amended step text', ...AMEND }], activeAmendmentId: 'amend-1',
+    },
+    {
+      stepId: 'step-2', status: 'PENDING', description: 'Dangling original',
+      amendments: [{ amendmentId: 'amend-1', description: 'Not in force', ...AMEND }], activeAmendmentId: 'amend-9',
+    },
+  ],
+}
 const FILES: Record<string, string> = {
   [`${ROOT}/.moe/workers/worker-1.json`]: JSON.stringify({ currentTaskId: 'task-abc' }),
   [`${ROOT}/.moe/workers/worker-2.json`]: JSON.stringify({ currentTaskId: null }),
+  [`${ROOT}/.moe/workers/worker-3.json`]: JSON.stringify({ currentTaskId: 'task-amd' }),
   [`${ROOT}/.moe/tasks/task-abc.json`]: JSON.stringify(TASK),
+  [`${ROOT}/.moe/tasks/task-amd.json`]: JSON.stringify(AMENDED),
 }
 const SEAT = { MOE_WORKER_ID: 'worker-1', MOE_PROJECT_PATH: ROOT }
 
@@ -59,6 +75,22 @@ test('a seat gets Moe instructions and the task snapshot after the summary', asy
   expect(note).toContain('Last QA rejection: Tests missing for empty password')
   expect(note).toContain('- [test_failure] src/Login.test.ts:12 empty password not covered')
   expect(note).toContain('moe.get_context {"taskId":"task-abc"}')
+})
+
+test('a step shows the amendment in force, not the text it replaced', async ($, on) => {
+  mock.env(on, { ...SEAT, MOE_WORKER_ID: 'worker-3' })
+  engine(on)
+  const note = (await compact($))[1] ?? ''
+  expect(note).toContain('- step-1 IN_PROGRESS: Amended step text')
+  expect(note).not.toContain('Original step text')
+})
+
+test('a dangling activeAmendmentId keeps the original text', async ($, on) => {
+  mock.env(on, { ...SEAT, MOE_WORKER_ID: 'worker-3' })
+  engine(on)
+  const note = (await compact($))[1] ?? ''
+  expect(note).toContain('- step-2 PENDING: Dangling original')
+  expect(note).not.toContain('Not in force')
 })
 
 test('outside a Moe seat the compaction is untouched', async ($, on) => {

@@ -15,61 +15,101 @@
     {
       "stepId": "step-1",
       "description": "1. Implement read-only board tree construction with tests first (DoD 1–2,4). After WT-11 lands, add new self-contained `board_snapshot CONTROL_TOP TASK_ID STATUS` / `Invoke-MoeBoardSnapshot -Top ... -TaskId ... -Status ...`, using the same small inline Node program in both wrappers (node stdin script, values in argv; never splice values into executable source). Existing Node is already required; avoid a new asset/manifest. Worktree-mode control root must be the verified repository root, never W; no nested-project support is added. Use a private temp directory/index OUTSIDE .moe, child-process argv arrays, and Git env with inherited GIT_INDEX_FILE/GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR removed and only the owned GIT_INDEX_FILE set. Read refs/moe/board: genuine absent ref => empty index; existing ref must resolve to a valid commit, other Git errors => skip. Seed temp index from old tree, not main. Allow only regular `.moe/tasks/*.json`, `.moe/epics/*.json`, `.moe/project.json` (flat canonical daemon records); never runtime subdirectories, non-JSON files, symlink/junction escapes or an unexpected non-board parent-tree entry. Read each file to a Buffer once, validate UTF-8/JSON from that captured content, then persist exactly that Buffer to an owned temp copy for Git hashing. Never parse then git-add the mutable source. Invalid/unreadable/changed-during-read files keep their old index entry (new invalid files remain absent), with a bounded escaped log naming each path; do not log content. Refuse/retain unsafe links, checking the input directories too. Confirmed deletions absent from a successfully enumerated directory and still missing at recheck remove only that prior index entry; ENOENT after a file was enumerated is a raced read, so retain it. Directory read failure skips the snapshot rather than deleting an entire subtree. Hash captured temp copies with `git hash-object -w --no-filters -- <args>` in modest argv batches (e.g. 32 paths for Windows command-line bounds), then update the private index with NUL-delimited index-info; board files use 100644. Example invariant:\n```js\nconst bytes = fs.readFileSync(file);\nJSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));\n// Only bytes captured above may be hashed, never a second read of file.\n```\nTwin helper-level tests prove valid full board + byte-exact Unicode/CRLF content, invalid old/new JSON behavior, no external/runtime paths, confirmed deletion vs failed directory/read, and unchanged control index plus recursive .moe content/mtime signatures. Run read-only assertions around the snapshot helper itself, not around fake-daemon RPCs that legitimately mutate fixture state.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Read-only board tree construction. Both wrappers carry one identical inline Node program between the markers '// moe board snapshot program' and '// end of the moe board snapshot program': sh board_snapshot_node (heredoc MOE_WT_BOARD_JS), ps1 Invoke-MoeBoardSnapshot ($js literal here-string, ASCII-only for the 5.1 pipe).\n- Inherited GIT_DIR/WORK_TREE/INDEX_FILE/COMMON_DIR/OBJECT_DIRECTORY/... are stripped. The private index and temp copies live in an os.tmpdir() mkdtemp dir that is removed in finally.\n- The parent comes from refs/moe/board^{commit}; only 100644 board entries are kept and any other parent entry is dropped.\n- Only .moe/project.json, .moe/tasks/*.json and .moe/epics/*.json, as regular files. A linked or junction directory, or an unreadable one, skips the snapshot (MOE_BOARD_SNAPSHOT_SKIPPED); an absent directory keeps its entries.\n- Each file is read once into a Buffer and validated (lstat before and after the read: ino, size, mtime). UTF-8 fatal decode plus JSON.parse run on that Buffer. The blob id is computed in-process, and only changed buffers are written to owned temp copies, then hash-object -w --no-filters --stdin-paths; a mismatched id throws.\n- Torn, unreadable, raced or link files keep the parent blob (a new one stays out) and are named, escaped, in MOE_BOARD_FILE_KEPT.\n- A deletion counts only when the name is absent from a successful readdir and an lstat recheck returns ENOENT.\n\nScope note: the tests live in scripts/tests/postflight-worktree.cjs, the one shared worktree suite that both postflight.sh (l.1257) and postflight.ps1 (l.1238) run, as WT-07/08/11 did. postflight.sh/.ps1 themselves are unchanged.\n\nNew cases:\n- board-snapshot: helper level, under core.autocrlf=true. Byte-exact CRLF/UTF-8 blobs; non-board, runtime, subdir, tmp and txt paths excluded; unchanged board writes no commit; torn old/new; deletion; linked dir skips. A .moe and control-index signature (paths, modes, sizes, mtimes, bytes, the index file, refs/heads, HEAD) is unchanged.\n- board-race, board-push and wt-board: see steps 2-3.\n- wt-control-seats: QA now writes refs/moe/board, architect does not.\n\nRED, against the pre-change wrappers: all 4 new cases and wt-control-seats failed for the expected reason. GREEN on bash: 6/6 ok.\n\nMutants, all killed: no --no-filters, 1 attempt, no delete, follow link, drop torn, --force push, commit unchanged.\n\nEdits made with the Edit tool (the global rail) rather than an mv-swap. Dirty paths from other sessions (.moe/roles, .moe/skills, .moe/tasks, .moe/decisions) were left untouched.",
+      "startedAt": "2026-11-02T13:59:48.620Z",
+      "completedAt": "2026-11-02T14:06:16.265Z"
     },
     {
       "stepId": "step-2",
       "description": "2. Publish only the board ref with bounded CAS and best-effort push (DoD 2–3). In each of at most three attempts, reread the current board tip and rebuild from that parent's tree so invalid-file fallbacks come from the winner, not a stale old snapshot. `write-tree`; if equal to parent's tree (or empty tree when unborn and no board data), create no commit/ref. Otherwise `commit-tree TREE -p OLD` (omit parent when unborn), message exactly `board: <taskId> <status>`, then `update-ref refs/moe/board NEW OLD` with the all-zero old OID for first creation. Git errors are not proof the ref is unborn. On CAS loss, retry from the newly read parent; exhaustion or tree/commit/ref operational failure emits MOE_BOARD_SNAPSHOT_SKIPPED and returns a non-fatal snapshot result. Never invoke hooks, reset an index, checkout a ref, or move main/task/control branches. A successful snapshot (or an existing unchanged board ref) may attempt `git push origin refs/moe/board:refs/moe/board` once, never force/rebase; failure/no remote emits MOE_BOARD_UNPUSHED and keeps local board history. Do not fetch/merge remote board divergence or change task receipt/ledger state. Give subprocess calls finite time/output bounds, dispose only owned temp resources in finally, and make JSON/filesystem/Git exceptions take the same non-fatal error handling path. Tests in both harnesses cover initial parentless commit, subsequent exact parent/message, unchanged board no new commit, one CAS race then success, three CAS losses with competing commits preserved, injected write-tree/commit-tree failure, and rejected/unreachable push with local ref retained. Assert main/task refs and source bytes stay unchanged in every helper-only scenario.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Publishing only the board ref (in the same shared program as step 1).\n- At most 3 attempts. Each one re-reads the tip with `rev-parse -q --verify refs/moe/board`: exit 1 means unborn, any other failure throws.\n- Each attempt rebuilds on that tip's tree, so a torn file falls back to the winner's blob.\n- A tree equal to the parent's tree, or no board at all on an unborn ref, writes nothing.\n- Otherwise `commit-tree TREE [-p OLD] -m 'board: <task> <status>'` (control chars become '?'), then `update-ref -m <msg> refs/moe/board NEW OLD`.\n  - For first creation OLD is the empty string, which git documents as \"must not exist\". It is equivalent to the all-zero OID and also safe on sha256 (verified: a second create fails \"reference already exists\").\n- Exhaustion, and any write-tree/commit-tree/ls-tree/hash-object failure, end in one `[WARN] MOE_BOARD_SNAPSHOT_SKIPPED: <why>`, exit 0.\n- No hooks run: commit-tree and update-ref run none, and the push uses --no-verify. No index reset, no checkout, no branch moves.\n- Push: once, after a snapshot or an unchanged existing ref, as plain `git push --no-verify origin refs/moe/board:refs/moe/board` (120s timeout, GIT_TERMINAL_PROMPT=0).\n  - With no origin: `[info] MOE_BOARD_UNPUSHED: no origin remote`.\n  - A rejected or unreachable push prints `[WARN] MOE_BOARD_UNPUSHED: <the rejected/fatal line>` and keeps the local ref.\n- No fetch, no merge, no ledger change. Every git call has a 60s timeout (push 120s) and maxBuffer 256 MiB.\n- The temp dir is removed in finally.\n\nTests:\n- board-race (a --require shim on child_process.spawnSync lands competitor commits right before update-ref):\n  - 1 loss, then success on the winner;\n  - 3 losses keep all competitors chained, the ref stays the last one, and SKIPPED is printed;\n  - fail-write-tree and fail-commit-tree each print SKIPPED with the ref unchanged.\n- board-push:\n  - pushed when it fast-forwards;\n  - a divergent origin is rejected, prints UNPUSHED, and leaves both the local and remote refs as they were (no force);\n  - an unreachable origin prints UNPUSHED and keeps the local ref.\n- snap() now asserts the read-only signature (.moe bytes/modes/mtimes, the control index file, refs/heads, HEAD) around every helper run.\n\nResults:\n- bash: board-snapshot, board-race and board-push ok.\n- Windows node.exe, ps1 platform, PS 5.1: wt-control-seats, board-snapshot, board-race, board-push, wt-board and codes, 6 ok, 0 failed (EXIT=0).",
+      "startedAt": "2026-11-02T14:06:26.747Z",
+      "completedAt": "2026-11-02T14:08:02.681Z"
     },
     {
       "stepId": "step-3",
       "description": "3. Wire snapshots only into worktree-mode post-flight (DoD 1,4–5). Reuse the landed wrapper's effective mode and canonical control-root resolution. Call the helper once after confirmed completion L12, never before publication or while its result is unknown; snapshot after task-bound QA post-flight as well (QA remains in control and need not own W), including approval and rejection board updates. No taskless notification run, worker checkpoint, failed/unpublished completion, or shared-mode path gains a snapshot. Gate it on existing settings.commitBoardState, default true; false does not invoke the helper or push. Pass actual task id/status read for that post-flight. Snapshot and push failure cannot alter LAND_OUTCOME/the PS result, ledger/finalization, task branch sync, or release cleanup; no board commit is reported as a task completion. Keep existing shared BOARD attribution untouched. Add twin end-to-end postflight cases: worktree completion C changes no .moe path while refs/moe/board contains the control records; QA post-flight refreshes the ref; false setting leaves board ref absent/unchanged; injected snapshot/push failures still leave the completion truthfully landed. Reuse existing fake proxy without changing it; helper-level cases supply their own static board fixtures. Record all actual changed files only, retain existing shared BOARD tests and held-out worktree-landing tests byte-for-byte.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Wiring, worktree mode only.\n- sh worktree_postflight / ps1 Invoke-MoeWorktreePostflight: right after land_worktree_completion / Invoke-MoeWorktreeCompletion returns with outcome committed (L12 done in wt_land_published) or nothing, call board_snapshot / Invoke-MoeBoardSnapshot with $PREFLIGHT_TASK_ID / $preflightTaskId and the post-flight status.\n  - failed, refused, unknown-push and unlanded outcomes never call it.\n- sh control_seat_postflight / ps1 Invoke-MoeControlSeatPostflight: when the role is qa, call it after the nothing row, with the post-flight status.\n  - This runs for approve and reject alike, and QA needs no W.\n  - Architect seats do not snapshot.\n- The gate is autoCommit && commitBoardState (both default on). With false, the helper and the push never run.\n- The helper's output is printed only. LAND_OUTCOME, the PS $res, the ledger, finalize, the task-branch sync and the lease release are all done before it runs, and it changes none of them.\n- The board commit is never a record_commit row.\n- Shared mode cannot reach it: both call sites are in the worktree and control-seat arms only. The shared BOARD tier code is unchanged, and postflight.sh/.ps1 are unchanged.\n\nTests:\n- wt-board, end-to-end on both harnesses:\n  1. A completion: C changes no .moe path; refs/moe/board's tree equals the control's task, epic and project.json blobs; the message is 'board: task-postflight REVIEW'; the completion row is committed.\n  2. A QA DONE post-flight adds a commit (parent = 1, 'board: … DONE').\n  3. commitBoardState=false: the ref is unchanged and no MOE_BOARD_ or board line is printed.\n  4. refs/moe/board pointing at a blob: a completion still lands (committed row, finalize landed, exit 0), prints SKIPPED, and the ref stays.\n- wt-checkpoint and wt-fails (4 failure modes) now assert that no board ref is written.\n\nMutants in a scratch snapshot, all killed:\n- no setting gate (wt-board);\n- snapshot on any outcome (wt-fails);\n- no QA call (wt-control-seats, wt-board).\n\nbash results: wt-checkpoint, wt-completion, wt-fails, wt-unlanded and wt-board, 5/5 ok.\n\nThe diff vs HEAD is +374/-8 (net 366) over 3 files.",
+      "startedAt": "2026-11-02T14:08:12.310Z",
+      "completedAt": "2026-11-02T14:11:22.637Z"
     },
     {
       "stepId": "step-4",
       "description": "4. Single final verification gate. From root run exactly `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`. Require safe failureClass NONE, held-out cases green, parity PASS and exit 0. On native Windows run `node scripts/tests/postflight-safe.mjs powershell` on the identical revision; PS5.1 is required, skips/unavailable engines are not success. Compare sorted grep -oE sets for `MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]+` between wrappers. Preserve safe-output handling; never expose raw postflight fixture logs. Load regression-check/verification-before-completion and retain fresh command, exitCode, safe outputTail and Windows results for complete_task. The held-out scripts are prerequisite outputs not new/edit targets; compare to WT-08T's landed version read-only. No full unrelated daemon/plugin gate or docs sweep in this mid-epic slice.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Gate run fresh from the root on one revision. Blobs: sh f3691313, ps1 7e47cecb, cjs 545cc402; no edits after 14:08Z, so both runs saw the same bytes.\n- `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh` exited 0 (14:13:40 to 14:37:17Z).\n  - safe: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n  - worktree-landing: 18 passed, 0 failed, 0 errors.\n  - PASS parity-check.sh\n- Native Windows (Windows node.exe, Windows PowerShell 5.1): `node scripts/tests/postflight-safe.mjs powershell` exited 0 (14:13:42 to 14:45:13Z): {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}. failureClass NONE also means no SKIP lines.\n- Wrapper code sets: the sorted grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]+' sets are identical in sh and ps1, 28 codes each (new: MOE_BOARD_FILE_KEPT, MOE_BOARD_SNAPSHOT_SKIPPED, MOE_BOARD_UNPUSHED).\n- Held-out scripts/tests/worktree-landing.sh and .ps1 are byte-identical to HEAD (WT-08T's 8ad04de7).\n- Raw fixture logs were never exposed; only the safe JSON summaries were read.",
+      "startedAt": "2026-11-02T14:13:12.211Z",
+      "completedAt": "2026-11-02T14:45:42.927Z"
     },
     {
       "stepId": "step-5",
       "description": "5. Final adversarial self-review, once. Load adversarial-self-review. Attack parse→read races, unreadable directories looking deleted, invalid JSON during daemon writes, symlink/junction substitution, untracked runtime files, hostile path/newline characters, CRLF/filter conversion, corrupt parent ref, two simultaneous snapshotters and remote rejection. Assert every hashed blob comes from the exact parsed Buffer; an uncertain read preserves its latest-parent blob; every retry recomputes against the actual latest board ref; .moe content/mtimes and real indexes are untouched; no main write/force push/rollback can occur. Confirm the two embedded programs are equivalent, source/control root is used not W, QA needs no W, false commitBoardState causes no work, and board errors never rewrite task delivery success. Keep <=400 net LOC without dropping the requested tests. Preserve PS BOM/CRLF and atomic Bash save requirements. If fixes arise refresh the same gate, then complete via Moe with accurate modifiedFiles and fresh evidence; wrapper owns Git writes. Docs remain WT-17/18.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Adversarial self-review, done once over `git diff -- scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs`. No defects found, so no code changed and the step-4 gate evidence stands for the same bytes (sh f3691313, ps1 7e47cecb, cjs 545cc402).\n\nChecked and holding:\n- Parse→read races: one read into a Buffer, with lstat before and after (ino, size, mtime) and length checks; the blob id is hashed in-process from those exact bytes, and git hash-object of an owned temp copy (--no-filters) must agree.\n- An uncertain read (link, not a regular file, torn, not UTF-8 or not JSON, ENOENT) keeps the parent blob and is named in MOE_BOARD_FILE_KEPT.\n- An unreadable directory throws, so the snapshot is SKIPPED and nothing reads as deleted. A deletion needs absence from a successful readdir plus an ENOENT recheck.\n- A link or junction for .moe, tasks or epics: SKIPPED.\n- Daemon atomic-write temps end in `.tmp`, so the `*.json` filter excludes them. The runtime dirs are never read.\n- Hostile names: update-index -z, a [\\s\\S] ls-tree parse, and esc/ascii in the log. The commit message strips control characters.\n- CRLF: --no-filters, tested with autocrlf=true.\n- A corrupt parent (blob ref) leads to SKIPPED while the landing stays landed (tested).\n- Each of the 3 CAS attempts re-reads the tip and rebuilds (race1 and race3 tested).\n- Remote rejection: a plain push, never --force, gives MOE_BOARD_UNPUSHED (tested). --no-verify matches the plan's \"Never invoke hooks\"; the agent git guard is not inherited (agent_git_exec subshell only).\n- The sig check asserts .moe content and mtimes and the real index are untouched around every run.\n- The two programs are asserted identical. Root is $PROJECT/$projectPath, set only at startup; no W reference. QA needs no W.\n- commitBoardState=false or autoCommit=false returns before node.\n- board_snapshot always returns 0, touches no LAND_* state, and the ps1 result is discarded via $null.\n- 366 net LOC. ps1 BOM kept and 0 CR, as at HEAD.\n\nTheoretical only, not fixed:\n(a) Swapping a parent directory for a link between lstat and readdir needs a hostile writer inside the trusted control checkout.\n(b) A board ref that diverged on origin (another machine) stays MOE_BOARD_UNPUSHED; the plan forbids fetch and merge.\n(c) A file that vanishes between readdir and read is kept, named (ENOENT), and dropped by the next snapshot.\n(d) A lost CAS leaves unreferenced objects for gc.\n(e) The push is bounded at 120s.\n(f) Under PS 5.1 an empty TaskId would be dropped from native argv. That path is unreachable: post-flight runs only with a non-empty preflight task id (ps1 l.9886, sh l.10567).",
+      "startedAt": "2026-11-02T14:46:03.733Z",
+      "completedAt": "2026-11-02T14:46:30.816Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,15 +119,27 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
-    "task-dd1ee586b90d4fc785434454b1423e76",
     "task-aa85ff13a8894913ae34242dbab6f395"
   ],
   "priority": "MEDIUM",
   "order": 19,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-106ee4a35a3f4ad58845e21e49610ec0",
+      "author": "governor-e6b40560",
+      "content": "GOVERNOR: review overlap, approved by the human (\"yes overlap the review, go faster\").\n\nAs soon as WT-11 (task-dd1ee586b90d4fc785434454b1423e76) enters REVIEW with its completion landed, the governor removes this row's dependsOn on WT-11 so a coder can start while WT-11 is still in QA.\n- **Build on WT-11's landed bytes.** Edit from HEAD, which contains WT-11's completion commit.\n- **If QA rejects WT-11 while you're working:** keep going on this row and don't touch WT-11's fix. The governor makes WT-11's rework wait until this row lands. If the reject reason changes a WT-11 contract you consume, say so in your step note.\n- Nothing in the plan changes.",
+      "timestamp": "2026-11-02T09:33:19.752Z"
+    },
+    {
+      "id": "comment-19acb00b0b954803bb31a339669cf7bb",
+      "author": "governor-e6b40560",
+      "content": "Governor, 14:48Z, for the QA who claims this row. Overlap step 2 has fired: WT-13 (task-fbe8e388) no longer depends on this row and is claimable. WT-13 edits moe-agent.sh/ps1 and the postflight tests live in the shared checkout.\n\n1. **Verify only in a git-archive snapshot of this row's completion 1f9950ee** (382 net without board json, under the cap), never the shared tree.\n2. **Expect MOE_CONTESTED_HELD/EDITING on WT-13's paths** at your QA-exit checkpoint. That is benign: WT-13's live hunks stay out.\n3. **If you reject with a byte change,** say so in the reject. The governor then adds this row's dependsOn on WT-13, so the rework waits for WT-13 to land.",
+      "timestamp": "2026-11-02T14:47:46.254Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:55:13.075Z",
-  "updatedAt": "2026-10-30T13:54:14.830Z",
+  "updatedAt": "2026-11-02T15:25:17.352Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:14.897Z",
@@ -96,16 +148,27 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:46:49.924Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T15:24:21.933Z",
+    "wallClockMs": 265052009
   },
   "contextFetchedBy": [
-    "architect-76a2c8bb"
+    "architect-76a2c8bb",
+    "worker-b49a5155",
+    "qa-1106e678"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:54:14.805Z",
   "planningNotes": {
@@ -126,5 +189,242 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T13:54:14.830Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T13:59:48.620Z",
+  "reviewStartedAt": "2026-11-02T14:47:01.461Z",
+  "verification": {
+    "command": "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nPASS parity-check.sh\nEXIT=0\n--- native Windows (PS 5.1): node scripts/tests/postflight-safe.mjs powershell -> {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null} EXIT=0",
+    "reportedAt": "2026-11-02T14:47:01.461Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-worktree.cjs",
+    ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+    ".moe/tasks/task-3c4850819cad458d9edb59809d00e400.json",
+    ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
+    ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+    ".moe/tasks/task-76d4500abc1047d5b51d63f2a2dc92bc.json",
+    ".moe/tasks/task-83515358babb403480bbef769d9726f2.json",
+    ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+    ".moe/tasks/task-d2a3532ec05c49d384214ae15b01ba7e.json",
+    ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
+  ],
+  "completionSummary": "WT-12: board history snapshots on refs/moe/board. Twin helpers: sh board_snapshot (board_snapshot_node) and ps1 Invoke-MoeBoardSnapshot. Both embed one identical Node program, and the tests assert the two copies are equal.\n- Reads: .moe/project.json, .moe/tasks/*.json and .moe/epics/*.json in the control root. Each file is one Buffer read with lstat before and after, a fatal UTF-8 decode and JSON.parse. Exactly those bytes are hashed; hash-object runs with --no-filters on a private index in a temp dir.\n- Invalid, torn or link files keep the parent blob and are named in MOE_BOARD_FILE_KEPT. Deletion needs a successful readdir plus an ENOENT recheck; a linked or unreadable dir skips the snapshot.\n- Writes: commit-tree -p tip ('board: <task> <status>'), then an update-ref CAS with 3 attempts; exhaustion or any error prints MOE_BOARD_SNAPSHOT_SKIPPED. An unchanged tree writes no commit. A plain push follows (no force, no hooks); a rejection or failure prints MOE_BOARD_UNPUSHED.\n- Wiring: after a worktree completion landing whose outcome is committed or nothing, and after a QA control-seat post-flight. Gated by autoCommit and commitBoardState. Shared mode is unchanged. The snapshot never alters the landing outcome.\n- Tests in postflight-worktree.cjs, run by both postflight harnesses:\n  - new cases: board-snapshot, board-race, board-push, wt-board;\n  - updated: wt-control-seats, wt-checkpoint, wt-fails.\n  - Every run asserts .moe content and mtimes and the real index are unchanged.\n  - RED was shown before the change; 10 mutants were killed.\n- Net 366 LOC. ps1 BOM kept, 0 CR.\n- Verification, same bytes:\n  - bash safe gate: NONE, last scenario Z.\n  - worktree-landing: 18/18.\n  - parity-check: PASS.\n  - Native Windows `node scripts/tests/postflight-safe.mjs powershell` (PS 5.1): failureClass NONE, exit 0.\n  - The MOE_(WORKTREE|LAND|CONTROL|BOARD)_ code sets are identical in both wrappers (28 codes).\n  - Held-out worktree-landing.sh and .ps1 are unchanged from WT-08T.\n- Theo",
+  "commits": [
+    {
+      "sha": "1f9950ee0540bc53654ca27723e078bcf6ac1849",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T13:49:28Z",
+      "paths": [
+        ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T14:47:24.474Z",
+      "treeId": "0e96bfd1bf2115019fc1711893e69ed29a7d7318",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ec65308e1d7132db564e9926c342eacff8e4fe08",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T14:47:45Z",
+      "paths": [
+        ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+        ".moe/tasks/task-3c4850819cad458d9edb59809d00e400.json",
+        ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
+        ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+        ".moe/tasks/task-76d4500abc1047d5b51d63f2a2dc92bc.json",
+        ".moe/tasks/task-83515358babb403480bbef769d9726f2.json",
+        ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+        ".moe/tasks/task-d2a3532ec05c49d384214ae15b01ba7e.json",
+        ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T15:25:17.352Z",
+      "treeId": "61484e2e8e441d0e7c5fbd6336bd5676e35d33a9",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-23c803d2ec834496a730b00524f44e0b"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-253884005a59471fb7c59ef38e1f3cc1"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-31187ec10ae54dd2b03f4c166f083f31"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-3ad573a754574dfd92083b2e813c0bff"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-3def080415d3495a8557b514d6a0ab2a"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-408a0ac1524b4ab4a6418dd741b53d8d"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-414eae5aa1f349f49852bf01f4e617db"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-4fdc7590cd054a45a379c477ffe45ac7"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-62ec51f179494706a39045154d07e544"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-64809b196c4042f18c7665e1e8a14b18"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-65b3e023923e4ab6b71cb94e7bea2f9b"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-69c024444381492c85878307df40c6e2"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-76ae5c472f6a4651a45478b1893e07dc"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-b6a3d41e365445629f73ff17bd379f13"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-befdddf7e1f047a0ba4f71dd900c9b8f"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-d861f3de0d62437a964a83011e8c7def"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-f622843305224cf49ca24478b26c3351"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-faa4d9ef330f4ef7900a00bd2b7dc049"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-253884005a59471fb7c59ef38e1f3cc1"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-31187ec10ae54dd2b03f4c166f083f31"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-3954cc09f74045a0ac8fa4b795dcb0a9"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-3def080415d3495a8557b514d6a0ab2a"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-414eae5aa1f349f49852bf01f4e617db"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-5adf0673fdad4c5f8a0956e7afcebe07"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-64809b196c4042f18c7665e1e8a14b18"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-69c024444381492c85878307df40c6e2"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-828e7d21602e4cf2a0f242e024db7dea"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-91ee455a601b411f97d5d951cc5f241c"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-b6a3d41e365445629f73ff17bd379f13"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-befdddf7e1f047a0ba4f71dd900c9b8f"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-faa4d9ef330f4ef7900a00bd2b7dc049"
+        },
+        {
+          "path": "scripts/tests/postflight-worktree.cjs",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/tests/postflight-worktree.cjs",
+          "taskId": "task-31187ec10ae54dd2b03f4c166f083f31"
+        },
+        {
+          "path": "scripts/tests/postflight-worktree.cjs",
+          "taskId": "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T14:47:45Z",
+    "at": "2026-11-02T15:25:17.352Z"
+  },
+  "completedAt": "2026-11-02T15:24:21.933Z",
+  "reviewCompletedAt": "2026-11-02T15:24:21.933Z",
+  "reviewSummary": "Reviewed completion 1f9950ee (on moe/work-2026-10-24 + origin, pushed; the only commit for the row). Diff 3 non-board files +374/-8 = 366 net (<400). Verified in git-archive snapshots of 1f9950ee, never the shared tree: blobs sh f3691313, ps1 7e47cecb, cjs 545cc402.\nRe-ran: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh` EXIT=0 (14:52-15:12Z): safe NONE/Z, worktree-landing 18/18, parity PASS. Native Windows node.exe `postflight-safe.mjs powershell` (PS 5.1) NONE/Z exit 0 (14:52-15:23Z).\nDoD: 1 wt-board (board tree = control tasks/epics/project.json blobs; C diff has no .moe path). 2 board-snapshot (torn old/new keep parent blob, named in MOE_BOARD_FILE_KEPT; unchanged board no commit). 3 board-race race3 SKIPPED with competitors kept; landing still counts shown end-to-end via the blob-ref SKIPPED case (same catch path, board_snapshot always returns 0); board-push UNPUSHED on reject/unreachable, no force. 4 wt-board-off, plus sig() around every helper run (.moe bytes/modes/mtimes, index, heads, HEAD). 5 postflight.sh/.ps1 unchanged; held-out worktree-landing.sh/.ps1 byte-identical to 8ad04de7; 28 MOE_(WORKTREE|LAND|CONTROL|BOARD)_ codes identical; JS program byte-identical in both wrappers, ASCII-only, ps1 BOM kept, 0 CR.\nMutants (own sweep, unmutated control 7/7 ok): 13/14 sh killed by AssertionError at the target case (1 attempt, commit-unchanged, drop torn, force push, no delete, follow link, no CAS, no JSON.parse, any filename, any outcome, no setting gate, no completion call, architect snapshots); ps1 3/3 killed (no QA call, no setting gate, any outcome). Expected survivor: dropping the non-board parent-entry filter (no test seeds a foreign entry in refs/moe/board), a minor defensive gap, not a DoD item.\nRails: no main/branch write, no .moe write, shared mode untouched, parity held. Complexity: lean already.",
+  "requiredCheckAtDone": null
 }

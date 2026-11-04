@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
-import type { MoeStateSnapshot, Task, TaskComment } from '../types/moe';
+import type { ImplementationStep, MoeStateSnapshot, StepAmendment, Task, TaskComment } from '../types/moe';
 
 /**
  * Plan Review Panel - a webview panel for reviewing implementation plans
@@ -523,6 +523,12 @@ export class PlanReviewPanel implements vscode.Disposable {
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .step-amended {
+            margin-top: 4px;
+            font-size: 11px;
+            font-style: italic;
+            color: var(--vscode-descriptionForeground);
+        }
         .step-files {
             margin-top: 6px;
             font-size: 11px;
@@ -717,7 +723,7 @@ export class PlanReviewPanel implements vscode.Disposable {
         return `<ul class="dod-list">${items}</ul>`;
     }
 
-    private renderSteps(steps: Array<{ stepId: string; description: string; status: string; affectedFiles?: string[] }>): string {
+    private renderSteps(steps: ImplementationStep[]): string {
         if (steps.length === 0) {
             return '<p class="muted">No implementation steps defined</p>';
         }
@@ -739,7 +745,7 @@ export class PlanReviewPanel implements vscode.Disposable {
 
             return `<div class="step-card ${cssClass}">
                 <div class="step-header ${statusClass}">Step ${i + 1}: ${escapeHtml(status)}</div>
-                <div class="step-description">${escapeHtml(step.description)}</div>
+                ${stepTextHtml(step)}
                 ${filesHtml}
             </div>`;
         }).join('');
@@ -861,6 +867,34 @@ function escapeHtml(text: string): string {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+/**
+ * The amendment in force on a plan step: the entry `activeAmendmentId` names, never simply the
+ * latest. Mirrors activeAmendment in packages/moe-daemon/src/util/planAmendments.ts, whose text the
+ * plan revision (and so every approval) covers. .moe/tasks is hand-editable, so a blank, dangling or
+ * non-string id, a non-array `amendments`, or an entry without a string description all resolve to
+ * null. Never throws. media/planReview.js and media/taskDetail.js carry the same rule.
+ */
+export function activeStepAmendment(step: Pick<ImplementationStep, 'amendments' | 'activeAmendmentId'>): StepAmendment | null {
+    const id: unknown = step?.activeAmendmentId;
+    const list: unknown = step?.amendments;
+    if (typeof id !== 'string' || id.length === 0 || !Array.isArray(list)) { return null; }
+    const found = list.find(a => !!a && typeof a === 'object' && typeof a.description === 'string' && a.amendmentId === id);
+    return found ?? null;
+}
+
+/**
+ * A step's text in the panels' HTML: the active amendment's description (the text the approval
+ * revision covers), else the step's own, then an "Amended by" line whose tooltip keeps the
+ * original. Shared by PlanReviewPanel and TaskDetailPanel; every value is escaped.
+ */
+export function stepTextHtml(step: Pick<ImplementationStep, 'description' | 'amendments' | 'activeAmendmentId'>): string {
+    const amendment = activeStepAmendment(step);
+    if (!amendment) { return `<div class="step-description">${escapeHtml(step.description)}</div>`; }
+    const by = typeof amendment.amendedBy === 'string' && amendment.amendedBy.trim() ? amendment.amendedBy : 'unknown';
+    return `<div class="step-description">${escapeHtml(amendment.description)}</div>`
+        + `<div class="step-amended" title="${escapeHtml('Original step: ' + (step.description || ''))}">Amended by ${escapeHtml(by)}</div>`;
 }
 
 function isAgentAuthor(author: string | undefined): boolean {

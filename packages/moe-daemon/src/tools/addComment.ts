@@ -121,7 +121,8 @@ export function addCommentTool(_state: StateManager): ToolDefinition {
       const updated = await state.updateTask(
         params.taskId,
         { comments: boundedComments, hasPendingQuestion: false },
-        'TASK_COMMENT_ADDED'
+        'TASK_COMMENT_ADDED',
+        params.workerId
       );
 
       // Best-effort: the comment is already stored, so a chat failure is

@@ -32,6 +32,13 @@ export const DEFAULT_MAX_TASKS_PER_EPIC = 40;
 export const MAX_STEP_DESCRIPTION_CHARS = 10000;
 /** Longest complete_step note accepted; the sanitizer bounds at the same value. */
 export const MAX_STEP_NOTE_CHARS = 10000;
+/**
+ * Most paths one plan step's affectedFiles, newFiles or modifiedFiles may hold.
+ * submit_plan refuses more per list, complete_step refuses more modifiedFiles,
+ * and the plan sanitizer bounds each list at the same value, so no tool accepts
+ * a path the next write would silently drop.
+ */
+export const MAX_STEP_FILES = 50;
 
 export interface ResolvedTaskSizing {
   warnSteps: number;

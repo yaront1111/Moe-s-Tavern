@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "id": "S01",
+      "note": "launch then close deregisters the seat; it stays known until acked",
+      "persisted": [],
+      "events": [
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "closed", "workerId": "worker-aaaa1111" }
+      ],
+      "expectDeregistered": ["worker-aaaa1111"],
+      "expectPersisted": ["worker-aaaa1111"]
+    },
+    {
+      "id": "S02",
+      "note": "closing a seat that was never launched sends nothing",
+      "persisted": [],
+      "events": [
+        { "op": "closed", "workerId": "worker-zzzz9999" }
+      ],
+      "expectDeregistered": [],
+      "expectPersisted": []
+    },
+    {
+      "id": "S03",
+      "note": "a double close deregisters once",
+      "persisted": [],
+      "events": [
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "closed", "workerId": "worker-aaaa1111" },
+        { "op": "closed", "workerId": "worker-aaaa1111" }
+      ],
+      "expectDeregistered": ["worker-aaaa1111"],
+      "expectPersisted": ["worker-aaaa1111"]
+    },
+    {
+      "id": "S04",
+      "note": "connect with only open seats deregisters nothing",
+      "persisted": [],
+      "events": [
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "launched", "workerId": "qa-bbbb2222" },
+        { "op": "connect" }
+      ],
+      "expectDeregistered": [],
+      "expectPersisted": ["worker-aaaa1111", "qa-bbbb2222"]
+    },
+    {
+      "id": "S05",
+      "note": "a new session counts every persisted seat as gone and resends all of them on connect",
+      "persisted": ["worker-aaaa1111", "qa-bbbb2222"],
+      "events": [
+        { "op": "connect" }
+      ],
+      "expectDeregistered": ["worker-aaaa1111", "qa-bbbb2222"],
+      "expectPersisted": ["worker-aaaa1111", "qa-bbbb2222"]
+    },
+    {
+      "id": "S06",
+      "note": "an ack removes the seat from the saved list",
+      "persisted": [],
+      "events": [
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "closed", "workerId": "worker-aaaa1111" },
+        { "op": "acked", "workerId": "worker-aaaa1111" }
+      ],
+      "expectDeregistered": ["worker-aaaa1111"],
+      "expectPersisted": []
+    },
+    {
+      "id": "S07",
+      "note": "an ack for an unknown id changes nothing",
+      "persisted": ["worker-aaaa1111"],
+      "events": [
+        { "op": "acked", "workerId": "worker-zzzz9999" }
+      ],
+      "expectDeregistered": [],
+      "expectPersisted": ["worker-aaaa1111"]
+    },
+    {
+      "id": "S08",
+      "note": "launching the same id twice keeps one seat and one deregistration",
+      "persisted": [],
+      "events": [
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "closed", "workerId": "worker-aaaa1111" },
+        { "op": "closed", "workerId": "worker-aaaa1111" }
+      ],
+      "expectDeregistered": ["worker-aaaa1111"],
+      "expectPersisted": ["worker-aaaa1111"]
+    },
+    {
+      "id": "S09",
+      "note": "a close followed by a connect before any ack sends the still-known seat again",
+      "persisted": [],
+      "events": [
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "closed", "workerId": "worker-aaaa1111" },
+        { "op": "connect" }
+      ],
+      "expectDeregistered": ["worker-aaaa1111", "worker-aaaa1111"],
+      "expectPersisted": ["worker-aaaa1111"]
+    },
+    {
+      "id": "S10",
+      "note": "several seats with interleaved closes, connects and acks",
+      "persisted": [],
+      "events": [
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "launched", "workerId": "qa-bbbb2222" },
+        { "op": "launched", "workerId": "architect-cccc3333" },
+        { "op": "closed", "workerId": "qa-bbbb2222" },
+        { "op": "connect" },
+        { "op": "acked", "workerId": "qa-bbbb2222" },
+        { "op": "closed", "workerId": "worker-aaaa1111" },
+        { "op": "connect" },
+        { "op": "acked", "workerId": "worker-aaaa1111" }
+      ],
+      "expectDeregistered": ["qa-bbbb2222", "qa-bbbb2222", "worker-aaaa1111", "worker-aaaa1111"],
+      "expectPersisted": ["architect-cccc3333"]
+    },
+    {
+      "id": "S11",
+      "note": "a restart forgets which seats are open but keeps the deregistration log; a relaunch after it is open again",
+      "persisted": [],
+      "events": [
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "restart" },
+        { "op": "connect" },
+        { "op": "launched", "workerId": "worker-aaaa1111" },
+        { "op": "connect" }
+      ],
+      "expectDeregistered": ["worker-aaaa1111"],
+      "expectPersisted": ["worker-aaaa1111"]
+    },
+    {
+      "id": "S12",
+      "note": "a persisted seat is resent on connect until its ack, then never again",
+      "persisted": ["worker-aaaa1111"],
+      "events": [
+        { "op": "connect" },
+        { "op": "acked", "workerId": "worker-aaaa1111" },
+        { "op": "connect" }
+      ],
+      "expectDeregistered": ["worker-aaaa1111"],
+      "expectPersisted": []
+    }
+  ]
+}

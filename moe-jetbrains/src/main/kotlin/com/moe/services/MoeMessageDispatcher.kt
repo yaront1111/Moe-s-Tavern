@@ -11,6 +11,9 @@ import com.moe.model.Decision
 import com.moe.model.MetricsAggregate
 import com.moe.model.MoeState
 import com.moe.model.PinEntry
+import com.moe.model.ExecutionReadinessJson
+import com.moe.model.ReadinessFailure
+import com.moe.model.ReadinessReply
 import com.moe.util.MoeJson
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -22,7 +25,15 @@ class MoeMessageDispatcher(
     private val updateState: (MoeState) -> Unit,
     private val onProjectMismatch: () -> Unit,
     private val onDaemonShuttingDown: () -> Unit,
-    private val onWorkerDeregistered: (workerId: String) -> Unit = {}
+    private val onWorkerDeregistered: (workerId: String) -> Unit = {},
+    /** Called on the receiving thread (completing a future needs no EDT). */
+    private val onExecutionReadiness: (ReadinessReply) -> Unit = {},
+    /**
+     * The applied frame's top-level `boardVersion` (null: an older daemon's snapshot, or
+     * a board-unchanged frame that could not be applied). Called on the EDT right after
+     * updateState, so the stored version always belongs to the applied state.
+     */
+    private val onBoardVersion: (Long?) -> Unit = {}
 ) {
     private val log = Logger.getInstance(MoeMessageDispatcher::class.java)
     private val gson = Gson()
@@ -35,6 +46,18 @@ class MoeMessageDispatcher(
     /** Strict: a JSON string only. Never coerces a number and never throws on an object or array. */
     private fun JsonElement?.stringOrNull(): String? =
         if (this != null && this.isJsonPrimitive && this.asJsonPrimitive.isString) this.asString else null
+
+    /**
+     * A frame's top-level `boardVersion` (STATE_SNAPSHOT and every task/epic push): the daemon's
+     * board version once the frame is applied. Null from an older daemon.
+     */
+    private fun JsonObject.boardVersionOrNull(): Long? =
+        get("boardVersion")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong
+
+    /** An ERROR about a readiness request: its operation, or (older daemons, no operation) its message, names it. */
+    private fun isReadinessError(json: JsonObject): Boolean =
+        json.get("operation").stringOrNull() == READINESS_REQUEST ||
+            json.get("message").stringOrNull()?.contains(READINESS_REQUEST) == true
 
     fun addListener(listener: MoeStateListener) {
         if (isDisposed()) {
@@ -78,11 +101,14 @@ class MoeMessageDispatcher(
         when (type) {
             "STATE_SNAPSHOT" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
-                val newState = MoeJson.parseState(payload)
+                // A GET_STATE sent with ifBoardVersion equal to the daemon's board version
+                // is answered without "tasks"/"epics": the board the plugin holds is current.
+                val boardVersion = json.boardVersionOrNull()
+                val parsed = MoeJson.parseState(payload)
                 val basePath = project.basePath
-                if (basePath != null && newState.project.rootPath.isNotEmpty()) {
+                if (basePath != null && parsed.project.rootPath.isNotEmpty()) {
                     try {
-                        val rootPath = newState.project.rootPath
+                        val rootPath = parsed.project.rootPath
                         if (!MoeDaemonSupervisor.isSameProject(rootPath, basePath)) {
                             log.warn("STATE_SNAPSHOT project mismatch: expected $basePath, got $rootPath. Disconnecting.")
                             onProjectMismatch()
@@ -93,13 +119,27 @@ class MoeMessageDispatcher(
                     }
                 }
                 applyMessageOnEdt(type) {
+                    val newState = if (payload.has("tasks")) {
+                        parsed
+                    } else {
+                        val current = currentState()
+                        if (current == null) {
+                            log.debug("Ignoring board-unchanged STATE_SNAPSHOT because state is not initialized")
+                            onBoardVersion(null)
+                            return@applyMessageOnEdt
+                        }
+                        // Same list instances: the board's fingerprint cache keys on identity.
+                        parsed.copy(tasks = current.tasks, epics = current.epics)
+                    }
                     updateState(newState)
+                    onBoardVersion(boardVersion)
                     publishState(newState)
                 }
             }
             "TASK_UPDATED", "TASK_CREATED" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val task = MoeJson.parseTask(payload)
+                val boardVersion = json.boardVersionOrNull()
                 applyMessageOnEdt(type) {
                     val current = currentState()
                     if (current == null) {
@@ -117,6 +157,9 @@ class MoeMessageDispatcher(
                     }
                     val newState = current.copy(tasks = tasks)
                     updateState(newState)
+                    // An applied push leaves the board at the daemon's version: the next
+                    // poll answers "unchanged" instead of re-pulling it. Absent = old daemon.
+                    boardVersion?.let(onBoardVersion)
                     publishState(newState)
 
                     if (oldTask?.status != task.status) {
@@ -134,6 +177,7 @@ class MoeMessageDispatcher(
             "TASK_DELETED" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val task = MoeJson.parseTask(payload)
+                val boardVersion = json.boardVersionOrNull()
                 applyMessageOnEdt(type) {
                     val current = currentState()
                     if (current == null) {
@@ -143,12 +187,14 @@ class MoeMessageDispatcher(
                     val tasks = current.tasks.filter { it.id != task.id }
                     val newState = current.copy(tasks = tasks)
                     updateState(newState)
+                    boardVersion?.let(onBoardVersion)
                     publishState(newState)
                 }
             }
             "EPIC_UPDATED", "EPIC_CREATED" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val epic = MoeJson.parseEpic(payload)
+                val boardVersion = json.boardVersionOrNull()
                 applyMessageOnEdt(type) {
                     val current = currentState()
                     if (current == null) {
@@ -158,12 +204,14 @@ class MoeMessageDispatcher(
                     val epics = current.epics.filter { it.id != epic.id } + epic
                     val newState = current.copy(epics = epics)
                     updateState(newState)
+                    boardVersion?.let(onBoardVersion)
                     publishState(newState)
                 }
             }
             "EPIC_DELETED" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val epic = MoeJson.parseEpic(payload)
+                val boardVersion = json.boardVersionOrNull()
                 applyMessageOnEdt(type) {
                     val current = currentState()
                     if (current == null) {
@@ -174,10 +222,24 @@ class MoeMessageDispatcher(
                     val tasks = current.tasks.filter { it.epicId != epic.id }
                     val newState = current.copy(epics = epics, tasks = tasks)
                     updateState(newState)
+                    boardVersion?.let(onBoardVersion)
                     publishState(newState)
                 }
             }
+            "EXECUTION_READINESS" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject
+                val readiness = payload?.let { ExecutionReadinessJson.parse(it) }
+                onExecutionReadiness(
+                    if (readiness != null) ReadinessReply.Answered(readiness)
+                    else ReadinessReply.Failed(ReadinessFailure.MALFORMED)
+                )
+            }
             "ERROR" -> {
+                if (isReadinessError(json)) {
+                    // The launcher shows its own dialog: no generic error notification.
+                    onExecutionReadiness(ReadinessReply.Failed(ReadinessFailure.DAEMON_ERROR))
+                    return
+                }
                 val errorMessage = json.get("message").safeAsString() ?: "Unknown error"
                 val operation = json.get("operation").safeAsString() ?: "unknown"
                 publishError(operation, errorMessage)
@@ -389,7 +451,8 @@ class MoeMessageDispatcher(
                     log.warn("Failed to parse CHANNEL_DELETED payload", e)
                 }
             }
-            "PINS" -> {
+            // PINS is the GET_PINS reply to this socket; PINS_UPDATED is the daemon's broadcast of a channel's full pin list after every pin write (pin/unpin/toggle, incl. moe.chat_pin/chat_unpin), same {channel, pins} shape.
+            "PINS", "PINS_UPDATED" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val channel = payload.get("channel").safeAsString() ?: return
                 val pinsArray = payload.get("pins")?.takeIf { it.isJsonArray }?.asJsonArray ?: return
@@ -397,7 +460,7 @@ class MoeMessageDispatcher(
                     val pins = pinsArray.map { MoeJson.parsePinEntry(it.asJsonObject) }
                     publishPins(channel, pins)
                 } catch (e: Exception) {
-                    log.warn("Failed to parse PINS payload", e)
+                    log.warn("Failed to parse $type payload", e)
                 }
             }
             "PIN_CREATED" -> {
@@ -432,7 +495,13 @@ class MoeMessageDispatcher(
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val decisionsArray = payload.get("decisions")?.takeIf { it.isJsonArray }?.asJsonArray ?: return
                 try {
-                    val decisions = decisionsArray.map { MoeJson.parseDecision(it.asJsonObject) }
+                    val decisions = decisionsArray.mapNotNull { element ->
+                        val obj = element?.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+                        if (obj.get("id").stringOrNull().isNullOrBlank()) return@mapNotNull null
+                        MoeJson.parseDecision(obj)
+                    }
+                    val skipped = decisionsArray.size() - decisions.size
+                    if (skipped > 0) log.warn("Skipped $skipped malformed DECISIONS entries")
                     publishDecisions(decisions)
                 } catch (e: Exception) {
                     log.warn("Failed to parse DECISIONS payload", e)
@@ -572,5 +641,9 @@ class MoeMessageDispatcher(
         invokeLater {
             listeners.forEach { it.onAccountAdded(accountId) }
         }
+    }
+
+    private companion object {
+        const val READINESS_REQUEST = "GET_EXECUTION_READINESS"
     }
 }

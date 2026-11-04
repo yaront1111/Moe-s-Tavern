@@ -1,7 +1,9 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { EpicStatus } from '../types/schema.js';
+import type { Epic, EpicStatus } from '../types/schema.js';
 import { invalidInput, missingRequired } from '../util/errors.js';
+import { validateEpicUpdates } from '../state/validators.js';
+import { archiveEpicTool } from './archiveEpic.js';
 
 /**
  * Refuses, before any write, a designation that could never be epic-final: an id
@@ -23,10 +25,36 @@ function assertDesignatable(state: StateManager, epicId: string, finalTaskId: un
   }
 }
 
+/**
+ * The one epic-update path of moe.update_epic and the board's /ws UPDATE_EPIC.
+ * Moving an epic that is not ARCHIVED yet to ARCHIVED runs moe.archive_epic
+ * instead of a bare status write: its in-flight refusal, its holder rule for a
+ * caller with a workerId, its finalizing hold, and every task archived with a
+ * TASK_ARCHIVED event. The call's other fields are validated before any write
+ * and applied after the archive. Every other update, an already-ARCHIVED epic
+ * included, stays a plain state.updateEpic.
+ */
+export async function applyEpicUpdate(
+  state: StateManager,
+  epicId: string,
+  updates: Record<string, unknown>,
+  workerId?: string
+): Promise<Epic> {
+  const epic = state.getEpic(epicId);
+  if (!epic || updates?.status !== 'ARCHIVED' || epic.status === 'ARCHIVED') {
+    return state.updateEpic(epicId, updates as Partial<Epic>, workerId);
+  }
+  const { status: _archived, ...rest } = updates;
+  const hasRest = Object.keys(rest).length > 0;
+  if (hasRest) validateEpicUpdates(rest as Partial<Epic>); // a bad companion field is refused before any write
+  await archiveEpicTool(state).handler(workerId === undefined ? { epicId } : { epicId, workerId }, state);
+  return hasRest ? state.updateEpic(epicId, rest as Partial<Epic>, workerId) : state.getEpic(epicId)!;
+}
+
 export function updateEpicTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.update_epic',
-    description: 'Update an existing epic',
+    description: 'Update an existing epic. status ARCHIVED on an epic that is not archived yet runs moe.archive_epic first (refused while any task is PLANNING, AWAITING_APPROVAL or WORKING, or, for a caller with a workerId, while another worker holds a BLOCKED task; otherwise every task is archived), then applies the other fields.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -35,21 +63,21 @@ export function updateEpicTool(_state: StateManager): ToolDefinition {
         description: { type: 'string', description: 'New description' },
         architectureNotes: { type: 'string', description: 'Architecture notes and technical guidance' },
         epicRails: { type: 'array', items: { type: 'string' }, description: 'Constraints that apply to all tasks in this epic' },
-        status: { type: 'string', enum: ['PLANNED', 'ACTIVE', 'COMPLETED'], description: 'Epic status' },
+        status: { type: 'string', enum: ['PLANNED', 'ACTIVE', 'COMPLETED', 'ARCHIVED'], description: 'Epic status. ARCHIVED follows moe.archive_epic (see the tool description).' },
         order: { type: 'number', description: 'Display order' },
         finalTaskId: {
           type: 'string',
           description: "Designate the epic's final (integration-and-hardening) task by id. get_context isEpicFinal and the epicFinal quality-gate scope follow it whatever the board order. An empty string clears it, and the epic falls back to the highest order."
-        }
+        },
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as the actor of EPIC_UPDATED, never stored on the epic' }
       },
       required: ['epicId'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const raw = (args || {}) as Record<string, unknown>;
-      // Proxy auto-injects workerId from MOE_WORKER_ID env into every tools/call;
-      // update_epic doesn't use it, so drop it before strict-field validation.
-      delete raw.workerId;
+      // The proxy injects the caller's workerId into every tools/call: it is the
+      // EPIC_UPDATED actor, never an epic field, so split it off before the strict check.
+      const { workerId, ...raw } = (args || {}) as Record<string, unknown>;
       const allowedFields = new Set(['epicId', 'title', 'description', 'architectureNotes', 'epicRails', 'status', 'order', 'finalTaskId']);
       for (const field of Object.keys(raw)) {
         if (!allowedFields.has(field)) {
@@ -91,7 +119,7 @@ export function updateEpicTool(_state: StateManager): ToolDefinition {
       if (params.order !== undefined) updates.order = params.order;
       if (params.finalTaskId !== undefined) updates.finalTaskId = params.finalTaskId;
 
-      const epic = await state.updateEpic(params.epicId, updates);
+      const epic = await applyEpicUpdate(state, params.epicId, updates, workerId as string | undefined);
 
       return { success: true, epic };
     }

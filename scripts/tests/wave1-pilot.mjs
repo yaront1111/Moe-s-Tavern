@@ -185,7 +185,9 @@ function writeProject() {
     globalRails: { techStack: [], forbiddenPatterns: [], requiredPatterns: [], formatting: '', testing: '', customRules: [] },
     settings: { approvalMode: 'CONTROL', speedModeDelayMs: 2000, agentCommand: 'codex', autoCreateBranch: false,
       branchPattern: 'moe/{epicId}/{taskId}', commitPattern: 'feat({epicId}): {taskTitle}', deliveryPolicy: 'local-branch',
-      autoCommit: true, consolidationBranch: 'wave1-pilot', qualityGate: opts.gate, qualityGateScope: 'everyTask', checkpointPush: false } });
+      autoCommit: true, consolidationBranch: 'wave1-pilot', qualityGate: opts.gate, qualityGateScope: 'everyTask', checkpointPush: false,
+      // The shared-mode delivery path; with a gate, an unset worktreeMode now means 'on' (WT-19).
+      worktreeMode: 'off' } });
   json('epics/epic-pilot.json', { id: 'epic-pilot', projectId: 'proj-wave1-pilot', title: 'Wave 1 pilot', description: '',
     architectureNotes: '', epicRails: [], status: 'ACTIVE', order: 1, createdAt: now, updatedAt: now });
   const task = (id, order, extra) => ({ id, epicId: 'epic-pilot', title: `Wave 1 pilot ${id}`, description: 'Pilot fixture',
@@ -342,6 +344,7 @@ async function runWrapper(label, during) {
   // Git Bash drops the backslashes of a native caller's argv, so sh gets forward slashes.
   const slash = (p) => (sh ? p.replace(/\\/g, '/') : p);
   const env = isolatedEnv({ MOE_PROXY_PATH: slash(PROXY_JS), MOE_DISABLE_HEARTBEAT: '1', PILOT_CLI_CONFIG: ctx.cliConfig });
+  env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // isolatedEnv drops MOE_*: WT-13's guard refuses REPO's wrapper when the pilot runs from a task worktree (task-86431c31)
   const common = [['--project', '-Project', slash(ctx.project)], ['--worker-id', '-WorkerId', WORKER], ['--role', '-Role', 'worker'],
     ['--command', '-Command', slash(ctx.cli)], ['--codex-exec', '-CodexExec'], ['--no-start-daemon', '-NoStartDaemon'],
     ['--no-loop', '-NoLoop'], ['--poll-interval', '-PollInterval', '0']];

@@ -8,6 +8,7 @@ import {
   MAX_PENDING_QUESTION_LIMIT,
   MAX_PENDING_QUESTIONS_PER_TASK,
   normalizeIntegerOption,
+  unansweredHumanComments,
 } from '../util/taskPayload.js';
 import { truncateForBudget } from '../util/memorySettings.js';
 
@@ -122,21 +123,8 @@ export function getPendingQuestionsTool(_state: StateManager): ToolDefinition {
         if (task.status === 'ARCHIVED' && params.includeArchived !== true) continue;
         if (params.epicId && task.epicId !== params.epicId) continue;
 
-        const comments = task.comments || [];
-
-        // Find the index of the last agent/worker comment
-        let lastAgentIdx = -1;
-        for (let i = comments.length - 1; i >= 0; i--) {
-          if (comments[i].author !== 'human') {
-            lastAgentIdx = i;
-            break;
-          }
-        }
-
-        // Collect human comments after the last agent comment
-        const questions = comments
-          .slice(lastAgentIdx + 1)
-          .filter((c) => c.author === 'human')
+        // Human comments after the last answering comment (daemon comments don't answer).
+        const questions = unansweredHumanComments(task.comments)
           .map((c) => ({ commentId: c.id, content: c.content, timestamp: c.timestamp }));
 
         if (questions.length > 0) {

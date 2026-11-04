@@ -203,6 +203,8 @@ export interface DependencyEvidenceRef {
   readonly prerequisiteTaskId: string;
   /** Each missing token exactly as delivery/policy.ts builds it, with that module's readable reason. */
   readonly missing: ReadonlyArray<{ readonly token: string; readonly reason: string }>;
+  /** The dependent runs verified-local: word the shortfall as its retained verified delivery rule. */
+  readonly verifiedLocal?: boolean;
 }
 
 /**
@@ -213,10 +215,13 @@ export interface DependencyEvidenceRef {
  */
 export function dependencyEvidenceRefusal(ref: DependencyEvidenceRef): MoeError {
   const named = ref.missing.map(({ token, reason }) => `${token} (${reason})`).join(', ');
+  const lacks = ref.verifiedLocal
+    ? 'retained verified delivery a verified-local task requires'
+    : 'delivery evidence settings.deliveryPolicy requires';
   return new MoeError(
     MoeErrorCode.CONSTRAINT_VIOLATION,
     `Task ${ref.taskId} cannot be claimed yet: its prerequisite ${ref.prerequisiteTaskId} is DONE but lacks the ` +
-      `delivery evidence settings.deliveryPolicy requires: ${named}. dependsOn withholds WORKING claims until that ` +
+      `${lacks}: ${named}. dependsOn withholds WORKING claims until that ` +
       'evidence is recorded; an architect/governor can edit the dependencies with moe.set_task_dependencies.',
     {
       taskId: ref.taskId,
@@ -256,6 +261,7 @@ export function inProgressStep(task: Task): ImplementationStep | null {
  * `force` is the single override, so a row held by a dead worker stays
  * recoverable — the door is explicit and both parties end up in the banner,
  * rather than every caller silently having the power.
+ * Only a governor or a human may pass force; release_task enforces that.
  */
 export function assertNoLiveLease(task: Task, force: boolean, caller?: string): void {
   if (force) return;
@@ -267,7 +273,7 @@ export function assertNoLiveLease(task: Task, force: boolean, caller?: string): 
   throw new MoeError(
     MoeErrorCode.NOT_ALLOWED,
     `Task ${task.id} is leased by ${task.assignedWorkerId} with step ${step.stepId} IN_PROGRESS; `
-      + 'pass force:true to override a confirmed-dead holder',
+      + 'only a governor or a human may override that lease (moe.release_task force), and only for a confirmed-dead holder',
     { taskId: task.id, holder: task.assignedWorkerId, stepId: step.stepId, caller },
     STEP_LEASE_HELD
   );
@@ -290,7 +296,7 @@ export function assertReleaseCaller(task: Task, caller: string | undefined, forc
   throw new MoeError(
     MoeErrorCode.NOT_ALLOWED,
     `Task ${task.id} is held by ${task.assignedWorkerId}, not ${caller}; `
-      + 'pass force:true to release a row you do not hold',
+      + 'only the holder may release it, or a governor or a human (moe.release_task force) once the holder is confirmed dead',
     { taskId: task.id, holder: task.assignedWorkerId, caller },
     RELEASE_NOT_ASSIGNEE
   );

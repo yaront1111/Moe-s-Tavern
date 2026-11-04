@@ -27,7 +27,7 @@ class DeliveryPresentationTest {
         currentCandidate = DeliveryCandidate(
             treeSha = sha.takeIf { mask and 1 != 0 }, baseRevision = base.takeIf { mask and 2 != 0 }
         ),
-        latestCheckRun = DeliveryCheckRun(" npm.cmd test ".takeIf { mask and 4 != 0 }, 0.takeIf { mask and 8 != 0 }),
+        latestCheckRun = DeliveryCheckRun(" npm.cmd test ".takeIf { mask and 4 != 0 }, 0L.takeIf { mask and 8 != 0 }),
         deliveryReceipt = DeliveryReceipt("refs/heads/Pilot".takeIf { mask and 16 != 0 }, landed.takeIf { mask and 32 != 0 }),
         attemptPhase = "finalizing".takeIf { mask and 64 != 0 }
     )
@@ -55,9 +55,12 @@ class DeliveryPresentationTest {
 
     @Test
     fun `zero passes and every signed nonzero exit code fails`() {
-        for (code in listOf(0, -1, 1, Int.MIN_VALUE, Int.MAX_VALUE)) {
-            val outcome = if (code == 0) DeliveryOutcome.PASS else DeliveryOutcome.FAIL
-            val key = if (code == 0) "moe.delivery.checkPassed" else "moe.delivery.checkFailed"
+        val codes = listOf(
+            0L, -1L, 1L, Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong(), 3221225477L, -9007199254740991L, 9007199254740991L
+        )
+        for (code in codes) {
+            val outcome = if (code == 0L) DeliveryOutcome.PASS else DeliveryOutcome.FAIL
+            val key = if (code == 0L) "moe.delivery.checkPassed" else "moe.delivery.checkFailed"
             assertEquals(listOf(DeliveryRow(key, code.toString(), outcome = outcome)),
                 DeliveryPresentation.rows(TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = code))))
         }
@@ -120,15 +123,75 @@ class DeliveryPresentationTest {
         )
     }
 
+    private fun gateRows(code: Long, outcome: String?) =
+        DeliveryPresentation.rows(TaskDelivery(latestCheckRun = DeliveryCheckRun("node gate.cjs", code, "runner-observed", outcome)))
+
+    private fun gateExpected(verdict: DeliveryRow, outcome: String) = listOf(
+        DeliveryRow("moe.delivery.checkCommand", "node gate.cjs"),
+        verdict,
+        DeliveryRow("moe.delivery.checkOutcome", outcome),
+        DeliveryRow("moe.delivery.checkSource", "runner-observed")
+    )
+
+    @Test
+    fun `an exit 0 run whose recorded outcome is not passed never renders as passed`() {
+        val notPassed = DeliveryRow("moe.delivery.checkNotPassed", "0", outcome = DeliveryOutcome.FAIL)
+        for (outcome in listOf("timeout", "infra-failure", "skipped", "inconclusive", "code-failure", "cancelled", "Passed", " passed")) {
+            val rows = gateRows(0, outcome)
+            assertEquals("outcome '$outcome'", gateExpected(notPassed, outcome), rows)
+            assertTrue("outcome '$outcome'", rows.none { it.labelKey == "moe.delivery.checkPassed" || it.outcome == DeliveryOutcome.PASS })
+        }
+    }
+
+    @Test
+    fun `an exit 0 run recorded as passed renders as passed with its outcome`() {
+        val passed = DeliveryRow("moe.delivery.checkPassed", "0", outcome = DeliveryOutcome.PASS)
+        assertEquals(gateExpected(passed, "passed"), gateRows(0, "passed"))
+    }
+
+    @Test
+    fun `a nonzero exit renders as failed whatever the recorded outcome`() {
+        for (code in listOf(1L, -9L)) for (outcome in listOf(null, "passed", "timeout", "code-failure")) {
+            assertEquals(
+                "exit $code outcome $outcome",
+                listOfNotNull(
+                    DeliveryRow("moe.delivery.checkFailed", code.toString(), outcome = DeliveryOutcome.FAIL),
+                    outcome?.let { DeliveryRow("moe.delivery.checkOutcome", it) }
+                ),
+                DeliveryPresentation.rows(TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = code, outcome = outcome)))
+            )
+        }
+    }
+
+    @Test
+    fun `a run without a recorded outcome keeps the exit code rendering`() {
+        for (outcome in listOf(null, "")) {
+            assertEquals(
+                "outcome '$outcome'",
+                listOf(DeliveryRow("moe.delivery.checkPassed", "0", outcome = DeliveryOutcome.PASS)),
+                DeliveryPresentation.rows(TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = 0, outcome = outcome)))
+            )
+        }
+    }
+
+    @Test
+    fun `an outcome without an exit code renders only the outcome row`() {
+        assertEquals(
+            listOf(DeliveryRow("moe.delivery.checkOutcome", "timeout")),
+            DeliveryPresentation.rows(TaskDelivery(latestCheckRun = DeliveryCheckRun(outcome = "timeout")))
+        )
+    }
+
     @Test
     fun `every emitted bundle key has a translation`() {
         val properties = Properties()
         requireNotNull(javaClass.classLoader.getResourceAsStream("messages/MoeBundle.properties")).use(properties::load)
         val keys = (DeliveryPresentation.rows(evidence()) + DeliveryPresentation.rows(
             TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = 1, source = "agent-reported"), requiredCheckSatisfied = false)
-        ) + DeliveryPresentation.rows(TaskDelivery(requiredCheckSatisfied = true)))
+        ) + DeliveryPresentation.rows(TaskDelivery(requiredCheckSatisfied = true)) +
+            DeliveryPresentation.rows(TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = 0, outcome = "timeout"))))
             .map { it.labelKey } + DeliveryPresentation.TITLE_KEY
-        assertEquals(12, keys.toSet().size)
+        assertEquals(14, keys.toSet().size)
         for (key in keys) assertTrue("Missing $key", !properties.getProperty(key).isNullOrEmpty())
     }
 }

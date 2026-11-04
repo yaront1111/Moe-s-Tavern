@@ -21,7 +21,10 @@
 // (TASK_UPDATED wakes wait_for_task; the wrapper's next claim poll resumes a
 // still-assigned task). An entry whose row no live seat holds is passed over
 // rather than leased: the slot goes to the next waiter, the entry keeps its
-// age, and a row BLOCKED on the resource returns to its claim pool unleased.
+// age, and a row BLOCKED on the resource returns to its claim pool unleased. A
+// row also counts as held while the entry's own registered, non-DEAD seat owns
+// the task's finalizing attempt: complete_task cleared the assignee, and the
+// worktree wrapper takes git-land-<target> inside that window.
 
 import type { StateManager } from './StateManager.js';
 import type {
@@ -33,6 +36,7 @@ import type {
   TaskStatus,
 } from '../types/schema.js';
 import { logger } from '../util/logger.js';
+import { currentAttempt } from './attemptStore.js';
 import { unmetDependsOn } from './dependencyUnblock.js';
 
 export const RESOURCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -49,8 +53,11 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   LOW: 3,
 };
 
-/** Statuses in which a task legitimately holds or waits on a resource. */
-const RESOURCE_ELIGIBLE_STATUSES = new Set<TaskStatus>([
+/**
+ * Statuses in which a task legitimately holds or waits on a resource. The grant
+ * path, the lease reaper and the acquire/wait tools all apply this one rule.
+ */
+export const RESOURCE_ELIGIBLE_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   'PLANNING',
   'WORKING',
   'REVIEW',
@@ -78,12 +85,46 @@ function resourceDependenciesSatisfied(state: StateManager, taskId: string): boo
  * Mirrors the owner check resumeResourceHolder applies to a parked task: no
  * assignee, or a known seat that is DEAD or bound to another task, means the
  * lease would sit idle until someone claims the row. An assignee without a
- * worker record keeps the old behaviour and is granted.
+ * worker record keeps the old behaviour and is granted. Failing that, the row
+ * still counts as held while the queue entry's own seat is landing it
+ * (landingSeatHoldsTask).
  */
-function heldByLiveSeat(state: StateManager, task: Task): boolean {
-  if (!task.assignedWorkerId) return false;
-  const owner = state.getWorker(task.assignedWorkerId);
-  return !owner || (owner.status !== 'DEAD' && owner.currentTaskId === task.id);
+function heldByLiveSeat(state: StateManager, task: Task, requesterId: string): boolean {
+  if (task.assignedWorkerId) {
+    const owner = state.getWorker(task.assignedWorkerId);
+    if (!owner || (owner.status !== 'DEAD' && owner.currentTaskId === task.id)) return true;
+  }
+  return landingSeatHoldsTask(state, task, requesterId);
+}
+
+/**
+ * The post-complete_task landing window: complete_task holds the open attempt
+ * in `finalizing`, moves the row to REVIEW and clears its assignee, and the
+ * worktree wrapper takes git-land-<target> from there, under the same seat,
+ * until moe.finalize_attempt closes the attempt. The row has no assignee, yet
+ * the queue entry's own seat is about to use the lease, so it is granted.
+ *
+ * Needs a registered, non-DEAD seat for the entry (unlike the assignee branch,
+ * a missing record is NOT granted: a deregistered requester is gone) that owns
+ * the task's open attempt in `finalizing`. The seat is not required to point at
+ * the task: complete_task leaves it IDLE with no current task. The record check
+ * runs before the attempt comparison, so a blank workerId can never match a
+ * malformed attempt that has none. A missing attempt, or one that cannot be
+ * read, is a pass-over, exactly as before.
+ */
+function landingSeatHoldsTask(state: StateManager, task: Task, requesterId: string): boolean {
+  const seat = state.getWorker(requesterId);
+  if (!seat || seat.status === 'DEAD') return false;
+  try {
+    const attempt = currentAttempt(state, task.id);
+    return attempt?.phase === 'finalizing' && attempt.workerId === requesterId;
+  } catch (error) {
+    logger.warn(
+      { taskId: task.id, workerId: requesterId, error },
+      'grantNextLeases: attempt record unreadable; passing the queue entry over'
+    );
+    return false;
+  }
 }
 
 export interface ResourceConfig {
@@ -436,7 +477,8 @@ export async function grantNextLeases(state: StateManager, resourceId: string): 
   // over: a lease would sit idle until someone claims the row while live seats
   // wait behind it. Its entry keeps its age, so the row's next claimant resumes
   // at the same place in line, and a row still BLOCKED here returns to its
-  // claim pool now, the moment a grant would have restored it.
+  // claim pool now, the moment a grant would have restored it. A seat landing a
+  // row it just completed (unassigned, attempt finalizing) holds it.
   const passedOver = new Set<ResourceQueueEntry>();
   const unheldBlocked: string[] = [];
   while (resource.holders.length < config.capacity && resource.queue.length > 0) {
@@ -446,7 +488,7 @@ export async function grantNextLeases(state: StateManager, resourceId: string): 
       .find((entry) => !passedOver.has(entry) && resourceDependenciesSatisfied(state, entry.taskId));
     if (!next) break;
     const task = state.tasks.get(next.taskId);
-    if (task && !heldByLiveSeat(state, task)) {
+    if (task && !heldByLiveSeat(state, task, next.workerId)) {
       passedOver.add(next);
       if (task.status === 'BLOCKED' && task.blockedResourceId === resourceId) unheldBlocked.push(task.id);
       continue;

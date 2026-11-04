@@ -3,8 +3,8 @@
 // only from validateImport over the transferred bytes. It is the ONLY admission gate, so its R09a codes surface
 // unchanged. Mounts are checked before and after the stream. This is local transfer logic, not isolation
 // certification: executionReady is false and verified-local stays unavailable.
-import { invoker } from './lifecycle.mjs';
-import { assertNoMounts, runSupervisorStream, snapshotArgv } from './snapshot-transfer.mjs';
+import { invoker, isOwnedInstanceName } from './lifecycle.mjs';
+import { assertNoMounts, runSupervisorStream, transferError } from './snapshot-transfer.mjs';
 import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES, MAX_IMPORT_PATH_BYTES, snapshotError, validateImport } from './source-snapshot.mjs';
 
 const MAX_TIMEOUT_MS = 600_000; // snapshot-transfer.mjs's bound
@@ -90,11 +90,11 @@ function exportReader() {
  * validateImport, refusing unless the guest shows no mount before and after the stream. Resolves the frozen
  * { instance, candidate, executionReady: false }, candidate being validateImport's frozen result. Any refusal rejects
  * with one fixed code, never a partial candidate; one during the stream kills the provider (runSupervisorStream).
- * provider: { executable = 'multipass', run, spawn }, as for materializeSnapshot.
+ * provider: { executable = 'multipass', run, spawn, ssh, keyDir }, as for materializeSnapshot.
  */
 export async function importCandidate(options) {
   const { name, provider = {}, timeoutMs } = options ?? {};
-  snapshotArgv(name, 'export'); // R09c's own code for a name that is not owned
+  if (!isOwnedInstanceName(name)) throw transferError('TRANSFER_INPUT_INVALID'); // R09c's own code for a name that is not owned
   invoker(name, provider); // R06's own codes for a bad provider record, run or executable
   if ((provider.spawn !== undefined && typeof provider.spawn !== 'function')
     || (timeoutMs !== undefined && !(Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= MAX_TIMEOUT_MS))) {

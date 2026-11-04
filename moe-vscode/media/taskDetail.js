@@ -150,6 +150,58 @@
         }
     }
 
+    // Detach a node that is on the page; anything else is left alone.
+    function removeNode(node) {
+        if (node && node.parentNode) { node.parentNode.removeChild(node); }
+    }
+
+    // Rebuild the read-only Delivery section from the rows the panel resolved
+    // (TaskDetailPanel.deliveryDisplay), in renderDelivery's node order. Every
+    // runner-reported value goes in as text (textContent, title), never as
+    // markup. No rows removes the section, as the initial render omits it; a new
+    // section goes right after #blockerSection, where the initial render puts it.
+    function renderDelivery(delivery) {
+        var rows = delivery && Array.isArray(delivery.rows)
+            ? delivery.rows.filter(function(row) { return row !== null && typeof row === 'object'; }) : [];
+        var section = document.getElementById('deliverySection');
+        if (rows.length === 0) { removeNode(section); return; }
+        if (!section) {
+            var blocker = document.getElementById('blockerSection');
+            if (!blocker || !blocker.parentNode) { return; }
+            section = document.createElement('div');
+            section.className = 'delivery-section';
+            section.id = 'deliverySection';
+            blocker.parentNode.insertBefore(section, blocker.nextSibling);
+        }
+        section.textContent = '';
+        section.appendChild(blockerLine('section-title', String(delivery.title)));
+        rows.forEach(function(row) {
+            var line = document.createElement('div');
+            line.className = 'delivery-row' + (row.outcome === 'PASS' ? ' delivery-pass' : row.outcome === 'FAIL' ? ' delivery-fail' : '');
+            line.appendChild(blockerLine('field-label', String(row.label)));
+            var value = blockerLine('delivery-value', String(row.value));
+            value.title = String(row.fullValue);
+            line.appendChild(value);
+            section.appendChild(line);
+        });
+    }
+
+    // The Release Agent button follows the assignment: the panel sends its
+    // label while the task has an agent to release, null otherwise. A new
+    // button goes just before Prev, where the initial render puts it.
+    function renderReleaseAgent(label) {
+        var button = document.getElementById('releaseAgentBtn');
+        if (typeof label !== 'string' || label === '') { removeNode(button); return; }
+        var prev = document.getElementById('prevBtn');
+        if (button || !prev || !prev.parentNode) { return; }
+        button = document.createElement('button');
+        button.className = 'btn btn-secondary';
+        button.id = 'releaseAgentBtn';
+        button.textContent = label;
+        button.addEventListener('click', postReleaseAgent);
+        prev.parentNode.insertBefore(button, prev);
+    }
+
     function isAgentAuthor(author) {
         if (!author) { return false; }
         var lower = author.toLowerCase();
@@ -197,6 +249,18 @@
             var reason = reasonEl ? reasonEl.value.trim() : '';
             vscodeApi.postMessage({ type: 'reopen', reason: reason });
         });
+    }
+
+    // Release Agent: the button exists only while the task has an assigned
+    // worker, so an unassigned page loads without it and renderReleaseAgent
+    // adds or removes it live. The host reads the worker id and title from
+    // fresh state, so nothing else is sent.
+    function postReleaseAgent() {
+        vscodeApi.postMessage({ type: 'releaseAgent' });
+    }
+    var releaseAgentBtn = document.getElementById('releaseAgentBtn');
+    if (releaseAgentBtn) {
+        releaseAgentBtn.addEventListener('click', postReleaseAgent);
     }
 
     // Prev / Next
@@ -264,6 +328,20 @@
     }
 
     // Render steps (for live updates)
+    // The amendment in force on a step: the entry activeAmendmentId names, never simply the
+    // latest; null for a blank, dangling or non-string id, a non-array amendments or an entry
+    // without a string description. The same rule as activeStepAmendment in
+    // src/panels/PlanReviewPanel.ts and the daemon's planAmendments.ts. Never throws.
+    function activeStepAmendment(step) {
+        var id = step ? step.activeAmendmentId : undefined;
+        if (typeof id !== 'string' || id.length === 0 || !Array.isArray(step.amendments)) { return null; }
+        for (var k = 0; k < step.amendments.length; k++) {
+            var a = step.amendments[k];
+            if (a && typeof a === 'object' && typeof a.description === 'string' && a.amendmentId === id) { return a; }
+        }
+        return null;
+    }
+
     function renderSteps(steps) {
         var container = document.getElementById('planContent');
         if (!container) { return; }
@@ -300,10 +378,19 @@
             header.appendChild(titleSpan);
             card.appendChild(header);
 
+            // Show the text the approval revision covers: the active amendment, else the original.
+            var amendment = activeStepAmendment(step);
             var desc = document.createElement('div');
             desc.className = 'step-description';
-            desc.textContent = step.description || '';
+            desc.textContent = amendment ? amendment.description : (step.description || '');
             card.appendChild(desc);
+            if (amendment) {
+                var amended = document.createElement('div');
+                amended.className = 'step-amended';
+                amended.textContent = 'Amended by ' + (typeof amendment.amendedBy === 'string' && amendment.amendedBy.trim() ? amendment.amendedBy : 'unknown');
+                amended.title = 'Original step: ' + (step.description || '');
+                card.appendChild(amended);
+            }
 
             if (step.affectedFiles && step.affectedFiles.length > 0) {
                 var filesDiv = document.createElement('div');
@@ -320,7 +407,8 @@
         }
     }
 
-    // Handle live updates - only update plan + comments, not editable fields
+    // Handle live updates: status, blocker, plan, comments, delivery and the
+    // Release Agent button; never the editable fields
     window.addEventListener('message', function(event) {
         var msg = event.data;
         if (msg.type === 'updateTask') {
@@ -343,5 +431,8 @@
             renderedPlanRevision = revisionForTask(task);
             // Update comments section
             renderComments(task.comments);
+            // Last, so nothing here can hold up the plan token above.
+            renderDelivery(msg.delivery);
+            renderReleaseAgent(msg.releaseAgentLabel);
         }
     });

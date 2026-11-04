@@ -7,6 +7,9 @@ POSTFLIGHT_TIMEOUT_SEC=60
 case "${MOE_POSTFLIGHT_TIMEOUT_SEC:-}" in ''|*[!0-9]*) : ;; *) POSTFLIGHT_TIMEOUT_SEC="$MOE_POSTFLIGHT_TIMEOUT_SEC" ;; esac
 # Claude account rotation stays off unless the [accounts] scenario turns it on.
 export MOE_ACCOUNT_ROTATION=off
+# A worktree-mode worker runs this harness from its own task worktree, where WT-13's guard refuses the wrapper
+# copy (task-3c4be125); postflight-worktree.cjs re-adds the seam for its own wrapper only, so its refusals stay real.
+export MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1
 # A protected launch's marker never reaches the legacy rows; [protected runtime] sets it per row.
 unset MOE_RUNTIME_PROTECTED
 
@@ -130,13 +133,17 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','sha256-repo','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
-'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
+'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
 'intent-strong','intent-strong-cas','intent-strong-unwritable','intent-strong-nocandidate','intent-legacy-unwritable',
+'reconcile-strong-receipt-lost','reconcile-strong-unreconciled','reconcile-strong-target-moved','reconcile-strong-rewrite','reconcile-strong-rewrite-same-tree','reconcile-strong-no-rebase',
+'reconcile-strong-finalize-lost','strong-checkpoint-held','strong-checkpoint-held-env','strong-checkpoint-held-forged','strong-checkpoint-held-journal',
+'strong-recovery-held','strong-recovery-held-gate',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
-'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected'];
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected',
+'wt-pass','wt-default','wt-moe-dir','wt-moe-file','wt-moe-link','wt-moe-link-out','wt-before','wt-tracked','wt-hidden','wt-assume','wt-nested'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen. freed-* is a
 // seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
@@ -186,6 +193,129 @@ child.on('exit',(code,signal)=>{clearInterval(poll);clearTimeout(deadline);
 // box -- so the Windows cancellation bound tracks MOE_POSTFLIGHT_TIMEOUT_SEC
 // rather than a fixed 30 s. The outer spawnSync timeout is still the real cap.
 const CANCEL_MS=Math.max(30000,(Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-30)*1000);
+// WT-10G: the worktree-mode frozen gate (sh run_frozen_gate worktree, ps1
+// Invoke-MoeFrozenGate -WorktreeMode; WT-S 2.2 L6) is not wired into landing
+// until WT-10, so the wt-* modes drive the wrapper's real gate functions
+// directly: sh slices them out by name, ps1 imports every function through the
+// AST. Only the check-run recorder is stubbed. TMPDIR/TMP/TEMP point at a
+// per-mode dir this suite owns, so every gate root is owned scratch. The drivers
+// read the stored index bits: git otherwise hides S on files a .moe link makes present.
+const WT_GATE=`
+const fs=require('fs'),path=require('path'),cp=require('child_process');
+const get=(...a)=>cp.execFileSync('git',a,{encoding:'utf8'}).trim(),real=p=>fs.realpathSync.native(p);
+let moe=true;try{fs.lstatSync('.moe');}catch(e){moe=false;}
+fs.writeFileSync(process.env.WTG_OBS,JSON.stringify({dirs:[process.cwd(),process.env.MOE_PROJECT_PATH,get('rev-parse','--show-toplevel')].map(real),
+ parent:real('..'),head:get('rev-parse','HEAD'),tree:get('write-tree'),moe,flags:get('ls-files','-t','--','.moe')}));
+const mode=process.env.WTG_MODE,link=t=>fs.symlinkSync(t,'.moe',process.platform==='win32'?'junction':'dir');
+if(mode==='wt-moe-dir'){fs.mkdirSync('.moe');fs.writeFileSync(path.join('.moe','x'),'gate\\n');}
+if(mode==='wt-moe-file')fs.writeFileSync('.moe','gate\\n');
+if(mode==='wt-moe-link')link(path.resolve('..','missing-target'));
+if(mode==='wt-moe-link-out')link(process.env.WTG_CONTROL_MOE);
+if(mode==='wt-tracked')fs.writeFileSync('src.txt','gate changed\\n');
+if(mode==='wt-hidden'){get('update-index','--skip-worktree','src.txt');fs.unlinkSync('src.txt');}
+if(mode==='wt-assume'){get('update-index','--assume-unchanged','src.txt');fs.writeFileSync('src.txt','hidden gate change\\n');}
+`;
+const WT_SH_FUNCS=['gate_git','gate_integrity','gate_integrity_wt','stop_gate_child','remove_gate_root','cleanup_gate_workspace','freeze_candidate','run_frozen_gate'];
+function shFunctions(){const s=read(wrapper);return WT_SH_FUNCS.map(name=>{const i=s.indexOf('\n'+name+'() {');
+  assert.ok(i>=0,'moe-agent.sh has no '+name);return s.slice(i+1,s.indexOf('\n}\n',i)+3);}).join('');}
+const WT_SH=`set -e
+record_candidate_rpc() { return 0; }
+record_check_run_rpc() { printf '%s\\t%s\\n' "$GATE_RC" "$GATE_OUTCOME" >> "$WTG_CHECKS"; }
+GREEN= BLUE= NC= YELLOW= GATE_PENDING_ROOTS= GATE_OUTCOME= GATE_WORKSPACE= flags=
+PYTHON_CMD=$(command -v python3 || command -v python)
+MOE_TOP=$WTG_REPO MOE_REL=$WTG_REL QUALITY_GATE='node gate.cjs'
+freeze_candidate "$WTG_BASE" "$WTG_TREE"
+if run_frozen_gate $WTG_ARM; then rc=0; else rc=1; fi
+if [ -n "$GATE_WORKSPACE" ] && [ -d "$GATE_WORKSPACE" ]; then flags=$(git -C "$GATE_WORKSPACE" -c sparse.expectFilesOutsideOfPatterns=true ls-files -t -- .moe src.txt); fi
+if cleanup_gate_workspace; then clean=0; else clean=1; fi
+printf 'rc=%s\\nclean=%s\\ncommit=%s\\nflags=%s\\n' "$rc" "$clean" "$FROZEN_COMMIT" "$flags" > "$WTG_RESULT"
+`;
+// ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
+const WT_PS1=`$ErrorActionPreference='Stop'
+$errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($env:WTG_WRAPPER,[ref]$null,[ref]$errors)
+if ($errors.Count) { throw ('moe-agent.ps1 parse errors: '+($errors -join '; ')) }
+foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] },$false)) { . ([ScriptBlock]::Create($fn.Extent.Text)) }
+foreach ($st in $ast.EndBlock.Statements) {
+  if ($st -is [System.Management.Automation.Language.AssignmentStatementAst] -and $st.Left.Extent.Text -like '$script:MoeGate*') { . ([ScriptBlock]::Create($st.Extent.Text)) }
+}
+function Send-MoeCheckRun([hashtable]$Frozen,[hashtable]$Gate) {
+  [IO.File]::AppendAllText($env:WTG_CHECKS,[string]$Gate.ExitCode+[char]9+[string]$Gate.Outcome+[char]10)
+  return $true
+}
+$git=@{ Top=$env:WTG_REPO; Rel=$env:WTG_REL }
+$frozen=New-MoeFrozenCandidate $git $env:WTG_TREE $env:WTG_BASE
+if ($env:WTG_ARM) { $ok=@(Invoke-MoeFrozenGate $git $frozen 'node gate.cjs' -WorktreeMode)[-1] }
+else { $ok=@(Invoke-MoeFrozenGate $git $frozen 'node gate.cjs')[-1] }
+$flags=''
+if ($script:MoeGate -and (Test-Path -LiteralPath $script:MoeGate.Workspace)) {
+  $flags=(Invoke-MoeGit -Top $script:MoeGate.Workspace -GitArgs @('-c','sparse.expectFilesOutsideOfPatterns=true','ls-files','-t','--','.moe','src.txt')).Out -join [char]10
+}
+$clean=Remove-MoeGateWorkspace
+$rc=if ($ok -eq $true) { '0' } else { '1' }
+$cl=if ($clean) { '0' } else { '1' }
+[IO.File]::WriteAllText($env:WTG_RESULT,(@(('rc='+$rc),('clean='+$cl),('commit='+$frozen.Commit),('flags='+$flags)) -join [char]10)+[char]10)
+`;
+function wtGate(mode){
+  const repo=path.join(root,mode),tmp=path.join(root,mode+'-tmp'),home=path.join(root,mode+'-home'),moeDir=path.join(repo,'.moe');
+  const obsFile=path.join(root,mode+'-obs.json'),checksFile=path.join(root,mode+'-checks.txt'),resultFile=path.join(root,mode+'-result.txt');
+  for(const d of [repo,tmp,home])fs.mkdirSync(d,{recursive:true});
+  git(repo,'init','-q');
+  for(const [key,value] of [['core.autocrlf','false'],['user.name','Moe Test'],['user.email','moe@test.local']])git(repo,'config',key,value);
+  // '!/.moe/' excludes only a directory: a tracked FILE named .moe materializes,
+  // and the before-command check must refuse it.
+  if(mode==='wt-before')write(moeDir,'tracked file\n');
+  else{write(path.join(moeDir,'tasks','task-a.json'),'{"id":"task-a"}\n');write(path.join(moeDir,'project.json'),'{"id":"proj-wt"}\n');}
+  write(path.join(repo,'src.txt'),'source\n');write(path.join(repo,'gate.cjs'),WT_GATE);
+  // A nested tracked path outside .moe: the sparse patterns must materialize it.
+  write(path.join(repo,'lib','keep.txt'),'nested\n');
+  git(repo,'add','--','.');git(repo,'commit','-qm','seed');
+  if(mode!=='wt-before')write(path.join(moeDir,'daemon.json'),'{"sentinel":"control runtime"}\n');
+  const map=p=>{let st;try{st=fs.lstatSync(p);}catch(e){return null;}
+    if(st.isSymbolicLink())return 'link:'+fs.readlinkSync(p);
+    if(!st.isDirectory())return read(p);
+    const o={};for(const n of fs.readdirSync(p).sort())o[n]=map(path.join(p,n));return o;};
+  const snap=()=>[git(repo,'rev-parse','HEAD'),git(repo,'ls-files','-s'),git(repo,'--no-optional-locks','status','--porcelain','-uall'),
+    cp.spawnSync('git',['-C',repo,'config','--get','core.sparseCheckout']).status,map(moeDir)];
+  const pre=snap(),env={};
+  for(const [key,value] of Object.entries(process.env))if(!/^GIT_|^(HOME|USERPROFILE|TMPDIR|TMP|TEMP)$/i.test(key))env[key]=value;
+  Object.assign(env,{HOME:home,USERPROFILE:home,TMPDIR:tmp,TMP:tmp,TEMP:tmp,WTG_WRAPPER:wrapper,WTG_REPO:repo,WTG_MODE:mode,
+    WTG_BASE:git(repo,'rev-parse','HEAD'),WTG_TREE:git(repo,'rev-parse','HEAD^{tree}'),WTG_OBS:obsFile,WTG_CHECKS:checksFile,WTG_RESULT:resultFile,WTG_CONTROL_MOE:moeDir});
+  if(mode!=='wt-default')env.WTG_ARM='worktree';
+  if(mode==='wt-nested')env.WTG_REL='sub';
+  const driver=path.join(root,win?'wt-driver.ps1':'wt-driver.sh');
+  if(!fs.existsSync(driver))write(driver,win?WT_PS1:shFunctions()+WT_SH);
+  const r=cp.spawnSync(engine,win?['-NoProfile','-File',driver]:[driver],{env,encoding:'utf8',timeout:120000,windowsHide:true});
+  const log=String(r.stdout||'')+String(r.stderr||'')+(r.error?'\n'+r.error:'');
+  assert.equal(r.status,0,mode+': driver failed\n'+log);
+  const res=read(resultFile),field=key=>(res.match(new RegExp('^'+key+'=(.*)$','m'))||[])[1];
+  const flags=res.slice(res.indexOf('flags=')+6).trim(),checks=fs.existsSync(checksFile)?read(checksFile).split('\n').filter(Boolean):[];
+  const obs=fs.existsSync(obsFile)?JSON.parse(read(obsFile)):null,integrity=log.includes('MOE_WORKTREE_GATE_INTEGRITY');
+  const moeFlags='S .moe/project.json\nS .moe/tasks/task-a.json';
+  assert.equal(field('clean'),'0',mode+': owned cleanup\n'+log);
+  assert.deepEqual(fs.readdirSync(tmp),[],mode+': owned gate scratch must be emptied\n'+log);
+  assert.equal(git(repo,'worktree','list','--porcelain').split('\n').filter(l=>l.startsWith('worktree ')).length,1,mode+'\n'+log);
+  assert.deepEqual(snap(),pre,mode+': the control checkout, its index and its .moe stay unchanged\n'+log);
+  if(obs){
+    assert.deepEqual(obs.dirs.map(d=>[path.basename(d),path.dirname(d)]),Array(3).fill(['tree',obs.parent]),mode+': cwd, MOE_PROJECT_PATH and toplevel are the gate checkout\n'+log);
+    assert.equal(path.dirname(obs.parent),fs.realpathSync.native(tmp),mode+': the gate root is owned scratch\n'+log);
+    assert.equal(fs.existsSync(obs.parent),false,mode+': the gate root is removed\n'+log);
+    assert.deepEqual([obs.head,obs.tree],[field('commit'),git(repo,'rev-parse','HEAD^{tree}')],mode+': the gate saw the frozen commit and tree\n'+log);
+  }
+  if(mode==='wt-pass'||mode==='wt-default'){
+    assert.equal(field('rc'),'0',log);assert.deepEqual(checks,['0\tpassed'],log);assert.equal(integrity,false,log);
+    assert.equal(obs.moe,mode==='wt-default',mode+': .moe in the gate checkout\n'+log);
+    assert.equal(obs.flags,mode==='wt-default'?moeFlags.replace(/^S/gm,'H'):moeFlags,mode+': .moe index entries\n'+log);
+  }else if(mode==='wt-before'||mode==='wt-nested'){
+    assert.equal(field('rc'),'1',log);assert.deepEqual(checks,[],log);assert.equal(obs,null,log);
+    assert.equal(integrity,mode==='wt-before',log);
+    if(mode==='wt-nested')assert.ok(log.includes('MOE_WORKTREE_PROJECT_NOT_TOP'),log);
+  }else{
+    assert.equal(field('rc'),'1',log);assert.deepEqual(checks,['0\tinconclusive'],log);
+    assert.equal(integrity,mode.startsWith('wt-moe-'),log);assert.equal(obs.moe,false,log);
+    assert.equal(flags,moeFlags+'\nH src.txt',mode+': index flags after the refusal\n'+log);
+  }
+}
 let count=0;
 try {
 if(!win){const source=read(wrapper),stop=source.slice(source.indexOf('stop_gate_child() {'),source.indexOf('cleanup_gate_workspace() {'));
@@ -197,6 +327,7 @@ for(const mode of modes.filter(m=>!process.env.MOE_FROZEN_TEST_ONLY||process.env
     assert.ok(probe.length>0&&probe.includes('--stdin')&&!/foreach/i.test(probe),'ps1 integrity probe must batch ls-files into one update-index --stdin, not spawn git per tracked file');
     count++;continue;
   }
+  if(mode.startsWith('wt-')){wtGate(mode);count++;continue;}
   const repo=path.join(root,mode),nested=path.join(repo,'nested project é'),owned=path.join(nested,'owned.txt');
   fs.mkdirSync(nested,{recursive:true});
   const gateSource=`
@@ -215,9 +346,15 @@ fs.writeFileSync('scratch.txt','generated only\\n');
 if(mode==='tracked-mutation')fs.writeFileSync('owned.txt','gate changed tracked\\n');
 if(mode==='hidden-mutation'){get('update-index','--skip-worktree','owned.txt');get('update-index','--assume-unchanged','gate.cjs');
  fs.writeFileSync('owned.txt','hidden gate change\\n');fs.appendFileSync('gate.cjs','\\n// hidden gate change\\n');}
+// Skip-worktree only, no assume-unchanged: an edit and a deletion hidden behind S bits.
+if(mode==='skip-worktree-mutation'){get('update-index','--skip-worktree','owned.txt');fs.writeFileSync('owned.txt','hidden gate change\\n');
+ get('update-index','--skip-worktree','../seed.txt');fs.unlinkSync('../seed.txt');}
+if(mode==='index-mutation'){fs.writeFileSync('staged.txt','gate staged\\n');get('add','staged.txt');}
+if(mode==='head-mutation')get('-c','user.name=t','-c','user.email=t@t.test','commit','--allow-empty','-qm','gate moved HEAD');
 if(mode==='cleanup-retry')get('worktree','lock','--reason','moe frozen cleanup retry',get('rev-parse','--show-toplevel'));
 if(mode==='dirty-helper'&&!fs.existsSync('helper.txt'))process.exit(19);
 if(mode==='race-fail'&&fs.existsSync('../break-gate.txt'))process.exit(23);
+if(mode==='strong-recovery-held-gate')process.exit(29);
 if(mode.startsWith('interrupt-')){fs.writeFileSync(path.join(dir,'owned.txt'),'late shared\\n');fs.writeFileSync(path.join(dir,'.moe','gate-ready'),'ready');setInterval(()=>{},1000);}
 if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');process.stderr.write('END');process.exit(37);}
 `;
@@ -233,7 +370,7 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
   write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
     status:'WORKING',filesModified:ownedPaths,implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:ownedPaths}]}));
-  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';
+  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';let seeded='';
   if(!noGit){
     // A sha256 repository: both wrappers refuse it at their git probe, because
     // Moe's delivery records hold SHA-1 ids only. Creating one needs git 2.29+.
@@ -258,7 +395,7 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     // (MOE_PUSH_REBASE=1), which rewrites the landed commit before the re-push;
     // receipt-push-rejected keeps the default, which announces the rejection and
     // leaves the checkout exactly as it was.
-    if(mode==='receipt-rebase-replay'||mode==='receipt-push-rejected'){const remote=path.join(root,mode+'-remote.git'),peer=path.join(root,mode+'-peer');
+    if(mode==='receipt-rebase-replay'||mode==='receipt-push-rejected'||mode==='reconcile-strong-no-rebase'){const remote=path.join(root,mode+'-remote.git'),peer=path.join(root,mode+'-peer');
       git(root,'init','-q','--bare',mode+'-remote.git');git(repo,'remote','add','origin',remote);git(repo,'push','-q','origin','moe/frozen');
       git(root,'clone','-q','-b','moe/frozen',remote,peer);
       for(const [key,value] of [['user.name','Moe Peer'],['user.email','peer@test.local'],['core.autocrlf','false']])git(peer,'config',key,value);
@@ -269,20 +406,33 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     if(mode==='receipt-cached-check'){const hook=path.join(repo,'.git','hooks','reference-transaction');
       write(hook,'#!/bin/sh\n[ "$1" = prepared ] || exit 0\ngrep -q " refs/heads/moe/frozen$" || exit 0\n'+
         'm="$(git rev-parse --git-dir)/moe-cas-refused"\n[ -e "$m" ] && exit 0\n: > "$m"\nexit 1\n');fs.chmodSync(hook,0o755);}
+    // CQ-V08: an earlier strong landing of this task is on the branch, and its
+    // receipt journal is still unsettled.
+    if(mode==='reconcile-strong-unreconciled'){const base=git(repo,'rev-parse','HEAD');
+      git(repo,'commit','--allow-empty','-qm','feat(task-postflight): earlier','-m','Moe-Session: worker-old@seed','-m','Moe-Kind: completion');
+      const t=git(repo,'rev-parse','HEAD');
+      seeded=JSON.stringify({taskId:'task-postflight',workerId:'worker-old',attemptId:'attempt-old',generation:1,candidateId:'cand-old',
+        target:'refs/heads/moe/frozen',targetBefore:base,targetAfter:t,landedRevision:t,pushResult:null,
+        treeSha:git(repo,'rev-parse',t+'^{tree}'),baseRevision:base,planRevision:3,profile:'verified-local'});
+      write(path.join(repo,'.git','moe','receipt','task-postflight.json'),seeded);}
     // CQ-V07: the claim's attempt is pinned on a strong (verified-local) or a legacy
     // execution policy. The hook logs every prepared ref update -- old is the
     // expected-old git was handed, so the CAS -- with the receipt journal as it
     // stood at that instant. A regular file where the journal dir goes makes the
-    // journal unwritable.
-    if(mode.startsWith('intent-')){const stamp=new Date().toISOString(),hook=path.join(repo,'.git','hooks','reference-transaction');
+    // journal unwritable. CQ-V08b: strong-checkpoint-held-journal pins a legacy
+    // attempt, and only the task's receipt journal says verified-local -- one the
+    // pre-flight replay keeps (it cannot parse it), as it keeps an unsettled one.
+    if(/^(intent|reconcile|strong)-/.test(mode)){const stamp=new Date().toISOString(),hook=path.join(repo,'.git','hooks','reference-transaction');
       write(path.join(nested,'.moe','attempts','attempt-postflight.json'),JSON.stringify({id:'attempt-postflight',generation:7,taskId:'task-postflight',
         workerId:'worker-frozen',runnerId:'worker-frozen',phase:'running',workspace:nested,startedAt:stamp,lastPhaseAt:stamp,
-        executionPolicySnapshot:{version:2,profile:mode.startsWith('intent-strong')?'verified-local':'legacy',planRevision:3,deliveryPolicy:'local-branch'}}));
+        executionPolicySnapshot:{version:2,profile:/^((intent|reconcile)-)?strong/.test(mode)&&mode!=='strong-checkpoint-held-journal'?'verified-local':'legacy',
+          planRevision:3,deliveryPolicy:'local-branch'}}));
+      if(mode==='strong-checkpoint-held-journal')write(path.join(repo,'.git','moe','receipt','task-postflight.json'),'{"profile":"verified-local"}\n');
       write(hook,['#!/bin/sh','[ "$1" = prepared ] || exit 0','d="$(git rev-parse --git-common-dir)"; j="$d/moe/receipt/task-postflight.json"',
         'while read -r old new ref; do','  if [ -f "$j" ]; then c="$(tr -d \'\\r\\n\' < "$j")"; else c=null; fi',
         '  printf \'{"ref":"%s","old":"%s","new":"%s","journal":%s}\\n\' "$ref" "$old" "$new" "$c" >> "$d/moe-intent-events.jsonl"','done',''].join('\n'));
       fs.chmodSync(hook,0o755);
-      if(mode.endsWith('-unwritable'))write(path.join(repo,'.git','moe','receipt'),'not a directory\n');}
+      if(mode.endsWith('-unwritable')||mode==='strong-recovery-held')write(path.join(repo,'.git','moe','receipt'),'not a directory\n');}
   }
   write(path.join(nested,'helper.txt'),'dirty helper\n');write(path.join(nested,'peer.txt'),'peer bytes\n');
   write(path.join(nested,'.codex','dirty.txt'),'denied bytes\n');
@@ -298,7 +448,7 @@ if(mode==='loop-land-twice'){const n=Number(fs.readFileSync(path.join(dir,'.moe'
  fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned '+(n===2?1:n)+'\\n');}
 else if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
 const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
-const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed)-/.test(mode)||/^teardown-(running|protected)$/.test(mode);
+const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed|strong-checkpoint)-/.test(mode)||/^teardown-(running|protected)$/.test(mode)||process.env.FROZEN_RUN==='2';
 // reattach-sidecar/-refused: a daemon restart parks the attempt while this
 // session runs, and the session goes on once the wrapper reattached it (or once
 // the wait runs out, as under a restart nobody reattached). reattach-preflight
@@ -334,9 +484,14 @@ if(mode==='closed-attempt'||mode==='freed-closed'||qaClaimed)a.phase='closed';if
 const stamp=new Date().toISOString();
 if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json'),JSON.stringify({id:'attempt-qa',generation:8,taskId:'task-postflight',
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
+// strong-checkpoint-held-forged: the CLI writes a newer, legacy attempt record of
+// its task; the profile its wrapper pinned at pre-flight still holds the exit.
+if(mode==='strong-checkpoint-held-forged')fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-forged.json'),JSON.stringify({id:'attempt-forged',generation:8,
+ taskId:'task-postflight',workerId:'worker-forged',runnerId:'worker-forged',phase:'closed',workspace:dir,startedAt:stamp,lastPhaseAt:stamp,
+ executionPolicySnapshot:{version:2,profile:'legacy',planRevision:3,deliveryPolicy:'local-branch'}}));
 if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
-if(mode==='teardown-protected')fs.copyFileSync(${JSON.stringify(baselineFile)},path.join(dir,'.moe','baseline-at-cli'));
+if(mode==='teardown-protected'||mode.startsWith('strong-checkpoint-'))fs.copyFileSync(${JSON.stringify(baselineFile)},path.join(dir,'.moe','baseline-at-cli'));
 if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|protected)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
@@ -353,18 +508,26 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|pro
     FAKE_TASK_STATUS:'REVIEW',FAKE_SCOPE_PEERS_ACTIVE:'1',FAKE_SCOPE_PEER_DECLARED:'peer.txt:task-peer',
     FROZEN_FIXTURE:nested,FROZEN_MODE:mode,HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),
     FAKE_EVIDENCE_MODE:mode,FAKE_CTX_IS_EPIC_FINAL:mode==='deferred'?'false':'true'};
-  if(mode.startsWith('race-'))env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
+  // CQ-V08 arms reuse the fake daemon's receipt knobs: a refused receipt, or a crash at the held ledger row.
+  env.FAKE_EVIDENCE_MODE={'reconcile-strong-receipt-lost':'receipt-refused','reconcile-strong-unreconciled':'receipt-refused',
+    'reconcile-strong-rewrite':'receipt-ledger-replay','reconcile-strong-rewrite-same-tree':'receipt-ledger-replay',
+    'reconcile-strong-finalize-lost':'finalize_attempt-null'}[mode]||mode;
+  if(mode.startsWith('race-')||mode==='reconcile-strong-target-moved')env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
   // A peer lands an EMPTY commit before the CAS: new base, identical rebuilt tree.
   if(mode==='receipt-same-tree-race'||mode==='intent-strong-cas'){write(race,"require('child_process').execFileSync('git',['commit','--allow-empty','-qm','peer-empty']);");
     env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';}
-  // The pull --rebase retry is opt-in; only receipt-rebase-replay exercises it.
-  if(mode==='receipt-rebase-replay')env.MOE_PUSH_REBASE='1';
+  // The pull --rebase retry is opt-in; receipt-rebase-replay exercises it, and
+  // reconcile-strong-no-rebase shows a strong landing ignores it.
+  if(mode==='receipt-rebase-replay'||mode==='reconcile-strong-no-rebase')env.MOE_PUSH_REBASE='1';
   const args=win?['-NoProfile','-File',wrapper,'-Project',nested,'-WorkerId','worker-frozen','-Role','worker',
     '-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']:
     [wrapper,'--project',nested,'--worker-id','worker-frozen','--role','worker','--team','Smoke','--no-start-daemon',
     '--command',cli,'--no-loop','--poll-interval','0'];
 
-  if(/^(checkpoint|manual)-/.test(mode)||/^teardown-(running|protected)$/.test(mode))env.FAKE_TASK_STATUS='WORKING';
+  if(/^(checkpoint|manual|strong-checkpoint)-/.test(mode)||/^teardown-(running|protected)$/.test(mode))env.FAKE_TASK_STATUS='WORKING';
+  // A CLI-visible variable that claims the legacy profile changes nothing: the
+  // wrapper reads the profile only from wrapper- and daemon-written records.
+  if(mode==='strong-checkpoint-held-env'){env.MOE_EXECUTION_PROFILE='legacy';env.PINNED_ATTEMPT_PROFILE='legacy';}
   if(mode==='teardown-protected')env.FAKE_SCOPE_ASSIGNEE='worker-live';
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
@@ -400,12 +563,12 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|pro
   // The crash-window arms die the same way: at the held ledger row (window 1) or
   // at the held receipt (windows 2 and 3).
   const ledgerHeld=path.join(nested,'.moe','ledger-held');
-  if(['receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(mode)){
+  if(['receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(env.FAKE_EVIDENCE_MODE)){
     env.TMPDIR=env.TMP=env.TEMP=wrapperTmp;
     const supervisor=path.join(root,'receipt-supervisor.cjs');
     write(supervisor,KILL_ON_MARKER);
     runEngine=process.execPath;
-    runArgs=[supervisor,mode==='receipt-ledger-replay'?ledgerHeld:receiptHeld,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
+    runArgs=[supervisor,env.FAKE_EVIDENCE_MODE==='receipt-ledger-replay'?ledgerHeld:receiptHeld,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
   }
   if(/^(interrupt|teardown)-/.test(mode)){
     const supervisor=path.join(root,mode+(win?'-supervisor.ps1':'-supervisor.sh'));
@@ -472,7 +635,7 @@ exit "$rc"
     checks=rpc.filter(r=>r.tool==='record_check_run'),finals=rpc.filter(r=>r.tool==='finalize_attempt'),
     seen=rows(path.join(nested,'.moe','gate-observations.jsonl'));
   const failed=['dirty-helper','race-fail','tracked-mutation','exit-tail','missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','workspace-failure','interrupt-int','interrupt-term',
-    'gate-qa-claimed','hidden-mutation'].includes(mode)||mode.startsWith('record_');
+    'gate-qa-claimed','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation'].includes(mode)||mode.startsWith('record_');
   const after=noGit?'':git(repo,'rev-parse','HEAD');
   const lastCommit=rpc.filter(r=>r.tool==='record_commit').at(-1);
   const pushBlocked=rows(path.join(nested,'.moe','messages','chan-general.jsonl')).some(m=>String(m.content).includes('PUSH-BLOCKED'))||
@@ -624,6 +787,123 @@ exit "$rc"
     const {workerId:w0,...r0}=receipts[0].args,{workerId:w1,...r1}=receipts[1].args;
     assert.deepEqual([w0,w1,r1],['worker-frozen','worker-other',r0],'the other seat re-sends the journaled report\n'+log2);
     replayed(rpc2,log2,reflog);
+    count++;continue;
+  }
+  if(mode.startsWith('reconcile-strong-')){
+    // CQ-V08, strong profile only: no double land, no early finalize, and a proof
+    // never moves to a tree other than the verified candidate's.
+    const moved=rows(path.join(repo,'.git','moe-intent-events.jsonl')).filter(e=>e.ref==='refs/heads/moe/frozen'),
+      receipts=rpc.filter(r=>r.tool==='record_delivery_receipt'),[c1={},c2={}]=candidates.map(r=>r.args),
+      completions=()=>git(repo,'log','--format=%H','--fixed-strings','--grep=Moe-Kind: completion',before+'..moe/frozen').split('\n').filter(Boolean);
+    if(mode==='reconcile-strong-receipt-lost'){
+      // DoD1: a lost receipt holds the finalize; the replay records it, THEN finalizes, and never lands again.
+      assert.deepEqual({deferred:said('MOE_FINALIZE_DEFERRED_RECEIPT: task task-postflight --'),finals:finals.length,journal:fs.existsSync(journal),landed:after!==before},
+        {deferred:1,finals:0,journal:true,landed:true},log);
+      const reflog=reflogOf();env.FAKE_EVIDENCE_MODE=mode;
+      const {log2,rpc2}=replay(args),r2=replayed(rpc2,log2,reflog);
+      assert.equal(r2.length,2,log2);assert.deepEqual(r2[1].args,r2[0].args,'the replay re-sends the journaled report\n'+log2);
+      assert.deepEqual(completions(),[after],'no double land\n'+log2);
+    }else if(mode==='reconcile-strong-unreconciled'){
+      // DoD1: a journal the replay could not settle refuses the next landing before any effect.
+      assert.deepEqual({warned:said('MOE_COMMIT_REFUSED_UNRECONCILED_INTENT: task task-postflight --'),moved,head:after,journal:read(journal),
+        commits:rpc.filter(r=>r.tool==='record_commit').map(r=>[r.args.outcome,r.args.kind,r.args.code]),receipts:receipts.map(r=>r.args.targetAfter),
+        rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),owned:read(owned),baseline:fs.existsSync(baselineFile),
+        evidence:candidates.length+checks.length,finals:finals.map(f=>f.args.outcome)},
+        {warned:1,moved:[],head:before,journal:seeded,commits:[['refused','completion','MOE_COMMIT_REFUSED_UNRECONCILED_INTENT']],receipts:[before],
+        rescue:'',owned:'frozen owned\n',baseline:true,evidence:0,finals:['failed']},log);
+    }else if(mode==='reconcile-strong-target-moved'){
+      // DoD2: a moved target re-freezes and rechecks; only the second candidate is journaled, received and landed, on the peer's commit.
+      assert.deepEqual({ids:c1.id!==c2.id,trees:c1.treeSha!==c2.treeSha,checks:checks.map(r=>[r.args.candidateId,r.args.exitCode]),
+        intent:moved.at(-1)?.journal?.candidateId,receipts:receipts.map(r=>r.args.candidateId),journal:fs.existsSync(journal),completions:completions(),
+        parent:[git(repo,'rev-parse',after+'~1'),git(repo,'log','-1','--format=%s',after+'~1')],finals:finals.map(f=>[f.args.outcome,f.args.landedRevision])},
+        {ids:true,trees:true,checks:[[c1.id,0],[c2.id,0]],intent:c2.id,receipts:[c2.id],journal:false,completions:[after],
+        parent:[c2.baseRevision,'peer-race'],finals:[['landed',after]]},log);
+    }else if(mode==='reconcile-strong-no-rebase'){
+      // DoD3: a rejected strong push is never rebased; the branch keeps the verified commit.
+      const r=receipts[0]?.args||{};
+      assert.deepEqual({rebased:log.includes('trying git pull --rebase'),exact:said('strong delivery is exact'),tree:git(repo,'rev-parse',after+'^{tree}'),
+        state:['rebase-merge','rebase-apply'].some(d=>fs.existsSync(path.join(repo,'.git',d))),receipt:[r.targetAfter,/^push failed: /.test(String(r.pushResult))],
+        finals:finals.map(f=>[f.args.outcome,f.args.landedRevision])},
+        {rebased:false,exact:1,tree:c1.treeSha,state:false,receipt:[after,true],finals:[['landed',after]]},log);
+    }else if(mode==='reconcile-strong-finalize-lost'){
+      // CQ-V08b: the receipt is accepted, then every finalize is lost. The strong journal
+      // stays; the replay re-sends that receipt, THEN finalizes that landing once, and never lands again.
+      const phase=()=>JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json'))).phase;
+      assert.deepEqual({finals:finals.map(f=>[f.args.outcome,f.args.landedRevision]),receipts:receipts.map(r=>r.args.targetAfter),
+        journal:fs.existsSync(journal)&&JSON.parse(read(journal)).targetAfter,phase:phase(),exhausted:said('finalize_attempt acknowledgement exhausted'),
+        deferred:said('MOE_FINALIZE_DEFERRED_RECEIPT'),completions:completions(),rows:ledgerRows().length},
+        {finals:Array(3).fill(['landed',after]),receipts:[after],journal:after,phase:'finalizing',exhausted:1,deferred:0,completions:[after],rows:1},log);
+      const n=rpc.length,reflog=reflogOf();env.FAKE_EVIDENCE_MODE=mode;
+      const {log2,rpc2}=replay(args),tail=rpc2.slice(n).filter(r=>['record_commit','record_delivery_receipt','finalize_attempt'].includes(r.tool)),f=tail[1]?.args||{};
+      assert.deepEqual({tail:tail.map(r=>r.tool),resent:tail[0]?.args,final:[f.attemptId,f.generation,f.workerId,f.outcome,f.landedRevision],
+        head:git(repo,'rev-parse','moe/frozen'),reflog:reflogOf(),journal:fs.existsSync(journal),phase:phase(),completions:completions(),rows:ledgerRows().length,
+        evidence:rpc2.filter(r=>r.tool==='record_candidate'||r.tool==='record_check_run').length},
+        {tail:['record_delivery_receipt','finalize_attempt'],resent:receipts[0].args,final:['attempt-postflight',7,'worker-frozen','landed',after],
+        head:after,reflog,journal:false,phase:'closed',completions:[after],rows:1,evidence:candidates.length+checks.length},log2);
+    }else{
+      // DoD3: run 1 died at its ledger row; the branch then carries the landing's
+      // trailers on a copy. A copy of another tree gets nothing; the same tree is that landing.
+      assert.ok(fs.existsSync(ledgerHeld),'run 1 must reach its ledger row\n'+log);
+      const j1=read(journal),same=mode.endsWith('-same-tree'),msg=path.join(root,mode+'-msg.txt');
+      write(msg,git(repo,'log','-1','--format=%B',after)+'\n');
+      const parent=same?git(repo,'commit-tree',before+'^{tree}','-p',before,'-m','peer-empty'):before;
+      const copy=git(repo,'commit-tree',(same?after:before)+'^{tree}','-p',parent,'-F',msg);
+      git(repo,'update-ref','refs/heads/moe/frozen',copy,after);
+      const n=rpc.length,{log2,rpc2}=replay(args),run2=log2.slice(log.length).split('MOE_DELIVERY_PROOF_NOT_TRANSFERRED: task task-postflight --').length-1;
+      const tail=rpc2.slice(n).filter(r=>['record_commit','record_delivery_receipt','finalize_attempt'].includes(r.tool))
+        .map(r=>[r.tool,r.tool==='record_commit'?r.args.sha:r.tool==='finalize_attempt'?r.args.outcome+' '+r.args.landedRevision:r.args.targetAfter]);
+      assert.deepEqual({warned:run2,tail,head:git(repo,'rev-parse','moe/frozen'),journal:fs.existsSync(journal)?read(journal):null},
+        same?{warned:0,tail:[['record_commit',copy],['record_delivery_receipt',after],['finalize_attempt','landed '+copy]],head:copy,journal:null}
+          :{warned:1,tail:[],head:copy,journal:j1},log2);
+    }
+    count++;continue;
+  }
+  if(mode.startsWith('strong-')){
+    // CQ-V08b: under the strong profile only a verified completion moves the target.
+    // A checkpoint -- this session's exit, or a later pre-flight's recovery -- is
+    // refused before any effect: no ref, rescue ref, index or baseline write.
+    const code='MOE_COMMIT_REFUSED_STRONG_CHECKPOINT',warned=s=>s.split(code+': task task-postflight --').length-1,
+      moved=()=>rows(path.join(repo,'.git','moe-intent-events.jsonl')).filter(e=>e.ref==='refs/heads/moe/frozen'||e.ref.startsWith('refs/moe/rescue/')),
+      rescues=()=>git(repo,'for-each-ref','--format=%(refname) %(objectname)','refs/moe/rescue/'),
+      commits=r=>r.filter(x=>x.tool==='record_commit').map(x=>[x.args.outcome,x.args.kind,x.args.code]);
+    // The exit is held by: -held the pin and the record; -env the same, its
+    // environment forged; -forged the pin alone, against a newer forged legacy
+    // record; -journal the receipt journal alone, under a legacy pin and record.
+    if(mode.startsWith('strong-checkpoint-')){
+      const line=rows(path.join(nested,'.moe','messages','chan-general.jsonl')).map(m=>String(m.content))
+        .filter(s=>s.includes('worker session ended: task=task-postflight')).pop()||'';
+      assert.deepEqual({warned:warned(log),commits:commits(rpc),line:line.includes(' outcome=refused code='+code),head:after,reflog:reflogOf(),moved:moved(),
+        rescue:rescues(),owned:read(owned),index:fs.readFileSync(index).equals(beforeIndex),
+        baseline:fs.readFileSync(baselineFile).equals(fs.readFileSync(path.join(nested,'.moe','baseline-at-cli'))),
+        evidence:candidates.length+checks.length+seen.length+finals.length},
+        {warned:1,commits:[['refused','checkpoint',code]],line:true,head:before,reflog:before,moved:[],
+        rescue:'',owned:'frozen owned\n',index:true,baseline:true,evidence:0},log);
+    }else{
+      // Run 1 ends a strong completion unlanded: its journal unwritable, or its gate
+      // failed and parked the bytes on a rescue ref. Run 2 (journal writable again)
+      // lands nothing, and the rescue ref stays unmoved.
+      const gate=mode.endsWith('-gate'),refs1=rescues(),moved1=moved().length,reflog=reflogOf(),
+        phase=()=>JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json'))).phase;
+      assert.deepEqual({code:rpc.filter(r=>r.tool==='record_commit').at(-1)?.args.code,finals:finals.map(f=>f.args.outcome),phase:phase(),head:after,
+        rescue:refs1.split('\n').filter(Boolean).length,baseline:fs.existsSync(baselineFile)},
+        {code:gate?'MOE_COMMIT_FAILED_GATE':'MOE_COMMIT_REFUSED_INTENT_UNWRITABLE',finals:[gate?'rescued':'failed'],phase:'closed',head:before,
+        rescue:gate?1:0,baseline:true},log);
+      if(!gate)fs.rmSync(path.join(repo,'.git','moe','receipt'));
+      const n=rpc.length,second=cp.spawnSync(engine,args,{env:{...env,FAKE_TASK_STATUS:'WORKING',FROZEN_RUN:'2'},encoding:'utf8',
+        timeout:Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)*1000,maxBuffer:4*1024*1024});
+      const log2=(second.stdout||'')+(second.stderr||'');write(path.join(root,mode+'.log'),log+log2);
+      assert.equal(second.signal,null,log2);assert.ok(second.status!==null,log2);
+      // The gate failure leaves its baseline lingering, so run 2 refuses twice: the
+      // pre-flight recovery of those bytes, then its own exit. A V07 refusal settles
+      // its baseline instead (landed=1, the bytes carried as the task's own), so run 2
+      // has nothing to recover and refuses only its exit checkpoint of those bytes.
+      const recovering=log2.indexOf(win?'a previous session of task task-postflight ended without landing':'lingering baseline for task-postflight');
+      assert.deepEqual({recovering:recovering>=0&&recovering<log2.indexOf(code),warned:warned(log2),recovered:log2.includes('MOE_CHECKPOINT_RECOVERED'),
+        commits:commits(rows(path.join(nested,'.moe','evidence-rpcs.jsonl')).slice(n)),head:git(repo,'rev-parse','moe/frozen'),reflog:reflogOf(),
+        rescue:rescues(),moved:moved().length,owned:read(owned)},
+        {recovering:gate,warned:gate?2:1,recovered:false,commits:Array(gate?2:1).fill(['refused','checkpoint',code]),head:before,reflog,
+        rescue:refs1,moved:moved1,owned:'frozen owned\n'},log2);
+    }
     count++;continue;
   }
   if(mode.startsWith('teardown-')){
@@ -778,7 +1058,7 @@ exit "$rc"
         assert.equal(git(repo,'rev-parse',after+'~1'),c.baseRevision,log);}
     }
   }
-  if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
+  if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
   if(mode==='dirty-helper'){
     assert.equal(after,before,'dirty helper must not authorize a branch commit\n'+log);
@@ -828,6 +1108,14 @@ exit "$rc"
     assert.ok(ci>=0&&ci<rpc.indexOf(check));assert.equal(check.args.treeSha,rpc[ci].args.treeSha);
     assert.equal(check.args.source,'runner-observed');assert.equal(check.args.command,'node gate.cjs');
     assert.ok(Buffer.byteLength(check.args.outputTail)<=16384);
+    // The run carries its honest outcome: 'passed' only for exit 0 with the checkout
+    // intact, 'inconclusive' for exit 0 after a tracked tree/index/HEAD mutation,
+    // 'code-failure' for a nonzero exit, 'infra-failure' for an interrupted gate.
+    // The wrapper can only know the mutation if it checked integrity BEFORE recording.
+    const wantOutcome=mode.startsWith('interrupt-')?'infra-failure':
+      ['tracked-mutation','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation'].includes(mode)?'inconclusive':
+      check.args.exitCode!==0?'code-failure':'passed';
+    assert.equal(check.args.outcome,wantOutcome,'CheckRun outcome for '+mode+' (exit '+check.args.exitCode+')\n'+log);
   }
   for(const o of seen){
     assert.notEqual(path.resolve(o.cwd),path.resolve(nested));assert.equal(path.basename(o.cwd),'nested project é');
@@ -858,7 +1146,10 @@ exit "$rc"
     assert.equal(git(repo,'rev-list','--parents','-n','1','HEAD'),after,'unborn landing is a parentless root commit');
     assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0);
   }
-  if(mode==='hidden-mutation'){assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0,'integrity refusal keeps the actual exit code');}
+  if(['tracked-mutation','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation'].includes(mode)){
+    assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0,'integrity refusal keeps the actual exit code');
+    assert.equal(checks[0].args.outcome,'inconclusive','an exit-0 gate that mutated its checkout is never a passing run\n'+log);}
+  if(mode==='pass')assert.deepEqual(checks.map(r=>[r.args.exitCode,r.args.outcome]),[[0,'passed']],log);
   if(mode==='receipt-cached-check'){
     assert.ok(fs.existsSync(path.join(repo,'.git','moe-cas-refused')),'git refused the first CAS\n'+log);
     assert.equal(candidates.length,1,log);assert.equal(checks.length,1,log);
@@ -965,6 +1256,8 @@ FROZENJS
 if printenv MOE_FROZEN_TEST_ONLY >/dev/null; then exit 0; fi
 # Owner guard cases (one suite shared with postflight.ps1).
 "$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-owner-guard.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
+# Migration landing cases (one suite shared with postflight.ps1).
+"$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-migration.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
 # Worktree provisioning cases (one suite shared with postflight.ps1).
 "$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-worktree.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
 
@@ -1440,6 +1733,108 @@ if [ "$count_after_wait" -ne "$count_at_exit" ]; then
   exit 1
 fi
 
+# --- Idle wait killed: only children of this arm's recorded wrapper are targets.
+idle_project() {
+  IDLE_PROJECT="$TMP_DIR/$1"
+  IDLE_OUT="$TMP_DIR/$1.out"
+  mkdir -p "$IDLE_PROJECT/.moe/messages"
+  printf '{"id":"proj-idle","settings":{"autoCommit":false}}\n' > "$IDLE_PROJECT/.moe/project.json"
+  : > "$IDLE_PROJECT/.moe/messages/chan-general.jsonl"
+  printf '{"port":9876,"projectPath":"%s"}\n' "$IDLE_PROJECT" > "$IDLE_PROJECT/.moe/daemon.json"
+}
+idle_sleep_pid() {
+  ps -A -o pid=,ppid=,comm= | awk -v parent="$idle_pid" '$2 == parent && $3 == "sleep" { print $1 }'
+}
+idle_fail() {
+  if [ -n "${idle_pid:-}" ]; then
+    idle_child="$(idle_sleep_pid)"
+    [ -z "$idle_child" ] || kill -KILL "$idle_child" 2>/dev/null || true
+    kill -KILL "$idle_pid" 2>/dev/null || true
+    wait "$idle_pid" 2>/dev/null || echo "idle wrapper exit status: $?" >&2
+  fi
+  cat "$IDLE_OUT" >&2 || true
+  cat "$IDLE_PROJECT/.moe/deregister.log" >&2 2>/dev/null || true
+  echo "IDLE WAIT FAILED: $1" >&2
+  exit 1
+}
+idle_wait_for_poll() {
+  local want="$1" deadline=$((SECONDS + $2)) claims
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    kill -0 "$idle_pid" 2>/dev/null || idle_fail 'wrapper exited instead of re-polling'
+    claims=$(grep -c '"tool":"claim_next_task"' "$IDLE_PROJECT/.moe/evidence-rpcs.jsonl" 2>/dev/null) || claims=0
+    idle_child="$(idle_sleep_pid)"
+    if [ "$claims" -ge "$want" ] && [ -n "$idle_child" ]; then return 0; fi
+    sleep 0.1
+  done
+  idle_fail "timed out waiting for poll $want"
+}
+
+# A failed diagnostic write must not turn a recovered sleep into a set -e exit.
+for idle_error_fd in 1 -; do
+  echo "[idle wait killed] sleep TERM/KILL survive; wrapper TERM stops (stderr=$idle_error_fd)"
+  idle_project "idle-wait-$idle_error_fd"
+  PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+    "$WRAPPER" --project "$IDLE_PROJECT" --worker-id worker-idle-wait --role worker \
+    --no-start-daemon --command /bin/true --loop --poll-interval 47 >"$IDLE_OUT" 2>&"$idle_error_fd" &
+  idle_pid=$!
+  idle_live_before="$LIVE_PIDS"
+  LIVE_PIDS="$LIVE_PIDS $idle_pid"
+  idle_wait_for_poll 1 "$POSTFLIGHT_TIMEOUT_SEC"
+  idle_repoll_limit=15
+  [ "$POSTFLIGHT_TIMEOUT_SEC" -ge 15 ] || idle_repoll_limit="$POSTFLIGHT_TIMEOUT_SEC"
+  idle_claims=1
+  for idle_signal in TERM KILL; do
+    kill -"$idle_signal" "$idle_child" || idle_fail "could not signal sleep $idle_child"
+    idle_claims=$((idle_claims + 1))
+    idle_wait_for_poll "$idle_claims" "$idle_repoll_limit"
+    idle_status=143
+    [ "$idle_signal" != KILL ] || idle_status=137
+    if [ "$idle_error_fd" != - ]; then
+      grep -Eq "MOE_IDLE_WAIT_INTERRUPTED:.*sleep exited $idle_status" "$IDLE_OUT" \
+        || idle_fail "missing interrupted-wait status $idle_status"
+    fi
+    if grep -Fq ' worker-idle-wait ' "$IDLE_PROJECT/.moe/deregister.log" 2>/dev/null; then
+      idle_fail 'a killed sleep deregistered the seat'
+    fi
+  done
+  kill -TERM "$idle_pid" || idle_fail 'could not signal wrapper'
+  # Bash defers its TERM trap until its foreground child returns, as before.
+  kill -TERM "$idle_child" 2>/dev/null || true
+  idle_deadline=$((SECONDS + POSTFLIGHT_TIMEOUT_SEC))
+  while kill -0 "$idle_pid" 2>/dev/null; do
+    [ "$SECONDS" -lt "$idle_deadline" ] || idle_fail 'wrapper TERM timed out'
+    sleep 0.1
+  done
+  idle_code=0
+  wait "$idle_pid" || idle_code=$?
+  idle_pid=''
+  LIVE_PIDS="$idle_live_before"
+  [ "$idle_code" -eq 0 ] || idle_fail "wrapper TERM exited $idle_code"
+  grep -Fq 'Agent stopped.' "$IDLE_OUT" || idle_fail 'wrapper TERM missed the stop trap'
+  grep -Eq ' worker-idle-wait terminal_closed$' "$IDLE_PROJECT/.moe/deregister.log" \
+    || idle_fail 'wrapper TERM did not deregister terminal_closed'
+done
+
+# A separate, registered one-shot seat fails its argv probe (scenario Z's seam).
+idle_project idle-unexpected
+mkdir -p "$TMP_DIR/idle-cli"
+cat > "$TMP_DIR/idle-cli/codex" <<'IDLE_CODEX'
+#!/usr/bin/env bash
+echo "error: unexpected argument '--sandbox' found" >&2
+exit 2
+IDLE_CODEX
+chmod +x "$TMP_DIR/idle-cli/codex"
+idle_code=0
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 \
+  timeout "$POSTFLIGHT_TIMEOUT_SEC" "$WRAPPER" --project "$IDLE_PROJECT" \
+  --worker-id worker-idle-unexpected --role worker --no-start-daemon \
+  --command "$TMP_DIR/idle-cli/codex" --no-loop >"$IDLE_OUT" 2>&1 || idle_code=$?
+[ "$idle_code" -eq 1 ] || idle_fail "argv refusal exited $idle_code, expected 1"
+grep -Fq 'MOE_CLI_ARGV_REJECTED' "$IDLE_OUT" || idle_fail 'argv probe did not refuse'
+grep -Eq ' worker-idle-unexpected unexpected_exit:1$' "$IDLE_PROJECT/.moe/deregister.log" \
+  || idle_fail 'argv refusal did not deregister unexpected_exit:1'
+echo '[idle wait killed] ok'
+
 reload_git() {
   git -C "$RELOAD_DIR/scripts" -c user.name='Moe Test' -c user.email=moe@test.local \
     -c commit.gpgsign=false -c core.autocrlf=false "$@"
@@ -1481,10 +1876,12 @@ printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":
 printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
 # c = claim_next_task, r = a wrapper_restart deregister, x = any other deregister
 # (the postflight.ps1 twin maps the same). A line still mid-append is skipped.
+# An optional workerId (argv[3]) counts only that worker's rows.
 cat > "$TMP_DIR/reload-sequence.cjs" <<'JS'
-const fs=require('fs'),file=process.argv[2];
+const fs=require('fs'),file=process.argv[2],worker=process.argv[3];
 const text=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
-const rows=text.split('\n').flatMap(l=>{try{return [JSON.parse(l)];}catch(e){return [];}});
+const rows=text.split('\n').flatMap(l=>{try{return [JSON.parse(l)];}catch(e){return [];}})
+  .filter(r=>worker===undefined||(r.args&&r.args.workerId===worker));
 process.stdout.write(rows.map(r=>r.tool==='claim_next_task'?'c':r.tool!=='deregister_worker'?'':
   r.args&&r.args.reason==='wrapper_restart'?'r':'x').join(''));
 JS
@@ -1548,6 +1945,142 @@ reload_want='^c+rc{2,}rc{2,}$'
 grep -Fq 'restarting to load it (edit 1 loaded)' "$TMP_DIR/wrapper-reload.out" \
   || reload_fail "the second restart did not run the edited bytes"
 echo "[hot reload] ok: 2 restarts, each re-registered, none without an edit"
+
+# --- Hot reload hold (task-f81c85ac; twin in postflight.ps1). The reload's
+# wrapper_restart deregister no longer releases the seat's task: the daemon
+# holds it for the relaunch (task-4ddbfb31), and FAKE_CLAIM_MODE=reload-hold
+# models that hold for two seats sharing one fake. worker-reload claims
+# task-postflight, then reloads on one committed edit. Its re-exec'd process
+# must get the same task back (alreadyAssigned) and resume it with a fresh
+# resume counter. worker-peer polls the same fake from an unedited copy, so it
+# never reloads; it must never be handed the task, and nothing is released. A
+# fake that releases on wrapper_restart fails at (b) or (c). Only the two
+# recorded wrapper PIDs are ever killed. ---
+echo "[hot reload hold] a reloading seat keeps its task and resumes it; a polling peer never gets it"
+RELOAD_DIR="$TMP_DIR/reload-hold"
+RELOAD_PROJECT="$RELOAD_DIR/project"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+HOLD_PEER_WRAPPER="$TMP_DIR/reload-hold-peer/scripts/moe-agent.sh"
+HOLD_PEER_OUT="$TMP_DIR/wrapper-reload-peer.out"
+HOLD_ANSWERS="$RELOAD_PROJECT/.moe/claim-answers.jsonl"
+HOLD_LAUNCHES="$TMP_DIR/reload-hold-launches.txt"
+HOLD_CLI="$TMP_DIR/reload-hold-cli"
+mkdir -p "$RELOAD_PROJECT/.moe/messages" "$TMP_DIR/reload-hold-peer"
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+cp -R "$ROOT_DIR/scripts" "$TMP_DIR/reload-hold-peer/"
+chmod +x "$RELOAD_WRAPPER" "$HOLD_PEER_WRAPPER"
+reload_repo
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+: > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+write_task_record "$RELOAD_PROJECT" '[]' WORKING
+cat > "$HOLD_CLI" <<EOF
+#!/usr/bin/env bash
+{ printf '%s\n' "\$@"; printf -- '--- launch ---\n'; } >> "$HOLD_LAUNCHES"
+exit 0
+EOF
+chmod +x "$HOLD_CLI"
+# One worker's claim answers from claim-answers.jsonl, space-separated.
+cat > "$TMP_DIR/reload-hold-answers.cjs" <<'JS'
+const fs=require('fs'),[file,worker]=process.argv.slice(2);
+const text=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
+const rows=text.split('\n').flatMap(l=>{try{return [JSON.parse(l)];}catch(e){return [];}});
+process.stdout.write(rows.filter(r=>r.workerId===worker).map(r=>r.answer).join(' '));
+JS
+hold_seq() { "$NODE_FOR_TEST" "$TMP_DIR/reload-sequence.cjs" "$RELOAD_PROJECT/.moe/evidence-rpcs.jsonl" "$1" 2>/dev/null || true; }
+hold_answers() { "$NODE_FOR_TEST" "$TMP_DIR/reload-hold-answers.cjs" "$HOLD_ANSWERS" "$1" 2>/dev/null || true; }
+hold_launches() { if [ -f "$HOLD_LAUNCHES" ]; then grep -c -- '^--- launch ---$' "$HOLD_LAUNCHES" || true; else echo 0; fi; }
+hold_peer_pid=""
+hold_fail() {
+  [ -z "$hold_peer_pid" ] || kill -KILL "$hold_peer_pid" 2>/dev/null || true
+  cat "$HOLD_PEER_OUT" >&2 2>/dev/null || true
+  cat "$HOLD_ANSWERS" >&2 2>/dev/null || true
+  reload_fail "[hot reload hold] $1 (worker-reload '$(hold_seq worker-reload)', worker-peer '$(hold_seq worker-peer)')"
+}
+# (b) and (c) on every poll, so a wrong answer fails at once and by name.
+hold_check_answers() {
+  local mine peer
+  mine="$(hold_answers worker-reload)"; peer="$(hold_answers worker-peer)"
+  [ -z "$mine" ] || [[ $mine =~ ^claimed( resumed)*$ ]] \
+    || hold_fail "(b) worker-reload's answers must be claimed, then only resumed: '$mine'"
+  [ -z "$peer" ] || [[ $peer =~ ^none( none)*$ ]] \
+    || hold_fail "(c) worker-peer was handed the held task: '$peer'"
+}
+# hold_until WHAT CHECK -- poll the CHECK function, bounded; a dead seat fails.
+hold_until() {
+  local deadline=$((SECONDS + POSTFLIGHT_TIMEOUT_SEC))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    hold_check_answers
+    if "$2"; then return 0; fi
+    kill -0 "$reload_pid" 2>/dev/null || hold_fail "worker-reload exited while waiting for $1"
+    [ -z "$hold_peer_pid" ] || kill -0 "$hold_peer_pid" 2>/dev/null || hold_fail "worker-peer exited while waiting for $1"
+    sleep 0.5
+  done
+  hold_fail "timed out after ${POSTFLIGHT_TIMEOUT_SEC}s waiting for $1"
+}
+hold_claimed() { grep -Fq '{"workerId":"worker-reload","answer":"claimed"}' "$HOLD_ANSWERS" 2>/dev/null; }
+hold_resumed_once() { [ "$(hold_launches)" -ge 2 ]; }
+# The launch and peer-claim counts are marked once the restart is seen, so a
+# later count is a launch and a peer claim after the reload deregister.
+hold_launch_mark=""; hold_peer_mark=""
+hold_after_reload() {
+  local seq restarts peer
+  seq="$(hold_seq worker-reload)"
+  case "$seq" in *x*) hold_fail "(a) worker-reload deregistered with a reason other than wrapper_restart" ;; esac
+  restarts="${seq//[!r]/}"
+  [ "${#restarts}" -le 1 ] || hold_fail "(a) worker-reload restarted more than once for one edit"
+  [ -n "$restarts" ] || return 1
+  peer="$(hold_seq worker-peer)"; peer="${peer//[!c]/}"
+  if [ -z "$hold_launch_mark" ]; then hold_launch_mark="$(hold_launches)"; hold_peer_mark="${#peer}"; fi
+  [[ $seq =~ ^c+rc+$ ]] && [ "$(hold_launches)" -gt "$hold_launch_mark" ] && [ "${#peer}" -gt "$hold_peer_mark" ]
+}
+reload_live_before="$LIVE_PIDS"
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=reload-hold MOE_DISABLE_HEARTBEAT=1 \
+  MOE_RESUME_MAX_ATTEMPTS=50 "$RELOAD_WRAPPER" --project "$RELOAD_PROJECT" --worker-id worker-reload --role worker \
+  --no-start-daemon --command "$HOLD_CLI" --loop --poll-interval 1 >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+hold_until "worker-reload's first claim" hold_claimed
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=reload-hold MOE_DISABLE_HEARTBEAT=1 \
+  MOE_RESUME_MAX_ATTEMPTS=50 "$HOLD_PEER_WRAPPER" --project "$RELOAD_PROJECT" --worker-id worker-peer --role worker \
+  --no-start-daemon --command /bin/true --loop --poll-interval 1 >"$HOLD_PEER_OUT" 2>&1 &
+hold_peer_pid=$!
+LIVE_PIDS="$LIVE_PIDS $hold_peer_pid"
+# Two launches: the claim's and one resume, so the pre-reload counter is past 1.
+hold_until "two launches before the edit" hold_resumed_once
+printf '# reload hold\n' >> "$RELOAD_WRAPPER"
+reload_commit 'reload hold edit'
+hold_until "a resume after the restart and a peer claim after it" hold_after_reload
+kill -KILL "$reload_pid" "$hold_peer_pid" 2>/dev/null || true
+wait "$reload_pid" "$hold_peer_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+# A fake RPC the kill orphaned still finishes; wait (bounded) until every
+# worker-reload claim has its answer row.
+hold_settle=$((SECONDS + 10))
+while :; do
+  hold_final="$(hold_seq worker-reload)"; hold_claims="${hold_final//[!c]/}"
+  read -r -a hold_words <<< "$(hold_answers worker-reload)" || true
+  [ "${#hold_words[@]}" -ne "${#hold_claims}" ] && [ "$SECONDS" -lt "$hold_settle" ] || break
+  sleep 0.2
+done
+hold_check_answers
+[[ $hold_final =~ ^c+rc+$ ]] || hold_fail "(a) expected claims, one wrapper_restart deregister, then claims"
+[[ $(reload_seq) != *x* ]] && [ "$(reload_seq | tr -cd r)" = r ] \
+  || hold_fail "(a) the RPC log must hold exactly one deregister, worker-reload's wrapper_restart"
+[ "${#hold_words[@]}" = "${#hold_claims}" ] \
+  || hold_fail "(b) ${#hold_words[@]} claim answers for ${#hold_claims} worker-reload claims"
+hold_peer_final="$(hold_seq worker-peer)"
+[[ $hold_peer_final =~ ^c+$ ]] && [[ $(hold_answers worker-peer) =~ ^none( none)*$ ]] \
+  || hold_fail "(c) worker-peer must only claim, and every answer must be none"
+if grep -Fq '"tool":"release_task"' "$RELOAD_PROJECT/.moe/evidence-rpcs.jsonl"; then hold_fail '(c) a seat called release_task'; fi
+hold_resume_line='[resume] worker-reload already holds task-postflight (WORKING) from a previous session (attempt 1/'
+sed "s/$(printf '\033')\[[0-9;]*m//g" "$TMP_DIR/wrapper-reload.out" \
+  | awk -v want="$hold_resume_line" '/restarting to load it/{seen=1} seen && index($0, want){found=1} END{exit !found}' \
+  || hold_fail "(d) no fresh '[resume] ... (attempt 1/' line after the restart"
+awk '$0 == "--- launch ---" {last=block; block=""; next} {block=block $0 "\n"} END{printf "%s", last}' "$HOLD_LAUNCHES" \
+  | grep -Fq 'RESUME: you are workerId worker-reload and you already claimed task task-postflight' \
+  || hold_fail "(e) the last launch does not carry the RESUME prompt for task-postflight"
+echo "[hot reload hold] ok: worker-reload resumed task-postflight after its restart (sequence $hold_final), worker-peer claimed ${#hold_peer_final} times and got none"
 
 # --- Hot reload refused (twin: the refused-reload arm in postflight.ps1). Seats
 # launched from the shared checkout reload every edit of the real file, and a
@@ -1663,6 +2196,121 @@ for reload_mode in deferred unverifiable; do
   fi
   echo "[hot reload $reload_mode] ok: $reload_edits deferrals, $reload_restarts restarts"
 done
+
+# --- Hot reload follow (WT-13 §6.2; twin in postflight.ps1). The project is the
+# wrapper's own checkout, on moe/control. A wrapper change committed to main only
+# (plumbing: neither HEAD nor the file moves) is followed at the next loop top,
+# BEFORE the hash check, so the file on disk is HEAD's blob and the seat restarts
+# once, with no MOE_WRAPPER_RELOAD_DEFERRED line.
+echo "[hot reload follow] a wrapper change landed on main is followed, then reloaded"
+RELOAD_DIR="$TMP_DIR/reload-follow"
+RELOAD_PROJECT="$RELOAD_DIR"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+mkdir -p "$RELOAD_DIR/.moe/messages"
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+chmod +x "$RELOAD_WRAPPER"
+printf '.moe/\n.mcp.json\nlogs/\n.claude/\n' > "$RELOAD_DIR/.gitignore"
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_DIR/.moe/project.json"
+: > "$RELOAD_DIR/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_DIR" > "$RELOAD_DIR/.moe/daemon.json"
+follow_git() {
+  git -C "$RELOAD_DIR" -c user.name='Moe Test' -c user.email=moe@test.local -c commit.gpgsign=false -c core.autocrlf=false "$@"
+}
+{ follow_git init -q && follow_git symbolic-ref HEAD refs/heads/main && follow_git add -A && follow_git commit -qm base \
+    && follow_git switch -q -c moe/control; } || { echo 'HOT RELOAD FAILED: could not initialize the follow repo' >&2; exit 1; }
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+  "$RELOAD_WRAPPER" --project "$RELOAD_DIR" --worker-id worker-reload-follow --role worker --no-start-daemon \
+  --command /bin/true --loop --poll-interval 1 >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+reload_live_before="$LIVE_PIDS"
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+reload_wait 0 '^c'
+reload_fmode="$(follow_git ls-files -s scripts/moe-agent.sh | cut -d' ' -f1)"
+reload_idx="$TMP_DIR/reload-follow.index"
+reload_blob="$({ cat "$RELOAD_WRAPPER"; printf '# landed on main\n'; } | follow_git hash-object -w --stdin)" \
+  && GIT_INDEX_FILE="$reload_idx" follow_git read-tree HEAD \
+  && GIT_INDEX_FILE="$reload_idx" follow_git update-index --cacheinfo "$reload_fmode,$reload_blob,scripts/moe-agent.sh" \
+  && reload_tree="$(GIT_INDEX_FILE="$reload_idx" follow_git write-tree)" \
+  && reload_main="$(follow_git commit-tree "$reload_tree" -p HEAD -m 'land a wrapper change on main')" \
+  && follow_git update-ref refs/heads/main "$reload_main" \
+  || reload_fail 'could not land the wrapper change on main'
+reload_wait 1 '^c+rc'
+reload_final="$(reload_seq)"
+kill -KILL "$reload_pid" 2>/dev/null || true
+wait "$reload_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+grep -Eq "MOE_CONTROL_ADVANCED [0-9a-f]{40}\.\.$reload_main\$" "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail 'no MOE_CONTROL_ADVANCED line naming the landed commit'
+if grep -q 'MOE_WRAPPER_RELOAD_DEFERRED' "$TMP_DIR/wrapper-reload.out"; then reload_fail 'the followed bytes were deferred'; fi
+[ "$(grep -c 'restarting to load it' "$TMP_DIR/wrapper-reload.out" || true)" = 1 ] || reload_fail 'expected one restart announcement'
+[ "$(follow_git rev-parse HEAD)" = "$reload_main" ] && [ "$(follow_git symbolic-ref HEAD)" = refs/heads/moe/control ] \
+  && follow_git diff --quiet HEAD -- scripts/moe-agent.sh || reload_fail 'the control checkout is not on moe/control at main with the wrapper equal to HEAD'
+echo "[hot reload follow] ok: followed $reload_main, restarted once, no deferral (sequence $reload_final)"
+
+# --- Hot reload race (task-69c02444; twin in postflight.ps1). A restart loads
+# the bytes it verified as committed. The fake proxy rewrites the wrapper inside
+# the restart's own deregister (FAKE_RELOAD_RACE_SRC/_DST): after the check and
+# before the load. The seat restarts on the committed bytes (a private
+# moe-wrapper-pin.* copy) and reloads the racing write only once it is committed,
+# again from a copy. Committed bytes that no longer name the MOE_WRAPPER_SOURCE
+# hand-over (a revert) reload from the checkout path, and no copy is left behind.
+echo "[hot reload race] a write after the committed check is never loaded"
+RELOAD_DIR="$TMP_DIR/reload-race"
+RELOAD_PROJECT="$RELOAD_DIR/project"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+RACE_TMP="$RELOAD_DIR/tmp"
+RACE_SRC="$RELOAD_DIR/race.src"
+mkdir -p "$RELOAD_PROJECT/.moe/messages" "$RACE_TMP"
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+chmod +x "$RELOAD_WRAPPER"
+reload_repo
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+: > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+# Edit A appends '# race A'; race.src is edit A with a marked idle line.
+"$NODE_FOR_TEST" -e 'const fs=require("fs"),[f,o]=process.argv.slice(1),a="Agent idle, checking for tasks in",t=fs.readFileSync(f,"utf8")+"# race A\n";
+if(t.split(a).length!==2)process.exit(3);fs.writeFileSync(o,t.replace(a,"MOE_TEST_RACE_LOADED from ${BASH_SOURCE[0]}, checking for tasks in"));' \
+  "$RELOAD_WRAPPER" "$RACE_SRC" || { echo 'HOT RELOAD FAILED: the idle line is not in the wrapper exactly once' >&2; exit 1; }
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+  TMPDIR="$RACE_TMP" FAKE_RELOAD_RACE_SRC="$RACE_SRC" FAKE_RELOAD_RACE_DST="$RELOAD_WRAPPER" \
+  "$RELOAD_WRAPPER" --project "$RELOAD_PROJECT" --worker-id worker-reload-race --role worker --no-start-daemon \
+  --command /bin/true --loop --poll-interval 1 >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+reload_live_before="$LIVE_PIDS"
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+reload_wait 0 '^c'
+printf '# race A\n' >> "$RELOAD_WRAPPER"
+reload_commit 'race A'
+reload_wait 1 '^c+rc{3,}$'
+[ ! -e "$RACE_SRC" ] || reload_fail 'the restart deregister did not write the racing bytes'
+grep -Fq MOE_TEST_RACE_LOADED "$RELOAD_WRAPPER" || reload_fail 'the racing bytes are not on disk'
+race_rc=0
+reload_git diff --quiet -- moe-agent.sh || race_rc=$?
+[ "$race_rc" = 1 ] || reload_fail "the racing bytes must stay uncommitted (git diff exited $race_rc)"
+if grep -Fq MOE_TEST_RACE_LOADED "$TMP_DIR/wrapper-reload.out"; then
+  reload_fail 'the restart loaded bytes written after the committed check'
+fi
+# Committed, the racing bytes reload once, from a private copy.
+reload_commit 'race write'
+reload_wait 2 '^c+rc+rc{3,}$'
+grep -Eq 'MOE_TEST_RACE_LOADED from .*/moe-wrapper-pin\.[^/]+/moe-agent\.sh,' "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail 'the committed racing bytes did not run from a moe-wrapper-pin copy'
+[ -z "$(find "$RACE_TMP" -maxdepth 1 -name 'moe-wrapper-pin.*' -print)" ] || reload_fail 'the running copy did not delete itself once loaded'
+# Bytes without the hand-over would resolve their helpers beside a copy.
+"$NODE_FOR_TEST" -e 'const fs=require("fs"),f=process.argv[1],t=fs.readFileSync(f,"utf8").split("MOE_WRAPPER_SOURCE");
+if(t.length<2)process.exit(3);fs.writeFileSync(f,t.join("MOE_WRAPPER_ORIGIN"));' "$RELOAD_WRAPPER" \
+  || reload_fail 'the wrapper does not name MOE_WRAPPER_SOURCE'
+reload_commit 'drop hand-over'
+reload_wait 3 '^c+rc+rc+rc{3,}$'
+reload_final="$(reload_seq)"
+kill -KILL "$reload_pid" 2>/dev/null || true
+wait "$reload_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+grep -Fq "MOE_TEST_RACE_LOADED from $RELOAD_WRAPPER," "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail 'bytes without the hand-over did not reload from the checkout path'
+race_left="$(find "$RACE_TMP" -maxdepth 1 -name 'moe-wrapper-pin.*' -print)"
+[ -z "$race_left" ] || reload_fail "private copies left behind: $race_left"
+echo "[hot reload race] ok: restarted on the committed bytes, loaded the racing write from a copy once committed (sequence $reload_final)"
 
 # --- Stale offset: bash parses incrementally, so the loop and its own tail
 # must be one group. No ps1 twin: PowerShell parses the whole file up front.
@@ -4319,6 +4967,44 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AB2] ok"
 
+  # Scenario AB3 (task-ecf78687) -- a seat's OWN message is never its mention.
+  # (a) The only unread message is one this seat sent, tagging itself, @all and
+  # its role group: the pre-wait probe must not count it (the wrapper-side wait
+  # runs) and the routed build must not list it (no notification-only session).
+  # (b) Contrast: another sender's @all + role-group tag still launches one.
+  echo "[scenario AB3] a seat's own role-group/@all message never wakes it"
+  SCOPE_AB3_DIR="$TMP_DIR/scope-ab3"
+  make_scope_project "$SCOPE_AB3_DIR" '[]'
+  set +e
+  FAKE_CLAIM_MODE=idle FAKE_MENTION=self MOE_TASKLESS_WAIT_SEC=5 \
+    run_scope_wrapper "$SCOPE_AB3_DIR" "$TMP_DIR/scope-ab3.out" "$FILE_CLI" worker worker-scope-ab3
+  scope_ab3_code=$?
+  set -e
+  FAKE_CLAIM_MODE=""; FAKE_MENTION=""
+  [ "$scope_ab3_code" -eq 0 ] || scope_fail AB3 "wrapper exited with $scope_ab3_code" "$TMP_DIR/scope-ab3.out"
+  grep -Fq 'msg-fake-self' "$SCOPE_AB3_DIR/.moe/messages/chan-general.jsonl" 2>/dev/null \
+    || scope_fail AB3 "fixture: the seat's own message was never served" "$TMP_DIR/scope-ab3.out"
+  if [ -f "$SCOPE_AB3_DIR/session-new.txt" ]; then
+    scope_fail AB3 "the seat's own message launched a notification-only session to answer itself" "$TMP_DIR/scope-ab3.out"
+  fi
+  grep -Fq '[no-task] No claimable task for role worker; waiting up to 5s in the wrapper' "$TMP_DIR/scope-ab3.out" \
+    || scope_fail AB3 "the pre-wait probe counted the seat's own message, so the wrapper-side wait was skipped" "$TMP_DIR/scope-ab3.out"
+  grep -Fq 'MOE_TASKLESS_NO_LAUNCH reason=idle role=worker worker=worker-scope-ab3' "$TMP_DIR/scope-ab3.out" \
+    || scope_fail AB3 "the suppressed launch must be named, not silent" "$TMP_DIR/scope-ab3.out"
+  SCOPE_AB3B_DIR="$TMP_DIR/scope-ab3b"
+  make_scope_project "$SCOPE_AB3B_DIR" '[]'
+  set +e
+  FAKE_CLAIM_MODE=idle FAKE_MENTION=group MOE_TASKLESS_WAIT_SEC=5 \
+    run_scope_wrapper "$SCOPE_AB3B_DIR" "$TMP_DIR/scope-ab3b.out" "$FILE_CLI" worker worker-scope-ab3b
+  scope_ab3b_code=$?
+  set -e
+  FAKE_CLAIM_MODE=""; FAKE_MENTION=""
+  [ "$scope_ab3b_code" -eq 0 ] || scope_fail AB3 "(b) wrapper exited with $scope_ab3b_code" "$TMP_DIR/scope-ab3b.out"
+  [ -f "$SCOPE_AB3B_DIR/session-new.txt" ] \
+    || scope_fail AB3 "(b) another sender's @all/role-group tag must still launch a notification-only session" "$TMP_DIR/scope-ab3b.out"
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AB3] ok"
+
   # Scenarios AC/AD -- a file whose HEAD blob holds CRLF, under line-ending
   # conversion. The snapshot hashes the worktree with `hash-object`, which loads
   # no index and so normalizes CRLF to LF; `git add` into the temp index (seeded
@@ -4894,8 +5580,10 @@ try {
   echo "[scenario AI] ok"
 
   # Scenario AJ -- held paths survive BOTH peel-failure sends and the rescue
-  # ledger row. Twin: scenario AJ in postflight.ps1 (task-dfbda1a8). Every
-  # row is checked: ps1's no-candidate peel adds a second, finally-block row.
+  # ledger row. Twin: scenario AJ in postflight.ps1 (task-dfbda1a8). The ledger
+  # must hold EXACTLY the expected rows on both wrappers (AJ2: one failed PEEL
+  # row); ps1's finally used to add a second one (task-4fdc7590), so the whole
+  # sequence is compared, never a tail of it.
   # AJ2 owns nothing but a TOOL-witnessed held.txt, so ps1's completion refuses
   # NO_OWNED_PATHS and takes its no-candidate peel (sh has one such branch).
   echo "[scenario AJ] peel failures and rescue records retain held contested paths"
@@ -4915,8 +5603,7 @@ const [f,run]=process.argv.slice(1),assert=require("assert");
 const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse);
 const expected=run==="1"?[["committed","peel-failed","rescue"],["failed","MOE_COMMIT_FAILED_PEEL","completion"]]:[["failed","MOE_COMMIT_FAILED_PEEL","completion"]];
 try {
-  assert.ok(rows.length>=expected.length,"missing ledger rows");
-  rows.slice(-expected.length).forEach((r,i)=>assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],expected[i].join("/")));
+  assert.deepStrictEqual(rows.map(r=>[r.outcome,r.code,r.kind]),expected,"ledger rows: exactly one failed row per landing");
   rows.forEach(r=>{
     const label=[r.outcome,r.code,r.kind].join("/");
     assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),label+": skipped and contested must be JSON arrays");
@@ -5217,10 +5904,10 @@ try {
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=45
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=44
+  scope_expected_runs=46
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=45
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AB3, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else
@@ -5296,6 +5983,66 @@ if grep -Fq 'reason=teamless' "$TMP_DIR/wrapper-teamheal.out"; then
 fi
 echo "[team heal] ok"
 
+# --- [landing resume] WT-11's resume prompt, beyond the shared suite (twin: the [landing resume]
+# block in postflight.ps1). A worktree seat whose task.landingRetry is set merges the target into
+# W before the CLI starts and leaves the merge uncommitted, so HEAD is still the pre-merge task tip.
+# Both prompt lines carry LR_RULE (verify the merged working tree, not HEAD; git stays read-only)
+# instead of "no git commands"; a seat without landingRetry gets neither line. ---
+echo "[landing resume] LANDING-RETRY and LANDING-CONFLICT prompts carry the merged-tree verification rule"
+LR_RULE="The wrapper commits this merge only when it lands, so HEAD can lack the merged target: where the verification builds a snapshot from HEAD (git archive HEAD, or a clone checked out at HEAD), build it from the tracked files of this worktree instead (the paths git ls-files lists), keep every other command unchanged, and say so in the evidence. Git stays read-only here: run only git status, git diff, git log, git show, git ls-files and git rev-parse, never a git write (commit, merge, reset, checkout, switch, restore, stash, add, rm, mv, rebase, cherry-pick, revert, apply, clean, or any other command that changes the index, HEAD, a ref or MERGE_HEAD)."
+LR_DIR="$TMP_DIR/lr-project"
+LR_W="$LR_DIR/.worktrees/task-postflight"
+mkdir -p "$LR_DIR/src" "$LR_DIR/.moe/messages"
+printf '.worktrees/\n.mcp.json\nlogs/\n' > "$LR_DIR/.gitignore"
+printf 'seed a\n' > "$LR_DIR/src/a.txt"
+printf '{"id":"proj-lr","name":"postflight-lr","settings":{"autoCommit":false}}\n' > "$LR_DIR/.moe/project.json"
+: > "$LR_DIR/.moe/messages/chan-general.jsonl"
+write_task_record "$LR_DIR" '[]' WORKING
+# The repo carries its identity: the resume's own merge needs one, and the seat's HOME has none.
+lr_git() { git -C "$LR_DIR" "$@"; }
+lr_git init -q; lr_git symbolic-ref HEAD refs/heads/main; lr_git config user.name 'Moe Test'; lr_git config user.email moe@test.local
+lr_git add .gitignore src .moe/project.json .moe/tasks; lr_git commit -qm seed; lr_git switch -q -c moe/control
+lr_fail() { cat "$TMP_DIR/wrapper-lr-$1.out" "$CLI_ARGS_FILE" >&2 || true; echo "LANDING RESUME FAILED ($1): $2" >&2; exit 1; }
+# lr_main FILE TEXT -- one commit on main; the control checkout goes back to moe/control.
+lr_main() { lr_git switch -q main && printf '%s\n' "$2" > "$LR_DIR/$1" && lr_git add -- "$1" && lr_git commit -qm "main $1" && lr_git switch -q moe/control; }
+# lr_run NAME -- one worker seat whose claim says worktree mode; it exits 0 and its CLI ran.
+lr_run() {
+  : > "$CLI_ARGS_FILE"
+  set +e
+  env PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_TASK_STATUS=WORKING \
+    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' MOE_LAND_NET_BACKOFF_SEC=0 timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+    "$WRAPPER" --project "$LR_DIR" --worker-id worker-lr --role worker --team Smoke --no-start-daemon \
+    --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$TMP_DIR/wrapper-lr-$1.out" 2>&1
+  lr_code=$?
+  set -e
+  [ "$lr_code" -eq 0 ] && [ -s "$CLI_ARGS_FILE" ] || lr_fail "$1" "exit $lr_code, or the CLI did not run"
+}
+# lr_prompt NAME HEADER -- the prompt holds HEADER and LR_RULE, not "no git commands"; W is mid-merge.
+lr_prompt() {
+  grep -Fq -- "$2" "$CLI_ARGS_FILE" || lr_fail "$1" "no '$2' in the prompt"
+  grep -Fq -- "$LR_RULE" "$CLI_ARGS_FILE" || lr_fail "$1" "the prompt lacks the merged-tree verification rule"
+  ! grep -Fq 'no git commands' "$CLI_ARGS_FILE" || lr_fail "$1" "the prompt still says no git commands"
+  git -C "$LR_W" rev-parse -q --verify MERGE_HEAD >/dev/null || lr_fail "$1" "W has no pending merge"
+}
+# (a) No landingRetry: W is made and the prompt has no resume line and no rule.
+lr_run plain
+[ -d "$LR_W" ] && ! grep -Fq 'LANDING-' "$CLI_ARGS_FILE" && ! grep -Fq -- "$LR_RULE" "$CLI_ARGS_FILE" || lr_fail plain "no W, or a resume line without landingRetry"
+# (b) A gate retry after main moved without a conflict: LANDING-RETRY, MERGE_HEAD set.
+printf 'task a\n' > "$LR_W/src/a.txt"; git -C "$LR_W" commit -qam 'task a'
+lr_main src/m.txt 'main m'
+printf '{"reason":"gate","count":1}\n' > "$LR_DIR/.moe/landing-retry.json"
+lr_run retry
+lr_prompt retry 'LANDING-RETRY: gate'
+! grep -Fq 'LANDING-CONFLICT' "$CLI_ARGS_FILE" || lr_fail retry "a clean merge said LANDING-CONFLICT"
+# (c) A same-line conflict: LANDING-CONFLICT, and src/a.txt stays unmerged in W.
+git -C "$LR_W" merge --abort
+lr_main src/a.txt 'main a'
+printf '{"reason":"conflict","paths":["src/a.txt"],"count":1}\n' > "$LR_DIR/.moe/landing-retry.json"
+lr_run conflict
+lr_prompt conflict 'LANDING-CONFLICT: src/a.txt'
+[ -n "$(git -C "$LR_W" ls-files -u -- src/a.txt)" ] || lr_fail conflict "src/a.txt is not unmerged in W"
+echo "[landing resume] ok"
+
 # --- [worktree reuse] Worktree provisioning regressions beyond the shared suite
 # (twin: the [worktree reuse] block in postflight.ps1). Only a missing index file marks
 # a half-made W, so a W whose agent emptied its index with `git rm` is reused as
@@ -5320,7 +6067,7 @@ wtr_run() {
   : > "$CLI_ARGS_FILE"; rm -rf "$WTR_DIR/.moe/evidence-rpcs.jsonl" "$WTR_DIR/.moe/attempts"
   set +e
   env PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_TASK_STATUS=WORKING \
-    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' MOE_LAND_NET_BACKOFF_SEC=0 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
     "$WRAPPER" --project "$WTR_DIR" --worker-id worker-wtr --role worker --team Smoke --no-start-daemon \
     --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$TMP_DIR/wrapper-wtr-$name.out" 2>&1
   wtr_code=$?
@@ -5389,7 +6136,337 @@ grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: .* has no index file but holds 
 printf 'agent edit\n' | cmp -s - "$WTR_W/src/a.txt" && printf 'agent new\n' | cmp -s - "$WTR_W/src/new.txt" \
   || wtr_fail index-deleted "the edited or the untracked file lost its bytes"
 [ ! -e "$wtr_index" ] || wtr_fail index-deleted "the refusal wrote W's index"
+# (e) WT-09: with a remote, W is cut from refs/remotes/origin/main, fetched first (origin is
+# one commit ahead of the local main); with no such ref the seat refuses with CREATE_FAILED.
+wtr_git worktree remove --force --force "$WTR_W"; wtr_git branch -q -D moe/task/task-postflight
+wtr_git remote add origin "$TMP_DIR/wtr-origin.git"
+wtr_run remote-no-base
+[ "$wtr_code" -eq 1 ] && grep -q 'MOE_LAND_FETCH_FAILED' "$TMP_DIR/wrapper-wtr-remote-no-base.out" \
+  && grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: refs/remotes/origin/main does not exist' "$TMP_DIR/wrapper-wtr-remote-no-base.out" \
+  || wtr_fail remote-no-base "not exit 1 with FETCH_FAILED, then CREATE_FAILED for the missing origin base"
+[ "$(wtr_blocks)" = 1 ] && [ ! -s "$CLI_ARGS_FILE" ] && [ "$(wtr_git worktree list --porcelain | grep -c '^worktree ')" = 1 ] \
+  || wtr_fail remote-no-base "not one report_blocked, the CLI ran, or W was registered"
+git init -q --bare "$TMP_DIR/wtr-origin.git"; wtr_git push -q origin main
+wtr_o1=$(git -C "$TMP_DIR/wtr-origin.git" -c user.name='Moe Test' -c user.email=moe@test.local commit-tree 'main^{tree}' -p main -m 'origin ahead')
+git -C "$TMP_DIR/wtr-origin.git" update-ref refs/heads/main "$wtr_o1"
+wtr_run remote-base
+[ "$wtr_code" -eq 0 ] && grep -Eq '^\[worktree\] created .+ on moe/task/task-postflight$' "$TMP_DIR/wrapper-wtr-remote-base.out" \
+  || wtr_fail remote-base "exit $wtr_code, or no [worktree] created line"
+[ "$(wtr_git rev-parse moe/task/task-postflight)" = "$wtr_o1" ] && [ "$(wtr_git rev-parse main)" != "$wtr_o1" ] \
+  || wtr_fail remote-base "W's branch does not start at origin's main tip"
 echo "[worktree reuse] ok"
+
+# --- [WT-14] Worktree removal at DONE and the orphan sweep (twin: the [WT-14] block
+# in postflight.ps1). wt14_fixture is the one builder: a control checkout on BRANCH
+# (moe/control, or a shared moe/work-* branch) whose .serena/memories and
+# .claude/skills hold sentinels, and per task a W made exactly as WT-04 makes it,
+# linked as WT-06 links it (the manifest line first, then the link), with one task
+# commit squash-landed on main. A QA seat claims task-postflight as DONE with its
+# completion recorded at main's tip. Teardown unlinks every link it made. ---
+echo "[WT-14] a QA approval removes a fully landed W; anything else is left in place"
+WT14_RUN=0
+WT14_LINKS="$TMP_DIR/wt14-links"
+: > "$WT14_LINKS"
+wt14_fail() { cat "$WT14_OUT" >&2 2>/dev/null || true; echo "WT-14 FAILED ($1): $2" >&2; exit 1; }
+wt14_git() { git -C "$WT14_P" -c user.name='Moe Test' -c user.email=moe@test.local -c commit.gpgsign=false -c core.autocrlf=false "$@"; }
+wt14_wgit() { local w="$1"; shift; git -C "$w" -c user.name='Moe Test' -c user.email=moe@test.local -c commit.gpgsign=false -c core.autocrlf=false "$@"; }
+# wt14_fixture NAME BRANCH TASK... -- a fresh control checkout $WT14_P on BRANCH, one landed W per TASK.
+wt14_fixture() {
+  local name="$1" branch="$2" tid w rel tree sha man
+  shift 2
+  WT14_P="$TMP_DIR/wt14-$name"; WT14_OUT="$TMP_DIR/wt14-$name.out"
+  mkdir -p "$WT14_P/src" "$WT14_P/.moe/messages" "$WT14_P/.serena/memories" "$WT14_P/.claude/skills/s"
+  printf '.worktrees/\n.mcp.json\nlogs/\n' > "$WT14_P/.gitignore"
+  printf 'seed\n' > "$WT14_P/src/seed.txt"
+  printf '{"id":"proj-wt14","name":"postflight-wt14","settings":{"autoCommit":false}}\n' > "$WT14_P/.moe/project.json"
+  : > "$WT14_P/.moe/messages/chan-general.jsonl"
+  printf 'memory sentinel\n' > "$WT14_P/.serena/memories/sentinel.md"
+  printf 'skill sentinel\n' > "$WT14_P/.claude/skills/s/SKILL.md"
+  # The repo's own identity, as the other fixtures set it: the sweep's rescue refs are commit-trees.
+  { wt14_git init -q && wt14_git config user.name 'Moe Test' && wt14_git config user.email moe@test.local \
+      && wt14_git config commit.gpgsign false && wt14_git config core.autocrlf false \
+      && wt14_git symbolic-ref HEAD refs/heads/main && wt14_git add .gitignore src .moe/project.json \
+      && wt14_git commit -qm seed && wt14_git switch -q -c "$branch"; } || wt14_fail "$name" "could not build the control checkout"
+  man="$(wt14_git rev-parse --path-format=absolute --git-common-dir)/moe/worktree"
+  mkdir -p "$man"
+  for tid in "$@"; do
+    w="$WT14_P/.worktrees/$tid"
+    { wt14_git worktree add -q --lock --reason "moe $tid" --no-checkout --no-track -b "moe/task/$tid" "$w" main \
+        && MSYS2_ARG_CONV_EXCL='*' git -C "$w" sparse-checkout set --no-cone '/*' '!/.moe/' && git -C "$w" read-tree -mu HEAD; } \
+      || wt14_fail "$name" "could not add W for $tid"
+    mkdir -p "$w/.serena" "$w/.claude"
+    for rel in .serena/memories .claude/skills; do
+      printf '%s\n' "$rel" >> "$man/$tid.links"
+      "$NODE_FOR_TEST" -e 'require("fs").symlinkSync(process.argv[1],process.argv[2],process.platform==="win32"?"junction":"dir")' "$WT14_P/$rel" "$w/$rel"
+      printf '%s\n' "$w/$rel" >> "$WT14_LINKS"
+    done
+    : > "$man/$tid.control-dirt"
+    printf '%s work\n' "$tid" > "$w/src/$tid.txt"
+    { wt14_wgit "$w" add "src/$tid.txt" && wt14_wgit "$w" commit -qm "work $tid" \
+        && tree=$(wt14_git merge-tree --write-tree main "moe/task/$tid") && sha=$(wt14_git commit-tree "$tree" -p main -m "land $tid") \
+        && wt14_git update-ref refs/heads/main "$sha"; } || wt14_fail "$name" "could not land $tid on main"
+  done
+}
+# wt14_qa NAME [VAR=VALUE...] -- one QA seat: task-postflight is DONE, its completion recorded at main's tip.
+wt14_qa() {
+  local land
+  land=$(wt14_git rev-parse main)
+  shift
+  set +e
+  env PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_TASK_STATUS=DONE \
+    FAKE_CTX_LANDING="{\"lastCompletion\":{\"sha\":\"$land\",\"ref\":\"refs/heads/main\",\"pushed\":false,\"recordedAt\":\"2026-11-02T00:00:00.000Z\"}}" \
+    "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" --project "$WT14_P" --worker-id qa-wt14 --role qa --team Smoke \
+    --no-start-daemon --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$WT14_OUT" 2>&1
+  WT14_CODE=$?
+  set -e
+}
+# wt14_listed TASK -- 0 when git lists a worktree at .worktrees/TASK.
+wt14_listed() {
+  local list
+  list=$(wt14_git worktree list --porcelain) || return 2
+  grep -Eq "^worktree .*/\.worktrees/$1\$" <<< "$list"
+}
+# wt14_gone NAME TASK -- W is off disk and unlisted; its branch, manifest and control-dirt are deleted.
+wt14_gone() {
+  local w="$WT14_P/.worktrees/$2" man rc=0
+  man="$(wt14_git rev-parse --path-format=absolute --git-common-dir)/moe/worktree/$2"
+  [ ! -e "$w" ] && [ ! -L "$w" ] || wt14_fail "$1" "$w is still on disk"
+  wt14_listed "$2" || rc=$?
+  [ "$rc" -eq 1 ] || wt14_fail "$1" "$w is still registered (or git worktree list failed)"
+  ! wt14_git rev-parse -q --verify "refs/heads/moe/task/$2" > /dev/null || wt14_fail "$1" "moe/task/$2 still exists"
+  [ ! -e "$man.links" ] && [ ! -e "$man.control-dirt" ] || wt14_fail "$1" "$2's manifest or control-dirt is still there"
+}
+# wt14_kept NAME TASK -- W is on disk and registered, its branch, manifest and both links intact.
+wt14_kept() {
+  local w="$WT14_P/.worktrees/$2" man
+  man="$(wt14_git rev-parse --path-format=absolute --git-common-dir)/moe/worktree/$2.links"
+  [ -d "$w" ] && wt14_listed "$2" || wt14_fail "$1" "$w was removed or unregistered"
+  wt14_git rev-parse -q --verify "refs/heads/moe/task/$2" > /dev/null || wt14_fail "$1" "moe/task/$2 was deleted"
+  [ -s "$man" ] && [ -L "$w/.serena/memories" ] && [ -L "$w/.claude/skills" ] || wt14_fail "$1" "$2's manifest or a link is gone"
+}
+# wt14_sentinels NAME -- the control's .serena/memories and .claude/skills bytes are unchanged.
+wt14_sentinels() {
+  { printf 'memory sentinel\n' | cmp -s - "$WT14_P/.serena/memories/sentinel.md" \
+      && printf 'skill sentinel\n' | cmp -s - "$WT14_P/.claude/skills/s/SKILL.md"; } || wt14_fail "$1" "a control sentinel changed"
+}
+# wt14_left NAME DETAIL -- exit 0 and W left to the sweep with DETAIL (an ERE) in the reason.
+wt14_left() {
+  [ "$WT14_CODE" -eq 0 ] || wt14_fail "$1" "exit $WT14_CODE, expected 0"
+  grep -Eq "\[worktree\] left .*/\.worktrees/task-postflight to the orphan sweep: .*$2" "$WT14_OUT" || wt14_fail "$1" "no left-to-the-sweep line matching '$2'"
+}
+
+echo "[scenario WT14A] a QA approval of a fully landed task removes W and its branch"
+wt14_fixture a moe/control task-postflight
+wt14_qa WT14A
+[ "$WT14_CODE" -eq 0 ] || wt14_fail WT14A "exit $WT14_CODE, expected 0"
+grep -Eq '\[worktree\] removed .*/\.worktrees/task-postflight on moe/task/task-postflight$' "$WT14_OUT" || wt14_fail WT14A "no [worktree] removed line"
+wt14_gone WT14A task-postflight
+wt14_sentinels WT14A
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14A] ok"
+
+echo "[scenario WT14B] a fully landed W holding .moe/x keeps W, its branch, its manifest and .moe/x"
+wt14_fixture b moe/control task-postflight
+mkdir -p "$WT14_P/.worktrees/task-postflight/.moe"
+printf 'x\n' > "$WT14_P/.worktrees/task-postflight/.moe/x"
+wt14_qa WT14B
+wt14_left WT14B 'MOE_WORKTREE_MOE_PRESENT'
+wt14_kept WT14B task-postflight
+printf 'x\n' | cmp -s - "$WT14_P/.worktrees/task-postflight/.moe/x" || wt14_fail WT14B "W/.moe/x lost its bytes"
+wt14_sentinels WT14B
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14B] ok"
+
+echo "[scenario WT14C] a W with a modified tracked file is left to the orphan sweep"
+wt14_fixture c moe/control task-postflight
+printf 'edited\n' > "$WT14_P/.worktrees/task-postflight/src/task-postflight.txt"
+wt14_qa WT14C
+wt14_left WT14C 'non-DENY dirty path'
+wt14_kept WT14C task-postflight
+printf 'edited\n' | cmp -s - "$WT14_P/.worktrees/task-postflight/src/task-postflight.txt" || wt14_fail WT14C "the edit lost its bytes"
+wt14_sentinels WT14C
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14C] ok"
+
+echo "[scenario WT14U] a W whose branch holds an unlanded commit is left to the orphan sweep"
+wt14_fixture u moe/control task-postflight
+printf 'unlanded\n' > "$WT14_P/.worktrees/task-postflight/src/unlanded.txt"
+{ wt14_wgit "$WT14_P/.worktrees/task-postflight" add src/unlanded.txt \
+    && wt14_wgit "$WT14_P/.worktrees/task-postflight" commit -qm unlanded; } || wt14_fail WT14U "could not commit in W"
+wt14_qa WT14U
+wt14_left WT14U 'moe/task/task-postflight is not fully landed in main'
+wt14_kept WT14U task-postflight
+wt14_sentinels WT14U
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14U] ok"
+
+wt14_expected=6
+if [ "$(id -u)" = 0 ]; then
+  echo "[scenario WT14D] SKIP (root ignores mode bits)"; wt14_expected=$((wt14_expected - 1))
+elif case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) true ;; *) false ;; esac; then
+  echo "[scenario WT14D] SKIP (msys: mode bits do not deny an unlink; the ps1 twin denies it with icacls)"; wt14_expected=$((wt14_expected - 1))
+else
+  echo "[scenario WT14D] an unlink that fails refuses with MOE_WORKTREE_REMOVE_REFUSED and keeps W registered"
+  wt14_fixture d moe/control task-postflight
+  chmod 0555 "$WT14_P/.worktrees/task-postflight/.serena"
+  wt14_qa WT14D
+  chmod 0755 "$WT14_P/.worktrees/task-postflight/.serena"
+  [ "$WT14_CODE" -eq 0 ] || wt14_fail WT14D "exit $WT14_CODE, expected 0"
+  grep -Eq 'MOE_WORKTREE_REMOVE_REFUSED: .*/\.worktrees/task-postflight: .*\.serena/memories' "$WT14_OUT" || wt14_fail WT14D "no REMOVE_REFUSED line naming the link"
+  ! grep -q '\[worktree\] removed' "$WT14_OUT" || wt14_fail WT14D "a refused removal printed a removed line"
+  wt14_kept WT14D task-postflight
+  wt14_sentinels WT14D
+  WT14_RUN=$((WT14_RUN + 1))
+  echo "[scenario WT14D] ok"
+fi
+
+echo "[scenario WT14S] a shared-mode control checkout removes nothing and prints no worktree line"
+wt14_fixture s moe/work-wt14 task-postflight
+wt14_qa WT14S
+[ "$WT14_CODE" -eq 0 ] || wt14_fail WT14S "exit $WT14_CODE, expected 0"
+! grep -Eq 'MOE_WORKTREE_|\[worktree\]' "$WT14_OUT" || wt14_fail WT14S "shared mode printed a MOE_WORKTREE_ or [worktree] line"
+wt14_kept WT14S task-postflight
+wt14_sentinels WT14S
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14S] ok"
+
+# The orphan sweep: one idle seat (no claim, a 5s taskless wait), so the loop top's sweep
+# is all a run does. The interval is unset unless a case passes it; FAKE_TASK_STATUS_MAP
+# answers the status reads.
+wt14_sweep() {   # NAME [VAR=VALUE...]
+  local name="$1"
+  shift
+  set +e
+  env -u MOE_WORKTREE_SWEEP_INTERVAL_SEC PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 \
+    FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" --project "$WT14_P" \
+    --worker-id worker-wt14 --role worker --team Smoke --no-start-daemon --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$WT14_OUT" 2>&1
+  WT14_CODE=$?
+  set -e
+  [ "$WT14_CODE" -eq 0 ] || wt14_fail "$name" "exit $WT14_CODE, expected 0"
+}
+wt14_admin() { printf '%s/moe/worktree' "$(wt14_git rev-parse --path-format=absolute --git-common-dir)"; }
+wt14_rows() { grep -c "$1" "$WT14_P/.moe/messages/chan-general.jsonl" || true; }
+
+echo "[scenario WT14E] the sweep parks an unlanded commit and W's dirt on rescue refs, then removes W; an unknown task's W goes too"
+wt14_fixture e moe/control task-e1 task-e2
+wt14_w="$WT14_P/.worktrees/task-e1"
+printf 'unlanded\n' > "$wt14_w/src/unlanded.txt"
+{ wt14_wgit "$wt14_w" add src/unlanded.txt && wt14_wgit "$wt14_w" commit -qm unlanded; } || wt14_fail WT14E "could not commit in W"
+wt14_t=$(wt14_git rev-parse refs/heads/moe/task/task-e1)
+printf 'edited\n' > "$wt14_w/src/task-e1.txt"
+printf 'untracked\n' > "$wt14_w/src/new.txt"
+wt14_sweep WT14E MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=task-e1=DONE,task-e2=NOT_FOUND
+wt14_refs=$(wt14_git for-each-ref --format='%(objectname) %(refname)' refs/moe/rescue/task-e1/)
+[ "$(grep -c "^$wt14_t " <<< "$wt14_refs")" = 1 ] || wt14_fail WT14E "no single rescue ref at the unlanded commit $wt14_t: $wt14_refs"
+grep -Eq "MOE_RESCUE_REF task=task-e1 ref=refs/moe/rescue/task-e1/[^ ]+ sha=$wt14_t reason=worktree-orphan" "$WT14_P/.moe/messages/chan-general.jsonl" \
+  || wt14_fail WT14E "no #general MOE_RESCUE_REF row for the unlanded commit"
+wt14_d=$(grep -v "^$wt14_t " <<< "$wt14_refs" | cut -d' ' -f2 || true)
+[ -n "$wt14_d" ] && [ "$(grep -c . <<< "$wt14_d")" = 1 ] || wt14_fail WT14E "no single second rescue ref for W's dirt: $wt14_refs"
+{ [ "$(wt14_git rev-parse "$wt14_d^")" = "$wt14_t" ] && [ "$(wt14_git show "$wt14_d:src/task-e1.txt")" = edited ] \
+    && [ "$(wt14_git show "$wt14_d:src/new.txt")" = untracked ]; } || wt14_fail WT14E "the dirt ref $wt14_d does not hold both dirty files on the unlanded commit"
+[ -z "$(wt14_git for-each-ref refs/moe/rescue/task-e2/)" ] || wt14_fail WT14E "a clean, landed W got a rescue ref"
+[ "$(grep -c '\[worktree\] removed ' "$WT14_OUT")" = 2 ] || wt14_fail WT14E "not exactly two removed lines"
+wt14_gone WT14E task-e1
+wt14_gone WT14E task-e2
+wt14_sentinels WT14E
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14E] ok"
+
+echo "[scenario WT14F] at most 5 removals a pass; WORKING, an open attempt and W/.moe are kept; a held lock skips the pass, a 3h-old one is broken"
+wt14_fixture f moe/control task-a1 task-d1 task-d2 task-d3 task-d4 task-d5 task-d6 task-m1 task-w1
+mkdir -p "$WT14_P/.moe/attempts" "$WT14_P/.worktrees/task-m1/.moe"
+printf '{"id":"attempt-a1","taskId":"task-a1","workerId":"worker-x","generation":1,"phase":"running"}\n' > "$WT14_P/.moe/attempts/attempt-a1.json"
+printf '{"id":"attempt-d0","taskId":"task-d1","workerId":"worker-x","generation":1,"phase":"closed"}\n' > "$WT14_P/.moe/attempts/attempt-d0.json"
+printf 'm1\n' > "$WT14_P/.worktrees/task-m1/.moe/x"
+wt14_map=task-a1=DONE,task-d1=DONE,task-d2=DONE,task-d3=DONE,task-d4=DONE,task-d5=DONE,task-d6=ARCHIVED,task-m1=DONE,task-w1=WORKING
+wt14_sweep WT14F MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=$wt14_map
+[ "$(grep -c '\[worktree\] removed ' "$WT14_OUT")" = 5 ] || wt14_fail WT14F "not exactly five removed lines in one pass"
+for wt14_t in task-d1 task-d2 task-d3 task-d4 task-d5; do wt14_gone WT14F "$wt14_t"; done
+for wt14_t in task-d6 task-a1 task-m1 task-w1; do wt14_kept WT14F "$wt14_t"; done
+mkdir "$(wt14_admin)/sweep.lock"
+wt14_sweep WT14F MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=$wt14_map
+grep -q '\[worktree\] sweep skipped: lock held' "$WT14_OUT" || wt14_fail WT14F "a held lock did not skip the pass"
+[ -d "$(wt14_admin)/sweep.lock" ] || wt14_fail WT14F "a held lock was taken over"
+wt14_kept WT14F task-d6
+"$NODE_FOR_TEST" -e 'const t=new Date(Date.now()-3*3600e3);require("fs").utimesSync(process.argv[1],t,t)' "$(wt14_admin)/sweep.lock"
+wt14_sweep WT14F MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=$wt14_map
+! grep -q 'sweep skipped' "$WT14_OUT" || wt14_fail WT14F "a 3h-old lock was not broken"
+[ ! -e "$(wt14_admin)/sweep.lock" ] || wt14_fail WT14F "the sweep left its lock behind"
+grep -Eq '\[worktree\] sweep left .*/\.worktrees/task-m1: W/\.moe exists \(MOE_WORKTREE_MOE_PRESENT\)' "$WT14_OUT" || wt14_fail WT14F "no sweep-left line for W/.moe"
+wt14_gone WT14F task-d6
+for wt14_t in task-a1 task-m1 task-w1; do wt14_kept WT14F "$wt14_t"; done
+printf 'm1\n' | cmp -s - "$WT14_P/.worktrees/task-m1/.moe/x" || wt14_fail WT14F "W/.moe/x lost its bytes"
+[ -z "$(wt14_git for-each-ref refs/moe/rescue/)" ] || wt14_fail WT14F "a clean, landed W got a rescue ref"
+wt14_sentinels WT14F
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14F] ok"
+
+echo "[scenario WT14G] an unregistered .worktrees/task-* directory is named and alerted once a day; .worktrees/stray is not"
+wt14_fixture g moe/control
+mkdir -p "$WT14_P/.worktrees/stray" "$WT14_P/.worktrees/task-ghost"
+printf 'stray\n' > "$WT14_P/.worktrees/stray/f.txt"
+printf 'ghost\n' > "$WT14_P/.worktrees/task-ghost/f.txt"
+for wt14_n in 1 2; do
+  wt14_sweep WT14G MOE_WORKTREE_SWEEP_INTERVAL_SEC=0
+  grep -Eq 'MOE_WORKTREE_UNREGISTERED: .*/\.worktrees/task-ghost: not a registered worktree; left on disk' "$WT14_OUT" \
+    || wt14_fail WT14G "run $wt14_n: no MOE_WORKTREE_UNREGISTERED line for task-ghost"
+  ! grep -q 'stray' "$WT14_OUT" || wt14_fail WT14G "run $wt14_n: a line names .worktrees/stray"
+done
+[ "$(wt14_rows 'MOE_WORKTREE_UNREGISTERED: ')" = 1 ] || wt14_fail WT14G "not exactly one #general alert across two runs"
+[ "$(wt14_rows 'stray')" = 0 ] || wt14_fail WT14G "an alert names .worktrees/stray"
+{ printf 'stray\n' | cmp -s - "$WT14_P/.worktrees/stray/f.txt" && printf 'ghost\n' | cmp -s - "$WT14_P/.worktrees/task-ghost/f.txt"; } \
+  || wt14_fail WT14G "an unregistered directory lost its bytes"
+wt14_sentinels WT14G
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14G] ok"
+
+echo "[scenario WT14H] a failed status read aborts the pass; the interval holds a fresh stamp back; a bad interval warns and uses 3600"
+wt14_fixture h moe/control task-h1 task-h2
+wt14_sweep WT14H MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=task-h1=FAIL,task-h2=DONE
+grep -q 'the worktree sweep stopped' "$WT14_OUT" || wt14_fail WT14H "a failed status read did not stop the pass"
+for wt14_t in task-h1 task-h2; do wt14_kept WT14H "$wt14_t"; done
+[ -z "$(wt14_git for-each-ref refs/moe/rescue/)" ] || wt14_fail WT14H "an aborted pass wrote a rescue ref"
+wt14_now=$(date +%s)
+printf '%s\n' "$wt14_now" > "$(wt14_admin)/sweep.last"
+wt14_sweep WT14H FAKE_TASK_STATUS_MAP=task-h1=DONE,task-h2=DONE
+! grep -Eq 'MOE_WORKTREE_|\[worktree\]' "$WT14_OUT" || wt14_fail WT14H "an unset interval swept within the hour"
+wt14_sweep WT14H MOE_WORKTREE_SWEEP_INTERVAL_SEC=abc FAKE_TASK_STATUS_MAP=task-h1=DONE,task-h2=DONE
+grep -q "MOE_WORKTREE_SWEEP_INTERVAL_SEC='abc'" "$WT14_OUT" || wt14_fail WT14H "no [WARN] for an invalid interval"
+! grep -q '\[worktree\]' "$WT14_OUT" || wt14_fail WT14H "an invalid interval swept within the hour"
+for wt14_t in task-h1 task-h2; do wt14_kept WT14H "$wt14_t"; done
+printf '%s\n' "$((wt14_now - 3601))" > "$(wt14_admin)/sweep.last"
+wt14_sweep WT14H MOE_WORKTREE_SWEEP_INTERVAL_SEC=abc FAKE_TASK_STATUS_MAP=task-h1=DONE,task-h2=DONE
+for wt14_t in task-h1 task-h2; do wt14_gone WT14H "$wt14_t"; done
+wt14_sentinels WT14H
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14H] ok"
+
+echo "[scenario WT14I] registered .worktrees/feature-x and .worktrees/task-z on their own branches and an unregistered .worktrees/scratch are never touched or named"
+wt14_fixture i moe/control
+wt14_git worktree add -q -b feature-x "$WT14_P/.worktrees/feature-x" main || wt14_fail WT14I "could not add feature-x"
+wt14_git worktree add -q -b feature-z "$WT14_P/.worktrees/task-z" main || wt14_fail WT14I "could not add task-z"
+printf 'wip\n' > "$WT14_P/.worktrees/feature-x/wip.txt"
+mkdir -p "$WT14_P/.worktrees/scratch"
+printf 'scratch\n' > "$WT14_P/.worktrees/scratch/f.txt"
+wt14_sweep WT14I MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 FAKE_TASK_STATUS_MAP=feature-x=DONE,task-z=DONE
+! grep -Eq 'MOE_WORKTREE_|\[worktree\]' "$WT14_OUT" || wt14_fail WT14I "the sweep named something outside its candidates"
+[ "$(wt14_rows 'MOE_WORKTREE_\|MOE_RESCUE_REF\|feature-\|task-z\|scratch')" = 0 ] || wt14_fail WT14I "the sweep posted to #general"
+{ wt14_listed feature-x && wt14_git rev-parse -q --verify refs/heads/feature-x > /dev/null \
+    && wt14_listed task-z && wt14_git rev-parse -q --verify refs/heads/feature-z > /dev/null \
+    && printf 'wip\n' | cmp -s - "$WT14_P/.worktrees/feature-x/wip.txt" && printf 'scratch\n' | cmp -s - "$WT14_P/.worktrees/scratch/f.txt"; } \
+  || wt14_fail WT14I "feature-x, task-z or scratch was touched"
+[ -z "$(wt14_git for-each-ref refs/moe/rescue/)" ] || wt14_fail WT14I "a rescue ref was written"
+wt14_sentinels WT14I
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14I] ok"
+
+while IFS= read -r wt14_l; do [ ! -L "$wt14_l" ] || rm -f -- "$wt14_l"; done < "$WT14_LINKS"
+wt14_expected=$((wt14_expected + 5))
+if [ "$WT14_RUN" -ne "$wt14_expected" ]; then
+  echo "Expected $wt14_expected WT-14 scenarios (WT14A, WT14B, WT14C, WT14U, WT14D (needs a non-root POSIX user), WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $WT14_RUN" >&2
+  exit 1
+fi
+echo "[WT-14] ok: $WT14_RUN scenarios"
 
 # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the JetBrains
 # launcher sets beside MOE_PROXY_PATH and MOE_DAEMON_PATH) runs exactly those
@@ -5414,7 +6491,9 @@ printf '%s\n' "${PR_MARK}'protected-daemon '+process.argv.slice(2).join(' ')+'\\
   > "$PR/fake-daemon.js"
 printf '#!/usr/bin/env bash\necho decoy-proxy >> %q\nexec %q %q "$@"\n' "$PR/marks" "$NODE_FOR_TEST" "$FAKE_PROXY" > "$PR/bin/moe-proxy"
 printf '#!/usr/bin/env bash\necho decoy-daemon >> %q\nexit 1\n' "$PR/marks" > "$PR/bin/moe-daemon"
-chmod +x "$PR/bin/moe-proxy" "$PR/bin/moe-daemon"
+# A protected launch runs only a known CLI by name, from PATH outside the project.
+printf '#!/bin/sh\nexit 0\n' > "$PR/bin/claude"
+chmod +x "$PR/bin/moe-proxy" "$PR/bin/moe-daemon" "$PR/bin/claude"
 for pr_pkg in moe-daemon moe-proxy; do
   mkdir -p "$PR/install/packages/$pr_pkg/dist"
   printf '%s\n' "require('fs').appendFileSync(require('path').join(__dirname,'..','..','..','..','marks'),'decoy-install-$pr_pkg\\n');process.exit(1);" \
@@ -5434,7 +6513,7 @@ pr_run() {
     if [ "$marker" = - ]; then unset MOE_RUNTIME_PROTECTED; else export MOE_RUNTIME_PROTECTED="$marker"; fi
     PATH="$PR/bin:$TMP_DIR:$PATH" HOME="$PR/home" MOE_PROXY_PATH="$proxy" MOE_DAEMON_PATH="$daemon" \
       FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 MOE_DISABLE_HEARTBEAT=1 timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
-      "$WRAPPER" --project "$PRJ" --worker-id worker-protected --role worker --command /bin/true --no-loop "$@"
+      "$WRAPPER" --project "$PRJ" --worker-id worker-protected --role worker --command claude --no-loop "$@"
   ) >"$PR/$row.out" 2>&1
   pr_code=$?
   set -e
@@ -5642,4 +6721,5 @@ ovf_has_block "$OVF_C/prompt-1" "$OVF_C/project/.moe/served-context.json" \
 case "$(cat "$OVF_C/prompt-1")" in 'First read the private session context file at '*) ovf_fail "a prompt under the threshold was routed through a file" ;; esac
 echo "[prompt overflow] ok"
 
+bash "$ROOT_DIR/scripts/tests/postflight-vm-route.sh"
 echo "PASS postflight.sh"

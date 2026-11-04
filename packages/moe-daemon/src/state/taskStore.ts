@@ -286,7 +286,7 @@ function assertProgressionReady(
   assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
 }
 
-export async function createTask(state: StateManager, input: Partial<Task>): Promise<Task> {
+export async function createTask(state: StateManager, input: Partial<Task>, actorWorkerId?: string): Promise<Task> {
   if (!state.project) {
     throw new Error('Project not loaded');
   }
@@ -358,7 +358,9 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
 
   await state.writeEntity('tasks', task.id, task);
   state.tasks.set(task.id, task);
-  state.appendActivity('TASK_CREATED', { title: task.title }, task);
+  // The actor is a parameter, never read from `input`: the board passes its raw /ws
+  // payload as `input`, and a payload must not name its own actor.
+  state.appendActivity('TASK_CREATED', { title: task.title }, task, undefined, undefined, undefined, actorWorkerId);
   state.emit({ type: 'TASK_CREATED', payload: task });
 
   if (task.status === 'PLANNING') {
@@ -685,7 +687,7 @@ export async function updateTask(
   return updated;
 }
 
-export async function deleteTask(state: StateManager, taskId: string): Promise<Task> {
+export async function deleteTask(state: StateManager, taskId: string, actorWorkerId?: string): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
     throw new Error(`Task not found: ${taskId}`);
@@ -738,7 +740,7 @@ export async function deleteTask(state: StateManager, taskId: string): Promise<T
     }
   }
 
-  state.appendActivity('TASK_DELETED', { title: task.title }, task);
+  state.appendActivity('TASK_DELETED', { title: task.title }, task, undefined, undefined, undefined, actorWorkerId);
   state.emit({ type: 'TASK_DELETED', payload: task });
   return task;
 }
@@ -840,7 +842,13 @@ export async function reorderTask(state: StateManager, taskId: string, beforeId:
 }
 
 export function nextTaskOrder(state: StateManager, epicId: string): number {
-  const tasks = Array.from(state.tasks.values()).filter((t) => t.epicId === epicId);
-  if (tasks.length === 0) return 1;
-  return Math.max(...tasks.map((t) => t.order)) + 1;
+  // Skip non-finite orders (as nextEpicOrder does): a legacy or hand-edited
+  // non-numeric order made every later default NaN (null on disk) and took
+  // epic-final status (isEpicFinalTask) from the epic's newest default-order row.
+  const orders = Array.from(state.tasks.values())
+    .filter((t) => t.epicId === epicId)
+    .map((t) => t.order as unknown)
+    .filter((o): o is number => typeof o === 'number' && Number.isFinite(o));
+  if (orders.length === 0) return 1;
+  return Math.max(...orders) + 1;
 }

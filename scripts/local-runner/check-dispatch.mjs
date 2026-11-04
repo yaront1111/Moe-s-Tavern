@@ -20,7 +20,7 @@ const FLAGS = ['--project', '--task', '--commit'], CONTROL = /[\x00-\x1f\x7f]/;
 const CALL_TIMEOUT_MS = 15_000, CHECK_BUDGET_MS = 3_600_000; // three calls fit runCheckJob's 60 s onReady bound
 const MAX_RERUNS = 10; // CQ-V05's maxInfraRetries: the daemon's repair decision is the budget, this only bounds it locally
 const LOCKFILE = 'package-lock.json';
-const CODE_RE = /^RUNNER_[A-Z0-9_]{1,60}$/, NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+const CODE_RE = /^RUNNER_[A-Z0-9_]{1,60}$/, NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/, ENVIRONMENT_ID_RE = /^moe-local-vm-v1:[0-9a-f]{64}$/;
 const fixed = (value, pattern) => typeof value === 'string' && pattern.test(value);
 const newId = prefix => `${prefix}-${randomBytes(16).toString('hex')}`;
 const under = (path, roots) => roots.some(root => path === root || path.startsWith(`${root}/`));
@@ -108,7 +108,10 @@ async function runOnce(job, check) {
   const reports = []; // this run's own, copied at once: a rejection carries none of it
   const onCleanup = report => { reports.push(metaOf(report)); };
   const onReady = async environment => {
-    if (!job.environments.includes(environment)) throw Object.assign(new Error('Unlisted environment.'), stop = { code: 'RUNNER_ENVIRONMENT_NOT_APPROVED' });
+    if (!job.environments.includes(environment)) { // names the id to approve, only in its fixed form: nothing else leaves
+      stop = { code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', ...(typeof environment === 'string' && ENVIRONMENT_ID_RE.test(environment) ? { environment } : {}) };
+      throw Object.assign(new Error('Unlisted environment.'), stop);
+    }
     const args = { id: newId('dispatch'), ...job.binding, command: check.command, ...(check.checkId === undefined ? {} : { checkId: check.checkId }), environment };
     try { await settle(job.call, 'moe.record_check_dispatch', args); } catch (error) { stop = stopOf(error); throw error; }
     dispatch = args;

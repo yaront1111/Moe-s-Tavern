@@ -2,12 +2,16 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { QAIssue, QAIssueType, RejectionDetails, RejectionHistoryEntry } from '../types/schema.js';
 import { MAX_REOPENS_DEFAULT } from '../types/schema.js';
-import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
+import { missingRequired, invalidInput, notFound, invalidState, notAllowed } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { resetPlanStepsToPending } from '../util/reopen.js';
 import { bumpEffort, bumpTier, defaultModel, isEffort, isTier, planSizeFloor, tierEffort } from '../util/routing.js';
 import { recordReview } from '../state/reviewStore.js';
 import { assertReviewBinding } from '../delivery/reviewBinding.js';
+
+// An entry names a DoD item, which is stored at 1000 chars at most (taskStore's sanitizeStringArray(definitionOfDone, 50, 1000)).
+const MAX_FAILED_DOD_ITEM_LENGTH = 1000;
 
 const VALID_ISSUE_TYPES: QAIssueType[] = [
   'test_failure', 'lint', 'security', 'missing_feature', 'regression', 'other'
@@ -16,7 +20,7 @@ const VALID_ISSUE_TYPES: QAIssueType[] = [
 export function qaRejectTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_reject',
-    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the task\'s reopen cap (task.maxReopens, default 3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH.',
+    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the reopen cap (3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human (needsHumanReview), and a row so parked refuses any supplied workerId with NOT_ALLOWED. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH. A verdict frees the QA seat: the reply carries sessionHandoff END_SESSION for it and no nextAction, so end the session; do not claim or wait inside it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -83,9 +87,25 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         throw invalidInput('reason', `too long (${params.reason.length} chars). Maximum ${MAX_REASON_LENGTH} characters allowed.`);
       }
 
-      // Validate failedDodItems
-      if (params.failedDodItems && params.failedDodItems.length > 20) {
-        throw invalidInput('failedDodItems', 'too many items (max 20)');
+      // Validate failedDodItems. Entries are refused, never truncated, so the
+      // repeated-failure match stays exact; a non-string used to crash the trim
+      // below with an uncoded TypeError.
+      if (params.failedDodItems !== undefined && params.failedDodItems !== null) {
+        if (!Array.isArray(params.failedDodItems)) {
+          throw invalidInput('failedDodItems', 'must be an array of strings');
+        }
+        if (params.failedDodItems.length > 20) {
+          throw invalidInput('failedDodItems', 'too many items (max 20)');
+        }
+        params.failedDodItems.forEach((item: unknown, i) => {
+          if (typeof item !== 'string') {
+            throw invalidInput(`failedDodItems[${i}]`, 'must be a string');
+          }
+          const len = item.trim().length;
+          if (len > MAX_FAILED_DOD_ITEM_LENGTH) {
+            throw invalidInput(`failedDodItems[${i}]`, `too long (${len} chars). Maximum ${MAX_FAILED_DOD_ITEM_LENGTH} characters.`);
+          }
+        });
       }
 
       // Validate issues
@@ -115,12 +135,26 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'REVIEW');
       }
 
+      // A row the qa_reject hard cap parked for a human (needsHumanReview) is
+      // a human's call. The unassigned park passes assertWorkerOwns and
+      // assertContextFetched, so refuse any supplied workerId here, before any
+      // write, the way claim_next_task fences the same row. The flag is read
+      // before this call's own write, so the cap's first park still lands.
+      if (task.needsHumanReview === true && params.workerId) {
+        throw notAllowed('qa_reject', `Task ${task.id} is parked for human review: its reopen budget and the architect re-plan are exhausted. A human must reopen or approve it; an agent seat cannot.`);
+      }
+
       assertWorkerOwns(task, params.workerId);
       // QA must read the task before rejecting — a reject without reading the
       // DoD/rails/diff produces a bogus rejectionReason that sends the worker in
       // circles. No-ops on the human path (assignedWorkerId null).
       assertContextFetched(task, params.workerId, 'qa_reject');
-      const handoffWorkerId = task.assignedWorkerId || params.workerId;
+      // Idle only the seat that held this row: its assignee. On an unassigned
+      // row, where assertWorkerOwns lets any seat give the verdict, that is the
+      // caller only when its own pointer is on this row, so a seat that holds
+      // another task keeps its claim.
+      const handoffWorkerId = task.assignedWorkerId
+        || (params.workerId && state.getWorker(params.workerId)?.currentTaskId === task.id ? params.workerId : null);
 
       // Same hard candidate gate as qa_approve, for the same reason: a rejection
       // must name the bytes it judged, or the worker re-reads feedback written
@@ -168,21 +202,27 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       const priorHistory = Array.isArray(task.rejectionHistory) ? task.rejectionHistory : [];
       const updatedHistory = [historyEntry, ...priorHistory].slice(0, 20);
 
-      // Bounded escalation. Two tiers off the reopen cap (default
-      // MAX_REOPENS_DEFAULT (3), per-task override via task.maxReopens):
-      //   soft cap  (== maxReopens): flip back to PLANNING once so the
-      //             architect gets ONE re-plan instead of the worker spinning.
-      //   hard cap  (>  maxReopens): the re-plan didn't help either — PARK the
-      //             task for a human instead of re-flipping to PLANNING forever.
-      // Because reopenCount is monotonic (never reset), a single `>=` test would
-      // re-flip to PLANNING on every reject past the cap — an unbounded
-      // PLANNING↔WORKING↔REVIEW loop. The hard cap is the terminating tier.
-      const maxReopens = typeof task.maxReopens === 'number' && task.maxReopens > 0
-        ? task.maxReopens
-        : MAX_REOPENS_DEFAULT;
+      // Bounded escalation. Two tiers off the reopen cap, MAX_REOPENS_DEFAULT
+      // (3) for every task (there is no per-task override):
+      //   soft cap  (newReopenCount >= maxReopens, no cap re-plan recorded):
+      //             flip back to PLANNING once so the architect gets ONE
+      //             re-plan instead of the worker spinning, and stamp
+      //             capReplanAt on the same write.
+      //   hard cap  (newReopenCount > maxReopens, capReplanAt set): the re-plan
+      //             didn't help either — PARK the task for a human instead of
+      //             re-flipping to PLANNING forever.
+      // reopenCount is monotonic (never reset) and the non-QA reopens bump it
+      // too (set_task_status, a board drag, REOPEN_TASK), so the count alone
+      // cannot say the re-plan happened: a human reopen that lands the count on
+      // the cap would send the next reject straight to the park. The hard cap
+      // therefore needs capReplanAt; a row without it (written before the field
+      // existed) reads as "no re-plan yet". Once it is set, every later reject
+      // past the cap parks, so the PLANNING↔WORKING↔REVIEW loop stays bounded.
+      const maxReopens = MAX_REOPENS_DEFAULT;
       const softCap = maxReopens;
       const hardCap = maxReopens + 1;
-      const reachedHardCap = newReopenCount >= hardCap;
+      const capReplanned = typeof task.capReplanAt === 'string' && task.capReplanAt.length > 0;
+      const reachedHardCap = capReplanned && newReopenCount >= hardCap;
       const reachedSoftCap = !reachedHardCap && newReopenCount >= softCap;
 
       // Append-only failed-DoD-item log. The append happens regardless of
@@ -277,6 +317,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         // it so the QA claim pool skips it. Status stays REVIEW — inert, not
         // re-flipping to PLANNING — until a human clears the flag.
         ...(parkedForHuman ? { assignedWorkerId: null, needsHumanReview: true } : {}),
+        // Record the cap re-plan in the same write as the PLANNING flip.
+        ...(reachedSoftCap ? { capReplanAt: nowIso } : {}),
         ...(resetSteps
           ? {
               implementationPlan: resetPlanStepsToPending(task.implementationPlan),
@@ -301,7 +343,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       const updated = await state.updateTask(
         params.taskId,
         updatePayload,
-        'QA_REJECTED'
+        'QA_REJECTED',
+        params.workerId
       );
 
       // Escalation messaging, one branch per destination.
@@ -363,9 +406,10 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       // REVIEW -> WORKING handoff. touchWorker skips missing worker records.
       await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
 
-      // Post system message to task channel
+      // Post system message to task channel. The line echoes QA's reason, so a
+      // tag it spells must not page seats (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions).
       try {
-        await state.postSystemMessage(params.taskId, `QA rejected: ${params.reason}`);
+        await state.postSystemMessage(params.taskId, `QA rejected: ${params.reason}`, { parseMentions: false });
       } catch { /* never block tool */ }
 
       // Cross-post structured rejection to #governors so the governor's chat_wait
@@ -392,6 +436,24 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         : replanReason
           ? `Task ${updated.id} rejected and flipped to PLANNING (${replanReason}). Architect will re-plan.`
           : `Task ${updated.id} rejected and moved to ${destination}. Worker should address: ${params.reason}`;
+      // Twin of requestReplan.ts's sessionHandoff (task-55a5a9f9): the verdict
+      // frees the QA seat, and the wrapper pinned that session to its claim's
+      // attempt identity, so a claim/wait hint would start a second review whose
+      // verdict is refused ATTEMPT_SUPERSEDED. A governor's verdict must not end
+      // the governance TUI; a seat whose pointer names another task is not ended.
+      const callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor'
+        ? params.workerId : undefined;
+      const seatWorker = handoffWorkerId || callerSeat;
+      const seatTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;
+      const sessionHandoff = seatWorker && !seatTaskId
+        ? {
+            action: 'END_SESSION', taskId: task.id, workerId: seatWorker,
+            reason: 'Rejection recorded on the task. Capture the failure pattern with Serena write_memory (gotcha-<area>), then end this session. ' +
+              'Do not call moe.claim_next_task or moe.wait_for_task inside this session: the wrapper pinned it to this review\'s attempt identity, so a second review claimed here would have its verdict refused ATTEMPT_SUPERSEDED. ' +
+              'The wrapper claims the next REVIEW task in a fresh session. If this is an interactive TUI, return control to its operator so the CLI can exit normally.'
+          }
+        : undefined;
+
       return {
         success: true,
         taskId: updated.id,
@@ -410,14 +472,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         rejectionHistory: updatedHistory,
         failedDodItems: updated.failedDodItems ?? nextFailedItems,
         message,
-        nextAction: {
-          tool: 'moe.wait_for_task',
-          args: {
-            statuses: ['REVIEW'],
-            workerId: params.workerId,
-          },
-          reason: 'Rejection recorded on the task. Capture the failure pattern with Serena write_memory (gotcha-<area>) so future work avoids it, then block until the next REVIEW task arrives.'
-        }
+        ...(sessionHandoff ? { sessionHandoff } : {}),
       };
     }
   };

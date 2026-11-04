@@ -18,58 +18,98 @@
     {
       "stepId": "step-1",
       "description": "scripts/moe-agent.sh: under the strong profile, only a verified completion may move the target (DoD 1).\n\nFirst read the LANDED CQ-V07 (task-16bbf8ff) and CQ-V08 (task-2720c13b) bytes: PINNED_ATTEMPT_PROFILE, the intent journal and its refusal path, and receipt_journal_fields with profile and treeSha. Adapt to their landed names. Keep every peer's bytes; this file is a collision hotspot (ad0dc2e7, c2a900aa, bc8410af, bdf6db6f).\n\n(a) Add a helper, strong_landing_task TASKID. It is true when ANY of these says 'verified-local':\n- PINNED_ATTEMPT_PROFILE, when TASKID is this session's pinned task;\n- the executionPolicySnapshot.profile of the task's NEWEST readable attempt record (highest generation) in .moe/attempts/*.json, which the daemon writes. Reuse moe_attempt_read's $PYTHON_CMD reader style. An unreadable record is skipped, never trusted;\n- a receipt journal for TASKID whose own profile is verified-local.\nThe helper never reads an environment variable a CLI can set.\n\n(b) The gate: in run_landing, right AFTER the landing_owner_guard check (about line 5401) and before anything reads or writes bytes, the baseline or refs. When LAND_KIND is checkpoint and strong_landing_task \"$LAND_TASK_ID\" is true, refuse with LAND_CODE MOE_COMMIT_REFUSED_STRONG_CHECKPOINT, through a landing_refuse_strong helper shaped like landing_refuse_owner (about line 3472):\n- set LAND_OUTCOME='refused';\n- print a [WARN] naming the code, the task and the branch, and saying the bytes and baseline stay for the verified completion;\n- call record_commit_rpc with refused and the code;\n- fill the session-ended summary with outcome=refused and the code;\n- set MOE_LANDING_DONE=true;\n- write NO update-ref, NO rescue ref, NO baseline change and NO temp index.\n\nThis one gate covers every checkpoint path, because all of them go through run_landing:\n- the post-flight exit checkpoint (LAND_KIND=$LANDING_MODE, about line 8596);\n- the pre-flight recovery (about line 5762, including a gate-failed strong completion's rescued bytes, whose rescue ref stays as it is);\n- the idle-path recoveries.\nThe Ctrl+C teardown rescue (LAND_KIND=rescue) only writes a rescue ref, so it is unchanged.\n\nThis step's error handling: strong fails closed only for a task some trusted record names verified-local. With no such record, every landing is byte-for-byte today's behavior, including the existing recovery messages.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Added strong_landing_task (pinned profile for the session's own task | newest readable .moe/attempts record by generation, tie fails closed | receipt journal's own profile; no env read) and landing_refuse_strong (MOE_COMMIT_REFUSED_STRONG_CHECKPOINT, record_commit refused, summary, MOE_LANDING_DONE; no ref/rescue/index/baseline write) after landing_refuse_owner. The gate sits in run_landing right after the owner guard for LAND_KIND=checkpoint. bash -n OK; an isolated unit check of strong_landing_task covered none, gen1 strong, gen2 legacy wins, garbage skipped, string generation skipped, journal strong, pinned own task, pinned other task. Full harness runs in step 6.",
+      "startedAt": "2026-10-31T20:33:00.135Z",
+      "completedAt": "2026-10-31T20:35:42.498Z"
     },
     {
       "stepId": "step-2",
       "description": "scripts/moe-agent.sh: a strong receipt journal now lives until finalize is acknowledged (DoD 2, CQ-V08's handed-forward residual).\n\nWhy: receipt_send (about line 5215) deletes the journal on an accepted receipt BEFORE finalize_attempt is sent. A crash between the two leaves the attempt finalizing with no journal. The daemon keeps a finalizing attempt's hold across restarts (packages/moe-daemon/src/state/attemptStore.ts reconcileRunningAttempts), so nothing would ever close it. The task is wedged in REVIEW: claims and qa_approve are refused.\n\nThe change applies ONLY to a journal whose own profile is verified-local. Legacy and observe journals keep today's deletion:\n\n(a) receipt_send, on an accepted receipt:\n- set a per-call RECEIPT_ACKED=true;\n- KEEP a strong journal;\n- on DELIVERY_RECEIPT_CONFLICT, keep CQ-V08's handling, which deletes the journal and treats the receipt as acknowledged;\n- reset RECEIPT_ACKED at each call.\n\n(b) finalize_postflight, CQ-V08's strong deferral:\n- key 'receipt unacknowledged' on RECEIPT_ACKED (or LAND_PROOF_UNTRANSFERRED) instead of the journal still existing;\n- when a strong committed landing is acknowledged, send finalize_attempt_rpc landed;\n- delete RECEIPT_JOURNAL only after that RPC succeeds;\n- on failure keep it and print the existing exhausted warning, so the next pre-flight replay finishes it.\n\n(c) receipt_replay, about line 5318, for a strong journal after receipt_send acknowledged it:\n- if the journaled attempt is still finalizing, send finalize 'landed' with the same tree that CQ-V08 (d) already checks. Delete the journal on success; keep it, with the existing warning, on failure;\n- a closed attempt deletes the journal, since nothing is left to acknowledge;\n- running, reconciling or mismatch keeps it, with a [WARN] naming the attempt and phase.\n\nV08 (a)'s MOE_COMMIT_REFUSED_UNRECONCILED_INTENT still refuses a new strong completion while that journal exists. So a kept journal can never lead to a second landing.\n\nUse only the existing helpers (receipt_journal_path, receipt_journal_fields, moe_pinned_attempt_phase, finalize_attempt_rpc, moe_evidence_rpc). Add no new state file and no new journal field.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "receipt_send: resets RECEIPT_ACKED per call. An ack or a DELIVERY_RECEIPT_CONFLICT sets it true. On an accepted receipt it keeps a journal whose own report profile is verified-local (read from the report itself; the args sent are unchanged). The conflict path still deletes, as in V08. finalize_postflight: the deferral is now untransferred || (journal exists && RECEIPT_ACKED != true). I kept the journal-exists clause on purpose: with no journal there is nothing for the replay to replay, so deferring would wedge the attempt, which is V08's existing liveness. After finalize_attempt_rpc succeeds, a strong landed journal is deleted only when moe_pinned_attempt_phase reads closed. A lost finalize keeps the journal, with the existing exhausted warning. receipt_replay: the phase is read once; a successful finalize sets phase=closed. A strong non-wt journal whose attempt is not closed is kept with a [WARN] naming the attempt and phase; otherwise wt or strong journals are removed. Legacy deletion is unchanged. RECEIPT_ACKED is reset in run_landing's init and at the loop top. No new state file and no new journal field. Confirmed the daemon's record_delivery_receipt has no attempt/phase gate, so a re-send after close answers duplicate:true, which makes a crash between finalize and the delete idempotent. bash -n OK.",
+      "startedAt": "2026-10-31T20:35:44.419Z",
+      "completedAt": "2026-10-31T20:40:38.630Z"
     },
     {
       "stepId": "step-3",
       "description": "scripts/moe-agent.ps1 is the exact twin of steps 1 and 2, in string parity: the same code MOE_COMMIT_REFUSED_STRONG_CHECKPOINT, the same banners, env names and settings names.\n\nTwins:\n- the strong_landing_task helper reads $script:PinnedAttemptProfile (CQ-V07), the newest readable .moe/attempts record of the task (Read-MoeAttempt's reader style, about line 1558) and a strong journal (Get-MoeReceiptJournalPath, about line 2711);\n- the gate goes in Invoke-MoeLanding (about line 4476), right after its Get-MoeOwnerGuard refusal, and has the same refusal shape;\n- the recovery's Invoke-MoeLanding -Kind 'checkpoint' (about line 5018) and the post-flight $moeMode checkpoint (about lines 7533 and 7538) reach it unchanged;\n- the journal lifetime: Send-MoeReceipt (about line 1707), Complete-MoePostflight (about line 5167) with Send-MoeFinalize (about line 1749), and Invoke-MoeReceiptReplay (about line 1840).\n\nKeep the file UTF-8 with a BOM, which Windows PowerShell 5.1 needs, and every peer's bytes. Then run `bash scripts/tests/parity-check.sh`, and its .ps1 sibling when pwsh is available. Register the new code there only if the check keeps an explicit list.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twins:\n- Test-MoeStrongLandingTask: $script:PinnedAttemptProfile for $preflightTaskId, then the newest readable .moe/attempts record by generation (per-file try/skip; a tie fails closed), then the journal profile via Get-MoeReceiptJournalPath.\n- Send-MoeStrongRefusal: same banner and code, record_commit refused, branch from symbolic-ref or abbrev-ref.\n- The Invoke-MoeLanding gate goes right after the Get-MoeOwnerGuard refusal for -Kind checkpoint. It sets $res Outcome=refused and Code, which feeds the session-ended outcome=/code= suffix.\n- Send-MoeReceipt keeps a strong journal on an accepted receipt; a conflict still deletes. The landing stores $res.ReceiptAcked.\n- Complete-MoePostflight defers on ProofUntransferred || (!ReceiptAcked && journal exists). After Send-MoeFinalize succeeds and Get-MoePinnedAttemptPhase reads closed, it removes the journal.\n- Invoke-MoeReceiptReplay reads the phase once; a successful finalize sets it closed. A strong non-wt journal that is not closed is kept with the same [WARN] text as sh; otherwise it is removed. The wt line is unchanged.\n\nResults:\n- BOM kept (efbbbf).\n- Parser: 0 errors on pwsh 7.6.9 and on powershell 5.1.26100.\n- bash scripts/tests/parity-check.sh: PASS, exit 0. pwsh.exe parity-check.ps1: PASS, exit 0. The new code is covered by the auto-extracted MOE_COMMIT_* family, so no list registration was needed.\n- A pwsh unit check of Test-MoeStrongLandingTask matches sh on none, gen1 strong, gen2 legacy, garbage, string generation, tie, journal, pinned, and pinned on another task.",
+      "startedAt": "2026-10-31T20:40:43.995Z",
+      "completedAt": "2026-10-31T20:47:03.942Z"
     },
     {
       "stepId": "step-4",
       "description": "scripts/tests/postflight.sh: add three modes to the embedded frozen-candidate suite. The same JS also lives in postflight.ps1; step 5 keeps the two copies byte-identical.\n\nReuse:\n- CQ-V07's strong fixture: the .moe/attempts record with executionPolicySnapshot {version:2, profile:'verified-local', planRevision, deliveryPolicy:'local-branch'}, the frozen gate candidate, and the regular file at <gitdir>/moe/receipt for unwritable;\n- CQ-V08's receipt machinery: the fake daemon's receipt answers, the receipt-held crash supervisor, the FAKE_CLAIM_MODE 'finalizing' second runs and the RPC call log.\n\nEach mode asserts exact codes, the order of calls in the log, the wrapper's exit status and Git state (`git rev-parse` of the branch and `git for-each-ref refs/moe/rescue`), and prints stdout and stderr on failure. A mode is never skipped silently.\n\n1. strong-checkpoint-held (post-flight):\n   - a strong session exits WORKING with dirty owned bytes;\n   - it is refused with MOE_COMMIT_REFUSED_STRONG_CHECKPOINT;\n   - the branch ref is byte-identical; no new refs/moe/rescue/*; the worktree bytes and baseline file are byte-identical;\n   - record_commit carries outcome refused with the code, and the session line reads outcome=refused code=MOE_COMMIT_REFUSED_STRONG_CHECKPOINT;\n   - the variant sets a CLI-visible env var claiming profile legacy and must still be refused.\n2. strong-recovery-held (pre-flight):\n   - run 1 is CQ-V07's unwritable strong completion (refused; bytes and baseline kept);\n   - run 2 makes the receipt dir writable again, and its pre-flight recovery is refused with the same code;\n   - the branch is byte-identical and there is NO MOE_CHECKPOINT_RECOVERED line;\n   - a second variant starts from a gate-failed strong completion: its refs/moe/rescue/<task>/* ref still exists, unmoved, after run 2.\n3. reconcile-strong-finalize-lost:\n   - run 1: a strong landing succeeds and record_delivery_receipt is accepted, then finalize_attempt is lost (the fake daemon drops it, or the crash supervisor kills the wrapper right after the accepted receipt);\n   - expect exactly one Moe-Kind: completion commit, and the journal KEPT;\n   - run 2, a finalizing claim: the replay re-sends the identical receipt (answered as accepted), THEN finalize 'landed' with landedRevision = targetAfter, in that order and exactly once;\n   - expect still one completion commit, the branch unchanged by run 2, and the journal gone.\n\nEvery existing receipt-*, intent-* and reconcile-strong-* mode must pass UNCHANGED. If one of them asserts the very residual being fixed (a strong journal deleted before finalize is acknowledged), stop and report it in complete_step. Never edit it silently.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Added 5 modes to the embedded frozen-candidate suite in postflight.sh. The shared fixture extends V07's strong attempt to /^(intent|reconcile|strong)-/, profile /^((intent|reconcile)-)?strong/.\n(1) strong-checkpoint-held, plus strong-checkpoint-held-env with MOE_EXECUTION_PROFILE=legacy and PINNED_ATTEMPT_PROFILE=legacy in the wrapper/CLI env. Each asserts: one MOE_COMMIT_REFUSED_STRONG_CHECKPOINT warn; record_commit [[refused,checkpoint,code]]; the session line carries 'outcome=refused code=…'; head and reflog are byte-identical; no prepared ref transaction on the branch or rescue refs (reference-transaction hook log); no rescue ref; the owned bytes, the index and the baseline (vs a copy taken at CLI time) are byte-identical; no candidate, check, gate or finalize.\n(2) strong-recovery-held and strong-recovery-held-gate. Run 2 is a second wrapper run with FAKE_TASK_STATUS=WORKING and FROZEN_RUN=2 (the CLI exits with the attempt untouched).\nDEVIATION FROM THE PLAN: a V07 intent refusal (MOE_COMMIT_REFUSED_INTENT_UNWRITABLE) does NOT leave a lingering baseline. Both wrappers rewrite it with landed=1 and the task's own bytes as C rows (run_landing → baseline_after_landing with baseline_landed_flag=1 for the session's own landing; ps1 Write-MoeBaseline $landedFlag at the refusal). So run 2's pre-flight has nothing to recover, and the containment there is run 2's exit checkpoint of those carried bytes being refused (asserted: no recovery line, 1 refusal). The gate-failed variant does leave the baseline lingering (rescued, landed=0). Its run 2 asserts the pre-flight recovery is refused (the recovering line comes before the first refusal) and so is the exit, 2 refusals in all. Both variants assert: no MOE_CHECKPOINT_RECOVERED; branch, reflog and rescue refs (name+objectname) unmoved; no new prepared ref transactions. This is existing V07 design, not a bug, so I filed no task.\n(3) reconcile-strong-finalize-lost (FAKE_EVIDENCE_MODE=finalize_attempt-null). Run 1: 3 identical finalize 'landed' calls, 1 accepted receipt, the journal is KEPT (targetAfter=after), the attempt stays finalizing, 'acknowledgement exhausted' appears once, no deferral, 1 completion commit and 1 ledger row. Run 2 (finalizing claim) has the tail [record_delivery_receipt, finalize_attempt] in that order: the re-sent receipt args deepEqual run 1's, the finalize is attempt-postflight/7/worker-frozen/landed/after, the branch and reflog are unchanged, the journal is gone, the attempt is closed, there is still 1 completion commit and 1 ledger row, and nothing new is frozen or gated.\nRED: all 5 FAIL against the HEAD wrapper (git archive snapshot): checkpoints committed, the recovery committed, the journal was deleted after the accepted receipt. GREEN: `MOE_POSTFLIGHT_TIMEOUT_SEC=360 MOE_FROZEN_TEST_ONLY=<5 new> bash scripts/tests/postflight.sh` → PASS 5. Existing modes unchanged: 32 related modes (all 11 receipt-*, 5 intent-*, 6 reconcile-strong-*, checkpoint-reconciling/unpinned, teardown-recovered/finalizing/landed/running/protected, freed-closed, pass, finalize-loss-once) → PASS 32, exit 0. No existing mode asserted the residual. bash -n OK.",
+      "startedAt": "2026-10-31T20:47:06.144Z",
+      "completedAt": "2026-10-31T21:12:19.080Z"
     },
     {
       "stepId": "step-5",
       "description": "scripts/tests/postflight.ps1: mirror step 4 in the embedded suite. The mode names, fixtures and assertions must be byte-identical to postflight.sh's copy, run against moe-agent.ps1. Add only the ps1-runner bits a mode needs, following the receipt-* and reconcile-strong-* modes' existing ps1 handling.\n\nKeep the harness's structure, timeouts and BOM. Run it with `pwsh -NoProfile -File scripts/tests/postflight.ps1`, and under Windows PowerShell 5.1 through interop from the repo on D: when that is reachable. If an engine is unavailable, say so; never claim it ran.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Mirrored step 4 into postflight.ps1's embedded suite with the Edit tool. A python check extracted the suite from both harnesses: the HEAD copies were identical, and the new copies are byte-identical again (BOM efbbbf kept, LF only, no line starts with '@). No ps1-runner bits were needed. Run 2 / replay spawn `engine` with the same args as the existing receipt and reconcile modes, and the one platform-specific string, the pre-flight recovery line, is selected by `win` inside the shared JS.\npwsh 7.6.9 (host=7.6.9 child=pwsh), `MOE_FROZEN_TEST_ONLY=<5 new> pwsh.exe -NoProfile -File D:\\projexts\\moes\\scripts\\tests\\postflight.ps1` → PASS 5, exit 0.\nWindows PowerShell 5.1 (host=5.1.26100.9711 child=powershell), same command via powershell.exe → PASS 5, exit 0.\nThe 32 related existing modes (receipt-*, intent-*, reconcile-strong-*, checkpoint-*, teardown-*, freed-closed, pass, finalize-loss-once) through the ps1 harness under pwsh → PASS 32, exit 0.\nps1 RED: a scratch snapshot (git archive HEAD plus the new postflight.ps1 and fake proxy, D:\\moe-scratch, removed afterwards) fails all 5 against the HEAD moe-agent.ps1, for the same reasons as bash: the checkpoint is committed, the baseline is rewritten, the recovery commits, the journal is deleted after the accepted receipt.\nparity-check.sh: PASS, exit 0.",
+      "startedAt": "2026-10-31T21:12:20.766Z",
+      "completedAt": "2026-10-31T21:22:22.924Z"
     },
     {
       "stepId": "step-6",
       "description": "VERIFY ONCE, fresh.\n\n1. The DoD command, `bash scripts/tests/postflight.sh`, runs the full suite: the three new modes plus every existing mode. It must exit 0. Supply its command, exit code and output tail to complete_task. Widen MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box; a timeout is diagnosed, never retried into green.\n2. ALSO run these, and report each result in the completion summary:\n   - `bash scripts/tests/parity-check.sh` (and its .ps1 sibling when pwsh exists);\n   - postflight.ps1 under pwsh, and under PowerShell 5.1 when reachable;\n   - `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs`, the V07/V08 DoD command, to prove nothing else regressed.\n3. Mutants, applied to scratch copies of the wrappers, never the shared files. Each must turn its named mode red; restore, cmp, and rerun green:\n   (i) gate only recoveries (LAND_RECOVERED) -> strong-checkpoint-held;\n   (ii) read strong from the env var instead of the pinned or record source -> the strong-checkpoint-held env variant;\n   (iii) delete the strong journal on an accepted receipt, today's behavior -> reconcile-strong-finalize-lost run 2;\n   (iv) finalize before re-sending the receipt in the replay -> the order assertion;\n   (v) refuse every checkpoint regardless of profile -> the existing legacy recovery modes.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY (no tracked edits in this step).\n1. DoD: `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh` exit 0 (~17.5 min, 21:22:46Z start). Results: PASS frozen candidate scenarios: 90 (incl. the 5 new modes), PASS owner guard scenarios: 16, [worktree] 36 ok, commit-scope scenarios run: 45, PASS postflight.sh.\n2. Also:\n - parity-check.sh PASS; parity-check.ps1 PASS under pwsh.\n - postflight.ps1, the 5 new modes: pwsh 7.6.9 PASS; PS 5.1 PASS. Under pwsh, the 32 related receipt-*/intent-*/reconcile-strong-*/checkpoint-*/teardown-*/freed-closed/pass/finalize-loss-once modes also PASS.\n - RED against the HEAD wrappers: all 5 new modes fail, sh and ps1.\n - node --test of the V07/V08 DoD trio: 43 pass / 5 fail. All 5 failures are pre-existing on a HEAD snapshot (\"RUNTIME_PROTECTED: unbound variable\", prompt-cache-launcher worker-type cases, from 29de0da4/task-aa85ff13); my diff has 0 references. Filed as bug task-84e45fa565b04e95b07c02929de0faf9.\n3. Mutants, on scratch copies only:\n - sh, under /tmp:\n   - (i) recovery-only gate: strong-checkpoint-held + strong-recovery-held-gate red;\n   - (ii) env trust: strong-checkpoint-held-env red, base strong-checkpoint-held stays green;\n   - (iii) drop journal on ack: reconcile-strong-finalize-lost red (run-1 journal:false);\n   - (iv) finalize before receipt: reconcile-strong-finalize-lost (tail order) + reconcile-strong-receipt-lost (\"the receipt precedes the finalize\") red;\n   - (v) always strong: teardown-recovered, checkpoint-reconciling, checkpoint-unpinned, freed-closed red.\n   - Each was restored, cmp-identical, then rerun green.\n - ps1, the same five on a Windows-visible snapshot under pwsh 7.6.9: identical reds, each for the right reason; (ii) base stays green. Restored and cmp-identical; the 10 affected modes are green in one run.",
+      "startedAt": "2026-10-31T21:22:24.624Z",
+      "completedAt": "2026-10-31T21:43:07.413Z"
     },
     {
       "stepId": "step-7",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a session trying to put unverified bytes on the target under strong. Check:\n- Is there any path besides a verified completion that moves the target ref under strong: a checkpoint, a recovery, an idle recovery, a resume, or a peel onto the consolidation branch?\n- Can the CLI make strong_landing_task false: an env var, a CLI-written .moe/attempts file under legacy hosting (document the threat-model limit), or a malformed newer record?\n- Can a kept strong journal ever be overwritten, or deleted before finalize is acknowledged?\n- Can it lead to a second landing? V08's MOE_COMMIT_REFUSED_UNRECONCILED_INTENT must still refuse.\n- Crashes: during the replay, between finalize and the journal delete (idempotent: the next replay finds the attempt closed and deletes it), and with two tasks landing concurrently (journals are per task).\n- Liveness: a refused strong recovery repeats its [WARN] on every pre-flight until a verified completion lands the bytes. That is fail-closed by design; hand the operator-facing docs to CQ-V12 (task-b621ddc9).\n- A DELIVERY_RECEIPT_CONFLICT under strong still finalizes the verified tree; note it for V12 if not.\n- Legacy and observe stay byte-for-byte; parity and the BOM hold; no .moe edits; no Git writes outside the wrappers and temp test repos.\nReport every path in complete_step.modifiedFiles, and write the Serena handoff memory 'task-task-7f82e200c224418896667560a49fe0ab-handoff' for CQ-V12.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "I ran the adversarial self-review over `git diff -- scripts/moe-agent.{sh,ps1} scripts/tests/postflight.{sh,ps1}` (337+/39-).\n\n**Review fix: two new frozen variants.** They are byte-identical in postflight.sh FROZENJS and the postflight.ps1 here-string. The wrappers are unchanged in this step.\n- **strong-checkpoint-held-forged:** the CLI writes a newer (generation 8) legacy attempt record for its task. The pinned profile still refuses the exit checkpoint.\n- **strong-checkpoint-held-journal:** a legacy pin and a legacy record, where only the receipt journal says verified-local. Refused.\n- Mutant vi (pin fast path removed) turns -forged red, and mutant vii (journal source never fires) turns -journal red, in both sh and ps1. Restored cmp-identical, both go green.\n\n**Fresh results on the final bytes:**\n- `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh` exits 0 with PASS postflight.sh, 21:50:11Z–22:07:39Z. Frozen 92/92, owner guard 16, commit-scope 45. sha256 of all 4 files was unchanged across the run.\n- The 7 strong modes pass under pwsh 7.6.9 and under PS 5.1.\n- parity-check.sh and parity-check.ps1 PASS.\n- The node --test trio (prompt-cache-launcher/agent-runtime/resume-progress) gives 48 pass / 0 fail / 2 skip, now that fix 84e45fa5 has landed.\n\n**Findings.** All are theoretical; they are recorded for QA and V12 in the Serena handoff.\n1. **Every non-verified path that could move the target under strong is gated:** exit, pre-flight and idle recovery, and resume.\n   - Peel comes after the gate.\n   - The teardown rescue writes only a rescue ref.\n   - Worktree checkpoints move only the task branch (V12).\n2. **Forged inputs.**\n   - Env cannot flip the check (-env, mutant ii).\n   - A CLI-forged newer legacy record cannot defeat the pin for the session's own exit (-forged). It can mask the record source for unpinned idle recoveries. That is a threat-model limit: verified-local host isolation is the boundary (V12 docs).\n   - A missing snapshot reads as legacy (556 of 1430 records have none).\n3. **Kept journals.**\n   - A kept strong journal is never overwritten: V08's existence refusal blocks a second strong completion.\n   - CONFLICT still deletes the journal, so CONFLICT plus a lost finalize leaves the attempt finalizing. This is near-impossible under strong (V12 note).\n4. **Retries are idempotent.** A re-sent receipt is a duplicate, and a closed attempt deletes its journal. Journals are per task, and live_marker_foreign_live guards concurrent seats.\n5. **Liveness warnings (V12 docs):** a refused strong recovery and a kept journal on an open attempt WARN on each pre-flight.\n6. **Legacy and observe are unchanged.** Cost: one more .moe/attempts scan per checkpoint landing, about 2.5–3 s for python over drvfs on 1431 records.\n7. **Generation edge cases.** A tie counts as strong (fail closed). A generation beyond Int64 counts in sh but is skipped in ps1; this is adversarial-only.",
+      "startedAt": "2026-10-31T21:43:08.927Z",
+      "completedAt": "2026-10-31T22:08:19.763Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,27 +120,55 @@
   "dependsOn": [
     "task-2720c13bc79b438e840b14cbba4fea50",
     "task-ad0dc2e7557d4ceca42ce7fab3708942",
-    "task-7a4aab5e0bfa48e0978eb76506edfd57"
+    "task-7a4aab5e0bfa48e0978eb76506edfd57",
+    "task-fa7fece51d0045edb7871beef40e0d93",
+    "task-aa85ff13a8894913ae34242dbab6f395"
   ],
   "priority": "HIGH",
   "order": 7.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-538dc5b5061743ada26059806d2a0013",
+      "author": "governor-4764040b",
+      "content": "Governor start guard (governor-4764040b, 19:01Z), for whoever claims this row once task-aa85ff13 is DONE. It applies until task-44a07f00 (the get_commit_scope fix) is live in the daemon.\n\naa85ff13 also edits scripts/moe-agent.sh and scripts/moe-agent.ps1. Its QA session lands an exit checkpoint shortly after approval, and today that landing commits any change made to those files since its own pre-flight under aa85ff13's id. That is how baa704f5 swept fa7fece5's edit.\n\nSo before your FIRST edit of scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight.sh or scripts/tests/postflight.ps1:\n1. Run `git log -5 --format=%s` and confirm a `wip(task-aa85ff13…) … [status=DONE role=qa …]` line is there.\n2. If it isn't, re-check every 20 s. Read-only work is fine meanwhile.\n3. If 5 minutes pass without it (for example, a dead QA seat), post one line in #governors and start anyway.",
+      "timestamp": "2026-10-31T19:01:09.397Z"
+    },
+    {
+      "id": "comment-b1ad55c1f1af4be4822b941552e4ff5b",
+      "author": "governor-4764040b",
+      "content": "Start guard LIFTED (governor-4764040b, 19:19Z). The daemon restarted at 19:17:49Z (pid 12216) with task-44a07f00's get_commit_scope fix, and the deployed dist contains it. A prerequisite's QA exit landing now treats an active dependent's planned paths as contested, so it can't sweep your edits. Ignore comment-538dc5b5: there's no need to wait for aa85ff13's `[status=DONE role=qa]` checkpoint before your first edit.",
+      "timestamp": "2026-10-31T19:18:12.500Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:13:22.145Z",
-  "updatedAt": "2026-10-30T13:40:43.969Z",
+  "updatedAt": "2026-10-31T22:38:40.011Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:17:55.701Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 7,
+    "doneAt": "2026-10-31T22:36:50.205Z",
+    "wallClockMs": 188334504
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-1ec18131",
+    "qa-1f1f912c"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T18:24:33.792Z",
   "executionContract": {
@@ -167,5 +235,79 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T18:24:33.882Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T20:33:00.135Z",
+  "reviewStartedAt": "2026-10-31T22:09:12.269Z",
+  "verification": {
+    "command": "MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh",
+    "exitCode": 0,
+    "outputTail": "[scenario AD] a CRLF-committed file rewritten, deleted, or replaced by a directory or a symlink after the snapshot still drops as MOE_ATTR_CONCURRENT\n[scenario AD] ok\n[scenario AE] a retargeted symlink lands; a symlink whose target changed, and a dangling one, stay MOE_ATTR_PREEXISTING\n[scenario AE] ok\n[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle\n[scenario AF] ok\n[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy\n[scenario AG] ok\n[scenario AH] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs\n[scenario AH] ok\n[scenario AI] a held contested path reaches record_commit on both nothing landings\n[scenario AI] ok\n[scenario AJ] peel failures and rescue records retain held contested paths\n[scenario AJ1] ok\n[scenario AJ2] ok\n[scenario AJ] ok\n[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named\n[scenario AK] ok\n[scenario AL] a contested hold names the peer that caused it: editing, then active, then idle\n[scenario AL] ok\n[scenario AM] a codex exec seat's completed file_change or Serena edit witnesses its path; a failed or outside one does not\n[scenario AM] ok\ncommit-scope scenarios run: 45\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\n[worktree reuse] a half-made W is finished, an emptied index is kept, a failed budget probe refuses\n[worktree reuse] ok\n[protected runtime] a protected launch runs the exact runtime paths or refuses\n[protected runtime] ok\n[prompt overflow] a claimed_task_context over 128 KiB reaches the CLI through a private file\n[prompt overflow] ok\nPASS postflight.sh",
+    "reportedAt": "2026-10-31T22:09:12.269Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+    ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "CQ-V08b delivered in moe-agent.sh/.ps1 + postflight.sh/.ps1 (337+/39-).\nR1: one gate in run_landing / Invoke-MoeLanding right after the owner guard: under the strong profile every checkpoint landing (post-flight exit, pre-flight, idle and resume recoveries) is refused MOE_COMMIT_REFUSED_STRONG_CHECKPOINT - no ref, rescue ref, temp index or baseline write. Strong = the session's pinned profile for its own task OR the newest readable .moe/attempts record (highest generation, tie=strong, no snapshot=legacy) OR the task's receipt journal profile; env never read.\nR2: a strong receipt journal outlives the receipt ack; finalize defers only on an unacked receipt and drops the journal only once the attempt is closed; the replay re-sends the receipt (duplicate), finalizes a lost finalize once, drops the journal at closed, else WARN+keep. V08's existence refusal blocks a second strong completion, so nothing lands twice. Legacy/observe unchanged.\nTests: 7 frozen modes, byte-identical in both suites: reconcile-strong-finalize-lost, strong-checkpoint-held(-env/-forged/-journal), strong-recovery-held(-gate).\nEvidence: fresh postflight.sh exit 0 (frozen 92/92, PASS postflight.sh); the 7 modes PASS under pwsh 7.6.9 and PS 5.1 on final bytes; parity-check.sh/.ps1 PASS; RED vs HEAD; 7 mutants red in sh+ps1, restored green; node --test prompt-cache-launcher/agent-runtime/resume-progress 48 pass/0 fail/2 skip (after fix 84e45fa5 landed).\nDeviation: strong-recovery-held run 2 refuses only its exit: V07's INTENT_UNWRITABLE refusal settles the baseline (landed=1), so nothing is recovered; -gate covers the refused recovery (a gate-failed rescue keeps landed=0).\nV12 residuals (Serena task-task-7f82e200c224418896667560a49fe0ab-handoff): worktree checkpoints ungated; a CLI-forged attempt record can mask unpinned idle recoveries (host-isolation boundary); CONFLICT + lost finalize wedge; per-pre-flight WARN liveness; one more attempts scan per checkpoint (~2.5-3 s python on drvfs).",
+  "commits": [
+    {
+      "sha": "03deb05cc3d5b741e18b587204ac2b0e9346f438",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-1ec18131@2026-10-31T20:19:04Z",
+      "paths": [
+        ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-1ec18131",
+      "recordedAt": "2026-10-31T22:09:29.811Z",
+      "treeId": "46f62a1994a302976bbeab7be4494c87231e591f",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "b94ccb69240a50c26c554d478a02665b7efe5727",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1f1f912c@2026-10-31T22:12:12Z",
+      "paths": [
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-1f1f912c",
+      "recordedAt": "2026-10-31T22:38:40.010Z",
+      "treeId": "d6c24b08a362e8337a617f036627f615f15045de",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1f1f912c@2026-10-31T22:12:12Z",
+    "at": "2026-10-31T22:38:40.010Z"
+  },
+  "completedAt": "2026-10-31T22:36:50.205Z",
+  "reviewCompletedAt": "2026-10-31T22:36:50.205Z",
+  "reviewSummary": "APPROVED. Reviewed 03deb05c (tree 46f62a19) on moe/work-2026-10-24, also on origin: 337+/39- in 4 wrapper/harness files, net 298 LOC, plus 2 wrapper board JSONs; no daemon or .moe edits.\nRe-run on a git-archive snapshot of 03deb05c:\n- MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh: exit 0, PASS. Frozen 92/92 incl. the 7 new modes; owner guard 16; worktree 36; commit-scope 45.\n- Wall-clock 14m43s (22:16:24Z-22:31:10Z). 9 live seats at start and end; gradle leases free, no queue. tasklist (contention proxy): java/node/powershell 2/7/3 at start, 1/6/2 at end.\n- parity-check.sh and parity-check.ps1 (pwsh): PASS.\n- postflight.ps1, 7 new modes: PASS under pwsh 7.6.9 and PS 5.1.26100.\n- Suite JS byte-identical in both harnesses; BOM kept.\n- node --test trio: 48 pass, 0 fail, 2 skip.\n- RED: all 7 modes fail against the parent moe-agent.sh, for the intended reason.\nDoD:\n1. strong-checkpoint-held (-env, -forged, -journal) and strong-recovery-held-gate: MOE_COMMIT_REFUSED_STRONG_CHECKPOINT; branch, reflog and rescue refs unmoved; bytes, index and baseline identical.\n2. reconcile-strong-finalize-lost: journal kept after ack; the replay re-sends the receipt, then finalizes landed once; one completion commit.\n3. ps1 suite identical; parity PASS.\n4. Existing receipt/intent/reconcile-strong modes pass; only fixture regexes widened.\n5. Fresh run green.\nCode: one gate after the owner guard, before any baseline, peel or CAS write. Strong comes from the pin, the newest attempt record (tie fails closed) or the journal, never env. Legacy deletion on ack is still pinned by receipt-replay.\nNon-blocking, for V12: +1 .moe/attempts scan per checkpoint (~3s on drvfs); worktree checkpoints ungated (target unmoved); pre-existing CONFLICT+lost-finalize wedge.\nPonytail: ps1 duplicates the branch lookup; landing_refuse_strong repeats refuse_owner. net: -9 lines possible.",
+  "requiredCheckAtDone": null
 }

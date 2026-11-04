@@ -264,8 +264,10 @@ export interface ProjectSettings {
   /**
    * 'on' runs each new WORKING claim in <projectPath>/.worktrees/<taskId>
    * on moe/task/<taskId>. Read once at claim time, pinned on the attempt's
-   * workspaceMode. Absent means 'off' only in resolveWorktreeMode (WT-19
-   * flips that default); any other value is refused.
+   * workspaceMode. Absent resolves (resolveWorktreeMode, the one default)
+   * to 'on' when qualityGate is non-blank after trim, else 'off', so the
+   * default never lands a gate-less project ungated; any other value is
+   * refused.
    */
   worktreeMode?: WorktreeMode;
   /**
@@ -331,6 +333,8 @@ export interface ProjectSettings {
    * never from a worker's lastActivityAt. default: 7200000 (2 h)
    */
   reconcileWindowMs?: number;
+  /** Wrapper-restart hold from deregistration, never idle time. Default 120000 ms; 0 disables; capped at 1800000. */
+  reloadHoldMs?: number;
   /**
    * Project-relative globs for files every task appends to (changelogs,
    * release notes). Claim-time fileCollision warnings ignore them so real
@@ -372,9 +376,9 @@ export interface Project {
 export const CURRENT_SCHEMA_VERSION = 6;
 
 /**
- * Default cap on QA reopen cycles. After this many rejections, qa_reject
+ * Cap on QA reopen cycles, the same for every task: there is no per-task override
+ * (the `_DEFAULT` suffix is historical). After this many rejections, qa_reject
  * sends the task back to PLANNING for re-planning instead of WORKING.
- * Override per-task via `task.maxReopens`.
  */
 export const MAX_REOPENS_DEFAULT = 3;
 
@@ -866,7 +870,7 @@ export interface LandingRetry {
   reason: UnlandedReason;
   /** Normalized project-relative conflict paths, when reported. */
   paths: string[];
-  /** Task-scoped rescue ref holding the unpublished bytes. */
+  /** Ref holding the unpublished bytes: a task-scoped rescue ref, or the task branch refs/heads/moe/task/<taskId> when a finalizing close set the retry. */
   rescueRef: string;
   /** The attempted 40-hex target tip B, or null when not reported. */
   targetTip: string | null;
@@ -979,12 +983,6 @@ export interface Task {
    */
   rejectionHistory?: RejectionHistoryEntry[];
   /**
-   * Hard cap on QA reopen cycles before the task is auto-flipped back to
-   * PLANNING (architect picks it up rather than the worker spinning on the
-   * same rejection). Defaults to MAX_REOPENS_DEFAULT (3).
-   */
-  maxReopens?: number;
-  /**
    * Launch tier set at submit_plan (architect choice, floored by plan size)
    * and bumped one step by each qa_reject. Drives the claim `launch` hint.
    */
@@ -1056,7 +1054,7 @@ export interface Task {
   hasPendingQuestion?: boolean;
   contextFetchedBy?: string[];
   stepsCompleted?: string[];
-  /** finalize_attempt alone sets unlanded worktree retries; landed/nothing-to-commit null it. Absent until first retry. */
+  /** Unlanded worktree retries: set by finalize_attempt 'unlanded', or by the finalizing close (deregister, DEAD-record removal) of a worktree attempt whose REVIEW task has no completion recorded for its round; landed/nothing-to-commit null it. Absent until first retry. */
   landingRetry?: LandingRetry | null;
   /**
    * Handoff notes accumulated when workers release the task. Newest-first.
@@ -1133,6 +1131,16 @@ export interface Task {
    */
   needsHumanReview?: boolean;
   /**
+   * ISO time of the qa_reject that flipped this task to PLANNING at its reopen
+   * cap: the one architect re-plan the cap grants. Written only by that flip
+   * and never cleared (a reopen keeps it). The hard cap parks the task
+   * (needsHumanReview) only once this is set, because `reopenCount` also counts
+   * non-QA reopens (set_task_status, a board move) and so cannot tell whether
+   * the re-plan ever happened. Absent on rows written before it existed, which
+   * read as "no cap re-plan yet".
+   */
+  capReplanAt?: string;
+  /**
    * Count of governor plan-critique `block` verdicts that flipped this task
    * back to PLANNING. Bounded by MAX_CRITIQUE_BLOCKS_DEFAULT; deliberately
    * separate from `reopenCount` so critique blocks don't corrupt the qa_reject
@@ -1195,6 +1203,8 @@ export interface Worker {
   chatCursors?: Record<string, string>; // channelId → lastReadMessageId (default: {})
   /** Claude account the seat's current claude launch runs under (moe.lease_account); null/absent when not rotating. */
   accountId?: string | null;
+  /** ISO deadline of a wrapper_restart hold; absent or null means no hold. */
+  reloadHoldUntil?: string | null;
 }
 
 // =============================================================================
@@ -1853,6 +1863,12 @@ export interface DaemonInfo {
   projectPath: string;
   /** Present only when the bind host is not '127.0.0.1' (e.g. 'wsl' for WSL agents: loopback plus the WSL adapter). */
   bindHost?: string;
+  /**
+   * Linux only: the writer's pid namespace, `readlink /proc/self/ns/pid` (for example `pid:[4026531836]`); absent
+   * elsewhere. A reader in another pid namespace (a container, another WSL distro) cannot judge `pid`, so /health
+   * alone decides; see isOtherPidNamespace (server/probeHost.ts).
+   */
+  pidNamespace?: string;
 }
 
 export interface PlanningNotes {

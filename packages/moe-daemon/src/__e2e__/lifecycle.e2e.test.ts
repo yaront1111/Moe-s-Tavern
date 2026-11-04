@@ -228,8 +228,9 @@ describe('lifecycle E2E', () => {
 
   it('auto-flips to PLANNING when the same DoD item fails twice', async () => {
     setupMoe();
-    // Bump maxReopens so reopen-cap does NOT trigger before same-item-twice.
-    writeTask({ maxReopens: 10 });
+    // Two rejections stay below the reopen cap (3), so the PLANNING flip
+    // below comes from the repeated DoD item.
+    writeTask();
     await state.load();
 
     const submit = submitPlanTool(state);

@@ -1,7 +1,22 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeUsageContext, readMoeRecord } from './usage-receipt.mjs';
+
+// One receipt file per launch and nothing pruned them (2663 files in 12 days, 2026-11-04):
+// receipts older than this are dropped at the next launch. Best-effort, never a launch failure.
+const USAGE_RECEIPT_RETENTION_DAYS = Number(process.env.MOE_USAGE_RECEIPT_RETENTION_DAYS ?? 30); // 0 keeps every receipt
+function pruneUsageReceipts(directory) {
+  try {
+    if (!(USAGE_RECEIPT_RETENTION_DAYS > 0)) return;
+    const cutoff = Date.now() - USAGE_RECEIPT_RETENTION_DAYS * 86400000;
+    for (const name of readdirSync(directory)) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = path.join(directory, name);
+      try { if (statSync(file).mtimeMs < cutoff) unlinkSync(file); } catch { /* in use or gone: the next launch retries */ }
+    }
+  } catch { /* pruning never fails a launch */ }
+}
 
 // The wrapper sends metadata through the environment so PowerShell 5.1 never
 // has to round-trip JSON quotes through native argv. No prompt text belongs here.
@@ -24,6 +39,7 @@ try {
   const launchId = randomUUID();
   const directory = path.join(project, 'logs', 'moe-usage');
   mkdirSync(directory, { recursive: true });
+  pruneUsageReceipts(directory);
   const file = path.join(directory, `${launchId}.jsonl`);
   writeFileSync(file, '', { flag: 'wx', mode: 0o600 });
   console.log(JSON.stringify({ file, context: normalizeUsageContext({ ...context, launchId,

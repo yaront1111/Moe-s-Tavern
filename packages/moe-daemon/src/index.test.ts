@@ -4,9 +4,10 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import net from 'net';
+import dns from 'dns';
 import { createRequire } from 'module';
-import { pathToFileURL } from 'url';
-import { execSync, spawn, type ChildProcess } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { execSync, spawn, spawnSync, type ChildProcess } from 'child_process';
 import type { DaemonInfo } from './types/schema.js';
 import { logger } from './util/logger.js';
 import {
@@ -67,6 +68,27 @@ describe('daemon lifecycle validation', () => {
       projectPath: testDir,
       ...overrides,
     };
+  }
+
+  // Shared by the WSL-boundary and pid-namespace blocks below.
+  const DEAD_PID = 2147483646;
+  const jsonPath = () => path.join(testDir, '.moe', 'daemon.json');
+  const lockPath = () => path.join(testDir, '.moe', 'daemon.lock');
+  const stopPath = () => path.join(testDir, '.moe', 'daemon.stop');
+
+  function writeDaemonFiles(port: number, pid = DEAD_PID, projectPath = testDir, extra: Partial<DaemonInfo> = {}): string {
+    const raw = JSON.stringify(daemonInfo({ port, pid, projectPath, ...extra }));
+    fs.writeFileSync(jsonPath(), raw);
+    fs.writeFileSync(lockPath(), JSON.stringify({
+      pid, projectPath, createdAt: new Date().toISOString(),
+    }));
+    return raw;
+  }
+
+  function killSpyWithoutSignals() {
+    const realKill = process.kill.bind(process);
+    return vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) =>
+      signal === 0 || signal === undefined ? realKill(pid, 0) : true) as typeof process.kill);
   }
 
   it('accepts valid daemon info only when health matches the requested project', async () => {
@@ -227,11 +249,7 @@ describe('daemon lifecycle validation', () => {
   // pid from another pid namespace. Flipping process.platform makes testDir's
   // own path form look like the other side's, so this runs on every CI OS.
   describe('daemon.json across the WSL boundary', () => {
-    const DEAD_PID = 2147483646;
     let savedExitCode: typeof process.exitCode;
-    const jsonPath = () => path.join(testDir, '.moe', 'daemon.json');
-    const lockPath = () => path.join(testDir, '.moe', 'daemon.lock');
-    const stopPath = () => path.join(testDir, '.moe', 'daemon.stop');
 
     beforeEach(() => {
       savedExitCode = process.exitCode;
@@ -251,21 +269,6 @@ describe('daemon lifecycle validation', () => {
       } finally {
         Object.defineProperty(process, 'platform', saved);
       }
-    }
-
-    function writeDaemonFiles(port: number, pid = DEAD_PID, projectPath = testDir): string {
-      const raw = JSON.stringify(daemonInfo({ port, pid, projectPath }));
-      fs.writeFileSync(jsonPath(), raw);
-      fs.writeFileSync(lockPath(), JSON.stringify({
-        pid, projectPath, createdAt: new Date().toISOString(),
-      }));
-      return raw;
-    }
-
-    function killSpyWithoutSignals() {
-      const realKill = process.kill.bind(process);
-      return vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) =>
-        signal === 0 || signal === undefined ? realKill(pid, 0) : true) as typeof process.kill);
     }
 
     it('DEAD_PID is not a live pid here', () => {
@@ -312,7 +315,7 @@ describe('daemon lifecycle validation', () => {
       for (const p of ['/mnt/d/p', '/home/u/p']) {
         expect([p, foreign(p, 'win32'), foreign(p, 'linux'), foreign(p, 'darwin')]).toEqual([p, true, false, false]);
       }
-      // `--project` is recorded as given: a relative path names no side.
+      // A daemon before task-78fa7110 recorded a relative --project as given: it names no side.
       for (const p of ['.', 'proj', 'sub/proj', 'sub\\proj']) {
         expect([p, foreign(p, 'win32'), foreign(p, 'linux'), foreign(p, 'darwin')]).toEqual([p, false, false, false]);
       }
@@ -664,6 +667,323 @@ setInterval(() => {}, 60000);`;
         });
       });
     });
+
+    // daemon.json is repository content, and a /health answer from another host could name any pid. So its
+    // bindHost is dialed only when the literal it resolves to is loopback or held by a local interface.
+    describe('a daemon.json bindHost is dialed only when it names this machine (task-d6ebe4ab)', () => {
+      const OFF = '192.0.2.10'; // RFC 5737 TEST-NET-1
+      const NAME = 'moe-bindhost.test';
+      const lo = { address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' };
+      const eth0 = { address: OFF, netmask: '255.255.255.0', family: 'IPv4', mac: '02:00:00:00:00:01', internal: false, cidr: `${OFF}/24` };
+      const v6 = (address: string, scopeid: number) =>
+        ({ address, netmask: 'ffff:ffff:ffff:ffff::', family: 'IPv6', mac: '02:00:00:00:00:01', internal: false, cidr: `${address}/64`, scopeid });
+      type Interfaces = ReturnType<typeof os.networkInterfaces>;
+      const loopbackOnly = { lo: [lo] } as Interfaces;
+      const withOff = { lo: [lo], eth0: [eth0] } as Interfaces;
+      // eth0's subnets hold OFF and 2001:db8::10, but eth0 itself holds .11 and ::11.
+      const neighbors = { lo: [lo], eth0: [{ ...eth0, address: '192.0.2.11', cidr: '192.0.2.11/24' }, v6('2001:db8::11', 2)] } as Interfaces;
+      // Two links with their own link-local addresses; eth0 is interface index 2.
+      const linkLocal = { lo: [lo], eth0: [v6('fe80::a', 2)], docker0: [v6('fe80::b', 3)] } as Interfaces;
+      const unreadable = () => vi.spyOn(os, 'networkInterfaces').mockImplementation(() => {
+        throw new Error('uv_interface_addresses EPERM');
+      });
+      const parsed = (raw: string) => JSON.parse(raw) as DaemonInfo;
+      const signals = (spy: ReturnType<typeof killSpyWithoutSignals>) =>
+        spy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined);
+      let dialed: string[];
+      let lookup: ReturnType<typeof vi.spyOn>;
+
+      beforeEach(() => {
+        dialed = [];
+        // Every address answers like the healthy fake daemon, so only the bindHost rule can withhold a signal.
+        const realRequest = http.request;
+        vi.spyOn(http, 'request').mockImplementation(((options: http.RequestOptions, callback?: (res: http.IncomingMessage) => void) => {
+          dialed.push(String(options.hostname));
+          return realRequest({ ...options, hostname: '127.0.0.1' }, callback);
+        }) as typeof http.request);
+        lookup = vi.spyOn(dns.promises, 'lookup').mockImplementation((async (name: string) => {
+          if (name === NAME) return { address: OFF, family: 4 };
+          throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${name}`), { code: 'ENOTFOUND' });
+        }) as unknown as typeof dns.promises.lookup);
+      });
+
+      // The whole refusal: nothing dialed, signalled, written or removed, exit 1, and status reports the reason.
+      async function expectRefused(bindHost: string, interfaces: Interfaces): Promise<void> {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(interfaces);
+        const raw = writeDaemonFiles(await healthServer(testDir), process.pid, testDir, { bindHost });
+        const info = parsed(raw);
+        const lock = fs.readFileSync(lockPath(), 'utf-8');
+        const logged = vi.spyOn(logger, 'info');
+        const errors = vi.spyOn(logger, 'error');
+        const killSpy = killSpyWithoutSignals();
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: false, reason: 'bindHost not local' });
+        expect(await probeDaemonHealth(info, testDir, 2000)).toBe(false);
+        await statusDaemon(testDir);
+        await stopDaemon(testDir);
+
+        expect(dialed).toEqual([]);
+        expect(signals(killSpy)).toEqual([]);
+        expect([fs.readFileSync(jsonPath(), 'utf-8'), fs.readFileSync(lockPath(), 'utf-8'), fs.existsSync(stopPath())])
+          .toEqual([raw, lock, false]);
+        expect(process.exitCode).toBe(1);
+        expect(logged.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields))
+          .toMatchObject([{ status: 'stopped', reason: 'bindHost not local', pid: process.pid }]);
+        expect(errors.mock.calls.map(([fields]) => fields)).toEqual([{ pid: process.pid, bindHost }]);
+      }
+
+      it.each([['an IP literal', OFF], ['a name that resolves', NAME]])('B1 %s off this machine is never dialed, signalled or removed', (_kind, bindHost) =>
+        expectRefused(bindHost, loopbackOnly));
+
+      // Exact addresses, never subnets: a neighbor on a local interface's subnet is another machine.
+      it.each([OFF, '2001:db8::10'])('B7 %s, on the subnet of a local interface but not held by one, is refused', (bindHost) =>
+        expectRefused(bindHost, neighbors));
+
+      // BlockList.check drops a %zone, but the zone picks the link that is dialed: with eth0 holding fe80::a,
+      // fe80::a%docker0 leaves on docker0's link to a peer. A Moe daemon's /health refuses a zoned Host, so no zone counts.
+      it.each(['fe80::a%docker0', 'fe80::a%eth0', 'fe80::a%2'])('B8 the zoned literal %s is refused', (bindHost) =>
+        expectRefused(bindHost, linkLocal));
+
+      it('B8 unzoned, a link-local address a local interface holds still stops: the OS delivers it locally', async () => {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(linkLocal);
+        const info = parsed(writeDaemonFiles(await healthServer(testDir), process.pid, testDir, { bindHost: 'fe80::a' }));
+        const killSpy = killSpyWithoutSignals();
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info });
+        await stopDaemon(testDir);
+
+        expect(signals(killSpy)).toEqual([[process.pid, 'SIGTERM']]);
+        expect(dialed).toEqual(['fe80::a', 'fe80::a']);
+      });
+
+      it.each([['an IP literal', OFF], ['a name that resolves', NAME]])('B2 %s to a local interface still stops, dialing the resolved literal', async (_kind, bindHost) => {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(withOff);
+        const info = parsed(writeDaemonFiles(await healthServer(testDir), process.pid, testDir, { bindHost }));
+        const killSpy = killSpyWithoutSignals();
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info });
+        await stopDaemon(testDir);
+
+        expect(signals(killSpy)).toEqual([[process.pid, 'SIGTERM']]);
+        expect(fs.existsSync(stopPath())).toBe(true);
+        // One resolution per validation, and the literal it gave is the one dialed.
+        expect(dialed).toEqual([OFF, OFF]);
+        expect(lookup).toHaveBeenCalledTimes(bindHost === NAME ? 2 : 0);
+        expect(process.exitCode ?? 0).toBe(0);
+      });
+
+      it.each([[undefined], ['127.0.1.1'], ['::1'], ['::ffff:127.0.0.1'], ['0.0.0.0'], ['::'], ['wsl']])('B3 loopback bindHost %s stops as before even when the interfaces cannot be read', async (bindHost) => {
+        unreadable();
+        const info = parsed(writeDaemonFiles(await healthServer(testDir), process.pid, testDir, bindHost === undefined ? {} : { bindHost }));
+        const probed = bindHost === undefined || ['0.0.0.0', '::', 'wsl'].includes(bindHost) ? '127.0.0.1' : bindHost;
+        const killSpy = killSpyWithoutSignals();
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info });
+        await stopDaemon(testDir);
+
+        expect(signals(killSpy)).toEqual([[process.pid, 'SIGTERM']]);
+        expect(dialed).toEqual([probed, probed]);
+      });
+
+      it('B4 unreadable interfaces leave loopback only, so a non-loopback bindHost is refused', async () => {
+        unreadable();
+        const info = daemonInfo({ port: await healthServer(testDir), bindHost: OFF });
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: false, reason: 'bindHost not local' });
+        expect(dialed).toEqual([]);
+      });
+
+      // net.isIP coerces its argument, so a one-element array passes as an IP literal unless the type is checked.
+      it.each([[[OFF]], [['127.0.0.1']], [5]])('B6 a non-string bindHost %j is never dialed and never throws', async (bindHost) => {
+        vi.spyOn(os, 'networkInterfaces').mockReturnValue(withOff);
+        const info = daemonInfo({ port: await healthServer(testDir), bindHost: bindHost as unknown as string });
+
+        expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: false, reason: 'health check failed' });
+        expect(await probeDaemonHealth(info, testDir, 2000)).toBe(false);
+        expect(dialed).toEqual([]);
+      });
+
+      it('B5 a foreign daemon.json bindHost is dialed only when a local interface holds it', async () => {
+        const info = daemonInfo({ port: await healthServer(testDir, DEAD_PID), pid: DEAD_PID, bindHost: OFF });
+        const interfaces = vi.spyOn(os, 'networkInterfaces').mockReturnValue(loopbackOnly);
+
+        expect(await otherSide(() => validateDaemonInfoForProject(testDir, info)))
+          .toEqual({ valid: false, reason: 'foreign daemon unreachable', foreign: true });
+        expect(dialed).toEqual([]);
+
+        interfaces.mockReturnValue(withOff);
+        expect(await otherSide(() => validateDaemonInfoForProject(testDir, info))).toEqual({ valid: true, info, foreign: true });
+        expect(dialed).toEqual([OFF]);
+
+        // The zone rule covers it too: eth0 holds fe80::a, but %docker0 would dial docker0's link.
+        interfaces.mockReturnValue(linkLocal);
+        expect(await otherSide(() => validateDaemonInfoForProject(testDir, { ...info, bindHost: 'fe80::a%docker0' })))
+          .toEqual({ valid: false, reason: 'foreign daemon unreachable', foreign: true });
+        expect(dialed).toEqual([OFF]);
+      });
+    });
+  });
+
+  // A daemon in a container (or another WSL distro) writes a pid from its own pid namespace to the mounted
+  // daemon.json: pid 15 means nothing on the host. Its record carries pidNamespace, and a reader in another namespace
+  // judges it by /health alone, never by its pid. 'pid:[1]' differs from every reader's own namespace on every CI OS
+  // (no real namespace inode is 1; Windows and macOS have none). The new exports are imported inside N1/N2, so the rest
+  // of this file still loads against code without them.
+  describe('daemon.json from another pid namespace (task-da89f620)', () => {
+    const OTHER_NS = 'pid:[1]';
+    const realReadlinkSync = fs.readlinkSync;
+    let savedExitCode: typeof process.exitCode;
+
+    beforeEach(() => {
+      savedExitCode = process.exitCode;
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      process.exitCode = savedExitCode;
+    });
+
+    // probeHost.ts reads /proc/self/ns/pid through the same default fs object.
+    function stubOwnPidNamespace(value: string | Error): void {
+      vi.spyOn(fs, 'readlinkSync').mockImplementation(((file: fs.PathLike, options?: unknown) => {
+        if (file !== '/proc/self/ns/pid') return realReadlinkSync(file, options as never);
+        if (value instanceof Error) throw value;
+        return value;
+      }) as typeof fs.readlinkSync);
+    }
+
+    const noProc = () => Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+    const nonZeroSignals = (spy: ReturnType<typeof killSpyWithoutSignals>) =>
+      spy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined);
+    type Calls = { mock: { calls: unknown[][] } };
+    const statusLines = (spy: Calls) => spy.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields);
+    const messages = (spy: Calls) => spy.mock.calls.map((args) => String(args.at(-1)));
+
+    it('N1 isOtherPidNamespace counts only a well-formed other namespace, and ownPidNamespace reads only that form', async () => {
+      const { isOtherPidNamespace, ownPidNamespace } = await import('./server/probeHost.js');
+      const twenty = `pid:[${'9'.repeat(20)}]`;
+      const tooLong = `pid:[${'1'.repeat(21)}]`;
+      expect([isOtherPidNamespace('pid:[1]', 'pid:[7]'), isOtherPidNamespace(twenty, 'pid:[7]')]).toEqual([true, true]);
+      for (const recorded of ['pid:[7]', undefined, 7, 'pid:[x]', 'pid:[1', tooLong, 'net:[1]', ['pid:[1]'], null]) {
+        expect([recorded, isOtherPidNamespace(recorded, 'pid:[7]')]).toEqual([recorded, false]);
+      }
+
+      stubOwnPidNamespace('pid:[7]');
+      expect([ownPidNamespace(), isOtherPidNamespace('pid:[7]'), isOtherPidNamespace('pid:[1]')]).toEqual(['pid:[7]', false, true]);
+      stubOwnPidNamespace('garbage');
+      expect(ownPidNamespace()).toBeUndefined();
+      // No namespace of its own (Windows, macOS): any well-formed value is another's; a malformed one still is not.
+      stubOwnPidNamespace(noProc());
+      expect([ownPidNamespace(), isOtherPidNamespace('pid:[7]'), isOtherPidNamespace('pid:[7]', undefined), isOtherPidNamespace('pid:[x]')])
+        .toEqual([undefined, true, true, false]);
+    });
+
+    it('N2 buildDaemonInfo records the writer\'s pid namespace only where it has one, and keeps the bindHost rule', async () => {
+      const { buildDaemonInfo } = await import('./index.js');
+      stubOwnPidNamespace('pid:[7]');
+      expect(buildDaemonInfo(4321, testDir, '127.0.0.1'))
+        .toEqual({ port: 4321, pid: process.pid, startedAt: expect.any(String), projectPath: testDir, pidNamespace: 'pid:[7]' });
+      expect(buildDaemonInfo(4321, testDir, 'wsl')).toMatchObject({ bindHost: 'wsl', pidNamespace: 'pid:[7]' });
+
+      stubOwnPidNamespace(noProc());
+      const bare = buildDaemonInfo(4321, testDir, '0.0.0.0');
+      expect(bare).toEqual({ port: 4321, pid: process.pid, startedAt: expect.any(String), projectPath: testDir, bindHost: '0.0.0.0' });
+      expect('pidNamespace' in bare).toBe(false);
+    });
+
+    it('N3 validateDaemonInfoForProject judges a namespaced record by /health alone and never probes its pid', async () => {
+      const killSpy = killSpyWithoutSignals();
+      const port = await healthServer(testDir, DEAD_PID);
+      const info = daemonInfo({ port, pid: DEAD_PID, pidNamespace: OTHER_NS });
+      expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info, namespaced: true });
+
+      const unreachable = daemonInfo({ port: await unusedPort(), pid: DEAD_PID, pidNamespace: OTHER_NS });
+      expect(await validateDaemonInfoForProject(testDir, unreachable))
+        .toEqual({ valid: false, reason: 'pid namespace daemon unreachable', namespaced: true });
+      expect(killSpy.mock.calls.filter(([pid]) => pid === DEAD_PID)).toEqual([]);
+
+      expect(await validateDaemonInfoForProject(testDir, daemonInfo({ port, pid: DEAD_PID })))
+        .toMatchObject({ valid: false, reason: 'pid not alive' });
+    });
+
+    it('N4 statusDaemon keeps a namespaced daemon.json that /health confirms and reports it running', async () => {
+      const raw = writeDaemonFiles(await healthServer(testDir, DEAD_PID), DEAD_PID, testDir, { pidNamespace: OTHER_NS });
+      const logged = vi.spyOn(logger, 'info');
+
+      await statusDaemon(testDir);
+
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(process.exitCode ?? 0).toBe(0);
+      expect(messages(logged).filter((msg) => msg.includes('not running'))).toEqual([]);
+      expect(statusLines(logged)).toMatchObject([{ status: 'running', owner: 'another pid namespace', pid: DEAD_PID }]);
+    });
+
+    // process.pid stands in for an unrelated host process that happens to hold the container's pid number.
+    it('N5 statusDaemon removes a namespaced daemon.json whose /health no longer answers, even when its pid number is alive here', async () => {
+      writeDaemonFiles(await unusedPort(), process.pid, testDir, { pidNamespace: OTHER_NS });
+      const killSpy = killSpyWithoutSignals();
+
+      await statusDaemon(testDir);
+
+      expect(fs.existsSync(jsonPath())).toBe(false);
+      expect(nonZeroSignals(killSpy)).toEqual([]);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('N6 stopDaemon never signals, removes or sentinels a live namespaced daemon, and exits 1', async () => {
+      const raw = writeDaemonFiles(await healthServer(testDir, DEAD_PID), DEAD_PID, testDir, { pidNamespace: OTHER_NS });
+      const killSpy = killSpyWithoutSignals();
+      const errors = vi.spyOn(logger, 'error');
+
+      await stopDaemon(testDir);
+
+      expect(nonZeroSignals(killSpy)).toEqual([]);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(fs.existsSync(stopPath())).toBe(false);
+      expect(process.exitCode).toBe(1);
+      expect(messages(errors).join('\n')).toMatch(/another pid namespace.*no signal sent, nothing removed/);
+    });
+
+    // No daemon.lock, so the only pid stop could probe is the record's own, which it must never touch (not even signal 0).
+    it('N7 stopDaemon cleans up an unreachable namespaced daemon.json as stale and never signals or probes its pid', async () => {
+      fs.writeFileSync(jsonPath(), JSON.stringify(daemonInfo({ port: await unusedPort(), pid: DEAD_PID, pidNamespace: OTHER_NS })));
+      const killSpy = killSpyWithoutSignals();
+
+      await stopDaemon(testDir);
+
+      expect(killSpy.mock.calls.filter(([pid]) => pid === DEAD_PID)).toEqual([]);
+      expect(nonZeroSignals(killSpy)).toEqual([]);
+      expect(fs.existsSync(jsonPath())).toBe(false);
+      expect(fs.existsSync(stopPath())).toBe(true);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('N8 existingDaemonBlocksStart refuses a second daemon over a live namespaced one, and a restarted container still starts', async () => {
+      const raw = writeDaemonFiles(await healthServer(testDir, DEAD_PID), DEAD_PID, testDir, { pidNamespace: OTHER_NS });
+      expect(await existingDaemonBlocksStart(testDir)).toBe(true);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(process.exitCode ?? 0).toBe(0);
+
+      // Its predecessor's record, read from a new namespace with nothing answering yet: stale, so the start proceeds.
+      writeDaemonFiles(await unusedPort(), DEAD_PID, testDir, { pidNamespace: OTHER_NS });
+      expect(await existingDaemonBlocksStart(testDir)).toBe(false);
+      expect(fs.existsSync(jsonPath())).toBe(false);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('N9 a record from the reader\'s own pid namespace keeps the pid rules', async () => {
+      stubOwnPidNamespace('pid:[7]');
+      const port = await healthServer(testDir, DEAD_PID);
+      writeDaemonFiles(port, DEAD_PID, testDir, { pidNamespace: 'pid:[7]' });
+      expect(await validateDaemonInfoForProject(testDir, readDaemonInfo(testDir)))
+        .toMatchObject({ valid: false, reason: 'pid not alive' });
+
+      await statusDaemon(testDir);
+
+      expect(fs.existsSync(jsonPath())).toBe(false);
+    });
   });
 });
 
@@ -785,5 +1105,97 @@ describe('daemon.json size cap', () => {
     expect(killSpy).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(testDir, '.moe', 'daemon.stop'))).toBe(true);
     expect(fs.existsSync(daemonJson)).toBe(true);
+  });
+});
+
+// A start over a project with no .moe/ is refused before any lock or spawn, and a
+// lock wait that ends with no daemon running exits non-zero (task-88673297). The
+// children run this source through tsx with a scrubbed env: no seat MOE_* variable,
+// a scratch HOME (a started _run writes ~/.moe/config.json) and a 100 ms lock wait.
+describe('no-moe start', () => {
+  const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
+  const entry = fileURLToPath(new URL('./index.ts', import.meta.url));
+  let scratch: string;
+  let project: string;
+
+  beforeEach(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-no-moe-start-'));
+    project = path.join(scratch, 'project');
+    fs.mkdirSync(project);
+    fs.mkdirSync(path.join(scratch, 'home'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  async function freePort(): Promise<number> {
+    const server = net.createServer();
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as net.AddressInfo).port;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    return port;
+  }
+
+  /** Run the CLI; returns its exit status, the msg of every JSON log line, and the wall time. */
+  async function daemon(...args: string[]): Promise<{ status: number | null; msgs: string[]; ms: number }> {
+    const home = path.join(scratch, 'home');
+    // NODE_OPTIONS hands tsx to the _run child that `start`'s supervisor spawns with
+    // process.execPath alone; without it that child dies on the .ts import, not on the bug.
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH, HOME: home, USERPROFILE: home, NODE_ENV: 'production', MOE_LOCK_RETRY_DELAY_MS: '100',
+      NODE_OPTIONS: `--import ${tsx}`,
+      ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP } : {}),
+    };
+    const port = String(await freePort());
+    const started = Date.now();
+    const result = spawnSync(process.execPath, ['--import', tsx, entry, ...args, '--port', port], {
+      env, encoding: 'utf-8', timeout: 30_000, windowsHide: true,
+    });
+    const msgs = `${result.stdout}${result.stderr}`.split('\n').flatMap((line) => {
+      try { return [String((JSON.parse(line) as { msg?: unknown }).msg)]; } catch { return []; }
+    });
+    return { status: result.status, msgs, ms: Date.now() - started };
+  }
+
+  const names = (msgs: string[], text: string) => msgs.some(msg => msg.startsWith(text));
+
+  it('N1: _run on a directory without .moe/ exits 1 naming the missing .moe/, with no lock race and nothing created', async () => {
+    const run = await daemon('_run', '--project', project);
+    expect({ status: run.status, missing: names(run.msgs, '.moe/ missing at '), race: names(run.msgs, 'Another process is starting the daemon') })
+      .toEqual({ status: 1, missing: true, race: false });
+    expect(fs.readdirSync(project)).toEqual([]);
+  }, 60_000);
+
+  it('N2: _run on a path that does not exist exits 1 and does not create it', async () => {
+    const typo = path.join(scratch, 'typo');
+    const run = await daemon('_run', '--project', typo);
+    expect({ status: run.status, missing: names(run.msgs, '.moe/ missing at '), exists: fs.existsSync(typo) })
+      .toEqual({ status: 1, missing: true, exists: false });
+  }, 60_000);
+
+  it('N3: start on a directory without .moe/ exits 1 within 10 s, spawning no daemon and no restart', async () => {
+    const run = await daemon('start', '--project', project);
+    expect({
+      status: run.status, fast: run.ms < 10_000, missing: names(run.msgs, '.moe/ missing at '),
+      spawned: names(run.msgs, 'Supervisor spawned daemon process'), restarted: names(run.msgs, 'Restarting daemon after backoff'),
+    }).toEqual({ status: 1, fast: true, missing: true, spawned: false, restarted: false });
+  }, 60_000);
+
+  it('N4: _run whose lock wait ends with no daemon running exits 1', async () => {
+    fs.mkdirSync(path.join(project, '.moe'));
+    // A live, fresh lock held by this test process: contention, never stale.
+    fs.writeFileSync(path.join(project, '.moe', 'daemon.lock'), JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+    const run = await daemon('_run', '--project', project);
+    expect({
+      status: run.status, waited: names(run.msgs, 'Another process is starting the daemon, waiting...'),
+      failed: names(run.msgs, 'Failed to acquire lock and daemon not running'),
+    }).toEqual({ status: 1, waited: true, failed: true });
+  }, 60_000);
+
+  it('N5: acquireLock throws a create error other than EEXIST instead of reporting contention', () => {
+    let code: unknown = 'returned without throwing';
+    try { acquireLock(project); } catch (error) { code = (error as NodeJS.ErrnoException).code; }
+    expect(code).toBe('ENOENT');
   });
 });

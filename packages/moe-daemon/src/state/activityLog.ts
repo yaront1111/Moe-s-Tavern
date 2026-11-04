@@ -12,10 +12,13 @@
 // must never throw into its caller - a failed audit write must not fail the
 // state mutation that triggered it - and getActivityLogWindow returns an empty
 // window rather than throwing when activity.log is missing or truncated
-// mid-line.
+// mid-line. Reads span the live activity.log and its rotated activity.log.<n>.gz
+// generations (LogRotator), newest first; a generation that cannot be read is
+// skipped with a warning and reported as omitted lines.
 
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import type { StateManager } from './StateManager.js';
 import type { ActivityEvent, ActivityEventType, Epic, RailProposal, Task, Worker } from '../types/schema.js';
 import { ACTIVITY_EVENT_TYPES } from '../types/schema.js';
@@ -197,15 +200,50 @@ export function getActivityLog(state: StateManager, limit = 100): ActivityEvent[
   return getActivityLogWindow(state, limit).events;
 }
 
+// LogRotator (util/LogRotator.ts) keeps activity.log.<n>.gz, newest n=1, contiguous.
+const MAX_ROTATED_GENERATIONS = 50;
+// Decompression cap per generation: 6x the 10 MB default rotation size. A larger
+// (or hostile) generation is skipped as unreadable instead of filling memory.
+const MAX_ROTATED_BYTES = 64 * 1024 * 1024;
+
+/**
+ * The newest `limit` raw lines across activity.log and its rotated generations,
+ * oldest first. A generation is decompressed only while the window is short; an
+ * unreadable one is skipped with a warning and reported as omitted lines.
+ */
+function readActivityTail(logPath: string, limit: number): { lines: string[]; hasMoreOlderLines: boolean } {
+  const live = readLastLinesWithMetadata(logPath, limit);
+  let lines = live.lines;
+  let hasMoreOlderLines = live.hasMoreOlderLines;
+  let gap = false;
+  for (let n = 1; !hasMoreOlderLines; n++) {
+    const gzPath = `${logPath}.${n}.gz`;
+    if (!fs.existsSync(gzPath)) break;
+    // A full window with an older generation still on disk has omitted lines.
+    if (lines.length >= limit || n > MAX_ROTATED_GENERATIONS) { hasMoreOlderLines = true; break; }
+    let older: string[];
+    try {
+      older = zlib.gunzipSync(fs.readFileSync(gzPath), { maxOutputLength: MAX_ROTATED_BYTES })
+        .toString('utf-8').split(/\r?\n/).filter((line) => line.length > 0);
+    } catch (error) {
+      gap = true;
+      logger.warn({ error, gzPath }, 'Skipping unreadable rotated activity log');
+      continue;
+    }
+    const need = limit - lines.length;
+    if (older.length > need) hasMoreOlderLines = true;
+    lines = [...older.slice(-need), ...lines];
+  }
+  return { lines, hasMoreOlderLines: hasMoreOlderLines || gap };
+}
+
 /**
  * Read a bounded activity log tail and report whether older raw log lines were omitted.
+ * Reads the rotated generations too once the live file runs short.
  * Returns events in reverse chronological order (newest first).
  */
 export function getActivityLogWindow(state: StateManager, limit = 100): { events: ActivityEvent[]; hasMoreOlderLines: boolean; linesRead: number } {
   const logPath = path.join(state.moePath, 'activity.log');
-  if (!fs.existsSync(logPath)) {
-    return { events: [], hasMoreOlderLines: false, linesRead: 0 };
-  }
 
   try {
     const safeLimit = Math.max(0, Math.trunc(limit));
@@ -213,7 +251,7 @@ export function getActivityLogWindow(state: StateManager, limit = 100): { events
       return { events: [], hasMoreOlderLines: false, linesRead: 0 };
     }
 
-    const { lines, hasMoreOlderLines } = readLastLinesWithMetadata(logPath, safeLimit);
+    const { lines, hasMoreOlderLines } = readActivityTail(logPath, safeLimit);
     const events: ActivityEvent[] = [];
     let skippedCount = 0;
 

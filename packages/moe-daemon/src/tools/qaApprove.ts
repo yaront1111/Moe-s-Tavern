@@ -1,8 +1,9 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TaskCommit } from '../types/schema.js';
-import { missingRequired, notFound, invalidState, invalidInput } from '../util/errors.js';
+import { missingRequired, notFound, invalidState, invalidInput, notAllowed } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { listAttempts } from '../state/attemptStore.js';
 import { nonHolderFinalizingRefusal } from '../util/claimGuards.js';
 import { recordReview } from '../state/reviewStore.js';
@@ -28,7 +29,7 @@ function commitEvidenceEntry(c: TaskCommit) {
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_approve',
-    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. HARD candidate gate: pass candidateId (from get_context.currentCandidate) — if it is not the task\'s current candidate the approval is refused with CANDIDATE_MISMATCH so an approval can never bless bytes nobody read. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits for the current work round (anchored on the latest rejection, else the first step start, else reviewStartedAt), the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving. Under the default settings.deliveryPolicy (legacy) that warning is the whole commit gate. Under a strict deliveryPolicy (local-branch, remote-push, merged-pull-request, manual-artifact) approval is HARD-refused with DELIVERY_EVIDENCE_MISSING (-32003) naming each missing evidence token (completion-commit, pushed-completion-commit, merged-pull-request, manual-artifact, required-check:<qualityGate>); manual-artifact and merged-pull-request are satisfied only by the matching manualArtifact / mergedPullRequest attestation, recorded on the task as task.deliveryEvidence with verifiedDelivery false. Under verified-local, approval needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate produced under the approved plan revision; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH, CANDIDATE_REVISION_STALE.',
+    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. HARD candidate gate: pass candidateId (from get_context.currentCandidate) — if it is not the task\'s current candidate the approval is refused with CANDIDATE_MISMATCH so an approval can never bless bytes nobody read. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits for the current work round (anchored on the latest rejection, else the first step start, else reviewStartedAt), the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving. Under the default settings.deliveryPolicy (legacy) that warning is the whole commit gate. Under a strict deliveryPolicy (local-branch, remote-push, merged-pull-request, manual-artifact) approval is HARD-refused with DELIVERY_EVIDENCE_MISSING (-32003) naming each missing evidence token (completion-commit, pushed-completion-commit, merged-pull-request, manual-artifact, required-check:<qualityGate>); manual-artifact and merged-pull-request are satisfied only by the matching manualArtifact / mergedPullRequest attestation, recorded on the task as task.deliveryEvidence with verifiedDelivery false. Under verified-local, approval needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate produced under the approved plan revision; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH, CANDIDATE_REVISION_STALE. A row the qa_reject hard cap parked for human review (needsHumanReview) refuses any supplied workerId with NOT_ALLOWED; only the workerId-less human path approves it. A verdict frees the QA seat: the reply carries sessionHandoff END_SESSION for it and no nextAction, so end the session; do not claim or wait inside it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -69,6 +70,15 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
 
       if (task.status !== 'REVIEW') {
         throw invalidState('Task', task.status, 'REVIEW');
+      }
+
+      // A row the qa_reject hard cap parked for a human (needsHumanReview) is
+      // a human's call. The unassigned park passes assertWorkerOwns and
+      // assertContextFetched, so refuse any supplied workerId here, before any
+      // write, the way claim_next_task fences the same row. The workerId-less
+      // human/IDE path is unaffected.
+      if (task.needsHumanReview === true && params.workerId) {
+        throw notAllowed('qa_approve', `Task ${task.id} is parked for human review: its reopen budget and the architect re-plan are exhausted. A human must reopen or approve it; an agent seat cannot.`);
       }
 
       // The artifact boundary. complete_task hands the task to QA but leaves its
@@ -115,7 +125,12 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         throw invalidInput('summary', `too long (max ${MAX_SUMMARY_CHARS} chars)`);
       }
       const reviewSummary = params.summary.trim();
-      const handoffWorkerId = task.assignedWorkerId || params.workerId;
+      // Idle only the seat that held this row: its assignee. On an unassigned
+      // row, where assertWorkerOwns lets any seat give the verdict, that is the
+      // caller only when its own pointer is on this row, so a seat that holds
+      // another task keeps its claim.
+      const handoffWorkerId = task.assignedWorkerId
+        || (params.workerId && state.getWorker(params.workerId)?.currentTaskId === task.id ? params.workerId : null);
 
       // THE HARD GATE. An approval must apply to the bytes the reviewer read, so
       // the candidate they name is checked against the task's CURRENT candidate
@@ -242,7 +257,8 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
             ? { deliveryEvidence }
             : task.deliveryEvidence !== undefined ? { deliveryEvidence: undefined } : {}),
         },
-        'QA_APPROVED'
+        'QA_APPROVED',
+        params.workerId
       );
 
       // Use the captured assignee because updateTask clears assignedWorkerId on
@@ -262,6 +278,24 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         } catch { /* never block tool */ }
       }
 
+      // Twin of requestReplan.ts's sessionHandoff (task-55a5a9f9): the verdict
+      // frees the QA seat, and the wrapper pinned that session to its claim's
+      // attempt identity, so a claim/wait hint would start a second review whose
+      // verdict is refused ATTEMPT_SUPERSEDED. A governor's verdict must not end
+      // the governance TUI; a seat whose pointer names another task is not ended.
+      const callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor'
+        ? params.workerId : undefined;
+      const seatWorker = handoffWorkerId || callerSeat;
+      const seatTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;
+      const sessionHandoff = seatWorker && !seatTaskId
+        ? {
+            action: 'END_SESSION', taskId: task.id, workerId: seatWorker,
+            reason: 'Task approved. If the review surfaced a reusable pattern, record it with Serena write_memory (pattern-<area>), then end this session. ' +
+              'Do not call moe.claim_next_task or moe.wait_for_task inside this session: the wrapper pinned it to this review\'s attempt identity, so a second review claimed here would have its verdict refused ATTEMPT_SUPERSEDED. ' +
+              'The wrapper claims the next REVIEW task in a fresh session. If this is an interactive TUI, return control to its operator so the CLI can exit normally.'
+          }
+        : undefined;
+
       return {
         success: true,
         taskId: updated.id,
@@ -280,14 +314,7 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
           `Task ${updated.id} approved and moved to DONE` +
           (warning ? ' (WARNING: no completion commit recorded — see warnings)' : '') +
           (deliveryEvidence ? ` (evidence: ${deliveryEvidence.kind} attested by ${deliveryEvidence.recordedBy} — NOT verified delivery)` : ''),
-        nextAction: {
-          tool: 'moe.wait_for_task',
-          args: {
-            statuses: ['REVIEW'],
-            workerId: params.workerId,
-          },
-          reason: 'Task approved. If the review surfaced a reusable pattern, record it with Serena write_memory (pattern-<area>), then block until the next REVIEW task arrives.'
-        }
+        ...(sessionHandoff ? { sessionHandoff } : {}),
       };
     }
   };

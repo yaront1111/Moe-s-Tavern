@@ -1,0 +1,247 @@
+{
+  "id": "task-2ef8e36c29f4490884dff27c9f3ed9fb",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-1] VS Code: notify on task status transitions, matching JetBrains",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0); decision doc docs/plans/2026-11-02-vscode-reuse.md. First wave: no dependencies, files disjoint from the other first-wave rows.\n\nObjective: VS Code tells the human nothing when a task needs them; JetBrains does. Port JetBrains' rule exactly. Source of truth: moe-jetbrains MoeMessageDispatcher.kt, the `\"TASK_UPDATED\", \"TASK_CREATED\"` branch (notify only when the cached task's status differs from the frame's status; an uncached task counts as different), and MoeNotificationService.kt for the texts:\n- AWAITING_APPROVAL: info, title \"Plan Awaiting Approval\", message `Task \"<title>\" has a plan ready for review`, action \"View Task\".\n- BLOCKED: warning, \"Task Blocked\", `Task \"<title>\" is blocked and needs attention`, action \"View Task\".\n- REVIEW: info, \"Task Ready for Review\", `Task \"<title>\" is ready for code review`, action \"View Task\".\n- DONE: info, \"Task Completed\", `Task \"<title>\" has been marked as done`, no action.\nEvery other status, a same-status frame, STATE_SNAPSHOT and TASK_DELETED never notify. JetBrains' notifyConnectionLost/notifyConnectionRestored are never called, so they are not part of parity. VS Code shows one line, `<title>: <message>`; \"View Task\" runs `moe.openTaskDetail` with the task id.\n\nSeam (verified at 882a4c39): MoeDaemonClient.handleMessage fires onTaskUpdated(payload) for TASK_UPDATED and TASK_CREATED BEFORE it writes the payload into currentState (case 'TASK_UPDATED'), so a listener reads the cached status from client.currentState. No MoeDaemonClient.ts change is needed; another first-wave row (VSC-6) owns that file.\n\nDeliverable: new moe-vscode/src/util/TaskNotifier.ts with a pure `taskNotification(previousStatus, task)` decision and a `registerTaskNotifier(client, window, commands)` returning a Disposable; moe-vscode/src/extension.ts registers it in activate() and pushes it to context.subscriptions; new moe-vscode/tests/task-notifier.test.cjs (ts.transpileModule + node:vm, a require map that throws on any undeclared module; pattern in tests/managed-vm.test.cjs).\n\nNot in scope: a mute setting (package.json belongs to first-wave row VSC-2), connection notices, plan-approval refusal notices (PlanReviewPanel owns them), any change to MoeDaemonClient.ts, package.json or media/.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl). Baseline at 882a4c39: lint 0, compile 0, 388 tests, 384 pass, 4 skip, 0 fail.",
+  "definitionOfDone": [
+    "moe-vscode/tests/task-notifier.test.cjs runs the real TaskNotifier.ts (ts.transpileModule + node:vm, a require map that throws on any undeclared module) and asserts the exact kind, title, message and action (command moe.openTaskDetail with the task id, or none for DONE) for AWAITING_APPROVAL, BLOCKED, REVIEW and DONE transitions.",
+    "The same test asserts no notification for: a same-status frame, a cached task moving to PLANNING or WORKING, an uncached task arriving in BACKLOG, an ARCHIVED frame, and a STATE_SNAPSHOT.",
+    "With a fake client that fires onTaskUpdated before it updates currentState (as MoeDaemonClient does), a WORKING to REVIEW frame shows exactly one notification, an immediately repeated REVIEW frame shows none, and after the notifier is disposed no frame notifies.",
+    "moe-vscode/src/extension.ts registers the notifier in activate() and pushes its Disposable into context.subscriptions; the task's diff leaves moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/package.json and moe-vscode/media/ unchanged.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures and more passing tests than the 384-pass baseline."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD, tests first: create moe-vscode/tests/task-notifier.test.cjs and see it fail (TaskNotifier.ts missing) before step 2. Read mem:gotcha-vscode-vm-test-harness (vm realms, driving the real client) and mem:gotcha-vscode-panel-strict-require-map first.\nLOADER for TaskNotifier.ts: copy the tests/managed-vm.test.cjs loader - ts.transpileModule (CommonJS, ES2020), then vm.runInThisContext('(function (exports, module, require) {' + code + '\\n})') with a require that throws `TaskNotifier.ts must not require ${name}` for EVERY name (the module uses only `import type`). runInThisContext keeps returned objects in the test realm, so assert.deepEqual (node:assert/strict) works on taskNotification results.\nFixtures: task(status, more) = { id: 'task-1', title: 'Ship it', status, ...more }; VIEW = { label: 'View Task', command: 'moe.openTaskDetail', taskId: 'task-1' }.\n(A) DoD 1, exact texts, pure decision:\n- taskNotification('PLANNING', task('AWAITING_APPROVAL')) deepEquals { kind: 'info', title: 'Plan Awaiting Approval', message: 'Task \"Ship it\" has a plan ready for review', action: VIEW }\n- ('WORKING', BLOCKED) -> { kind: 'warning', title: 'Task Blocked', message: 'Task \"Ship it\" is blocked and needs attention', action: VIEW }\n- ('WORKING', REVIEW) -> { kind: 'info', title: 'Task Ready for Review', message: 'Task \"Ship it\" is ready for code review', action: VIEW }\n- ('REVIEW', DONE) -> { kind: 'info', title: 'Task Completed', message: 'Task \"Ship it\" has been marked as done' } with NO action key (strict deepEqual tells a missing key from action: undefined)\n- (undefined, REVIEW) -> the REVIEW object (an uncached task counts as different).\n(B) DoD 2, never notify: ('REVIEW', REVIEW), ('BLOCKED', BLOCKED), ('BACKLOG', PLANNING), ('AWAITING_APPROVAL', WORKING), (undefined, BACKLOG), ('DONE', ARCHIVED) each return undefined.\n(C) DoD 2+3, fake client. fakeClient(tasks) has:\n- currentState { tasks };\n- onTaskUpdated(listener), returning { dispose } that removes the listener;\n- frame(t): fires the listeners FIRST (over a copy), THEN writes t into currentState.tasks (replace by id, push if new, drop on ARCHIVED). This is the order of MoeDaemonClient.handleMessage case 'TASK_UPDATED';\n- snapshot(tasks): replaces currentState and fires nothing (STATE_SNAPSHOT only fires onStateChanged).\nRecorder window: showInformationMessage/showWarningMessage push { kind: 'info'|'warning', line, items } and return Promise.resolve(answer), answer settable. commands.executeCommand pushes [command, ...args] and returns a settable promise.\nSequence: seed [task('WORKING')], register.\n1. A REVIEW frame records exactly [{ kind: 'info', line: 'Task Ready for Review: Task \"Ship it\" is ready for code review', items: ['View Task'] }].\n2. The same REVIEW frame again adds nothing; a WORKING frame adds nothing.\n3. snapshot([task('DONE')]) adds nothing; then snapshot([task('WORKING')]).\n4. dispose(), then a DONE frame (one that WOULD notify) adds nothing.\nSeparate rows:\n- a BLOCKED frame is kind 'warning' with items ['View Task'];\n- DONE is 'info' with items [];\n- with currentState undefined (before the first snapshot) a REVIEW frame records nothing (JetBrains returns early when currentState() is null).\n(D) Action:\n- answer 'View Task': after `await new Promise(r => setImmediate(r))` the commands are exactly [['moe.openTaskDetail', 'task-1']];\n- answer undefined: [];\n- a DONE notice (no button): [];\n- executeCommand returning Promise.reject(new Error('boom')): after the flush, one more { kind: 'warning', line: 'Moe: could not open task task-1: boom', items: [] } is recorded.\n(E) Link neutralization. Title '[Approve](command:workbench.action.terminal.sendSequence?%7B%7D)'. LINK_REGEX = /\\[([^\\]]+)\\]\\(((?:https?:\\/\\/|command:|file:)[^\\)\\s]+)(?: ([\"'])(.+?)(\\3))?\\)/i, copied from microsoft/vscode src/vs/base/common/linkedText.ts minus the g flag; cite it in a comment.\n- assert.match(title, LINK_REGEX): the fixture is live.\n- The REVIEW notice's message equals 'Task \"[Approve] (command:workbench.action.terminal.sendSequence?%7B%7D)\" is ready for code review'.\n- assert.doesNotMatch(recorded line, LINK_REGEX).\n(F) Real-client seam guard. Transpile src/services/MoeDaemonClient.ts and run it in vm.createContext the way tests/plan-approval-client.test.cjs createHarness does. Copy RecordingEventEmitter, the vscode stub (EventEmitter, window.createOutputChannel/showErrorMessage, workspace.getConfiguration -> { get: () => false } so no reconnect timer) and the vscode/ws/child_process/fs/path/net require switch. Never require() that test file: it registers its own tests at load.\nRegister the real notifier on new MoeDaemonClient('extension') and feed frames through client['handleMessage'](JSON.stringify(frame)):\n1. STATE_SNAPSHOT { tasks: [task-1 WORKING], epics: [] } -> 0 recorded\n2. TASK_UPDATED task-1 REVIEW -> exactly 1\n3. the same frame again -> 1\n4. TASK_DELETED task-1 -> 1\n5. TASK_CREATED task-2 BACKLOG -> 1\n6. STATE_SNAPSHOT [task-2 DONE] -> 1\n7. TASK_UPDATED task-2 AWAITING_APPROVAL -> 2\nPut client.dispose() in finally. This row goes red if a later edit to handleMessage caches a frame before firing onTaskUpdated (sibling rows VSC-6 and VSC-12 edit that file). Compare only test-realm strings and arrays: vm-realm objects fail strict deepEqual.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/task-notifier.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/task-notifier.test.cjs"
+      ],
+      "note": "Wrote tests/task-notifier.test.cjs (rows A1-A6, B, B2, C1-C8, D1-D5, E1-E2, F, F2). Red before impl: node --test fails ENOENT on src/util/TaskNotifier.ts. JetBrains MoeMessageDispatcher.kt l.110-142 and MoeNotificationService.kt texts re-read, match the plan. 23 other dirty paths in the shared tree belong to peers, left alone.",
+      "startedAt": "2026-11-02T09:57:09.622Z",
+      "completedAt": "2026-11-02T09:58:40.636Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create moe-vscode/src/util/TaskNotifier.ts so step 1's tests pass. Use type-only imports only: `import type * as vscode from 'vscode'`, `import type { MoeDaemonClient } from '../services/MoeDaemonClient'`, `import type { Task, TaskStatus } from '../types/moe'`. The transpiled module then has zero require() calls, so the esbuild bundle and every strict vm require map are unaffected. The planner type-checked these exact Pick signatures under TS 6.0.3 (0 diagnostics), and vscode.window, vscode.commands and the client all fit them.\n1. `export interface TaskNotification { kind: 'info' | 'warning'; title: string; message: string; action?: { label: string; command: string; taskId: string } }`\n2. `export function taskNotification(previousStatus: TaskStatus | undefined, task: Task): TaskNotification | undefined` ports the JetBrains MoeMessageDispatcher.kt 'TASK_UPDATED', 'TASK_CREATED' rule:\n- return undefined when previousStatus === task.status;\n- otherwise switch on task.status with the MoeNotificationService.kt texts:\n  - AWAITING_APPROVAL: info, 'Plan Awaiting Approval', `Task \"${name}\" has a plan ready for review`\n  - BLOCKED: warning, 'Task Blocked', `Task \"${name}\" is blocked and needs attention`\n  - REVIEW: info, 'Task Ready for Review', `Task \"${name}\" is ready for code review`\n  - these three carry action { label: 'View Task', command: 'moe.openTaskDetail', taskId: task.id }\n  - DONE: info, 'Task Completed', `Task \"${name}\" has been marked as done`; omit the action key, do not set it to undefined\n  - default: undefined.\nname = String(task.title).replace(/\\]\\(/g, '] ('), with a one-line comment. Why: VS Code renders [label](command:...) in notification text as a clickable command link (linkedText.ts LINK_REGEX, opened with allowCommands: true), and task titles are agent-written. A title without '](' is unchanged, so the JetBrains texts hold exactly.\n3. `export function registerTaskNotifier(client: Pick<MoeDaemonClient, 'currentState' | 'onTaskUpdated'>, window: Pick<typeof vscode.window, 'showInformationMessage' | 'showWarningMessage'>, commands: Pick<typeof vscode.commands, 'executeCommand'>): vscode.Disposable` returns the client.onTaskUpdated(listener) subscription itself: disposing it unsubscribes, and nothing else needs cleanup. The listener:\n- `const state = client.currentState; if (!state || !task) return;` (JetBrains ignores TASK_* frames until the first STATE_SNAPSHOT)\n- `n = taskNotification(state.tasks.find(t => t.id === task.id)?.status, task)`. This reads the OLD status because MoeDaemonClient.handleMessage fires onTaskUpdated BEFORE it caches the frame (verified at 241ac770; step 1 (F) guards it). Never write currentState.\n- If there is no n, return. Otherwise show `${n.title}: ${n.message}`: showWarningMessage for 'warning', else showInformationMessage. Pass 'View Task' as the only item when n.action exists (type items as string[]).\n- When the pick equals the action label, return commands.executeCommand(n.action.command, n.action.taskId).\nError handling: end that show->execute chain with .then(undefined, (err: unknown) => window.showWarningMessage(`Moe: could not open task ${task.id}: ${err instanceof Error ? err.message : String(err)}`)), because Thenable has no .catch. A failed open (command gone after deactivate, panel creation throws) then reaches the human as a warning, not an unhandled rejection in the extension host. No timers, no other state, no setting: a mute setting needs package.json, which VSC-2 owns.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/src/util/TaskNotifier.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/TaskNotifier.ts"
+      ],
+      "note": "Created src/util/TaskNotifier.ts (type-only imports, taskNotification + registerTaskNotifier, '](' rewrite with comment, rejection handler on the show->execute chain). node --test tests/task-notifier.test.cjs in place: 25/25 pass.",
+      "startedAt": "2026-11-02T09:58:41.625Z",
+      "completedAt": "2026-11-02T09:59:01.605Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "moe-vscode/src/extension.ts, two edits only:\n1. Add `import { registerTaskNotifier } from './util/TaskNotifier';` after the AntigravityIntegration import (line 17).\n2. In activate(), directly after `context.subscriptions.push(statusBar);` (line 36), add a one-line comment (VSC-1: task status notices, matching JetBrains MoeMessageDispatcher) and `context.subscriptions.push(registerTaskNotifier(daemonClient, vscode.window, vscode.commands));`.\nWhy there: it registers once per activation, before the auto-connect block (~line 426), so no early frame is missed, and its Disposable goes with the extension. Never register it again on reconnect: two subscriptions would double every notice.\nKeep line 8 (`import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';`) byte-identical: tests/daemon-json-cap.test.cjs regex-matches it.\nDo not touch MoeDaemonClient.ts (VSC-6), package.json (VSC-2) or media/. The existing moe.openTaskDetail command (line 92, (taskId: string)) is reused as is.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/extension.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "extension.ts: one import after AntigravityIntegration plus one context.subscriptions.push(registerTaskNotifier(daemonClient, vscode.window, vscode.commands)) right after the statusBar push. Line 8 unchanged byte-for-byte; git diff shows MoeDaemonClient.ts, package.json and media/ untouched. daemon-json-cap + task-notifier tests: 30/30.",
+      "startedAt": "2026-11-02T09:59:02.784Z",
+      "completedAt": "2026-11-02T09:59:12.913Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run checkRefs[0] ONCE, fresh, from the repo root (or the task worktree root), as ONE command:\n`R=$(git rev-parse --show-toplevel) && V=$R/moe-vscode && S=$(mktemp -d -t vsc1-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$V/src/util/TaskNotifier.ts\" \"$S/moe-vscode/src/util/\" && cp \"$V/src/extension.ts\" \"$S/moe-vscode/src/\" && cp \"$V/tests/task-notifier.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'`\nSubmit that command, its exit code and the output tail (the node:test summary) to complete_task.\nThe command archives HEAD of the WHOLE repo into a temp dir outside the checkout (two tests read moe-jetbrains/src/test/resources), overlays only this task's three files, and runs npm ci, lint, compile and test with Linux node 24. This follows the GLOBAL rail: no npm in the shared checkout (mem:gotcha-vscode-gate-from-wsl).\nPlanner's dry run at 241ac770 without the overlay: exit 0, 388 tests, 384 pass, 4 skip, 0 fail. Before implementation the command is red: cp cannot stat TaskNotifier.ts. Expect exit 0, `fail 0` and pass > 384 (DoD 5), and quote the new counts.\nError handling for a red run:\n- fix a lint error, compile error or failing test in the owning file, then re-run the whole command;\n- never edit another row's files and never weaken an assertion to go green;\n- an `npm ci` network failure: retry once, then report it as an environment fault with its output.\nFor quick iteration before this step, `node --test tests/task-notifier.test.cjs` may run in place from moe-vscode (read-only, no npm).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] run fresh in snapshot /tmp/vsc1-gate-7wfRxC (git archive HEAD + 3-file overlay, Linux node v24.21.0, env -i): npm ci, lint, compile, test all exit 0. node:test summary: tests 416, pass 412, fail 0, skipped 4 (baseline 384 pass; 25 new rows here, rest are landed peer rows at HEAD). Log /tmp/vsc1-gate-run.log.",
+      "startedAt": "2026-11-02T09:59:14.156Z",
+      "completedAt": "2026-11-02T09:59:35.855Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's own diff (the three files), then complete_task with the step-4 evidence. If the review changes any file, re-run step 4 and submit that fresh output.\n- Parity: re-read MoeMessageDispatcher.kt lines 110-142 and MoeNotificationService.kt.\n  - Every title, message and kind matches char-for-char, and DONE has no button.\n  - Nothing notifies for STATE_SNAPSHOT, TASK_DELETED, a same-status frame, BACKLOG/PLANNING/WORKING/ARCHIVED, or a frame before the first snapshot.\n  - The '](' -> '] (' rewrite is the ONLY intentional divergence, and it carries its comment.\n- Twice or concurrently:\n  - a burst of frames is decided frame by frame from the cache;\n  - activate() registers exactly once;\n  - a View Task click after dispose or deactivate lands in the error handling path, not an unhandled rejection.\n- Null, empty or huge input: an undefined or empty title, a newline in a title, an unknown status (no notice). 50 DONE frames give 50 notices, the same as JetBrains (accepted).\n- Mutation spot-check in the step-4 snapshot dir $S (outside the checkout, never in it). Each of these must turn `node --test tests/task-notifier.test.cjs` red; restore by re-copying:\n  - delete the same-status guard;\n  - return a no-op Disposable;\n  - drop the '](' rewrite;\n  - drop the rejection handler.\n- Scope: complete_step.modifiedFiles lists exactly moe-vscode/src/util/TaskNotifier.ts, moe-vscode/src/extension.ts and moe-vscode/tests/task-notifier.test.cjs (DoD 4). Peer rows may hold dirty edits in MoeDaemonClient.ts or package.json. Leave them alone and never stage them.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/util/TaskNotifier.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/tests/task-notifier.test.cjs"
+      ],
+      "note": "Self-review done, no file changed after the step-4 gate. Parity re-read against MoeMessageDispatcher.kt/MoeNotificationService.kt: texts, kinds, DONE-no-button, status-change-only and no-state-before-snapshot all match; the '](' rewrite is the only divergence and carries its comment. Mutation spot-check in snapshot /tmp/vsc1-gate-7wfRxC (scratch runner /tmp/vsc1-mut/run-mutants.mjs): 12 mutants (same-status guard, no-op Disposable, rewrite dropped, rewrite w/o g flag, rejection handler dropped, no-state guard, no cached status, DONE action, BLOCKED kind, execute on dismissal, all-warning, BACKLOG notifies) all killed, 0 survivors; snapshot restored. git status in moe-vscode: only extension.ts (M), TaskNotifier.ts and task-notifier.test.cjs (new); MoeDaemonClient.ts, package.json, media/ have no diff.",
+      "startedAt": "2026-11-02T09:59:37.074Z",
+      "completedAt": "2026-11-02T10:00:15.482Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:38:41.896Z",
+  "updatedAt": "2026-11-02T10:02:44.249Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T09:39:11.394Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T10:02:23.103Z",
+    "wallClockMs": 1391709
+  },
+  "contextFetchedBy": [
+    "architect-d54b05fd",
+    "worker-4c1da905",
+    "qa-1106e678"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T09:56:27.558Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code tells the human when a task needs them, using JetBrains' rule. A TASK_UPDATED or TASK_CREATED frame whose status differs from the cached task's (an uncached task counts as different) shows one notification, `<title>: <message>`:\n- AWAITING_APPROVAL: info, 'Plan Awaiting Approval: Task \"<t>\" has a plan ready for review'\n- BLOCKED: warning, 'Task Blocked: Task \"<t>\" is blocked and needs attention'\n- REVIEW: info, 'Task Ready for Review: Task \"<t>\" is ready for code review'\n- DONE: info, 'Task Completed: Task \"<t>\" has been marked as done'\nThe first three carry a 'View Task' button that runs moe.openTaskDetail with the task id; DONE has none.\nNothing is shown for any other status, a same-status frame, STATE_SNAPSHOT, TASK_DELETED, or a frame before the first STATE_SNAPSHOT. '](' in a title becomes '] (', so a title cannot plant a clickable command link. A failed View Task open shows as a warning. Disposing the notifier (extension deactivate) stops all notices.",
+    "acceptanceCriteria": [
+      "DoD 1: tests/task-notifier.test.cjs loads the real TaskNotifier.ts (transpileModule + node:vm, a require that throws on every module) and asserts the exact kind, title, message and action (moe.openTaskDetail + task id; none for DONE) for AWAITING_APPROVAL, BLOCKED, REVIEW and DONE.",
+      "DoD 2: the same file asserts no notification for a same-status frame, a cached task moving to PLANNING or WORKING, an uncached task arriving in BACKLOG, an ARCHIVED frame, and a STATE_SNAPSHOT (fake client and the real MoeDaemonClient).",
+      "DoD 3: with a fake client that fires onTaskUpdated before updating currentState, WORKING->REVIEW shows exactly one notification, an immediate repeat shows none, and after dispose() a frame that would otherwise notify shows none.",
+      "DoD 4: extension.ts registers the notifier in activate() and pushes its Disposable into context.subscriptions; the task diff leaves MoeDaemonClient.ts, package.json and media/ unchanged.",
+      "DoD 5: checkRefs[0] exits 0 with 0 failures and more than 384 passing tests."
+    ],
+    "invariants": [
+      "The notifier only reads client.currentState and decides from the status cached before the frame; it never writes the cache.",
+      "At most one notification per frame; none for STATE_SNAPSHOT, TASK_DELETED, same-status frames, statuses outside AWAITING_APPROVAL/BLOCKED/REVIEW/DONE, or frames before the first STATE_SNAPSHOT.",
+      "Every show/execute Thenable chain ends in a rejection handler.",
+      "A title without '](' yields the JetBrains text byte for byte."
+    ],
+    "compatibility": [
+      "moe-vscode/src/services/MoeDaemonClient.ts (owned by VSC-6), moe-vscode/package.json (VSC-2) and moe-vscode/media/ are unchanged by this task.",
+      "extension.ts line 8 `import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';` stays byte-identical (tests/daemon-json-cap.test.cjs regex).",
+      "moe.openTaskDetail keeps its (taskId: string) signature; no new command, setting or package.json contribution.",
+      "TaskNotifier.ts emits no require(), so the esbuild bundle and the existing strict vm harnesses are unchanged."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/util/TaskNotifier.ts (new, type-only imports): export interface TaskNotification; export function taskNotification(previousStatus: TaskStatus | undefined, task: Task): TaskNotification | undefined; export function registerTaskNotifier(client: Pick<MoeDaemonClient, 'currentState' | 'onTaskUpdated'>, window: Pick<typeof vscode.window, 'showInformationMessage' | 'showWarningMessage'>, commands: Pick<typeof vscode.commands, 'executeCommand'>): vscode.Disposable.",
+      "moe-vscode/src/extension.ts activate(): one import plus one context.subscriptions.push(registerTaskNotifier(daemonClient, vscode.window, vscode.commands)) right after the statusBar push.",
+      "moe-vscode/tests/task-notifier.test.cjs (new): node:test rows A-F.",
+      "Surfaces: consumes MoeDaemonClient.onTaskUpdated and currentState (read only); produces vscode.window notices and calls the existing moe.openTaskDetail command."
+    ],
+    "reuse": [
+      "tests/managed-vm.test.cjs loader (transpileModule + runInThisContext + throwing require) for TaskNotifier.ts.",
+      "tests/plan-approval-client.test.cjs createHarness shape (RecordingEventEmitter, require switch, autoConnect=false stub) for the real-client row, copied because requiring that file would register its tests.",
+      "The existing moe.openTaskDetail command (extension.ts:92) for View Task, and the vscode Event subscription as the returned Disposable."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/services/MoeDaemonClient.ts handleMessage, case 'TASK_UPDATED'/'TASK_CREATED' (~line 1425): this._onTaskUpdated.fire(payload) runs BEFORE this.state.tasks is updated. No other onTaskUpdated subscriber exists at 241ac770.",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt 'TASK_UPDATED', 'TASK_CREATED' branch (lines 110-142): returns early when currentState() is null; notifies when oldTask?.status != task.status, only for AWAITING_APPROVAL/BLOCKED/REVIEW/DONE.",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeNotificationService.kt notifyAwaitingApproval/notifyTaskBlocked/notifyTaskInReview/notifyTaskCompleted: texts and NotificationType. ViewTaskAction 'View Task' is on every notice except the completed one; notifyConnectionLost/Restored have no caller.",
+      "moe-vscode/src/extension.ts:92 registers moe.openTaskDetail(taskId: string); activate() pushes statusBar at line 36 and auto-connects at ~line 426.",
+      "VS Code src/vs/base/common/linkedText.ts LINK_REGEX parses [label](http(s)://|command:|file:...) in notification text, and notificationsViewer.ts opens it with allowCommands: true (checked 2026-11-02)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && V=$R/moe-vscode && S=$(mktemp -d -t vsc1-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$V/src/util/TaskNotifier.ts\" \"$S/moe-vscode/src/util/\" && cp \"$V/src/extension.ts\" \"$S/moe-vscode/src/\" && cp \"$V/tests/task-notifier.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Put the rule inside MoeDaemonClient.handleMessage: rejected. VSC-6 owns that file this wave, and a separate pure module is testable without a socket.\n2) Diff snapshots in onStateChanged: rejected. It fires after the cache write (the old status is gone) and also on STATE_SNAPSHOT, which must never notify.\n3) Fake-client-only test: kept, per DoD 3, plus one real-client row (F). The fire-before-cache seam lives in a file that VSC-6 and VSC-12 will edit, and row F turns a silent breakage into a red test.\n4) Mute setting or connection notices: out of scope. package.json belongs to VSC-2, and JetBrains never calls notifyConnectionLost/Restored.",
+    "codebaseInsights": "- No onTaskUpdated subscriber exists before this task, and the VS Code EventEmitter delivers synchronously, so the listener reads the pre-frame cache.\n- vm realms: objects created inside vm.createContext fail strict deepEqual against test-realm objects; strings cross freely (mem:gotcha-vscode-vm-test-harness). runInThisContext keeps TaskNotifier's results in the test realm.\n- Thenable has no .catch, so use .then(undefined, handler).\n- src/ has no console use, and MoeDaemonClient's log() is module-private, so the user-visible warning is the error path.\n- tests/daemon-json-cap.test.cjs regex-matches extension.ts's MoeDaemonClient import line.\n- Baseline gate at 241ac770: lint 0, compile 0, 388 tests / 384 pass / 4 skip / 0 fail.",
+    "risks": "(a) Strict deepEqual: DONE must omit the action key, not set it to undefined.\n(b) The dispose row must use a frame that WOULD notify, or it passes vacuously.\n(c) Cross-realm: in row F compare only recorded strings and arrays built in the test realm.\n(d) Row F must stub workspace.getConfiguration().get() -> false, or a reconnect timer holds node:test open.\n(e) The '](' -> '] (' rewrite is an intentional, commented divergence from JetBrains (a command-link guard) and is invisible for normal titles.\n(f) Peer rows (VSC-2 package.json, VSC-6 MoeDaemonClient.ts) may have dirty edits in the shared tree. The gate overlays only this task's three files onto HEAD, so they cannot leak in; never stage them.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeNotificationService.kt",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/tests/managed-vm.test.cjs",
+      "moe-vscode/tests/plan-approval-client.test.cjs",
+      "moe-vscode/tests/daemon-json-cap.test.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "e188161982373b7dd36a1e56851d201faebc51f7",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T09:56:27.583Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T09:57:09.622Z",
+  "reviewStartedAt": "2026-11-02T10:00:28.692Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && V=$R/moe-vscode && S=$(mktemp -d -t vsc1-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$V/src/util/TaskNotifier.ts\" \"$S/moe-vscode/src/util/\" && cp \"$V/src/extension.ts\" \"$S/moe-vscode/src/\" && cp \"$V/tests/task-notifier.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "✔ V6 a refusal shows at most 32 ids of at most 64 characters; only ready verified-local launches\n✔ A1 launchAllAgents, legacy: worker and QA share one readiness decision and at most one error\n✔ A1 launchAllAgents, verified-local and ready: worker and QA share one readiness decision and at most one error\n✔ A1 launchAllAgents, verified-local and not ready: worker and QA share one readiness decision and at most one error\n✔ A2 a shared refusal holds even if the project turns legacy before the worker and QA staggers fire\n✔ files.watcherExclude keeps per-task worktrees out of the file watcher\n✔ search.exclude keeps per-task worktrees out of search and quick open\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees\nℹ tests 416\nℹ suites 0\nℹ pass 412\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 1011.941901\n(GATE_EXIT=0; npm ci, eslint src, tsc -p ./ and node --test all ran clean in snapshot /tmp/vsc1-gate-7wfRxC)",
+    "reportedAt": "2026-11-02T10:00:28.692Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/task-notifier.test.cjs",
+    "moe-vscode/src/util/TaskNotifier.ts",
+    "moe-vscode/src/extension.ts",
+    ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json"
+  ],
+  "completionSummary": "VS Code now notifies on task status transitions with JetBrains' rule. New src/util/TaskNotifier.ts (type-only imports, zero require): pure taskNotification(previousStatus, task) and registerTaskNotifier(client, window, commands) -> Disposable. A TASK_UPDATED/TASK_CREATED frame whose status differs from the cached one (uncached counts as different) shows one `<title>: <message>` notice for AWAITING_APPROVAL (info, View Task), BLOCKED (warning, View Task), REVIEW (info, View Task), DONE (info, no button); texts match MoeNotificationService.kt. Nothing for other statuses, same-status frames, STATE_SNAPSHOT, TASK_DELETED, or frames before the first snapshot. View Task runs moe.openTaskDetail with the task id; a failed open surfaces as a warning (rejection handler on the Thenable chain). One intentional divergence: '](' in a title becomes '] (' so an agent-written title cannot plant a clickable command: link. extension.ts registers it once in activate() after the statusBar push and pushes the Disposable into context.subscriptions; MoeDaemonClient.ts, package.json, media/ untouched. tests/task-notifier.test.cjs: 25 rows (pure decision, fake client firing before caching, View Task/error paths, link neutralization, and 2 rows driving the REAL MoeDaemonClient to guard the fire-before-cache seam). Gate in git-archive snapshot: lint/compile/test exit 0, 416 tests, 412 pass, 0 fail, 4 skip (baseline 384 pass). 12 scratch mutants all killed.",
+  "commits": [
+    {
+      "sha": "fd136d98966c4f232c32d07cf8acac91e8b5e6e2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T09:56:36Z",
+      "paths": [
+        ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/util/TaskNotifier.ts",
+        "moe-vscode/tests/task-notifier.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T10:01:01.394Z",
+      "treeId": "3654229dc380cbc414ddddb6fd9530807d46e994",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/task-notifier.test.cjs",
+    "moe-vscode/src/util/TaskNotifier.ts",
+    "moe-vscode/src/extension.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1106e678@2026-11-02T10:01:09Z",
+    "at": "2026-11-02T10:02:44.249Z"
+  },
+  "completedAt": "2026-11-02T10:02:23.103Z",
+  "reviewCompletedAt": "2026-11-02T10:02:23.103Z",
+  "reviewSummary": "Approved. Completion commit fd136d98 (kind completion, pushed, on moe/work-2026-10-24). Reviewed git show: TaskNotifier.ts (78 lines, type-only imports), extension.ts (+4: import, one subscriptions.push after statusBar; line 8 untouched), tests/task-notifier.test.cjs (25 rows). Source diff ~82 net LOC.\nRe-ran task.verification myself (git archive HEAD + 3-file overlay, snapshot /tmp/vsc1-qa-wPH3nX, env -i, node 24.21.0): npm ci, lint, compile, test all exit 0; 416 tests, 412 pass, 0 fail, 4 skip (baseline 384 pass).\nDoD 1: A1-A6 assert exact kind/title/message/action (moe.openTaskDetail + id; no action key for DONE); texts match MoeNotificationService.kt and MoeMessageDispatcher.kt 110-142 char-for-char.\nDoD 2: B, B2, C4, C5, F/F2 cover same-status, PLANNING/WORKING, uncached BACKLOG, ARCHIVED, STATE_SNAPSHOT, pre-snapshot frames (F/F2 use the real MoeDaemonClient).\nDoD 3: C1 fake client fires before caching, as MoeDaemonClient.ts:1425-1427 does; WORKING->REVIEW = 1 notice, repeat = 0, disposed = 0.\nDoD 4: registered once in activate(), Disposable pushed; MoeDaemonClient.ts, package.json, media/ have no diff.\nDoD 5: exit 0, 0 fail, 412 > 384.\nMutation check in my snapshot (outside checkout): no same-status guard (4 fail), no '](' rewrite (2 fail), no-op Disposable (2 fail) all killed; restored 25/25. Thenable chain ends in .then(undefined, handler). '](' -> '] (' is the only intended divergence from JetBrains, commented. Out of scope by design: mute setting, connection notices, docs (VSC-18). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

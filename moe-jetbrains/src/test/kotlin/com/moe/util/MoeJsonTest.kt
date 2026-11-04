@@ -20,7 +20,7 @@ import org.junit.Test
 class MoeJsonTest {
     private val deliveryJson = """{
         "currentCandidate":{"id":" Candidate-X ","treeSha":"AbCdEf0123456789AbCdEf0123456789AbCdEf01","shortSha":"AbCdEf01","baseRevision":" Base-X "},
-        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9,"source":"runner-observed"},
+        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9,"source":"runner-observed","outcome":"code-failure"},
         "deliveryReceipt":{"target":" refs/heads/Pilot ","landedRevision":" LanDed-X "},
         "attemptPhase":"finalizing",
         "requiredCheckSatisfied":false
@@ -53,12 +53,12 @@ class MoeJsonTest {
     fun `delivery rejects numeric ids string exit codes and wrong shaped nested records`() {
         val fields = """"delivery":{
             "currentCandidate":{"id":42,"treeSha":true,"shortSha":[],"baseRevision":{}},
-            "latestCheckRun":{"command":17,"exitCode":"0","source":["runner-observed"]},
+            "latestCheckRun":{"command":17,"exitCode":"0","source":["runner-observed"],"outcome":["timeout"]},
             "deliveryReceipt":[],"attemptPhase":1,"requiredCheckSatisfied":"false"
         }"""
         val expected = JsonParser.parseString("""{
             "currentCandidate":{"id":null,"treeSha":null,"shortSha":null,"baseRevision":null},
-            "latestCheckRun":{"command":null,"exitCode":null,"source":null},"deliveryReceipt":null,"attemptPhase":null,
+            "latestCheckRun":{"command":null,"exitCode":null,"source":null,"outcome":null},"deliveryReceipt":null,"attemptPhase":null,
             "requiredCheckSatisfied":null
         }""")
         for ((path, task) in bothPaths(blockerTaskJson(fields))) {
@@ -92,11 +92,47 @@ class MoeJsonTest {
     }
 
     @Test
+    fun `delivery keeps a JSON string check outcome verbatim and nulls absent or wrong kinds`() {
+        val outcomes = listOf("passed", "code-failure", "infra-failure", "timeout", "skipped", "inconclusive")
+            .map { "\"$it\"" to JsonPrimitive(it) } + listOf(
+            "" to JsonNull.INSTANCE, "\"cancelled\"" to JsonPrimitive("cancelled"),
+            "\" timeout \"" to JsonPrimitive(" timeout "), "\"\"" to JsonPrimitive(""),
+            "42" to JsonNull.INSTANCE, "true" to JsonNull.INSTANCE, "null" to JsonNull.INSTANCE,
+            "[\"timeout\"]" to JsonNull.INSTANCE, "{}" to JsonNull.INSTANCE
+        )
+        for ((literal, expected) in outcomes) {
+            val outcome = if (literal.isEmpty()) "" else ",\"outcome\":$literal"
+            val members = "\"delivery\":{\"latestCheckRun\":{\"exitCode\":0$outcome}}"
+            for ((path, task) in bothPaths(blockerTaskJson(members))) {
+                val run = serializedDelivery(task).asJsonObject.getAsJsonObject("latestCheckRun")
+                assertTrue("$path outcome $literal: parsed run dropped outcome", run.has("outcome"))
+                assertEquals("$path outcome $literal", expected, run.get("outcome"))
+                assertEquals("$path outcome $literal exitCode", JsonPrimitive(0), run.get("exitCode"))
+            }
+        }
+    }
+
+    @Test
+    fun `delivery check run from a daemon without outcome keeps command exit code and source`() {
+        val members = "\"delivery\":{\"latestCheckRun\":{\"command\":\"node gate.cjs\",\"exitCode\":0,\"source\":\"runner-observed\"}}"
+        val expected = JsonParser.parseString(
+            """{"command":"node gate.cjs","exitCode":0,"source":"runner-observed","outcome":null}"""
+        )
+        for ((path, task) in bothPaths(blockerTaskJson(members))) {
+            assertCompanions(path, task)
+            assertEquals(path, expected, serializedDelivery(task).asJsonObject.get("latestCheckRun"))
+        }
+    }
+
+    @Test
     fun `delivery exit codes require exact signed integers without coercion or overflow`() {
-        val cases = mapOf(
-            "0" to 0, "-1" to -1, "1.0" to 1, "1e2" to 100,
-            "2147483647" to Int.MAX_VALUE, "-2147483648" to Int.MIN_VALUE,
-            "2147483648" to null, "-2147483649" to null, "1.1" to null,
+        // The daemon's rule (deliveryProjection.ts, Number.isSafeInteger): any exact |n| <= 2^53-1.
+        val cases = mapOf<String, Long?>(
+            "0" to 0L, "-1" to -1L, "1.0" to 1L, "1e2" to 100L,
+            "2147483647" to 2147483647L, "-2147483648" to -2147483648L,
+            "2147483648" to 2147483648L, "-2147483649" to -2147483649L, "3221225477" to 3221225477L,
+            "9007199254740991" to 9007199254740991L, "-9007199254740991" to -9007199254740991L,
+            "9007199254740992" to null, "-9007199254740992" to null, "1.1" to null,
             "1e-400" to null, "1e400" to null, "\"0\"" to null,
             "true" to null, "null" to null, "[]" to null, "{}" to null
         )
@@ -271,6 +307,44 @@ class MoeJsonTest {
     }
 
     @Test
+    fun `worktree mode and target resolve exactly as the daemon's resolveWorktreeMode and resolveWorktreeTarget`() {
+        fun settingsOf(block: String) = requireNotNull(
+            parseState("""{"project":{"id":"p","name":"n","settings":$block},"epics":[],"tasks":[]}""").project.settings
+        )
+        // settings block to (stored mode, resolves on, on only through the qualityGate default)
+        val modes = listOf(
+            """{"worktreeMode":"on"}""" to Triple("on", true, false),
+            """{"worktreeMode":"off","qualityGate":"npm test"}""" to Triple("off", false, false),
+            """{"qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"qualityGate":"   "}""" to Triple(null, false, false),
+            """{}""" to Triple(null, false, false),
+            """{"qualityGate":42}""" to Triple(null, false, false),
+            """{"worktreeMode":42,"qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"worktreeMode":"maybe","qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"worktreeMode":null,"qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"worktreeMode":"ON","qualityGate":"npm test"}""" to Triple(null, true, true),
+            """{"worktreeMode":42}""" to Triple(null, false, false),
+            """{"worktreeMode":"maybe"}""" to Triple(null, false, false),
+            """{"worktreeMode":null}""" to Triple(null, false, false)
+        )
+        modes.forEach { (block, expected) ->
+            val s = settingsOf(block)
+            assertEquals(block, expected, Triple(s.worktreeMode, s.worktreeModeOn, s.worktreeModeFromDefault))
+        }
+        val targets = listOf(
+            """{"consolidationBranch":"  release/train  "}""" to "release/train",
+            """{"consolidationBranch":""}""" to "main",
+            """{"consolidationBranch":"   "}""" to "main",
+            """{}""" to "main",
+            """{"consolidationBranch":true}""" to "main",
+            """{"consolidationBranch":"moe/work-*"}""" to "main",
+            """{"consolidationBranch":"a?b"}""" to "main",
+            """{"consolidationBranch":"a[b"}""" to "main"
+        )
+        targets.forEach { (block, expected) -> assertEquals(block, expected, settingsOf(block).worktreeTarget) }
+    }
+
+    @Test
     fun `parseState preserves task runtime fields and step metadata`() {
         val state = parseState(
             """
@@ -320,6 +394,59 @@ class MoeJsonTest {
         assertEquals("verified", step.note)
         assertEquals("2026-04-28T01:00:00.000Z", step.startedAt)
         assertEquals("2026-04-28T02:00:00.000Z", step.completedAt)
+    }
+
+    @Test
+    fun `an amended step reads as its active amendment through both parse paths`() {
+        val original = "ORIGINAL: delete nothing"
+        val amended = "AMENDED: delete src/a.ts"
+        val amend1 = """{"amendmentId":"amend-1","description":"$amended","reason":"r","amendedBy":"architect-1","amendedAt":"2026-11-03T15:37:48.020Z"}"""
+        fun steps(members: String) = """{"id":"task-amend","epicId":"epic-1","status":"AWAITING_APPROVAL","implementationPlan":[
+            {"stepId":"step-1","description":"$original","status":"PENDING","affectedFiles":["src/a.ts"]$members}]}""".let { json ->
+            listOf("parseTask" to parseTask(json), "parseState" to parseSnapshotTask(json)).map { (path, task) ->
+                assertEquals("$path kept the task", "task-amend", task.id)
+                path to task.implementationPlan.single()
+            }
+        }
+
+        // The hunt's F1 wire step (task-2597ac6f): the description on the wire is still the original text.
+        for ((path, step) in steps(""","amendments":[$amend1],"activeAmendmentId":"amend-1"""")) {
+            assertEquals(path, amended, step.effectiveDescription)
+            assertEquals(path, original, step.description)
+            assertEquals(path, "architect-1", step.activeAmendment?.amendedBy)
+            assertEquals(path, "r", step.activeAmendment?.reason)
+            assertEquals(path, "2026-11-03T15:37:48.020Z", step.activeAmendment?.amendedAt)
+        }
+        // The ACTIVE amendment wins, not the latest; junk entries are skipped without dropping real ones.
+        val latest = """{"amendmentId":"amend-2","description":"LATEST: not active"}"""
+        for ((path, step) in steps(""","amendments":[7,"x",null,$amend1,$latest],"activeAmendmentId":"amend-1"""")) {
+            assertEquals(path, amended, step.effectiveDescription)
+            assertEquals(path, listOf("amend-1", "amend-2"), step.amendments.map { it.amendmentId })
+        }
+        // A dangling, blank, non-string or wrongly shaped amendment degrades to the original text.
+        val degraded = listOf(
+            ""","amendments":[$amend1],"activeAmendmentId":"amend-9"""",
+            ""","amendments":[{"amendmentId":"","description":"BLANK"}],"activeAmendmentId":""""",
+            ""","amendments":{"amend-1":$amend1},"activeAmendmentId":"amend-1"""",
+            ""","amendments":["amend-1",7,null],"activeAmendmentId":"amend-1"""",
+            ""","amendments":[{"amendmentId":"amend-1","description":42}],"activeAmendmentId":"amend-1"""",
+            ""","amendments":[{"description":"NO ID"}],"activeAmendmentId":"amend-1"""",
+            ""","amendments":[{"amendmentId":"1","description":"NUMERIC ACTIVE ID"}],"activeAmendmentId":1""",
+            ""","amendments":null,"activeAmendmentId":null""",
+            ""
+        )
+        for (members in degraded) {
+            for ((path, step) in steps(members)) {
+                assertEquals("$path $members", original, step.effectiveDescription)
+                assertEquals("$path $members", original, step.description)
+                assertNull("$path $members", step.activeAmendment)
+            }
+        }
+        // A legacy step with no amendment keys parses exactly as before.
+        for ((path, step) in steps("")) {
+            assertTrue(path, step.amendments.isEmpty())
+            assertNull(path, step.activeAmendmentId)
+        }
     }
 
     private fun parseTask(taskJson: String) =
@@ -381,9 +508,9 @@ class MoeJsonTest {
           },
           "priorHandoffs": [
             {
-              "from": "worker-1",
-              "to": "qa-1",
-              "createdAt": "2026-09-11T10:09:00.000Z",
+              "releasedBy": "worker-1",
+              "releasedAt": "2026-09-11T10:09:00.000Z",
+              "reason": "context budget",
               "whatIsDone": "parser",
               "whatRemains": "review",
               "pitfalls": "two call sites",
@@ -534,11 +661,44 @@ class MoeJsonTest {
 
             assertEquals("approve", requireNotNull(task.planCritiqueResult).verdict)
             assertEquals("dod-2", requireNotNull(task.failedDodItems).single().item)
-            assertEquals("qa-1", requireNotNull(task.priorHandoffs).single().to)
+            assertEquals(
+                com.moe.model.HandoffNote(
+                    releasedBy = "worker-1", releasedAt = "2026-09-11T10:09:00.000Z",
+                    reason = "context budget", whatIsDone = "parser", whatRemains = "review",
+                    pitfalls = "two call sites", openQuestions = "none"
+                ),
+                requireNotNull(task.priorHandoffs).single()
+            )
             assertEquals(listOf("6 steps"), task.planSizeWarnings)
             assertEquals(0, requireNotNull(task.verification).exitCode)
             assertEquals("verified", task.reviewSummary)
         }
+    }
+
+    @Test
+    fun `prior handoffs read the daemon's releasedBy, releasedAt and reason, never from, to or createdAt`() {
+        val json = """
+            {"id": "task-h", "epicId": "epic-h", "priorHandoffs": [
+              {
+                "releasedBy": "worker-1", "releasedAt": "2026-11-03T10:00:00.000Z",
+                "reason": "context budget", "whatIsDone": "parser", "whatRemains": "ui",
+                "from": "decoy-from", "to": "decoy-to", "createdAt": "decoy-created"
+              },
+              {
+                "from": "w1", "to": "w2", "createdAt": "2026-09-11T09:30:00Z",
+                "whatIsDone": "legacy only", "whatRemains": "x"
+              }
+            ]}
+        """.trimIndent()
+        val expected = listOf(
+            com.moe.model.HandoffNote(
+                releasedBy = "worker-1", releasedAt = "2026-11-03T10:00:00.000Z",
+                reason = "context budget", whatIsDone = "parser", whatRemains = "ui"
+            ),
+            com.moe.model.HandoffNote(whatIsDone = "legacy only", whatRemains = "x")
+        )
+        assertEquals(expected, parseTask(json).priorHandoffs)
+        assertEquals(expected, parseSnapshotTask(json).priorHandoffs)
     }
 
     @Test
@@ -872,11 +1032,12 @@ class MoeJsonTest {
                 "five_hour": { "percent": 92.5, "resetsAt": "2026-10-20T14:05:00.000Z" },
                 "seven_day": { "percent": 40, "resetsAt": null }
               },
-              "peakPercent": 92.5, "blockedUntil": "2026-10-20T14:05:00.000Z", "active": false, "seats": ["worker-a"]
+              "peakPercent": 92.5, "blockedUntil": "2026-10-20T14:05:00.000Z", "active": false, "seats": ["worker-a"],
+              "vmToken": true
             },
             {
               "id": "acct-2", "label": "Personal", "signIn": "signed_out", "signInCheckedAt": null,
-              "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []
+              "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false
             },
             {
               "id": "acct-3", "label": "acct-3", "signIn": "subscription", "signInCheckedAt": "2026-10-20T09:00:00.000Z",
@@ -905,7 +1066,8 @@ class MoeJsonTest {
                 peakPercent = 92.5,
                 blockedUntil = "2026-10-20T14:05:00.000Z",
                 active = false,
-                seats = listOf("worker-a")
+                seats = listOf("worker-a"),
+                vmToken = true
             ),
             ClaudeAccount(
                 id = "acct-2",
@@ -916,7 +1078,8 @@ class MoeJsonTest {
                 peakPercent = null,
                 blockedUntil = null,
                 active = false,
-                seats = emptyList()
+                seats = emptyList(),
+                vmToken = false
             ),
             ClaudeAccount(
                 id = "acct-3",
@@ -927,7 +1090,9 @@ class MoeJsonTest {
                 peakPercent = 12.0,
                 blockedUntil = null,
                 active = true,
-                seats = listOf("worker-b", "qa-c")
+                seats = listOf("worker-b", "qa-c"),
+                // An older daemon sends no flag: unknown, never set.
+                vmToken = null
             )
         )
     )
@@ -1008,12 +1173,13 @@ class MoeJsonTest {
                 {
                   "id": "acct-3", "label": "", "signIn": "bogus", "signInCheckedAt": 5,
                   "windows": { "five_hour": 5, "seven_day": { "percent": "40", "resetsAt": 7 } },
-                  "peakPercent": "NaN", "blockedUntil": {}, "active": "true", "seats": ["worker-a", 2]
+                  "peakPercent": "NaN", "blockedUntil": {}, "active": "true", "seats": ["worker-a", 2],
+                  "vmToken": "sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCd"
                 },
                 { "id": "acct-3", "label": "a second acct-3" },
                 {
                   "id": "acct-4", "signIn": "other", "signInCheckedAt": " ",
-                  "windows": { "five_hour": { "percent": 5, "resetsAt": "" } }, "blockedUntil": ""
+                  "windows": { "five_hour": { "percent": 5, "resetsAt": "" } }, "blockedUntil": "", "vmToken": 1
                 }
               ]
             }
@@ -1054,6 +1220,22 @@ class MoeJsonTest {
             ),
             rotation
         )
+        // A token-shaped vmToken value never survives parsing.
+        assertFalse(rotation.toString().contains("sk-ant"))
+    }
+
+    @Test
+    fun `parseAccountRotation reads vmToken as a real JSON boolean only`() {
+        val cases = listOf(
+            "true" to true, "false" to false,
+            "\"true\"" to null, "\"false\"" to null, "1" to null, "0" to null, "null" to null, "{}" to null, "[]" to null
+        )
+        for ((literal, expected) in cases) {
+            val rotation = parseRotation(
+                """{ "registryFile": "/home/dev/.moe/claude-accounts.json", "accounts": [ { "id": "acct-1", "vmToken": $literal } ] }"""
+            )
+            assertEquals("vmToken $literal", expected, rotation?.accounts?.single()?.vmToken)
+        }
     }
 
     @Test

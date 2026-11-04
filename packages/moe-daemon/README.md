@@ -33,8 +33,11 @@ moe-daemon start --project /path/to/project [--port 9876]
 Starts the daemon for a project. Creates `.moe/daemon.json` with connection info.
 
 Options:
-- `--project, -p` - Project path (required)
+- `--project` - Project path. Defaults to `MOE_PROJECT_PATH`, then the current directory.
 - `--port` - Port number (default: auto-detect starting at 9876)
+- `--host` - Bind address. Defaults to `MOE_BIND_HOST`, then `127.0.0.1`; `--host` wins over `MOE_BIND_HOST`. `wsl` binds loopback plus the WSL adapters. A value other than `127.0.0.1` is recorded as `bindHost` in `.moe/daemon.json` (see `docs/CONFIGURATION.md`).
+
+`init` takes the same options, plus `--name` (the project name).
 
 ### Check Status
 
@@ -77,7 +80,7 @@ The daemon reads and writes to the `.moe/` directory:
 ## Environment Variables
 
 ### Logging
-- `MOE_LOG_LEVEL` - Log level (debug, info, warn, error). Default: `info`
+- `LOG_LEVEL` - Log level (`debug`, `info`, `warn`, `error`). Default: `info`
 
 ### Network Configuration
 - `MOE_DEFAULT_PORT` - Default port to start on. Default: `9876`

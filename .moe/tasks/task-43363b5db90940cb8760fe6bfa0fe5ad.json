@@ -1,0 +1,359 @@
+{
+  "id": "task-43363b5db90940cb8760fe6bfa0fe5ad",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-18] Integration and hardening: VS Code parity and plugin-reuse epic",
+  "description": "Epic-final row for epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0); decision doc docs/plans/2026-11-02-vscode-reuse.md. Depends on every other row in the epic. The slices each proved only their own part; this row gates the whole epic.\n\nObjective and deliverable:\n1. Full regression of both plugins, in snapshots (GLOBAL rail: no in-place builds or installs). moe-vscode: `npm ci && npm run lint && npm run compile && npm test && npm run package`, then `node scripts/tests/onboarding.mjs` on the unzipped vsix's extension/bundled dir, in a snapshot whose absolute path has no UUID-shaped segment (npm 12 redacts UUIDs in `npm list` output and vsce then packages nothing; see VSC-16). moe-jetbrains: `gradlew.bat test buildPlugin --rerun` under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-snapshot-gradle-test), then the onboarding smoke on the unzipped zip. Report counts against the 882a4c39 baseline (VS Code: 388 tests, 384 pass, 4 skip).\n2. Cross-client corpus integrity: every moe-jetbrains/src/test/resources/client-*.json is read by at least one Kotlin test and at least one moe-vscode test, and no corpus row carries a client-specific expectation.\n3. An adversarial pass over the whole epic diff (find each row's commits with `git log --grep <task id>`; read the combined diff of moe-vscode/, moe-jetbrains/, scripts/bundle-manifest.json and .github/workflows/ci.yml): contracts that drifted between a corpus row and its consumer, duplicated helpers (a second copy of account text or of shell quoting), strict vm-harness require maps broken by a new import, listeners or terminals never disposed, notifications fired from snapshots.\n4. The docs sweep held back from the slices: moe-vscode/README.md (task notifications, the Delivery section, Release Agent, the Accounts view, settings parity, worktree exclusion), moe-vscode/CHANGELOG.md (one entry for the epic), moe-vscode/MANUAL_TESTS.md (manual checks for notifications, the Accounts view and its sign-in terminal, worktree exclusion, and running the extension through VS Code Remote-WSL, which is VS Code's answer to JetBrains' \"Run Agents in WSL\" toggle), and the slice table in docs/plans/2026-11-02-vscode-reuse.md (final status and landing commit per row).\n5. Any cleanup a slice explicitly parked in its summary.\n\nNot in scope: the epic's files-to-avoid (CLAUDE.md, scripts/CLAUDE.md, docs/ARCHITECTURE.md, docs/CONFIGURATION.md, docs/MCP_SERVER.md, docs/SCHEMA.md, docs/TROUBLESHOOTING.md, docs/roles/**, packages/moe-daemon/src/generated/initFiles.ts, scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight*, scripts/tests/worktree-*). If one of them needs a change, file a follow-up row instead.\n\nVerification: the snapshot runs of item 1, each cited with its command, exit code and counts.",
+  "definitionOfDone": [
+    "In a UUID-free git-archive snapshot of the epic's final HEAD, moe-vscode `npm ci && npm run lint && npm run compile && npm test && npm run package` exits 0 with counts reported against the 882a4c39 baseline, and `node scripts/tests/onboarding.mjs` passes on the unzipped vsix's extension/bundled dir.",
+    "Under the jetbrains-gradle lease in a snapshot, `gradlew.bat test buildPlugin --rerun` reports BUILD SUCCESSFUL with the JUnit total, and the onboarding smoke passes on the unzipped plugin zip.",
+    "Every moe-jetbrains/src/test/resources/client-*.json is referenced by at least one test under moe-jetbrains/src/test/kotlin and one under moe-vscode/tests (grep listing in the summary).",
+    "moe-vscode/README.md, CHANGELOG.md and MANUAL_TESTS.md describe the epic's user-visible changes, including the Remote-WSL manual check, and the slice table in docs/plans/2026-11-02-vscode-reuse.md shows each row's final status and landing commit.",
+    "The summary lists the adversarial findings over the whole epic diff, each fixed in this task or filed as a new row with its id.",
+    "The diff touches none of the files listed as not in scope."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preconditions and inventory (read-only).\n\n(a) Confirm that every dependsOn row is DONE or ARCHIVED and has landed: `git log --oneline --grep <task id>` on moe/work-2026-10-24 must show its completion commit (feat/fix, not only wip). Confirm that VSC-0 (task-a3e414a3, not in dependsOn) is DONE and that docs/plans/2026-11-02-vscode-reuse.md is on the branch. A DONE row that has not landed is a blocker: call moe.report_blocked naming it instead of gating a partial epic.\n\n(b) Build the per-row table that step 6 needs: label, task id, final status, and landing commit. The landing commit is the short sha of the completion commit: landing.lastCompletion.sha from moe.get_context epicSiblings, cross-checked with git log.\n\n(c) List the epic rows that are NOT in this row's dependsOn:\n- VSC-0;\n- this row;\n- VSC-22, task-be543ff20bbc4f30ac7ac895ae0b4d13 (the JetBrains ChatPanel dead-selection follow-up filed by VSC-6's architect; mem:gotcha-jetbrains-chatpanel-dead-selection);\n- any other row filed during the epic (moe.list_tasks epicId epic-aabc654d).\n\n(d) Collect the parked items. Read each row's completionSummary and reviewSummary, with moe.get_context per row or a read-only node read of .moe/tasks/<id>.json. List every note that says out of scope, follow-up, parked, deferred or not pinned. Known now:\n- VSC-1 left its docs to this row;\n- VSC-3 noted that MoeJson drops exit codes outside the Int range;\n- VSC-6 noted that VS Code pushes CHANNEL_CREATED without an id dedupe (JetBrains dedupes).\n\nError handling: if a moe tool call fails, retry once, then fall back to reading .moe/tasks/*.json read-only. Never edit .moe by hand.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "All 20 dependsOn rows are DONE and have landed (git log --grep shows feat/fix completions on moe/work-2026-10-24): VSC-1 fd136d98, VSC-2 c46c4a8c, VSC-3 287d86c5, VSC-4 4ad2f057, VSC-5 2e63e0fd (first 3cfc3c78), VSC-6 6fa401dc (code b7a67b97), VSC-7 00c1ac96 (code 7df999be/d13c97f5), VSC-8 ff0e8290, VSC-9 89062f86, VSC-10 080f6df1, VSC-11 63e2961d (code e71520cd), VSC-12 fbc38d15, VSC-13 b863458a, VSC-14 21464c5d, VSC-15 5e972820, VSC-16 84536308, VSC-17 f534cc06, VSC-19 25e70ba1, VSC-20 161c058c, VSC-21 2ab627c2. Rows outside dependsOn (all DONE): VSC-0 3da2f5aa (reuse doc is on the branch), VSC-21a fb3e0721 (first 644ce882), VSC-22 d2a55eb5, ba9590ce 946b4713, 26a3dacd 519720ca, 2f4b224f 12ef9ffb, 76d4500a 53685817. Parked items gathered: VSC-8 delivery section has no live refresh (architect comment-97b50ba7); the exit code outside the Int range is a known divergence; chat channel auto-select differs (JetBrains prefers general, VS Code takes channels[0]; comment-41ad6014); VSC-6 CHANNEL_CREATED has no id dedupe; plus the minor notes from QA summaries. Dirty paths owned by other sessions (.moe/roles, .moe/skills, scripts/moe-agent.*, postflight-worktree.cjs, board json) were left untouched.",
+      "startedAt": "2026-11-02T15:05:06.162Z",
+      "completedAt": "2026-11-02T15:07:18.164Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Corpus integrity (DoD 3), read-only.\n\nRun this from the repo root and paste its output into the summary:\nfor f in moe-jetbrains/src/test/resources/client-*.json; do b=$(basename \"$f\"); k=$(grep -rl \"$b\" moe-jetbrains/src/test/kotlin | tr '\\n' ' '); v=$(grep -rl \"$b\" moe-vscode/tests | tr '\\n' ' '); echo \"$b | kotlin: ${k:-NONE} | vscode: ${v:-NONE}\"; done\n\nExpect these corpora, each with at least one Kotlin reader and one moe-vscode reader: client-verdicts, client-delivery, client-blocker, client-settings-policy, client-accounts and client-seat-tracker. A NONE is a finding for step 3.\n\nThen check that no row carries a client-specific expectation:\n- grep -nEi 'jetbrains|vs ?code|intellij|kotlin|typescript' over the corpora, and judge every hit (a descriptive note is fine; an expectation keyed to one client is not);\n- each moe-vscode consumer reads the corpus file itself, not a copied fixture;\n- where the reuse decision calls for it, the consumer asserts that its labels equal moe-jetbrains/src/main/resources/messages/MoeBundle.properties.\n\nError handling: parse each corpus with node -e inside a per-file try/catch. A corpus that does not parse is a finding, not a crash of this check.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Corpus grep listing: client-accounts.json | kotlin AccountsCorpusTest.kt | vscode accounts-corpus, accounts-view, accounts-actions. client-blocker.json | BlockerCorpusTest.kt | blocker-corpus. client-delivery.json | DeliveryCorpusTest.kt | delivery-corpus. client-seat-tracker.json | SeatTrackerCorpusTest.kt | agent-seat-tracker. client-settings-policy.json | SettingsPolicyCorpusTest.kt | settings-policy-corpus. client-verdicts.json | ClientVerdictCorpusTest.kt | plan-review, managed-vm-verdicts. No NONE. All 6 corpora parse. The client-name grep has 2 hits, both the value blockedResourceId \"jetbrains-gradle\" in client-blocker B01 and B04: data, not a client-specific expectation. No copied fixture under moe-vscode; every consumer reads ../../moe-jetbrains/src/test/resources/<corpus> directly. The accounts, delivery and settings-policy consumers assert their labels against MoeBundle.properties. client-blocker.json carries cause enums, not label keys. The 3 VS Code copies of the blocker labels currently equal moe.blocker.* in the bundle, but no test pins that (minor finding for step 3).",
+      "startedAt": "2026-11-02T15:07:18.915Z",
+      "completedAt": "2026-11-02T15:09:09.198Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial pass over the whole epic diff (DoD 5).\n\nFirst list `git log --format='%h %s' 882a4c39..HEAD -- moe-vscode moe-jetbrains scripts/bundle-manifest.json .github/workflows/ci.yml`. Mark every commit whose subject names no epic task id, so its hunks are not blamed on the epic. Then read `git diff 882a4c39..HEAD` over the same paths. Check at least:\n(1) contract drift between a corpus and its consumer, and label drift from MoeBundle.properties;\n(2) duplicated helpers, such as a second copy of account text (the VSC-13 port vs the Accounts view) or of shell quoting (the VSC-15 sign-in terminal vs util/AgentLauncher.ts);\n(3) strict vm-harness require maps broken by a new import, which shows as a whole test file failing or a test total that dropped;\n(4) listeners, terminals, tree providers and timers that are never disposed (the VSC-1 notifier, the VSC-14/15 view, VSC-20/21 seat tracking and onDidCloseTerminal);\n(5) notifications fired from STATE_SNAPSHOT or before the first snapshot;\n(6) seat deregistration parity: seat ids persisted until WORKER_DEREGISTERED acks them, resent at every connect, and seats the extension did not launch never touched;\n(7) webview text built from daemon strings is escaped, the CSP is intact, and there are no new markup-string writes;\n(8) Windows and POSIX paths and quoting in every new terminal command;\n(9) the bundle manifest read by both builds with no hand-kept second list, and the CI job packaging and smoke-testing the vsix;\n(10) the parked items from step 1(d).\n\nFor each finding:\n- Fix it in this task only if the fix stays inside this task's four doc files.\n- Otherwise file a row with moe.create_task in epic-aabc654d: status BACKLOG, title prefixed [VSC-n], a DoD that includes a test. Record its id.\n\nError handling: when a finding's evidence is ambiguous, write the open question into the filed row instead of guessing a fix.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Every commit in 882a4c39..HEAD on the plugin paths names an epic row (26 feat/fix; the bug rows ba9590ce, 26a3dacd, 2f4b224f and 76d4500a were filed from the epic). No commit from outside the epic. Findings, filed as BACKLOG rows:\n- F1 task-921ca494 [VSC-23] MEDIUM. Task detail live 'updateTask' never refreshes the Delivery section or the Release Agent button (VSC-8/11, architect comment-97b50ba7). The 3 blocker-label copies are not pinned to MoeBundle.\n- F2 task-d2a3532e [VSC-24]. chat.js auto-selects channels[0] where JetBrains prefers the general channel. CHANNEL_CREATED is not deduped by id in the client cache or in chat.js.\n- F3 task-3c485081 [VSC-25]. AccountsTreeProvider duplicates psQuote/shQuote/assertSafeArg and has a second account-text resolver. Its 'CR, LF or NUL' comments are stale. C09 CLI sign-in is unreachable while disconnected.\n- F4 task-83515358 [VSC-26]. JetBrains drops exit codes outside the Int range; VS Code renders them FAIL.\n- F5 task-e1024bb3 [VSC-27]. On win32 the agent and account terminals assume a PowerShell default profile.\nChecked with no finding:\n- (3) vm require maps: the pre-gate ran 556 tests, 552 pass, 4 skip, 0 fail.\n- (4) every new listener is disposed: notifier, seat wiring, onDidOpenTerminal, accounts provider, view and commands.\n- (5) the notifier skips STATE_SNAPSHOT and pre-snapshot frames.\n- (6) seats stay persisted until acked, are resent on connect, and only launched seats are mapped.\n- (7) delivery and policy text go through escapeHtml; no CSP line changed.\n- (9) both bundlers read scripts/bundle-manifest.json with no second list, and the CI step packages and smoke-tests the vsix.\nAccepted and not filed: a throwing source dispose (VSC-20; vscode disposables do not throw). VSC-21's reload behaviour becomes a MANUAL_TESTS check in step 5.",
+      "startedAt": "2026-11-02T15:09:10.247Z",
+      "completedAt": "2026-11-02T15:12:28.681Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update moe-vscode/README.md with the Edit tool. Describe what actually landed: read each row's completionSummary and the code at HEAD, not the plans.\n\nFeatures, one line each and only for behaviour that shipped:\n- task-status notifications with View Task;\n- per-task worktrees kept out of file watching and search;\n- the Delivery section in task detail;\n- blocker parity on the board and in task detail;\n- Release Agent;\n- the Accounts view and its actions;\n- settings parity: enableAgentTeams, the read-only effective landing policy, and the dead branch/commit fields gone;\n- seat deregistration when an agent terminal closes;\n- deleted chat channels leaving the chat view.\n\nRegenerate the Commands list and the Extension settings table from moe-vscode/package.json (contributes.commands and contributes.configuration at HEAD), so every title and key matches. Under Release notes, add a short Unreleased block that mirrors the CHANGELOG entry. Keep the README's tone and length; no marketing.\n\nError handling: leave out any feature whose row did not ship (ARCHIVED or scoped down). Never describe one from its plan.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/README.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/README.md"
+      ],
+      "note": "README now covers what landed at HEAD:\n- Features: the board cause chip; task notifications with View Task (none on a snapshot); task detail blocker, Delivery and Release Agent; seat deregistration when a terminal closes (retried at the next connect, reload survivors kept); the Claude accounts view and its actions; settings parity (Agent Teams, read-only landing policy, the branch and commit fields gone); worktree exclusion; deleted channel.\n- Getting started lists the Claude accounts view.\n- The settings table matches package.json, with no change needed: the 8 keys and defaults are the same.\n- Commands now include Moe: Refresh Claude Accounts and the 7 Moe Accounts commands, with their title-bar and context-menu placement (from package.json menus).\n- Known issues gained 3 lines matching filed rows VSC-23, VSC-27 and VSC-25.\n- Release notes have an Unreleased block that mirrors the CHANGELOG.",
+      "startedAt": "2026-11-02T15:12:29.632Z",
+      "completedAt": "2026-11-02T15:13:27.517Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "CHANGELOG and manual checks.\n\nmoe-vscode/CHANGELOG.md: add one '## [Unreleased]' entry for the epic, above [0.8.0], with Keep a Changelog Added/Changed/Fixed sections. Do not bump the version; versions are synced at release.\n\nmoe-vscode/MANUAL_TESTS.md: replace the stale first line. An automated node:test suite now exists (`npm test`), and the manual checks cover what node:test cannot. Add sections in the file's existing style (numbered steps plus Expected lines):\n- task notifications: AWAITING_APPROVAL, BLOCKED, REVIEW and DONE; View Task opens the task; no notice on a reconnect snapshot;\n- the Accounts view and its sign-in terminal;\n- worktree exclusion: a file under .worktrees/ is absent from search and quick open but still listed in the Explorer;\n- Release Agent;\n- seat deregistration: launch a seat, close its terminal, and the worker deregisters and its task is released;\n- a deleted chat channel leaves both the channel list and the selection;\n- Remote-WSL, VS Code's answer to JetBrains' 'Run Agents in WSL' toggle: open the project through VS Code Remote-WSL; the extension host and the bundled daemon run inside the distro, and agents launch through moe-agent.sh.\n\nError handling: leave out the manual check for any behaviour that did not ship.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/MANUAL_TESTS.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/MANUAL_TESTS.md"
+      ],
+      "note": "CHANGELOG: one [Unreleased] entry above [0.8.0] with Added, Changed and Fixed. It covers notifications, Delivery, Release Agent, the Claude accounts view, seat deregistration, Agent Teams and the landing policy, worktree exclusion, the shared corpora, the removal of the dead branch and commit fields, the bundle manifest, the slim vsix and CI packaging, the deleted channel, and control-character and curly-quote quoting. No version bump. MANUAL_TESTS: the stale 'no harness' line is replaced with the npm test description. New sections: task notifications (including no notice on a reconnect snapshot); Delivery and Release Agent; the Claude accounts view (governor relay comment-90164cf2 items 1-4); worktree exclusion; seat deregistration (close, disconnected close resent at reconnect, Reload Window survivor kept, ordinary terminal untouched); deleted channel; Remote-WSL.",
+      "startedAt": "2026-11-02T15:13:28.571Z",
+      "completedAt": "2026-11-02T15:14:36.637Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Update the slice table in docs/plans/2026-11-02-vscode-reuse.md with the Edit tool.\n- Add 'Final status' and 'Landing commit' columns, filled from step 1(b). Use the short sha of each row's completion commit; for this row write 'this row'.\n- Add a 'Follow-ups filed during the epic' table. It lists VSC-22 (task-be543ff20bbc4f30ac7ac895ae0b4d13) and every row filed in step 3, with each one's status at the time of writing.\n- Replace the wave note that says 'At writing, VSC-2 and VSC-19 are DONE' with the final state.\n- Correct any Area cell that a row's landed diff contradicts. For example, VSC-6 touched MoeDaemonClient.ts and media/chat.js, not extension.ts.\n- Leave the Baseline, Gap list and Reuse decision sections as written (they are VSC-0's record), apart from a one-line pointer from Baseline to this row's final counts.\n\nError handling: a row whose landing commit cannot be found is marked 'not landed' with the reason, never guessed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "note": "Slice table: added Final status + Landing commit columns (all 21 other rows DONE; VSC-18 WORKING / \"this row\"); every sha verified to carry its row's task id and be an ancestor of HEAD (32/32 OK). Board-only completions show the code commit in brackets (VSC-6 6fa401dc/b7a67b97, VSC-7 00c1ac96/7df999be, VSC-11 63e2961d/e71520cd); refixed rows show the first landing (VSC-5 2e63e0fd/3cfc3c78). Area cells corrected against git show --name-only (VSC-6 -> MoeDaemonClient.ts, media/chat.js; VSC-9 test only; VSC-16 + docs/DEVELOPMENT.md; VSC-17 + .vscodeignore; others made specific). New \"Follow-ups filed during the epic\" table: VSC-21a, VSC-22, 4 bug rows (DONE with shas, filer verified from each row's description), VSC-23..27 (PLANNING, not landed). Wave note now gives the final state. Baseline: one pointer line to \"Final gates (VSC-18)\", a section step 7 adds with the measured counts. Gap list / Reuse decision untouched.",
+      "startedAt": "2026-11-02T15:14:37.465Z",
+      "completedAt": "2026-11-02T15:19:22.004Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Verification, run once, after steps 4-6 (DoD 1 and 2). There is no npm in the shared checkout; both gates use the UUID-free snapshot /mnt/d/moe-scratch/vsc18-gate (see mem:gotcha-vsce-package-uuid-path and mem:gotcha-vscode-gate-from-wsl).\n\nGate A: run executionContract.checkRefs[0] verbatim, with its output redirected to a log outside the checkout. It does the following:\n- archives HEAD and overlays the four docs;\n- builds packages/moe-daemon and packages/moe-proxy;\n- runs moe-vscode npm ci, lint, compile, test and package;\n- unzips the vsix and runs scripts/tests/onboarding.mjs on its extension/bundled directory.\nRecord: the npm test summary lines (tests, pass, fail, skipped) against the 882a4c39 baseline of 388 tests, 384 pass and 4 skip; the vsix file count and size; and onboarding's PASS line.\n\nGate B, JetBrains, in the same snapshot (the daemon and proxy are built there now):\n1. Call moe.acquire_resource { resourceId: 'jetbrains-gradle' } (mem:convention-jetbrains-gradle-lease).\n2. Run checkRefs[1] verbatim: cmd.exe `gradlew.bat test buildPlugin --rerun`, the JUnit total, the unzipped plugin zip, and the onboarding smoke on it.\n3. Call moe.release_resource right after the gradle run, even on failure.\nRecord BUILD SUCCESSFUL, the JUnit total (VSC-19's QA saw 546 at 25e70ba1) and onboarding's PASS line.\n\nSubmit Gate A as the complete_task verification, and cite Gate B's command, exit code and counts in the summary.\n\nError handling:\n- If prepareSandbox rejects the Linux-installed node_modules, redo Gate B in a second D:\\\\moe-scratch snapshot whose daemon and proxy were installed and built by Windows npm through cmd.exe, and say which variant ran.\n- A failure traced to a commit outside the epic is reported with its sha and filed, not fixed here.\n- Kill only PIDs you started; the onboarding smoke stops its own daemon.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "note": "Gate A (checkRefs[0] verbatim, snapshot 7925df59): exit 0. Lint and compile clean; npm test 556 tests, 552 pass, 0 fail, 0 cancelled, 4 skipped (baseline 388/384/4 at 882a4c39); vsix 4094 files, 61.36 MB (64,342,960 B); onboarding PASS. Gate B (checkRefs[1] verbatim, same snapshot): lease jetbrains-gradle acquired 15:25:52Z and released right after gradle finished, before the zip onboarding. Exit 0: BUILD SUCCESSFUL in 1m 8s, \"13 actionable tasks: 13 executed\" (:test and :prepareSandbox ran; the snapshot was fresh, so the short --rerun form gave fresh evidence); JUnit total 571 in 35 XML files, 0 failures/errors/skipped (546 at 25e70ba1); zip 64,559,036 B; onboarding PASS; the Linux node_modules were accepted, so no fallback was needed. I then added a \"Final gates (VSC-18)\" section to the reuse doc (the Baseline pointer's target) and reran Gate A on the final doc bytes: exit 0, same counts (556/552/0/4; 4094 files, 61.36 MB; onboarding PASS) at snapshot ec65308e, which differs from 7925df59 only in .moe/ (a peer WT-12 board checkpoint); the overlaid doc cmp-equals the checkout copy. Logs: /mnt/d/moe-scratch/vsc18-gate{A,B,A2}.log.",
+      "startedAt": "2026-11-02T15:19:36.249Z",
+      "completedAt": "2026-11-02T15:37:17.252Z"
+    },
+    {
+      "stepId": "step-8",
+      "description": "Final self-review and summary.\n(1) DoD 6: `git status --short` and this task's diff touch only moe-vscode/README.md, moe-vscode/CHANGELOG.md, moe-vscode/MANUAL_TESTS.md and docs/plans/2026-11-02-vscode-reuse.md, and none of the description's not-in-scope files. Other sessions' dirty paths are not yours.\n(2) Re-read the four docs against HEAD: every command, setting key, behaviour and sha they name exists.\n(3) Assemble the summary:\n- the Gate A and Gate B commands, exit codes and counts against the baselines;\n- the corpus grep listing from step 2;\n- every adversarial finding, marked 'fixed here' or given its filed row id;\n- each parked item from step 1(d) and what happened to it.\n(4) Remove /mnt/d/moe-scratch/vsc18-gate after recording the results.\n\nError handling: if the re-read finds a doc claim that does not hold, fix the doc and rerun Gate A, because README.md and CHANGELOG.md ship inside the vsix.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Read-only step; no tracked file changed. (1) DoD 6: git status shows only the 4 docs as this row's (158 insertions and 31 deletions in total). The other dirty paths (scripts/moe-agent.{sh,ps1}, scripts/tests/postflight*) are the WT-12 lane's and were dirty at session start; I left them untouched. (2) Docs re-read against HEAD. These were confirmed in package.json: the 8 setting keys, the 8 accounts commands (7 hidden from the palette), and the title-bar and context-menu placement. Also confirmed: configurationDefaults sets files.watcherExclude and search.exclude for .worktrees, and the 5 view names include Claude accounts. Every quoted UI string was grepped in src/media: the four notification titles, View Task, \"Released from board\", \"Not connected to the Moe daemon.\", \"Select a channel to start chatting\", Enable Agent Teams, Landing & Gate Policy, Sign out and remove, Remove only, and terminal_closed. Every sha was verified in step 6. All markdown tables have consistent column counts. No doc changed, so Gate A was not rerun again. (3) The summary is assembled in complete_task. (4) I deleted /mnt/d/moe-scratch/vsc18-gate, vsc18-pre and vsc18-pre.log after checking that no process had them as cwd or argv. The gate logs are kept as evidence. Self-review: the diff is docs only; the epic-wide adversarial pass ran in step 3 (F1-F5 filed as VSC-23..27).",
+      "startedAt": "2026-11-02T15:37:25.219Z",
+      "completedAt": "2026-11-02T15:39:55.101Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2ef8e36c29f4490884dff27c9f3ed9fb",
+    "task-09e784e5dd214833b8b9df66038941cc",
+    "task-a5f39d5535404f6e9e59f762c046f5e0",
+    "task-db97dacb7b3843b4a6f747c154123501",
+    "task-0f2cc6eb40324b37bafa8be4cf65caa3",
+    "task-9f6a725ff14c4c08b4acb203884e7ae5",
+    "task-93729f32ef6f408cbd411813c5c93838",
+    "task-185f728fd79c4658a86b8a0b40a66595",
+    "task-06dda5c1df29433ab4eb5c4230b38581",
+    "task-743e577af8204d6aa48d11fab01c979d",
+    "task-e8255fb1ab274ca9bf67d49c34a9635e",
+    "task-daf5abdd282a4c46b280eb0a48e74cd9",
+    "task-065e4812d96247cc8394b3cd0416475d",
+    "task-720f81a6917d4490ab3b5a58c2217ccb",
+    "task-357ed3ae786b4477a39840a7b86a88a6",
+    "task-6fbd08111de142508fb0402d06f24e3f",
+    "task-6a0f0be32acb4dc8b3977f32405277a5",
+    "task-b3daad343a474830a6bd243991d5353d",
+    "task-7fa27666bdb94325b62c205e3599b165",
+    "task-7e7bd0ec91ca488da2858f70cff32f65"
+  ],
+  "priority": "HIGH",
+  "order": 19,
+  "comments": [
+    {
+      "id": "comment-71c36bc183f5428882fcc509beb58f40",
+      "author": "architect-93e0e956",
+      "content": "Architect note from the VSC-0 breakdown session, added after this row was created:\n1. dependsOn holds all 20 slice rows (VSC-1 to VSC-17 and VSC-19 to VSC-21), which is the daemon's cap. VSC-0 (task-a3e414a3, the breakdown row that writes docs/plans/2026-11-02-vscode-reuse.md) is NOT in the list. Before item 4 (the slice-table update), confirm VSC-0 is DONE and the doc is on the branch.\n2. Rows VSC-19, VSC-20 and VSC-21 (task-b3daad34, task-7fa27666, task-7e7bd0ec) were added after the description was written. They port JetBrains' AgentSeatTracker, so closing an agent's terminal deregisters its worker (DEREGISTER_WORKER with reason terminal_closed, acknowledged by WORKER_DEREGISTERED). Treat them as part of items 2-4. client-seat-tracker.json is in the corpus-integrity check. Add seat deregistration on terminal close to the README feature list and add a MANUAL_TESTS.md check (launch a seat, close its terminal, see the worker deregistered and its task released).",
+      "timestamp": "2026-11-02T09:46:18.049Z"
+    },
+    {
+      "id": "comment-97b50ba723544e7d96a21958279e0d5c",
+      "author": "architect-93e0e956",
+      "content": "Gap for the hardening pass (architect-93e0e956, from planning VSC-8 task-185f728f and VSC-3 task-a5f39d55). Please fix it here or file it as a row, per this row's DoD.\n1. The VS Code Delivery section renders only when the task detail panel opens. VSC-8's DoD covers the initial HTML (TaskDetailPanel.getWebviewContent) and nothing else. Live updates go through postMessage 'updateTask' to media/taskDetail.js, which rebuilds only #blockerSection. So delivery evidence recorded while the panel is open (candidate, check run, receipt, attempt phase) stays stale until the panel is reopened. JetBrains refreshes its delivery section on every state update (TaskDetailDialog.refreshDeliverySection). VSC-11 edits media/taskDetail.js, which is why VSC-8 did not take the fix. A fix that avoids a second copy of the logic: have the panel post the precomputed deliveryRows (and labels) with 'updateTask', and have taskDetail.js rebuild an always-present #deliverySection from DOM text nodes, as renderBlocker does.\n2. Known cross-client gap, deliberately left out of client-delivery.json. The daemon accepts any safe-integer check exitCode. JetBrains MoeJson.deliveryExitCode returns null outside the Int range (TaskDelivery.exitCode is Int), so a code such as 3221225477 shows no exit row in JetBrains, while VS Code (Number.isSafeInteger, per VSC-8's plan) renders it as failed. The risk is low: PowerShell $LASTEXITCODE and bash codes stay in range. A real fix touches MoeJson.kt and Models.kt. Serena memory decision-client-corpus-conventions has the details.",
+      "timestamp": "2026-11-02T10:16:11.311Z"
+    },
+    {
+      "id": "comment-41ad601412ee40008d714cf6e0f4cc46",
+      "author": "architect-93e0e956",
+      "content": "Known client divergence, filed for the epic's final pass (architect-93e0e956, from planning VSC-22 task-be543ff2). Channel auto-selection after the selected channel is deleted:\n- JetBrains (VSC-22) uses ChatChannelSelection.choose: the general-type channel, else the first listed channel. Initial selection uses the same rule.\n- VS Code media/chat.js updateChannels uses deselectChannel(), then selectChannels(channels[0].id): the first listed channel, with no general-type preference. Initial selection behaves the same.\n\nThe two agree whenever #general is the oldest channel. The daemon sorts snapshot channels by createdAt, and persistence.ts seeds #general first, so this is the normal case. They differ only when #general is missing or is not the oldest channel.\n\nIf exact parity is wanted: port choose() to chat.js (about 4 lines: prefer `ch.type === 'general'`, else channels[0]) and mirror ChatChannelSelectionTest cases (b) through (f). Not a corpus candidate; the rule is too small.",
+      "timestamp": "2026-11-02T10:47:18.132Z"
+    },
+    {
+      "id": "comment-90164cf2968a4bcbbef320709d353a11",
+      "author": "governor-e6b40560",
+      "content": "Governor relay for step 5 (MANUAL_TESTS.md), from QA qa-564d8bce's VSC-14 approval, msg-5ab4da8d. This is a non-blocking note.\n\nLive VS Code rendering of the new Accounts view (VSC-14/15) is unverified, because there is no IDE harness. When you write the manual checks, include these:\n1. The Accounts view lists one item per rotation row with its chips line.\n2. A disconnected client shows the single state item instead of stale rows.\n3. The view refreshes when the board changes. onStateChanged fires on every delta, as in ManagedVmTreeProvider.\n4. VSC-15's actions run end to end against a live daemon: add, sign in (an integrated terminal), remove, move up, move down, rename, and switch percent.",
+      "timestamp": "2026-11-02T12:14:27.779Z"
+    },
+    {
+      "id": "comment-26ceef48ae324e0eb78a32a7f34b9ebf",
+      "author": "governor-e6b40560",
+      "content": "Governor note for DoD 5 (12:27Z): add task-26a3dacde03c4195bfcd3e01e3c59efd to your findings list as a row filed from the epic.\n\nThe row is \"bug: VS Code AgentLauncher lets terminal control characters through to sendText (bash path unchecked)\". VSC-15's worker filed it from its self-review, and it is now in PLANNING. I could not add it to this row's dependsOn because the list is at the 20-id cap.\n\n- **If it is DONE before your step 7:** your snapshot gate covers it. Note its landing commit.\n- **If it is not:** list it as open, with its id.",
+      "timestamp": "2026-11-02T12:27:59.892Z"
+    },
+    {
+      "id": "comment-7f11a0dd43b443239475eaa2f5988f1c",
+      "author": "governor-e6b40560",
+      "content": "Governor, 13:50Z, a second DoD 5 finding row for your list: task-2f4b224f9afe47b4a5e382d5da7bb16c, \"bug: PowerShell quoting in both plugins lets curly quotes (and, in JetBrains, a backtick) break out of agent and accounts command lines\". An architect filed it while planning task-26a3dacd, and I promoted it to PLANNING.\n\nAs with 26a3dacd, this row's dependsOn is at the 20-id cap, so I could not add an edge. List the row as DONE with its landing commit, or as open with its id.",
+      "timestamp": "2026-11-02T13:49:41.803Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:42:20.055Z",
+  "updatedAt": "2026-11-02T16:03:11.792Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:12:41.151Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 8,
+    "doneAt": "2026-11-02T16:01:25.314Z",
+    "wallClockMs": 20924163
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-4c1da905",
+    "qa-564d8bce"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:18:45.017Z",
+  "executionContract": {
+    "intendedBehavior": "Close epic-aabc654d.\n- Prove both plugins on the final HEAD. VS Code: lint, compile, test and package, plus the onboarding smoke on the vsix bundle. JetBrains: test and buildPlugin, plus the onboarding smoke on the zip.\n- Prove that every client-*.json corpus has a Kotlin reader and a moe-vscode reader, with no client-specific expectation.\n- Run an adversarial pass over the whole epic diff. Each finding is fixed in this row's docs or filed as a row.\n- Sweep moe-vscode README, CHANGELOG and MANUAL_TESTS, and the reuse doc's slice table, so they describe what landed.",
+    "acceptanceCriteria": [
+      "Gate A (checkRefs[0]) exits 0, and the summary reports its npm test counts against 882a4c39 (388/384/4) plus the onboarding PASS on the vsix bundle.",
+      "Gate B (checkRefs[1]), run under the jetbrains-gradle lease, prints BUILD SUCCESSFUL, the JUnit total and the onboarding PASS on the plugin zip.",
+      "The summary carries the corpus grep listing, every adversarial finding with 'fixed here' or a filed row id, and every parked item's outcome.",
+      "The slice table shows each row's final status and landing commit, plus a follow-ups table that includes VSC-22."
+    ],
+    "invariants": [
+      "The diff touches only moe-vscode/README.md, moe-vscode/CHANGELOG.md, moe-vscode/MANUAL_TESTS.md and docs/plans/2026-11-02-vscode-reuse.md.",
+      "No npm install, build or test runs in the shared checkout; every gate runs in /mnt/d/moe-scratch/vsc18-gate.",
+      "The jetbrains-gradle lease is held only around the gradle run and released even on failure.",
+      "Docs describe what landed at HEAD, never what a plan promised."
+    ],
+    "compatibility": [
+      "Leave the Baseline, Gap list and Reuse decision sections of the reuse doc as VSC-0 wrote them; only a pointer to the final counts is added.",
+      "No version bump in moe-vscode/package.json; the CHANGELOG entry is [Unreleased]."
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/onboarding.mjs takes an extracted bundle directory: <vsix>/extension/bundled for VS Code, and <zip>/moe-jetbrains for JetBrains (.github/workflows/ci.yml 'Verify packaged JetBrains onboarding').",
+      "moe-jetbrains/build.gradle.kts prepareSandbox requires built, fresh packages/moe-daemon and moe-proxy dist plus node_modules (requireBundledAssets), and excludes node_modules/.bin from the copy.",
+      "vsce packages nothing from a path with a UUID-shaped segment (npm 12 redaction), so the gates use /mnt/d/moe-scratch.",
+      "Epic rows land as feat/fix(<task id>) completion commits on moe/work-2026-10-24. The epic baseline sha is 882a4c39."
+    ],
+    "checkRefs": [
+      "S=/mnt/d/moe-scratch/vsc18-gate && rm -rf \"$S\" && mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && git -C /mnt/d/projexts/moes rev-parse HEAD > \"$S/.snapshot-sha\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/README.md moe-vscode/CHANGELOG.md moe-vscode/MANUAL_TESTS.md docs/plans/2026-11-02-vscode-reuse.md \"$S\"/) && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && cd \"$1\" && for p in packages/moe-daemon packages/moe-proxy; do (cd \"$p\" && npm ci --no-audit --no-fund && npm run build) || exit 1; done && cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test && npm run package && mkdir ../vsix && unzip -q ./*.vsix -d ../vsix && cd .. && node scripts/tests/onboarding.mjs vsix/extension/bundled' _ \"$S\"",
+      "S=/mnt/d/moe-scratch/vsc18-gate && test -s \"$S/.snapshot-sha\" && /mnt/c/Windows/System32/cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$S\")\\\\moe-jetbrains && .\\\\gradlew.bat test buildPlugin --rerun\" && grep -ho 'tests=\"[0-9]*\"' \"$S\"/moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{s+=$2} END {print \"JUnit tests total: \" s}' && rm -rf \"$S/jb\" && mkdir \"$S/jb\" && unzip -q \"$S\"/moe-jetbrains/build/distributions/*.zip -d \"$S/jb\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node scripts/tests/onboarding.mjs jb/moe-jetbrains"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Code findings from the adversarial pass are FILED as rows, not fixed here. A fix would need files this plan cannot name in advance, and the gates would have to rerun. The DoD allows 'fixed or filed', so the only fixes made in this row are those confined to its four doc files.\n\nOne verification step with two gates, in the same UUID-free snapshot. Gate A builds the daemon and proxy that both packagers need. Gate B reuses them under the jetbrains-gradle lease, so the lease is held only for the gradle run. Gate A is the complete_task evidence; Gate B is cited in the summary (prior epic-final rows also submitted one principal gate). The epic diff is measured as 882a4c39..HEAD on the plugin paths, with non-epic commits listed and excluded, rather than stitched from per-row commits.",
+    "codebaseInsights": "- scripts/tests/onboarding.mjs takes an extracted bundle directory: <vsix>/extension/bundled for VS Code, and <zip>/moe-jetbrains for JetBrains (the CI step 'Verify packaged JetBrains onboarding' does exactly this).\n- moe-jetbrains/build.gradle.kts prepareSandbox calls requireBundledAssets(): packages/moe-daemon and moe-proxy dist must exist and be no older than their src (mtime check), plus node_modules. node_modules/.bin is excluded from the copy, so Linux-installed node_modules should copy cleanly from a /mnt/d snapshot. That is untested, so Gate B has the Windows-npm fallback.\n- `gradlew test` alone needs no dist (prepareTestSandbox).\n- vsce packages nothing from a UUID path, hence /mnt/d/moe-scratch.\n- VS Code baseline at 9ea87aa6 (after VSC-0/1/2 landed): lint 0, compile 0, 416 tests / 412 pass / 4 skip.\n- The epic-baseline sha for DoD counts is 882a4c39 (388/384/4).\n- VSC-22 (task-be543ff20bbc4f30ac7ac895ae0b4d13, BACKLOG) is outside dependsOn (cap 20); list it in the follow-ups table.",
+    "risks": "- Gate A runs three npm ci on NTFS through WSL. It is slow (minutes), so redirect output to a log outside the checkout.\n- A non-epic commit landing between epic rows can break a suite. Attribute it by sha before blaming the epic.\n- Docs must describe what landed: rows may be scoped down at plan time. Read completionSummaries and the code, not the slice descriptions.\n- The four docs ship in the vsix (README, CHANGELOG), so any doc edit after Gate A means rerunning Gate A.\n- Release the jetbrains-gradle lease even on failure. Leases are task-keyed and survive report_blocked.\n- Never edit the epic's files-to-avoid; file a row instead.",
+    "keyFiles": [
+      "docs/plans/2026-11-02-vscode-reuse.md",
+      "moe-vscode/README.md",
+      "moe-vscode/CHANGELOG.md",
+      "moe-vscode/MANUAL_TESTS.md",
+      "moe-vscode/package.json",
+      "scripts/tests/onboarding.mjs",
+      "moe-jetbrains/build.gradle.kts",
+      ".github/workflows/ci.yml",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "b7a67b97f9549bc04c44948ae87a708072b7c27f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:18:45.047Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T15:05:06.162Z",
+  "reviewStartedAt": "2026-11-02T15:40:30.999Z",
+  "verification": {
+    "command": "S=/mnt/d/moe-scratch/vsc18-gate && rm -rf \"$S\" && mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && git -C /mnt/d/projexts/moes rev-parse HEAD > \"$S/.snapshot-sha\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/README.md moe-vscode/CHANGELOG.md moe-vscode/MANUAL_TESTS.md docs/plans/2026-11-02-vscode-reuse.md \"$S\"/) && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && cd \"$1\" && for p in packages/moe-daemon packages/moe-proxy; do (cd \"$p\" && npm ci --no-audit --no-fund && npm run build) || exit 1; done && cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test && npm run package && mkdir ../vsix && unzip -q ./*.vsix -d ../vsix && cd .. && node scripts/tests/onboarding.mjs vsix/extension/bundled' _ \"$S\"",
+    "exitCode": 0,
+    "outputTail": "npm notice run eslint src --ext ts\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\nnpm notice run moe-vscode@0.8.0 test\n✔ C4: an updateChannels message with no list degrades to the no-channel state instead of throwing (0.653185ms)\n✔ files.watcherExclude keeps per-task worktrees out of the file watcher (4.713199ms)\n✔ search.exclude keeps per-task worktrees out of search and quick open (3.441085ms)\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees (4.801053ms)\nℹ tests 556\nℹ suites 0\nℹ pass 552\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 10940.271355\nnpm notice run moe-vscode@0.8.0 package\nnpm notice run vsce package\n      └─ moe-icon.svg [0.36 KB]\n\n=> Run vsce ls --tree to see all included files.\n\n DONE  Packaged: /mnt/d/moe-scratch/vsc18-gate/moe-vscode/moe-vscode-0.8.0.vsix (4094 files, 61.36 MB)\nPASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence\n(snapshot sha ec65308e1d7132db564e9926c342eacff8e4fe08; GATE_A_EXIT=0)",
+    "reportedAt": "2026-11-02T15:40:30.999Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/README.md",
+    "moe-vscode/CHANGELOG.md",
+    "moe-vscode/MANUAL_TESTS.md",
+    "docs/plans/2026-11-02-vscode-reuse.md",
+    ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
+    ".moe/tasks/task-7fa27666bdb94325b62c205e3599b165.json",
+    ".moe/tasks/task-3ad573a754574dfd92083b2e813c0bff.json",
+    ".moe/tasks/task-408a0ac1524b4ab4a6418dd741b53d8d.json",
+    ".moe/tasks/task-5adf0673fdad4c5f8a0956e7afcebe07.json",
+    ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json",
+    ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+    ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
+  ],
+  "completionSummary": "Docs-only close-out of epic-aabc654d: moe-vscode README, CHANGELOG [Unreleased], MANUAL_TESTS (incl. Remote-WSL), and docs/plans/2026-11-02-vscode-reuse.md (Final status + Landing commit columns, Area fixes, follow-ups table, Final gates). No version bump; git status shows only these 4 docs as mine (scripts/* dirt is WT-12's).\nGate A (checkRefs[0], exit 0, ec65308e = 7925df59 + .moe only): lint, compile clean; npm test 556 tests/552 pass/0 fail/4 skip vs 388/384/4 at 882a4c39; vsix 4094 files, 61.36 MB; vsix onboarding PASS.\nGate B (checkRefs[1], exit 0, 7925df59, jetbrains-gradle lease held only for gradle): BUILD SUCCESSFUL 1m 8s, 13/13 tasks executed (fresh snapshot, so the short --rerun ran :test); JUnit 571 (546 at 25e70ba1), 0 fail/error; zip onboarding PASS.\nCorpora (each read in place from moe-jetbrains/src/test/resources, no copies, no client-specific rows): accounts: AccountsCorpusTest / accounts-corpus, accounts-view, accounts-actions; blocker: BlockerCorpusTest / blocker-corpus; delivery: DeliveryCorpusTest / delivery-corpus; seat-tracker: SeatTrackerCorpusTest / agent-seat-tracker; settings-policy: SettingsPolicyCorpusTest / settings-policy-corpus; verdicts: ClientVerdictCorpusTest / plan-review, managed-vm-verdicts.\nFindings, all filed (code out of scope): VSC-23 task-921ca494 (detail Delivery/Release not live; blocker labels unpinned), VSC-24 task-d2a3532e (chat general-first, CHANNEL_CREATED dedupe), VSC-25 task-3c485081 (Accounts duplicate quoting; no CLI sign-in while disconnected), VSC-26 task-83515358 (JB exit codes beyond Int), VSC-27 task-e1024bb3 (win32 PowerShell default). README Known issues names them.\nDONE follow-ups: VSC-21a fb3e0721, VSC-22 d2a55eb5, bugs ba9590ce 946b4713, 26a3dacd 519720ca, 2f4b224f 12ef9ffb, 76d4500a 53685817.\nParked: VSC-20 throwing dispose accepted; VSC-21 reload survival is a manual check (VSC-21a landed the pid memory). MANUAL_TESTS checks, D1 Remote-WSL included, are written but not run (no VS Code GUI here).",
+  "commits": [
+    {
+      "sha": "78642f851af4f5adba54fedff9143328c24d9892",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T15:03:38Z",
+      "paths": [
+        ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
+        ".moe/tasks/task-7fa27666bdb94325b62c205e3599b165.json",
+        "docs/plans/2026-11-02-vscode-reuse.md",
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/MANUAL_TESTS.md",
+        "moe-vscode/README.md"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T15:41:11.639Z",
+      "treeId": "5c6a15910f5bda540989e4f6cad38276c209feb1",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "7aa4148ca3fa026d41a57b1fa4d688331c889ff3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T15:41:26Z",
+      "paths": [
+        ".moe/tasks/task-3ad573a754574dfd92083b2e813c0bff.json",
+        ".moe/tasks/task-408a0ac1524b4ab4a6418dd741b53d8d.json",
+        ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
+        ".moe/tasks/task-5adf0673fdad4c5f8a0956e7afcebe07.json",
+        ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json",
+        ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+        ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T16:03:11.792Z",
+      "treeId": "6a4bc37c90e5079a0989a6efa6ff985046608963",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/README.md",
+    "moe-vscode/CHANGELOG.md",
+    "moe-vscode/MANUAL_TESTS.md",
+    "docs/plans/2026-11-02-vscode-reuse.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T15:41:26Z",
+    "at": "2026-11-02T16:03:11.792Z"
+  },
+  "completedAt": "2026-11-02T16:01:25.314Z",
+  "reviewCompletedAt": "2026-11-02T16:01:25.314Z",
+  "reviewSummary": "VSC-18 approved. Completion 78642f85 (pushed, = HEAD): 4 docs (~189 changed lines) + board json. Gate A re-run (checkRefs[0], snapshot 78642f85): exit 0; lint/compile clean; npm test 556/552 pass/0 fail/4 skip (baseline 388/384/4); vsix 4094 files 61.36 MB; vsix onboarding PASS. Gate B (checkRefs[1], lease held only for gradle): BUILD SUCCESSFUL 1m 14s, 13/13 executed; JUnit 571, 0 fail/err/skip (546 at 25e70ba1). Zip onboarding: 1st run timed out at the restart health step (onboarding.mjs:227, 20 s deadline, load 14.7/16). Unchanged rerun PASS. Code = worker's passing 7925df59, and the vsix run passed, so I judged it a harness load flake (gotcha memory). Logs /mnt/d/moe-scratch/vsc18-qa-gate{A,B}.log. DoD3: grep re-run; all 6 client-*.json have Kotlin and vscode readers; only client-name hit is data 'jetbrains-gradle'. DoD4: README commands/menus/8 settings/views match package.json; quoted UI strings, chat fallback and Delivery tooltips match src; [Unreleased] entry, no bump; Remote-WSL check present. All 32 table shas carry their task id, are HEAD ancestors and each row's latest feat/fix; VSC-22 in follow-ups. DoD5: VSC-23..27 exist (PLANNING); F3 quoting duplication confirmed. DoD6: no not-in-scope file. Notes: MANUAL_TESTS not executed (no GUI). CHANGELOG 'remaining docs/roles reference files' is incomplete: the whole dir ships, governor.md included.",
+  "requiredCheckAtDone": null
+}

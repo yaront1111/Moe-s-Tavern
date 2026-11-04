@@ -1,4 +1,7 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { MoeError, MoeErrorCode } from '../util/errors.js';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { joinTeamTool } from './joinTeam.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
@@ -70,8 +73,44 @@ describe('moe.join_team does not let DEAD members hold seats', () => {
     expect(teamNow().memberIds).toEqual(['w-c', 'w-new', 'w-n2']);
 
     const before = structuredClone(teamNow());
-    await expect(join('w-n3')).rejects.toThrow(`Team Workers is full (max 3 members)`);
+    const events: string[] = [];
+    const off = h.state.subscribe((e) => { events.push(e.type); });
+    try {
+      await expect(join('w-n3')).rejects.toThrow(`Team Workers is full (max 3 members)`);
+    } finally {
+      off();
+    }
     expect(teamNow()).toEqual(before);
+    // The refusal precedes auto-registration: no record, no file, no event (so no WORKER_CREATED).
+    expect(h.state.getWorker('w-n3')).toBeNull();
+    expect(fs.existsSync(path.join(h.moePath, 'workers', 'w-n3.json'))).toBe(false);
+    expect(events).toEqual([]);
+  });
+
+  it('refuses a full team with a coded TEAM_FULL MoeError', async () => {
+    await fullWithTwoDead();
+    await join('w-new');
+    await join('w-n2');
+
+    const err = await join('w-n3').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MoeError);
+    const moeErr = err as MoeError;
+    expect(moeErr.codeName).toBe('TEAM_FULL');
+    expect(moeErr.code).toBe(MoeErrorCode.INVALID_STATE);
+    expect(moeErr.message).toContain('is full (max 3 members)');
+    // The /ws ADD_TEAM_MEMBER path shares the refusal.
+    await expect(h.state.addTeamMember(team.id, 'w-n3')).rejects.toMatchObject({ codeName: 'TEAM_FULL' });
+  });
+
+  it('a current member re-joining its full team is never refused', async () => {
+    await fullWithTwoDead();
+    await join('w-new');
+    await join('w-n2');
+    expect(teamNow().memberIds).toEqual(['w-c', 'w-new', 'w-n2']);
+
+    await join('w-c');
+
+    expect(teamNow().memberIds).toEqual(['w-c', 'w-new', 'w-n2']);
   });
 
   it('a DEAD member re-joining under its own id (wrapper_restart) keeps its seat in a full team', async () => {

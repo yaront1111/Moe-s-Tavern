@@ -1,0 +1,397 @@
+{
+  "version": 1,
+  "now": "2026-10-20T12:00:00.000Z",
+  "zone": "UTC",
+  "rows": [
+    {
+      "id": "C01",
+      "note": "no rotation yet (an older daemon or before the first snapshot)",
+      "rotation": null,
+      "selectedId": null,
+      "connected": true,
+      "expectRows": [],
+      "expectChips": [],
+      "expectActions": {"add": false, "rename": false, "moveUp": false, "moveDown": false, "removeOnly": false, "signIn": false, "signOut": false, "signOutAndRemove": false, "check": false, "switchAt": false, "setVmToken": false, "removeVmToken": false}
+    },
+    {
+      "id": "C02",
+      "note": "an empty account list: only add and the switch control work",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": []
+      },
+      "selectedId": null,
+      "connected": true,
+      "expectRows": [],
+      "expectChips": [],
+      "expectActions": {"add": true, "rename": false, "moveUp": false, "moveDown": false, "removeOnly": false, "signIn": false, "signOut": false, "signOutAndRemove": false, "check": false, "switchAt": true, "setVmToken": false, "removeVmToken": false}
+    },
+    {
+      "id": "C03",
+      "note": "an unusable account file: one error chip and no actions",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": "accounts[0].label: the label contains control characters",
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": []
+      },
+      "selectedId": null,
+      "connected": true,
+      "expectRows": [],
+      "expectChips": [
+        {"key": "moe.accounts.chip.error", "args": []}
+      ],
+      "expectActions": {"add": false, "rename": false, "moveUp": false, "moveDown": false, "removeOnly": false, "signIn": false, "signOut": false, "signOutAndRemove": false, "check": false, "switchAt": false, "setVmToken": false, "removeVmToken": false}
+    },
+    {
+      "id": "C04",
+      "note": "one active account with no usage yet, selected",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-1", "label": "Work Max", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": true, "seats": [], "vmToken": false}
+        ]
+      },
+      "selectedId": "acct-1",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-1", "position": 1, "label": "Work Max", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.active", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.activeNoData", "args": ["Work Max"]}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": false, "moveDown": false, "removeOnly": true, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": true, "setVmToken": true, "removeVmToken": false}
+    },
+    {
+      "id": "C05",
+      "note": "several accounts: every sign-in state, windows with and without a reset time, spent and active with seats; the middle one selected",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-1", "label": "Work Max", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {"five_hour": {"percent": 92.7, "resetsAt": "2026-10-20T14:05:00.000Z"}, "seven_day": {"percent": 40, "resetsAt": "2026-10-23T09:00:00.000Z"}, "seven_day_opus": {"percent": 61.2, "resetsAt": null}}, "peakPercent": 92.7, "blockedUntil": "2026-10-20T14:05:00.000Z", "active": false, "seats": ["worker-a"], "vmToken": true},
+          {"id": "acct-2", "label": "Personal", "signIn": "signed_out", "signInCheckedAt": null, "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-3", "label": "acct-3", "signIn": "other", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-4", "label": "Spare", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {"five_hour": {"percent": 12, "resetsAt": null}}, "peakPercent": 12, "blockedUntil": null, "active": true, "seats": ["qa-c", "worker-b"], "vmToken": false}
+        ]
+      },
+      "selectedId": "acct-2",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-1", "position": 1, "label": "Work Max", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.resets", "args": [92, "14:05"]}, "weekly": {"key": "moe.accounts.usage.percent", "args": [61]}, "status": {"key": "moe.accounts.status.spentUntil", "args": ["14:05"]}, "vmToken": {"key": "moe.accounts.vmTokenState.present", "args": []}},
+        {"id": "acct-2", "position": 2, "label": "Personal", "signIn": {"key": "moe.accounts.signIn.signedOut", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.signInNeeded", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-3", "position": 3, "label": "acct-3", "signIn": {"key": "moe.accounts.signIn.other", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.signInNeeded", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-4", "position": 4, "label": "Spare", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.percent", "args": [12]}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.activeSeats", "args": [2]}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.spent", "args": ["Work Max", "14:05"]},
+        {"key": "moe.accounts.chip.active", "args": ["Spare", 12]}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": true, "moveDown": true, "removeOnly": true, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": true, "setVmToken": true, "removeVmToken": false}
+    },
+    {
+      "id": "C06",
+      "note": "selection at the top: no move up; VM token set",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-a", "label": "Alpha", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": true},
+          {"id": "acct-b", "label": "Beta", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-c", "label": "Gamma", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []}
+        ]
+      },
+      "selectedId": "acct-a",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-a", "position": 1, "label": "Alpha", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.present", "args": []}},
+        {"id": "acct-b", "position": 2, "label": "Beta", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-c", "position": 3, "label": "Gamma", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.unknown", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.noData", "args": ["Alpha"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Beta"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Gamma"]}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": false, "moveDown": true, "removeOnly": true, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": true, "setVmToken": true, "removeVmToken": true}
+    },
+    {
+      "id": "C07",
+      "note": "selection in the middle: both moves; VM token not set",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-a", "label": "Alpha", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": true},
+          {"id": "acct-b", "label": "Beta", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-c", "label": "Gamma", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []}
+        ]
+      },
+      "selectedId": "acct-b",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-a", "position": 1, "label": "Alpha", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.present", "args": []}},
+        {"id": "acct-b", "position": 2, "label": "Beta", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-c", "position": 3, "label": "Gamma", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.unknown", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.noData", "args": ["Alpha"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Beta"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Gamma"]}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": true, "moveDown": true, "removeOnly": true, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": true, "setVmToken": true, "removeVmToken": false}
+    },
+    {
+      "id": "C08",
+      "note": "selection at the bottom: no move down; no vmToken flag (an older daemon) disables both VM token actions",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-a", "label": "Alpha", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": true},
+          {"id": "acct-b", "label": "Beta", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-c", "label": "Gamma", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []}
+        ]
+      },
+      "selectedId": "acct-c",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-a", "position": 1, "label": "Alpha", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.present", "args": []}},
+        {"id": "acct-b", "position": 2, "label": "Beta", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-c", "position": 3, "label": "Gamma", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.unknown", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.noData", "args": ["Alpha"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Beta"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Gamma"]}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": true, "moveDown": false, "removeOnly": true, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": true, "setVmToken": false, "removeVmToken": false}
+    },
+    {
+      "id": "C09",
+      "note": "disconnected: list edits off, command-line actions still on",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-a", "label": "Alpha", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": true},
+          {"id": "acct-b", "label": "Beta", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-c", "label": "Gamma", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []}
+        ]
+      },
+      "selectedId": "acct-b",
+      "connected": false,
+      "expectRows": [
+        {"id": "acct-a", "position": 1, "label": "Alpha", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.present", "args": []}},
+        {"id": "acct-b", "position": 2, "label": "Beta", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-c", "position": 3, "label": "Gamma", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.unknown", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.noData", "args": ["Alpha"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Beta"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Gamma"]}
+      ],
+      "expectActions": {"add": false, "rename": false, "moveUp": false, "moveDown": false, "removeOnly": false, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": false, "setVmToken": true, "removeVmToken": false}
+    },
+    {
+      "id": "C10",
+      "note": "a selection that is not in the list selects nothing",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-a", "label": "Alpha", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": true},
+          {"id": "acct-b", "label": "Beta", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-c", "label": "Gamma", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []}
+        ]
+      },
+      "selectedId": "acct-gone",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-a", "position": 1, "label": "Alpha", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.present", "args": []}},
+        {"id": "acct-b", "position": 2, "label": "Beta", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-c", "position": 3, "label": "Gamma", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.unknown", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.noData", "args": ["Alpha"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Beta"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Gamma"]}
+      ],
+      "expectActions": {"add": true, "rename": false, "moveUp": false, "moveDown": false, "removeOnly": false, "signIn": false, "signOut": false, "signOutAndRemove": false, "check": true, "switchAt": true, "setVmToken": false, "removeVmToken": false}
+    },
+    {
+      "id": "C11",
+      "note": "no cli in the payload (an older daemon): command-line actions off",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "accounts": [
+          {"id": "acct-a", "label": "Alpha", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": true},
+          {"id": "acct-b", "label": "Beta", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-c", "label": "Gamma", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []}
+        ]
+      },
+      "selectedId": "acct-a",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-a", "position": 1, "label": "Alpha", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.present", "args": []}},
+        {"id": "acct-b", "position": 2, "label": "Beta", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-c", "position": 3, "label": "Gamma", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.unknown", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.noData", "args": ["Alpha"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Beta"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Gamma"]}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": false, "moveDown": true, "removeOnly": true, "signIn": false, "signOut": false, "signOutAndRemove": false, "check": false, "switchAt": true, "setVmToken": false, "removeVmToken": false}
+    },
+    {
+      "id": "C12",
+      "note": "five subscription accounts and more: four chips plus +N more, a shortened chip label, floored percents and another-day reset time",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-1", "label": "A very long account label", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {"five_hour": {"percent": 33.3, "resetsAt": null}}, "peakPercent": 33.3, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-2", "label": "Two", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {"seven_day": {"percent": 89.6, "resetsAt": "2026-10-22T08:30:00.000Z"}}, "peakPercent": 89.6, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-3", "label": "Three", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": true, "seats": [], "vmToken": false},
+          {"id": "acct-4", "label": "Four", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-5", "label": "Five", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-6", "label": "Six", "signIn": "signed_out", "signInCheckedAt": null, "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-7", "label": "Seven", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false}
+        ]
+      },
+      "selectedId": null,
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-1", "position": 1, "label": "A very long account label", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.percent", "args": [33]}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-2", "position": 2, "label": "Two", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.resets", "args": [89, "10-22 08:30"]}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-3", "position": 3, "label": "Three", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.active", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-4", "position": 4, "label": "Four", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-5", "position": 5, "label": "Five", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-6", "position": 6, "label": "Six", "signIn": {"key": "moe.accounts.signIn.signedOut", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.signInNeeded", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-7", "position": 7, "label": "Seven", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.ready", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.usage", "args": ["A very long accou...", 33]},
+        {"key": "moe.accounts.chip.usage", "args": ["Two", 89]},
+        {"key": "moe.accounts.chip.activeNoData", "args": ["Three"]},
+        {"key": "moe.accounts.chip.noData", "args": ["Four"]},
+        {"key": "moe.accounts.chip.more", "args": [2]}
+      ],
+      "expectActions": {"add": true, "rename": false, "moveUp": false, "moveDown": false, "removeOnly": false, "signIn": false, "signOut": false, "signOutAndRemove": false, "check": true, "switchAt": true, "setVmToken": false, "removeVmToken": false}
+    },
+    {
+      "id": "C13",
+      "note": "spent wins over active; a window without a percent shows none; a reset time that is not an ISO instant shows as sent",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-solo", "label": "Solo", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {"five_hour": {"percent": null, "resetsAt": "2026-10-20T17:00:00.000Z"}, "seven_day": {"percent": 100, "resetsAt": "soon"}}, "peakPercent": 100, "blockedUntil": "2026-10-21T03:00:00.000Z", "active": true, "seats": ["worker-z"], "vmToken": true}
+        ]
+      },
+      "selectedId": "acct-solo",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-solo", "position": 1, "label": "Solo", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.resets", "args": [100, "soon"]}, "status": {"key": "moe.accounts.status.spentUntil", "args": ["10-21 03:00"]}, "vmToken": {"key": "moe.accounts.vmTokenState.present", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.spent", "args": ["Solo", "10-21 03:00"]}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": false, "moveDown": false, "removeOnly": true, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": true, "setVmToken": true, "removeVmToken": true}
+    },
+    {
+      "id": "C14",
+      "note": "a lower switch percent: the daemon's blockedUntil drives spent, an account with seats that is not active is in use",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 75,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-x", "label": "Ex", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {"five_hour": {"percent": 80, "resetsAt": "2026-10-20T15:30:00.000Z"}}, "peakPercent": 80, "blockedUntil": "2026-10-20T15:30:00.000Z", "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-y", "label": "Why", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {"five_hour": {"percent": 5, "resetsAt": null}}, "peakPercent": 5, "blockedUntil": null, "active": false, "seats": ["worker-q"], "vmToken": false},
+          {"id": "acct-z", "label": "Zed", "signIn": "subscription", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": true, "seats": [], "vmToken": false}
+        ]
+      },
+      "selectedId": "acct-z",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-x", "position": 1, "label": "Ex", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.resets", "args": [80, "15:30"]}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.spentUntil", "args": ["15:30"]}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-y", "position": 2, "label": "Why", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.percent", "args": [5]}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.inUse", "args": [1]}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-z", "position": 3, "label": "Zed", "signIn": {"key": "moe.accounts.signIn.subscription", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.active", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.spent", "args": ["Ex", "15:30"]},
+        {"key": "moe.accounts.chip.usage", "args": ["Why", 5]},
+        {"key": "moe.accounts.chip.activeNoData", "args": ["Zed"]}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": true, "moveDown": false, "removeOnly": true, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": true, "setVmToken": true, "removeVmToken": false}
+    },
+    {
+      "id": "C15",
+      "note": "no subscription account: one no-account chip",
+      "rotation": {
+        "registryFile": "/home/dev/.moe/claude-accounts.json",
+        "switchAtPercent": 90,
+        "error": null,
+        "cli": {"node": "/usr/bin/node", "script": "/opt/moe/daemon/dist/accounts/cli.js"},
+        "accounts": [
+          {"id": "acct-p", "label": "Pea", "signIn": "signed_out", "signInCheckedAt": null, "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false},
+          {"id": "acct-q", "label": "Queue", "signIn": "other", "signInCheckedAt": "2026-10-20T11:00:00.000Z", "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false}
+        ]
+      },
+      "selectedId": "acct-q",
+      "connected": true,
+      "expectRows": [
+        {"id": "acct-p", "position": 1, "label": "Pea", "signIn": {"key": "moe.accounts.signIn.signedOut", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.signInNeeded", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}},
+        {"id": "acct-q", "position": 2, "label": "Queue", "signIn": {"key": "moe.accounts.signIn.other", "args": []}, "fiveHour": {"key": "moe.accounts.usage.none", "args": []}, "weekly": {"key": "moe.accounts.usage.none", "args": []}, "status": {"key": "moe.accounts.status.signInNeeded", "args": []}, "vmToken": {"key": "moe.accounts.vmTokenState.absent", "args": []}}
+      ],
+      "expectChips": [
+        {"key": "moe.accounts.chip.noneSignedIn", "args": []}
+      ],
+      "expectActions": {"add": true, "rename": true, "moveUp": true, "moveDown": false, "removeOnly": true, "signIn": true, "signOut": true, "signOutAndRemove": true, "check": true, "switchAt": true, "setVmToken": true, "removeVmToken": false}
+    }
+  ],
+  "labels": [
+    {"id": "L01", "input": "", "valid": true},
+    {"id": "L02", "input": "   ", "valid": true},
+    {"id": "L03", "input": "Work Max", "valid": true},
+    {"id": "L04", "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "valid": true},
+    {"id": "L05", "input": " xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ", "valid": true},
+    {"id": "L06", "input": "\tWork Max\n", "valid": true},
+    {"id": "L07", "input": "Caf\u00e9 \u00fcber", "valid": true},
+    {"id": "L08", "input": "a\u0085b", "valid": true},
+    {"id": "L09", "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "valid": false},
+    {"id": "L10", "input": "a\tb", "valid": false},
+    {"id": "L11", "input": "a\nb", "valid": false},
+    {"id": "L12", "input": "a\u0000b", "valid": false},
+    {"id": "L13", "input": "a\u001fb", "valid": false},
+    {"id": "L14", "input": "a\u007fb", "valid": false}
+  ]
+}

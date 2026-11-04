@@ -20,7 +20,24 @@ const clip = (value: unknown, max: number): string => {
   return text.length > max ? `${text.slice(0, max)}...` : text
 }
 
-type Step = { stepId?: string; status?: string; description?: string }
+type Amendment = { amendmentId?: string; description?: string }
+type Step = {
+  stepId?: string; status?: string; description?: string
+  amendments?: Amendment[]; activeAmendmentId?: string
+}
+
+// Twin: effectiveStepDescription (packages/moe-daemon/src/util/planAmendments.ts)
+// The daemon never rewrites description on an amendment; the one named by
+// activeAmendmentId is what the seat must follow. A dangling id keeps the original.
+// Total: hand-edited records must not throw (a throw drops the whole snapshot).
+function stepText(s: Step): string | undefined {
+  const id = s.activeAmendmentId
+  if (typeof id === 'string' && id && Array.isArray(s.amendments)) {
+    const hit = s.amendments.find(a => a && typeof a.description === 'string' && a.amendmentId === id)
+    if (hit) return hit.description
+  }
+  return s.description
+}
 type Issue = { type?: string; description?: string; file?: string; line?: number }
 type Task = {
   id?: string; title?: string; status?: string; reopenCount?: number; reopenReason?: string | null
@@ -54,7 +71,7 @@ export async function snapshot($: EngineInterface, workerId: string): Promise<st
   if (steps.length) {
     lines.push('Steps:')
     for (const s of steps.slice(0, 30)) {
-      lines.push(`- ${s.stepId} ${s.status}: ${clip(s.description, s === current ? 1500 : 120)}`)
+      lines.push(`- ${s.stepId} ${s.status}: ${clip(stepText(s), s === current ? 1500 : 120)}`)
     }
   }
   const dod = task.definitionOfDone ?? []

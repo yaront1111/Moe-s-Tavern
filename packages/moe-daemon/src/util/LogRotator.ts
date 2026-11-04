@@ -20,6 +20,12 @@ const COMPRESSION_TIMEOUT_MS =
     ? COMPRESSION_TIMEOUT_MS_ENV
     : DEFAULT_COMPRESSION_TIMEOUT_MS;
 
+/** After a failed rotation, rotateIfNeeded skips further attempts for this long. */
+export const ROTATION_RETRY_DELAY_MS = 60_000;
+
+/** How long a failed compression waits for its destination to close before rejecting anyway. */
+export const DESTINATION_CLOSE_WAIT_MS = 5_000;
+
 export interface LogRotatorOptions {
   maxSizeMB?: number;
   retentionCount?: number;
@@ -29,6 +35,8 @@ export class LogRotator {
   private readonly logPath: string;
   private readonly maxSizeBytes: number;
   private readonly retentionCount: number;
+  /** Epoch ms before which rotateIfNeeded does not attempt a rotation (set by a failure). */
+  private retryAfter = 0;
 
   constructor(logPath: string, options?: LogRotatorOptions) {
     this.logPath = logPath;
@@ -56,6 +64,13 @@ export class LogRotator {
    * Should be called before appending to the log.
    */
   async rotateIfNeeded(): Promise<boolean> {
+    // After a failed rotation, wait before trying again: every append calls
+    // this under the activity mutex, so a persistent failure would otherwise
+    // re-read and re-gzip the whole live log once per event.
+    if (Date.now() < this.retryAfter) {
+      return false;
+    }
+
     if (!fs.existsSync(this.logPath)) {
       return false;
     }
@@ -69,45 +84,58 @@ export class LogRotator {
       await this.rotate();
       return true;
     } catch (error) {
-      logger.error({ error, logPath: this.logPath }, 'Failed to check/rotate log');
+      this.retryAfter = Date.now() + ROTATION_RETRY_DELAY_MS;
+      logger.error(
+        { error, logPath: this.logPath, retryInMs: ROTATION_RETRY_DELAY_MS },
+        'Failed to check/rotate log'
+      );
       return false;
     }
   }
 
   /**
-   * Perform log rotation:
-   * 1. Shift existing rotated logs (activity.log.2.gz -> activity.log.3.gz)
-   * 2. Compress current log to activity.log.1.gz
-   * 3. Truncate current log file
-   * 4. Delete logs beyond retention count
+   * Perform log rotation. The generation chain changes only after a complete
+   * compressed copy of the live log exists, so a failed or timed-out
+   * compression (a full disk, a locked file) leaves every generation and the
+   * live log exactly as they were:
+   * 1. Remove a leftover temporary file from a crashed attempt
+   * 2. Compress the live log into activity.log.rotating.tmp
+   * 3. Shift existing rotated logs (activity.log.2.gz -> activity.log.3.gz);
+   *    each rename replaces its target, so the first one drops the oldest
+   * 4. Rename the temporary file to activity.log.1.gz
+   * 5. Truncate the live log
+   * Any failure removes the temporary file and rethrows the original error.
    */
   private async rotate(): Promise<void> {
     logger.info({ logPath: this.logPath, maxSizeMB: this.maxSizeBytes / 1024 / 1024 }, 'Rotating activity log');
 
     const dir = path.dirname(this.logPath);
     const baseName = path.basename(this.logPath);
-
-    // Delete oldest log if it would exceed retention
-    const oldestLog = path.join(dir, `${baseName}.${this.retentionCount}.gz`);
-    if (fs.existsSync(oldestLog)) {
-      fs.unlinkSync(oldestLog);
-    }
-
-    // Shift existing rotated logs
-    for (let i = this.retentionCount - 1; i >= 1; i--) {
-      const oldPath = path.join(dir, `${baseName}.${i}.gz`);
-      const newPath = path.join(dir, `${baseName}.${i + 1}.gz`);
-      if (fs.existsSync(oldPath)) {
-        fs.renameSync(oldPath, newPath);
-      }
-    }
-
-    // Compress current log to .1.gz
+    const pendingPath = path.join(dir, `${baseName}.rotating.tmp`);
     const compressedPath = path.join(dir, `${baseName}.1.gz`);
-    await this.compressFile(this.logPath, compressedPath);
 
-    // Truncate the current log file
-    fs.writeFileSync(this.logPath, '');
+    try {
+      fs.rmSync(pendingPath, { force: true });
+      await this.compressFile(this.logPath, pendingPath);
+
+      for (let i = this.retentionCount - 1; i >= 1; i--) {
+        const oldPath = path.join(dir, `${baseName}.${i}.gz`);
+        const newPath = path.join(dir, `${baseName}.${i + 1}.gz`);
+        if (fs.existsSync(oldPath)) {
+          fs.renameSync(oldPath, newPath);
+        }
+      }
+
+      fs.renameSync(pendingPath, compressedPath);
+      fs.writeFileSync(this.logPath, '');
+    } catch (error) {
+      try {
+        fs.rmSync(pendingPath, { force: true });
+      } catch (cleanupError) {
+        logger.warn({ error: cleanupError, pendingPath }, 'Failed to remove temporary rotation file');
+      }
+      throw error;
+    }
 
     logger.info({ rotatedTo: compressedPath }, 'Activity log rotated successfully');
   }
@@ -155,7 +183,22 @@ export class LogRotator {
         if (cleanup.destroyDestination) {
           destination.destroy();
         }
-        reject(error instanceof Error ? error : new Error(String(error)));
+        const failure = error instanceof Error ? error : new Error(String(error));
+        // fs.createWriteStream opens its file asynchronously, and destroy()
+        // lets a pending open finish before it closes the fd. Rejecting now
+        // would let rotate() remove the temporary file before that late open
+        // recreates it, so settle once the destination has closed, bounded
+        // in case its open never returns.
+        if (destination.closed) {
+          reject(failure);
+          return;
+        }
+        const closeWait = setTimeout(() => reject(failure), DESTINATION_CLOSE_WAIT_MS);
+        closeWait.unref?.();
+        destination.once('close', () => {
+          clearTimeout(closeWait);
+          reject(failure);
+        });
       };
 
       const timeout = setTimeout(() => {

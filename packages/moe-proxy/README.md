@@ -46,18 +46,25 @@ Send JSON-RPC 2.0 messages via stdin:
 
 ## Environment Variables
 
-- `MOE_PROJECT_PATH` - Project path (required)
+- `MOE_PROJECT_PATH` - Project path, where the proxy reads `.moe/daemon.json` (default: the current directory)
 - `MOE_DAEMON_HOST` - Daemon host (default: 127.0.0.1)
-- `MOE_DAEMON_PORT` - Daemon port (default: read from .moe/daemon.json)
+- `MOE_WORKER_ID` - Launcher-set. The seat's worker id, added as `workerId` to every `tools/call` that omits one, and to `tools/list` so the daemon lists only the tools for the seat's role. `moe.get_activity_log` never gets it, because its `workerId` is a filter. A blank value counts as unset
+- `MOE_RUNNER_PROCESS_STARTED_AT` and `MOE_RUNNER_HOST` - Launcher-set, for architect, QA and governor seats only. The runner identity, added as `processStartedAt` and `host` to a `moe.claim_next_task` that names neither key, so a task claimed inside the session can be reattached after a daemon restart. Both must be non-blank, or neither is sent
 - `MOE_SESSION_ID` - The session id the proxy stamps onto the identity tools (see Execution identity)
 - `MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION` - The execution attempt the proxy stamps onto the identity tools; set both or neither
 - `MOE_WORKER_TYPE` - The agent CLI the launcher started, added to the registration tools (see Worker type)
 - `MOE_BLOCKING_TIMEOUT_MS` - The per-request deadline of `moe.wait_for_task`, `moe.chat_wait` and `moe.wait_for_resource` (default: 660000)
+- `MOE_MESSAGE_TIMEOUT_MS` - The per-request deadline of every other request; when it passes, the proxy answers that request with a `Request timed out` error (default: 30000)
+- `MOE_TOOL_NAME_STYLE` - Launcher-set for grok. `underscore` exposes each `moe.<name>` tool as `moe_<name>` in `tools/list` and maps the alias back on `tools/call`, for clients that drop dotted tool names. Any other value, or none, keeps the daemon's names
 - `MOE_PROXY_ONESHOT_DEADLINE_MS` - Wrapper-only. An absolute bound for one call, in Unix epoch milliseconds, covering connect, queue, send and the EOF drain (see One-shot calls). Blank means unset; any other value that is not plain decimal digits forming a safe integer fails closed (one null-id error, exit 1, no connection)
+
+The daemon port always comes from `.moe/daemon.json`; no environment variable overrides it.
 
 ## One-shot calls
 
 The wrappers' RPC helpers pipe one bare `tools/call` into a fresh proxy and close stdin. In a session that never sent `initialize`, stdin EOF lets a pending blocking call (the three tools above) finish up to its deadline instead of the usual drain. It fails at once if the daemon socket is lost. Initialized MCP sessions, ordinary calls and queued (unsent) messages keep the 2-second drain, and SIGINT/SIGTERM cap any drain at 2 seconds.
+
+The proxy exits 0 only after its stdout has drained, so a reader that starts late still gets all of a reply bigger than the OS pipe buffer (about 64 KiB on Linux). A reader that stops reading gets 2 seconds; then the proxy exits 1, because the reply may be incomplete. A reader that closes the pipe (EPIPE) gets exit 1, as before.
 
 When `MOE_PROXY_ONESHOT_DEADLINE_MS` passes, the proxy writes one `Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)` error for each pending request id (one null-id error when none is pending, as before the first connect) and exits 1. No late success follows.
 

@@ -15,7 +15,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { AGENT_CLIS, loadAgentManifest } from './agent-cache.mjs';
 import { loadCertifiedProvider } from './doctor.mjs';
 import { bootstrapError, GUEST_LAYOUT, GUEST_RESOURCES, IMAGE_ARCHES, JOB_IDENTITIES } from './guest-bootstrap.mjs';
-import { invoker, lifecycleError, QUERY_TIMEOUT_MS, STATES } from './lifecycle.mjs';
+import { guestAddress } from './guest-ssh.mjs';
+import { invoker, lifecycleError, QUERY_TIMEOUT_MS, sameOwner, STATES } from './lifecycle.mjs';
 import { classifyFailure, MAX_PROBE_BUFFER, providerError } from './multipass.mjs';
 
 const CONTROL = /[\x00-\x1f\x7f]/;
@@ -34,7 +35,7 @@ const SHARED_FS = new Set(['9p', 'virtiofs', 'nfs', 'nfs4', 'cifs', 'smb3', 'smb
 const REPORTED = /^(?:PROVIDER|LEDGER|LIFECYCLE|IMAGE)_[A-Z_]+$/;
 // [kind, test flag, path, failure when the identity CAN]: the credential and cloud-init's copies of it
 // (raw and processed user-data, the merged cloud-config, the pickled datasource, the unredacted instance
-// data, the combined config, the NoCloud seed device), then the supervisor. cloud-init's internal_files
+// data, the combined config, the NoCloud seed device), then the pinned SSH host key (CQ-R14b), then the supervisor. cloud-init's internal_files
 // docs describe combined-cloud-config.json as root-readable and unredacted with user-data overrides;
 // it can carry the write_files credential. Its mode on the pinned image needs R13 real-guest certification.
 const DENIED = [
@@ -46,6 +47,7 @@ const DENIED = [
   ['readInstanceData', '-r', '/run/cloud-init/instance-data-sensitive.json', 'CREDENTIAL_EXPOSED'],
   ['readCombinedConfig', '-r', '/run/cloud-init/combined-cloud-config.json', 'CREDENTIAL_EXPOSED'],
   ['readSeed', '-r', '/dev/sr0', 'CREDENTIAL_EXPOSED'],
+  ['readHostKey', '-r', '/etc/ssh/ssh_host_ed25519_key', 'CREDENTIAL_EXPOSED'],
   ['writeSupervisor', '-w', GUEST_LAYOUT.supervisor, 'SUPERVISOR_WRITABLE'],
   ['writeSupervisorDir', '-w', GUEST_LAYOUT.supervisorDirs[1], 'SUPERVISOR_WRITABLE'],
 ];
@@ -142,6 +144,8 @@ function parseInfo(stdout, name) {
     memoryTotal: detail.memory.total ?? null,
     diskTotal: detail.disks.sda1.total === undefined ? null : Number(detail.disks.sda1.total),
     mountCount: Object.keys(detail.mounts).length,
+    // The SSH stream address (CQ-R14d1): only the first entry counts, and a Starting VM has none, which stays valid.
+    address: guestAddress(Array.isArray(detail.ipv4) ? detail.ipv4[0] : undefined),
   };
 }
 
@@ -245,9 +249,7 @@ export async function waitForGuestReady({
   const source = await pinnedSource(sourceImage);
   invoker(name, provider);
   const record = await ledger.read(name);
-  if (owner?.taskId !== record.taskId || owner?.attemptId !== record.attemptId || owner?.generation !== record.generation) {
-    throw lifecycleError('LIFECYCLE_NOT_OWNER');
-  }
+  if (!sameOwner(record, owner)) throw lifecycleError('LIFECYCLE_NOT_OWNER');
   if (record.phase !== 'owned') throw lifecycleError('LIFECYCLE_PHASE_INVALID');
   const { supervisorSha256 } = bootstrap;
   const { info, failure } = await awaitCloudInit({ name, provider, sleep, pollMs, polls: Math.ceil(maxWaitMs / pollMs) });

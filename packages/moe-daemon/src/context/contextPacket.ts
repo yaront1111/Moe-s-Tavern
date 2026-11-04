@@ -14,8 +14,16 @@ export const MANDATORY_SECTIONS: readonly string[] = Object.freeze([
   'project.globalRails', 'allRails', 'task.description', 'task.definitionOfDone',
   'task.taskRails', 'task.implementationPlan', 'task.executionContract',
 ]);
-/** Mandatory when served (the approved protected-check overlay); never reported missing. */
-const CONDITIONAL_SECTIONS: readonly string[] = Object.freeze(['task.requiredCheckSnapshot']);
+/**
+ * Conditional section -> the body path whose non-empty array makes it required.
+ * The approved protected-check overlay is mandatory when served. When the served
+ * contract declares requiredChecks but no bound snapshot is served (absent,
+ * malformed or bound to other definitions) it is reported missing, reason
+ * 'unbound-snapshot'. Without a declaration it is not listed at all.
+ */
+const CONDITIONAL_SECTIONS: Readonly<Record<string, string>> = Object.freeze({
+  'task.requiredCheckSnapshot': 'task.executionContract.requiredChecks',
+});
 
 export const DEFAULT_PACKET_BUDGET_CHARS = 100_000;
 export const MIN_PACKET_BUDGET_CHARS = 1_000;
@@ -105,13 +113,16 @@ function omissions(body: Record<string, unknown>, input: PacketInput): PacketSec
 export function buildPacketManifest(body: Record<string, unknown>, input: PacketInput): PacketManifest {
   const sections: PacketSection[] = [];
   let mandatoryChars = 0;
-  for (const path of [...MANDATORY_SECTIONS, ...CONDITIONAL_SECTIONS]) {
+  for (const path of [...MANDATORY_SECTIONS, ...Object.keys(CONDITIONAL_SECTIONS)]) {
     const value = own(body, path);
+    const declaredBy = Object.hasOwn(CONDITIONAL_SECTIONS, path) ? own(body, CONDITIONAL_SECTIONS[path]) : undefined;
     if (servable(path, value)) {
       sections.push({ path, mandatory: true, status: 'served' });
       mandatoryChars += JSON.stringify(value).length;
-    } else if (!CONDITIONAL_SECTIONS.includes(path)) {
+    } else if (!Object.hasOwn(CONDITIONAL_SECTIONS, path)) {
       sections.push({ path, mandatory: true, status: 'missing', reason: value === undefined || value === null ? 'not-set' : 'empty' });
+    } else if (Array.isArray(declaredBy) && declaredBy.length > 0) {
+      sections.push({ path, mandatory: true, status: 'missing', reason: 'unbound-snapshot' });
     }
   }
   sections.push(...omissions(body, input));

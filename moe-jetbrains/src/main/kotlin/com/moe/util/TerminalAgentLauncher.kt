@@ -1,6 +1,8 @@
 package com.moe.util
 
 import com.moe.model.AccountCli
+import com.moe.model.ReadinessFailure
+import com.moe.model.ReadinessReply
 import com.moe.services.MoeProjectService
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
@@ -13,7 +15,14 @@ import com.intellij.openapi.util.SystemInfo
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.nio.file.InvalidPathException
+import java.nio.file.Paths
+import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.swing.SwingUtilities
 
 object TerminalAgentLauncher {
@@ -113,6 +122,52 @@ object TerminalAgentLauncher {
         return ProtectedAgentRuntime.Selected(script, env)
     }
 
+    internal sealed interface ProtectedInterpreter {
+        data class Ready(val word: String) : ProtectedInterpreter
+        data class Refused(val reason: String) : ProtectedInterpreter
+    }
+
+    internal fun protectedInterpreter(
+        kind: ScriptKind,
+        wslAgents: Boolean,
+        basePath: String,
+        windows: Boolean = SystemInfo.isWindows,
+        systemRoot: String? = System.getenv("SystemRoot"),
+        bash: String = "/bin/bash",
+        subject: String = "the agent wrapper's interpreter"
+    ): ProtectedInterpreter {
+        val candidate = when {
+            !windows && kind == ScriptKind.BASH -> bash
+            windows && kind == ScriptKind.BASH && wslAgents -> {
+                // Windows cannot stat the distro's fixed /bin/bash; if absent, its shell fails without a project lookup.
+                return ProtectedInterpreter.Ready("/bin/bash")
+            }
+            windows && kind == ScriptKind.POWERSHELL -> {
+                if (systemRoot.isNullOrBlank()) return ProtectedInterpreter.Refused(
+                    "SystemRoot is not set, so Windows PowerShell cannot be found"
+                )
+                try {
+                    Paths.get(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe").toString()
+                } catch (_: InvalidPathException) {
+                    return ProtectedInterpreter.Refused("SystemRoot $systemRoot is not a valid Windows PowerShell path")
+                }
+            }
+            else -> return ProtectedInterpreter.Refused("no trusted interpreter runs the installed $kind wrapper on this host")
+        }
+        val file = when (val selection = RuntimeSelectionPolicy.installedExecutable(candidate, basePath)) {
+            is RuntimeSelection.Accepted -> selection.file
+            is RuntimeSelection.Rejected -> return ProtectedInterpreter.Refused(
+                "$subject $candidate is not an absolute regular file outside the project"
+            )
+        }
+        if (!windows) return ProtectedInterpreter.Ready(file.path)
+        val word = file.path.replace('\\', '/')
+        if (!Regex("^[A-Za-z]:(/[A-Za-z0-9._-]+)+$").matches(word)) return ProtectedInterpreter.Refused(
+            "$subject ${file.path} holds a character a terminal cannot take unquoted"
+        )
+        return ProtectedInterpreter.Ready(if (wslAgents) toWslPath(file.path) else word)
+    }
+
     /** Null under the legacy profile, so the legacy resolution runs; otherwise the installed selection or its refusal. */
     internal fun protectedAgentRuntime(
         basePath: String,
@@ -130,7 +185,8 @@ object TerminalAgentLauncher {
         val manager: Any,
         val envOverrides: Map<String, String>,
         val agentCommand: String,
-        val wslAgents: Boolean = false
+        val wslAgents: Boolean = false,
+        val interpreter: String? = null
     )
 
     private val roleTabNames = mapOf(
@@ -163,12 +219,18 @@ object TerminalAgentLauncher {
     // The protected profile runs these agent CLIs by exact name only; the wrappers accept the same set (task-aa85ff13).
     private val PROTECTED_AGENT_COMMANDS = AgentProvider.entries.filter { it != AgentProvider.CUSTOM }.map { it.command }
     private const val MAX_SHOWN_AGENT_COMMAND = 200
+    private const val VM_SEAT_NOT_PROTECTED = "Moe did not start the agent: .moe/project.json no longer asks for " +
+        "verified-local, so this worker or QA seat has no protected wrapper to run. Nothing was started; try again."
+    // The service's own bound plus margin; its future completes TIMEOUT by itself at 20 s.
+    private const val VM_READINESS_WAIT_MS = MoeProjectService.READINESS_TIMEOUT_MS + 5_000L
 
     /**
      * Under PROTECTED, repository content (.moe/project.json settings.agentCommand) and custom commands never choose
      * the binary a seat runs: only an exact known CLI name passes. LEGACY keeps explicit, then the setting, then claude.
      */
-    internal fun agentCommandFor(profile: RuntimeProfile, explicit: String?, projectSetting: String?): AgentCommandChoice {
+    internal fun agentCommandFor(profile: RuntimeProfile, explicit: String?, projectSetting: String?, vmSeat: Boolean = false): AgentCommandChoice {
+        // A VM seat runs only a CLI the guest has, whatever the profile allows on the host.
+        if (vmSeat) VerifiedLocalLaunch.agentRefusal(explicit ?: projectSetting ?: "claude")?.let { return AgentCommandChoice.Refused(it) }
         if (profile == RuntimeProfile.LEGACY) return AgentCommandChoice.Run(explicit ?: projectSetting ?: "claude")
         val candidate = (explicit ?: projectSetting)?.trim() ?: "claude"
         if (candidate in PROTECTED_AGENT_COMMANDS) return AgentCommandChoice.Run(candidate)
@@ -246,20 +308,36 @@ object TerminalAgentLauncher {
         }
     }
 
-    private fun resolveContext(project: Project, agentCommand: String? = null): AgentContext? {
+    /** [vmSeat]: a worker or QA seat on the verified-local VM route, which runs only the installed wrapper. */
+    private fun resolveContext(project: Project, agentCommand: String? = null, vmSeat: Boolean = false): AgentContext? {
         val basePath = project.basePath ?: run {
             Messages.showErrorDialog(project, "Project path not available.", "Moe")
             return null
         }
 
         val wslAgents = isWslAgentsEnabled(project)
-        val selected = when (val runtime = protectedAgentRuntime(basePath, wslAgents)) {
+        val selected = when (val runtime = protectedAgentRuntime(basePath, VerifiedLocalLaunch.preferBash(vmSeat, wslAgents))) {
             is ProtectedAgentRuntime.Refused -> {
                 Messages.showErrorDialog(project, runtime.message, "Moe")
                 return null
             }
             is ProtectedAgentRuntime.Selected -> runtime
-            null -> null
+            // Only a setting changed since the profile was read gets here; a VM seat never takes the legacy script.
+            null -> if (vmSeat) {
+                Messages.showErrorDialog(project, VM_SEAT_NOT_PROTECTED, "Moe")
+                return null
+            } else {
+                null
+            }
+        }
+        val interpreter = selected?.let {
+            when (val resolved = protectedInterpreter(it.script.kind, wslAgents, basePath)) {
+                is ProtectedInterpreter.Ready -> resolved.word
+                is ProtectedInterpreter.Refused -> {
+                    Messages.showErrorDialog(project, ProtectedAgentRuntime.Refused(resolved.reason).message, "Moe")
+                    return null
+                }
+            }
         }
         val script = selected?.script ?: resolveAgentScript(basePath, preferBash = wslAgents) ?: run {
             Messages.showErrorDialog(
@@ -292,7 +370,7 @@ object TerminalAgentLauncher {
         // `selected` is non-null exactly under PROTECTED, so project.json is not read a second time.
         val profile = if (selected != null) RuntimeProfile.PROTECTED else RuntimeProfile.LEGACY
         val projectSetting = MoeProjectService.getInstance(project).getState()?.project?.settings?.agentCommand
-        val resolvedCommand = when (val choice = agentCommandFor(profile, agentCommand, projectSetting)) {
+        val resolvedCommand = when (val choice = agentCommandFor(profile, agentCommand, projectSetting, vmSeat)) {
             is AgentCommandChoice.Run -> choice.command
             is AgentCommandChoice.Refused -> {
                 Messages.showErrorDialog(project, choice.message, "Moe")
@@ -300,18 +378,34 @@ object TerminalAgentLauncher {
             }
         }
 
-        return AgentContext(basePath, script, manager, envOverrides, resolvedCommand, wslAgents)
+        return AgentContext(basePath, script, manager, envOverrides, resolvedCommand, wslAgents, interpreter)
     }
 
-    private fun launchRole(project: Project, ctx: AgentContext, role: String, codexExec: Boolean = false) {
+    /**
+     * The only way a seat reaches the terminal manager: a [VerifiedLocalLaunch.Decision.Refused] reports through
+     * [refuse] and never touches [manager].
+     */
+    internal fun openSeat(decision: VerifiedLocalLaunch.Decision, manager: Any, basePath: String, tabName: String, refuse: (String) -> Unit): Any? =
+        when (decision) {
+            is VerifiedLocalLaunch.Decision.Refused -> null.also { refuse(decision.message) }
+            VerifiedLocalLaunch.Decision.Launch -> createTerminalWidget(manager, basePath, tabName)
+        }
+
+    private fun launchRole(project: Project, ctx: AgentContext, role: String, codexExec: Boolean = false, decision: VerifiedLocalLaunch.Decision = VerifiedLocalLaunch.Decision.Launch) {
         val tabName = roleTabNames[role] ?: "Moe $role"
-        val defaultTeamName = project.name.takeIf { it.isNotBlank() } ?: "Moe Team"
-        val teamName = if (isTeamModeEnabled(project)) defaultTeamName else null
-        val workerId = newWorkerId(role)
-        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec, ctx.wslAgents, workerId)
         try {
-            val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)
+            // Built before any tab opens, so a value the builder refuses lands in the catch below with no terminal.
+            val launch = if (decision is VerifiedLocalLaunch.Decision.Refused) null else {
+                val defaultTeamName = project.name.takeIf { it.isNotBlank() } ?: "Moe Team"
+                val teamName = if (isTeamModeEnabled(project)) defaultTeamName else null
+                val workerId = newWorkerId(role)
+                workerId to buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec, ctx.wslAgents, workerId, ctx.interpreter)
+            }
+            val widget = openSeat(decision, ctx.manager, ctx.basePath, tabName) { Messages.showErrorDialog(project, it, "Moe") }
+            // A refusal has shown its one dialog: no command is built and no terminal exists.
+            if (launch == null) return
             if (widget != null) {
+                val (workerId, command) = launch
                 if (sendCommand(widget, command)) trackSeat(project, widget, workerId)
             } else {
                 LOG.warn("Failed to create terminal widget for tab \"$tabName\"")
@@ -352,14 +446,37 @@ object TerminalAgentLauncher {
         }
     }
 
+    /** Worker and QA under verified-local: their VM-route context and the one readiness answer that decides both. */
+    private class VmSeats(val ctx: AgentContext, val readiness: CompletableFuture<ReadinessReply>) {
+        // Touched only by the launching pooled thread.
+        var decision: VerifiedLocalLaunch.Decision? = null
+    }
+
     fun startAgents(project: Project, agentCommand: String? = null) {
         val ctx = resolveContext(project, agentCommand) ?: return
+        val declared = RuntimeSelectionPolicy.declaredProfile(ctx.basePath)
+        val vm = if (VerifiedLocalLaunch.isVmSeat("worker", declared)) {
+            val vmCtx = resolveContext(project, agentCommand, vmSeat = true) ?: return
+            VmSeats(vmCtx, MoeProjectService.getInstance(project).requestExecutionReadiness())
+        } else {
+            null
+        }
         val roles = listOf("architect", "worker", "qa", "governor")
         ApplicationManager.getApplication().executeOnPooledThread {
             for ((index, role) in roles.withIndex()) {
+                val seats = vm?.takeIf { VerifiedLocalLaunch.isVmSeat(role, declared) }
+                // A refusal showed its one dialog at the first VM seat; the other opens nothing.
+                if (seats?.decision is VerifiedLocalLaunch.Decision.Refused) continue
+                val (seatCtx, decision) = if (seats == null) {
+                    ctx to VerifiedLocalLaunch.Decision.Launch
+                } else {
+                    val vmDecision = seats.decision ?: awaitVmDecision(project, seats.readiness) ?: return@executeOnPooledThread
+                    seats.decision = vmDecision
+                    seats.ctx to vmDecision
+                }
                 try {
                     SwingUtilities.invokeAndWait {
-                        launchRole(project, ctx, role)
+                        launchRole(project, seatCtx, role, decision = decision)
                     }
                 } catch (ex: InvocationTargetException) {
                     LOG.warn("Failed to launch agent terminal for role $role", ex.targetException ?: ex)
@@ -382,9 +499,38 @@ object TerminalAgentLauncher {
         }
     }
 
+    /** Bounded and never on the EDT. Null when interrupted or the project closed meanwhile. */
+    private fun awaitVmDecision(project: Project, readiness: CompletableFuture<ReadinessReply>): VerifiedLocalLaunch.Decision? {
+        val reply = try {
+            readiness.get(VM_READINESS_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (ex: InterruptedException) {
+            Thread.currentThread().interrupt()
+            LOG.warn("Interrupted while waiting for the daemon's execution readiness", ex)
+            return null
+        } catch (_: TimeoutException) {
+            ReadinessReply.Failed(ReadinessFailure.TIMEOUT)
+        } catch (_: ExecutionException) {
+            ReadinessReply.Failed(ReadinessFailure.TIMEOUT)
+        }
+        return if (project.isDisposed) null else VerifiedLocalLaunch.decide("worker and QA", reply)
+    }
+
     fun startAgent(project: Project, role: String, agentCommand: String? = null) {
-        val ctx = resolveContext(project, agentCommand) ?: return
-        launchRole(project, ctx, role)
+        val basePath = project.basePath
+        if (basePath == null || !VerifiedLocalLaunch.isVmSeat(role, RuntimeSelectionPolicy.declaredProfile(basePath))) {
+            val ctx = resolveContext(project, agentCommand) ?: return
+            launchRole(project, ctx, role)
+            return
+        }
+        val ctx = resolveContext(project, agentCommand, vmSeat = true) ?: return
+        val seat = if (role == "qa") "QA" else role
+        // The answer arrives off the EDT; the launch, or its one refusal dialog, runs on the EDT unless the project closed.
+        MoeProjectService.getInstance(project).requestExecutionReadiness().thenAccept { reply ->
+            ApplicationManager.getApplication().invokeLater(
+                { launchRole(project, ctx, role, decision = VerifiedLocalLaunch.decide(seat, reply)) },
+                project.disposed
+            )
+        }
     }
 
     /** The shell an Accounts tab command is typed into: the one agents run in. */
@@ -399,33 +545,115 @@ object TerminalAgentLauncher {
     /**
      * `node <cli.js> --accounts-file <file> <args>` with every word quoted. Under
      * WSL the daemon's Windows paths become /mnt paths for WSL's own node, so
-     * claude signs in where WSL agents run it.
+     * claude signs in where WSL agents run it. [interpreter] replaces the PowerShell line's bare `powershell`
+     * word (the protected profile's pinned System32 path); the other shells ignore it.
      */
-    internal fun buildAccountsCommand(cli: AccountCli, registryFile: String, args: List<String>, shell: AccountsShell): String =
-        when (shell) {
+    internal fun buildAccountsCommand(
+        cli: AccountCli, registryFile: String, args: List<String>, shell: AccountsShell, interpreter: String? = null
+    ): String {
+        (listOf(cli.node, cli.script, registryFile) + args).forEach { requireSafeArg("accounts command word", it) }
+        return when (shell) {
             AccountsShell.POWERSHELL -> powerShellLine(
-                "& " + (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { psQuote(it) }
+                "& " + (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { psQuote(it) },
+                interpreter ?: "powershell"
             )
             AccountsShell.WSL_BASH ->
                 "node " + (listOf(toWslPath(cli.script), "--accounts-file", toWslPath(registryFile)) + args).joinToString(" ") { shQuote(it) }
             AccountsShell.BASH ->
                 (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { shQuote(it) }
         }
+    }
+
+    /**
+     * The protected WSL Accounts program, typed after the fixed /bin/bash: WSL's node has no fixed system path. Bash
+     * builtins only, then `exec node`. It applies protected_trusted_dir from scripts/moe-agent.sh and scripts/moe-call.sh
+     * (task-0b2ea570): keep, as real paths and in order, the absolute PATH entries whose real path is neither the project
+     * ($1) nor under it, walking ancestors with -ef so a link cannot hide the project. Keeping nothing refuses, because an
+     * empty PATH makes bash search the cwd, which is the project. No ', backslash or ! so bash, zsh and fish type it alike.
+     */
+    internal const val PROTECTED_WSL_NODE_PROGRAM = "f() { echo \"[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start.\" >&2; exit 1; }; p=\$(cd -- \"\$1\" 2>/dev/null && pwd -P) || f; shift; k=; IFS=: read -r -a e <<< \"\$PATH\"; for d in \"\${e[@]}\"; do case \$d in /*) ;; *) continue ;; esac; r=\$(cd -- \"\$d\" 2>/dev/null && pwd -P) || continue; u=\$r; while :; do [ \"\$u\" -ef \"\$p\" ] && continue 2; [ \"\$u\" = / ] && break; u=\${u%/*}; u=\${u:-/}; done; k=\${k:+\$k:}\$r; done; [ -n \"\$k\" ] || f; PATH=\$k; exec node \"\$@\""
+
+    /**
+     * The accounts CLI option every protected Accounts line passes with the project
+     * (packages/moe-daemon/src/accounts/cli.ts, task-55710898): the CLI then runs claude only from outside the
+     * project, with PATH = those entries and cwd = the home folder, or refuses before anything runs.
+     */
+    internal const val PROTECTED_PROJECT_OPTION = "--protected-project"
+
+    private fun protectedAccountsRefusal(reason: String): Nothing = throw IllegalArgumentException(
+        "Protected execution profile: $reason. Moe runs account commands only with an interpreter outside the project, so nothing was started."
+    )
+
+    /**
+     * `/bin/bash -c <PROTECTED_WSL_NODE_PROGRAM> moe-accounts <project> <cli.js> --accounts-file <registry>
+     * --protected-project <project> ...`: WSL's own node, found only outside the project, and the CLI's claude too.
+     */
+    private fun protectedWslAccountsCommand(cli: AccountCli, registryFile: String, args: List<String>, basePath: String): String {
+        if (!Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(basePath)) {
+            protectedAccountsRefusal("the project $basePath has no /mnt path in WSL, so WSL's node cannot be checked against it")
+        }
+        val project = toWslPath(basePath)
+        val words = listOf(toWslPath(cli.script), "--accounts-file", toWslPath(registryFile), PROTECTED_PROJECT_OPTION, project) + args
+        (listOf(project) + words).forEach { requireSafeArg("accounts command word", it) }
+        val word = when (val resolved = protectedInterpreter(ScriptKind.BASH, wslAgents = true, basePath = basePath, windows = true)) {
+            is ProtectedInterpreter.Ready -> resolved.word
+            is ProtectedInterpreter.Refused -> protectedAccountsRefusal(resolved.reason)
+        }
+        return shQuote(word) + " -c " + shQuote(PROTECTED_WSL_NODE_PROGRAM) + " moe-accounts " + shQuote(project) + " " +
+            words.joinToString(" ") { shQuote(it) }
+    }
+
+    /**
+     * LEGACY: [buildAccountsCommand] unchanged. PROTECTED: no interpreter is looked up through the project cwd or PATH.
+     * Native routes type the real path of [cli]'s node, checked outside the project, and Windows the pinned System32
+     * PowerShell; WSL runs [PROTECTED_WSL_NODE_PROGRAM]. Every route passes [PROTECTED_PROJECT_OPTION] and the project
+     * after the registry, so the CLI's own claude lookup skips the project too. A refusal throws IllegalArgumentException.
+     */
+    internal fun accountsCommandFor(
+        profile: RuntimeProfile,
+        cli: AccountCli,
+        registryFile: String,
+        args: List<String>,
+        shell: AccountsShell,
+        basePath: String,
+        systemRoot: String? = System.getenv("SystemRoot")
+    ): String {
+        if (profile == RuntimeProfile.LEGACY) return buildAccountsCommand(cli, registryFile, args, shell)
+        if (shell == AccountsShell.WSL_BASH) return protectedWslAccountsCommand(cli, registryFile, args, basePath)
+        val interpreter = if (shell != AccountsShell.POWERSHELL) null else when (val resolved = protectedInterpreter(
+            ScriptKind.POWERSHELL, wslAgents = false, basePath = basePath, systemRoot = systemRoot, subject = "the Accounts command's PowerShell"
+        )) {
+            is ProtectedInterpreter.Ready -> resolved.word
+            is ProtectedInterpreter.Refused -> protectedAccountsRefusal(resolved.reason)
+        }
+        val node = when (val selection = RuntimeSelectionPolicy.installedExecutable(cli.node, basePath)) {
+            is RuntimeSelection.Accepted -> selection.file.path
+            is RuntimeSelection.Rejected ->
+                protectedAccountsRefusal("the Accounts command's node ${cli.node} is not an absolute regular file outside the project")
+        }
+        return buildAccountsCommand(cli.copy(node = node), registryFile, listOf(PROTECTED_PROJECT_OPTION, basePath) + args, shell, interpreter)
+    }
 
     /** The accounts CLI line for this project's agent shell, for a person to run when no terminal tab can. */
-    fun accountsCommandLine(project: Project, cli: AccountCli, registryFile: String, args: List<String>): String =
-        buildAccountsCommand(cli, registryFile, args, accountsShellFor(SystemInfo.isWindows, isWslAgentsEnabled(project)))
+    fun accountsCommandLine(project: Project, cli: AccountCli, registryFile: String, args: List<String>): String {
+        val basePath = project.basePath ?: ""
+        val shell = accountsShellFor(SystemInfo.isWindows, isWslAgentsEnabled(project))
+        return accountsCommandFor(RuntimeSelectionPolicy.profile(basePath), cli, registryFile, args, shell, basePath)
+    }
 
     /**
      * Runs the daemon's `accounts` CLI in a new terminal tab (sign in, check, sign
      * out): claude's own sign-in prompts need a person, and the daemon never runs
-     * claude. False when no terminal tab could run it.
+     * claude. False when no terminal tab could run it. Throws IllegalArgumentException,
+     * before any tab opens, for a word holding a control character, or when the
+     * protected profile has no trusted interpreter for the line.
      */
     fun runAccountsCommand(project: Project, cli: AccountCli, registryFile: String, args: List<String>, tabName: String): Boolean {
+        val line = accountsCommandLine(project, cli, registryFile, args)
         val manager = resolveTerminalManager(project) ?: return false
         val workingDir = project.basePath ?: System.getProperty("user.home")
         val widget = runCatching { createTerminalWidget(manager, workingDir, tabName) }.getOrNull() ?: return false
-        return sendCommand(widget, accountsCommandLine(project, cli, registryFile, args))
+        return sendCommand(widget, line)
     }
 
     private fun buildCommand(
@@ -437,26 +665,28 @@ object TerminalAgentLauncher {
         teamName: String? = null,
         codexExec: Boolean = false,
         wslAgents: Boolean = false,
-        workerId: String = newWorkerId(role)
+        workerId: String = newWorkerId(role),
+        interpreter: String? = null
     ): String {
         if (wslAgents) {
             return when (script.kind) {
                 // Genuine Linux run: bash script + /mnt/<drive>/ paths, typed into
                 // the user's WSL terminal profile.
                 ScriptKind.BASH -> buildWslBashCommand(
-                    basePath, role, script.file.absolutePath, envOverrides, agentCommand, teamName, codexExec, workerId
+                    basePath, role, script.file.absolutePath, envOverrides, agentCommand, teamName, codexExec, workerId, interpreter
                 )
                 // Graceful degrade when only the .ps1 exists: run it on the Windows
-                // side via WSL interop, with bash-safe escaping so the line survives
-                // being typed into a bash prompt.
-                ScriptKind.POWERSHELL -> bashWrapPowerShell(
-                    buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec, workerId)
-                )
+                // side via WSL interop. The line is only base64 after its prefix, so
+                // it needs no bash escaping to survive a bash prompt.
+                ScriptKind.POWERSHELL -> {
+                    val line = buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec, workerId, interpreter)
+                    if (interpreter != null) line else bashWrapPowerShell(line)
+                }
             }
         }
         return when (script.kind) {
-            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec, workerId)
-            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file.absolutePath, envOverrides, agentCommand, teamName, codexExec, workerId)
+            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec, workerId, interpreter)
+            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file.absolutePath, envOverrides, agentCommand, teamName, codexExec, workerId, interpreter)
         }
     }
 
@@ -468,7 +698,8 @@ object TerminalAgentLauncher {
         agentCommand: String,
         teamName: String? = null,
         codexExec: Boolean = false,
-        workerId: String = newWorkerId(role)
+        workerId: String = newWorkerId(role),
+        interpreter: String? = null
     ): String = buildBashCommand(
         toWslPath(basePath),
         role,
@@ -477,7 +708,16 @@ object TerminalAgentLauncher {
         agentCommand,
         teamName,
         codexExec,
-        workerId
+        workerId,
+        interpreter
+    )
+
+    internal fun buildCommandForTest(
+        basePath: String, role: String, scriptPath: String, kind: ScriptKind, envOverrides: Map<String, String>,
+        agentCommand: String, teamName: String?, wslAgents: Boolean, workerId: String, interpreter: String? = null
+    ): String = buildCommand(
+        basePath, role, ResolvedScript(File(scriptPath), ScriptSource.BUNDLED, kind), envOverrides, agentCommand, teamName,
+        wslAgents = wslAgents, workerId = workerId, interpreter = interpreter
     )
 
     internal fun buildWslBashCommandForTest(
@@ -491,24 +731,12 @@ object TerminalAgentLauncher {
     ): String = buildWslBashCommand(basePath, role, scriptPath, envOverrides, agentCommand, teamName, codexExec)
 
     /**
-     * Convert a `powershell -NoProfile ... -Command "..."` line (backtick-escaped
-     * for a PowerShell host) into one that survives a bash prompt: interop needs
-     * the .exe suffix, and bash double quotes eat `$`, backticks, and `"` unless
-     * backslash-escaped. The PowerShell-level backtick escaping is first undone,
-     * then re-escaped for bash.
+     * Convert a `powershell -NoProfile ... -EncodedCommand <base64>` line into one that survives a bash prompt:
+     * interop needs only the .exe suffix, because base64 holds no `$`, backtick, quote or `!` for bash to expand.
+     * Any other line is returned unchanged.
      */
-    internal fun bashWrapPowerShell(psLine: String): String {
-        val prefix = "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
-        if (!psLine.startsWith(prefix) || !psLine.endsWith("\"")) return psLine
-        val inner = psLine.removePrefix(prefix).removeSuffix("\"")
-            .replace("`\"", "\"").replace("`\$", "\$")
-        val bashEscaped = inner
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\$", "\\\$")
-            .replace("`", "\\`")
-        return "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$bashEscaped\""
-    }
+    internal fun bashWrapPowerShell(psLine: String): String =
+        if (psLine.startsWith(POWERSHELL_LINE_PREFIX)) "powershell.exe" + psLine.removePrefix("powershell") else psLine
 
     private fun buildPowerShellCommand(
         basePath: String,
@@ -518,8 +746,10 @@ object TerminalAgentLauncher {
         agentCommand: String,
         teamName: String? = null,
         codexExec: Boolean = false,
-        workerId: String = newWorkerId(role)
+        workerId: String = newWorkerId(role),
+        interpreter: String? = null
     ): String {
+        requireSafeLaunchArgs(script.absolutePath, basePath, workerId, agentCommand, teamName, envOverrides)
         val projectArg = psQuote(basePath)
         val scriptArg = psQuote(script.absolutePath)
         val commandArg = psQuote(agentCommand)
@@ -545,15 +775,21 @@ object TerminalAgentLauncher {
         } else ""
         val interactiveArg = if (shouldLaunchClaudeInteractive(role, agentCommand, codexExec)) " -Interactive" else ""
         return powerShellLine(
-            "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$execArg$interactiveArg"
+            "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$execArg$interactiveArg",
+            interpreter ?: "powershell"
         )
     }
 
-    /** Runs [psCommand] in a fresh `powershell`, escaped for the PowerShell prompt it is typed into. */
-    private fun powerShellLine(psCommand: String): String {
-        val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
-        return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
-    }
+    private const val POWERSHELL_LINE_PREFIX = "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
+
+    /**
+     * Runs [psCommand] in a fresh `powershell`. The typed line holds only base64 (of UTF-16LE, never UTF_16, which
+     * writes a BOM) after the trusted executable and fixed flags, so no argument value reaches the outer shell (PowerShell,
+     * cmd, or bash under WSL), nor Windows PowerShell 5.1's native argument passing, which drops a plain `"`. This is
+     * the form VS Code's AgentLauncher and AccountsTreeProvider type. [psQuote] still guards the decoded script.
+     */
+    private fun powerShellLine(psCommand: String, exe: String = "powershell"): String =
+        "$exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + Base64.getEncoder().encodeToString(psCommand.toByteArray(Charsets.UTF_16LE))
 
     /**
      * Gate: when does JetBrains opt a role into Claude's interactive TUI?
@@ -613,8 +849,10 @@ object TerminalAgentLauncher {
         agentCommand: String,
         teamName: String? = null,
         codexExec: Boolean = false,
-        workerId: String = newWorkerId(role)
+        workerId: String = newWorkerId(role),
+        interpreter: String? = null
     ): String {
+        requireSafeLaunchArgs(scriptPath, basePath, workerId, agentCommand, teamName, envOverrides)
         val projectArg = shQuote(basePath)
         val scriptArg = shQuote(scriptPath)
         val commandArg = shQuote(agentCommand)
@@ -640,11 +878,31 @@ object TerminalAgentLauncher {
             }
         } else ""
         val interactiveArg = if (shouldLaunchClaudeInteractive(role, agentCommand, codexExec)) " --interactive" else ""
-        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg$execArg$interactiveArg"
+        val word = interpreter?.let { shQuote(it) } ?: "bash"
+        return "$envPrefix$word $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg$execArg$interactiveArg"
     }
 
+    // Every word is typed into the shell's line editor: CR/LF end the line, and Ctrl-U or Ctrl-W erase the quoting before them.
+    private fun requireSafeArg(label: String, value: String) =
+        require(value.none { it < ' ' || it == '\u007f' }) { "Invalid $label: contains control characters" }
+
+    private fun requireSafeLaunchArgs(
+        scriptPath: String, basePath: String, workerId: String, agentCommand: String, teamName: String?, envOverrides: Map<String, String>
+    ) {
+        requireSafeArg("script path", scriptPath)
+        requireSafeArg("project path", basePath)
+        requireSafeArg("worker id", workerId)
+        requireSafeArg("command", agentCommand)
+        if (teamName != null) requireSafeArg("team name", teamName)
+        envOverrides.forEach { (key, value) -> requireSafeArg("env $key", value) }
+    }
+
+    // PowerShell reads ', U+2018, U+2019, U+201A and U+201B as single quotes, so each is doubled: the rule of
+    // CodeGeneration.EscapeSingleQuotedStringContent. A doubled pair reads back as one copy of itself.
+    private val PS_SINGLE_QUOTE = Regex("['‘’‚‛]")
+
     private fun psQuote(value: String): String {
-        return "'" + value.replace("'", "''") + "'"
+        return "'" + value.replace(PS_SINGLE_QUOTE) { it.value + it.value } + "'"
     }
 
     private fun shQuote(value: String): String {

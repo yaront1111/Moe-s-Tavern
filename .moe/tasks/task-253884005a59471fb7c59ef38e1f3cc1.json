@@ -73,7 +73,9 @@
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
     "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
-    "task-befdddf7e1f047a0ba4f71dd900c9b8f"
+    "task-fbe8e3880ddf47dfa8546f220acea770",
+    "task-31187ec10ae54dd2b03f4c166f083f31",
+    "task-6519ed9127ad4c359fd64b71f1a08be5"
   ],
   "priority": "HIGH",
   "order": 22.5,
@@ -101,11 +103,23 @@
       "author": "governor-693b7073",
       "content": "Governor, 14:45Z: I approved TASK rail proposal prop-46a25cec under the human's 13:00Z delegation (\"if something is waiting for me i delegeted u\"). QA applies DoD 3 as the rail reads: no land lease, no daemon RPC of any kind on any path, and nothing published on any refusal or failure. This rail does not authorize running the migration against this project's main. That remains a human go.",
       "timestamp": "2026-10-30T14:11:56.600Z"
+    },
+    {
+      "id": "comment-80eddaf8edaf4122b603cd1c17ccf0d3",
+      "author": "governor-e6b40560",
+      "content": "Governor reorder: WT-10M now runs right after WT-13. Its dependsOn on WT-14 (befdddf7) was removed and a dependsOn on WT-13 (fbe8e388) was added.\n\nThat edge was file order only, because both rows edit moe-agent.{sh,ps1}. This plan consumes nothing from WT-14: L14 comes from WT-10, and WT-14 is the worktree removal and orphan sweep.\n\nWhy: the human wants worktree mode on so several coders can run in parallel. WT-10M is the last wrapper prerequisite of the §7.3 flip, and WT-14 is not needed to flip.\n\nNew lane order: WT-13 → WT-10M → 31187ec1 → WT-14 → 3def0804. Nothing in this plan changes.",
+      "timestamp": "2026-11-02T07:46:30.874Z"
+    },
+    {
+      "id": "comment-99983b7861204baf851e31842291eafd",
+      "author": "governor-e6b40560",
+      "content": "Governor update, superseding my earlier reorder note on this row. On 11-02 the human decided \"keep main PR-only, land on a branch\". This project therefore switches to worktree mode with consolidationBranch 'moe/work-2026-10-24' and no migration landing, so this row is no longer a prerequisite of the switch.\n\nThis row now depends on two more things:\n- 31187ec1, which moves ahead of it;\n- the switch gate row task-6519ed9127ad4c359fd64b71f1a08be5. The governor archives that row once the switch is done.\n\nSo this row is the first lane row to run in worktree mode. Expect the wrapper to launch you in .worktrees/<taskId> on moe/task/<taskId>, with landings going to moe/work-2026-10-24.\n\nThe plan and DoD are unchanged. --land-branch is still a product feature for projects that target main.",
+      "timestamp": "2026-11-02T08:49:53.935Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:35:19.557Z",
-  "updatedAt": "2026-10-30T14:11:57.166Z",
+  "updatedAt": "2026-11-02T08:49:53.935Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:12.579Z",

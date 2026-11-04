@@ -32,6 +32,7 @@ import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { sanitizeString } from '../util/sanitize.js';
 import { atomicWriteJson } from '../util/atomicWrite.js';
+import { notFound } from '../util/errors.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { parseRawMentions } from '../util/mentionRouter.js';
 import { MAX_CHAT_MESSAGE_BYTES, isSystemFeedMessage } from '../util/chatPayload.js';
@@ -173,6 +174,12 @@ export async function sendMessage(state: StateManager, opts: {
   content: string;
   replyTo?: string;
   decisionId?: string;
+  /**
+   * false: the content echoes text an agent wrote (a step description), so a tag
+   * it spells is not the sender addressing anyone. Record no mentions and route
+   * to no seat; the router is not consulted. Default true.
+   */
+  parseMentions?: boolean;
 }): Promise<{ message: ChatMessage; routingTargets: string[] }> {
   const channel = state.channels.get(opts.channel);
   if (!channel) throw new Error(`Channel not found: ${opts.channel}`);
@@ -187,22 +194,26 @@ export async function sendMessage(state: StateManager, opts: {
 
   // One parser, imported — this used to be a second copy of the router's regex
   // kept in sync by comment, which is how the two drifted apart on quoting.
-  const rawMentions = parseRawMentions(content);
+  const addressesSeats = opts.parseMentions !== false;
+  const rawMentions = addressesSeats ? parseRawMentions(content) : [];
 
   // Compute routing targets via MentionRouter (expands @all, applies loop guards)
-  let routingTargets: string[];
-  try {
-    const allWorkers = Array.from(state.workers.values());
-    const allTeams = Array.from(state.teams.values());
-    const tempMessage: ChatMessage = {
-      id: '', channel: opts.channel, sender: opts.sender,
-      content, replyTo: opts.replyTo ?? null, mentions: rawMentions, timestamp: ''
-    };
-    const routingResult = state.mentionRouter.route(tempMessage, allWorkers, allTeams);
-    routingTargets = routingResult.targets;
-  } catch {
-    // Fall back to raw mentions on MentionRouter errors
-    routingTargets = rawMentions;
+  // The router re-parses the content itself, so an echo skips it altogether.
+  let routingTargets: string[] = [];
+  if (addressesSeats) {
+    try {
+      const allWorkers = Array.from(state.workers.values());
+      const allTeams = Array.from(state.teams.values());
+      const tempMessage: ChatMessage = {
+        id: '', channel: opts.channel, sender: opts.sender,
+        content, replyTo: opts.replyTo ?? null, mentions: rawMentions, timestamp: ''
+      };
+      const routingResult = state.mentionRouter.route(tempMessage, allWorkers, allTeams);
+      routingTargets = routingResult.targets;
+    } catch {
+      // Fall back to raw mentions on MentionRouter errors
+      routingTargets = rawMentions;
+    }
   }
 
   const message: ChatMessage = {
@@ -249,6 +260,15 @@ export async function sendMessage(state: StateManager, opts: {
 }
 
 /**
+ * The newest bytes of a channel's JSONL that getMessages reads, and that
+ * messageExistsInChannel checks. The two must agree: see messageExistsInChannel.
+ */
+export const CHAT_READ_WINDOW_BYTES = 1024 * 1024;
+
+/** Chunk size of messageExistsAnywhereInChannel's whole-file scan (exported for its test). */
+export const MESSAGE_SCAN_CHUNK_BYTES = 256 * 1024;
+
+/**
  * Read up to the last `maxBytes` of a JSONL file. Truncates any partial
  * leading line so callers always receive complete JSON records.
  * TODO: replace with a per-channel offset index for true cursor-based reads.
@@ -288,12 +308,12 @@ export async function getMessages(state: StateManager,
   const messagesFile = path.join(state.moePath, 'messages', `${channelId}.jsonl`);
   if (!fs.existsSync(messagesFile)) return [];
 
-  // Bound the read to the last 1 MB of the JSONL file to avoid loading
-  // arbitrarily large channels into memory.
+  // Bound the read to the newest CHAT_READ_WINDOW_BYTES of the JSONL file to
+  // avoid loading arbitrarily large channels into memory.
   // TODO: replace with a per-channel index so old messages remain reachable.
   let raw: string;
   try {
-    raw = readTailJsonl(state, messagesFile, 1024 * 1024);
+    raw = readTailJsonl(state, messagesFile, CHAT_READ_WINDOW_BYTES);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return [];
@@ -340,9 +360,13 @@ export async function getMessages(state: StateManager,
 }
 
 /**
- * Check if a message exists in a channel's JSONL file.
- * Bounded to the last 1 MB — sufficient for recent-message callers
- * (e.g. pinMessage). Older messages cannot be referenced.
+ * Whether a message with this id is in the NEWEST CHAT_READ_WINDOW_BYTES (1 MiB)
+ * of the channel's JSONL: the same window getMessages reads. Bounded on purpose.
+ * chat_read's all-channel mode and chat_wait's catch-up (collectChatBacklog) ask
+ * it whether getMessages can page from an explicit sinceId; an id older than the
+ * window would trip getMessages' expired-cursor fallback and replay the newest
+ * window on every call. A check that must find a message whatever its age
+ * (chat_send's replyTo, pinMessage) uses messageExistsAnywhereInChannel.
  */
 export function messageExistsInChannel(state: StateManager, channelId: string, messageId: string): boolean {
   const messagesFile = path.join(state.moePath, 'messages', `${channelId}.jsonl`);
@@ -350,7 +374,7 @@ export function messageExistsInChannel(state: StateManager, channelId: string, m
 
   let raw: string;
   try {
-    raw = readTailJsonl(state, messagesFile, 1024 * 1024);
+    raw = readTailJsonl(state, messagesFile, CHAT_READ_WINDOW_BYTES);
   } catch {
     return false;
   }
@@ -368,19 +392,82 @@ export function messageExistsInChannel(state: StateManager, channelId: string, m
 }
 
 /**
+ * Whether the channel's JSONL holds a message with this id ANYWHERE in the file,
+ * whatever its age: chat_send's replyTo check and pinMessage. The newest window
+ * is checked first (most references are recent); on a miss the whole file is
+ * read in MESSAGE_SCAN_CHUNK_BYTES chunks, and only a line whose bytes contain
+ * the id as a JSON string is decoded and parsed, so memory stays at one chunk
+ * plus one line (sendMessage caps a line's content at 10 KB). A match is the
+ * line's `id`: the same id in another line's replyTo or content is not one.
+ * A missing file holds nothing; any other read error is thrown, so an
+ * unreadable log never reads as "no such message".
+ */
+export function messageExistsAnywhereInChannel(state: StateManager, channelId: string, messageId: string): boolean {
+  if (messageExistsInChannel(state, channelId, messageId)) return true;
+  const messagesFile = path.join(state.moePath, 'messages', `${channelId}.jsonl`);
+  const needle = Buffer.from(JSON.stringify(messageId), 'utf-8');
+  let fd: number;
+  try {
+    fd = fs.openSync(messagesFile, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  try {
+    const chunk = Buffer.allocUnsafe(MESSAGE_SCAN_CHUNK_BYTES);
+    let carry = Buffer.alloc(0); // the unfinished last line of the bytes read so far
+    for (let position = 0; ;) {
+      const read = fs.readSync(fd, chunk, 0, chunk.length, position);
+      position += read;
+      const data = carry.length > 0 ? Buffer.concat([carry, chunk.subarray(0, read)]) : chunk.subarray(0, read);
+      // Lines end at a 0x0A byte, which never occurs inside a UTF-8 sequence. At
+      // the end of the file the last line needs no newline.
+      const complete = read > 0 ? data.lastIndexOf(0x0a) + 1 : data.length;
+      if (blockHoldsMessage(data.subarray(0, complete), needle, messageId)) return true;
+      if (read === 0) return false;
+      carry = Buffer.from(data.subarray(complete)); // a copy: `chunk` is reused
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Whether a block of whole JSONL lines holds a line whose `id` is messageId. */
+function blockHoldsMessage(block: Buffer, needle: Buffer, messageId: string): boolean {
+  for (let at = block.indexOf(needle); at >= 0; at = block.indexOf(needle, at + needle.length)) {
+    const start = block.lastIndexOf(0x0a, at) + 1;
+    const newline = block.indexOf(0x0a, at);
+    try {
+      const msg = JSON.parse(block.toString('utf-8', start, newline < 0 ? block.length : newline)) as ChatMessage;
+      if (msg?.id === messageId) return true;
+    } catch {
+      // A malformed line holds no message; keep looking.
+    }
+  }
+  return false;
+}
+
+/**
  * Post a system message about one entity (a task) to the #general channel.
  * Callers wrote these for per-task channels, so many never name the task;
  * the id is prepended unless the content already carries it.
  * Silently skips if no general channel is found. Never throws.
  */
-export async function postSystemMessage(state: StateManager, entityId: string, content: string): Promise<void> {
-  await state.postToGeneral(entityId && !content.includes(entityId) ? `${entityId}: ${content}` : content);
+export async function postSystemMessage(
+  state: StateManager, entityId: string, content: string, opts?: SystemPostOptions
+): Promise<void> {
+  const line = entityId && !content.includes(entityId) ? `${entityId}: ${content}` : content;
+  // Forward opts only when given, so a plain call keeps its one-argument shape.
+  await (opts ? state.postToGeneral(line, opts) : state.postToGeneral(line));
 }
+
+/** Options for a daemon-authored post. `parseMentions: false` marks echoed agent text. */
+export type SystemPostOptions = { parseMentions?: boolean };
 
 /**
  * Post a system message to the 'general' channel. Never throws.
  */
-export async function postToGeneral(state: StateManager, content: string): Promise<void> {
+export async function postToGeneral(state: StateManager, content: string, opts?: SystemPostOptions): Promise<void> {
   try {
     let generalChannel: ChatChannel | null = null;
     for (const ch of state.channels.values()) {
@@ -390,7 +477,12 @@ export async function postToGeneral(state: StateManager, content: string): Promi
       }
     }
     if (!generalChannel) return;
-    await state.sendMessage({ channel: generalChannel.id, sender: 'system', content });
+    // The call object stays { channel, sender, content } unless the option is
+    // false, so a spy on the plain shape still matches.
+    await state.sendMessage({
+      channel: generalChannel.id, sender: 'system', content,
+      ...(opts?.parseMentions === false ? { parseMentions: false } : {}),
+    });
   } catch (error) {
     logger.warn({ error }, 'Failed to post to general channel');
   }
@@ -399,8 +491,11 @@ export async function postToGeneral(state: StateManager, content: string): Promi
 /**
  * Post a system message to a role channel by name (e.g. 'architects').
  * Silently skips if no matching channel is found. Never throws.
+ * `opts.parseMentions: false` marks echoed agent text, as for postToGeneral.
  */
-export async function postToRoleChannel(state: StateManager, roleName: string, content: string): Promise<void> {
+export async function postToRoleChannel(
+  state: StateManager, roleName: string, content: string, opts?: SystemPostOptions
+): Promise<void> {
   try {
     let target: ChatChannel | null = null;
     for (const ch of state.channels.values()) {
@@ -410,7 +505,10 @@ export async function postToRoleChannel(state: StateManager, roleName: string, c
       }
     }
     if (!target) return;
-    await state.sendMessage({ channel: target.id, sender: 'system', content });
+    await state.sendMessage({
+      channel: target.id, sender: 'system', content,
+      ...(opts?.parseMentions === false ? { parseMentions: false } : {}),
+    });
   } catch (error) {
     logger.warn({ error, roleName }, 'Failed to post to role channel');
   }
@@ -491,9 +589,10 @@ export async function pinMessage(state: StateManager, channelId: string, message
     const channel = state.channels.get(channelId);
     if (!channel) throw new Error(`Channel not found: ${channelId}`);
 
-    // Validate messageId exists in channel (scans full JSONL, no limit)
-    if (!messageExistsInChannel(state, channelId, messageId)) {
-      throw new Error(`Message not found in channel: ${messageId}`);
+    // Validate messageId exists in the channel, whatever its age: the newest
+    // window first, then the whole JSONL (messageExistsAnywhereInChannel).
+    if (!messageExistsAnywhereInChannel(state, channelId, messageId)) {
+      throw notFound('Message', messageId);
     }
 
     const pins = readPins(state, channelId);
@@ -511,12 +610,14 @@ export async function pinMessage(state: StateManager, channelId: string, message
     pins.push(pin);
     writePins(state, channelId, pins);
     state.emit({ type: 'PINS_UPDATED', payload: { channel: channelId, pins } });
-    state.appendActivity('PIN_CREATED', { channelId, messageId, pinnedBy });
+    // pinnedBy is the validated caller on every path (chat_pin's guarded workerId, /ws 'human'),
+    // so it is also the event's actor: get_activity_log { workerId } filters on that field only.
+    state.appendActivity('PIN_CREATED', { channelId, messageId, pinnedBy }, undefined, undefined, undefined, undefined, pinnedBy);
     return pin;
   });
 }
 
-export async function unpinMessage(state: StateManager, channelId: string, messageId: string): Promise<void> {
+export async function unpinMessage(state: StateManager, channelId: string, messageId: string, actorWorkerId?: string): Promise<void> {
   await state.mutex.runExclusive(async () => {
     const channel = state.channels.get(channelId);
     if (!channel) throw new Error(`Channel not found: ${channelId}`);
@@ -528,7 +629,7 @@ export async function unpinMessage(state: StateManager, channelId: string, messa
     pins.splice(idx, 1);
     writePins(state, channelId, pins);
     state.emit({ type: 'PINS_UPDATED', payload: { channel: channelId, pins } });
-    state.appendActivity('PIN_REMOVED', { channelId, messageId });
+    state.appendActivity('PIN_REMOVED', { channelId, messageId }, undefined, undefined, undefined, undefined, actorWorkerId);
   });
 }
 
@@ -570,6 +671,13 @@ export async function createDecision(state: StateManager, opts: {
     const content = sanitizeString(opts.content, 'content', 10240);
     if (!content) throw new Error('Decision content is required');
 
+    // Checked before the write: a later sendMessage throw orphaned the decision with messageId null.
+    const postTo = opts.channel && state.channels.has(opts.channel) ? opts.channel : null;
+    const postContent = `[Decision Proposed] ${content}`;
+    if (postTo && Buffer.byteLength(postContent, 'utf-8') > MAX_CHAT_MESSAGE_BYTES) {
+      throw new Error('Message content exceeds 10KB limit');
+    }
+
     const decision: Decision = {
       id: generateId('dec'),
       proposedBy: opts.proposedBy,
@@ -589,11 +697,11 @@ export async function createDecision(state: StateManager, opts: {
     state.decisions.set(decision.id, decision);
 
     // Post a system message to the channel if provided
-    if (opts.channel && state.channels.has(opts.channel)) {
+    if (postTo) {
       const { message: msg } = await sendMessage(state, {
-        channel: opts.channel,
+        channel: postTo,
         sender: opts.proposedBy,
-        content: `[Decision Proposed] ${content}`,
+        content: postContent,
         decisionId: decision.id
       });
       decision.messageId = msg.id;

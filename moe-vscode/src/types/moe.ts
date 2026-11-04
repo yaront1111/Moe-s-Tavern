@@ -159,6 +159,15 @@ export interface Epic {
   updatedAt: string;
 }
 
+/** One moe.amend_plan_step revision of a step's text (packages/moe-daemon/src/types/schema.ts StepAmendment). */
+export interface StepAmendment {
+  amendmentId: string;
+  description: string;
+  reason?: string;
+  amendedBy?: string;
+  amendedAt?: string;
+}
+
 export interface ImplementationStep {
   stepId: string;
   description: string;
@@ -168,6 +177,10 @@ export interface ImplementationStep {
   completedAt?: string;
   note?: string;
   modifiedFiles?: string[];
+  /** Append-only amendment history; `description` stays the original text. */
+  amendments?: StepAmendment[];
+  /** The amendment in force (an amendmentId above); absent when the step was never amended. */
+  activeAmendmentId?: string;
 }
 
 export interface QAIssue {
@@ -199,10 +212,11 @@ export interface TaskMetrics {
   doneAt?: string;
 }
 
+/** release_task hand-off note, keyed as HandoffNote in packages/moe-daemon/src/types/schema.ts. */
 export interface HandoffNote {
-  from?: string;
-  to?: string;
-  createdAt?: string;
+  releasedBy?: string;
+  releasedAt?: string;
+  reason?: string;
   whatIsDone?: string;
   whatRemains?: string;
   pitfalls?: string;
@@ -236,6 +250,20 @@ export interface MetricsAggregate {
   avgReopenCount?: number;
   totalCompleted?: number;
   perEpic: EpicMetricsAggregate[];
+}
+
+/**
+ * Runner-reported delivery evidence the daemon serves on /ws as `task.delivery`
+ * (packages/moe-daemon/src/state/deliveryProjection.ts). Display only, never
+ * stored on a task. Every member is optional: the daemon omits what it cannot
+ * read, and a legacy-policy task usually carries little or nothing.
+ */
+export interface TaskDelivery {
+  currentCandidate?: { id?: string; treeSha?: string; shortSha?: string; baseRevision?: string };
+  latestCheckRun?: { command?: string; exitCode?: number; source?: string; outcome?: string };
+  requiredCheckSatisfied?: boolean;
+  deliveryReceipt?: { target?: string; landedRevision?: string };
+  attemptPhase?: string;
 }
 
 export interface Task {
@@ -288,6 +316,10 @@ export interface Task {
   blockedResourceId?: string | null;
   blockedFromStatus?: TaskStatus | null;
   blockedAt?: string | null;
+
+  // Served on /ws only, optional and nullable like the blocker fields above;
+  // the raw client passes it through untouched.
+  delivery?: TaskDelivery | null;
 }
 
 export interface Worker {
@@ -488,6 +520,7 @@ export type DaemonInboundMessage =
   | { type: 'MESSAGE_CREATED'; payload: ChatMessage }
   | { type: 'CHANNEL_CREATED'; payload: ChatChannel }
   | { type: 'PINS'; payload: { channel: string; pins: PinEntry[] } }
+  | { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }
   | { type: 'PIN_CREATED'; payload: { channel: string; pin: PinEntry } }
   | { type: 'PIN_REMOVED'; payload: { channel: string; messageId: string } }
   | { type: 'PIN_TOGGLED'; payload: { channel: string; pin: PinEntry } }
@@ -525,7 +558,7 @@ const DAEMON_MESSAGE_TYPES = new Set([
   'PROPOSAL_CREATED', 'PROPOSAL_UPDATED', 'SETTINGS_UPDATED',
   'TEAM_CREATED', 'TEAM_UPDATED', 'TEAM_DELETED',
   'CHANNELS', 'MESSAGES', 'MESSAGE_SENT', 'MESSAGE_CREATED', 'CHANNEL_CREATED',
-  'PINS', 'PIN_CREATED', 'PIN_REMOVED', 'PIN_TOGGLED',
+  'PINS', 'PINS_UPDATED', 'PIN_CREATED', 'PIN_REMOVED', 'PIN_TOGGLED',
   'DECISIONS', 'DECISION_PROPOSED', 'DECISION_RESOLVED',
   'ACTIVITY_LOG', 'ERROR', 'DAEMON_SHUTTING_DOWN'
 ]);

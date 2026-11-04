@@ -1,0 +1,52 @@
+{
+  "id": "task-5ac436aa967740d89c440d0f6f120547",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-19a] Test: pre-flip worktree dry run (parallel landings, conflict resume, candidate gate)",
+  "description": "Split from WT-19 (task-b1ca54f2716442be889a14623eb59983) DoD 5. The request is #architects msg-8285827e and the shape is architect-0fcb7226's msg-27859513. The human's go on the early worktree switch is #general msg-717a48e0.\n\nGoal: before this project switches to worktree mode, prove three things on the post-WT-10M wrapper bytes:\n- two parallel tasks and one conflict-resumed task land on main with fast-forward-only history;\n- the control checkout follows;\n- the candidate qualityGate passes in the sparse gate worktree.\nIf the run fails, the flip waits.\n\nOne new file: scripts/tests/worktree-e2e.cjs, modelled on postflight-worktree.cjs.\n- It keeps WT-19 step 2's CLI: `<sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>`.\n- It runs the real wrappers against the shared fake proxy, with no real daemon.\n- Fixture under <parent-tmp>:\n  - a `git init` repo whose first commit is this repo's HEAD tree, so the gate's scripts exist;\n  - a local bare origin;\n  - the control checkout on moe/control;\n  - settings: worktreeMode 'on', consolidationBranch 'main', and qualityGate set to the candidate `bash scripts/tests/parity-check.sh && npm run lint`.\n- Scenarios: (a) parallel and (b) conflict-resume, as WT-19 step 2 defines them.\n\nWT-19 step 2 already planned this file under the same name and CLI, and WT-19's step 6 gate line runs it. WT-19's re-check therefore runs it unchanged.\n\nWhy WT-10M alone is enough as a dependency: its chain is WT-10M → WT-13 → WT-12 → WT-11 → WT-10, so the LANDING-CONFLICT resume (WT-11) and the control follow (WT-13) are on HEAD before this row can be claimed. postflight-fake-proxy.js and postflight-worktree.cjs are lane files, so this row edits no existing file.\n\nNOT in scope:\n- any edit to an existing file;\n- this repo's main, moe/control, settings or GitHub origin;\n- the ps1 engine leg and scenario (c), the remote race. Both stay with WT-19.\n\nVerification: `node scripts/tests/worktree-e2e.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d -p /mnt/d/moe-scratch wt-e2e.XXXXXX)\" \"$(command -v bash)\"`. Widen MOE_POSTFLIGHT_TIMEOUT_SEC if drvfs is slow.",
+  "definitionOfDone": [
+    "scripts/tests/worktree-e2e.cjs is the only changed file. It has WT-19 step 2's CLI and a `cli` fake-CLI mode, prints one ok/FAILED line per scenario, exits 1 on any failure, and never prints SKIP.",
+    "Parallel: two seats launched at once land task-a and task-b. main gains exactly two commits, `git log --first-parent main` is linear, every refs/heads/main reflog entry is a fast-forward, local main equals the bare origin's main, and neither worktree holds .moe.",
+    "Conflict-resume: task-c's first attempt ends unlanded (main does not move; finalize_attempt records outcome 'unlanded'). Its second session gets the LANDING-CONFLICT prompt, resolves it and lands. History stays linear and fast-forward only.",
+    "Control follows: after every landing, moe/control's HEAD equals main and `git status` is clean, MOE_CONTROL_ADVANCED is printed, and none of WT-13's MOE_CONTROL_NOT_FOLLOWING, MOE_CONTROL_CHECKOUT_BEHIND or MOE_CONTROL_CHECKOUT_DIVERGED appears.",
+    "Gate: every landing runs `bash scripts/tests/parity-check.sh && npm run lint` in the wrapper's gate workspace and prints the wrapper's gate-pass line. The gate string is prefixed with a probe proving the workspace holds no .moe/.",
+    "The verification command exits 0 with <parent-tmp> under /mnt/d/moe-scratch, run from a HEAD snapshot that contains WT-10M's landing. The summary records that sha, the output tail and each scenario's wall time."
+  ],
+  "taskRails": [
+    "Run from a HEAD snapshot with the new file copied in and cmp-checked (Serena gotcha-gate-hermetic-snapshot-from-wsl). This keeps 31187ec1's and WT-14's in-flight wrapper edits out.",
+    "Handle any missing fake-proxy behaviour inside the new file.",
+    "Clean up only <parent-tmp>.",
+    "A wrapper defect becomes a bug: row in this epic, with the output. Never weaken an assertion."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Superseded by WT-19b (task-48aafb880ede4b22a3e26115c07f8470). The human decided on 11-02 \"keep main PR-only, land on a branch\", so this project's worktree target is consolidationBranch 'moe/work-2026-10-24' and there is no migration landing. This row's DoD asserted on main and required a post-WT-10M snapshot. WT-19b keeps the same scope, depends on WT-13 and uses a slash-named non-main target. No plan was submitted and no work was lost.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-253884005a59471fb7c59ef38e1f3cc1"
+  ],
+  "priority": "HIGH",
+  "order": 26.8,
+  "comments": [
+    {
+      "id": "comment-aa1387af10834b6b85b79edd2392804f",
+      "author": "governor-e6b40560",
+      "content": "@architect-0fcb7226 HOLD: please don't submit a plan for this row. It is superseded by a human decision just now: \"keep main PR-only, land on a branch\".\n\nWhat changes:\n- This project's worktree target becomes consolidationBranch 'moe/work-2026-10-24'. It is slash-named, it isn't main, and it already contains everything.\n- So there is no migration landing, and WT-10M is no longer a flip prerequisite.\n\nThis row's DoD assumes the opposite on both counts. DoD 2-4 assert on main, and DoD 6 requires a snapshot containing WT-10M's landing. A DoD can't be edited, so I'm archiving this row and re-filing it as **WT-19b**. WT-19b keeps your text, with three changes:\n- It depends on WT-13.\n- Its fixture target is a slash-named non-main branch, while main must never move.\n- Its snapshot must contain WT-13.\n\nYour exploration carries over unchanged. The new id follows in #architects.",
+      "timestamp": "2026-11-02T08:47:45.090Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T08:13:06.641Z",
+  "updatedAt": "2026-11-02T08:48:09.859Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T08:43:56.916Z"
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226"
+  ]
+}

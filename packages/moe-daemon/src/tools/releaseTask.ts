@@ -1,7 +1,8 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { HandoffNote } from '../types/schema.js';
-import { invalidInput, missingRequired, notFound } from '../util/errors.js';
+import { invalidInput, missingRequired, notAllowed, notFound } from '../util/errors.js';
+import { workerHasRole } from '../util/workerRole.js';
 import {
   assertNoLiveLease,
   assertReleaseCaller,
@@ -82,7 +83,14 @@ function clampOptional(value: unknown, field: string, max = MAX_HANDOFF_FIELD_LE
 export function releaseTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.release_task',
-    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — but NEVER on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. One exception to in-place routing: the 3rd release in 24h whose handoffNote.whatIsDone reports no progress ("nothing"/"none"/"n/a") parks the task to BACKLOG for human triage and returns cascadeTriggered:true (disable via settings.refusalCascadeAutoBacklog:false). To pull a task OUT of the agent pool yourself, have a human/governor use moe.set_task_status → BACKLOG.',
+    // Mutex opt-out (tools/index.ts ToolDefinition.blocking): a handoffNote's
+    // disk-state capture spawns `git status` (util/diskState.ts, killed at 3 s)
+    // before the handler's state.runExclusive; a dispatch-level wrap would hold
+    // the fleet-wide mutex across it. The ownership gates and every write stay
+    // inside that runExclusive; before it the handler only validates input,
+    // checks the caller's role for force and captures.
+    blocking: true,
+    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Ownership: a caller that supplies workerId may release only the row it holds (RELEASE_NOT_ASSIGNEE otherwise); only an omitted workerId (a human or the board) may release a row another worker holds, and only between steps (STEP_LEASE_HELD while a step is IN_PROGRESS) unless force; a supplied workerId that is blank or not a string is refused INVALID_INPUT. A row the qa_reject hard cap parked for human review (needsHumanReview) refuses any supplied workerId with NOT_ALLOWED; only the workerId-less human/board path unparks it. NEVER release on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. One exception to in-place routing: the 3rd release in 24h whose handoffNote.whatIsDone reports no progress ("nothing"/"none"/"n/a") parks the task to BACKLOG for human triage and returns cascadeTriggered:true (disable via settings.refusalCascadeAutoBacklog:false). To pull a task OUT of the agent pool yourself, have a human/governor use moe.set_task_status → BACKLOG.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -103,7 +111,7 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
         force: {
           type: 'boolean',
-          description: 'Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. Both parties are named in the banner and the result, so the strip is auditable. Without it, a release by a non-assignee is refused (RELEASE_NOT_ASSIGNEE) and a live step lease is refused (STEP_LEASE_HELD).'
+          description: 'Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. Both parties are named in the banner and the result, so the strip is auditable. Without it, a release by a non-assignee is refused (RELEASE_NOT_ASSIGNEE) and a live step lease is refused (STEP_LEASE_HELD). A caller whose workerId resolves to no governor role (team role, else the id prefix) is refused NOT_ALLOWED; a human or the board omits workerId.'
         },
         attemptId: {
           type: 'string',
@@ -138,6 +146,25 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         throw missingRequired('taskId');
       }
       const force = params.force === true;
+      // Only an omitted workerId is the human/board path. Explicit blank or
+      // non-string values bypass proxy injection, not this role check. Refuse
+      // before task reads or writes; an assignee never needs force on its row.
+      if (force && params.workerId !== undefined) {
+        const callerId = typeof params.workerId === 'string' ? params.workerId : '';
+        if (!workerHasRole(state, callerId, 'governor')) {
+          throw notAllowed(
+            'release_task',
+            `force is the governor/human crash-recovery override (worker ${callerId || '(none)'} is not a governor)`
+          );
+        }
+      }
+      // Without force too, only an omitted workerId is the human/board path: the
+      // proxy injects MOE_WORKER_ID into an absent key only, so a supplied blank or
+      // non-string id bypassed injection. Refuse it before any read or write
+      // rather than read it as the human (assertReleaseCaller skips a falsy caller).
+      if (params.workerId !== undefined && (typeof params.workerId !== 'string' || params.workerId.trim() === '')) {
+        throw invalidInput('workerId', 'must be a non-blank worker id when supplied; a human or the board omits it');
+      }
       // Bounded before use: an ATTEMPT_SUPERSEDED refusal echoes the presented id.
       if (typeof params.attemptId === 'string' && params.attemptId.length > MAX_ATTEMPT_ID_LEN) {
         throw invalidInput('attemptId', `must be at most ${MAX_ATTEMPT_ID_LEN} characters`);
@@ -222,6 +249,12 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           // unpark paths for a qa_reject-capped task (see schema.ts).
           const correctedStatus = task.status === 'WORKING' ? nextStatusForRelease(task) : task.status;
           const unparking = task.needsHumanReview === true;
+          // The unpark is a human path: a seat (any supplied workerId) cannot put
+          // a row the qa_reject hard cap parked back into the QA queue. Refused
+          // before any write; the /ws RELEASE_TASK path sends no workerId.
+          if (unparking && params.workerId) {
+            throw notAllowed('release_task', `Task ${task.id} is parked for human review; only a human (no workerId) can release it back into the QA queue.`);
+          }
           if (correctedStatus === task.status && !normalizedHandoff && !unparking) {
             return {
               success: true,
@@ -246,12 +279,14 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
             repairUpdates.priorHandoffs = repairedHandoffs;
           }
 
-          const repaired = await state.updateTask(task.id, repairUpdates, 'WORKER_RELEASED');
+          const repaired = await state.updateTask(task.id, repairUpdates, 'WORKER_RELEASED', params.workerId);
 
           if (correctedStatus !== task.status) {
             const msg = `🔧 task ${repaired.id} was unassigned but stuck in ${task.status}; auto-routed to ${correctedStatus}`;
-            try { await state.postToGeneral(msg); } catch { /* never block tool */ }
-            try { await state.postToRoleChannel('workers', msg); } catch { /* never block tool */ }
+            // A status notice, not a page: a mention-less #workers line would
+            // otherwise route to every busy seat.
+            try { await state.postToGeneral(msg, { parseMentions: false }); } catch { /* never block tool */ }
+            try { await state.postToRoleChannel('workers', msg, { parseMentions: false }); } catch { /* never block tool */ }
           }
 
           return {
@@ -327,7 +362,7 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           updates.status = parkStatus;
         }
 
-        const updated = await state.updateTask(task.id, updates, 'WORKER_RELEASED');
+        const updated = await state.updateTask(task.id, updates, 'WORKER_RELEASED', params.workerId);
 
         // The seat is given up, so the attempt that held it ends here — keyed on
         // the release itself, never on where the routing above sent the task.
@@ -366,8 +401,12 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           chatMsg = `${baseMsg} (released without handoff)`;
           warning = 'release_task called without handoffNote; next claimer will lack context.';
         }
-        try { await state.postToGeneral(chatMsg); } catch { /* never block tool */ }
-        try { await state.postToRoleChannel('workers', chatMsg); } catch { /* never block tool */ }
+        // These copies echo agent text (the title, the reason, the handoff
+        // summaries), so a tag it spells must not page seats
+        // (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions). The
+        // #governors copy keeps parsing: it is the governor's page.
+        try { await state.postToGeneral(chatMsg, { parseMentions: false }); } catch { /* never block tool */ }
+        try { await state.postToRoleChannel('workers', chatMsg, { parseMentions: false }); } catch { /* never block tool */ }
         try { await state.postToRoleChannel('governors', chatMsg); } catch { /* never block tool */ }
 
         if (cascadeTriggered) {

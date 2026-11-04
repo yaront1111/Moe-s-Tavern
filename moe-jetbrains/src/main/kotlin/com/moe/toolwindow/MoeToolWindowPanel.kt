@@ -70,6 +70,9 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private var searchQuery: String = ""
     private var epicSortByDate: Boolean = false
     private var lastStateFingerprint: String = ""
+    /** boardTaskFingerprint of [fingerprintedTasks]: a board-unchanged snapshot reuses the same list instance. */
+    private var fingerprintedTasks: List<Task>? = null
+    private var cachedTaskFingerprint = ""
     private val columnOrder = listOf("BACKLOG", "PLANNING", "WORKING", "REVIEW", "DONE")
     private val columnPanels = mutableMapOf<String, TaskColumn>()
     private val columnContainers = mutableMapOf<String, JBPanel<JBPanel<*>>>()
@@ -466,7 +469,14 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             val boardFingerprint = runCatching {
                 // Includes planRevision/step text: this early-return otherwise hides a
                 // revision-only plan edit and leaves approvals on the old rendered snapshot.
-                val taskFingerprint = boardTaskFingerprint(state.tasks)
+                val taskFingerprint = if (state.tasks === fingerprintedTasks) {
+                    cachedTaskFingerprint
+                } else {
+                    boardTaskFingerprint(state.tasks).also {
+                        fingerprintedTasks = state.tasks
+                        cachedTaskFingerprint = it
+                    }
+                }
                 val epicFingerprint = state.epics.joinToString(",") {
                     "${it.id}:${it.title}:${it.status}:${it.order}"
                 }
@@ -529,18 +539,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 lastState?.let { updateBoard(it) }
             }
 
-            val workflowOrder = listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW", "DONE")
-            fun getNextStatus(current: String): String? {
-                val idx = workflowOrder.indexOf(current)
-                return if (idx >= 0 && idx < workflowOrder.size - 1) workflowOrder[idx + 1] else null
-            }
-            fun getPreviousStatus(current: String): String? {
-                val idx = workflowOrder.indexOf(current)
-                return if (idx > 0) workflowOrder[idx - 1] else null
-            }
-
             fun handleNext(task: Task) {
-                val nextStatus = getNextStatus(task.status) ?: return
+                val nextStatus = BoardMoves.next(task.status) ?: return
                 if (task.status == "AWAITING_APPROVAL") {
                     BoardApproval.approveRendered(project, service, task)
                 } else {
@@ -549,20 +549,12 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             }
 
             fun handleReleaseAgent(task: Task) {
-                val workerId = task.assignedWorkerId ?: return
-                val result = Messages.showYesNoDialog(
-                    project,
-                    MoeBundle.message("moe.message.releaseAgent", workerId, task.title),
-                    MoeBundle.message("moe.message.releaseAgentTitle"),
-                    Messages.getQuestionIcon()
-                )
-                if (result == Messages.YES) {
-                    service.releaseTask(task.id, MoeBundle.message("moe.message.releasedInUI"))
-                }
+                // Shared with Task Detail: a mid-step holder needs a second confirmation before force.
+                BoardRelease.releaseRendered(project, service, task)
             }
 
             fun handlePrevious(task: Task) {
-                val prevStatus = getPreviousStatus(task.status) ?: return
+                val move = BoardMoves.previous(task.status) ?: return
                 val reason = Messages.showInputDialog(
                     project,
                     MoeBundle.message("moe.message.previousReason"),
@@ -570,10 +562,13 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     Messages.getQuestionIcon()
                 )
                 if (reason.isNullOrBlank()) return
-                if (task.status == "DONE" || task.status == "REVIEW") {
-                    service.reopenTask(task.id, reason)
-                } else {
-                    service.updateTaskStatus(task.id, prevStatus, task.order)
+                when (move) {
+                    PreviousMove.Reopen -> service.reopenTask(task.id, reason)
+                    is PreviousMove.Status -> {
+                        // UPDATE_TASK carries no reason, so record it as a task comment first.
+                        service.addTaskComment(task.id, reason)
+                        service.updateTaskStatus(task.id, move.target, task.order)
+                    }
                 }
             }
 
@@ -632,8 +627,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         if (task.status == "AWAITING_APPROVAL") {
                             PlanReviewDialog(project, task, service).show()
                         } else {
-                            val nextCb = if (getNextStatus(task.status) != null) { t: Task -> handleNext(t) } else null
-                            val prevCb = if (getPreviousStatus(task.status) != null) { t: Task -> handlePrevious(t) } else null
+                            val nextCb = if (BoardMoves.hasNext(task.status)) { t: Task -> handleNext(t) } else null
+                            val prevCb = if (BoardMoves.hasPrevious(task.status)) { t: Task -> handlePrevious(t) } else null
                             TaskDetailDialog(project, task, service, onNext = nextCb, onPrevious = prevCb).show()
                         }
                     },
@@ -653,15 +648,21 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     } else null,
                     onClearColumn = if (isDone) {
                         {
-                            val doneCount = columnTasks.size
-                            val result = Messages.showYesNoDialog(
-                                project,
-                                MoeBundle.message("moe.message.archiveDone", doneCount),
-                                MoeBundle.message("moe.message.archiveDoneTitle"),
-                                Messages.getQuestionIcon()
-                            )
-                            if (result == Messages.YES) {
-                                service.archiveDoneTasks(selectedEpicId)
+                            // ARCHIVE_DONE_TASKS ignores the board search, so quote what it
+                            // will archive. Count at click time from the newest state: this
+                            // column is not rebuilt when a task the search hides reaches DONE.
+                            val epicId = selectedEpicId
+                            val doneCount = DoneColumnClear.archiveCount(lastState?.tasks ?: allTasks, epicId, columnTasks)
+                            if (doneCount != null) {
+                                val result = Messages.showYesNoDialog(
+                                    project,
+                                    MoeBundle.message("moe.message.archiveDone", doneCount),
+                                    MoeBundle.message("moe.message.archiveDoneTitle"),
+                                    Messages.getQuestionIcon()
+                                )
+                                if (result == Messages.YES) {
+                                    service.archiveDoneTasks(epicId)
+                                }
                             }
                         }
                     } else null,

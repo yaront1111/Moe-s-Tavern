@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { invalidInput, missingRequired, notFound } from '../util/errors.js';
+import { isWorkerAlive } from '../util/workerLiveness.js';
 
 export function chatJoinTool(_state: StateManager): ToolDefinition {
   return {
@@ -9,7 +10,7 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        channel: { type: 'string', description: 'Channel ID to join' },
+        channel: { type: 'string', description: 'Channel id, or name in either "general" or "#general" form' },
         workerId: { type: 'string', description: 'Your worker ID' }
       },
       required: ['channel', 'workerId'],
@@ -32,14 +33,18 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
         }
       }
 
-      const channel = state.getChannel(params.channel);
+      // Resolve the reference (id, "general" or "#general") before any read or
+      // write, so a refused join posts nothing. Everything below keys on the
+      // canonical id; getChannel only matched the id and refused "#general".
+      if (typeof params.channel !== 'string') throw invalidInput('channel', 'must be a string');
+      const channel = state.resolveChannelRef(params.channel);
       if (!channel) throw notFound('Channel', params.channel);
 
       // Idempotency: if a join message for this worker already exists in the
       // recent message window for this channel, skip the broadcast.
       let alreadyMember = false;
       try {
-        const recent = await state.getMessages(params.channel, { limit: 200 });
+        const recent = await state.getMessages(channel.id, { limit: 200 });
         const joinMarker = `${params.workerId} joined #${channel.name}`;
         alreadyMember = recent.some((m) => m.sender === 'system' && m.content === joinMarker);
       } catch {
@@ -49,25 +54,24 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
       // Post system join message (skip if worker is already a member)
       if (!alreadyMember) {
         await state.sendMessage({
-          channel: params.channel,
+          channel: channel.id,
           sender: 'system',
           content: `${params.workerId} joined #${channel.name}`
         });
       }
 
-      // Get online workers (active status or recent activity)
+      // Online workers: the shared isWorkerAlive predicate (not DEAD, active
+      // within the liveness window), the same one list_workers reports as isAlive.
       const now = Date.now();
-      const PRESENCE_TIMEOUT_MS = 120_000;
       const onlineWorkers: Array<{ id: string; status: string }> = [];
       for (const worker of state.workers.values()) {
-        const lastActivity = worker.lastActivityAt ? new Date(worker.lastActivityAt).getTime() : 0;
-        if (worker.status !== 'IDLE' && (now - lastActivity < PRESENCE_TIMEOUT_MS)) {
+        if (isWorkerAlive(worker, now)) {
           onlineWorkers.push({ id: worker.id, status: worker.status });
         }
       }
 
       return {
-        channel: params.channel,
+        channel: channel.id,
         channelName: channel.name,
         onlineWorkers
       };

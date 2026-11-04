@@ -117,15 +117,17 @@ Claude Code config example:
 
 ## Run the JetBrains Plugin
 
-Open `moe-jetbrains` in IntelliJ/PyCharm and run one of:
+Build the daemon and the proxy first. The plugin build bundles both, and `requireBundledAssets()` in `moe-jetbrains/build.gradle.kts` fails it when either one's `dist/` is missing or older than its `src/`, or its `node_modules/` is missing. Then run Gradle from `moe-jetbrains/` (or open `moe-jetbrains` in IntelliJ/PyCharm and run the same tasks there):
 
 ```bash
-cd packages/moe-daemon
-npm run build
-
+cd packages/moe-daemon && npm install && npm run build
+cd ../moe-proxy && npm install && npm run build
+cd ../../moe-jetbrains
 ./gradlew runIde     # launches a sandbox IDE
 ./gradlew buildPlugin
 ```
+
+On Windows, run `.\gradlew.bat runIde` or `.\gradlew.bat buildPlugin` from `moe-jetbrains\`.
 
 The plugin:
 - Connects to `ws://127.0.0.1:<port>/ws`
@@ -135,16 +137,16 @@ The plugin:
 Notes:
 - For local development in this repo, open the repo root (the folder containing `packages/`) so the plugin can auto-start the local daemon.
 - If you install the plugin ZIP manually, extract it so the plugin folder contains `lib/` at the top level (e.g., `.../plugins/moe-jetbrains/lib`). If you end up with `.../plugins/moe-jetbrains/moe-jetbrains/lib`, PyCharm will not load the plugin.
-- Gradle wrapper maintenance: the committed wrapper targets Gradle 8.10.2. Keep `moe-jetbrains/gradlew` with LF endings and `moe-jetbrains/gradlew.bat` with CRLF endings; `.gitattributes` enforces this. If the wrapper is regenerated, use Gradle's `wrapper --gradle-version 8.10.2 --distribution-type bin` flow from a trusted Gradle install/distribution, do not hand-edit the binary jar, and validate with `.\gradlew.bat test` on Windows plus `bash -lc 'cd moe-jetbrains && ./gradlew --version'` when bash is available.
+- Gradle wrapper maintenance: the committed wrapper pins its Gradle version in `moe-jetbrains/gradle/wrapper/gradle-wrapper.properties` (`distributionUrl`). Keep `moe-jetbrains/gradlew` with LF endings and `moe-jetbrains/gradlew.bat` with CRLF endings; `.gitattributes` enforces this. If the wrapper is regenerated, use Gradle's `wrapper --gradle-version <version> --distribution-type bin` flow (the pinned version, or the one you are moving to) from a trusted Gradle install/distribution, do not hand-edit the binary jar, and validate with `.\gradlew.bat test` on Windows plus `bash -lc 'cd moe-jetbrains && ./gradlew --version'` when bash is available.
 
 ---
 
 ## Seed Data for the UI
 
-The current UI does not create epics or tasks yet. To see data in the board:
-- Create epic and task JSON files under `.moe/epics/` and `.moe/tasks/`.
-- Use the examples in `docs/SCHEMA.md` as templates.
-- The daemon file watcher will load them and broadcast to the UI.
+Create epics and tasks through the daemon. Never write `.moe/` files by hand: the daemon is the sole writer of its runtime state.
+- JetBrains: **+ Epic** in the board header, **+** in the Backlog column header, or **Tools → Moe → Create Task**.
+- VS Code: **Moe: Create Epic** and **Moe: Create Task** in the Command Palette.
+- Agents and scripts: `moe.create_epic` and `moe.create_task` (contracts in [MCP_SERVER.md](./MCP_SERVER.md)). From a terminal, with the daemon running: `scripts/moe-call.sh create_epic '{"title":"My epic"}' --project <path>`.
 
 ---
 
@@ -167,7 +169,7 @@ The agent scripts handle daemon startup, MCP config, role documentation injectio
 ```
 
 Key flags:
-- `-Role` / `--role`: `architect`, `worker`, or `qa`
+- `-Role` / `--role`: `architect`, `worker`, `qa`, or `governor`
 - `-Project` / `--project`: Path to your project
 - `-ProjectName` / `--project-name`: Look up project from `~/.moe/projects.json` registry
 - `-Command` / `--command`: Agent CLI to run (`claude`, `codex`, `gemini`, `grok`, or custom path). `grok` is xAI's Grok Build — install with `irm https://x.ai/cli/install.ps1 | iex` (or `npm install -g @xai-official/grok`) on Windows, `curl -fsSL https://x.ai/cli/install.sh | bash` on Mac/Linux/WSL; auth via `XAI_API_KEY` or `grok login`
@@ -217,6 +219,8 @@ bash scripts/tests/parity-check.sh
 
 Both smoke tests verify the same contract through ONE shared fake proxy, `scripts/tests/postflight-fake-proxy.js`, which each harness copies to its temp dir; `parity-check.sh` and `parity-check.ps1` fail if either harness embeds a private copy again. Its env knobs are `FAKE_CLAIM_MODE=resume|blocked|idle|noteam|noteam-until-joined|finalizing`, `FAKE_CLAIM_ONCE` / `FAKE_CLAIM_LIMIT` / `FAKE_CLAIM_TOKENS` / `FAKE_CLAIM_LAUNCH`, `FAKE_TASK_STATUS`, `FAKE_ATTEMPT_PHASE`, `FAKE_SIBLING_ORDER`, `FAKE_LIST_TASKS_TRUNCATED`, `FAKE_GET_CONTEXT_FAIL`, `FAKE_ADOPTED_TASK_ID`, `FAKE_CTX_IS_EPIC_FINAL` / `FAKE_CTX_IS_EPIC_FINAL_AT`, `FAKE_SCOPE_PEER_DECLARED` / `FAKE_SCOPE_PEERS_ACTIVE` / `FAKE_SCOPE_PEER_ACTIVE` / `FAKE_SCOPE_DECLARED_FIELD` for `get_commit_scope`, `FAKE_EVIDENCE_MODE` / `FROZEN_MODE` for the candidate, check, finalize and receipt recorders, `FAKE_HEARTBEAT_REATTACH` / `FAKE_HEARTBEAT_ATTEMPT` / `FAKE_REATTACH_REFUSE` for reattach, `FAKE_JOIN_FULL` / `FAKE_JOIN_FULL_UNTIL` for team joins, `FAKE_MENTION`, and `FAKE_ACCOUNT_HOME` / `FAKE_ACCOUNT_WAIT_ONCE` for account leases; the fake `record_commit` writes a `<project>/.moe/record_commit.jsonl` ledger. The harnesses check that the session-ended message reaches `#general`; scenarios A–E (pathspec-only completion commits, the two `MOE_COMMIT_REFUSED_*` refusals, peer index entries surviving) stay green; and the landing scenarios F–X cover BLOCKED / WORKING / `role=architect` checkpoints, baseline-based `MOE_ATTR_PREEXISTING` skips, peer-declared and asserted-but-unchanged paths (with and without the daemon's `declared` field: `MOE_ATTR_ASSERTED_FOREIGN` for history-only bytes a session did not produce, in an exit landing and in a crash recovery), tool-written files (stream-json fixture), `MOE_CHECKPOINT_RECOVERED` recovery of a lingering baseline, CAS retry via `MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF`, own-task-record staging, gate / peel / rejecting-hook failures landing in `refs/moe/rescue/task-postflight/*` with HEAD unchanged, unborn HEAD, `status=UNKNOWN`, and (bash only) `kill -INT` teardown. (The wrapper no longer writes a session-summary file — cross-session memory moved to the Serena MCP server, where the agent writes a `task-<id>-handoff` note before stopping.) They are self-contained and skip with exit 0 when an integration prerequisite such as a runnable Node.js is unavailable.
 
+CI runs these two harnesses only in the nightly: `postflight.sh` takes about 45 min on ubuntu-latest and `postflight.ps1` 85-110 min per PowerShell engine on windows-latest, too long for per-push PR CI. `.github/workflows/nightly.yml` (a daily cron plus `workflow_dispatch` with a `ref` input) calls `ci.yml` with `full: true` for each ref in the `NIGHTLY_REFS` repository variable, a JSON array (unset: `["main"]`). PR CI keeps the fast legs: `worktree-landing.sh` and `parity-check.sh` on Linux, `worktree-landing.ps1` under Windows PowerShell 5.1 and `parity-check.ps1` under PowerShell 7 on Windows. GitHub fires `schedule` only from main's copy of nightly.yml; to run a branch's own full set before it reaches main, use `gh workflow run ci.yml --ref <branch> -f full=true`.
+
 ### Running a Team (Parallel Agents)
 
 Launch a full team of agents (architect + worker + QA) working on the same epic:
@@ -243,24 +247,54 @@ The script loads role-specific documentation from `.moe/roles/<role>.md` (projec
 
 ## Plugin Bundling
 
-The JetBrains plugin bundles everything needed to run agents:
+Both IDE plugins bundle everything needed to run agents. The JetBrains zip ships a `moe-jetbrains/` directory (the installed plugin directory). The VS Code extension ships `moe-vscode/bundled/`, which becomes `extension/bundled/` in the `.vsix`. Both have the same layout below `<root>`, except `lib/`:
 
 ```
-moe-jetbrains/          (installed plugin directory)
-├── lib/                # Plugin JARs
-├── daemon/             # Bundled moe-daemon (dist + node_modules)
-├── proxy/              # Bundled moe-proxy (dist + node_modules)
-├── scripts/            # moe-agent.ps1, moe-agent.sh
-└── docs/roles/         # Role documentation (architect.md, worker.md, qa.md)
+<root>/                 (JetBrains: moe-jetbrains/ · VS Code: bundled/)
+├── lib/                # Plugin JARs (JetBrains only)
+├── daemon/             # moe-daemon dist minus *.test.* / *.spec.*, its package.json, node_modules with only its lockfile's production packages (no devDependencies, no .bin)
+├── proxy/              # moe-proxy dist minus *.test.* / *.spec.*, its package.json, node_modules with only its lockfile's production packages (no devDependencies, no .bin)
+├── scripts/
+│   ├── moe-agent.ps1, moe-agent.sh, moe-call.sh   # the .sh files are LF-normalized
+│   ├── prompt-cache*.mjs, usage-receipt.mjs, usage-session.mjs, usage-report.mjs, analyze-usage.mjs
+│   ├── moe-account-lease.mjs, moe-serena-ignore.mjs
+│   ├── local-runner/   # everything except *.test.* / *.spec.* and any tests/, __tests__/, fixtures/, __fixtures__/ dir
+│   │                   # (includes certified-provider.json, multipass.mjs, doctor.mjs, cli.mjs, vm-control.mjs)
+│   └── mods/           # everything except *.test.ts and .claude-plugin/types/
+└── docs/
+    ├── roles/          # the whole docs/roles/ dir
+    └── skills/
 ```
 
-The `build.gradle.kts` copies these from the repo during `prepareSandbox` and `buildPlugin`. When building from source, ensure daemon and proxy are built first:
+JetBrains copies these from the repo in `build.gradle.kts` (`prepareSandbox`, also run by `buildPlugin`); VS Code copies them in `moe-vscode/scripts/bundle-assets.mjs`, which `vscode:prepublish` runs. Both builds read the `scripts/` and `docs/` lists from `scripts/bundle-manifest.json` (its `comment` member states the copy rules); the daemon and proxy copies stay in each build. When building from source, ensure daemon and proxy are built first:
 
 ```bash
 cd packages/moe-daemon && npm install && npm run build
 cd ../moe-proxy && npm install && npm run build
 cd ../../moe-jetbrains && ./gradlew buildPlugin
 ```
+
+### Packaging guards
+
+Three guards keep a bundle complete and test-free:
+
+1. **Required-asset lists that fail the build.** JetBrains `requireBundledAssets()` (run in `prepareSandbox`'s `doFirst`) and the checks in `bundle-assets.mjs` fail on a missing or stale (older than its `src/`) daemon or proxy `dist`, on missing `node_modules`, and on a missing `local-runner/` `certified-provider.json`, `multipass.mjs`, `doctor.mjs`, `cli.mjs` or `vm-control.mjs`. Both builds also fail, before copying anything, on any file or directory the manifest names that is missing (its required `local-runner/` files included), and on a malformed manifest.
+2. **Packaged checks in `node scripts/tests/onboarding.mjs <extracted bundle>`.** They require the helper files above. They run the bundled `vm-control.mjs` with no arguments and expect exit 2 with `{"code":"VM_CONTROL_INPUT_INVALID"}`, which proves its whole import closure loads from the bundle. They also fail on any test artifact under `daemon/`, `proxy/` or `scripts/` (`node_modules` is skipped). The full onboarding flow then runs on the bundled daemon and proxy. CI runs it on the extracted JetBrains zip (`build-plugin`, 'Verify packaged JetBrains onboarding'); `release.yml` ('Verify packaged onboarding') also runs it on the extracted `.vsix`.
+3. **`scripts/tests/local-runner-bundle.test.mjs`** runs the real VS Code bundler on a fixture and replays onboarding's packaged checks on its output. It also checks the manifest's lists, that neither build file re-lists them, and `ci.yml`. CI runs it on ubuntu, windows and macos ('Test local runner prerequisite bundles').
+
+### Client verification record (CQ-I)
+
+What proves each client contract, where it runs, and what is not certified. Evidence for a given change (counts, versions, dates) belongs in that task's completion record, not here.
+
+| Contract | Proved by | Where it runs | Not certified |
+|---|---|---|---|
+| `/ws` `CLIENT_HELLO` and approval admission | Daemon vitest `src/server/WebSocketServer.test.ts` ('capability negotiation v1') and `src/server/planApproval.test.ts` | CI `test-typescript` (ubuntu) | No IDE sends `CLIENT_HELLO`: there is no sender in `moe-jetbrains/src/main` or `moe-vscode/src` |
+| Shared verdict corpus (approval binding, reconnect, managed-VM decode) | `moe-jetbrains/src/test/resources/client-verdicts.json` (sections `approval`, `vm`), read by JUnit `ClientVerdictCorpusTest` and by node:test `moe-vscode/tests/plan-review.test.cjs` and `managed-vm-verdicts.test.cjs` | JUnit: CI `build-plugin` (ubuntu). node:test: 'Test VS Code daemon startup' (ubuntu, windows, macos) | JetBrains JUnit runs on ubuntu only |
+| Packaging | The three guards above | Guard 1: every plugin build. Guard 2: CI `build-plugin` (JetBrains zip), `release.yml` (JetBrains zip and `.vsix`). Guard 3: CI ubuntu, windows, macos | CI does not run onboarding on the VS Code bundle; only `release.yml` does |
+| Windows engines | Both IDEs launch Windows seats with Windows PowerShell 5.1 (`powershell`): JetBrains `util/TerminalAgentLauncher.kt` `powerShellLine`, VS Code `src/util/AgentLauncher.ts` `buildPowerShellCommand`. PR CI `windows-latest` runs the landing-guard suites under Windows PowerShell 5.1 and PowerShell 7, `worktree-landing.ps1` under 5.1, `parity-check.ps1` under 7, onboarding on Windows Node, and the VS Code tests; the nightly adds the wrapper post-flight suites under 5.1 and 7 and `worktree-landing.ps1` under 7 | CI `build-all-platforms` (windows-latest); the post-flight suites only in `nightly.yml` | JetBrains JUnit does not run on Windows |
+| Native provider smoke and isolation certification | `node scripts/local-runner/cli.mjs certify --work-dir <abs>`, and `native-smoke --work-dir <abs>` (provider-support evidence only, never certification). Per-platform state: [CERTIFICATION.md](CERTIFICATION.md#certified-platforms) | Operator-invoked on real hardware; never in CI | This row states no result; read the linked section |
+| Headless only | Every row above runs headless (vitest, JUnit, node:test, Node scripts); the Managed VMs tests use fakes | CI and local | No IntelliJ sandbox (`runIde`) or VS Code Extension Host interaction is certified, and no test launches a real VM |
+| `verified-local` stays unavailable | The daemon refuses it with `EXECUTION_PROFILE_NOT_READY` (`packages/moe-daemon/src/delivery/executionProfile.ts` and its test). Both Managed VMs surfaces always show the strong profile as unavailable (`ManagedVmPresentationTest`, `managed-vm.test.cjs`). VS Code settings never send `executionProfile` or `deliveryPolicy` (`settings-wire.test.cjs`, S6) | Daemon: CI `test-typescript`. Clients: as the corpus row | Neither IDE offers `verified-local` |
 
 ---
 
@@ -270,14 +304,10 @@ Implemented now:
 - Board UI with 5 columns (Awaiting Approval displays in Planning)
 - Drag/drop status change
 - Task detail dialog (approve/reject/reopen)
+- Epic create, edit and delete (`CreateEpicDialog`, `EpicDetailDialog`) and task creation (`CreateTaskDialog`, also the `Moe.CreateTask` action)
+- Worker status (`WorkerPanel`), project settings (`MoeSettingsDialog`), the status bar widget (`MoeStatusBarWidget`) and IDE notifications (`MoeNotificationService`)
 - Daemon state manager + file watcher
 - MCP tools: `get_context`, `submit_plan`, `check_approval`, `start_step`, `complete_step`, `complete_task`, `report_blocked`, `propose_rail`, `list_tasks`, `get_next_task`, `claim_next_task`, `search_tasks`, `qa_approve`, `qa_reject`, `create_task`, `create_epic`, `update_epic`, `delete_task`, `delete_epic`, `get_activity_log`, `unblock_worker` (seat-only; `resolveBlocks: true` clears the block), `set_task_status`, `get_commit_scope`, `record_commit`, `declare_files`
-
-Not yet implemented (planned):
-- Epic CRUD UI
-- Task creation UI
-- Worker status UI
-- Notifications/settings/status bar
 
 See `docs/PLUGIN_SPEC.md` and `docs/UI_SPEC.md` for the roadmap.
 
@@ -296,7 +326,7 @@ See `docs/PLUGIN_SPEC.md` and `docs/UI_SPEC.md` for the roadmap.
 
 - **Permission denied on scripts**: Run `chmod +x scripts/*.sh`
 - **python3 not found**: Install via `brew install python3`
-- **Port 3141 in use**: Daemon will scan for next available port, check daemon.json for actual port
+- **Port 9876 in use**: Daemon will scan for next available port, check daemon.json for actual port
 - **Apple Silicon vs Intel**: Both work identically; verify Node.js architecture with `node -p process.arch`
 
 For detailed Mac setup and verification checklist, see [MAC_INSTALL.md](./MAC_INSTALL.md).
@@ -322,20 +352,20 @@ wslpath -u "C:\Users\yourname\projects\myproject"
 **Common WSL Issues**
 - **Path not found**: Ensure you're using `/mnt/c/...` format, not `C:\...`
 - **Permission denied**: Windows filesystem permissions may differ; try `chmod +x` on scripts
-- **Node not found**: Install Node.js in WSL separately: `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs`
+- **Node not found**: Install Node.js 24 LTS in WSL separately (the daemon needs 22.22+, 24 or 26): `curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs`
 - **python3 not found**: `sudo apt-get install python3`
 - **Daemon can't write files**: Check Windows file has write access from WSL
 
 **Networking**
 - WSL2 uses a different IP than Windows host
-- Daemon runs on `127.0.0.1` which WSL can access
+- The daemon binds `127.0.0.1` by default, and WSL in NAT mode cannot reach the Windows loopback. For WSL agents against a Windows daemon, start the daemon with `--host wsl` (or `MOE_BIND_HOST=wsl`): it then also listens on the WSL adapter, and agents reach it through the WSL gateway. In JetBrains on Windows, the **Start Agents** menu toggle **Run Agents in WSL (Linux)** restarts the daemon that way. Mirrored networking uses loopback. See [WSL agents cannot reach the Windows daemon](./TROUBLESHOOTING.md#wsl-agents-cannot-reach-the-windows-daemon).
 - If using Docker in WSL, ensure Docker Desktop WSL integration is enabled
 
 **IDE Integration**
 - When using JetBrains IDE on Windows with WSL projects:
   - Open project via `\\wsl$\Ubuntu\...` path in Windows
   - Or use Remote Development with WSL backend
-  - The plugin connects to daemon via localhost (works across WSL/Windows boundary)
+  - The plugin connects to the daemon at `ws://127.0.0.1:<port>/ws`. WSL agents that use a Windows daemon need the `--host wsl` bind described under **Networking**.
 
 ### General Troubleshooting
 
@@ -393,7 +423,7 @@ Outbound messages: `GET_STATE`, `UPDATE_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `R
 |---------|-----------|--------|
 | Condition | Project opened | `workspaceContains:.moe`, `onView:moe.board`, `onCommand:moe.connect` |
 | Auto-connect | On project open | On activation (configurable) |
-| Config location | `MoeSettings` | `vscode.workspace.getConfiguration('moe')` |
+| Config location | `MoeSettingsDialog` (writes `.moe/project.json` `settings` through `UPDATE_SETTINGS`) | `vscode.workspace.getConfiguration('moe')` |
 
 ### Code Reuse Opportunities
 
@@ -419,15 +449,25 @@ Build and run using Docker:
 cd packages/moe-daemon
 docker build -t moe-daemon .
 
-# Run with your project mounted
-docker run -p 9876:9876 -v /path/to/project:/project moe-daemon
+# Run it for your project, from the project's root
+cd /path/to/project
+docker run -d --name moe-daemon --user "$(id -u):$(id -g)" \
+  -p 127.0.0.1:9876:9876 \
+  -v "$PWD":"$PWD" -e MOE_PROJECT_PATH="$PWD" \
+  moe-daemon
 ```
 
-Or use docker-compose:
+Why each flag is needed:
+
+- `-p 127.0.0.1:9876:9876` publishes the daemon on host loopback only, because `/mcp` has no authentication and a port published without an address is reachable on every host interface. Keep 9876 on both sides: host clients take the port from the `.moe/daemon.json` the container writes. Inside the container the image sets `MOE_BIND_HOST=0.0.0.0`, because a published port reaches the container's network interface, never its loopback.
+- `-v "$PWD":"$PWD" -e MOE_PROJECT_PATH="$PWD"` mounts the project at the absolute path it has on the host. The daemon reports that path in `.moe/daemon.json` and on `/health`, and moe-proxy and the IDE plugins refuse a daemon that reports another project's path. On a Windows host, mount `D:\x` at `/mnt/d/x` and set `MOE_PROJECT_PATH=/mnt/d/x`: those clients treat `D:\x` and `/mnt/d/x` as the same project.
+- `--user "$(id -u):$(id -g)"` runs the daemon as you, so it can write the project's `.moe/`. The image's own user is uid 1001.
+
+Or use docker-compose. It mounts `${PWD}` the same way, so run it from the project's root:
 
 ```bash
-# From repo root
-docker-compose up -d
+# From the project root (here, this repo)
+MOE_UID=$(id -u) MOE_GID=$(id -g) docker-compose up -d
 
 # View logs
 docker-compose logs -f moe-daemon

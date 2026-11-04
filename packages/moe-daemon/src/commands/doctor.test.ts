@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -211,13 +211,352 @@ describe('runDoctor — daemon health reachability', () => {
   });
 });
 
+// task-d7b24cab: a daemon.json written on the other side of the WSL boundary names a pid in another pid namespace,
+// so doctor judges it by /health alone, at the hosts the daemon lifecycle asks (server/probeHost.ts foreignProbeHosts):
+// the recorded bindHost when it is this machine, then the WSL gateway from /proc/net/route, stubbed here.
+// Imports only runDoctor, so this block runs unchanged against a tree that predates the fix (the RED run).
+describe('runDoctor — daemon.json from the other side of the WSL boundary', () => {
+  // Off Windows the bug's drive-letter projectPath is foreign; on Windows a POSIX one is. doctor compares only the
+  // /health reply's projectPath with --project, and a temp dir is never a drive path here, so the stubs name testDir.
+  const FOREIGN_PROJECT = process.platform === 'win32' ? '/home/moe/project' : 'D:/projexts/moes';
+  const DEAD_PID = 2147483646; // never a live pid here
+  const ROUTE_HEADER = 'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n';
+  const OTHER_PROJECT = path.join(os.tmpdir(), 'moe-doctor-another-project');
+  let testDir: string;
+  let moePath: string;
+  let route: string;
+  const servers: net.Server[] = [];
+  const sockets = new Set<net.Socket>();
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-doctor-foreign-'));
+    moePath = scaffoldMoe(testDir);
+    route = ROUTE_HEADER; // no default route, so no WSL gateway unless a row adds one
+    const realReadFileSync = fs.readFileSync;
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) =>
+      file === '/proc/net/route' ? route : realReadFileSync(file, options as never)) as typeof fs.readFileSync);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const sock of sockets) sock.destroy();
+    sockets.clear();
+    await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  async function healthServer(host: string, projectPath: string, pid: number, port = 0, statusCode = 200): Promise<number> {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: statusCode === 200 ? 'healthy' : 'unhealthy', projectPath, pid }));
+    });
+    servers.push(server);
+    server.on('connection', (sock: net.Socket) => {
+      sockets.add(sock);
+      sock.on('close', () => sockets.delete(sock));
+    });
+    await new Promise<void>((resolve) => server.listen(port, host, resolve));
+    return (server.address() as net.AddressInfo).port;
+  }
+
+  async function unusedPort(): Promise<number> {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as net.AddressInfo;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    return port;
+  }
+
+  const writeForeignDaemonJson = (port: number, pid: number) => fs.writeFileSync(path.join(moePath, 'daemon.json'),
+    JSON.stringify({ port, pid, projectPath: FOREIGN_PROJECT, startedAt: new Date().toISOString(), bindHost: 'wsl' }));
+
+  it('F1: a daemon answering /health for this project on loopback is reported live, naming that host, though its pid is not alive here', async () => {
+    const port = await healthServer('127.0.0.1', testDir, DEAD_PID);
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[OK\\] daemon\\.json: .*127\\.0\\.0\\.1:${port}`));
+    expect(line(result.output, 'daemon.json:')).not.toMatch(/not running|stale/);
+    expect(line(result.output, 'daemon health reachability')).toMatch(new RegExp(`^\\[OK\\] .*127\\.0\\.0\\.1:${port}`));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it.skipIf(process.platform !== 'linux')('F2: the WSL gateway is asked after loopback, and its answer for this project beats loopback\'s answer for another', async () => {
+    const port = await healthServer('127.0.0.2', testDir, DEAD_PID);
+    await healthServer('127.0.0.1', OTHER_PROJECT, DEAD_PID, port);
+    route += 'eth0\t00000000\t0200007F\t0003\t0\t0\t0\t00000000\t0\t0\t0\n'; // little-endian 127.0.0.2
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[OK\\] daemon\\.json: .*127\\.0\\.0\\.2:${port}`));
+    expect(line(result.output, 'daemon health reachability')).toMatch(new RegExp(`^\\[OK\\] .*127\\.0\\.0\\.2:${port}`));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it.each([['a pid not alive here', DEAD_PID], ['a pid that happens to be alive here', process.pid]])(
+    'F3: with %s and no /health answering, it warns stale naming what it asked, adds no reachability line and exits 0', async (_kind, pid) => {
+      const port = await unusedPort();
+      writeForeignDaemonJson(port, pid);
+
+      const result = await runDoctor(testDir);
+
+      expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[WARN\\] daemon\\.json: .*127\\.0\\.0\\.1:${port}.*\\(stale\\)`));
+      expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+      expect(result.exitCode).toBe(0);
+    });
+
+  it('F4: a /health that answers only for another project is never green and exits 1', async () => {
+    const port = await healthServer('127.0.0.1', OTHER_PROJECT, DEAD_PID);
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(/^\[WARN\] daemon\.json: /);
+    expect(line(result.output, 'daemon health reachability'))
+      .toMatch(new RegExp(`^\\[FAIL\\] .*127\\.0\\.0\\.1:${port} reports a different project`));
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('F5: a live but unhealthy daemon answering /health 503 is never called stale', async () => {
+    const port = await healthServer('127.0.0.1', testDir, DEAD_PID, 0, 503);
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(/^\[WARN\] daemon\.json: /);
+    expect(line(result.output, 'daemon.json:')).not.toMatch(/stale/);
+    expect(line(result.output, 'daemon health reachability')).toMatch(new RegExp(`^\\[WARN\\] .*127\\.0\\.0\\.1:${port}.*HTTP 503`));
+    expect(result.exitCode).toBe(0);
+  });
+
+  // daemon.json is repository content: a hostile record must neither crash doctor nor steer its dial.
+  it.each([99999, 1.5, -1, 0])('F6: a recorded port of %s is reported as not a TCP port, not dialed, and never throws', async (port) => {
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[FAIL\\] daemon\\.json: .*${String(port).replace('.', '\\.')}.*not a valid TCP port`));
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('F7: a non-string projectPath is never foreign (RegExp.test would coerce it), so its dead pid is stale and nothing is dialed', async () => {
+    const port = await healthServer('127.0.0.1', testDir, DEAD_PID);
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+      port, pid: DEAD_PID, projectPath: [FOREIGN_PROJECT], startedAt: new Date().toISOString(), bindHost: 'wsl' }));
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(`[WARN] daemon.json: daemon.json present but pid ${DEAD_PID} not running (stale)`);
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+  });
+
+  it('F8: a recorded bindHost that is not this machine is never dialed or named, and with no gateway nothing is asked', async () => {
+    const port = await healthServer('127.0.0.1', testDir, DEAD_PID);
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+      port, pid: DEAD_PID, projectPath: FOREIGN_PROJECT, startedAt: new Date().toISOString(), bindHost: '192.0.2.10' }));
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(/^\[WARN\] daemon\.json: .*no address.*\(stale\)/);
+    expect(line(result.output, 'daemon.json:')).not.toContain('192.0.2.10');
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+    expect(result.exitCode).toBe(0);
+  });
+});
+
+// task-da89f620: a daemon in a container writes a pid from its own pid namespace (pid 15) to the mounted daemon.json,
+// so kill -0 on the host proves nothing. Its record carries pidNamespace, and doctor judges a record from another
+// namespace by /health at the local probe address alone. 'pid:[1]' is no reader's own namespace on any CI OS.
+describe('runDoctor — daemon.json from another pid namespace (task-da89f620)', () => {
+  const DEAD_PID = 2147483646; // never a live pid here
+  let testDir: string;
+  let moePath: string;
+  const servers: http.Server[] = [];
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-doctor-pidns-'));
+    moePath = scaffoldMoe(testDir);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  async function healthServer(projectPath: string, pid: number): Promise<number> {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' });
+      res.end(JSON.stringify({ status: 'healthy', projectPath, pid }));
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return (server.address() as net.AddressInfo).port;
+  }
+
+  async function unusedPort(): Promise<number> {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as net.AddressInfo;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    return port;
+  }
+
+  // As the Docker image writes it: bindHost 0.0.0.0, which a local probe dials at 127.0.0.1.
+  const writeDaemonJson = (port: number, extra: Record<string, unknown> = { pidNamespace: 'pid:[1]' }) =>
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+      port, pid: DEAD_PID, projectPath: testDir, startedAt: new Date().toISOString(), bindHost: '0.0.0.0', ...extra }));
+
+  it('D1 a namespaced record whose /health answers for this project is valid though its pid is not alive here', async () => {
+    const port = await healthServer(testDir, DEAD_PID);
+    writeDaemonJson(port);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[OK\\] daemon\\.json: .*another pid namespace.*127\\.0\\.0\\.1:${port}`));
+    expect(line(result.output, 'daemon.json:')).not.toMatch(/not running|stale/);
+    expect(line(result.output, 'daemon health reachability')).toMatch(new RegExp(`^\\[OK\\] .*127\\.0\\.0\\.1:${port}`));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('D2 a namespaced record whose port answers nothing is stale, naming the address asked', async () => {
+    const port = await unusedPort();
+    writeDaemonJson(port);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[WARN\\] daemon\\.json: .*another pid namespace.*127\\.0\\.0\\.1:${port}.*\\(stale\\)$`));
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('D3 a record without pidNamespace keeps the pid rule', async () => {
+    writeDaemonJson(await healthServer(testDir, DEAD_PID), {});
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(`[WARN] daemon.json: daemon.json present but pid ${DEAD_PID} not running (stale)`);
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+  });
+});
+
+// daemon.json is unchecked JSON (gitignored runtime state a hand edit or a broken writer can corrupt). http.request and
+// Socket#connect throw ERR_SOCKET_BAD_PORT synchronously on a port outside 1-65535 or a fraction, which rejected
+// runDoctor for a LOCAL record with a live pid (port 0 dials port 80; the string '8080' is dialed). doctor judges the
+// recorded port once, before the pid check, the local/foreign split and any dial, with the lifecycle's own isValidPort.
+describe('runDoctor — a local daemon.json whose port is not a TCP port', () => {
+  const DEAD_PID = 2147483646; // never a live pid here
+  let testDir: string;
+  let moePath: string;
+  let requestSpy: ReturnType<typeof vi.spyOn>;
+  let connectSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-doctor-port-'));
+    moePath = scaffoldMoe(testDir);
+    requestSpy = vi.spyOn(http, 'request'); // call-through: a dial that is not refused still happens
+    connectSpy = vi.spyOn(net.Socket.prototype, 'connect');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  // Raw JSON text, so '1e999' reaches doctor as Infinity (JSON.stringify cannot write it). testDir is a local path.
+  function writeRawDaemonJson(portMember: string, pid: number = process.pid): void {
+    fs.writeFileSync(path.join(moePath, 'daemon.json'),
+      `{${portMember}"pid":${pid},"projectPath":${JSON.stringify(testDir)},"startedAt":"${new Date().toISOString()}"}`);
+  }
+
+  const refusal = (shown: string) => `[FAIL] daemon.json: daemon.json port ${shown} is not a valid TCP port (1-65535); not dialed`;
+
+  function expectNothingDialed(): void {
+    expect(requestSpy).not.toHaveBeenCalled();
+    expect(connectSpy).not.toHaveBeenCalled();
+  }
+
+  it.each([
+    ['99999', '99999'], ['65536', '65536'], ['0', '0'], ['-1', '-1'], ['1.5', '1.5'], ['1e999', 'Infinity'], ['"8080"', '"8080"'],
+  ])('P1: a live local pid with the raw port %s resolves with the one named [FAIL], nothing dialed, exit 1', async (raw, shown) => {
+    writeRawDaemonJson(`"port":${raw},`);
+
+    const result = await runDoctor(testDir);
+
+    expect(result.output.filter((l) => l.startsWith('[FAIL]'))).toEqual([refusal(shown)]);
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('P2: a hostile string port is shown as JSON.stringify(value) capped at 120 chars, with no raw control character', async () => {
+    const hostile = `\u001b[2J${'9'.repeat(300)}`;
+    writeRawDaemonJson(`"port":${JSON.stringify(hostile)},`);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(refusal(JSON.stringify(hostile).slice(0, 120)));
+    expect(result.output.join('\n')).not.toContain('\u001b');
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('P3: a dead local pid with port 99999 gets the same [FAIL], never "(stale)": the port is judged before liveness', async () => {
+    writeRawDaemonJson('"port":99999,', DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(refusal('99999'));
+    expect(result.output.some((l) => l.includes('(stale)'))).toBe(false);
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('P4: a record with no port key still reads "daemon.json missing port" and dials nothing', async () => {
+    writeRawDaemonJson('');
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe('[FAIL] daemon.json: daemon.json missing port');
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('P4: a daemon.json holding only the JSON literal null has no port to read: it resolves with "missing port"', async () => {
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), 'null');
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe('[FAIL] daemon.json: daemon.json missing port');
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  // A refused loopback dial takes about 2 s per probe on Windows. Whatever listens on the port decides the
+  // reachability outcome, so only the daemon.json line and the dial are asserted.
+  it.each([1, 65535])('P5: the boundary port %i is a valid port, judged as at 90c499e1 and dialed', async (port) => {
+    writeRawDaemonJson(`"port":${port},`);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(`[OK] daemon.json: daemon.json valid (pid ${process.pid}, port ${port})`);
+    expect(line(result.output, 'daemon health reachability')).toBeDefined();
+    expect(requestSpy).toHaveBeenCalledWith(expect.objectContaining({ port }), expect.anything());
+  }, 15_000);
+});
+
 // Worktree readiness probes (epic-dce3a64f §7.3): a stubbed read-only Git runner drives each
 // condition; a real throwaway repository covers the listing and proves doctor writes nothing.
-type GitCall = 'version' | 'toplevel' | 'head' | 'target' | 'list';
+type GitCall = 'version' | 'toplevel' | 'head' | 'target' | 'list' | 'remote' | 'originTarget' | 'controlAncestor' | 'targetAncestor';
 const gitError = (code: number | string, stderr = '') => Object.assign(new Error(`git: ${stderr}`), { code, stderr });
 const callOf = (args: string[]): GitCall => {
-  const kind = ({ version: 'version', 'symbolic-ref': 'head', worktree: 'list' } as Record<string, GitCall>)[args[0]]
-    ?? (args[1] === '--show-toplevel' ? 'toplevel' : args[1] === '--verify' ? 'target' : undefined);
+  const kind = ({ version: 'version', 'symbolic-ref': 'head', worktree: 'list', remote: 'remote' } as Record<string, GitCall>)[args[0]]
+    ?? (args[0] === 'merge-base' ? (args[2] === 'refs/heads/moe/control' ? 'controlAncestor' : 'targetAncestor') : undefined)
+    ?? (args[1] === '--show-toplevel' ? 'toplevel' : undefined)
+    ?? (args[1] === '--verify' ? (args[3]?.startsWith('refs/remotes/origin/') ? 'originTarget' : 'target') : undefined);
   if (!kind) throw new Error(`unexpected git call: ${args.join(' ')}`);
   return kind;
 };
@@ -255,8 +594,10 @@ describe('runDoctor — worktree readiness probes', () => {
   }
 
   function stubGit(overrides: Overrides = {}): PlanPathGitRunner {
+    // No remote (local mode) and passing ancestry checks by default, so every other case keeps its meaning.
     const ready: Record<GitCall, string> = { version: 'git version 2.43.0\n', toplevel: `${root}\n`,
-      head: 'refs/heads/moe/control\n', target: 'b'.repeat(40), list: listing([root, 'refs/heads/moe/control']) };
+      head: 'refs/heads/moe/control\n', target: 'b'.repeat(40), list: listing([root, 'refs/heads/moe/control']),
+      remote: '', originTarget: 'c'.repeat(40), controlAncestor: '', targetAncestor: '' };
     return async (args, cwd, timeout, maxBuffer) => {
       calls.push(args);
       expect([cwd, timeout <= 2000, (maxBuffer ?? Infinity) <= 128 * 1024]).toEqual([root, true, true]);
@@ -350,8 +691,64 @@ describe('runDoctor — worktree readiness probes', () => {
     writeSettings({ ...ON, qualityGate: 'echo SHOULD-NOT-RUN' });
     const result = await doctor(stubGit());
     expect(calls).toEqual([['version'], ['rev-parse', '--show-toplevel'], ['symbolic-ref', '-q', 'HEAD'],
-      ['worktree', 'list', '--porcelain', '-z'], ['rev-parse', '--verify', '--quiet', 'refs/heads/main^{commit}']]);
+      ['merge-base', '--is-ancestor', 'refs/heads/moe/control', 'refs/heads/main'],
+      ['worktree', 'list', '--porcelain', '-z'], ['rev-parse', '--verify', '--quiet', 'refs/heads/main^{commit}'], ['remote']]);
     expect(result.output.join('\n')).not.toContain('SHOULD-NOT-RUN');
+  });
+
+  it('W4: in remote mode a target that origin\'s copy contains passes, read as last fetched with no fetch', async () => {
+    writeSettings(ON);
+    const result = await doctor(stubGit({ remote: 'origin\n' }));
+    expect(line(result.output, 'worktree target:')).toMatch(/^\[OK\] .*refs\/remotes\/origin\/main contains it/);
+    expect(calls).toEqual([['version'], ['rev-parse', '--show-toplevel'], ['symbolic-ref', '-q', 'HEAD'],
+      ['merge-base', '--is-ancestor', 'refs/heads/moe/control', 'refs/heads/main'],
+      ['worktree', 'list', '--porcelain', '-z'], ['rev-parse', '--verify', '--quiet', 'refs/heads/main^{commit}'], ['remote'],
+      ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main^{commit}'],
+      ['merge-base', '--is-ancestor', 'refs/heads/main', 'refs/remotes/origin/main']]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  const refFailures: Array<[string, string, () => Overrides, RegExp]> = [
+    ['W1: in remote mode a target origin does not have fails naming refs/remotes/origin/main and MOE_WORKTREE_CREATE_FAILED',
+      'worktree target', () => ({ remote: 'origin\n', originTarget: gitError(1) }),
+      /^\[FAIL\] .*refs\/remotes\/origin\/main.*MOE_WORKTREE_CREATE_FAILED/],
+    ['W2: in remote mode a local target holding commits origin lacks fails naming MOE_LAND_TARGET_DIVERGED',
+      'worktree target', () => ({ remote: 'origin\n', targetAncestor: gitError(1) }),
+      /^\[FAIL\] .*refs\/heads\/main holds commits refs\/remotes\/origin\/main lacks.*MOE_LAND_TARGET_DIVERGED/],
+    ['W3: in remote mode an unreadable target ancestry check fails with git\'s reason',
+      'worktree target', () => ({ remote: 'origin\n', targetAncestor: gitError(128, 'fatal: bad object') }),
+      /^\[FAIL\] .*exit 128: fatal: bad object/],
+    ['W5: an unreadable remote list fails the target probe',
+      'worktree target', () => ({ remote: gitError(129, 'usage: git remote') }),
+      /^\[FAIL\] .*cannot list remotes \(exit 129: usage: git remote\)/],
+    ['W6: a moe/control that is not an ancestor of the target fails naming MOE_CONTROL_CHECKOUT_DIVERGED',
+      'worktree control branch', () => ({ controlAncestor: gitError(1) }),
+      /^\[FAIL\] .*refs\/heads\/moe\/control holds commits main lacks.*MOE_CONTROL_CHECKOUT_DIVERGED/],
+    ['W7: an unreadable control ancestry check fails with git\'s reason',
+      'worktree control branch', () => ({ controlAncestor: gitError(128, 'fatal: Not a valid object name refs/heads/main') }),
+      /^\[FAIL\] .*exit 128: fatal: Not a valid object name/],
+  ];
+
+  it.each(refFailures)('%s', async (_title, label, overrides, pattern) => {
+    writeSettings(ON);
+    const result = await doctor(stubGit(overrides()));
+    expect(line(result.output, `${label}:`)).toMatch(pattern);
+    for (const other of LABELS.filter((l) => l !== label)) expect(line(result.output, `${other}:`)).toContain('[OK]');
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('W8: with worktreeMode off, a diverged moe/control and a target origin lacks are info and exit 0', async () => {
+    writeSettings({ worktreeMode: 'off' });
+    const result = await doctor(stubGit({ remote: 'origin\n', originTarget: gitError(1), controlAncestor: gitError(1) }));
+    expect(line(result.output, 'worktree control branch:')).toMatch(/^\[INFO\] .*MOE_CONTROL_CHECKOUT_DIVERGED/);
+    expect(line(result.output, 'worktree target:')).toMatch(/^\[INFO\] .*MOE_WORKTREE_CREATE_FAILED/);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('names the configured target, not main, in the control branch fix', async () => {
+    writeSettings({ ...ON, consolidationBranch: 'moe/work-2026-10-24' });
+    const result = await doctor(stubGit({ head: 'refs/heads/moe/work-2026-10-24\n' }));
+    expect(line(result.output, 'worktree control branch:')).toMatch(/^\[FAIL\] .*\(git switch -c moe\/control "moe\/work-2026-10-24"\)$/);
   });
 
   it.each([
@@ -419,7 +816,7 @@ describe('runDoctor — worktree probes against a real repository', () => {
 
   // The fixture's own Git commands must not inherit a seat's repository, index or config.
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toUpperCase().startsWith('GIT_'))),
-    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null' };
   const git = (cwd: string, ...args: string[]) => execFileSync('git',
     ['-c', 'user.name=Moe Test', '-c', 'user.email=moe@test.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, env, encoding: 'utf-8' });
   const snapshot = (project: string) => [
@@ -452,5 +849,46 @@ describe('runDoctor — worktree probes against a real repository', () => {
     git(project, 'worktree', 'remove', path.join(base, 'target checkout'));
     const ready = await runDoctor(project);
     expect([line(ready.output, 'worktree target:')?.slice(0, 4), ready.exitCode]).toEqual(['[OK]', 0]);
+  });
+
+  // A control checkout on moe/control at the target's commit, with ON settings and no task worktree.
+  function controlProject(name: string): string {
+    const project = path.join(base, name);
+    fs.mkdirSync(project);
+    git(project, 'init', '-q', '-b', 'main');
+    git(project, 'commit', '-q', '--allow-empty', '--no-verify', '-m', 'init');
+    git(project, 'switch', '-q', '-c', 'moe/control');
+    fs.writeFileSync(path.join(scaffoldMoe(project), 'project.json'), JSON.stringify({ settings: ON }));
+    return project;
+  }
+
+  it('W9: a moe/control holding a commit the target lacks fails naming MOE_CONTROL_CHECKOUT_DIVERGED; behind the target it passes', async () => {
+    const project = controlProject('control project');
+    git(project, 'commit', '-q', '--allow-empty', '--no-verify', '-m', 'a human commit on moe/control');
+
+    const diverged = await runDoctor(project);
+    expect(line(diverged.output, 'worktree control branch:')).toMatch(/^\[FAIL\] .*MOE_CONTROL_CHECKOUT_DIVERGED/);
+    for (const label of LABELS.filter((l) => l !== 'worktree control branch')) expect(line(diverged.output, `${label}:`)).toContain('[OK]');
+    expect(diverged.exitCode).toBe(1);
+
+    // A landing on the target that contains moe/control: behind is normal between a landing and the follow.
+    git(project, 'update-ref', 'refs/heads/main', git(project, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'landed').trim());
+    const behind = await runDoctor(project);
+    expect([line(behind.output, 'worktree control branch:')?.slice(0, 4), behind.exitCode]).toEqual(['[OK]', 0]);
+  });
+
+  it('W10: in remote mode a target origin lacks fails naming refs/remotes/origin/main; once pushed it passes', async () => {
+    const project = controlProject('remote project');
+    const origin = path.join(base, 'origin.git');
+    git(base, 'init', '-q', '--bare', origin);
+    git(project, 'remote', 'add', 'origin', origin);
+
+    const missing = await runDoctor(project);
+    expect(line(missing.output, 'worktree target:')).toMatch(/^\[FAIL\] .*refs\/remotes\/origin\/main.*MOE_WORKTREE_CREATE_FAILED/);
+    expect(missing.exitCode).toBe(1);
+
+    git(project, 'push', '-q', 'origin', 'main'); // also writes refs/remotes/origin/main
+    const pushed = await runDoctor(project);
+    expect([line(pushed.output, 'worktree target:')?.slice(0, 4), pushed.exitCode]).toEqual(['[OK]', 0]);
   });
 });

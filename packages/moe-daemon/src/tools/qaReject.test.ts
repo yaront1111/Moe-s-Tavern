@@ -84,7 +84,7 @@ describe('qa_reject bounded escalation', () => {
   };
 
   it('sends the task back to WORKING below the soft cap', async () => {
-    // maxReopens default 3 → reopenCount 0 -> 1 stays WORKING.
+    // Reopen cap 3 → reopenCount 0 -> 1 stays WORKING.
     setupMoe(); writeEpic(); writeTask({ reopenCount: 0 });
     await state.load();
     const result = await qaRejectTool(state).handler(
@@ -105,6 +105,19 @@ describe('qa_reject bounded escalation', () => {
     expect(result.status).toBe('PLANNING');
     expect(result.reopenCount).toBe(3);
     expect(result.parkedForHuman).toBe(false);
+    expect(result.exceededReopenCap).toBe(true);
+  });
+
+  it('ignores a maxReopens key on the task file: the reopen cap stays 3', async () => {
+    // No tool writes task.maxReopens and qa_reject no longer reads it, so a stray
+    // key (a hand-edited or legacy file) still loads and cannot move the cap.
+    setupMoe(); writeEpic(); writeTask({ reopenCount: 2, maxReopens: 10 } as Partial<Task>);
+    await state.load();
+    const result = await qaRejectTool(state).handler(
+      { taskId: 'task-1', reason: 'still broken', workerId: 'qa-a' }, state,
+    ) as RejectResult & { maxReopens: number };
+    expect(result.maxReopens).toBe(3);
+    expect(result.status).toBe('PLANNING');
     expect(result.exceededReopenCap).toBe(true);
   });
 
@@ -147,7 +160,7 @@ describe('qa_reject bounded escalation', () => {
     expect(state.getTask('task-1')?.tier).toBe('standard');
 
     fs.rmSync(testDir, { recursive: true, force: true });
-    setupMoe(); writeEpic(); writeTask({ id: 'task-1', reopenCount: 3, tier: 'light' });
+    setupMoe(); writeEpic(); writeTask({ id: 'task-1', reopenCount: 3, tier: 'light', capReplanAt: '2026-11-04T00:00:00.000Z' });
     state = new StateManager({ projectPath: testDir });
     await state.load();
     await qaRejectTool(state).handler({ taskId: 'task-1', reason: 'still bad', workerId: 'qa-a' }, state);
@@ -156,7 +169,7 @@ describe('qa_reject bounded escalation', () => {
 
   it('parks in REVIEW for a human past the hard cap instead of re-flipping to PLANNING', async () => {
     // reopenCount 3 -> 4 > maxReopens (hard cap) → parked in REVIEW, unassigned.
-    setupMoe(); writeEpic(); writeTask({ reopenCount: 3, assignedWorkerId: 'qa-a' });
+    setupMoe(); writeEpic(); writeTask({ reopenCount: 3, assignedWorkerId: 'qa-a', capReplanAt: '2026-11-04T00:00:00.000Z' });
     await state.load();
     await createWorker('qa-a', 'CODING', 'task-1');
 
@@ -177,13 +190,123 @@ describe('qa_reject bounded escalation', () => {
   it('does not re-flip on repeated rejects past the hard cap (loop is bounded)', async () => {
     // A parked task stays parked; a further reject would require re-ownership,
     // but even the state proves no PLANNING churn: reopenCount 5 -> 6 stays parked.
-    setupMoe(); writeEpic(); writeTask({ reopenCount: 5, assignedWorkerId: 'qa-a' });
+    setupMoe(); writeEpic(); writeTask({ reopenCount: 5, assignedWorkerId: 'qa-a', capReplanAt: '2026-11-04T00:00:00.000Z' });
     await state.load();
     const result = await qaRejectTool(state).handler(
       { taskId: 'task-1', reason: 'again', workerId: 'qa-a' }, state,
     ) as RejectResult;
     expect(result.status).toBe('REVIEW');
     expect(result.parkedForHuman).toBe(true);
+  });
+
+  // The cap re-plan record (task-77e54ebb). reopenCount is monotonic and the
+  // non-QA reopens bump it too (set_task_status REVIEW/DONE -> WORKING, a board
+  // drag, REOPEN_TASK), so the hard cap parks a row only once the soft cap's one
+  // re-plan is recorded on it (capReplanAt). The first two cases are hunt
+  // task-928a468d's hardCapSkipsReplan repro.
+  describe('the hard cap parks only after the cap re-plan', () => {
+    // Two prior QA rejections, both back to WORKING (reopenCount 1, 2); unassigned until a QA seat claims it.
+    const huntRow = (overrides: Partial<Task> = {}) => {
+      const now = new Date().toISOString();
+      return writeTask({
+        definitionOfDone: ['DoD-A'], assignedWorkerId: null, contextFetchedBy: [],
+        reopenCount: 2, reopenReason: 'second QA reject',
+        rejectionHistory: [
+          { reason: 'second QA reject', rejectedAt: now, reopenCount: 2 },
+          { reason: 'first QA reject', rejectedAt: now, reopenCount: 1 },
+        ],
+        metrics: { rejectCount: 2, reopenCount: 2 },
+        ...overrides,
+      });
+    };
+    const move = (status: Task['status'], reason?: string) =>
+      setTaskStatusTool(state).handler({ taskId: 'task-1', status, ...(reason ? { reason } : {}) }, state);
+    // A QA seat claims, reads and rejects, as the wrapper flow does.
+    async function qaReviewAndReject(reason = 'QA reject', extra: Record<string, unknown> = {}) {
+      await claimNextTaskTool(state).handler({ statuses: ['REVIEW'], workerId: 'qa-a' }, state);
+      await getContextTool(state).handler({ taskId: 'task-1', workerId: 'qa-a' }, state);
+      return await qaRejectTool(state).handler(
+        { taskId: 'task-1', reason, workerId: 'qa-a', ...extra }, state,
+      ) as RejectResult & { message: string };
+    }
+    const reload = async () => { state = new StateManager({ projectPath: testDir }); await state.load(); };
+
+    it('a human REVIEW -> WORKING reopen at reopenCount 2, then the next QA reject: PLANNING (one re-plan), not a park', async () => {
+      setupMoe(); writeEpic(); huntRow();
+      await state.load();
+      await move('WORKING', 'human: also cover the empty-input case'); // reopenCount 2 -> 3
+      expect(state.getTask('task-1')!.reopenCount).toBe(3);
+      await move('REVIEW');
+      const r = await qaReviewAndReject('third QA reject'); // 3 -> 4
+      const t = state.getTask('task-1')!;
+      expect({
+        status: r.status, parkedForHuman: r.parkedForHuman, reopenCount: r.reopenCount,
+        everEnteredPlanning: t.planningEntry !== undefined, needsHumanReview: t.needsHumanReview,
+      }).toEqual({ status: 'PLANNING', parkedForHuman: false, reopenCount: 4, everEnteredPlanning: true, needsHumanReview: undefined });
+      expect(r.message).toContain('flipped to PLANNING');
+      expect(typeof t.capReplanAt).toBe('string');
+    });
+
+    it('a human DONE -> WORKING reopen of a row with 2 past rejects: its first new QA reject re-plans, not parks', async () => {
+      setupMoe(); writeEpic(); huntRow({ status: 'DONE' });
+      await state.load();
+      await move('WORKING', 'human: regression found after DONE'); // 2 -> 3
+      await move('REVIEW');
+      const r = await qaReviewAndReject(); // 3 -> 4
+      expect({ status: r.status, parkedForHuman: r.parkedForHuman, needsHumanReview: state.getTask('task-1')!.needsHumanReview })
+        .toEqual({ status: 'PLANNING', parkedForHuman: false, needsHumanReview: undefined });
+    });
+
+    it('after that re-plan, the next QA reject parks the row for a human; the stamp survives a reload', async () => {
+      setupMoe(); writeEpic(); huntRow();
+      await state.load();
+      await move('WORKING', 'human reopen'); // 2 -> 3
+      await move('REVIEW');
+      expect((await qaReviewAndReject()).status).toBe('PLANNING'); // 3 -> 4: the cap re-plan
+      const stamp = state.getTask('task-1')!.capReplanAt;
+      expect(typeof stamp).toBe('string');
+
+      await reload();
+      expect(state.getTask('task-1')!.capReplanAt).toBe(stamp);
+      await move('AWAITING_APPROVAL'); // re-planned, approved and worked: none of these is a reopen
+      await move('WORKING');
+      await move('REVIEW');
+      const r = await qaReviewAndReject('re-plan did not help either'); // 4 -> 5
+      const t = state.getTask('task-1')!;
+      expect({ status: r.status, parkedForHuman: r.parkedForHuman, needsHumanReview: r.needsHumanReview, reopenCount: r.reopenCount })
+        .toEqual({ status: 'REVIEW', parkedForHuman: true, needsHumanReview: true, reopenCount: 5 });
+      expect({ assignedWorkerId: t.assignedWorkerId, needsHumanReview: t.needsHumanReview, capReplanAt: t.capReplanAt })
+        .toEqual({ assignedWorkerId: null, needsHumanReview: true, capReplanAt: stamp });
+    });
+
+    it('a legacy row past the cap with no capReplanAt reads as "no cap re-plan yet": PLANNING, and the stamp is written', async () => {
+      setupMoe(); writeEpic(); writeTask({ reopenCount: 3 });
+      await state.load();
+      expect(state.getTask('task-1')!.capReplanAt).toBeUndefined();
+      const r = await qaRejectTool(state).handler({ taskId: 'task-1', reason: 'still bad', workerId: 'qa-a' }, state) as RejectResult;
+      expect({ status: r.status, parkedForHuman: r.parkedForHuman, exceededReopenCap: r.exceededReopenCap })
+        .toEqual({ status: 'PLANNING', parkedForHuman: false, exceededReopenCap: true });
+      expect(typeof state.getTask('task-1')!.capReplanAt).toBe('string');
+    });
+
+    it('the soft cap stamps capReplanAt; a same-DoD-item flip below the cap and a WORKING reject do not', async () => {
+      setupMoe(); writeEpic(); writeTask({ reopenCount: 2 });
+      await state.load();
+      const reject = (extra: Record<string, unknown> = {}) =>
+        qaRejectTool(state).handler({ taskId: 'task-1', reason: 'x', workerId: 'qa-a', ...extra }, state) as Promise<RejectResult>;
+      expect((await reject()).status).toBe('PLANNING'); // 2 -> 3 == maxReopens
+      expect(typeof state.getTask('task-1')!.capReplanAt).toBe('string');
+
+      writeTask({ failedDodItems: [{ item: 'DoD-X', rejectedAt: new Date().toISOString(), rejectedBy: 'qa-a' }] });
+      await reload();
+      expect((await reject({ failedDodItems: ['DoD-X'] })).status).toBe('PLANNING');
+      expect(state.getTask('task-1')!.capReplanAt).toBeUndefined();
+
+      writeTask();
+      await reload();
+      expect((await reject()).status).toBe('WORKING');
+      expect(state.getTask('task-1')!.capReplanAt).toBeUndefined();
+    });
   });
 
   it('excludes a parked REVIEW task from the ranked QA claim pool', async () => {
@@ -252,6 +375,7 @@ describe('qa_reject bounded escalation', () => {
 import { ToolTestHarness } from './toolTestHarness.js';
 import { vi } from 'vitest';
 import { getContextTool } from './getContext.js';
+import { setTaskStatusTool } from './setTaskStatus.js';
 
 describe('moe.qa_reject', () => {
   const h = new ToolTestHarness();
@@ -375,11 +499,6 @@ describe('moe.qa_reject', () => {
   it('clears stale rejectionDetails after structured details are followed by reason-only rejection', async () => {
     const rejectTool = qaRejectTool(h.state);
 
-    // Raise the reopen cap so this test (which performs three rejections)
-    // doesn't trip the auto-flip-to-PLANNING path that newer qa_reject
-    // applies once reopenCount >= maxReopens.
-    await h.state.updateTask('task-1', { maxReopens: 10 } as Partial<import('../types/schema.js').Task>);
-
     await rejectTool.handler({
       taskId: 'task-1',
       reason: 'Initial structured rejection',
@@ -401,7 +520,9 @@ describe('moe.qa_reject', () => {
       failedDodItems: ['New DoD item only'],
     });
 
-    await h.state.updateTask('task-1', { status: 'REVIEW' });
+    // A third rejection would reach the reopen cap (3) and flip to PLANNING;
+    // this test is about rejectionDetails, so keep it below the cap.
+    await h.state.updateTask('task-1', { status: 'REVIEW', reopenCount: 0 });
     const reasonOnlyResult = await rejectTool.handler({
       taskId: 'task-1',
       reason: 'Reason-only rejection',

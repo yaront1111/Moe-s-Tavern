@@ -68,7 +68,8 @@
           "id": "moe.metrics",
           "name": "Metrics"
         },
-        { "id": "moe.managedVms", "name": "Managed VMs" }
+        { "id": "moe.managedVms", "name": "Managed VMs" },
+        { "id": "moe.accounts", "name": "Claude accounts" }
       ]
     },
     "commands": [
@@ -134,7 +135,15 @@
       },
       { "command": "moe.managedVms.refresh", "title": "Moe: Refresh Managed VMs", "icon": "$(refresh)" },
       { "command": "moe.managedVms.reconcile", "title": "Moe: Reconcile Managed VMs", "icon": "$(sync)", "enablement": "moe.managedVms.canReconcile" },
-      { "command": "moe.managedVms.cleanup", "title": "Moe: Clean Up Owned VMs", "icon": "$(trash)", "enablement": "moe.managedVms.canCleanup" }
+      { "command": "moe.managedVms.cleanup", "title": "Moe: Clean Up Owned VMs", "icon": "$(trash)", "enablement": "moe.managedVms.canCleanup" },
+      { "command": "moe.accounts.refresh", "title": "Moe: Refresh Claude Accounts", "icon": "$(refresh)" },
+      { "command": "moe.accounts.add", "title": "Add...", "category": "Moe Accounts", "icon": "$(add)" },
+      { "command": "moe.accounts.signIn", "title": "Sign in", "category": "Moe Accounts" },
+      { "command": "moe.accounts.remove", "title": "Remove...", "category": "Moe Accounts" },
+      { "command": "moe.accounts.moveUp", "title": "Move up", "category": "Moe Accounts" },
+      { "command": "moe.accounts.moveDown", "title": "Move down", "category": "Moe Accounts" },
+      { "command": "moe.accounts.rename", "title": "Rename...", "category": "Moe Accounts" },
+      { "command": "moe.accounts.setSwitchPercent", "title": "Set Switch Percent...", "category": "Moe Accounts", "icon": "$(settings-gear)" }
     ],
     "menus": {
       "view/title": [
@@ -150,7 +159,26 @@
         },
         { "command": "moe.managedVms.refresh", "when": "view == moe.managedVms", "group": "navigation@1" },
         { "command": "moe.managedVms.reconcile", "when": "view == moe.managedVms", "group": "navigation@2" },
-        { "command": "moe.managedVms.cleanup", "when": "view == moe.managedVms", "group": "navigation@3" }
+        { "command": "moe.managedVms.cleanup", "when": "view == moe.managedVms", "group": "navigation@3" },
+        { "command": "moe.accounts.refresh", "when": "view == moe.accounts", "group": "navigation@1" },
+        { "command": "moe.accounts.add", "when": "view == moe.accounts && moe.accounts.canAdd", "group": "navigation@2" },
+        { "command": "moe.accounts.setSwitchPercent", "when": "view == moe.accounts && moe.accounts.canSwitchAt", "group": "navigation@3" }
+      ],
+      "view/item/context": [
+        { "command": "moe.accounts.signIn", "when": "view == moe.accounts && viewItem =~ /\\bcanSignIn\\b/", "group": "1_accounts@1" },
+        { "command": "moe.accounts.rename", "when": "view == moe.accounts && viewItem =~ /\\bcanRename\\b/", "group": "1_accounts@2" },
+        { "command": "moe.accounts.moveUp", "when": "view == moe.accounts && viewItem =~ /\\bcanMoveUp\\b/", "group": "1_accounts@3" },
+        { "command": "moe.accounts.moveDown", "when": "view == moe.accounts && viewItem =~ /\\bcanMoveDown\\b/", "group": "1_accounts@4" },
+        { "command": "moe.accounts.remove", "when": "view == moe.accounts && viewItem =~ /\\bcanRemove\\b/", "group": "1_accounts@5" }
+      ],
+      "commandPalette": [
+        { "command": "moe.accounts.add", "when": "false" },
+        { "command": "moe.accounts.signIn", "when": "false" },
+        { "command": "moe.accounts.remove", "when": "false" },
+        { "command": "moe.accounts.moveUp", "when": "false" },
+        { "command": "moe.accounts.moveDown", "when": "false" },
+        { "command": "moe.accounts.rename", "when": "false" },
+        { "command": "moe.accounts.setSwitchPercent", "when": "false" }
       ]
     },
     "configuration": {
@@ -176,11 +204,6 @@
           "default": true,
           "description": "Automatically connect to daemon when workspace contains .moe folder"
         },
-        "moe.agentCommand": {
-          "type": "string",
-          "default": "claude",
-          "description": "CLI command to launch agents (claude, codex, gemini, grok, or a custom CLI path)"
-        },
         "moe.chat.notifications.enabled": {
           "type": "boolean",
           "default": true,
@@ -191,12 +214,15 @@
           "items": { "type": "string" },
           "default": [],
           "description": "List of channel IDs to mute notifications for"
-        },
-        "moe.chat.notifications.soundEnabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Play a notification sound for new agent chat messages"
         }
+      }
+    },
+    "configurationDefaults": {
+      "files.watcherExclude": {
+        "**/.worktrees/**": true
+      },
+      "search.exclude": {
+        "**/.worktrees": true
       }
     }
   },

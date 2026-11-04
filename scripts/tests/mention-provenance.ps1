@@ -48,10 +48,17 @@ Write-Host "[child] $psExe"
 # to fix. Probe the selected child and record what actually answered; a host
 # that cannot be probed is not a host this harness may report green on.
 $probeScript = '$ErrorActionPreference = ''Stop''; "PROBE_HOST exe=" + (Get-Process -Id $PID).Path + " version=" + $PSVersionTable.PSVersion.ToString(); if ($PSVersionTable.PSVersion.Major -ge 6) { "PROBE_TYPES reader=" + [Newtonsoft.Json.JsonTextReader].Assembly.FullName + " jobject=" + [Newtonsoft.Json.Linq.JObject].Assembly.FullName } else { "PROBE_TYPES not-required host=WindowsPowerShell-" + $PSVersionTable.PSVersion.ToString() + " ConvertFrom-Json leaves ISO strings as [string] here" }'
-# Printed single-quoted with inner quotes doubled, so the line above is a
-# literally re-runnable command rather than an approximation of one.
-$probeDisplay = "$psExe -NoProfile -Command '" + ($probeScript -replace "'", "''") + "'"
+# Sent as -EncodedCommand (base64 of the UTF-16LE text), never -Command. A
+# Windows PowerShell 5.1 parent passes native arguments with legacy quoting,
+# which strips the double quotes inside $probeScript: the child then ran
+# `PROBE_HOST exe= + ...` as a command, and the probe failed for either child.
+# Base64 has no quotes to strip, and both engines decode it the same way.
+$probeEncoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($probeScript))
+# [probe] is the exact command run, re-runnable as printed; [probe-script] is
+# the text it decodes to.
+$probeDisplay = "$psExe -NoProfile -EncodedCommand $probeEncoded"
 Write-Host "[probe] $probeDisplay"
+Write-Host "[probe-script] $probeScript"
 $probeOut = @()
 $probeRc = 1
 try {
@@ -59,7 +66,7 @@ try {
     # Continue, not Stop: a child that writes to stderr must be REPORTED with
     # its own output below, not turned into an opaque terminating error here.
     $ErrorActionPreference = 'Continue'
-    $probeOut = @(& $psExe -NoProfile -Command $probeScript 2>&1 | ForEach-Object { "$_" })
+    $probeOut = @(& $psExe -NoProfile -EncodedCommand $probeEncoded 2>&1 | ForEach-Object { "$_" })
     $probeRc = $LASTEXITCODE
 } catch {
     $probeOut = @("probe could not be launched: $_")
@@ -142,6 +149,7 @@ function Invoke-ProvenanceMode {
         mode = $env:MOE_PROVENANCE_MODE; worker = $env:MOE_PROVENANCE_WORKER
         chan = $env:MOE_PROVENANCE_CHANNEL; cap = $env:MOE_PROVENANCE_CAPTURE
         waitSec = $env:MOE_TASKLESS_WAIT_SEC
+        seam = $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER
     }
     try {
         $env:MOE_PROXY_PATH = $fakeProxy
@@ -152,6 +160,7 @@ function Invoke-ProvenanceMode {
         $env:MOE_PROVENANCE_CHANNEL = $channel
         $env:MOE_PROVENANCE_CAPTURE = $capture
         $env:MOE_TASKLESS_WAIT_SEC = '5'
+        $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1' # WT-13's guard refuses $wrapper when this suite runs from a task worktree (task-86431c31)
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         & $psExe -NoProfile -File $wrapper `
@@ -171,6 +180,7 @@ function Invoke-ProvenanceMode {
         $env:MOE_PROVENANCE_WORKER = $saved.worker; $env:MOE_PROVENANCE_CHANNEL = $saved.chan
         $env:MOE_PROVENANCE_CAPTURE = $saved.cap
         $env:MOE_TASKLESS_WAIT_SEC = $saved.waitSec
+        $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = $saved.seam
     }
     if ($rc -ne 0) {
         Get-Content $wrapperOut -Tail 40 | ForEach-Object { Write-Host "  $_" }

@@ -136,6 +136,33 @@ class ManagedVmPresentationTest {
     }
 
     @Test
+    fun `P6 producer codes render their own text and the bundle codes are exactly KNOWN_CODES`() {
+        val bundle = Properties()
+        checkNotNull(ManagedVmPresentationTest::class.java.getResourceAsStream("/messages/MoeBundle.properties")).use { bundle.load(it) }
+        val codeKey = Regex("""moe\.managedVm\.code\.[A-Z][A-Z0-9_]*""")
+        val bundled = bundle.stringPropertyNames().filter { codeKey.matches(it) }.map { it.removePrefix(K.CODE_PREFIX) }.toSet()
+        assertEquals(ManagedVmPresentation.KNOWN_CODES, bundled)
+
+        val provider = ManagedVmPresentation.readiness(status(provider = """{"ready":false,"code":"VERSION_MISMATCH"}"""))[0]
+        assertEquals(text(K.PROVIDER_NOT_READY, code("VERSION_MISMATCH")), provider)
+        val cleanup = """{"schema":"moe-vm-cleanup-v1","deleted":[],"preserved":[],"errors":[{"instance":"$d","code":"LIFECYCLE_NOT_OWNER"},""" +
+            """{"instance":"$e","code":"LEDGER_WRITE_FAILED"}],"invalid":0}"""
+        val errors = ManagedVmPresentation.notes(decode(CLEANUP, cleanup))
+        assertEquals(listOf(text(K.CLEANUP_ERROR, d, code("LIFECYCLE_NOT_OWNER")), text(K.CLEANUP_ERROR, e, code("LEDGER_WRITE_FAILED"))), errors)
+
+        fun render(t: ManagedVmText): String =
+            MessageFormat(bundle.getProperty(t.key), Locale.ROOT).format(t.args.map { if (it is ManagedVmText) render(it) else it }.toTypedArray<Any>())
+        val notOwner = "This VM record belongs to another task attempt, so Moe left it untouched; reconcile, then refresh."
+        val writeFailed = "Its ledger record could not be written; the VM may already be gone. " +
+            "Check free space and permissions under ~/.moe/runner-state (or MOE_RUNNER_STATE_DIR), then clean up again."
+        assertEquals(
+            "VM provider: not ready. The Multipass client and daemon versions differ; restart Multipass, or reinstall it, so both run the same approved version.",
+            render(provider)
+        )
+        assertEquals(listOf("$d: not deleted. $notOwner", "$e: not deleted. $writeFailed"), errors.map(::render))
+    }
+
+    @Test
     fun `every key and code has plain bundle text`() {
         val bundle = Properties()
         checkNotNull(ManagedVmPresentationTest::class.java.getResourceAsStream("/messages/MoeBundle.properties")).use { bundle.load(it) }

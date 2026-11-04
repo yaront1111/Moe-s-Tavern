@@ -22,6 +22,7 @@ import { releaseTaskTool } from './releaseTask.js';
 import { getHandoffHistoryTool } from './getHandoffHistory.js';
 import { listMetricsTool } from './listMetrics.js';
 import { submitPlanCritiqueTool } from './submitPlanCritique.js';
+import { currentAttempt, openAttempt } from '../state/attemptStore.js';
 import type { Project, Epic, Task } from '../types/schema.js';
 
 describe('governance control-plane features', () => {
@@ -353,6 +354,132 @@ describe('governance control-plane features', () => {
         expect(heard).toHaveLength(1);
         expect(heard[0].mentions).toEqual([]);
         expect(heard[0].content).toContain("`src/a'@worker-victim'.ts`");
+      });
+
+      // Worktree mode: a WORKING claim pins workspaceMode 'worktree' on its attempt only
+      // while settings.worktreeMode is 'on'. The rows below read that pinned mode on
+      // the claimer's attempt and on the live peer's open attempt, never the setting.
+      const LIVE_AND_DORMANT = [
+        { task: 'task-dead', files: ['src/foo.ts'] },
+        { task: 'task-gone', files: ['src/foo.ts'] },
+        { task: 'task-live', files: ['src/foo.ts'], liveAssignee: 'worker-live' },
+        { task: 'task-unassigned', files: ['src/foo.ts'] },
+      ];
+      const DORMANT_ONLY = [
+        { task: 'task-dead', files: ['src/foo.ts'] },
+        { task: 'task-gone', files: ['src/foo.ts'] },
+        { task: 'task-unassigned', files: ['src/foo.ts'] },
+      ];
+
+      async function openPeerAttempt(workspaceMode?: 'worktree' | 'shared'): Promise<void> {
+        await openAttempt(state, {
+          taskId: 'task-live', workerId: 'worker-live', runnerId: 'worker-live',
+          workspace: path.join(testDir, '.worktrees', 'task-live'),
+          ...(workspaceMode ? { workspaceMode } : {}),
+        });
+      }
+
+      // Every line the claim puts in #workers, whatever its wording or mentions:
+      // a reworded or mention-less notice still counts (a mention-less system line
+      // in a role channel routes to every busy seat).
+      async function claimAndHearWorkers(): Promise<{ result: Claimed; posted: string[] }> {
+        const workersId = state.getChannels().find((c) => c.name === 'workers')!.id;
+        const posted: string[] = [];
+        const unsubscribe = state.subscribe((e) => {
+          if (e.type === 'MESSAGE_CREATED' && e.payload.channel === workersId) posted.push(e.payload.content);
+        });
+        try {
+          const result = await claimNextTaskTool(state).handler(
+            { workerId: 'worker-b', statuses: ['WORKING'], taskId: 'task-B' },
+            state
+          ) as Claimed;
+          return { result, posted };
+        } finally {
+          unsubscribe();
+        }
+      }
+
+      function expectPagedAsToday(heard: Heard[]): void {
+        expect(heard).toHaveLength(1);
+        expect(heard[0].mentions).toEqual(['worker-live', 'worker-b']);
+        expect(heard[0].targets).toEqual(['worker-live', 'worker-b']);
+        expect(heard[0].content.endsWith('Coordinate before either of you lands.')).toBe(true);
+      }
+
+      it('(h) a worktree claimer and a worktree live peer: no #workers heads-up, nobody paged', async () => {
+        await setup({ live: 'worker-live' });
+        await state.updateSettings({ worktreeMode: 'on' });
+        await openPeerAttempt('worktree');
+        const { result, posted } = await claimAndHearWorkers();
+
+        expect(result.hasNext).toBe(true);
+        expect(currentAttempt(state, 'task-B')!.workspaceMode).toBe('worktree');
+        expect(posted).toEqual([]);
+        // The claimer's advisory is untouched, liveAssignee included.
+        expect(result.fileCollision).toEqual(LIVE_AND_DORMANT);
+      });
+
+      it('(h2) a worktree claimer with only dormant peers posts nothing either', async () => {
+        await setup();
+        await state.updateSettings({ worktreeMode: 'on' });
+        const { result, posted } = await claimAndHearWorkers();
+
+        expect(result.hasNext).toBe(true);
+        expect(currentAttempt(state, 'task-B')!.workspaceMode).toBe('worktree');
+        expect(posted).toEqual([]);
+        expect(result.fileCollision).toEqual(DORMANT_ONLY);
+      });
+
+      it.each([
+        ['a shared', 'shared' as const],
+        ['a legacy (no workspaceMode)', undefined],
+      ])('(i) %s live peer attempt keeps the heads-up and its pages', async (_label, peerMode) => {
+        await setup({ live: 'worker-live' });
+        await state.updateSettings({ worktreeMode: 'on' });
+        await openPeerAttempt(peerMode);
+        const { result, heard } = await claimAndHear();
+
+        expect(currentAttempt(state, 'task-B')!.workspaceMode).toBe('worktree');
+        expect(result.fileCollision).toEqual(LIVE_AND_DORMANT);
+        expectPagedAsToday(heard);
+      });
+
+      it('(i) a live peer with no open attempt keeps the heads-up and its pages', async () => {
+        await setup({ live: 'worker-live' });
+        await state.updateSettings({ worktreeMode: 'on' });
+        const { result, heard } = await claimAndHear();
+
+        expect(currentAttempt(state, 'task-live')).toBeNull();
+        expect(result.fileCollision).toEqual(LIVE_AND_DORMANT);
+        expectPagedAsToday(heard);
+      });
+
+      it('(j) worktreeMode off (shared claimer) pages as today even when the peer runs in a worktree', async () => {
+        await setup({ live: 'worker-live' });
+        await openPeerAttempt('worktree');
+        const { result, heard } = await claimAndHear();
+
+        expect(currentAttempt(state, 'task-B')!.workspaceMode).toBe('shared');
+        expect(result.fileCollision).toEqual(LIVE_AND_DORMANT);
+        expectPagedAsToday(heard);
+      });
+
+      it('(k) a failing #workers post never fails the claim', async () => {
+        await setup({ live: 'worker-live' });
+        const post = vi.spyOn(state, 'postToRoleChannel').mockRejectedValue(new Error('post down'));
+        try {
+          const result = await claimNextTaskTool(state).handler(
+            { workerId: 'worker-b', statuses: ['WORKING'], taskId: 'task-B' },
+            state
+          ) as Claimed;
+
+          expect(result.hasNext).toBe(true);
+          expect(result.fileCollision).toEqual(LIVE_AND_DORMANT);
+          expect(post).toHaveBeenCalledWith('workers', expect.stringContaining('file collision on task-B'));
+          expect(state.getTask('task-B')!.assignedWorkerId).toBe('worker-b');
+        } finally {
+          post.mockRestore();
+        }
       });
     });
   });
@@ -750,7 +877,6 @@ describe('governance control-plane features', () => {
         status: 'REVIEW',
         assignedWorkerId: 'qa-1',
         contextFetchedBy: ['qa-1'], // simulate QA preflight get_context
-        maxReopens: 10, // ensure reopen-cap does NOT trigger first
         implementationPlan: [
           { stepId: 'step-1', description: 's', status: 'COMPLETED', affectedFiles: [] },
         ],
@@ -781,12 +907,13 @@ describe('governance control-plane features', () => {
         reason: 'still failing tests',
         failedDodItems: ['Tests pass'],
         workerId: 'qa-1',
-      }, state) as { status: string; repeatedFailedDodItem?: string };
+      }, state) as { status: string; repeatedFailedDodItem?: string; exceededReopenCap: boolean };
 
       expect(result.status).toBe('PLANNING');
       expect(result.repeatedFailedDodItem).toBe('Tests pass');
       expect(state.getTask('task-d')!.status).toBe('PLANNING');
-      // Did NOT hit the reopen cap (maxReopens=10, count=2)
+      // Did NOT hit the reopen cap (3, count=2): the repeated item caused the flip.
+      expect(result.exceededReopenCap).toBe(false);
       expect(state.getTask('task-d')!.reopenCount).toBe(2);
     });
   });

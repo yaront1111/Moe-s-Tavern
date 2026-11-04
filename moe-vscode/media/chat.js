@@ -86,6 +86,29 @@
         saveState();
     }
 
+    // The selected channel vanished from the list (deleted): back to the no-channel state
+    // the page starts in. Markup is built with DOM calls only.
+    function deselectChannel() {
+        currentChannel = null;
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+        messagesEl.textContent = '';
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = 'Select a channel to start chatting';
+        messagesEl.appendChild(empty);
+        renderPins();
+        saveState();
+    }
+
+    // With nothing selected, select what JetBrains ChatChannelSelection.choose picks: the first
+    // general-type channel in list order, else the first listed channel. An empty list selects nothing.
+    function autoSelectChannel() {
+        if (currentChannel || channels.length === 0) return;
+        var general = channels.find(function(ch) { return ch.type === 'general'; });
+        selectChannel((general || channels[0]).id);
+    }
+
     // =====================================================================
     // Message rendering
     // =====================================================================
@@ -499,11 +522,12 @@
         switch (data.type) {
             case 'updateChannels':
                 channels = data.channels || [];
-                renderChannels();
-                // Auto-select first channel if none selected
-                if (!currentChannel && channels.length > 0) {
-                    selectChannel(channels[0].id);
+                // Drop a selection that is no longer listed; the branch below then falls back
+                if (currentChannel && !channels.some(function(ch) { return ch.id === currentChannel; })) {
+                    deselectChannel();
                 }
+                renderChannels();
+                autoSelectChannel();
                 break;
 
             case 'loadMessages':
@@ -532,12 +556,17 @@
                 break;
             }
 
-            case 'channelCreated':
-                if (data.channel) {
-                    channels.push(data.channel);
-                    renderChannels();
-                }
+            case 'channelCreated': {
+                // JetBrains MoeMessageDispatcher parity: replace by id, so a repeated frame lists
+                // the channel once (the latest payload, moved last). No string id: a no-op.
+                const created = data.channel;
+                if (!created || typeof created.id !== 'string') break;
+                channels = channels.filter(function(ch) { return ch.id !== created.id; });
+                channels.push(created);
+                renderChannels();
+                autoSelectChannel();
                 break;
+            }
 
             case 'loadPins':
                 pinCache[data.channel] = data.pins || [];

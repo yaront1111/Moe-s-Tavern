@@ -1,0 +1,267 @@
+{
+  "id": "task-f58c7c75e2f7401fbd8648817d343a6b",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "test: wt-control-seats can't tell the control-seat route from the shared landing path (ps1 mutant survives)",
+  "description": "QA (qa-b29f7b3d) approved WT-07 (task-b319b263) with one non-blocking gap, recorded in its reviewSummary as \"ps1: 3/4 killed. Survivor, non-blocking: control seat routed to the shared path. With no baseline that path also lands nothing here.\"\n\nThe gap is in the wt-control-seats case (WT7D) of scripts/tests/postflight-worktree.cjs. The case still passes when moe-agent.ps1 sends an architect or QA control seat down the shared landing path instead of Invoke-MoeControlSeatPostflight. With no pre-flight baseline, the shared path also lands nothing, so every assertion holds on both routes:\n- one nothing/checkpoint/MOE_COMMIT_NOTHING_TO_COMMIT row;\n- for-each-ref unchanged;\n- HEAD stays on moe/control;\n- the control write is kept;\n- no baseline is written.\nA regression in the control-seat route would therefore go unnoticed.\n\nQA's suggested fix: give the case an ASSERTED path (declare_files) or a TOOL-witnessed path that the shared path would commit.\n\nWhen this row is promoted, slot it into the wrapper-lane dependsOn chain (pinned #general msg-6c3c0ede).",
+  "definitionOfDone": [
+    "wt-control-seats gives the architect and QA control seats at least one path the shared landing path would commit (an ASSERTED path via declare_files, or a TOOL-witnessed edit). It asserts that path is on no ref after the seat exits, and that exactly one MOE_COMMIT_NOTHING_TO_COMMIT row was recorded.",
+    "The completion summary carries mutation evidence: routing the control seat to the shared landing path makes wt-control-seats fail under both engines (moe-agent.ps1 via powershell, moe-agent.sh via bash).",
+    "node scripts/tests/postflight-safe.mjs bash and node scripts/tests/postflight-safe.mjs powershell (Windows PowerShell 5.1) both report failureClass NONE, and parity-check PASSes.",
+    "Test-only: moe-agent.sh/.ps1 change only if the hardened case exposes a real defect, and the summary names that defect."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Harden wt-control-seats with a declared (ASSERTED) path. This is a test-only change to ONE function, wtControlSeats() (scripts/tests/postflight-worktree.cjs, about line 571).\n\nEditing rule: use only the main session's own Edit tool (Claude Edit/Write, or apply_patch on a codex exec seat). The path is contested, because task-31187ec1's plan also declares this file, so a write by shell, Serena or a subagent leaves no TOOL witness and the landing HOLDS it.\n\nWHY THE CASE IS BLIND TODAY:\n- A control seat skips the pre-flight baseline: preflight_landing and Invoke-MoePreflightBaseline return early for a non-worker in control_worktree_mode.\n- If a mutant routes it to the shared landing, run_landing / Invoke-MoeLanding find no baseline and force the undeclared policy to 'never'. The CLI's undeclared src/<role>.txt is then reported, never committed, and both routes record the same single nothing/checkpoint/MOE_COMMIT_NOTHING_TO_COMMIT row.\n- A DECLARED path is ASSERTED. Both twins say 'ASSERTED/TOOL/PLANNED/BOARD still land' (Resolve-MoeAttribution, and resolve_attribution's DECLARED set). On the shared route it would be committed to moe/control: Ensure-MoeSafeBranch / ensure_safe_branch keep that non-default branch.\n\nCHANGE, inside the existing for(const role of ['architect','qa']) loop:\n1. const rel='src/'+role+'.txt'. Keep f=path.join(p.top,'src',role+'.txt'), so the fake CLI's WT_CLI_WRITE target and the declaration name the same file. rel is ROOT-relative with '/'. This fixture has no sub, so ROOT = TOP.\n2. Before the launch, rewrite the fixture's task record with the existing write() helper:\n   write(path.join(p.dir,'.moe','tasks',TASK+'.json'),JSON.stringify({id:TASK,title:'Worktree smoke',status:'WORKING',declaredFiles:[rel]}))\n   The fake proxy's get_commit_scope reads it from MOE_PROJECT_PATH/.moe/tasks; declaredSets puts declaredFiles into ASSERTED.\n3. Take before=refs() AFTER that write.\n4. Add FAKE_SCOPE_DECLARED_FIELD:'1' to the landRun knobs, next to FAKE_CLAIM_WORKSPACE:null, so the scope serves `declared` as the current daemon does.\n5. After the existing assertions, add:\n   assert.equal(git(p.top,'log','--all','--format=%H','--',rel),'',`${role}: the declared ${rel} reached a ref`)\n   This means no commit reachable from any ref (branches, refs/moe/rescue/*, HEAD) carries the path.\n6. Keep every existing assertion unchanged:\n   - exit 0 and the MOE_COMMIT_NOTHING_TO_COMMIT line;\n   - exactly ONE ledger row [nothing, checkpoint, MOE_COMMIT_NOTHING_TO_COMMIT, no sha, no ref] (launch() clears record_commit.jsonl on every run);\n   - for-each-ref unchanged, HEAD still refs/heads/moe/control, the write kept;\n   - noBaseline.\n7. Extend the comment above the function to say why. For example: '// Architect and QA seats in the control checkout (HEAD moe/control) land nothing, not even a declared (ASSERTED) path, which the shared landing commits even with no baseline.'\n\nDo not touch any other case or helper, postflight-fake-proxy.js, or either wrapper.\n\nError handling in the harness is unchanged. git() throws an Error when a fixture command fails, so a harness fault is reported and never passes silently. assert.* raises an AssertionError on a wrong wrapper.\n\nThen run node --check scripts/tests/postflight-worktree.cjs (exit 0).\n\nTDD note: the real wrappers are already correct, so this test's RED is the step-2 mutant.\n\nArchitect prototype on HEAD d8681900, in scratch snapshots: exactly these lines pass against both real wrappers (bash 4 s, PS 5.1 8 s).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "wtControlSeats now declares src/<role>.txt per role, serves declared via FAKE_SCOPE_DECLARED_FIELD, and asserts git log --all on it is empty. node --check ok; git diff HEAD shows only this hunk. Other dirty paths are .moe/tasks records from other sessions.",
+      "startedAt": "2026-10-31T18:15:30.373Z",
+      "completedAt": "2026-10-31T18:15:49.623Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Mutation evidence on both engines (DoD 2). This step changes no tracked file: mutants live only in scratch snapshots outside the checkout, never in scripts/. Never kill processes by pattern; the suite kills only its own children, by PID.\n\nSNAPSHOTS, from the current HEAD (task-fa7fece5, this row's dependsOn, will have landed) plus this task's suite:\n1. Run git diff HEAD -- scripts/tests/postflight-worktree.cjs. It must show only the wtControlSeats hunks. If a peer's uncommitted hunk is there, stop and ask governor-693b7073 in #governors.\n2. Create two roots:\n   - WSL root: S=$(mktemp -d <your scratchpad>/f58c.XXXXXX)\n   - Windows-visible root: WT=$(mktemp -d \"$(wslpath \"$(powershell.exe -NoProfile -Command '[IO.Path]::GetTempPath()' | tr -d '\\r')\")moe-f58c.XXXXXX\")\n3. In each root, for v in orig mut:\n   - mkdir -p <root>/$v <root>/tmp-$v\n   - git archive HEAD scripts docs package.json | tar -x -C <root>/$v\n   - cp scripts/tests/postflight-worktree.cjs <root>/$v/scripts/tests/ && cmp the two files.\n\nMUTANTS: make the control-seat branch unreachable, so an architect/QA seat falls through to the shared landing.\n- sh, in $S/mut/scripts/moe-agent.sh, replace\n    elif { [ \"$ROLE\" = architect ] || [ \"$ROLE\" = qa ]; } && control_worktree_mode; then\n  with\n    elif false; then\n- ps1, in $WT/mut/scripts/moe-agent.ps1, replace\n    elseif (($Role -eq 'architect' -or $Role -eq 'qa') -and (Test-MoeControlWorktreeMode)) { $moeWtExit = 'control' }\n  with\n    elseif ($false) { $moeWtExit = 'control' }\n- Apply each as an exact-string replace and assert the match count is exactly 1; a silent no-op would read as a false kill.\n- After each replace: diff must show exactly one changed line. The sh copy must pass bash -n. The ps1 copy must keep its UTF-8 BOM (first bytes EF BB BF).\n- If task-fa7fece5 re-spelled an anchor line, mutate the same routing condition in its new spelling.\n\nRUN ONLY THE CASE, for v in orig mut:\n- bash:\n  cd $S/$v && MOE_WORKTREE_ONLY=wt-control-seats MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-worktree.cjs sh \"$S/$v/scripts/moe-agent.sh\" \"$S/$v/scripts/tests/postflight-fake-proxy.js\" \"$S/tmp-$v\" \"$(command -v bash)\"\n- Windows PowerShell 5.1, from WSL:\n  cd $WT/$v && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_WORKTREE_ONLY MOE_WORKTREE_ONLY=wt-control-seats MOE_POSTFLIGHT_TIMEOUT_SEC=300 \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-worktree.cjs ps1 \"$(wslpath -w \"$WT/$v/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$WT/$v/scripts/tests/postflight-fake-proxy.js\")\" \"$(wslpath -w \"$WT/tmp-$v\")\" powershell.exe\n  On a native Windows seat, run node with Windows paths directly.\n\nREQUIRED RESULTS:\n- orig prints '[worktree] wt-control-seats ok' on both engines.\n- mut prints 'wt-control-seats FAILED' on both engines, and its log shows the shared route's 'Committed checkpoint for task task-postflight on moe/control'.\n- Survivor check: run git show HEAD:scripts/tests/postflight-worktree.cjs > $WT/mut/scripts/tests/postflight-worktree.head.cjs, then run that file with the same ps1 mut arguments. It must print 'ok': QA's survivor, which proves the new lines are what kill it.\n\nRecord the 5 results in the step note: engine, suite (hardened/HEAD), wrapper (real/mutant), verdict, and the first failure line. Keep orig/ for step 3. Delete only the exact mut dirs you created.\n\nArchitect prototype (2026-10-31, HEAD d8681900): bash orig ok / mut FAILED; ps1 orig ok / mut FAILED at the first assertion, the shared route having committed 2 paths on moe/control.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Mutation table (final suite bytes; sh re-run on HEAD baa704f5, ps1 unchanged between HEADs). Each mutant is exactly one changed line in a scratch snapshot, count==1, bash -n ok, BOM kept.\n1 bash | hardened | real | ok | '[worktree] wt-control-seats ok'\n2 bash | hardened | mutant (elif false) | FAILED | 'architect: exit code 0, or no MOE_COMMIT_NOTHING_TO_COMMIT line'; log 'Committed checkpoint ... on moe/control (2 paths)'\n3 ps1 5.1 | hardened | real | ok\n4 ps1 5.1 | hardened | mutant ($false) | FAILED | same first assertion; 'Committed checkpoint ... on moe/control (2 paths)'\n5 ps1 5.1 | HEAD suite | mutant | ok (QA's survivor reproduced)\nMut dirs deleted; orig rebuilt from HEAD baa704f5 for step 3.",
+      "startedAt": "2026-10-31T18:15:50.641Z",
+      "completedAt": "2026-10-31T18:17:26.671Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate (DoD 3 and the epic parity rail). Run it ONCE, in step 2's orig snapshots: exact HEAD plus this task's suite, so a peer's in-flight bytes in the shared tree cannot leak in. If HEAD or the suite changed since step 2, rebuild orig first.\n\nStart both runs in the background, each with its own log and rc file (append echo rc=$? to the log). Running them at the same time is fine on this host; QA did so for WT-07. Wait with an until-loop on the rc line, inside the 10-minute tool cap, and re-issue the wait when it times out. Expect about 13-15 min for bash and 20-22 min for PS 5.1.\n\n(a) bash, from $S/orig, with the seat's own variables cleared. VERIFICATION COMMAND (the complete_task evidence, exactly as run):\n  env $(compgen -e | grep -E '^(MOE_|CLAUDE)' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh\n  Expect one JSON line with \"failureClass\":\"NONE\", the parity PASS line, and exit 0.\n(b) Windows PowerShell 5.1, from $WT/orig:\n  WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell\n  On a native Windows seat use plain node. Expect \"engine\":\"powershell\",\"failureClass\":\"NONE\".\n\nmoe.complete_task:\n- verification = command (a) as written, its exitCode, and an outputTail holding the JSON line and the parity line.\n- The summary carries (b)'s JSON line, the snapshot's HEAD sha, and step 2's 5-row mutation table.\n- The summary states that scripts/moe-agent.sh and .ps1 are unchanged (DoD 4). Exception: if the hardened case exposed a real defect, name it, fix it in both twins with Edit, and rerun steps 2-3.\n\nError handling:\n- Any failureClass other than NONE is a failure. Read failureLine and lastScenario.\n- If it was a harness flake (for example TIMEOUT on a busy box), rerun with a wider MOE_POSTFLIGHT_TIMEOUT_SEC and say in the summary that it took a rerun. Never present a rerun-only pass as a first-run pass.\n- A real red is a defect: debug it with systematic-debugging, never by weakening the test.\n- After the runs end, delete only the exact snapshot dirs you created.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Gates on snapshot of HEAD baa704f5 + hardened suite, first run, no flake. bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"} + PASS parity-check.sh rc=0. ps1 5.1: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"} rc=0. Snapshots deleted.",
+      "startedAt": "2026-10-31T18:17:27.544Z",
+      "completedAt": "2026-10-31T18:43:05.045Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, once. Load adversarial-self-review and read git diff HEAD -- scripts/tests/postflight-worktree.cjs as an attacker.\n\n(1) Scope: the diff touches only wtControlSeats and its comment. git diff --quiet HEAD -- scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-fake-proxy.js passes, unless DoD 4's named-defect route was taken.\n(2) Vacuity: could the new assertion pass on a broken route? A declaration the fake proxy ignores would bring QA's survivor back. Check for:\n   - a record written to the wrong .moe (p.dir vs p.top spelling on win32);\n   - a backslash or absolute rel;\n   - a missing FAKE_SCOPE_DECLARED_FIELD;\n   - a record written after before=refs().\n   The proof is step 2's two mutant FAILED runs and the HEAD-suite survivor run. Confirm they ran on the FINAL suite bytes.\n(3) git log --all -- <rel> covers refs/heads, refs/moe/rescue/* and HEAD, so a mutant that only parks the bytes on a rescue ref still fails.\n(4) In the qa run, src/architect.txt is still dirty but undeclared. The control route must still land nothing and record exactly one row.\n(5) PS 5.1: node writes the record without a BOM (the fake proxy strips one anyway), and rel uses '/'.\n(6) Two concurrent suite runs use separate mkdtemp roots and do not collide.\n(7) Neither the diff nor any note carries one of the project's global forbiddenPatterns.\n(8) Only your own scratch dirs were deleted, and no tracked file was written by a shell or a subagent.\n\nFix any finding with Edit, and rerun steps 2-3 if the suite bytes changed. Report modifiedFiles: scripts/tests/postflight-worktree.cjs only. Write the Serena handoff note task-task-f58c7c75e2f7401fbd8648817d343a6b-handoff, then call moe.complete_task. The wrapper lands the work: never git add, commit or push.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Self-review of the wtControlSeats diff (committed in checkpoint 76f80f90; no uncommitted scripts/ diff remains). (1) Scope: only wtControlSeats and its comment changed; git diff --quiet HEAD on moe-agent.sh, moe-agent.ps1 and postflight-fake-proxy.js passes. (2) Vacuity: the step-2 mutants FAILED on both engines, and the HEAD-suite ps1 survivor run passed, all on the final suite bytes (the suite is unchanged since). rel uses '/', the record is written to p.dir/.moe/tasks before before=refs(), and FAKE_SCOPE_DECLARED_FIELD is set. (3) git log --all covers branches, rescue refs and HEAD. (4) The qa run's dirty src/architect.txt is undeclared; the control route still records exactly one row. (5) PS 5.1 record has no BOM (fake proxy strips one anyway). (6) Concurrent runs use separate mkdtemp roots. (7) No forbidden patterns. (8) Only my own scratch dirs were deleted, and the tracked file was written only with Edit. Theoretical: none.",
+      "startedAt": "2026-10-31T18:44:19.866Z",
+      "completedAt": "2026-10-31T18:44:30.537Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor on the human's 14:5xZ instruction to keep the board moving and coders busy. This is the LOW test gap QA noted when approving WT-07. The plan touches the postflight harnesses: governor-693b7073 slots it into the wrapper chain once planned.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 31,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T14:35:31.686Z",
+  "updatedAt": "2026-10-31T19:11:28.173Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T14:49:02.375Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T14:49:30.087Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T19:11:07.580Z",
+    "wallClockMs": 15697493
+  },
+  "contextFetchedBy": [
+    "architect-66fd8127",
+    "worker-25da16b2",
+    "qa-4398294e"
+  ],
+  "dependsOn": [
+    "task-7a4aab5e0bfa48e0978eb76506edfd57"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T15:06:21.933Z",
+  "executionContract": {
+    "intendedBehavior": "wt-control-seats fails whenever an architect or QA seat in a worktree-mode control checkout (HEAD refs/heads/moe/control) is routed to the shared landing path instead of control_seat_postflight / Invoke-MoeControlSeatPostflight, on both wrappers. It does so because each seat now carries a declared (ASSERTED) path that the shared landing would commit even without a baseline.",
+    "acceptanceCriteria": [
+      "Per role, the fixture task record declares src/<role>.txt (declaredFiles), and the scope serves `declared` (FAKE_SCOPE_DECLARED_FIELD=1).",
+      "After each control-seat exit: git log --all -- src/<role>.txt is empty; exactly one record_commit row [nothing, checkpoint, MOE_COMMIT_NOTHING_TO_COMMIT]; refs, HEAD and the written bytes are as before; no baseline.",
+      "A mutant with the control-seat route disabled fails the case under bash and under Windows PowerShell 5.1, and the unmutated wrappers pass. HEAD's unhardened suite still lets the ps1 mutant pass, which shows it was the survivor."
+    ],
+    "invariants": [
+      "No other suite case or helper, postflight-fake-proxy.js, or either wrapper changes, unless a real defect is named in the summary.",
+      "Mutants exist only in scratch snapshots outside the checkout.",
+      "The existing wt-control-seats assertions are kept unchanged."
+    ],
+    "compatibility": [
+      "Every other postflight-worktree.cjs case is unchanged, as is the suite's CLI shape (<sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>, MOE_WORKTREE_ONLY)."
+    ],
+    "reuse": [
+      "The existing helpers repo, landRun, ledger, noBaseline, write, git and probe, and the fake proxy's declaredFiles / FAKE_SCOPE_DECLARED_FIELD knobs. No new knob or helper."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh: preflight_landing returns early for a non-worker in control_worktree_mode. run_landing sets policy_override=never on a missing baseline, while ASSERTED/TOOL/PLANNED/BOARD still land. resolve_attribution builds DECLARED from scope.declared.",
+      "scripts/moe-agent.ps1: Invoke-MoePreflightBaseline returns early for control seats. Invoke-MoeLanding sets $policyOverride='never' when there is no baseline. Resolve-MoeAttribution puts declared ASSERTED paths in the candidates. Ensure-MoeSafeBranch keeps a non-default branch such as moe/control.",
+      "scripts/tests/postflight-fake-proxy.js get_commit_scope reads records from MOE_PROJECT_PATH/.moe/tasks. Asserted comes from the record's declaredFiles (declaredSets), and `declared` is served only with FAKE_SCOPE_DECLARED_FIELD=1."
+    ],
+    "checkRefs": [
+      "env $(compgen -e | grep -E '^(MOE_|CLAUDE)' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh",
+      "WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) TOOL-witnessed edit. The fake CLI would have to emit Claude stream-json tool_use/tool_result pairs that the witness harvester accepts on both engines: far more fixture for the same kill. Rejected. (2) A declare_files (ASSERTED) path through the fake proxy's existing on-disk record plus the FAKE_SCOPE_DECLARED_FIELD knob. Chosen: about 4 changed lines, no new knob or helper, engine-independent, and prototyped green on the real wrappers and red on both mutants. (3) An in-suite positive control, a non-control seat landing the same declared path. Rejected as scope beyond the DoD; the mutation evidence covers it. (4) Seeding declaredFiles in repo()'s committed record. Rejected because it changes a shared helper. The per-case rewrite stays local, and a dirty .moe/tasks record is realistic in a control checkout, where the daemon writes.",
+    "codebaseInsights": "Why the ps1 mutant survived: a control seat takes no pre-flight baseline (preflight_landing / Invoke-MoePreflightBaseline return early). The shared landing then forces the undeclared policy to 'never', so the CLI's undeclared write is reported, never committed, and both routes record the identical nothing row. On sh, the old case already caught it through the baseline file the shared run_landing leaves behind (noBaseline), which is why QA killed 11/12 sh mutants but only 3/4 ps1. Declared (ASSERTED) paths bypass 'never' in both twins. Routing lines: moe-agent.sh about :9692 (elif ... control_worktree_mode; then control_seat_postflight) and moe-agent.ps1 about :8925 ($moeWtExit = 'control'). On the mutant route the shared landing keeps the non-default moe/control branch and CASes onto it.",
+    "risks": "(a) dependsOn task-fa7fece5 edits moe-agent.sh for bash 3.2. If it re-spells the routing line, mutate the same condition in its new spelling and keep the one-changed-line check. (b) The suite path is contested by task-31187ec1's plan, so write it only with the main session's Edit tool. (c) The gates are long (bash about 13-15 min, PS 5.1 about 20-22 min). Background them and poll; never block the foreground past 10 min. (d) PS 5.1 needs a snapshot on a Windows-visible drive (%TEMP%), run by Windows node.exe, with WSLENV passing only the knobs. (e) Never kill by pattern, and never mutate the tracked wrappers or leave a mutant in the checkout.",
+    "keyFiles": [
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-safe.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c0965b1765e0a2c2126a57260846be4af9074c56",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T15:06:21.953Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "e8df388279399db7b5a677d05bab9399a60043ad",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-66fd8127@2026-10-31T14:49:32Z",
+      "paths": [
+        ".moe/tasks/task-2720c13bc79b438e840b14cbba4fea50.json",
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-d4810c9c0b0244598e275cc5cbe40ed7.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+        ".moe/tasks/task-f622843305224cf49ca24478b26c3351.json"
+      ],
+      "recordedBy": "architect-66fd8127",
+      "recordedAt": "2026-10-31T15:18:27.044Z",
+      "treeId": "b7a648cec4b66652c7f09b6a57078f951340424e",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "76f80f901d6c3d4d9643a86e010623d75d87def3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T18:15:10Z",
+      "paths": [
+        ".moe/tasks/task-01020adf7b0f4dc3bdd72734eb07be3c.json",
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T18:43:20.662Z",
+      "treeId": "ac0c96048e18a8ada6a5107beb703509bc69b1d2",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "a912e2404a106272a71626a17c16a412403a7c81",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T18:43:58Z",
+      "paths": [
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T18:44:59.695Z",
+      "treeId": "672ccb9de5ba2c03a6dae13f63d2516103b58d3b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "03355c255c193cd565c8b4f5878790527ade4683",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-4398294e@2026-10-31T18:45:16Z",
+      "paths": [
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-d4c4a758ad304ec3a6d294d9307b06f1.json",
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json"
+      ],
+      "recordedBy": "qa-4398294e",
+      "recordedAt": "2026-10-31T19:11:28.173Z",
+      "treeId": "c17a82738553c153aef03b0a347e4a56c86e68a2",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs",
+    ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+    ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+    ".moe/tasks/task-d4c4a758ad304ec3a6d294d9307b06f1.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-4398294e@2026-10-31T18:45:16Z",
+    "at": "2026-10-31T19:11:28.173Z"
+  },
+  "workStartedAt": "2026-10-31T18:15:30.373Z",
+  "touchedFiles": [
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "reviewStartedAt": "2026-10-31T18:44:41.046Z",
+  "verification": {
+    "command": "env $(compgen -e | grep -E '^(MOE_|CLAUDE)' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}\nPASS parity-check.sh\nrc=0",
+    "reportedAt": "2026-10-31T18:44:41.046Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "wt-control-seats (postflight-worktree.cjs, wtControlSeats only) now gives each architect/QA control seat a declared (ASSERTED) path, src/<role>.txt, in the fixture task record, and serves it via FAKE_SCOPE_DECLARED_FIELD=1. The shared landing would commit that path even with no baseline. After the seat exits the case asserts `git log --all -- src/<role>.txt` is empty, on top of the unchanged assertions (one nothing/checkpoint/MOE_COMMIT_NOTHING_TO_COMMIT row, refs and HEAD unchanged, write kept, no baseline).\n\nGates (first run, no flake; snapshot of HEAD baa704f5 + hardened suite, MOE_*/CLAUDE* cleared):\n- bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}; parity-check PASS; rc=0.\n- PS 5.1: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}; rc=0.\n\nMutation table (each mutant is one changed line in a scratch snapshot, count==1, bash -n ok, BOM kept):\n1 bash | hardened | real | ok\n2 bash | hardened | mutant (elif false) | FAILED at 'architect: exit code 0, or no MOE_COMMIT_NOTHING_TO_COMMIT line'; log 'Committed checkpoint ... on moe/control (2 paths)'\n3 ps1 5.1 | hardened | real | ok\n4 ps1 5.1 | hardened | mutant ($false) | FAILED at the same assertion; shared route committed 2 paths on moe/control\n5 ps1 5.1 | HEAD suite | mutant | ok (QA's survivor reproduced)\n\nscripts/moe-agent.sh, moe-agent.ps1 and postflight-fake-proxy.js are unchanged; no defect found. Snapshots deleted. The step-3 gate output was captured earlier in this same attempt; the outputTail below is condensed from my step-3 note, not re-run in this session.",
+  "completedAt": "2026-10-31T19:11:07.580Z",
+  "reviewCompletedAt": "2026-10-31T19:11:07.580Z",
+  "reviewSummary": "APPROVED. Reviewed completion a912e240 (board only) + checkpoint 76f80f90 (suite change), on moe/work-2026-10-24, pushed. Diff: postflight-worktree.cjs wtControlSeats() only, +7/-3; moe-agent.sh/.ps1/fake-proxy unchanged (DoD 4).\n\nDoD 1: each role's task record declares src/<role>.txt, written before before=refs(); FAKE_SCOPE_DECLARED_FIELD=1; new assert `git log --all -- rel` empty; old assertions kept. Fake proxy declaredSets/knob read and confirmed.\n\nDoD 2 (my scratch snapshots of a912e240, one-line mutants, count==1, bash -n ok, BOM kept):\n- bash real ok; bash mutant (elif false) FAILED at 'exit code 0, or no MOE_COMMIT_NOTHING_TO_COMMIT line', log 'Committed checkpoint ... on moe/control (2 paths)'\n- PS5.1 real ok; PS5.1 mutant ($false) FAILED, same assertion\n- PS5.1 pre-change suite (76f80f90^) on mutant: ok = QA's survivor reproduced.\n\nDoD 3 (snapshot of a912e240, MOE_*/CLAUDE* cleared, first run, no flake):\n- verification cmd (postflight-safe.mjs bash && parity-check.sh): {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}, PASS parity, rc=0\n- Windows node.exe postflight-safe powershell (PS5.1, timeout 180 via WSLENV): {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}, rc=0\n\nTIMING/CONTENTION (proxy, not CPU): gates concurrent from 18:46:13Z; bash+parity ~11 min, PS ~24 min. Live seats 12 (2 workers CODING). jetbrains-gradle/gradle leases: no holders or queue at start or end. tasklist.exe node/powershell/pwsh/bash/java start 6/3/0/0/2, end 6/3/0/0/2 (flat); other seats' harnesses on host, untouched.\n\nPonytail: nothing to cut. Own scratch dirs deleted; no process kills.",
+  "requiredCheckAtDone": null
+}

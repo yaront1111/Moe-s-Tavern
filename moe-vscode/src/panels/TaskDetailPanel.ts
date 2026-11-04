@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
-import { PlanReviewPanel, seedRevisionAttribute, showApprovalRefusal } from './PlanReviewPanel';
+import { PlanReviewPanel, seedRevisionAttribute, showApprovalRefusal, stepTextHtml } from './PlanReviewPanel';
 import type {
     HandoffNote,
+    ImplementationStep,
     Task,
     TaskComment,
     TaskPriority,
@@ -134,6 +135,161 @@ export function blockerFacts(task: Task): string[] {
     return facts;
 }
 
+// =============================================================================
+// Delivery presentation
+// =============================================================================
+
+/**
+ * The runner-reported delivery evidence of a task, as display rows. A port of
+ * the contract JetBrains ships and owns (DeliveryPresentation.rows in
+ * moe-jetbrains/src/main/kotlin/com/moe/toolwindow/, plus the type guards of
+ * MoeJson.parseDelivery, because this client receives the raw wire JSON).
+ * tests/delivery-corpus.test.cjs replays the shared corpus
+ * moe-jetbrains/src/test/resources/client-delivery.json through it, so drift
+ * fails a test instead of shipping. Kept inside this file with no new import:
+ * peer tests load the panel under node:vm with a strict require map.
+ *
+ * What a run REPORTED is never proof the daemon executed a check, and the
+ * policy verdict (requiredCheckSatisfied) is never inferred from the run.
+ */
+export type DeliveryOutcome = 'PASS' | 'FAIL';
+
+export interface DeliveryRow {
+    labelKey: string;
+    value: string;
+    fullValue: string;
+    outcome: DeliveryOutcome | null;
+}
+
+export const DELIVERY_TITLE_KEY = 'moe.delivery.title';
+
+/** English labels, equal to the moe.delivery.* entries of JetBrains' MoeBundle.properties (the test compares them). */
+export const DELIVERY_LABELS: Record<string, string> = {
+    'moe.delivery.title': 'Delivery',
+    'moe.delivery.candidateSha': 'Candidate SHA',
+    'moe.delivery.candidateBase': 'Candidate base',
+    'moe.delivery.checkCommand': 'Reported check command',
+    'moe.delivery.checkPassed': 'Reported check passed - exit code',
+    'moe.delivery.checkFailed': 'Reported check failed - exit code',
+    'moe.delivery.checkNotPassed': 'Reported check did not pass - exit code',
+    'moe.delivery.checkOutcome': 'Reported check outcome',
+    'moe.delivery.checkSource': 'Reported check source',
+    'moe.delivery.requiredCheckCounted': 'Required check counted by policy',
+    'moe.delivery.requiredCheckNotCounted': 'Required check not counted by policy',
+    'moe.delivery.receiptTarget': 'Reported delivery target',
+    'moe.delivery.landedRevision': 'Reported landed revision',
+    'moe.delivery.attemptPhase': 'Owning attempt phase',
+};
+
+/** A non-null, non-array object, or null for anything else. */
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+}
+
+/** A non-empty string member, or null: missing, empty and wrong-typed all mean "no row", never coerced. */
+function reportedText(record: Record<string, unknown> | null, key: string): string | null {
+    const value = record?.[key];
+    return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * Display rows in JetBrains' order. Total function: a malformed member means
+ * no row for it, and nothing here throws. A candidate SHA is the tree SHA when
+ * that is non-empty, else the short SHA (an empty tree SHA must fall back, so a
+ * bare `??` on the raw member would be wrong). SHA rows show 8 characters and
+ * keep the whole value as `fullValue`; every other row has fullValue === value.
+ */
+export function deliveryRows(delivery: unknown): DeliveryRow[] {
+    const root = asRecord(delivery);
+    if (!root) { return []; }
+    const rows: DeliveryRow[] = [];
+    const addValue = (labelKey: string, value: string | null, sha = false): void => {
+        if (value) { rows.push({ labelKey, value: sha ? value.slice(0, 8) : value, fullValue: value, outcome: null }); }
+    };
+    const addVerdict = (labelKey: string, value: string, outcome: DeliveryOutcome): void => {
+        rows.push({ labelKey, value, fullValue: value, outcome });
+    };
+    const candidate = asRecord(root.currentCandidate);
+    addValue('moe.delivery.candidateSha', reportedText(candidate, 'treeSha') ?? reportedText(candidate, 'shortSha'), true);
+    addValue('moe.delivery.candidateBase', reportedText(candidate, 'baseRevision'), true);
+    const run = asRecord(root.latestCheckRun);
+    const outcome = reportedText(run, 'outcome');
+    addValue('moe.delivery.checkCommand', reportedText(run, 'command'));
+    // The daemon stores any safe integer; a string is never coerced to a code.
+    const code = run?.exitCode;
+    if (typeof code === 'number' && Number.isSafeInteger(code)) {
+        // Mirrors the daemon gate rule: only exit 0 with no outcome or exactly "passed" reads as passed.
+        const passed = code === 0 && (outcome === null || outcome === 'passed');
+        const labelKey = passed ? 'moe.delivery.checkPassed'
+            : code !== 0 ? 'moe.delivery.checkFailed' : 'moe.delivery.checkNotPassed';
+        addVerdict(labelKey, String(code), passed ? 'PASS' : 'FAIL');
+    }
+    addValue('moe.delivery.checkOutcome', outcome);
+    const source = reportedText(run, 'source');
+    addValue('moe.delivery.checkSource', source === 'runner-observed' || source === 'agent-reported' ? source : null);
+    if (root.requiredCheckSatisfied === true) {
+        addVerdict('moe.delivery.requiredCheckCounted', 'yes', 'PASS');
+    } else if (root.requiredCheckSatisfied === false) {
+        addVerdict('moe.delivery.requiredCheckNotCounted', 'no', 'FAIL');
+    }
+    const receipt = asRecord(root.deliveryReceipt);
+    addValue('moe.delivery.receiptTarget', reportedText(receipt, 'target'));
+    addValue('moe.delivery.landedRevision', reportedText(receipt, 'landedRevision'), true);
+    addValue('moe.delivery.attemptPhase', reportedText(root, 'attemptPhase'));
+    return rows;
+}
+
+/**
+ * deliveryRows with each English label looked up: the one lookup behind the
+ * initial markup (which escapes it) and the live update (DOM text in media/taskDetail.js).
+ */
+export function deliveryDisplay(delivery: unknown) {
+    return {
+        title: DELIVERY_LABELS[DELIVERY_TITLE_KEY],
+        rows: deliveryRows(delivery).map(row => ({ ...row, label: DELIVERY_LABELS[row.labelKey] ?? row.labelKey })),
+    };
+}
+
+// =============================================================================
+// Release Agent
+// =============================================================================
+
+/**
+ * The text of JetBrains' Release Agent action (moe.button.releaseAgent,
+ * moe.message.releasedInUI, moe.message.releaseAgent, releaseAgentForce,
+ * releaseAgentForceTitle and releaseAgentForceStale in MoeBundle.properties,
+ * used by TaskDetailDialog and MoeToolWindowPanel.handleReleaseAgent), copied
+ * exactly: tests/task-release.test.cjs reads that bundle and compares. The
+ * confirm text keeps its {0} (worker id) and {1} (task title) placeholders. It
+ * is shown as plain text in a modal, so it is never HTML-escaped.
+ */
+const RELEASE_AGENT_LABEL = 'Release Agent';
+const RELEASED_FROM_BOARD = 'Released from board';
+const RELEASE_AGENT_CONFIRM = 'Release agent "{0}" from "{1}"? The task stays claimable where it is (Working stays Working, unassigned; Review if all steps are done) and the agent goes idle — the next agent may pick it up immediately. To pull the task away from the fleet instead, drag it to Backlog.';
+const RELEASE_AGENT_FORCE = 'Agent "{0}" is mid-step: step {1} of "{2}" is IN_PROGRESS, so a normal release is refused. Force the release only if you believe "{0}" is dead (hung or crashed). A live agent would lose the task in the middle of its step. Force release?';
+const RELEASE_AGENT_FORCE_TITLE = 'Force Release Agent';
+const RELEASE_AGENT_FORCE_STALE = 'Nothing was sent. The task changed while you were confirming, and agent "{0}" no longer holds step {1} IN_PROGRESS. Reopen the task and try again.';
+
+/** Plain-text bundle substitution, never re-scanning inserted values. */
+function formatBundleText(template: string, ...values: string[]): string {
+    return template.replace(/\{(\d)\}/g, (match, index: string) => values[Number(index)] ?? match);
+}
+
+/** Mirror the daemon guard: the holder leases the first IN_PROGRESS step. */
+function stepLease(task: Task | undefined): { holder: string; stepId: string } | null {
+    const holder = nonBlankString(task?.assignedWorkerId);
+    if (holder === null || !Array.isArray(task?.implementationPlan)) { return null; }
+    const step = task.implementationPlan.find(entry => entry?.status === 'IN_PROGRESS');
+    return step ? { holder, stepId: step.stepId } : null;
+}
+
+/** The Release Agent button's label when the task has an agent to release, else null: one rule for the initial page and every live update. */
+function releaseAgentLabel(task: Task): string | null {
+    return nonBlankString(task.assignedWorkerId) !== null ? RELEASE_AGENT_LABEL : null;
+}
+
 /**
  * Task Detail Panel - a full-featured editor panel for viewing and editing tasks.
  *
@@ -141,7 +297,7 @@ export function blockerFacts(task: Task): string[] {
  * - Editable fields: title, description, DoD, priority
  * - Implementation plan display with status icons and color coding
  * - Comments section with add-comment input
- * - Action buttons: Save, Approve, Reject, Reopen, Prev, Next, Delete
+ * - Action buttons: Save, Approve, Reject, Reopen, Release Agent, Prev, Next, Delete
  * - PR link display
  * - Live updates via state change subscription
  */
@@ -265,6 +421,12 @@ export class TaskDetailPanel implements vscode.Disposable {
         codeName?: string;
         context?: { taskId?: string };
     }): void {
+        if (event.operation === 'RELEASE_TASK') {
+            if (event.context?.taskId === this.taskId) {
+                vscode.window.showErrorMessage('Agent was not released: ' + event.message);
+            }
+            return;
+        }
         if (!this.approvalPending || event.operation !== 'APPROVE_TASK') { return; }
         if (event.context?.taskId !== this.taskId) { return; }
         this.approvalPending = false;
@@ -284,9 +446,13 @@ export class TaskDetailPanel implements vscode.Disposable {
                 this.approvalPending = false;
             }
             if (task) {
+                // The page rebuilds the Delivery section and the Release Agent
+                // button from these, with the initial render's rows and rule.
                 this.panel.webview.postMessage({
                     type: 'updateTask',
                     task,
+                    delivery: deliveryDisplay(task.delivery),
+                    releaseAgentLabel: releaseAgentLabel(task),
                 });
             }
         }, 200);
@@ -349,6 +515,48 @@ export class TaskDetailPanel implements vscode.Disposable {
                     break;
                 }
 
+                case 'releaseAgent': {
+                    // Live updates add and remove the button, but a click can
+                    // still race one: judge the task as it is now, not as rendered.
+                    const current = this.findTask();
+                    const workerId = nonBlankString(current?.assignedWorkerId);
+                    if (!current || workerId === null) {
+                        vscode.window.showInformationMessage('No agent is assigned to this task.');
+                        break;
+                    }
+                    // Only the click-time snapshot chooses force; the cache
+                    // recheck below can refuse it, never authorize a new lease.
+                    const lease = stepLease(current);
+                    const title = current.title;
+                    const choice = await vscode.window.showWarningMessage(
+                        formatBundleText(RELEASE_AGENT_CONFIRM, workerId, title),
+                        { modal: true },
+                        RELEASE_AGENT_LABEL
+                    );
+                    if (choice !== RELEASE_AGENT_LABEL) { break; }
+                    let released: boolean;
+                    if (lease) {
+                        const forceChoice = await vscode.window.showWarningMessage(
+                            formatBundleText(RELEASE_AGENT_FORCE, lease.holder, lease.stepId, title),
+                            { modal: true },
+                            RELEASE_AGENT_FORCE_TITLE
+                        );
+                        if (forceChoice !== RELEASE_AGENT_FORCE_TITLE) { break; }
+                        const latestLease = stepLease(this.findTask());
+                        if (!latestLease || latestLease.holder !== lease.holder || latestLease.stepId !== lease.stepId) {
+                            vscode.window.showWarningMessage(formatBundleText(RELEASE_AGENT_FORCE_STALE, lease.holder, lease.stepId));
+                            break;
+                        }
+                        released = this.client.releaseTask(this.taskId, RELEASED_FROM_BOARD, true);
+                    } else {
+                        released = this.client.releaseTask(this.taskId, RELEASED_FROM_BOARD);
+                    }
+                    if (!released) {
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — agent was not released.');
+                    }
+                    break;
+                }
+
                 case 'delete': {
                     const confirmed = await vscode.window.showWarningMessage(
                         'Delete this task? This cannot be undone.',
@@ -388,10 +596,10 @@ export class TaskDetailPanel implements vscode.Disposable {
                     } else {
                         if (idx <= 0) { break; }
                         if (currentStatus === 'REVIEW' || currentStatus === 'DONE') {
-                            const reason = await vscode.window.showInputBox({
+                            const reason = (await vscode.window.showInputBox({
                                 prompt: 'Reason for reopening',
                                 placeHolder: 'Why is this task being reopened?',
-                            });
+                            }))?.trim();
                             if (reason) {
                                 if (this.client.reopenTask(this.taskId, reason)) {
                                     vscode.window.showInformationMessage('Task reopened');
@@ -400,7 +608,11 @@ export class TaskDetailPanel implements vscode.Disposable {
                                 }
                             }
                         } else {
-                            this.client.updateTaskStatus(this.taskId, workflowOrder[idx - 1]);
+                            // Twin: media/board.js previousMove and JetBrains BoardMoves.previous. WORKING goes
+                            // back to PLANNING, never AWAITING_APPROVAL, which /ws refuses from WORKING.
+                            const target = currentStatus === 'PLANNING' ? 'BACKLOG'
+                                : currentStatus === 'WORKING' || currentStatus === 'AWAITING_APPROVAL' ? 'PLANNING' : undefined;
+                            if (target) { this.client.updateTaskStatus(this.taskId, target); }
                         }
                     }
                     break;
@@ -593,6 +805,12 @@ export class TaskDetailPanel implements vscode.Disposable {
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .step-amended {
+            margin-top: 4px;
+            font-size: 11px;
+            font-style: italic;
+            color: var(--vscode-descriptionForeground);
+        }
         .step-files {
             margin-top: 4px;
             font-size: 11px;
@@ -783,6 +1001,15 @@ export class TaskDetailPanel implements vscode.Disposable {
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .delivery-section { margin-bottom: 12px; }
+        .delivery-value {
+            font-size: 12px;
+            font-family: var(--vscode-editor-font-family);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .delivery-pass .delivery-value { color: var(--vscode-testing-iconPassed); }
+        .delivery-fail .delivery-value { color: var(--vscode-testing-iconFailed); }
     </style>
 </head>
 <body>
@@ -800,6 +1027,10 @@ export class TaskDetailPanel implements vscode.Disposable {
              media/taskDetail.js; the wrapper stays even when empty so the
              update handler has one node of its own to fill and to clear. -->
         <div id="blockerSection">${this.renderBlocker(task)}</div>
+
+        <!-- Delivery: read-only runner-reported evidence; nothing when there is
+             none. Live-refreshed (added, rebuilt, removed) in media/taskDetail.js. -->
+        ${this.renderDelivery(task)}
 
         <!-- Editable fields -->
         <div class="field-row">
@@ -860,6 +1091,7 @@ export class TaskDetailPanel implements vscode.Disposable {
         ${task.status === 'AWAITING_APPROVAL' ? '<button class="btn btn-approve" id="approveBtn">Approve</button>' : ''}
         ${task.status === 'AWAITING_APPROVAL' ? '<button class="btn btn-reject" id="rejectBtn">Reject</button>' : ''}
         ${task.status === 'REVIEW' || task.status === 'DONE' ? '<button class="btn btn-secondary" id="reopenBtn">Reopen</button>' : ''}
+        ${releaseAgentLabel(task) !== null ? `<button class="btn btn-secondary" id="releaseAgentBtn">${RELEASE_AGENT_LABEL}</button>` : ''}
         <button class="btn btn-secondary" id="prevBtn" ${task.status === 'BACKLOG' ? 'disabled' : ''} title="Move back in workflow">Prev</button>
         <button class="btn btn-secondary" id="nextBtn" ${task.status === 'DONE' ? 'disabled' : ''} title="Move forward in workflow">Next</button>
         <span class="spacer"></span>
@@ -922,7 +1154,29 @@ export class TaskDetailPanel implements vscode.Disposable {
         return parts.join('');
     }
 
-    private renderSteps(steps: Array<{ stepId: string; description: string; status: string; affectedFiles?: string[] }>): string {
+    /**
+     * The read-only Delivery section, or '' when the task has no delivery
+     * evidence to show. Display only: no action, no copy button, no client call.
+     * Every value is runner-reported text, so it goes through `escapeHtml`, in
+     * the element and in the `title` attribute that carries the full value.
+     * tests/delivery-corpus.test.cjs matches this exact one-line-per-row markup.
+     * Live updates post the same `deliveryDisplay` rows, which media/taskDetail.js
+     * writes as DOM text and which tests/task-detail-live.test.cjs holds equal to this.
+     */
+    private renderDelivery(task: Task): string {
+        const { title, rows } = deliveryDisplay(task.delivery);
+        if (rows.length === 0) {
+            return '';
+        }
+        const body = rows.map(row => {
+            const outcome = row.outcome ? ` delivery-${row.outcome.toLowerCase()}` : '';
+            return `<div class="delivery-row${outcome}"><div class="field-label">${escapeHtml(row.label)}</div>`
+                + `<div class="delivery-value" title="${escapeHtml(row.fullValue)}">${escapeHtml(row.value)}</div></div>`;
+        });
+        return `<div class="delivery-section" id="deliverySection"><div class="section-title">${escapeHtml(title)}</div>${body.join('')}</div>`;
+    }
+
+    private renderSteps(steps: ImplementationStep[]): string {
         if (steps.length === 0) {
             return '<p class="muted-text">No implementation steps defined</p>';
         }
@@ -943,7 +1197,7 @@ export class TaskDetailPanel implements vscode.Disposable {
 
             return `<div class="step-card ${cssClass}">
                 <div class="step-header"><span class="${iconClass}">${icon}</span><span>Step ${i + 1}: ${escapeHtml(status)}</span></div>
-                <div class="step-description">${escapeHtml(step.description)}</div>
+                ${stepTextHtml(step)}
                 ${filesHtml}
             </div>`;
         }).join('');
@@ -1107,11 +1361,12 @@ function kpi(label: string, value: string): string {
     return `<div class="kpi"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${escapeHtml(value)}</div></div>`;
 }
 
+// The title matches the JetBrains header (TaskDetailDialog.handoffBlocks): "#N released by X (time): reason",
+// each part only when its field is a non-blank string, so a malformed note renders "#N" instead of throwing.
 function renderHandoff(index: number, h: HandoffNote): string {
-    const title = `#${index}` +
-        (h.from ? ` from ${escapeHtml(h.from)}` : '') +
-        (h.to ? ` → ${escapeHtml(h.to)}` : '') +
-        (h.createdAt ? `  (${escapeHtml(h.createdAt)})` : '');
+    const part = (prefix: string, value: unknown, suffix = ''): string =>
+        typeof value === 'string' && value.trim() ? prefix + escapeHtml(value) + suffix : '';
+    const title = `#${index}` + part(' released by ', h.releasedBy) + part(' (', h.releasedAt, ')') + part(': ', h.reason);
     function block(label: string, value: string | undefined): string {
         const body = value && value.trim() ? escapeHtml(value) : '—';
         return `<div class="handoff-section">

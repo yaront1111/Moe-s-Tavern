@@ -197,5 +197,24 @@ describe('moe.get_pending_questions', () => {
     expect(fullQuestion.tasks[0].questions[0].content).toHaveLength(1200);
     expect(fullQuestion.tasks[0].questions[0].contentTruncated).toBeUndefined();
   });
+
+  it('leaves an ARCHIVED task out by default and returns it with includeArchived: true', async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    const question = (id: string) => [{ id, author: 'human', content: `Still open? ${id}`, timestamp: '2024-01-01T00:00:00Z' }];
+    h.createTask({ id: 'task-live', order: 1, hasPendingQuestion: true, comments: question('c-live') });
+    h.createTask({ id: 'task-shelved', order: 2, status: 'ARCHIVED', hasPendingQuestion: true, comments: question('c-shelved') });
+    await h.state.load();
+
+    type Res = { totalMatches: number; tasks: Array<{ taskId: string; questions: Array<{ commentId: string }> }> };
+    const tool = getPendingQuestionsTool(h.state);
+    const byDefault = await tool.handler({}, h.state) as Res;
+    expect(byDefault.tasks.map((t) => t.taskId)).toEqual(['task-live']);
+    expect(byDefault.totalMatches).toBe(1);
+
+    const withArchived = await tool.handler({ includeArchived: true }, h.state) as Res;
+    expect(withArchived.tasks.map((t) => t.taskId)).toEqual(['task-live', 'task-shelved']);
+    expect(withArchived.tasks[1].questions.map((q) => q.commentId)).toEqual(['c-shelved']);
+  });
 });
 

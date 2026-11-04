@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
-import { MoeDaemonClient } from '../services/MoeDaemonClient';
+import { MoeDaemonClient, protectedVmControlRuntime, runtimeProfile } from '../services/MoeDaemonClient';
 import { ManagedVmCommand, ManagedVmReport, actions, notes, readiness, rows, runVmControl, strongProfile, unreadable } from '../util/ManagedVm';
 
 interface VmNode { label: string; children?: VmNode[] }
@@ -77,7 +77,10 @@ export class ManagedVmTreeProvider implements vscode.TreeDataProvider<VmNode>, v
         const script = path.join(this.extensionPath, 'bundled', 'scripts', 'local-runner', 'vm-control.mjs');
         if (!root) { return Promise.resolve(unreadable('no-project')); }
         if (!fs.existsSync(script)) { return Promise.resolve(unreadable('script-missing')); }
-        return runVmControl(execFile, this.client.resolveDaemonRuntime().node, script, command, root, signal);
+        if (runtimeProfile(root) !== 'protected') { return runVmControl(execFile, this.client.resolveDaemonRuntime().node, script, command, root, signal); }
+        // Protected read: the JetBrains ManagedVmPanel.execute counterpart. A refused node starts no process and never falls back to the legacy node.
+        const runtime = protectedVmControlRuntime(root);
+        return runtime ? runVmControl(execFile, runtime.node, script, command, root, signal, runtime.env) : Promise.resolve(unreadable('node-missing'));
     }
 
     /** Toolbar enablement follows the same actions() the run re-checks. */

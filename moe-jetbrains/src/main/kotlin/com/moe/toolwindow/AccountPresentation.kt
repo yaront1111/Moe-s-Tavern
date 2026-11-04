@@ -25,7 +25,9 @@ data class AccountRow(
     val signIn: AccountText,
     val fiveHour: AccountText,
     val weekly: AccountText,
-    val status: AccountText
+    val status: AccountText,
+    /** Set, not set, or unknown when the daemon does not report it. */
+    val vmToken: AccountText
 )
 
 /** Which Accounts tab controls work right now. */
@@ -39,7 +41,9 @@ data class AccountActions(
     val signOut: Boolean,
     val signOutAndRemove: Boolean,
     val check: Boolean,
-    val switchAt: Boolean
+    val switchAt: Boolean,
+    val setVmToken: Boolean,
+    val removeVmToken: Boolean
 )
 
 /** Every bundle key the Accounts tab, the header line and their dialogs use. */
@@ -62,6 +66,7 @@ object AccountKeys {
     const val COLUMN_FIVE_HOUR = "moe.accounts.column.fiveHour"
     const val COLUMN_WEEKLY = "moe.accounts.column.weekly"
     const val COLUMN_STATUS = "moe.accounts.column.status"
+    const val COLUMN_VM_TOKEN = "moe.accounts.column.vmToken"
 
     const val SIGN_IN_SUBSCRIPTION = "moe.accounts.signIn.subscription"
     const val SIGN_IN_SIGNED_OUT = "moe.accounts.signIn.signedOut"
@@ -75,6 +80,9 @@ object AccountKeys {
     const val STATUS_ACTIVE_SEATS = "moe.accounts.status.activeSeats"
     const val STATUS_IN_USE = "moe.accounts.status.inUse"
     const val STATUS_READY = "moe.accounts.status.ready"
+    const val VM_TOKEN_STATE_PRESENT = "moe.accounts.vmTokenState.present"
+    const val VM_TOKEN_STATE_ABSENT = "moe.accounts.vmTokenState.absent"
+    const val VM_TOKEN_STATE_UNKNOWN = "moe.accounts.vmTokenState.unknown"
 
     const val HEADER = "moe.accounts.header"
     const val HEADER_TOOLTIP = "moe.accounts.header.tooltip"
@@ -95,6 +103,8 @@ object AccountKeys {
     const val BUTTON_MOVE_UP = "moe.accounts.button.moveUp"
     const val BUTTON_MOVE_DOWN = "moe.accounts.button.moveDown"
     const val BUTTON_REMOVE = "moe.accounts.button.remove"
+    const val BUTTON_SET_VM_TOKEN = "moe.accounts.button.setVmToken"
+    const val BUTTON_REMOVE_VM_TOKEN = "moe.accounts.button.removeVmToken"
 
     const val ADD_TITLE = "moe.accounts.add.title"
     const val ADD_PROMPT = "moe.accounts.add.prompt"
@@ -106,12 +116,19 @@ object AccountKeys {
     const val REMOVE_CONFIRM = "moe.accounts.remove.confirm"
     const val REMOVE_SIGN_OUT = "moe.accounts.remove.signOut"
     const val REMOVE_ONLY = "moe.accounts.remove.only"
+    const val VM_TOKEN_SET_TITLE = "moe.accounts.vmToken.setTitle"
+    const val VM_TOKEN_SET_CONFIRM = "moe.accounts.vmToken.setConfirm"
+    const val VM_TOKEN_REMOVE_TITLE = "moe.accounts.vmToken.removeTitle"
+    const val VM_TOKEN_REMOVE_CONFIRM = "moe.accounts.vmToken.removeConfirm"
+    const val VM_TOKEN_UNSUPPORTED = "moe.accounts.vmToken.unsupported"
     const val CANCEL = "moe.button.cancel"
     const val TERMINAL_TAB = "moe.accounts.terminal.tab"
     const val TERMINAL_UNAVAILABLE_TITLE = "moe.accounts.terminal.unavailableTitle"
     const val TERMINAL_UNAVAILABLE = "moe.accounts.terminal.unavailable"
 
-    val COLUMNS = listOf(COLUMN_POSITION, COLUMN_ACCOUNT, COLUMN_SIGN_IN, COLUMN_FIVE_HOUR, COLUMN_WEEKLY, COLUMN_STATUS)
+    val COLUMNS = listOf(
+        COLUMN_POSITION, COLUMN_ACCOUNT, COLUMN_SIGN_IN, COLUMN_FIVE_HOUR, COLUMN_WEEKLY, COLUMN_STATUS, COLUMN_VM_TOKEN
+    )
 }
 
 object AccountPresentation {
@@ -145,7 +162,8 @@ object AccountPresentation {
                     now,
                     zone
                 ),
-                status = status(account, now, zone)
+                status = status(account, now, zone),
+                vmToken = AccountText(vmTokenKey(account.vmToken))
             )
         }
 
@@ -178,6 +196,9 @@ object AccountPresentation {
         // List edits go through the daemon; CLI commands run in a terminal and only need its paths.
         val edit = usable && connected
         val cli = usable && rotation.cli != null
+        // The flag and the `vm-token` command ship in the same daemon (CQ-M07k), so a
+        // daemon that sends no flag runs a CLI that refuses the command: unknown disables both.
+        val vmToken = if (selected) accounts[index].vmToken else null
         return AccountActions(
             add = edit && accounts.size < MAX_ACCOUNTS,
             rename = edit && selected,
@@ -188,14 +209,29 @@ object AccountPresentation {
             signOut = cli && selected,
             signOutAndRemove = cli && selected,
             check = cli && accounts.isNotEmpty(),
-            switchAt = edit
+            switchAt = edit,
+            setVmToken = cli && selected && vmToken != null,
+            removeVmToken = cli && selected && vmToken == true
         )
     }
 
-    /** The daemon's label rule: trimmed, at most 64 characters, no control characters. Empty means the id. */
+    /**
+     * The `accounts` CLI words for minting (or with [remove], deleting) an account's
+     * VM token. These are the only VM-token words the plugin passes: a token is never
+     * an argument, and the plugin never reads Moe's token store, only the daemon's flag.
+     */
+    fun vmTokenArgs(accountId: String, remove: Boolean): List<String> =
+        if (remove) listOf("vm-token", accountId, "--remove") else listOf("vm-token", accountId)
+
+    /**
+     * The daemon's label rule (accounts/registry.ts normalizeLabel): trimmed, at most 64 UTF-16 characters, and none of
+     * U+0000..U+001F or U+007F. The C1 controls (U+0080..U+009F) are accepted, as the daemon accepts them. Empty means
+     * the id. Kotlin's trim also strips U+001C..U+001F at the ends, where the daemon's JS trim does not; that
+     * divergence is known and not pinned by the shared corpus.
+     */
     fun isValidLabel(input: String): Boolean {
         val label = input.trim()
-        return label.length <= MAX_LABEL_LENGTH && label.none { it.isISOControl() }
+        return label.length <= MAX_LABEL_LENGTH && label.none { it < ' ' || it == '\u007F' }
     }
 
     /** Floored, so 89.6% never reads as a 90% switch point. */
@@ -211,6 +247,13 @@ object AccountPresentation {
         SUBSCRIPTION -> AccountKeys.SIGN_IN_SUBSCRIPTION
         "other" -> AccountKeys.SIGN_IN_OTHER
         else -> AccountKeys.SIGN_IN_SIGNED_OUT
+    }
+
+    /** A missing flag (an older daemon) is unknown, never set. */
+    private fun vmTokenKey(vmToken: Boolean?): String = when (vmToken) {
+        true -> AccountKeys.VM_TOKEN_STATE_PRESENT
+        false -> AccountKeys.VM_TOKEN_STATE_ABSENT
+        null -> AccountKeys.VM_TOKEN_STATE_UNKNOWN
     }
 
     private fun usage(window: UsageWindow?, now: Instant, zone: ZoneId): AccountText {

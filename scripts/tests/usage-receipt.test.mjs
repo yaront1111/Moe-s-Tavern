@@ -321,3 +321,35 @@ test('canonical snapshots fail open to unknown for mismatched, malformed, traver
     assert.equal(readFileSync(prepared.file, 'utf8'), '', name);
   }
 });
+
+// G1 needs the built daemon and proxy because onboarding.mjs does; CI's build-all-platforms job builds both (its Build daemon and Build proxy steps) before the step that runs this file (Test agent runtime discovery).
+test('G1: the prompt-cache tests and the onboarding smoke never append to an inherited live usage receipt', t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe usage guard '));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'receipt.jsonl');
+  const env = { ...process.env, MOE_USAGE_RECEIPT_FILE: file,
+    MOE_USAGE_CONTEXT_JSON: JSON.stringify({ ...context, taskId: 'task-guard' }) };
+  delete env.NODE_TEST_CONTEXT; // a nested node --test that inherits it reports to this run instead of running
+  const launch = spawnSync(process.execPath, [helper, 'usage-start', 'claude'], { env, encoding: 'utf8' });
+  assert.equal(launch.status, 0, launch.stderr);
+  const before = readFileSync(file);
+  assert.equal(before.toString('utf8').trim().split('\n').length, 1, 'the receipt starts with exactly one launch line');
+  const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+  const children = [
+    ['--test', '--test-reporter=tap', 'scripts/tests/prompt-cache.test.mjs', 'scripts/tests/prompt-cache-launcher.test.mjs'],
+    ['scripts/tests/onboarding.mjs'],
+  ];
+  const outputs = children.map(args => {
+    const child = spawnSync(process.execPath, args, { cwd: repoRoot, env, encoding: 'utf8', timeout: 600_000, windowsHide: true });
+    const out = `${child.stdout ?? ''}${child.stderr ?? ''}`;
+    assert.equal(child.status, 0,
+      `node ${args.join(' ')} exited ${child.status} (signal ${child.signal}):\n${out.slice(-4000)}`);
+    return out;
+  });
+  assert.match(outputs[0], /^# fail 0$/m, 'the prompt-cache run reports no failures');
+  const pass = /^# pass (\d+)$/m.exec(outputs[0]);
+  assert.ok(pass && Number(pass[1]) >= 1, 'the prompt-cache run reports at least one pass');
+  assert.match(outputs[1], /^PASS onboarding:/m);
+  const after = readFileSync(file);
+  assert.deepEqual(after, before, `receipt grew by: ${after.toString('utf8').slice(before.length)}`);
+});

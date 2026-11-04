@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { StateManager } from '../state/StateManager.js';
 import { chatWaitTool, MAX_BURST_MESSAGES, PER_CHANNEL_SCAN_LIMIT, summarizeChatBurst } from './chatWait.js';
+import { MAX_CHAT_RESPONSE_CHARS } from '../util/chatPayload.js';
 import type { ChatMessage, Worker } from '../types/schema.js';
 
 const WORKER_ID = 'worker-wait';
@@ -219,6 +220,82 @@ describe('moe.chat_wait', () => {
     });
   });
 
+  describe('drains deliver only routed lines outside the watched channels', () => {
+    /** Not a routine presence line, so it routes to every busy seat. */
+    const SYSTEM_LINE = 'file collision: task-1 and task-2 both touch x.ts';
+
+    beforeEach(async () => {
+      // A mention-less system line routes only to non-IDLE, non-DEAD seats.
+      await state.updateWorker(WORKER_ID, { status: 'GOVERNING' });
+    });
+
+    /** Another seat's thread around one system line routed to the caller. */
+    async function postWorkersThread(): Promise<{ system: ChatMessage; reply: ChatMessage }> {
+      await post(channels.workers, `@${PEER_ID} please rebase task-1`);
+      const system = await post(channels.workers, SYSTEM_LINE, 'system');
+      const reply = await post(channels.workers, 'rebased, pushing now', PEER_ID);
+      return { system, reply };
+    }
+
+    it('entry drain returns only the routed system line from an unwatched channel', async () => {
+      const { system, reply } = await postWorkersThread();
+
+      const result = await wait({ channels: [channels.governors] });
+
+      expect(result.messages?.map((m) => m.id)).toEqual([system.id]);
+      // The skipped reply after the last delivered line still moves the cursor.
+      expect(cursorFor(channels.workers)).toBe(reply.id);
+      expect(state.getUnreadSummary(WORKER_ID)).toBeNull();
+      expect(await wait({ channels: [channels.governors] })).toMatchObject({ hasMessage: false, timedOut: true });
+    });
+
+    it('wake drain returns only the routed system line from an unwatched channel', async () => {
+      const pending = wait({ channels: [channels.governors] });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const { system } = await postWorkersThread();
+
+      const result = await pending;
+
+      expect(result.messages?.map((m) => m.id)).toEqual([system.id]);
+    });
+
+    it('with no filter delivers routed and human lines, never another seat\'s unrouted line', async () => {
+      await post(channels.workers, '@worker-ghost can you look at task-2', PEER_ID);
+      await post(channels.workers, 'ack, on it', PEER_ID);
+      const human = await post(channels.workers, `@${PEER_ID} please rebase task-1`);
+      const system = await post(channels.workers, SYSTEM_LINE, 'system');
+
+      const result = await wait({});
+
+      expect(result.messages?.map((m) => m.id)).toEqual([human.id, system.id]);
+    });
+
+    it('reads past more than one page of skipped lines to a routed line in the same call', async () => {
+      const anchor = await post(channels.workers, 'anchor', PEER_ID);
+      await state.updateWorkerCursors(WORKER_ID, { [channels.workers]: anchor.id });
+      for (let i = 0; i < PER_CHANNEL_SCAN_LIMIT + 10; i++) {
+        await post(channels.workers, `peer chatter ${i}`, PEER_ID);
+      }
+      const system = await post(channels.workers, SYSTEM_LINE, 'system');
+
+      const result = await wait({ channels: [channels.governors] });
+
+      expect(result.messages?.map((m) => m.id)).toEqual([system.id]);
+      expect(cursorFor(channels.workers)).toBe(system.id);
+    });
+
+    it('a skip-only entry drain blocks with the cursor on its last skipped line', async () => {
+      const anchor = await post(channels.workers, 'anchor', PEER_ID);
+      await post(channels.workers, 'peer chatter one', PEER_ID);
+      const last = await post(channels.workers, 'peer chatter two', PEER_ID);
+
+      const result = await wait({ sinceId: anchor.id });
+
+      expect(result).toEqual({ hasMessage: false, timedOut: true });
+      expect(cursorFor(channels.workers)).toBe(last.id);
+    });
+  });
+
   describe('burst on wake', () => {
     for (const mention of ['direct', 'role'] as const) {
       it(`wakes for a routed ${mention} mention outside the watched channels`, async () => {
@@ -249,22 +326,25 @@ describe('moe.chat_wait', () => {
       expect((await pending).messages?.map(m => m.id)).toEqual([message.id]);
       expect(cursorFor(channels.workers)).toBeUndefined();
     });
-    it('returns every message that arrived, not just the one that woke the waiter', async () => {
+    it('skips unrouted chatter on a no-filter wake and delivers only the routed trigger', async () => {
       const waitPromise = wait({});
       // Let the (empty) entry drain finish so this exercises the wake path.
       await new Promise((resolve) => setTimeout(resolve, 30));
 
       // Unrouted chatter: does not wake a broad-scope waiter and does not
-      // increment unread — but it IS in the channel the wake drain scans.
-      const quiet1 = await post(channels.general, 'unrelated status one', PEER_ID);
-      const quiet2 = await post(channels.general, 'unrelated status two', PEER_ID);
+      // increment unread. It IS in the channel the wake drain scans, but with
+      // no filter the drain applies the wake's own rule, so it is skipped.
+      await post(channels.general, 'unrelated status one', PEER_ID);
+      await post(channels.general, 'unrelated status two', PEER_ID);
       const trigger = await post(channels.general, `@${WORKER_ID} now look`, PEER_ID);
 
       const result = await waitPromise;
 
       expect(result.hasMessage).toBe(true);
-      expect(result.messages?.map((m) => m.id)).toEqual([quiet1.id, quiet2.id, trigger.id]);
+      expect(result.messages?.map((m) => m.id)).toEqual([trigger.id]);
       expect(cursorFor(channels.general)).toBe(trigger.id);
+      // The skipped chatter is never delivered by a later call either.
+      expect(await wait({})).toMatchObject({ hasMessage: false, timedOut: true });
     });
 
     it('does not advance a cursor past a backlog the drain never scanned', async () => {
@@ -361,6 +441,48 @@ describe('moe.chat_wait', () => {
       expect(burst.hasMore).toBe(true);
     });
 
+    it('moves a cursor over skipped lines but never past a line the response budget dropped', () => {
+      const message = (id: string, channel: string, timestamp: string, content = id): ChatMessage => ({
+        id, channel, sender: 'system', content, replyTo: null, mentions: [], timestamp,
+      });
+      const r1 = message('r1', 'chan-a', '2026-11-03T10:00:00.000Z');
+      const rB = message('rB', 'chan-b', '2026-11-03T10:00:01.000Z', 'x'.repeat(MAX_CHAT_RESPONSE_CHARS));
+
+      // s1 is a skipped line after r1 in chan-a; sB0 a skipped line before rB.
+      const burst = summarizeChatBurst([r1, rB], [], {
+        partialChannels: new Set(),
+        scannedChannels: new Set(['chan-a', 'chan-b']),
+        skipAfter: new Map([['r1', 's1']]),
+        skipLead: new Map([['chan-b', 'sB0']]),
+      }, 0);
+
+      expect(burst.messages.map((m) => m.id)).toEqual(['r1']);
+      expect(burst.cursorUpdates).toEqual({ 'chan-a': 's1', 'chan-b': 'sB0' });
+      expect(burst.fullyDrained).toEqual(['chan-a']);
+      expect(burst.hasMore).toBe(true);
+    });
+
+    it('keeps the plain cursor in a channel whose off-bus line the response budget dropped', () => {
+      // The dropped off-bus line may be one the scan skipped (the live wake
+      // admitted it from routingTargets), so no skip run may carry the cursor.
+      const message = (id: string, timestamp: string, content = id): ChatMessage => ({
+        id, channel: 'chan-a', sender: 'system', content, replyTo: null, mentions: [], timestamp,
+      });
+      const r1 = message('r1', '2026-11-03T10:00:00.000Z');
+      const trigger = message('t1', '2026-11-03T10:00:01.000Z', 'x'.repeat(MAX_CHAT_RESPONSE_CHARS));
+
+      const burst = summarizeChatBurst([r1], [trigger], {
+        partialChannels: new Set(),
+        scannedChannels: new Set(['chan-a']),
+        skipAfter: new Map([['r1', 's1']]),
+        skipLead: new Map([['chan-a', 's0']]),
+      }, 0);
+
+      expect(burst.messages.map((m) => m.id)).toEqual(['r1']);
+      expect(burst.cursorUpdates).toEqual({ 'chan-a': 'r1' });
+      expect(burst.fullyDrained).toEqual([]);
+    });
+
     it('does not advance a partially scanned channel past what the scan read (wake path)', async () => {
       // Regression: the scan pages 50 at a time, so with more than that waiting
       // the trigger is newest by timestamp — letting it set the cursor would
@@ -369,10 +491,13 @@ describe('moe.chat_wait', () => {
       await state.updateWorkerCursors(WORKER_ID, { [channels.general]: anchor.id });
       const fillers: ChatMessage[] = [];
       for (let i = 0; i < PER_CHANNEL_SCAN_LIMIT + 10; i++) {
-        fillers.push(await post(channels.general, `filler ${i}`, PEER_ID));
+        // Human fillers: the no-filter drain delivers every human line, so the
+        // scan's page is all deliverable and the partial-scan cursor is what
+        // this row pins. (An idle seat is no routing target of a mention-less
+        // human line, so they neither wake the waiter nor mark unread.)
+        fillers.push(await post(channels.general, `filler ${i}`));
       }
 
-      // Broad scope: unrouted fillers neither wake the waiter nor mark unread.
       const waitPromise = wait({});
       await new Promise((resolve) => setTimeout(resolve, 30));
       const trigger = await post(channels.general, `@${WORKER_ID} wake up`, PEER_ID);

@@ -22,6 +22,13 @@ const sh = read('sh');
 const shContext = between(sh, '                # 5. Fetch context for the claimed task', '                # 6. Read task channel backlog');
 const psContext = between(ps, '    $dynamicContext = ""', '    # -------- Pre-flight baseline');
 const psBody = between(ps, '    $claimPromptBody = $null', '    $script:CliLaunchedAt = Get-Date');
+// This fixture tests prompt rendering, not provisioning: psContext calls real wrapper helpers
+// but excludes their definitions, so each reachable one gets a side-effect-free stand-in.
+// Initialize-MoeWorktree (WT-04) keeps its signature; Test-MoeControlWorktreeMode (WT-13)
+// answers $false because the fixture renders a shared-mode checkout.
+const psStubs = `function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {}
+function Test-MoeControlWorktreeMode { $false }
+`;
 const shPrompt = between(sh, '    DYNAMIC_CONTEXT=""', '    # -------- Pre-flight landing: recovery');
 const windows = process.platform === 'win32';
 // The planner budget is read from the environment; an operator's own value must
@@ -64,10 +71,7 @@ $preflightClaimFailed=$${bool(o.claimFailed)}
 $preflightRoutedMentions=@([pscustomobject]@{content='reply-fixture'})
 $preflightContext=$env:MOE_FIXTURE_CONTEXT | ConvertFrom-Json
 $statuses=@('WORKING'); $serenaProject=[IO.Path]::GetTempPath()
-# This fixture tests prompt rendering, not provisioning: psContext calls the real WT-04 helper
-# but excludes its definition, so supply a side-effect-free stand-in with the same signature.
-function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {}
-`;
+${psStubs}`;
     script = '\ufeff' + setup + psContext + psBody + '\n[Console]::Write(([char]30).ToString() + $dynamicContext + [char]30 + $claimPromptBody)';
   }
   // Real scripts exceed Windows argv limits; a file also avoids bash -c quote
@@ -230,6 +234,26 @@ for (const [engine, executable] of engines) {
     assert.match(junk.body, multiPlan);
   });
 }
+
+// The PowerShell renders run only on Windows, and under $ErrorActionPreference = 'Stop' a
+// slice call to a helper defined outside the slice throws CommandNotFoundException
+// (task-5d517571: Initialize-MoeWorktree; task-99a26cf2: Test-MoeControlWorktreeMode). This
+// check runs on every OS. A mention in a comment counts as a call: it fails closed.
+// ponytail: only Verb-MoeNoun names are scanned; scan every function moe-agent.ps1 defines
+// if a slice ever calls one of its few non-Moe helpers (Invoke-PostFlight, Get-RoleDoc).
+const psUnreachable = new Set([
+  'Stop-MoeVerifiedLocalSeat', // behind $script:MoeVmRoute, which the fixture never sets
+  'Invoke-MoeQaControlPreflight', // behind (Test-MoeControlWorktreeMode), stubbed to $false
+  'Assert-MoeQaLandedCommit', // behind (Test-MoeControlWorktreeMode), stubbed to $false
+]);
+test('ps1 prompt slices call only Moe helpers the fixture defines, stubs or cannot reach', () => {
+  const slices = psContext + psBody;
+  const called = new Set(slices.match(/\b[A-Z][A-Za-z]+-Moe[A-Za-z0-9]+\b/g));
+  assert.ok(called.size > 0, 'the helper scan matched nothing: its pattern no longer fits the slices');
+  const defined = new Set([...`${slices}\n${psStubs}`.matchAll(/^\s*function\s+(?:\w+:)?([\w-]+)/gm)].map(m => m[1]));
+  const missing = [...called].filter(name => !defined.has(name) && !psUnreachable.has(name));
+  assert.deepEqual(missing, [], `ps1 prompt slices call Moe helpers the fixture neither defines nor stubs: ${missing.join(', ')}. Add a side-effect-free stand-in to psStubs, or list a call the fixture cannot reach in psUnreachable with its guard.`);
+});
 
 // ---- Wrapper-side wait + adoption boundary: assert the GUARDS, in both
 // wrappers. These live outside the rendered prompt slices (pre-flight and

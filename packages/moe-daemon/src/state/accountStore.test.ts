@@ -21,8 +21,10 @@ import {
   registryFilePath,
   removeAccount,
   renameAccount,
+  vmTokenFile,
 } from '../accounts/registry.js';
 import { parseUsageWindows } from '../accounts/usageWindows.js';
+import { removeVmToken, writeVmToken } from '../accounts/vmTokens.js';
 import type { Project, Worker } from '../types/schema.js';
 
 // What the daemon does with the machine's account list: which account each
@@ -315,9 +317,26 @@ describe('views', () => {
     expect(view.accounts[1]).toEqual({
       id: 'acct-2', label: 'Two', signIn: 'subscription', signInCheckedAt: new Date(T0).toISOString(),
       windows: { five_hour: { percent: 42, resetsAt: new Date(T0 + 2 * HOUR).toISOString() } },
-      peakPercent: 42, blockedUntil: null, active: true, seats: ['w1'],
+      peakPercent: 42, blockedUntil: null, active: true, seats: ['w1'], vmToken: false,
     });
     expect(state.getSnapshot().accountRotation.accounts).toHaveLength(3);
+  });
+
+  it('reports VM token presence from a stat, never reading the token store', () => {
+    threeAccounts();
+    writeVmToken(accountsFile, 'acct-1', `sk-ant-oat01-${'Q7x_Lm2-Zp9K'.repeat(4)}`);
+    try {
+      fs.symlinkSync(vmTokenFile(accountsFile, 'acct-1'), vmTokenFile(accountsFile, 'acct-3'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+    }
+    const spies = [vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs, 'openSync')];
+    expect(accountRotationView(state, T0).accounts.map((account) => account.vmToken)).toEqual([true, false, false]);
+    const opened = spies.flatMap((spy) => spy.mock.calls.map(([target]) => String(target)));
+    expect(opened).toContain(path.resolve(accountsFile));
+    expect(opened.filter((target) => target.includes('claude-vm-tokens'))).toEqual([]);
+    removeVmToken(accountsFile, 'acct-1');
+    expect(accountRotationView(state, T0).accounts[0].vmToken).toBe(false);
   });
 
   it('broadcasts ACCOUNTS_UPDATED only when the view changes', async () => {

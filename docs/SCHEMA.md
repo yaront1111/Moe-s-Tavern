@@ -159,19 +159,45 @@ interface ProjectSettings {
   // weakens deliveryPolicy. 'verified-local' is refused EXECUTION_PROFILE_NOT_READY
   // until local isolation, trusted runner evidence and revision-bound delivery are
   // certified. Any other value is refused as invalid input, never read as the
-  // default. See `executionPolicySnapshot` below.
+  // default. See `executionPolicySnapshot` below. A change through the settings
+  // path records one PROJECT_SETTINGS_UPDATED activity event (an observe, a refused
+  // activate, or a rollback that keeps stored verified-local task snapshots and open
+  // verified-local attempts strict); a hand edit of project.json records nothing.
   executionProfile?: 'legacy' | 'observe' | 'verified-local';
 
   // What moe.qa_approve requires before DONE (packages/moe-daemon/src/delivery/policy.ts).
-  // Absent or null = 'legacy': the soft NO-COMPLETION-COMMIT warning, approval
-  // always lands. Strict values refuse approval with DELIVERY_EVIDENCE_MISSING
+  // Absent or null = 'legacy': for a legacy or observe task, the soft
+  // NO-COMPLETION-COMMIT warning and no evidence refusal. Strict values refuse
+  // approval with DELIVERY_EVIDENCE_MISSING
   // unless: 'local-branch' a completion commit is recorded for the review round;
   // 'remote-push' one recorded as pushed; 'merged-pull-request' / 'manual-artifact'
   // the approval attests a merged pull request / manual artifact. Under any
   // strict value, a qualityGate the wrapper runs for the task also needs a
-  // runner-observed exit-0 CheckRun on the current candidate. Any other value is
+  // runner-observed exit-0 CheckRun on the current candidate, and each approved
+  // executionContract.requiredChecks definition its own (CQ-V01). A verified-local
+  // task's checks are judged under every value, 'legacy' included (task-43088e9b),
+  // but such a task is refused EXECUTION_PROFILE_NOT_READY first. Any other value is
   // refused as invalid input, never read as the default.
   deliveryPolicy?: 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact';
+
+  // Human-approved isolated check environment ids (CQ-V04): the exact
+  // CheckRun.environment values a runner reports, e.g. 'moe-local-vm-v1:<sha256>'.
+  // Absent, null or [] approves none. Read live for verified-local tasks only, by
+  // delivery/policy.ts and moe.record_check_dispatch admission
+  // (CHECK_ENVIRONMENT_NOT_APPROVED), so removing an id revokes the evidence
+  // recorded in it. At most 50 non-blank ids of at most 255 characters without
+  // control characters; anything else is refused INVALID_INPUT where it is read.
+  // Set in .moe/project.json only: a settings update refuses the key as unknown
+  // and keeps the stored value, so the IDE never edits it.
+  checkEnvironments?: string[];
+
+  // Repair budgets for a failing required check of a verified-local task
+  // (CQ-V05/V05b, delivery/repairPolicy.ts). Each an integer from 0 to 10;
+  // defaults { maxCodeRepairs: 3, maxInfraRetries: 2 }. An unknown key or any
+  // other shape is refused INVALID_INPUT, returned as
+  // moe.record_check_observation's repairError. Legacy and observe tasks ignore
+  // it. Set in .moe/project.json only, like checkEnvironments.
+  repairPolicy?: { maxCodeRepairs?: number; maxInfraRetries?: number };
 
   // Branch a worker is expected to be on when it calls moe.complete_task:
   // a literal branch name or a `*` glob (e.g. "moe/work-*", what the agent
@@ -181,6 +207,14 @@ interface ProjectSettings {
   // most once per 24 h. A literal value (no `*`) also doubles
   // as the wrapper's peel target instead of moe/work-<date>.
   consolidationBranch?: string;
+
+  // WorktreeMode = 'off' | 'on'. 'on' runs each new WORKING claim in
+  // <projectPath>/.worktrees/<taskId> on moe/task/<taskId>. Read once at
+  // claim time and pinned on the attempt's workspaceMode. Absent resolves
+  // (resolveWorktreeMode, state/validators.ts) to 'on' when qualityGate is
+  // non-blank after trim, else 'off', so the default never lands a gate-less
+  // project ungated; any other value is refused.
+  worktreeMode?: WorktreeMode;
 
   // Plan-size thresholds enforced by moe.submit_plan: warn past the warn
   // values, hard-reject past the max values. Distinct files = union of
@@ -352,7 +386,8 @@ interface Epic {
 type EpicStatus = 
   | 'PLANNED'      // Not started
   | 'ACTIVE'       // Has worker(s) assigned
-  | 'COMPLETED';   // All tasks done
+  | 'COMPLETED'    // All tasks done
+  | 'ARCHIVED';    // Shelved: set by moe.archive_epic once it has archived every task, or by moe.update_epic (or the board's UPDATE_EPIC) with status ARCHIVED, which runs archive_epic
 ```
 
 **Example:**
@@ -432,6 +467,7 @@ interface Task {
   // Structured, approval-relevant intent for the plan. Absent on legacy rows.
   // Never approval, readiness or evidence by itself. See `executionContract` below.
   executionContract?: TaskExecutionContract;
+  requiredCheckSnapshot?: RequiredCheckSnapshot; // Daemon-owned: set, or cleared by a plan without requiredChecks, only by moe.submit_plan's PLAN_SUBMITTED write. See `requiredCheckSnapshot` below
 
   // Daemon-owned plan-reuse facts (CQ-C07a) and recipe binding (CQ-C08). Never
   // approval, readiness or evidence. See the sections below.
@@ -456,7 +492,8 @@ interface Task {
   rejectionDetails?: RejectionDetails;          // Latest structured QA feedback (cleared on next cycle)
   rejectionHistory?: RejectionHistoryEntry[];   // Newest-first; capped at 20 entries
   failedDodItems?: FailedDodItem[];             // Append-only DoD failure log; capped at last 100
-  maxReopens?: number;                          // Per-task override of MAX_REOPENS_DEFAULT (3)
+  capReplanAt?: string;                         // ISO time of the qa_reject that reached the reopen cap and flipped the row to PLANNING for its one re-plan; never cleared
+  needsHumanReview?: boolean;                   // true from a qa_reject past the cap once capReplanAt is set (row stays REVIEW, unassigned, out of QA claims); cleared by qa_approve, a reopen, release_task, set_task_status or a board move into REVIEW
   tier?: 'light' | 'standard' | 'heavy';        // Launch tier: submit_plan (floored by plan size), +1 per qa_reject
   effort?: Effort;                                // Planner's effort (raised to allowed + tier minimum), +1 allowed level per qa_reject
   lowEffortEligible?: boolean;                    // submit_plan: every plan file matches routing.lowEffortFiles (low/medium allowed)
@@ -464,6 +501,7 @@ interface Task {
   codexModel?: string;                            // Planner's codex model (provider 'codex'); qa_reject resets to the codex default
   priorAttempt?: PriorAttempt;                  // Snapshot from moe.request_replan
   priorHandoffs?: HandoffNote[];                // Newest-first; capped at 20
+  landingRetry?: LandingRetry | null;           // Set by finalize_attempt 'unlanded', or by the finalizing close of a worktree landing with no completion recorded; landed/nothing-to-commit null it. Absent until first retry. See `landingRetry` below
 
   // Plan-size warnings from the latest submit_plan (warn-zone only; cleared
   // when a compliant plan lands) — lets boards/governors see size pressure.
@@ -476,6 +514,7 @@ interface Task {
   // also frees the seat (assignedWorkerId → null, worker → IDLE); resource
   // blocks keep hold+idle for the grant-return path.
   blockedReason?: string | null;         // Why the task is BLOCKED
+  priorBlockedReason?: string | null;    // The last blockedReason, kept when set_task_status, a board move, archive_task or a resource restore that returns the row unassigned takes it out of BLOCKED (the lease grant, dependency auto-unblock and unblock_worker do not copy it); never cleared
   blockedResourceId?: string | null;     // Shared-resource id the task is queued on; the grant path
                                          // auto-unblocks on lease grant
   blockedOnTaskIds?: string[] | null;    // Task ids this row waits on (report_blocked param ∪ task-… ids
@@ -544,6 +583,7 @@ interface Task {
                                                 // records round-trip without reviving a contract
   pendingPlanCritique?: PendingPlanCritique;    // Set by submit_plan in CONTROL mode
   planCritiqueResult?: PlanCritiqueResult;      // Set by submit_plan_critique
+  critiqueBlockCount?: number;                  // +1 per critique block that flips the row to PLANNING (moe.submit_plan_critique, or submit_plan's size critic under taskSizing.autoCritique); at 2 a block stops flipping; cleared by qa_approve and every reopen
 
   // Creation
   createdBy: 'HUMAN' | 'WORKER' | 'ARCHITECT' | 'QA' | 'GOVERNOR';
@@ -565,6 +605,10 @@ interface Task {
                                  // DONE/ARCHIVED (missing/deleted ids count as satisfied); PLANNING and
                                  // REVIEW claims are unaffected. list_tasks surfaces dependsOnUnmet
 
+  // Comments: questions and answers on the task (TaskComment below)
+  comments: TaskComment[];       // Oldest first, appended by moe.add_comment and the board's ADD_COMMENT; every writer keeps the newest 200 (MOE_MAX_COMMENTS_PER_TASK)
+  hasPendingQuestion?: boolean;  // true on a board comment whose author is 'human'; false at create_task and on every moe.add_comment. Read by get_pending_questions and wait_for_task
+
   // Ownership + ordering bookkeeping (Phase 3; both optional)
   contextFetchedBy?: string[];   // De-duplicated workerIds that invoked moe.get_context for this task
   stepsCompleted?: string[];     // Ordered stepIds already marked COMPLETED
@@ -572,6 +616,10 @@ interface Task {
   // Timestamps
   createdAt: string;
   updatedAt: string;
+  planSubmittedAt?: string;      // Set by every moe.submit_plan, in its AWAITING_APPROVAL write
+  planApprovedAt?: string;       // Set with status WORKING by every approval: the board's (PLAN_APPROVED), SPEED/TURBO auto-approval (PLAN_AUTO_APPROVED) and a relaxed-mode set_task_status approval
+  workStartedAt?: string;        // Set by the first moe.start_step and never overwritten; a reopen keeps it
+  completedAt?: string;          // Set at DONE by moe.qa_approve, with reviewCompletedAt (complete_task stamps only reviewStartedAt); every reopen clears it
   reviewStartedAt?: string;      // Set on the WORKING → REVIEW flip; qa_approve counts completion commits from the current work round: at/after the latest rejection, else the first step start (workStartedAt), else this (completionCommitsForReview in delivery/policy.ts)
   reviewCompletedAt?: string;
 }
@@ -784,13 +832,45 @@ type ExecutionPolicySnapshot =
 | `reuse` | string list | existing implementations reused, or why a new one is introduced |
 | `sourceAssumptions` | string list | source facts with path or symbol references |
 | `checkRefs` | string list | verification commands exactly as they will be run |
-| `requiredChecks` | `ProtectedCheckDefinition[]` (at most 20) | approved check commands (`id`, `command`, and optional `configs`/`scripts`/`assertionRoots` path lists of at most 50). Approval material, never evidence; the measured snapshot and check runs are documented with the CQ-V delivery records |
+| `requiredChecks` | `ProtectedCheckDefinition[]` (at most 20) | approved check commands (`id`, `command`, and optional `configs`/`scripts`/`assertionRoots` path lists of at most 50). Approval material, never evidence; the measured snapshot is `requiredCheckSnapshot` below, and check runs are documented with the CQ-V delivery records |
 
 Every string list holds at most 50 entries, each at most 1000 chars.
 
 - **Validation** (`validateExecutionContract`, run by every `updateTask` writer): strict, refusing `INVALID_INPUT` with `context.field`; unknown keys are refused; strings are preserved and never truncated; the stored object is a fresh canonical copy; empty lists are omitted. `undefined`, `null` or an empty contract clears it.
 - **Writers.** `moe.submit_plan` replaces it, and an omitted contract clears it. `moe.get_context` projects it for every role when set.
 - **Revision.** A material change increments `planRevision` once, in the same write. Object key order is not material; list order is.
+
+### `requiredCheckSnapshot` (CQ-V01)
+
+`Task.requiredCheckSnapshot` is the protected file identity `moe.submit_plan` measured for the contract's `requiredChecks`: the Git object id of every blob under the definitions' `configs`, `scripts` and `assertionRoots` paths at one tree. It is daemon-owned: only the `PLAN_SUBMITTED` write sets or clears it (a plan without `requiredChecks` clears it), and every other writer, board echo included, has the key stripped.
+
+```typescript
+interface RequiredCheckSnapshot {
+  version: 1;
+  revision: string;          // the 40-hex TREE id requiredCheckRevision (default HEAD) resolved to, never a mutable ref
+  definitionDigest: string;  // sha256 hex of the definitions ([id, command, configs, scripts, assertionRoots] each)
+  entries: { path: string; oid: string }[];  // <=2000 blobs, strictly ascending by path; every configs/scripts path has one
+}
+```
+
+Readers must use `readRequiredCheckSnapshot` (`delivery/requiredChecks.ts`), which answers `null` for a malformed snapshot or one whose `definitionDigest` no longer matches the current definitions; the delivery policy then reports `protected-checks-unapproved`. It is approval material, never verification evidence: a candidate's `protectedEntries` must equal `entries`, and each definition's command needs its own passing run (see `moe.qa_approve` in docs/MCP_SERVER.md).
+
+### `landingRetry` (WT-03)
+
+`Task.landingRetry` records the last worktree landing that published nothing. It is optional and absent until the first retry, so older rows load unchanged with no migration and no `schemaVersion` bump. Two paths set it: `moe.finalize_attempt`'s outcome `'unlanded'`, and the close of a worktree attempt whose unassigned `REVIEW` task has no completion recorded for its round (`moe.deregister_worker`, or removing a `DEAD` worker record), which sets reason `'contention'` with the task branch as `rescueRef`. `moe.finalize_attempt`'s `'landed'` and `'nothing-to-commit'` set it to `null`. Board `UPDATE_TASK` echoes cannot restore, clear or forge it. How each field is fed, and the routing that goes with it, is under `moe.finalize_attempt` in [`docs/MCP_SERVER.md`](MCP_SERVER.md).
+
+```typescript
+type UnlandedReason = 'conflict' | 'contention' | 'gate' | 'diverged' | 'remote';  // UNLANDED_REASONS
+
+interface LandingRetry {
+  reason: UnlandedReason;     // Why the worktree landing published nothing
+  paths: string[];            // Normalized project-relative conflict paths, when reported (finalize_attempt's `conflictPaths` parameter)
+  rescueRef: string;          // Ref holding the unpublished bytes: a refs/moe/rescue/<taskId>/... ref, or the task branch refs/heads/moe/task/<taskId> when a finalizing close set the retry
+  targetTip: string | null;   // The attempted 40-hex target tip, or null when not reported
+  count: number;              // Consecutive unlanded finalizes since landed/nothing-to-commit, starting at 1
+  at: string;                 // ISO timestamp of this unlanded finalize
+}
+```
 
 ### `planSourceBasis`, `planningEntry`, `planReuse` (CQ-C07a)
 
@@ -904,6 +984,17 @@ interface TaskCommit {
   message?: string;
 }
 
+/**
+ * One entry of `task.comments`, appended by `moe.add_comment` or the board's
+ * `/ws` ADD_COMMENT. Both refuse empty or over-10000-char content.
+ */
+interface TaskComment {
+  id: string;                // "comment-…"
+  author: string;            // moe.add_comment: the caller's workerId, else 'agent'; board: the sent author, else 'human'
+  content: string;           // Trimmed, ≤10000 chars
+  timestamp: string;         // ISO 8601
+}
+
 interface RejectionDetails {
   failedDodItems?: string[];
   issues?: QAIssue[];
@@ -1009,6 +1100,7 @@ interface PendingPlanCritique {
 interface PlanCritiqueResult {
   verdict: 'pass' | 'block';
   concerns?: string[];       // each ≤1000 chars; required when verdict='block'
+  category?: 'size' | 'correctness' | 'rails' | 'dependency' | 'uncategorized'; // As sent; 'uncategorized' = a block sent without one; absent on a pass sent without one and on the daemon size critic's block
   reviewedBy: string;        // workerId or "governor"
   reviewedAt: string;        // ISO 8601
 }
@@ -1020,12 +1112,14 @@ interface PlanCritiqueResult {
 export const MAX_REOPENS_DEFAULT = 3;
 ```
 
-`moe.qa_reject` auto-flips a task from `WORKING` back to `PLANNING` when either:
+`moe.qa_reject` auto-flips a task from `REVIEW` back to `PLANNING` when either:
 
-1. `reopenCount ≥ task.maxReopens ?? MAX_REOPENS_DEFAULT`, or
+1. `reopenCount ≥ MAX_REOPENS_DEFAULT` and the task has had no cap re-plan yet (`capReplanAt` unset), or
 2. The same DoD item has been recorded in `failedDodItems[]` two or more times.
 
 In both cases the architect (not the worker) is expected to pick up the re-plan; the daemon cross-posts a heads-up to `#architects` and emits a `TASK_REOPENED` activity event with the rejection history.
+
+The cap is the same for every task: there is no per-task override. Once `capReplanAt` is set, a rejection past the cap (`reopenCount ≥ MAX_REOPENS_DEFAULT + 1`) parks the task in `REVIEW` for a human (`needsHumanReview`) instead of flipping it again.
 
 ---
 
@@ -1068,6 +1162,10 @@ interface Worker {
   // Claude account rotation: the account the seat's current claude launch runs under.
   // Set by every moe.lease_account; null when the lease gave no account. See Claude Accounts.
   accountId?: string | null;
+
+  // ISO deadline of a wrapper_restart reload hold (settings.reloadHoldMs); absent or null = no hold.
+  // Cleared by the seat's next claim_next_task or by any full deregister.
+  reloadHoldUntil?: string | null;
 }
 
 type WorkerType =
@@ -1139,6 +1237,7 @@ interface Team {
   name: string;                  // "Coders"
   role: TeamRole | null;         // Optional team role (null = project team)
   memberIds: string[];           // Worker IDs belonging to this team
+  formerMemberIds?: string[];    // Eviction tombstone: members whose worker record was deleted (stale sweep, DEAD prune, restart purge) or DEAD members a join into a full team evicted; read only to auto-rejoin a returning worker, never counted toward maxSize; cleared when it joins or leaves any team
   maxSize: number;               // Maximum members (default 10)
 
   // Timestamps
@@ -1244,7 +1343,8 @@ interface ExecutionAttempt {
   workerId: string;           // The seat that opened it; not necessarily the row's current assignee
   runnerId: string;           // The runner session; a claim-opened attempt records the worker id
   generation: number;         // Fencing token: per task, starts at 1, (max over every prior attempt) + 1, never reused
-  workspace: string;          // The checkout it runs against; a claim records the project path
+  workspace: string;          // The checkout it runs against: the project path, or the task worktree for a worktree attempt
+  workspaceMode?: ExecutionWorkspaceMode; // ExecutionWorkspaceMode = 'shared' | 'worktree'. Set once by the claim; absent on older records, which read as 'shared' (no migration, no version bump)
   phase: 'running' | 'finalizing' | 'reconciling' | 'closed';
   startedAt: string;          // ISO 8601
   lastPhaseAt: string;        // ISO 8601, when `phase` last changed; the reconcile window counts from it
@@ -1255,6 +1355,15 @@ interface ExecutionAttempt {
   executionPolicySnapshot?: ExecutionPolicySnapshot; // Captured at claim; absent on attempts opened before it existed
   contextReceipt?: ServedContextReceipt;             // Latest served get_context read; daemon-written, never approval
   stepCompletions?: StepCompletionEvidence[];        // Strict step evidence; daemon-written, append-only, never approval
+}
+
+// The claim and get_context projection of an attempt's workspace (`workspace` in the
+// moe.claim_next_task and moe.get_context replies, docs/MCP_SERVER.md). Never stored.
+interface AttemptWorkspace {
+  mode: ExecutionWorkspaceMode;
+  path: string;
+  branch: string | null;         // moe/task/<taskId> for a worktree attempt, null for shared
+  target: string | null;         // The live delivery target for a worktree attempt, null for shared
 }
 
 interface ServedContextReceipt {
@@ -1317,6 +1426,11 @@ interface Candidate {
   readonly baseRevision: string;   // Runner-REPORTED commit sha (7-40 hex) the bytes were built on
   readonly treeSha: string;        // Runner-REPORTED tree or commit sha (7-40 hex) naming the bytes
   readonly deliveryTarget: string; // Where the runner intends to land them, e.g. "refs/heads/wave1-pilot"
+  readonly protectedEntries?: readonly { readonly path: string; readonly oid: string }[];
+                                   // CQ-V01: runner-REPORTED `git ls-tree -r` entries for the task's protected
+                                   // check paths in this tree (<=2000, normalized paths, lowercase 40-hex oids,
+                                   // strictly ascending by UTF-8 bytes). Absent = not measured; [] = none exist.
+                                   // Compared with Task.requiredCheckSnapshot; never verified against git
   readonly createdAt: string;      // ISO 8601, the daemon's clock at first record (never the caller's)
 }
 ```
@@ -1569,6 +1683,30 @@ The existing receipt is consulted before the candidate, so a replay always recon
   "pushResult": null
 }
 ```
+
+---
+
+## Task delivery projection
+
+**Served, never stored.** A `Task` the daemon sends a plugin over `/ws` (the `STATE_SNAPSHOT`, broadcasts and direct mutation replies, all through `WebSocketServer.servedTask`) may carry a computed `delivery` key, projected by `packages/moe-daemon/src/state/deliveryProjection.ts` from the candidate, check-run, receipt and attempt stores. It is never written to `.moe/tasks/`, and MCP responses do not carry it. The key is absent when the task has neither a candidate nor an attempt phase.
+
+```typescript
+interface TaskDelivery {
+  currentCandidate?: { id: string; treeSha: string; shortSha: string; baseRevision: string }; // the task's latest Candidate; shortSha = treeSha's first 8
+  latestCheckRun?: {                 // the LAST run reported on the current candidate, counted or not: display only
+    command: string; exitCode: number;
+    source?: 'runner-observed' | 'agent-reported'; // omitted when the stored value is not one of these
+    outcome?: CheckOutcome;                        // omitted when absent (rows recorded without one) or not a CheckOutcome
+  };
+  requiredCheckSatisfied?: boolean;  // delivery/policy.ts's verdict on the owed checks, never the latest run's (below)
+  deliveryReceipt?: { target: string; landedRevision: string };  // the current candidate's DeliveryReceipt
+  attemptPhase?: 'running' | 'finalizing' | 'reconciling' | 'closed'; // the candidate's producer attempt, else the task's current one
+}
+```
+
+- **`requiredCheckSatisfied`** is `evaluateDeliveryEvidence` on the checks alone: `false` while it reports a `required-check:`, `protected-check-changed:` or `required-check-untrusted-checker:` token, `protected-checks-unapproved`, `protected-checks-unmeasured` or `unreadable-required-check`, and `true` once every owed check is satisfied, so a passing `latestCheckRun` the policy does not count (an agent report, say) still reads `false`. It is absent under the `legacy` policy (except for a `verified-local` task, whose checks every policy judges), when no check is owed, and when the policy cannot be read, which today includes every `verified-local` task (`EXECUTION_PROFILE_NOT_READY`).
+- **Fail-soft.** A record that fails its shape check (including a latest run whose `treeSha` is not the candidate's), or a lookup that throws, drops only its own field, with a debug log. Nothing is repaired, and a bad record cannot break a board connection.
+- **Clients.** The JetBrains board (`DeliveryPresentation.kt`) shows `latestCheckRun` as reported, never as proof: an exit-0 run with no `outcome` or with `passed` reads as passed, and any other outcome as not passed. It shows `requiredCheckSatisfied` separately as counted or not counted.
 
 ---
 
@@ -1861,6 +1999,36 @@ interface AccountRotationView {
 
 ---
 
+## daemon.json (runtime)
+
+**File:** `.moe/daemon.json` (gitignored; written only by the daemon, once its port is listening, and removed on shutdown)
+
+```typescript
+interface DaemonInfo {
+  port: number;                       // 1-65535
+  pid: number;                        // the daemon (`_run`) process, in the writer's own pid namespace
+  startedAt: string;                  // ISO 8601
+  projectPath: string;                // absolute, as the writer spells it (a drive path on Windows)
+  bindHost?: string;                  // present only when not '127.0.0.1' (e.g. 'wsl', '0.0.0.0' in the Docker image)
+  pidNamespace?: string;              // Linux only: `readlink /proc/self/ns/pid`, e.g. "pid:[4026531836]"; absent elsewhere
+}
+```
+
+**Liveness rule** (the daemon CLI's `status`, `stop` and `start`/`init` gate, and `doctor`; `server/probeHost.ts`):
+
+- A record from the other side of the WSL boundary (its `projectPath` form: a drive or UNC path read outside Windows,
+  a POSIX path read on Windows) is judged by `/health` alone, at `foreignProbeHosts`' addresses. It is never signalled
+  or removed. This rule is checked first.
+- A record whose `pidNamespace` is not the reader's own (a container, another WSL distro) is judged by `/health`
+  alone, at the local probe address of its `bindHost`. Its pid means nothing to the reader and is never signalled. An
+  answer confirming this project and the recorded pid means running. No answer means stale: the record is removed, as
+  a dead pid's is, so a restarted container starts. A reader with no namespace of its own (Windows, macOS) counts any
+  well-formed value as another's. Only the exact form `pid:[<1-20 digits>]` counts; any other value is ignored.
+- Any other record (no `pidNamespace`, or the reader's own) keeps the pid rules: a dead pid means stale, and a live
+  one must also answer `/health` for this project with that pid.
+
+---
+
 ## Activity Event
 
 **File:** `.moe/activity.log` (append-only, one JSON per line)
@@ -1884,7 +2052,11 @@ interface ActivityEvent {
 type ActivityEventType =
   // Project
   | 'PROJECT_CREATED'
-  | 'PROJECT_SETTINGS_UPDATED'
+  | 'PROJECT_SETTINGS_UPDATED' // An executionProfile transition only (state/profileRollout.ts). Payload: { setting: 'executionProfile',
+                               // from: <profile> | 'unreadable', to, transition: 'observe' | 'activate' | 'rollback', outcome: 'applied' | 'refused' };
+                               // a refused activate adds codeName and unsupportedCapabilities [{ capability: 'vm' | 'client' | 'check', reason }];
+                               // a rollback adds retainedStrictTasks, retainedStrictTaskIds, retainedStrictAttempts, retainedStrictAttemptIds
+                               // (ids sorted, at most 10) and unreadableSnapshots
   | 'GLOBAL_RAILS_UPDATED'
   
   // Epic
@@ -2031,26 +2203,44 @@ export function migrate(data: Record<string, unknown>): Record<string, unknown> 
 
 ## ID Generation
 
-All IDs use a prefix + short UUID format:
+The daemon mints the ids it owns with `generateId` (`packages/moe-daemon/src/util/ids.ts`): the prefix, a dash, and the whole `crypto.randomUUID()` with its dashes removed. Every id it mints today is therefore `<prefix>-<32 lowercase hex>`. It keeps all 128 bits on purpose: 32-bit ids make birthday collisions likely once a board holds thousands of entities, and a colliding id silently overwrites a file.
 
 ```typescript
 function generateId(prefix: string): string {
-  const uuid = crypto.randomUUID().split('-')[0]; // First 8 chars
+  const uuid = crypto.randomUUID().replace(/-/g, '');
   return `${prefix}-${uuid}`;
 }
-
-// Examples:
-// Project:  "proj-a1b2c3d4"
-// Epic:     "epic-e1f2g3h4"
-// Task:     "task-t1u2v3w4"
-// Worker:   "worker-w1x2y3z4"
-// Step:     "step-s1t2u3v4"
-// Proposal: "prop-p1q2r3s4"
-// Event:    "evt-e1f2g3h4"
-// Channel:  "chan-c1d2e3f4"
-// Message:  "msg-m1n2o3p4"
-// Decision: "dec-d1e2f3g4"
 ```
+
+| Prefix | Entity | Example |
+|---|---|---|
+| `proj-` | Project | `proj-54125b5ae91e4ad6b663e6d92a3a5418` |
+| `epic-` | Epic | `epic-890174221fbb4427aa42c280f3d3a78c` |
+| `task-` | Task | `task-19d1fd27db354746ab3f8976d527df6f` |
+| `team-` | Team | `team-1364cc3d3ffa44c18c2ea86e524dd5e6` |
+| `prop-` | RailProposal | `prop-5fa8108ce4834d579577edaa0bd952d1` |
+| `evt-` | ActivityEvent | `evt-443cf409047d44139c2162f978d4af82` |
+| `chan-` | ChatChannel | `chan-79b64e60b3d741fda216455844f22cee` |
+| `msg-` | ChatMessage | `msg-7fafb5101ac648da85a27fe86c9a1e7d` |
+| `dec-` | Decision | `dec-cb0cc483cb234d91ab68477f51aaf13a` |
+| `comment-` | Task comment | `comment-9f610ecb39e947e9b24ede00f6d6db07` |
+| `attempt-` | ExecutionAttempt | `attempt-1b8c24b723654595baa83853fafdf12c` |
+| `ctxreceipt-` | ServedContextReceipt | `ctxreceipt-76e3df81d7ee4545a8d8f3b53daf5db8` |
+| `cand-` | Candidate | `cand-bd972721489c4d53bbe68dcc0bca6b02` |
+| `review-` | Review | `review-f4318da2ab41498a821cbcb3f1ce0689` |
+| `check-` | CheckRun | `check-b353089b6c104aba8139fb6167cbe291` |
+| `dispatch-` | CheckDispatch | `dispatch-dce8ea0e1a7f4e379963a0e3f7bd5d92` |
+| `receipt-` | DeliveryReceipt | `receipt-6b3128f21b7f4b19b93e3a72adb55a07` |
+
+Candidate, Review, CheckRun and CheckDispatch also accept a caller-supplied id (see their interfaces above); the daemon mints a `cand-`, `review-`, `check-` or `dispatch-` id only when the caller gives none.
+
+**Legacy 8-hex ids.** Until commit 0aab4d36 (2026-06-30), `generateId` kept only the first 8 hex characters of the UUID, so boards created before then still hold ids such as `proj-3830fac7` and `epic-be924fb8`. They were never rewritten and stay valid. Code that parses ids must accept both lengths, as the daemon's own task-id scan does (`task-[0-9a-f]{6,}` in `tools/reportBlocked.ts`): treat an id as an opaque token, not a fixed-length string.
+
+**Step ids are positional.** `moe.submit_plan` numbers a plan's steps `step-<n>` (`step-1`, `step-2`, ...) in plan order (`tools/submitPlan.ts`), so a step id is unique only within its task's plan, and a resubmitted plan is numbered afresh.
+
+**Worker ids come from the seat.** The daemon never mints one. Each seat brings its own through `MOE_WORKER_ID`, which `moe-proxy` injects as the default `workerId` on the seat's tool calls. The launchers (`scripts/moe-agent.sh`, `scripts/moe-agent.ps1`) default it to `<role>-<8 hex>`, for example `worker-1a2b3c4d`, and `--worker-id` / `-WorkerId` overrides it.
+
+Example ids elsewhere in this document are short placeholders such as `proj-a1b2c3d4`; real ids have the shapes above.
 
 ---
 

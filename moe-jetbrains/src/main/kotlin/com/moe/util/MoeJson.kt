@@ -22,6 +22,7 @@ import com.moe.model.PlanCritiqueResult
 import com.moe.model.Project
 import com.moe.model.ProjectSettings
 import com.moe.model.RailProposal
+import com.moe.model.StepAmendment
 import com.moe.model.Task
 import com.moe.model.TaskComment
 import com.moe.model.TaskMetrics
@@ -38,6 +39,8 @@ import java.math.BigDecimal
 
 object MoeJson {
     private val MAX_SAFE_PLAN_REVISION_DECIMAL: BigDecimal = BigDecimal.valueOf(MAX_SAFE_PLAN_REVISION)
+    /** 2^53-1, JS Number.MAX_SAFE_INTEGER: the largest delivery check exit code the daemon accepts. */
+    private val MAX_SAFE_EXIT: BigDecimal = BigDecimal(9007199254740991L)
 
     private fun JsonObject.getStringOrNull(key: String): String? {
         val element = get(key) ?: return null
@@ -117,6 +120,43 @@ object MoeJson {
         if (!element.isJsonPrimitive) return default
         val primitive = element.asJsonPrimitive
         return if (primitive.isBoolean) primitive.asBoolean else default
+    }
+
+    /**
+     * Honours the value ONLY when it is a real JSON string, so a number or a boolean counts as unset.
+     * Mirrors the readers that apply `qualityGate` and `consolidationBranch`: `scripts/moe-agent.sh`
+     * (`isinstance(v, str)`, else `''`) and `completeTask.ts` (`typeof === 'string'`).
+     *
+     * [getStringOrDefault] cannot be used for landing policy: Gson's `asString` turns `42` into "42"
+     * and `true` into the literal branch "true". Never throws.
+     */
+    private fun JsonObject.getStrictStringOrDefault(key: String, default: String): String {
+        val element = get(key)
+        return if (element != null && element.isJsonPrimitive && element.asJsonPrimitive.isString) element.asString else default
+    }
+
+    /**
+     * Honours the value ONLY when it is a real JSON number that is an exact Int above 0, else null.
+     * Mirrors `positiveInt` in `packages/moe-daemon/src/util/planSize.ts` (typeof number,
+     * Number.isInteger, above 0, else the default).
+     *
+     * [getIntOrNull] cannot be used for plan-size policy: Gson's `asInt` turns "9" into 9 and truncates
+     * 7.5 to 7. The original literal is re-read exactly as [BigDecimal] (see [getPlanRevisionOrNull]), so
+     * a fraction, a numeric string, zero, a negative and a value past Int all give null. Values above
+     * Int.MAX_VALUE are null where the daemon would accept them; no real plan limit is that large.
+     * Never throws.
+     */
+    private fun JsonObject.getPositiveIntOrNull(key: String): Int? {
+        val primitive = get(key)?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive ?: return null
+        if (!primitive.isNumber) return null
+        return try {
+            val value = BigDecimal(primitive.asString)
+            if (value.signum() <= 0 || value > BigDecimal(Int.MAX_VALUE)) null else value.intValueExact()
+        } catch (_: NumberFormatException) {
+            null
+        } catch (_: ArithmeticException) {
+            null
+        }
     }
 
     private fun JsonObject.getStringListOrDefault(key: String, default: List<String> = emptyList()): List<String> {
@@ -220,16 +260,13 @@ object MoeJson {
             ?.takeIf { it.isJsonObject }
             ?.asJsonObject
             ?: JsonObject()
-        val warnSteps = sizing.getIntOrNull("warnSteps")?.takeIf { it > 0 } ?: 8
-        val warnDistinctFiles = sizing.getIntOrNull("warnDistinctFiles")?.takeIf { it > 0 } ?: 5
+        val warnSteps = sizing.getPositiveIntOrNull("warnSteps") ?: 8
+        val warnDistinctFiles = sizing.getPositiveIntOrNull("warnDistinctFiles") ?: 5
         return TaskSizingThresholds(
             warnSteps = warnSteps,
-            maxSteps = maxOf(warnSteps, sizing.getIntOrNull("maxSteps")?.takeIf { it > 0 } ?: 12),
+            maxSteps = maxOf(warnSteps, sizing.getPositiveIntOrNull("maxSteps") ?: 12),
             warnDistinctFiles = warnDistinctFiles,
-            maxDistinctFiles = maxOf(
-                warnDistinctFiles,
-                sizing.getIntOrNull("maxDistinctFiles")?.takeIf { it > 0 } ?: 10
-            )
+            maxDistinctFiles = maxOf(warnDistinctFiles, sizing.getPositiveIntOrNull("maxDistinctFiles") ?: 10)
         )
     }
 
@@ -259,15 +296,16 @@ object MoeJson {
             checkpointPush = getStrictBooleanOrDefault(settings, "checkpointPush", true),
             commitBoardState = getStrictBooleanOrDefault(settings, "commitBoardState", true),
             commitHooks = getStrictBooleanOrDefault(settings, "commitHooks", false),
-            consolidationBranch = settings.getStringOrDefault("consolidationBranch", "").trim(),
-            qualityGate = settings.getStringOrDefault("qualityGate", "").trim(),
+            consolidationBranch = settings.getStrictStringOrDefault("consolidationBranch", "").trim(),
+            qualityGate = settings.getStrictStringOrDefault("qualityGate", "").trim(),
             qualityGateScope = settings.getStringOrDefault("qualityGateScope", "epicFinal")
                 .takeIf { it in setOf("epicFinal", "everyTask") }
                 ?: "epicFinal",
             attributionUndeclared = attribution.getStringOrDefault("undeclared", "solo")
                 .takeIf { it in setOf("solo", "never", "always") }
                 ?: "solo",
-            taskSizing = parseTaskSizing(settings)
+            taskSizing = parseTaskSizing(settings),
+            worktreeMode = settings.getStrictStringOrNull("worktreeMode")?.takeIf { it == "on" || it == "off" }
         )
     }
 
@@ -414,13 +452,16 @@ object MoeJson {
     private fun JsonObject.deliveryObject(key: String): JsonObject? =
         get(key)?.takeIf { it.isJsonObject }?.asJsonObject
 
-    /** Do not coerce strings, truncate fractions or wrap overflow into a passing code. */
-    private fun JsonObject.deliveryExitCode(): Int? {
+    /**
+     * Exact safe integers only (|n| <= 2^53-1), the same rule as the daemon and VS Code (Number.isSafeInteger).
+     * Do not coerce strings, truncate fractions or wrap overflow into a passing code.
+     */
+    private fun JsonObject.deliveryExitCode(): Long? {
         val primitive = get("exitCode")?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive ?: return null
         if (!primitive.isNumber) return null
         return try {
             val value = BigDecimal(primitive.asString)
-            if (value < BigDecimal(Int.MIN_VALUE) || value > BigDecimal(Int.MAX_VALUE)) null else value.intValueExact()
+            if (value.abs() > MAX_SAFE_EXIT) null else value.longValueExact()
         } catch (_: NumberFormatException) {
             null
         } catch (_: ArithmeticException) {
@@ -440,7 +481,9 @@ object MoeJson {
             latestCheckRun = delivery.deliveryObject("latestCheckRun")?.let {
                 DeliveryCheckRun(
                     it.getStrictStringOrNull("command"), it.deliveryExitCode(),
-                    it.getStrictStringOrNull("source")?.takeIf { source -> source == "runner-observed" || source == "agent-reported" }
+                    it.getStrictStringOrNull("source")?.takeIf { source -> source == "runner-observed" || source == "agent-reported" },
+                    // Verbatim, never whitelisted: the presentation fails closed on anything but "passed".
+                    outcome = it.getStrictStringOrNull("outcome")
                 )
             },
             deliveryReceipt = delivery.deliveryObject("deliveryReceipt")?.let {
@@ -475,9 +518,9 @@ object MoeJson {
             if (!el.isJsonObject) return@mapNotNull null
             val h = el.asJsonObject
             HandoffNote(
-                from = h.getStringOrNull("from"),
-                to = h.getStringOrNull("to"),
-                createdAt = h.getStringOrNull("createdAt"),
+                releasedBy = h.getStringOrNull("releasedBy"),
+                releasedAt = h.getStringOrNull("releasedAt"),
+                reason = h.getStringOrNull("reason"),
                 whatIsDone = h.getStringOrNull("whatIsDone"),
                 whatRemains = h.getStringOrNull("whatRemains"),
                 pitfalls = h.getStringOrNull("pitfalls"),
@@ -560,8 +603,30 @@ object MoeJson {
             modifiedFiles = obj.getStringListOrNull("modifiedFiles"),
             note = obj.getStringOrNull("note"),
             startedAt = obj.getStringOrNull("startedAt"),
-            completedAt = obj.getStringOrNull("completedAt")
+            completedAt = obj.getStringOrNull("completedAt"),
+            amendments = parseStepAmendments(obj),
+            activeAmendmentId = obj.getStrictStringOrNull("activeAmendmentId")
         )
+    }
+
+    /**
+     * A step's amendment history. .moe/tasks is hand-editable, so a non-array holder yields
+     * an empty list and an entry that is not an object, or whose amendmentId or description
+     * is not a real JSON string, is skipped; nothing here throws or drops the step.
+     */
+    private fun parseStepAmendments(obj: JsonObject): List<StepAmendment> {
+        val holder = obj.get("amendments")?.takeIf { it.isJsonArray } ?: return emptyList()
+        return holder.asJsonArray.mapNotNull { entry ->
+            if (!entry.isJsonObject) return@mapNotNull null
+            val a = entry.asJsonObject
+            StepAmendment(
+                amendmentId = a.getStrictStringOrNull("amendmentId") ?: return@mapNotNull null,
+                description = a.getStrictStringOrNull("description") ?: return@mapNotNull null,
+                reason = a.getStrictStringOrNull("reason"),
+                amendedBy = a.getStrictStringOrNull("amendedBy"),
+                amendedAt = a.getStrictStringOrNull("amendedAt")
+            )
+        }
     }
 
     fun parseTask(obj: JsonObject): Task {
@@ -721,7 +786,10 @@ object MoeJson {
             peakPercent = obj.getStrictFiniteDoubleOrNull("peakPercent"),
             blockedUntil = obj.getStrictStringOrNull("blockedUntil")?.takeIf { it.isNotBlank() },
             active = getStrictBooleanOrDefault(obj, "active", false),
-            seats = obj.getStrictStringListOrNull("seats") ?: emptyList()
+            seats = obj.getStrictStringListOrNull("seats") ?: emptyList(),
+            // A real JSON boolean only; anything else (a string, a number, null) is
+            // unknown. Not getStrictBooleanOrDefault: absent must stay distinct from false.
+            vmToken = obj.get("vmToken")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
         )
     }
 

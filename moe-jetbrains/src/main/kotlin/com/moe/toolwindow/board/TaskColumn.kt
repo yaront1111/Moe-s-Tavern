@@ -2,6 +2,7 @@ package com.moe.toolwindow.board
 
 import com.moe.model.Task
 import com.moe.model.Epic
+import com.moe.toolwindow.BoardMoves
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.ui.JBUI
@@ -171,7 +172,7 @@ class TaskColumn(
             val epicTasks = grouped[epicId].orEmpty().sortedBy { it.order }
             if (!isCollapsed) {
                 for (task in epicTasks) {
-                    listPanel.add(TaskCard(task, epicTitle, status, onOpen, onDelete, onNext = onNext, onPrevious = onPrevious, onReleaseAgent = onReleaseAgent))
+                    listPanel.add(TaskCard(task, epicTitle, status, onOpen, onDelete, onNext = onNext?.takeIf { BoardMoves.hasNext(task.status) }, onPrevious = onPrevious?.takeIf { BoardMoves.hasPrevious(task.status) }, onReleaseAgent = onReleaseAgent))
                 }
             }
         }

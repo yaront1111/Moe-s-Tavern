@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { lookup } from 'node:dns/promises';
+import { existsSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -38,7 +39,7 @@ const SEGMENTS = {
   },
   ps1: {
     helper: () => optional(ps, '\nfunction Read-MoeDaemonJsonText(', '\nif (-not $NoStartDaemon) {'),
-    check: () => between(ps, '\n    if (Test-Path $daemonInfoPath) {', '\n    if (-not $running) {'),
+    check: () => between(ps, '\n    if (Test-Path -LiteralPath $daemonInfoPath) {', '\n    if (-not $running) {'),
   },
 };
 const windows = process.platform === 'win32';
@@ -92,7 +93,7 @@ is_wsl() { return 1; }
 trap 'echo "@@ exit host=[\${MOE_DAEMON_HOST:-}]"' EXIT
 ${SEGMENTS.sh.probe()}
 ${SEGMENTS.sh.helper()}
-${withPid ? `content=$(cat "$DAEMON_INFO"); printf '%s' "\${content//${SHELL_PID}/$$}" > "$DAEMON_INFO"` : ''}
+${withPid ? `content=$(cat "$DAEMON_INFO"); printf '%s' "\${content//${SHELL_PID}/$$}" > "$DAEMON_INFO"; echo "@@ fixture-pid=$$"` : ''}
 ${SEGMENTS.sh.check()}
 echo "@@ port=[$DAEMON_PORT] project=[$DAEMON_PROJECT] running=$RUNNING"
 `;
@@ -117,9 +118,9 @@ const ENV = { ...process.env };
 delete ENV.MOE_DAEMON_HOST;
 // spawn, not spawnSync: the identity rows answer /health from this process, and
 // a blocked event loop would leave every probe to time out as 'unknown'.
-function spawnAsync(exe, args) {
+function spawnAsync(exe, args, env = ENV) {
   return new Promise((resolve, reject) => {
-    const child = spawn(exe, args, { env: ENV, windowsHide: true });
+    const child = spawn(exe, args, { env, windowsHide: true });
     let out = '';
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.stderr.on('data', (chunk) => { out += chunk; });
@@ -130,7 +131,7 @@ function spawnAsync(exe, args) {
 }
 
 // Runs one engine's real block against a daemon.json holding `content`.
-async function runCheck(engine, content, { qualified = false, project = PROJECT[engine.ext] } = {}) {
+async function runCheck(engine, content, { qualified = false, project = PROJECT[engine.ext], daemonHost } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'moe-cap-'));
   try {
     const file = path.join(dir, 'daemon.json');
@@ -143,19 +144,38 @@ async function runCheck(engine, content, { qualified = false, project = PROJECT[
     const args = engine.ext === 'sh'
       ? ['--noprofile', '--norc', fwd(script)]
       : ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script];
-    const r = await spawnAsync(engine.exe, args);
+    const r = await spawnAsync(engine.exe, args, daemonHost === undefined ? ENV : { ...ENV, MOE_DAEMON_HOST: daemonHost });
     const out = r.out.replaceAll('\r\n', '\n').replace(ANSI, '');
+    // The sh fixture fills in $$ before probing; compare those exact bytes too.
+    const before = content.replace(SHELL_PID, /@@ fixture-pid=(\d+)/.exec(out)?.[1] ?? 'missing-fixture-pid');
     const after = existsSync(file) ? readFileSync(file, 'utf8') : null;
-    return { status: r.status, out, lines: out.split('\n'), size: existsSync(file) ? statSync(file).size : -1, after, infoPath };
+    return { status: r.status, out, lines: out.split('\n'), size: existsSync(file) ? statSync(file).size : -1, before, after, infoPath };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-const listen = (server) => new Promise((resolve, reject) => {
+const listen = (server, address = '127.0.0.1') => new Promise((resolve, reject) => {
   server.once('error', reject);
-  server.listen(0, '127.0.0.1', resolve);
+  server.listen(0, address, resolve);
 });
+// No resolver hook: bind the fake to the OS's first address, just as the
+// launchers must. localhost. exercises DNS and IPv6 without a machine alias.
+async function localName(name) {
+  if (net.isIP(name) || name.toLowerCase() === 'localhost') return { name, skip: 'not a DNS name' };
+  const server = net.createServer();
+  try {
+    const [{ address, family }] = await lookup(name, { all: true });
+    if (family === 6 && /^fe[89ab][0-9a-f]:/i.test(address)) return { name, skip: `scoped link-local first address: ${address}` };
+    await listen(server, address);
+    return { name, address, literal: family === 6 ? `[${address}]` : address };
+  } catch (error) {
+    return { name, skip: `first address unavailable: ${error.message}` };
+  } finally {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  }
+}
+const NAMES = await Promise.all(['localhost.', hostname()].map(localName));
 // A port that answers nothing: reserved, then released.
 async function closedPort() {
   const server = net.createServer();
@@ -166,14 +186,22 @@ async function closedPort() {
 }
 // A fake daemon /health answering `statusCode` + `body`, recording each request
 // so a row proves the launcher asked (and asked nothing else).
-async function withHealth(statusCode, body, fn) {
+async function withHealth(statusCode, body, fn, { address = '127.0.0.1', guard = false } = {}) {
+  let isAllowedHealthHost;
+  if (guard) {
+    const url = new URL('../../packages/moe-daemon/dist/server/healthHost.js', import.meta.url);
+    assert.ok(existsSync(url), 'packages/moe-daemon/dist/server/healthHost.js is missing: build packages/moe-daemon first');
+    ({ isAllowedHealthHost } = await import(url.href));
+  }
   const requests = [];
   const server = http.createServer((req, res) => {
-    requests.push(`${req.method} ${req.url}`);
-    res.writeHead(statusCode, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(body));
+    const allowed = !guard || isAllowedHealthHost(req.headers.host, req.socket.localAddress);
+    const code = allowed ? statusCode : 403;
+    requests.push(`${req.method} ${req.url}${guard ? ` ${req.headers.host} ${code}` : ''}`);
+    res.writeHead(code, { 'content-type': allowed ? 'application/json' : 'text/plain' });
+    res.end(allowed ? JSON.stringify(body) : 'Forbidden');
   });
-  await listen(server);
+  await listen(server, address);
   try {
     return await fn(server.address().port, requests);
   } finally {
@@ -192,16 +220,16 @@ const REFUSAL_FIXED = [
   '); it takes the next free port.',
   "Refusing to register, claim or bridge to another project's daemon.",
 ];
-function refusal(port, served, project, infoPath) {
+function refusal(port, served, project, infoPath, host = '127.0.0.1') {
   return [
-    `[ERROR] ${REFUSAL_FIXED[0]}127.0.0.1:${port} serves ${served}${REFUSAL_FIXED[1]}${project}).`,
+    `[ERROR] ${REFUSAL_FIXED[0]}${host}:${port} serves ${served}${REFUSAL_FIXED[1]}${project}).`,
     `${infoPath}${REFUSAL_FIXED[2]}${project}${REFUSAL_FIXED[3]}`,
     REFUSAL_FIXED[4],
   ];
 }
-function assertRefused(r, port, served, project) {
+function assertRefused(r, port, served, project, host = '127.0.0.1') {
   assert.equal(r.status, 1, r.out);
-  const expected = refusal(port, served, project, r.infoPath);
+  const expected = refusal(port, served, project, r.infoPath, host);
   assert.deepEqual(r.lines.filter((l) => l.includes('MOE_DAEMON_FOREIGN_PROJECT')), [expected[0]], r.out);
   const at = r.lines.indexOf(expected[0]);
   assert.deepEqual(r.lines.slice(at, at + 3), expected, r.out);
@@ -228,6 +256,30 @@ test('identity: both launchers carry the same MOE_DAEMON_FOREIGN_PROJECT refusal
 
 for (const engine of ENGINES) {
   const t = (name, fn, skip = engine.skip) => test(`${engine.name}: ${name}`, { skip }, fn);
+  for (const [name, project, served, same] of [
+    ['WSL share and POSIX', '\\\\wsl$\\Ubuntu\\home\\u\\Proj', '/home/u/Proj', true],
+    ['WSL host aliases and ignored distro', '//WsL.LocalHost/Debian/home/u/Proj', '//wsl$/Ubuntu/home/u/Proj', true],
+    ['WSL Unicode tail and POSIX', '\\\\wsl.localhost\\Ubuntu\\home\\u\\caf\u00e9\\\u00ad', '/home/u/caf\u00e9/\u00ad', true],
+    ['WSL POSIX case', '//wsl$/Ubuntu/home/u/Proj', '/home/u/proj', false],
+    ['WSL alias POSIX case', '//wsl$/Ubuntu/home/u/Proj', '//wsl.localhost/Ubuntu/home/u/proj', false],
+    ['WSL ignorable segment', '//wsl$/Ubuntu/home/u/Proj/\u00ad', '/home/u/Proj', false],
+  ]) {
+    t(`identity: ${name} is ${same ? 'adopted' : 'refused, untouched'}`, () =>
+      withHealth(200, healthy(served), async (port, requests) => {
+        const info = { pid: engine.ext === 'sh' ? SHELL_PID : process.pid, port, startedAt: 'x', projectPath: project };
+        const content = JSON.stringify(info).replace(`"${SHELL_PID}"`, SHELL_PID);
+        const r = await runCheck(engine, content, { project });
+        if (same) {
+          assert.equal(r.status, 0, r.out);
+          assert.ok(r.out.includes(engine.ext === 'sh' ? 'running=true' : `@@ running=True port=${port} err=`), r.out);
+          assert.ok(!r.out.includes('MOE_DAEMON_FOREIGN_PROJECT'), r.out);
+        } else {
+          assertRefused(r, port, served, project);
+        }
+        assert.equal(r.after, r.before);
+        assert.deepEqual(requests, ['GET /health']);
+      }));
+  }
   if (engine.ext === 'sh') {
     const info = INFO.sh();
     t('a 65536-byte daemon.json is read', async () => {
@@ -285,6 +337,37 @@ for (const engine of ENGINES) {
     // The PID branch: kill -0 proves a process, not which project it serves.
     const pidInfo = (port) => `{"pid":${SHELL_PID},"port":${port},"startedAt":"x","projectPath":"/mnt/c/moe-id/proj"}`;
     const running = (port) => `@@ port=[${port}] project=[/mnt/c/moe-id/proj] running=true`;
+    for (const { name, address, literal, skip } of NAMES) {
+      for (const same of [false, true]) {
+        t(`identity: named host ${name}, live pid, ${same ? 'same adopted' : 'foreign refused'}`, () =>
+          withHealth(200, healthy(same ? 'C:/moe-id/proj' : OTHER), async (port, requests) => {
+            const r = await runCheck(engine, pidInfo(port), { daemonHost: name });
+            assert.deepEqual(requests, [`GET /health ${literal}:${port} 200`], r.out);
+            if (same) {
+              assert.equal(r.status, 0, r.out);
+              assert.ok(r.lines.includes(running(port)), r.out);
+            } else assertRefused(r, port, OTHER, PROJECT.sh, name);
+            assert.equal(r.after, r.before);
+          }, { address, guard: true }), engine.skip || skip);
+        t(`identity: named host ${name}, Windows-owned candidate, ${same ? 'same adopted' : 'foreign refused'}`, () =>
+          withHealth(200, healthy(same ? 'd:/projexts/px4swarm/' : OTHER), async (port, requests) => {
+            const r = await runCheck(engine, px4Info(port), { project: PX4, daemonHost: name });
+            assert.deepEqual(requests, [`GET /health ${literal}:${port} 200`], r.out);
+            if (same) {
+              assert.equal(r.status, 0, r.out);
+              assert.ok(r.out.includes('running=true'), r.out);
+            } else assertRefused(r, port, OTHER, PX4, name);
+            assert.ok(r.lines.includes(`@@ exit host=[${name}]`), r.out);
+            assert.equal(r.after, r.before);
+          }, { address, guard: true }), foreignSkip || skip);
+      }
+    }
+    t('identity: non-resolving named host is adopted as today', async () => {
+      const port = await closedPort();
+      const r = await runCheck(engine, pidInfo(port), { daemonHost: 'moe-daemon.invalid' });
+      assert.equal(r.status, 0, r.out);
+      assert.ok(r.lines.includes(running(port)), r.out);
+    });
     t('identity: a live pid whose daemon serves another project is refused', () =>
       withHealth(200, healthy(OTHER), async (port, requests) => {
         const r = await runCheck(engine, pidInfo(port));
@@ -308,6 +391,57 @@ for (const engine of ENGINES) {
       assert.equal(r.status, 0, r.out);
       assert.ok(r.lines.includes(running(port)), r.out);
     });
+
+    // daemon.json from another pid namespace (a Docker container; the daemon records
+    // pidNamespace, task-da89f620): its pid means nothing here, so /health decides
+    // (task-a7f8d8d6). Without an exact other namespace the kill -0 rule stays.
+    const OWN_NS = (() => { try { return readlinkSync('/proc/self/ns/pid'); } catch { return null; } })();
+    const DEAD_PID = 2147483646; // no process on any host: Linux pid_max is at most 2^22
+    const nsInfo = (port, pidNamespace) => JSON.stringify({ pid: DEAD_PID, port, startedAt: 'x', projectPath: '/mnt/c/moe-id/proj', ...(pidNamespace === undefined ? {} : { pidNamespace }) });
+    t('pid namespace: another namespace whose /health answers for this project is adopted, untouched', () =>
+      withHealth(200, healthy('C:/moe-id/proj'), async (port, requests) => {
+        const content = nsInfo(port, 'pid:[1]');
+        const r = await runCheck(engine, content);
+        assert.equal(r.status, 0, r.out);
+        assert.ok(r.lines.includes(`[OK] Daemon reachable at 127.0.0.1:${port} (daemon.json from another pid namespace)`), r.out);
+        assert.ok(r.lines.includes(running(port)), r.out);
+        assert.ok(!r.out.includes('Stale daemon.json'), r.out);
+        assert.equal(r.after, content);
+        assert.deepEqual(requests, ['GET /health']);
+      }));
+    t('pid namespace: another namespace with no /health answer is removed as stale', async () => {
+      const port = await closedPort();
+      const r = await runCheck(engine, nsInfo(port, 'pid:[1]'));
+      assert.equal(r.status, 0, r.out);
+      assert.ok(r.lines.includes(`[INFO] Stale daemon.json detected (no /health answer at 127.0.0.1:${port} from its pid namespace)`), r.out);
+      assert.ok(r.lines.includes(`@@ port=[${port}] project=[/mnt/c/moe-id/proj] running=false`), r.out);
+      assert.equal(r.after, null);
+    });
+    t('pid namespace: another namespace whose daemon serves another project is refused, untouched', () =>
+      withHealth(200, healthy(OTHER), async (port, requests) => {
+        const content = nsInfo(port, 'pid:[1]');
+        const r = await runCheck(engine, content);
+        assertRefused(r, port, OTHER, PROJECT.sh);
+        assert.equal(r.after, content);
+        assert.deepEqual(requests, ['GET /health']);
+      }));
+    for (const [label, pidNamespace, skip] of [
+      ['no pidNamespace', undefined],
+      ["this host's own pidNamespace", OWN_NS, OWN_NS === null && 'no /proc/self/ns/pid on this host'],
+      ["pidNamespace 'pid:[x]'", 'pid:[x]'],
+      ["pidNamespace 'net:[1]'", 'net:[1]'],
+      ['a 21-digit pidNamespace', `pid:[${'1'.repeat(21)}]`],
+      ['a numeric pidNamespace', 1],
+    ]) {
+      t(`pid namespace: a dead pid with ${label} keeps the kill -0 rule (removed, no /health)`, () =>
+        withHealth(200, healthy('C:/moe-id/proj'), async (port, requests) => {
+          const r = await runCheck(engine, nsInfo(port, pidNamespace));
+          assert.equal(r.status, 0, r.out);
+          assert.ok(r.lines.includes(`[INFO] Stale daemon.json detected (PID ${DEAD_PID} is not running)`), r.out);
+          assert.equal(r.after, null);
+          assert.deepEqual(requests, []);
+        }), engine.skip || skip);
+    }
     continue;
   }
   t('moe-agent.ps1 parses', () => {
@@ -344,6 +478,29 @@ for (const engine of ENGINES) {
   });
 
   const psInfo = (port) => JSON.stringify({ pid: process.pid, port, startedAt: 'x', projectPath: PROJECT.ps1 });
+  for (const { name, address, literal, skip } of NAMES) {
+    for (const same of [false, true]) {
+      t(`identity: named host ${name}, live pid, ${same ? 'same adopted' : 'foreign refused'}`, () =>
+        withHealth(200, healthy(same ? PROJECT.ps1 : OTHER), async (port, requests) => {
+          const r = await runCheck(engine, psInfo(port), { daemonHost: name });
+          assert.deepEqual(requests, [`GET /health ${literal}:${port} 200`], r.out);
+          if (same) {
+            assert.equal(r.status, 0, r.out);
+            assert.ok(r.lines.includes(`@@ running=True port=${port} err=`), r.out);
+          } else {
+            assertRefused(r, port, OTHER, PROJECT.ps1, name);
+            assert.ok(!r.out.includes('@@ running='), r.out);
+          }
+          assert.equal(r.after, r.before);
+        }, { address, guard: true }), engine.skip || skip);
+    }
+  }
+  t('identity: non-resolving named host is adopted as today', async () => {
+    const port = await closedPort();
+    const r = await runCheck(engine, psInfo(port), { daemonHost: 'moe-daemon.invalid' });
+    assert.equal(r.status, 0, r.out);
+    assert.ok(r.lines.includes(`@@ running=True port=${port} err=`), r.out);
+  });
   for (const [name, project, served] of [
     ['Unicode normalization', 'D:/qa/caf\u00e9', 'D:/qa/cafe\u0301'],
     ['POSIX case', '/home/qa/OtherProject', '/home/qa/otherproject'],
@@ -418,10 +575,33 @@ const CONTRACT = [
   ['/home/qa/OtherProject', '/home/qa/OtherProject'], ['/home/qa/otherproject', '/home/qa/otherproject'],
   ['/home//u/./x/../p/', '/home/u/p'],
   ['\\\\srv\\share\\proj', '//srv/share/proj'], ['//SRV/SHARE/PROJ/', '//srv/share/proj'], ['//srv/share/../../b', '//srv/share/b'],
+  ['//srv//share/proj', '//srv/share/proj'], ['\\\\srv\\\\share\\proj', '//srv/share/proj'],
+  ['//SRV//SHARE', '//srv/share'], ['//srv//share/../../b', '//srv/share/b'],
+  ['//srv//..//share/x', '//srv/share/x'], ['//srv///share//proj//', '//srv/share/proj'],
 ];
 const WSL_SHARES = [
   ['\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj'], ['//wsl$/Ubuntu/home/u/proj', '/home/u/proj'],
   ['//WSL$/Ubuntu/mnt/d/proj', 'd:/proj'], ['//wsl$/Ubuntu', '/'],
+  ['//WsL.LocalHost/Debian', '/'], ['\\\\WSL$\\Ubuntu\\', '/'], ['//wsl.localhost/Ubuntu/', '/'],
+  ['\\\\WsL.LocalHost/Ubuntu\\home//u\\Proj/', '/home/u/Proj'],
+  ['//wsl$/Ubuntu/home/u/caf\u00e9/\u00ad/.\u00ad/..\u00ad', '/home/u/caf\u00e9/\u00ad/.\u00ad/..\u00ad'],
+  ['//wsl.localhost/Ubuntu/home/u/cafe\u0301', '/home/u/cafe\u0301'],
+  ['//wsl$/Ubuntu//home///u/./x/../Proj/', '/home/u/Proj'],
+  ['//wsl.localhost/Ubuntu/../../Proj', '/Proj'],
+  ['//wsl$/Ubuntu/..', '/'], ['//wsl$/Ubuntu///', '/'],
+  ['//wsl.localhost/Ubuntu/mnt/D/Proj/../X', 'd:/x'], ['//wsl$/Ubuntu/mnt/d', 'd:'],
+  ['//wsl$/Ubuntu/MNT/d/Proj', '/MNT/d/Proj'],
+];
+// These must remain generic UNC, not WSL shares (including Unicode host lookalikes).
+const NOT_WSL_SHARES = [
+  ['//wsl$/', '//wsl$'], ['//wsl.localhost', '//wsl.localhost'],
+  ['//wsl$//', '//wsl$'], ['//wsl.localhost//', '//wsl.localhost'],
+  ['//wsl.localhost.evil/Ubuntu/Proj', '//wsl.localhost.evil/ubuntu/proj'],
+  ['//wsl$evil/Ubuntu/Proj', '//wsl$evil/ubuntu/proj'],
+  ['//w\u017fl$/Ubuntu/Proj', '//w\u017fl$/ubuntu/proj'],
+  ['//w\u017fl.localhost/Ubuntu/Proj', '//w\u017fl.localhost/ubuntu/proj'],
+  ['//wsl$//home/u/Proj', '//wsl$/home/u/proj'], ['\\\\wsl$\\\\home\\u\\Proj', '//wsl$/home/u/proj'],
+  ['//wsl.localhost//Ubuntu/home', '//wsl.localhost/ubuntu/home'],
 ];
 // Maps the rows' inputs to keys in ONE child process, which reads them as JSON on stdin. A
 // failed spawn, a non-zero exit, unparseable output or a wrong row count fails the test.
@@ -444,7 +624,7 @@ writeSync(1, JSON.stringify(JSON.parse(readFileSync(0, 'utf8')).map((p) => compa
 process.exit(0);`;
   return childKeys(process.execPath, ['--input-type=module', '-e', code], rows);
 }
-const ALL_ROWS = [...CONTRACT, ...WSL_SHARES];
+const ALL_ROWS = [...CONTRACT, ...WSL_SHARES, ...NOT_WSL_SHARES];
 test('path contract: moe-proxy and moe-daemon give every row its contract key', () => {
   assert.deepEqual(distKeys('packages/moe-proxy/dist/utils.js', ALL_ROWS), ALL_ROWS);
   assert.deepEqual(distKeys('packages/moe-daemon/dist/index.js', ALL_ROWS), ALL_ROWS);
@@ -462,13 +642,14 @@ test('path contract: moe-proxy matches every absolute row of the JetBrains table
 // The launchers' own rules, cut from the real scripts.
 const pythonKeys = (rows) => childKeys(PYTHON, ['-c', `import json, ntpath, posixpath, re, sys
 ${between(SEGMENTS.sh.probe(), 'WINDOWS = re.compile(', '\ntry:')}
-print(json.dumps([comparable(p) for p in json.load(sys.stdin)]))`], rows);
+print(json.dumps([comparable(p) for p in json.load(sys.stdin.buffer)]))`], rows);
 function powershellKeys(engine, rows) {
   const dir = mkdtempSync(path.join(tmpdir(), 'moe-path-'));
   try {
     const script = path.join(dir, 'keys.ps1');
     writeFileSync(script, `\ufeff$ErrorActionPreference = 'Stop'
-${between(ps, '\nfunction Get-MoeComparableProjectPath(', '\n# Which project the daemon on 127.0.0.1')}
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+${between(ps, '\nfunction Get-MoeComparableProjectPath(', '\n# Which project the daemon ')}
 foreach ($p in @(${rows.map(([p]) => psq(p)).join(', ')})) { Get-MoeComparableProjectPath $p }
 `);
     return childKeys(engine.exe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], rows,
@@ -483,10 +664,10 @@ const LAUNCHER_RULES = [
 ];
 for (const rule of LAUNCHER_RULES) {
   test(`path contract: ${rule.name} gives every non-WSL-share row its key`, { skip: rule.skip }, () => {
-    assert.deepEqual(rule.keys(CONTRACT), CONTRACT);
+    assert.deepEqual(rule.keys([...CONTRACT, ...NOT_WSL_SHARES]), [...CONTRACT, ...NOT_WSL_SHARES]);
   });
   test(`path contract: ${rule.name} maps a WSL share to its POSIX path`,
-    { skip: rule.skip, todo: 'launchers still read a WSL share as plain UNC: task-3def080415d3495a8557b514d6a0ab2a' }, () => {
+    { skip: rule.skip }, () => {
       assert.deepEqual(rule.keys(WSL_SHARES), WSL_SHARES);
     });
 }

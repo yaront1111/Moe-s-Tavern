@@ -16,13 +16,16 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.chat_read',
     description: 'Read chat messages from a channel with cursor-based pagination. Auto-tracks read position per worker. '
-      + 'Skips the daemon\'s status lines in #general (system posts that mention nobody) unless includeSystem is true.',
+      + 'Skips the daemon\'s status lines in #general (system posts that mention nobody) unless includeSystem is true. '
+      + 'A read with sinceId is a peek that moves no stored cursor or unread count; in all-channel mode the id applies only '
+      + 'to the channel that holds it, and the other channels read from the caller\'s stored cursor. '
+      + 'Omit sinceId to read from and advance your cursor.',
     inputSchema: {
       type: 'object',
       properties: {
         channel: { type: 'string', description: 'Channel id, or name in either "general" or "#general" form (omit to read from all channels)' },
         workerId: { type: 'string', description: 'Worker ID for auto-cursor tracking' },
-        sinceId: { type: 'string', description: 'Return messages after this message ID' },
+        sinceId: { type: 'string', description: 'Return messages after this message ID. A peek: moves no stored cursor and clears no unread count' },
         limit: { type: 'number', description: 'Max messages to return (default 10, max 200)' },
         maxContentChars: {
           type: 'number',
@@ -81,6 +84,13 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
       let sinceId = params.sinceId;
       let allChannelFetchedMessages: ChatMessage[] = [];
 
+      // An explicit sinceId makes this read a PEEK: it pages from that id but
+      // writes no stored cursor and clears no unread count. Otherwise it would
+      // rewind the cursor chat_wait drains from (re-delivering handled
+      // messages) or jump past unread ones. An empty string stays cursor mode.
+      const explicitSinceId = params.sinceId || undefined;
+      const peek = explicitSinceId !== undefined;
+
       // If workerId provided and no explicit sinceId, use worker's saved cursor
       if (params.workerId && !sinceId && channelId) {
         const worker = state.getWorker(params.workerId);
@@ -102,9 +112,14 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
           ? (state.getWorker(params.workerId)?.chatCursors || {})
           : {};
         for (const ch of channels) {
-          const chSinceId = params.workerId && !params.sinceId
-            ? existingCursors[ch.id]
-            : sinceId;
+          // An explicit id belongs to ONE channel (collectChatBacklog applies the
+          // same rule). Applied to a channel that does not hold it, it would trip
+          // getMessages' expired-cursor fallback and return that channel's newest
+          // window; those channels read from the caller's stored cursor instead
+          // (none without a workerId, which keeps the newest window).
+          const chSinceId = explicitSinceId && state.messageExistsInChannel(ch.id, explicitSinceId)
+            ? explicitSinceId
+            : existingCursors[ch.id];
           const chMessages = await state.getMessages(ch.id, { sinceId: chSinceId, limit, hideSystemFeed });
           allMessages.push(...chMessages);
         }
@@ -143,8 +158,8 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
           .map((msg) => msg.channel)
       );
 
-      // Update worker's chat cursor atomically if workerId provided
-      if (params.workerId && messages.length > 0) {
+      // Update worker's chat cursor atomically if workerId provided (not on a peek)
+      if (params.workerId && !peek && messages.length > 0) {
         const cursorUpdates: Record<string, string> = {};
         if (channelId) {
           cursorUpdates[channelId] = cursor!;
@@ -161,7 +176,8 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
       }
 
       // Clear unread notification counts only when messages were actually read
-      if (params.workerId && messages.length > 0) {
+      // by a cursor-mode read; a peek leaves them for the next one
+      if (params.workerId && !peek && messages.length > 0) {
         if (channelId) {
           state.clearUnread(params.workerId, channelId);
         } else {

@@ -1,10 +1,27 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { missingRequired, invalidInput, notFound } from '../util/errors.js';
+import type { Task } from '../types/schema.js';
+import { missingRequired, invalidInput, invalidState, notFound } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
-import { RESOURCE_ID_RE } from '../state/resourceStore.js';
+import { RESOURCE_ELIGIBLE_STATUSES, RESOURCE_ID_RE } from '../state/resourceStore.js';
 
 const MAX_NOTE_LENGTH = 500;
+
+/**
+ * A lease or queue entry is legal only on a row the grant path serves: the
+ * statuses grantNextLeases keeps and the lease reaper spares. Anything else
+ * (BACKLOG, AWAITING_APPROVAL, DONE, ARCHIVED) is refused before any write, so
+ * live waiters never queue behind a lease no other path would have issued.
+ */
+export function assertResourceTaskEligible(task: Task): void {
+  if (RESOURCE_ELIGIBLE_STATUSES.has(task.status)) return;
+  throw invalidState(
+    `Task ${task.id}`,
+    task.status,
+    `${[...RESOURCE_ELIGIBLE_STATUSES].join('/')} to lease a resource. No grant path serves a lease on this row and the lease reaper revokes one: ` +
+      'take the lease for the task your seat is working on, or move this row back with moe.set_task_status first. Nothing was written'
+  );
+}
 
 export function acquireResourceTool(_state: StateManager): ToolDefinition {
   return {
@@ -41,6 +58,7 @@ export function acquireResourceTool(_state: StateManager): ToolDefinition {
 
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
+      assertResourceTaskEligible(task);
       assertWorkerOwns(task, params.workerId, 'moe.acquire_resource');
       await state.touchWorker(params.workerId);
 

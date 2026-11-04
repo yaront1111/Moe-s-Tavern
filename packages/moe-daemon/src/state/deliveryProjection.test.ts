@@ -315,23 +315,23 @@ describe('deliveryProjection', () => {
       expect(snapshot.payload.tasks[0]).toEqual({ ...task, delivery: expected });
       h.state.checkRuns.set('check-2', { ...check, id: 'check-2', exitCode: 0 });
       expect(JSON.parse(await update())).toEqual({
-        type: 'TASK_UPDATED', payload: { ...task, delivery: { ...expected, latestCheckRun: { command: check.command, exitCode: 0, source: 'runner-observed' } } },
+        type: 'TASK_UPDATED', payload: { ...task, delivery: { ...expected, latestCheckRun: { command: check.command, exitCode: 0, source: 'runner-observed' } } }, boardVersion: h.state.boardVersion,
       });
       expect(h.state.tasks.get(task.id)).toBe(task);
       expect(task).not.toHaveProperty('delivery');
     });
 
     it('serves byte-identical legacy snapshots and updates with no evidence', async () => {
-      const expectedSnapshot = JSON.stringify({ type: 'STATE_SNAPSHOT', payload: h.state.getSnapshot() });
+      const expectedSnapshot = JSON.stringify({ type: 'STATE_SNAPSHOT', payload: h.state.getSnapshot(), boardVersion: h.state.boardVersion });
       expect(await connect()).toBe(expectedSnapshot);
-      expect(await update()).toBe(JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+      expect(await update()).toBe(JSON.stringify({ type: 'TASK_UPDATED', payload: task, boardVersion: h.state.boardVersion }));
     });
 
     it('keeps malformed evidence from breaking snapshots and still filters archived tasks', async () => {
       h.state.candidates.set('corrupt', null as unknown as Candidate);
       h.state.tasks.set('archived', { ...task, id: 'archived', status: 'ARCHIVED' });
       expect(JSON.parse(await connect()).payload.tasks).toEqual([task]);
-      expect(await update()).toBe(JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+      expect(await update()).toBe(JSON.stringify({ type: 'TASK_UPDATED', payload: task, boardVersion: h.state.boardVersion }));
     });
 
     it('projects direct edit replies so they cannot erase delivery after a broadcast', async () => {

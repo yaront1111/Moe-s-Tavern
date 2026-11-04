@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { PriorAttempt } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 
 const MAX_REASON_LENGTH = 2000;
 
@@ -19,7 +20,7 @@ const MAX_REASON_LENGTH = 2000;
 export function requestReplanTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.request_replan',
-    description: 'Worker requests a fresh plan from the architect. Snapshots prior implementation plan into task.priorAttempt, flips task to PLANNING, pings #architects.',
+    description: 'Worker requests a fresh plan from the architect. Snapshots prior implementation plan into task.priorAttempt, flips task to PLANNING, pings #architects. Frees the seat: the reply carries sessionHandoff END_SESSION for it, so end the session; do not claim or wait inside it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -74,20 +75,29 @@ export function requestReplanTool(_state: StateManager): ToolDefinition {
           priorAttempt,
           reopenReason: params.reason,
         },
-        'TASK_REOPENED'
+        'TASK_REOPENED',
+        params.workerId
       );
 
-      // Worker is done with this task; touchWorker is a no-op for missing records.
-      if (task.assignedWorkerId) {
+      // Worker is done with this task. A pointer naming a different task means
+      // that seat is coding it: resetting it mid-step is the two-pointer drift
+      // report_blocked guards against.
+      const prevAssignee = task.assignedWorkerId;
+      if (prevAssignee) {
         try {
-          await state.touchWorker(task.assignedWorkerId, { status: 'IDLE', currentTaskId: null });
+          const prevWorker = state.getWorker(prevAssignee);
+          if (prevWorker && (prevWorker.currentTaskId === task.id || prevWorker.currentTaskId == null)) {
+            await state.touchWorker(prevAssignee, { status: 'IDLE', currentTaskId: null });
+          }
         } catch { /* never block tool */ }
       }
 
       const stepHint = params.stepId ? ` (broke at step ${params.stepId})` : '';
       const reasonSummary = params.reason.length > 200 ? params.reason.slice(0, 200) + '…' : params.reason;
+      // The #general line echoes the agent's reason, so a tag it spells must not
+      // page seats (mem:gotcha-plan-step-text-at-tokens-echoed-as-mentions).
       try {
-        await state.postSystemMessage(task.id, `Replan requested${stepHint}: ${reasonSummary}`);
+        await state.postSystemMessage(task.id, `Replan requested${stepHint}: ${reasonSummary}`, { parseMentions: false });
       } catch { /* never block tool */ }
       try {
         await state.postToRoleChannel(
@@ -96,17 +106,32 @@ export function requestReplanTool(_state: StateManager): ToolDefinition {
         );
       } catch { /* never block tool */ }
 
+      // Twin of reportBlocked.ts's sessionHandoff (43f6dd55): the seat is freed,
+      // so a claim/wait hint would start a second task in a session whose pinned
+      // attempt identity makes every start_step fail ATTEMPT_SUPERSEDED. A
+      // governor never holds a task, so its replan must not end the governance
+      // TUI; a seat whose pointer names another task is not ended either.
+      const callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor'
+        ? params.workerId : undefined;
+      const seatWorker = prevAssignee || callerSeat;
+      const seatTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;
+      const sessionHandoff = seatWorker && !seatTaskId
+        ? {
+            action: 'END_SESSION', taskId: task.id, workerId: seatWorker,
+            reason: 'End this session so the wrapper can checkpoint the task it launched. ' +
+              'Do not call moe.claim_next_task or moe.wait_for_task inside this session. ' +
+              'A new conversation turn is not a fresh preflight; the next task needs a new wrapper session and baseline. ' +
+              'If this is an interactive TUI, return control to its operator so the CLI can exit normally.'
+          }
+        : undefined;
+
       return {
         success: true,
         taskId: updated.id,
         status: updated.status,
         priorAttempt,
-        message: `Task ${updated.id} flipped to PLANNING; architect will re-plan with priorAttempt context.`,
-        nextAction: {
-          tool: 'moe.wait_for_task',
-          args: { workerId: params.workerId, statuses: ['WORKING'] },
-          reason: 'Replan requested; wait for an architect to re-plan or pick up a different task.',
-        },
+        message: `Task ${updated.id} flipped to PLANNING; architect will re-plan with priorAttempt context. Seat freed — this response does not start another task session.`,
+        ...(sessionHandoff ? { sessionHandoff } : {}),
       };
     }
   };

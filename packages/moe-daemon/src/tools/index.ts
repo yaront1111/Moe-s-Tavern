@@ -34,6 +34,8 @@ import { unblockWorkerTool } from './unblockWorker.js';
 import { releaseTaskTool } from './releaseTask.js';
 import { enterGovernanceTool } from './enterGovernance.js';
 import { listWorkersTool } from './listWorkers.js';
+import { getSeatLivenessTool } from './getSeatLiveness.js';
+import { getExecutionReadinessTool } from './getExecutionReadiness.js';
 import { createTeamTool } from './createTeam.js';
 import { joinTeamTool } from './joinTeam.js';
 import { leaveTeamTool } from './leaveTeam.js';
@@ -134,6 +136,8 @@ export function getTools(state: StateManager): ToolDefinition[] {
     releaseTaskTool(state),
     enterGovernanceTool(state),
     listWorkersTool(state),
+    getSeatLivenessTool(state),
+    getExecutionReadinessTool(state),
     createTeamTool(state),
     joinTeamTool(state),
     leaveTeamTool(state),
@@ -245,6 +249,8 @@ export const TOOL_AUDIENCE: Readonly<Record<string, readonly Seat[] | 'wrapper'>
   'moe.amend_plan_step': [A],
   'moe.deregister_worker': 'wrapper',
   'moe.heartbeat': 'wrapper',
+  'moe.get_seat_liveness': 'wrapper',
+  'moe.get_execution_readiness': 'wrapper',
   'moe.lease_account': 'wrapper',
   'moe.report_account_usage': 'wrapper',
   'moe.acquire_resource': [W, Q],

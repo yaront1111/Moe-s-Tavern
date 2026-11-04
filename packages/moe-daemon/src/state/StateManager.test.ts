@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { StateManager } from './StateManager.js';
 import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
+import { MAX_PLAN_STEPS } from './validators.js';
 import type { Task, Epic, Project, RailProposal, ChatChannel, Team, Worker } from '../types/schema.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 
@@ -2162,12 +2163,12 @@ describe('StateManager', () => {
       await expect(stateManager.updateTask('task-test123', { priority: 'INVALID' as any })).rejects.toThrow('Invalid priority');
     });
 
-    it('createTask truncates plan to 50 steps (B28)', async () => {
+    it('createTask truncates plan to MAX_PLAN_STEPS steps (B28)', async () => {
       setupMoeFolder();
       createTestEpic();
       await stateManager.load();
 
-      const bigPlan = Array.from({ length: 60 }, (_, i) => ({
+      const bigPlan = Array.from({ length: MAX_PLAN_STEPS + 10 }, (_, i) => ({
         stepId: `step-${i + 1}`,
         description: `Step ${i + 1}`,
         status: 'PENDING' as const,
@@ -2180,7 +2181,7 @@ describe('StateManager', () => {
         implementationPlan: bigPlan,
       });
 
-      expect(task.implementationPlan.length).toBe(50);
+      expect(task.implementationPlan.length).toBe(MAX_PLAN_STEPS);
     });
 
     it('clears assignedWorkerId on any status change unless explicitly set', async () => {

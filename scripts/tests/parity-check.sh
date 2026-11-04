@@ -23,15 +23,27 @@ fail() { echo "PARITY FAIL: $*" >&2; failures=$((failures + 1)); }
 
 # ---- 1. Code families: extract the full set from each file, diff them. -------
 # Word-bounded so MOE_COMMIT_FAILED is not satisfied by MOE_COMMIT_FAILED_REF_CONTENTION.
-# The sh wrapper's internal env-plumbing names that share a prefix (bash ->
-# inline-python bridging from an earlier revision) are exempt from the symmetry
-# rule — same allowlist as parity-check.ps1; the operator-facing vocabulary is
-# fully compared.
-INTERNAL_PLUMBING='^(MOE_ATTR_UNDECLARED|MOE_ATTR_EXCLUDE|MOE_ATTR_POLICY_OVERRIDE|MOE_COMMIT_BOARD_STATE)$'
+# INTERNAL_PLUMBING exempts a wrapper-internal env name that shares a compared
+# prefix (an env bridge, never printed) from the symmetry rule. Add such a name
+# to BOTH scripts (parity-check.ps1's $internalPlumbing) with a comment, as
+# '^(NAME_A|NAME_B)$', and never exempt a whole family. The list is empty: the
+# sh wrapper's bash -> inline-python bridge uses MOE_PY_* names, which is not a
+# compared family, so '^$' (no extracted code is empty) exempts nothing.
+INTERNAL_PLUMBING='^$'
+# SH_ONLY names a printed code whose condition only moe-agent.sh can meet: the
+# verified-local WSL refusal (a ps1 seat never runs inside WSL). Keep it in
+# BOTH scripts (parity-check.ps1's $shOnly), and never exempt a whole family.
+SH_ONLY='^MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED$'
 extract_codes() { # $1 = file, $2 = prefix regex
-  grep -oE "\b$2[A-Z0-9_]*\b" "$1" 2>/dev/null | grep -vE "$INTERNAL_PLUMBING" | sort -u || true
+  grep -oE "\b$2[A-Z0-9_]*\b" "$1" 2>/dev/null | grep -vE "$INTERNAL_PLUMBING" | grep -vE "$SH_ONLY" | sort -u || true
 }
-for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_'; do
+# The worktree-mode families follow the land-on-every-exit ones, then the
+# verified-local VM route's (CQ-M07m/M07n) and its check-VM gate's (CQ-M07r/M07s).
+# MOE_WRAPPER_ is not a family: moe-agent.sh carries sh-only internal MOE_WRAPPER_* names
+# (its hot-reload plumbing), so section 2 requires its codes by name.
+for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_' \
+  'MOE_WORKTREE_' 'MOE_LAND_' 'MOE_CONTROL_' 'MOE_BOARD_' 'MOE_PUSH_' 'MOE_MIGRATION_' \
+  'MOE_VERIFIED_LOCAL_' 'MOE_SEAT_' 'MOE_VM_' 'MOE_CHECK_DISPATCH_'; do
   sh_set="$(extract_codes "$SH" "$prefix")"
   ps_set="$(extract_codes "$PS1" "$prefix")"
   only_sh="$(comm -23 <(printf '%s\n' "$sh_set") <(printf '%s\n' "$ps_set") | sed '/^$/d' || true)"
@@ -58,7 +70,8 @@ for code in \
   MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY \
   MOE_ATTR_EXCLUDED MOE_ATTR_CONTESTED MOE_ATTR_PEER_DECLARED MOE_ATTR_PREEXISTING MOE_ATTR_MISSING MOE_ATTR_CONCURRENT \
   MOE_ATTR_ASSERTED_FOREIGN \
-  MOE_CHECKPOINT_RECOVERED MOE_RESCUE_REF MOE_ATTRIBUTION_UNRESOLVED; do
+  MOE_CHECKPOINT_RECOVERED MOE_RESCUE_REF MOE_ATTRIBUTION_UNRESOLVED \
+  MOE_WRAPPER_IN_WORKTREE; do
   require_both "code" "$code"
 done
 
@@ -91,7 +104,7 @@ done
 # Baseline / temp-index plumbing (identical file formats and git invocations).
 for lit in '#moe-baseline v1' 'moe/baseline' ':(literal)' \
   '--porcelain=v1 -z --untracked-files=all --no-renames' 'hash-object --stdin-paths' \
-  'update-index --no-assume-unchanged --no-skip-worktree -z --stdin'; do
+  'update-index --no-skip-worktree -z --stdin' 'update-index --no-assume-unchanged -z --stdin'; do
   require_both "baseline/index" "$lit"
 done
 
@@ -103,6 +116,7 @@ done
 
 # Env names.
 for env_name in GIT_TERMINAL_PROMPT MOE_DISABLE_CHECKPOINT MOE_ATTRIBUTION MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF \
+  MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER \
   MOE_DISABLE_QUALITY_GATE MOE_RESUME_MAX_ATTEMPTS \
   MOE_CODEX_SANDBOX MOE_CODEX_REASONING_EFFORT MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC \
   CLAUDE_CODE_PROMPT_CACHE_TTL CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL CLAUDE_CODE_AUTO_COMPACT_WINDOW \
@@ -139,6 +153,18 @@ done
 
 # Resume-budget prose: a session that completed a plan step re-arms the budget.
 require_both "resume-budget prose" 'resume budget re-armed'
+
+# Verified-local VM route (CQ-M07m/M07n): the readiness read, the claim marker,
+# the seat CLI and account helper verbs, the job outcome marker and the capacity wait.
+for lit in get_execution_readiness executionRoute seat-start seat-job seat-stop vm-credential seatJob \
+  MOE_AGENT_SEAT_PATH retry-sec 'no task is claimed; retrying in'; do
+  require_both "vm route" "$lit"
+done
+# The check-VM gate (CQ-M07r/M07s): its start, pass, refusal and ignored-override lines.
+for lit in 'Post-flight: owed checks in check VMs: task' 'check VMs passed every owed check of candidate' \
+  'was not frozen, recorded and passed by the check VMs' 'only the bundled local-runner/check-dispatch.mjs runs.'; do
+  require_both "check dispatch" "$lit"
+done
 
 # Claude account rotation: the helper both wrappers call and the lease, wait and
 # relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are compared above).

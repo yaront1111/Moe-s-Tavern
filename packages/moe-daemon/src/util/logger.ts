@@ -5,7 +5,9 @@
 import pino from 'pino';
 
 const level = process.env.LOG_LEVEL || 'info';
-const isDev = process.env.NODE_ENV !== 'production';
+// Pretty output only for a developer's terminal: the IDE-spawned daemon writes to a pipe, and the
+// pino-pretty transport is a worker thread (+15 MB RSS per process) formatting every line for nobody.
+const isDev = process.env.NODE_ENV !== 'production' && process.stdout.isTTY === true;
 
 export const logger = pino({
   level,

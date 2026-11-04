@@ -22,6 +22,29 @@ export const MAX_PENDING_QUESTION_LIMIT = 50;
 export const DEFAULT_PENDING_QUESTIONS_PER_TASK = 3;
 export const MAX_PENDING_QUESTIONS_PER_TASK = 20;
 
+// Authors the daemon itself writes under: finalizeAttempt.ts (landing notes)
+// and delivery/repairActivation.ts (diagnostics). Never an answer to a human.
+const SYSTEM_COMMENT_AUTHORS: ReadonlySet<string> = new Set(['moe-daemon']);
+
+/**
+ * The unanswered human questions on a task: 'human' comments after the last
+ * comment by any author other than 'human' or the daemon. Shared by
+ * get_pending_questions and wait_for_task so the two surfaces cannot disagree.
+ * A non-array `comments` (hand-edited state) yields none.
+ */
+export function unansweredHumanComments(comments: readonly TaskComment[] | undefined): TaskComment[] {
+  const list = Array.isArray(comments) ? comments : [];
+  let lastAnswer = -1;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const author = list[i].author;
+    if (author !== 'human' && !SYSTEM_COMMENT_AUTHORS.has(author)) {
+      lastAnswer = i;
+      break;
+    }
+  }
+  return list.slice(lastAnswer + 1).filter((c) => c.author === 'human');
+}
+
 export type TaskSummary = {
   id: string;
   epicId: string;

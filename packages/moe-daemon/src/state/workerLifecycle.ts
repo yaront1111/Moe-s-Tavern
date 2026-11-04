@@ -7,14 +7,35 @@
 // =============================================================================
 
 import type { StateManager } from './StateManager.js';
-import type { Task, TaskStatus } from '../types/schema.js';
+import type { ExecutionAttempt, LandingRetry, ProjectSettings, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
+import { generateId } from '../util/ids.js';
+import { completionCommitsForReview } from '../delivery/policy.js';
 import { announceAttemptClosed, closeOpenAttempts, listAttempts, setAttemptPhase } from './attemptStore.js';
 import { releaseDeregisteredClaims } from './resourceStore.js';
 
 export { isWorkerAlive, LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
 
 const CLAIMABLE_FALLBACK_STATUS: TaskStatus = 'BACKLOG';
+
+export const RELOAD_HOLD_REASON = 'wrapper_restart';
+export const RELOAD_HOLD_EXPIRED_REASON = 'reload_hold_expired';
+export const DEFAULT_RELOAD_HOLD_MS = 120_000;
+export const MAX_RELOAD_HOLD_MS = 1_800_000;
+
+export function resolveReloadHoldMs(settings?: Pick<ProjectSettings, 'reloadHoldMs'>): number {
+  const ms = settings?.reloadHoldMs;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
+    ? Math.min(ms, MAX_RELOAD_HOLD_MS)
+    : DEFAULT_RELOAD_HOLD_MS;
+}
+
+/** Caller holds state.mutex. Propagate a failed clear: resuming with a live deadline is unsafe. */
+export async function endReloadHold(state: StateManager, workerId?: string): Promise<void> {
+  if (!workerId || state.getWorker(workerId)?.reloadHoldUntil == null) return;
+  await state.updateWorker(workerId, { reloadHoldUntil: null });
+  logger.info({ workerId }, 'worker returned from reload hold');
+}
 
 /** True iff the task has an implementation plan and every step is COMPLETED. */
 export function allStepsCompleted(task: Pick<Task, 'implementationPlan'>): boolean {
@@ -159,6 +180,35 @@ export interface DeregisterResult {
   workerId: string;
   released: ReleaseResult[];
   alreadyDead: boolean;
+  held: string[];
+  holdUntil?: string;
+}
+
+/** Caller holds state.mutex. A failed hold write falls back to full deregistration. */
+async function beginReloadHold(state: StateManager, worker: Worker, reason: string): Promise<DeregisterResult | null> {
+  const ms = resolveReloadHoldMs(state.project?.settings);
+  if (reason !== RELOAD_HOLD_REASON || worker.status === 'DEAD' || ms === 0) return null;
+  const tasks = state.getActiveTasksAssignedToWorker(worker.id);
+  if (tasks.length === 0) return null;
+  const held = tasks.map(task => task.id);
+  if (worker.reloadHoldUntil != null) {
+    return { workerId: worker.id, released: [], alreadyDead: false, held, holdUntil: worker.reloadHoldUntil };
+  }
+  const holdUntil = new Date(Date.now() + ms).toISOString();
+  try {
+    await state.updateWorker(worker.id, { reloadHoldUntil: holdUntil });
+  } catch (error) {
+    logger.warn({ workerId: worker.id, error }, 'deregisterWorker: reload hold write failed; releasing');
+    return null;
+  }
+  const banner = `🔌 ${worker.id} reloading (${reason}); holding ${held.length} task(s) for its relaunch until ${holdUntil}: ${tasks
+    .map(task => `${task.id}(${task.status})`).join(', ')}`;
+  try { await state.postToRoleChannel('workers', banner); } catch { /* never block */ }
+  try { await state.postToRoleChannel('governors', banner); } catch { /* never block */ }
+  state.appendActivity('WORKER_DISCONNECTED', {
+    workerId: worker.id, reason, releasedTaskIds: [], heldTaskIds: held, holdUntil,
+  }, undefined, worker);
+  return { workerId: worker.id, released: [], alreadyDead: false, held, holdUntil };
 }
 
 /**
@@ -183,7 +233,10 @@ export interface DeregisterResult {
  * qa_approve's hold without an acknowledged landing — exactly what a QA claim's
  * supersede did before the task-scoped hold existed. Under the legacy delivery
  * policy the soft NO-COMPLETION-COMMIT warning is then the only guard; strict
- * policies still refuse the approval.
+ * policies still refuse the approval. So a worktree attempt whose unassigned
+ * REVIEW row has no completion recorded for its round is routed back for a
+ * landing retry after its close (retryUnrecordedLanding), as an unlanded
+ * finalize routes it, instead of being left for QA's landed gate to park.
  *
  * ALSO THE DEAD-RECORD BACKSTOP. deleteWorker (the stale-record prune) and the
  * startup purge call it for a DEAD record, and only for one. deregister marks
@@ -210,7 +263,83 @@ export async function closeOwnFinalizingAttempts(state: StateManager, workerId: 
       continue;
     }
     announceAttemptClosed(state, attempt.taskId);
+    await retryUnrecordedLanding(state, attempt);
   }
+}
+
+/**
+ * The close above ended a landing the daemon has no completion for. On a
+ * worktree attempt whose task is in REVIEW, held by no seat, with no completion
+ * entry for its current round (completionCommitsForReview, the rule QA's
+ * commit gate uses), nothing is known to have published, and QA's landed gate
+ * would park the row BLOCKED. Route it as an unlanded finalize would, with
+ * reason contention (a reason both launchers' worktree_resume accept), no paths
+ * and the task branch as the ref that holds the bytes. Any other row keeps the
+ * plain close. Never reads git: a commit the dead runner published unrecorded
+ * is settled by the next pre-flight's receipt replay. Never throws: a failed
+ * write is logged and leaves the row in REVIEW, and the close stands.
+ */
+async function retryUnrecordedLanding(state: StateManager, attempt: ExecutionAttempt): Promise<void> {
+  try {
+    const task = state.getTask(attempt.taskId);
+    if (attempt.workspaceMode !== 'worktree' || !task || task.status !== 'REVIEW' || task.assignedWorkerId
+      || completionCommitsForReview(task).length > 0) return;
+    await routeUnlandedLanding(state, task, attempt,
+      { reason: 'contention', paths: [], rescueRef: `refs/heads/moe/task/${task.id}`, targetTip: null },
+      attempt.workerId,
+      `The runner of ${attempt.workerId} ended mid-landing: attempt ${attempt.id} was closed with no completion recorded for this round.`);
+  } catch (error) {
+    logger.warn(
+      { workerId: attempt.workerId, attemptId: attempt.id, taskId: attempt.taskId, error },
+      'closeOwnFinalizingAttempts: failed to route an unrecorded worktree landing for a retry; the row stays in REVIEW'
+    );
+  }
+}
+
+/**
+ * Route a worktree landing that published nothing back for a retry: the one
+ * definition behind moe.finalize_attempt's 'unlanded' outcome and the
+ * finalizing close's routing (closeOwnFinalizingAttempts). One write sets
+ * task.landingRetry (count = the prior count + 1) and appends one moe-daemon
+ * comment (`note`, when given, opens it). A REVIEW row goes to WORKING,
+ * unassigned, keeping reopenCount and its completed steps, or to BLOCKED
+ * (unblocking to WORKING) for 'diverged' or the 3rd unlanded landing in a row.
+ * A row not in REVIEW keeps its status and assignment, and so does a REVIEW row
+ * parked for a human (needsHumanReview, the qa_reject hard cap), which still gets
+ * the retry record and the comment. Caller must hold state.mutex.
+ */
+export async function routeUnlandedLanding(
+  state: StateManager,
+  task: Task,
+  attempt: Pick<ExecutionAttempt, 'id' | 'generation'>,
+  unlanded: Omit<LandingRetry, 'count' | 'at'>,
+  actor: string,
+  note?: string
+): Promise<Task> {
+  const prior = task.landingRetry?.count;
+  const count = (typeof prior === 'number' && Number.isSafeInteger(prior) && prior > 0 ? prior : 0) + 1;
+  const at = new Date().toISOString();
+  const landingRetry = { ...unlanded, count, at };
+  const { reason, paths, rescueRef, targetTip } = landingRetry;
+  // A REVIEW row the qa_reject hard cap parked for a human stays put: the claim
+  // fences (claimNextTask) refuse only REVIEW + needsHumanReview, so WORKING or
+  // BLOCKED would hand a human-reserved row to the next worker.
+  const parked = task.status === 'REVIEW' && task.needsHumanReview === true;
+  const status = task.status !== 'REVIEW' || parked ? task.status
+    : reason === 'diverged' || count >= 3 ? 'BLOCKED' : 'WORKING';
+  const preview = paths.slice(0, 20).join(', ') || '(none reported)';
+  const comment = { id: generateId('comment'), author: 'moe-daemon', timestamp: at,
+    content: `${note ? `${note} ` : ''}Landing unlanded (${reason}) ${count} time(s) in a row; attempt ${attempt.id} ` +
+      `(generation ${attempt.generation}); paths: ${preview}${paths.length > 20 ? ` (+${paths.length - 20} more)` : ''}; ` +
+      `rescue ref: ${rescueRef}; target tip: ${targetTip ?? 'unknown'}; task ${status}` +
+      `${parked ? ', kept parked for human review (needsHumanReview)' : ''}.` };
+  const routing: Partial<Task> = task.status !== 'REVIEW' || parked ? {} : { status, assignedWorkerId: null,
+    ...(status === 'BLOCKED' ? {
+      blockedReason: `Landing unlanded (${reason}) ${count} time(s) in a row; ${rescueRef}; reconcile, then move the task to WORKING`,
+      blockedResourceId: null, blockedOnTaskIds: null, blockedFromStatus: 'WORKING' as const, blockedAt: at,
+    } : {}) };
+  return state.updateTask(task.id, { ...routing, landingRetry, comments: [...task.comments, comment] },
+    routing.status === 'BLOCKED' ? 'TASK_BLOCKED' : undefined, actor);
 }
 
 /**
@@ -218,7 +347,8 @@ export async function closeOwnFinalizingAttempts(state: StateManager, workerId: 
  * tasks, mark worker DEAD, drop the released tasks' claims on
  * releaseOnDeregister resources, post chat-leave system messages to every
  * channel the worker had a cursor for, and emit a single banner to #workers /
- * #governors summarizing the cleanup.
+ * #governors summarizing the cleanup. A wrapper_restart with active tasks
+ * instead holds the seat for its relaunch until claim or deadline expiry.
  *
  * Marking the worker DEAD (rather than deleting it) keeps lastError/history for
  * post-mortem and makes repeat calls idempotent; the record prune in
@@ -243,7 +373,7 @@ export async function deregisterWorker(
 
   const worker = state.getWorker(workerId);
   if (!worker) {
-    return { workerId, released: [], alreadyDead: true };
+    return { workerId, released: [], alreadyDead: true, held: [] };
   }
 
   // Already fully deregistered — no-op, no chat spam on repeat calls. Key on
@@ -252,8 +382,11 @@ export async function deregisterWorker(
   // and left a dangling assignment, a retry should re-run releaseWorkerTasks.
   // The finalizing close above has already run, so this answer stays quiet.
   if (worker.status === 'DEAD' && state.getTasksAssignedToWorker(workerId).length === 0) {
-    return { workerId, released: [], alreadyDead: true };
+    return { workerId, released: [], alreadyDead: true, held: [] };
   }
+
+  const hold = await beginReloadHold(state, worker, reason);
+  if (hold) return hold;
 
   const released = await releaseWorkerTasks(state, workerId, reason);
 
@@ -265,6 +398,7 @@ export async function deregisterWorker(
     await state.updateWorker(workerId, {
       status: 'DEAD',
       currentTaskId: null,
+      ...(worker.reloadHoldUntil != null ? { reloadHoldUntil: null } : {}),
     });
   } catch (err) {
     logger.warn({ workerId, error: err }, 'deregisterWorker: updateWorker failed');
@@ -322,5 +456,5 @@ export async function deregisterWorker(
   );
 
   logger.info({ workerId, reason, released: released.length }, 'worker deregistered');
-  return { workerId, released, alreadyDead: false };
+  return { workerId, released, alreadyDead: false, held: [] };
 }

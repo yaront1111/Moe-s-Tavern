@@ -245,7 +245,7 @@ class PlanApprovalContractTest {
             taskSizing = TaskSizingThresholds(warnSteps = 2, maxSteps = 3, warnDistinctFiles = 4, maxDistinctFiles = 5)
         )
 
-        connectedSender(sent).updateSettings(settings)
+        assertTrue("a send handed to the socket reports true", connectedSender(sent).updateSettings(settings))
 
         val payload = singlePayload(sent, "UPDATE_SETTINGS")
         assertEquals(
@@ -257,6 +257,47 @@ class PlanApprovalContractTest {
         assertEquals(4321, payload.get("speedModeDelayMs").asInt)
         assertEquals("codex --profile strong", payload.get("agentCommand").asString)
         assertTrue(payload.get("enableAgentTeams").asBoolean)
+    }
+
+    @Test
+    fun `a disconnected settings save sends nothing, notifies once and reports false`() {
+        val sent = mutableListOf<String>()
+        var disconnections = 0
+        val sender = MoeCommandSender(
+            connectedCheck = { false },
+            onDisconnected = { disconnections++ },
+            send = { _, message -> sent.add(message); true }
+        )
+
+        assertFalse(sender.updateSettings(ProjectSettings()))
+
+        assertTrue("nothing may reach the transport while disconnected", sent.isEmpty())
+        assertEquals("ensureConnected already notified; no second report", 1, disconnections)
+    }
+
+    @Test
+    fun `a refused or throwing settings save reports false and notifies once`() {
+        val sent = mutableListOf<String>()
+        var refusedDisconnections = 0
+        val refusing = MoeCommandSender(
+            connectedCheck = { true },
+            onDisconnected = { refusedDisconnections++ },
+            send = { _, message -> sent.add(message); false }
+        )
+
+        assertFalse(refusing.updateSettings(ProjectSettings()))
+        assertEquals("the refused packet reached the transport once", 1, sent.size)
+        assertEquals(1, refusedDisconnections)
+
+        var throwingDisconnections = 0
+        val throwing = MoeCommandSender(
+            connectedCheck = { true },
+            onDisconnected = { throwingDisconnections++ },
+            send = { _, _ -> throw IllegalStateException("sentinel transport failure") }
+        )
+
+        assertFalse("a throwing transport is reported, not rethrown", throwing.updateSettings(ProjectSettings()))
+        assertEquals(1, throwingDisconnections)
     }
 
     @Test

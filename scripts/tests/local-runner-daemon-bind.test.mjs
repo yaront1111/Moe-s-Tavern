@@ -169,10 +169,18 @@ function provider() {
   proc.send = (...frames) => proc.stdout.write(Buffer.concat(frames.map(frame => encodeFrame(frame))));
   return proc;
 }
+// CQ-R14d2: the bridge opens over the SSH route, whose one info read this answers; ssh and keyDir are strings only.
+const INFO = { state: 'Running', image_hash: 'a'.repeat(64), image_release: '24.04 LTS', cpu_count: '2', memory: {}, disks: { sda1: {} }, mounts: {},
+  ipv4: ['10.0.0.2'] };
+const infoRun = async (executable, args) => {
+  if (JSON.stringify(args) !== JSON.stringify(['info', NAME, '--format', 'json'])) throw new Error('unexpected provider call');
+  return { stdout: JSON.stringify({ errors: [], info: { [NAME]: INFO } }), stderr: '' };
+};
+const SSH_ROUTE = Object.freeze({ run: infoRun, ssh: path.join(tmpdir(), 'moe-stream', 'ssh'), keyDir: path.join(tmpdir(), 'moe-stream', 'keys') });
 function session(proc, daemonInfoPath, options = {}) {
   const run = { forwarded: [] };
   run.promise = runGuestSession({ name: NAME, binding: BINDING, job: JOB, sessionId: 'worker-1@2026-10-30T00:00:00.000Z', daemonInfoPath,
-    provider: { spawn: proc.spawn }, timeoutMs: 200, onOutput: () => {}, onObservation: () => {},
+    provider: { ...SSH_ROUTE, spawn: proc.spawn }, timeoutMs: 200, onOutput: () => {}, onObservation: () => {},
     forward: tool => { run.forwarded.push(tool); return { content: [{ type: 'text', text: tool }] }; }, ...options });
   return run;
 }

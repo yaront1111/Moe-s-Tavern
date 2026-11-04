@@ -8,6 +8,8 @@ import {
   buildPacketManifest, DEFAULT_PACKET_BUDGET_CHARS, MANDATORY_SECTIONS, MAX_PACKET_BUDGET_CHARS,
   type PacketManifest, type PacketSection,
 } from '../context/contextPacket.js';
+import { definitionDigest } from '../delivery/requiredChecks.js';
+import { validateExecutionContract } from '../state/validators.js';
 import type { Task, TaskCommit } from '../types/schema.js';
 
 type Ctx = Record<string, unknown> & {
@@ -157,6 +159,67 @@ describe('get_context packetManifest (CQ-C01)', () => {
       { limitChars: 15, mandatoryChars: 16, status: 'overflow', requirement: 'expand' }]);
     const junk = buildPacketManifest({ project: 1, task: 'x', allRails: null }, { ...input, planRevision: 2 });
     expect(junk.sections.map((s) => s.status)).toStrictEqual(Array(7).fill('missing'));
+  });
+
+  it('lists the check overlay missing only when requiredChecks are declared and no snapshot is served', () => {
+    const input = { planRevision: 1, roleOmitted: [], siblingsBeyondCap: 0, commitsTotal: 0, rejectionsTotal: 0,
+      budgetChars: DEFAULT_PACKET_BUDGET_CHARS };
+    const snapshotRows = (task: unknown) => {
+      const m = buildPacketManifest({ task }, input);
+      return { rows: m.sections.filter((s) => s.path === 'task.requiredCheckSnapshot'), mandatoryChars: m.budget.mandatoryChars };
+    };
+    const unbound = missing('task.requiredCheckSnapshot', 'unbound-snapshot');
+    const declared = { executionContract: { requiredChecks: [{ id: 'unit' }] } };
+    const base = snapshotRows({ executionContract: {} });
+    const gap = snapshotRows(declared);
+    expect(gap.rows).toStrictEqual([unbound]);
+    expect(gap.mandatoryChars).toBe(JSON.stringify(declared.executionContract).length);
+    expect(buildPacketManifest({ task: declared }, input).complete).toBe(false);
+    for (const task of [{ executionContract: { requiredChecks: [] } }, { executionContract: {} }, {}, { executionContract: 'x' },
+      { executionContract: { requiredChecks: 'x' } }, { executionContract: { requiredChecks: { length: 1 } } },
+      { executionContract: Object.create({ requiredChecks: [{ id: 'unit' }] }) as object },
+      Object.create({ executionContract: { requiredChecks: [{ id: 'unit' }] } }) as object]) {
+      expect(snapshotRows(task).rows).toStrictEqual([]);
+    }
+    expect(base.rows).toStrictEqual([]);
+    for (const task of [{ ...declared, requiredCheckSnapshot: { revision: 'r' } }, { requiredCheckSnapshot: { revision: 'r' } }]) {
+      expect(snapshotRows(task).rows).toStrictEqual([served('task.requiredCheckSnapshot')]);
+    }
+  });
+
+  describe('protected-check overlay through get_context', () => {
+    const CHECKED = { ...CONTRACT, requiredChecks: [{ id: 'unit', command: 'npm test', scripts: ['scripts/check.sh'] }] };
+    const snapshotFor = (defs: Parameters<typeof definitionDigest>[0]) => ({
+      version: 1, revision: 'a'.repeat(40), definitionDigest: definitionDigest(defs),
+      entries: [{ path: 'scripts/check.sh', oid: 'b'.repeat(40) }],
+    });
+    const ROW = 'task.requiredCheckSnapshot';
+    const stale = snapshotFor([{ id: 'other', command: 'npm run other', scripts: ['scripts/other.sh'] }] as never);
+
+    it.each([['absent', undefined], ['bound to other definitions', stale]])(
+      'lists a declared but unserved overlay (%s) missing for every caller, never role-trimmed', async (_name, snapshot) => {
+        await seed({ executionContract: CHECKED, ...(snapshot ? { requiredCheckSnapshot: snapshot } : {}) } as Partial<Task>);
+        for (const workerId of ['worker-w', 'qa-q', 'architect-a', 'governor-g', '']) {
+          const res = await read({ workerId });
+          expect(res.task).not.toHaveProperty('requiredCheckSnapshot');
+          expect(res.packetManifest.sections.filter((s) => s.path === ROW)).toStrictEqual([missing(ROW, 'unbound-snapshot')]);
+          expect(res.packetManifest.complete).toBe(false);
+        }
+      });
+
+    it('serves a bound overlay whole, listed served and mandatory in both views for every caller', async () => {
+      const defs = validateExecutionContract(CHECKED)!.requiredChecks!;
+      const snapshot = snapshotFor(defs);
+      await seed({ executionContract: CHECKED, requiredCheckSnapshot: snapshot } as Partial<Task>);
+      for (const workerId of ['worker-w', 'qa-q', 'architect-a', 'governor-g', '']) {
+        for (const view of ['default', 'full'] as const) {
+          const res = await read({ workerId, ...(view === 'full' ? { view } : {}) });
+          expect((res.task as Task).requiredCheckSnapshot).toStrictEqual(snapshot);
+          expect(res.packetManifest.sections.filter((s) => s.path === ROW)).toStrictEqual([served(ROW)]);
+          expect(res.packetManifest.budget.mandatoryChars).toBe(charsOf(res, [...MANDATORY, ROW]));
+        }
+      }
+    });
   });
 
   it('serves an unreadable planRevision as null with a limitation, never throwing', async () => {

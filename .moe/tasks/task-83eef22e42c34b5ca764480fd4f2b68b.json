@@ -1,0 +1,265 @@
+{
+  "id": "task-83eef22e42c34b5ca764480fd4f2b68b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07o1] JetBrains daemon client for execution readiness",
+  "description": "Prerequisite slice carved out of CQ-M07o (task-8dbc76d7678b416bbfdbbbe9f58a33f8) by architect-b520bc90 on 2026-11-01. As one task, M07o measured about 540 lines across 10-11 files, past QA's 400-line cap and the 10-file plan limit. This slice is the plugin's /ws client half: M07o's DoD 5 plus the readiness request its launcher needs. CQ-M07o keeps the launcher decision and dependsOn this row. Design: mem:decision-cq-m07-verified-local-activation. Wire contract: CQ-M07d (task-b0485bb1), as planned.\n\nObjective: the JetBrains plugin negotiates client capabilities on every connection, and it can ask the daemon for execution readiness and wait a bounded time for the answer.\n\nDeliverable, in moe-jetbrains:\n- **New com/moe/model/ExecutionReadiness.kt.** Kept out of Models.kt, which CQ-M07l edits. It holds:\n  - `data class ExecutionReadiness(profile: String, ready: Boolean, missingCapabilities: List<String>, evaluatedAt: String?)`;\n  - `sealed interface ReadinessReply { Answered(readiness); Failed(reason: ReadinessFailure) }`;\n  - `enum class ReadinessFailure { NOT_CONNECTED, DISCONNECTED, TIMEOUT, DAEMON_ERROR, MALFORMED }`;\n  - a strict parser for the EXECUTION_READINESS payload. It accepts exactly the four fields: profile one of legacy, observe, verified-local or unreadable; ready a real JSON boolean; missingCapabilities an array of strings; evaluatedAt a string or null. Anything else is null, so it is never read as ready.\n- **CLIENT_HELLO.** MoeCommandSender sends `{\"protocolVersion\":1,\"capabilities\":{\"planRevisions\":true,\"verifiedLocal\":true}}`. MoeProjectService sends it on every WebSocket open, before GET_STATE.\n  - planRevisions must be declared. After any hello, the daemon refuses every plan approval unless planRevisions was negotiated (WebSocketServer.ts assertApprovalCapabilities). The plugin already sends expectedPlanRevision on approveTask and on the board drag.\n  - Declare no other capability. A second hello on the same socket is refused CLIENT_CAPABILITIES_LOCKED, so send it once per socket.\n- **The readiness request.** `MoeProjectService.requestExecutionReadiness(timeoutMs = 20_000): CompletableFuture<ReadinessReply>`. 20 s covers the daemon evaluator's 11 s provider-probe guard.\n  - It sends GET_EXECUTION_READINESS {\"refresh\":true}.\n  - It never completes exceptionally. When not connected, or when the send fails, it returns an already-completed Failed(NOT_CONNECTED).\n  - MoeMessageDispatcher routes EXECUTION_READINESS to a new callback, which completes every pending request with Answered, or with Failed(MALFORMED) for a payload the parser refuses.\n  - An ERROR whose operation is GET_EXECUTION_READINESS, or whose message names it, completes pending requests with Failed(DAEMON_ERROR). That covers the daemon's 'GET_EXECUTION_READINESS failed' and an older daemon's 'Unknown message type: GET_EXECUTION_READINESS'.\n  - Disconnect and dispose complete pending requests with Failed(DISCONNECTED). Each request completes with Failed(TIMEOUT) after timeoutMs and leaves the pending set.\n\nNOT in scope: TerminalAgentLauncher, RuntimeSelectionPolicy and any launch decision (CQ-M07o); VS Code (CQ-M07p); the daemon (CQ-M07d/d2); docs (the CQ-M07 sweep).\n\nVerification: ./gradlew test under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). From WSL: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\". A snapshot run of the exact commit also counts (mem:gotcha-jetbrains-gate-snapshot).",
+  "definitionOfDone": [
+    "On every WebSocket open the plugin sends CLIENT_HELLO {protocolVersion: 1, capabilities: {planRevisions: true, verifiedLocal: true}} before GET_STATE (JUnit on the exact payload and the send order).",
+    "requestExecutionReadiness sends GET_EXECUTION_READINESS {refresh: true}, and an EXECUTION_READINESS reply completes it as Answered with the strictly parsed profile, ready, missingCapabilities and evaluatedAt (JUnit).",
+    "A malformed reply, the daemon's GET_EXECUTION_READINESS error, no connection, a disconnect, or no reply within the timeout completes the request as Failed with that reason, never as Answered (JUnit, short timeout).",
+    "Plan approval still sends expectedPlanRevision after the hello, and PlanApprovalContractTest passes unchanged.",
+    "./gradlew test passes under the jetbrains-gradle lease."
+  ],
+  "taskRails": [
+    "Declare in CLIENT_HELLO only capabilities the plugin honors: planRevisions and verifiedLocal.",
+    "A failed, malformed, late or missing readiness answer is never reported as ready."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the readiness model and parser, the two commands, and the dispatcher routing. Read `mem:gotcha-client-hello-locks-approval-capabilities` and `mem:task-task-8dbc76d7678b416bbfdbbbe9f58a33f8-handoff` first. CQ-M07o consumes these exact names, so keep them.\n\n**Size budget for the whole task: at most 400 net changed lines** (runtime ~120, tests ~120).\n\n**1. New moe-jetbrains/src/main/kotlin/com/moe/model/ExecutionReadiness.kt.** It stays out of Models.kt, which CQ-M07l edits.\n- `data class ExecutionReadiness(val profile: String, val ready: Boolean, val missingCapabilities: List<String>, val evaluatedAt: String?)`.\n- `sealed interface ReadinessReply { data class Answered(val readiness: ExecutionReadiness); data class Failed(val reason: ReadinessFailure) }`.\n- `enum class ReadinessFailure { NOT_CONNECTED, DISCONNECTED, TIMEOUT, DAEMON_ERROR, MALFORMED }`.\n- `object ExecutionReadinessJson { fun parse(payload: JsonObject): ExecutionReadiness? }` is strict and never throws:\n  - profile must be one of \"legacy\", \"observe\", \"verified-local\" or \"unreadable\";\n  - ready must be a real JSON boolean (not the string \"true\", not 1);\n  - missingCapabilities must be an array of at most 64 strings, each 1-128 characters;\n  - evaluatedAt must be present, as a string or JSON null;\n  - ready = true with a non-empty missingCapabilities is contradictory, so it is null.\n  - Unknown extra keys are ignored and never retained (decodeClientHello's convention), so an additive daemon field cannot break the client. A missing or wrong-typed field gives null, so the reply is never read as ready.\n\n**2. moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt.**\n- `fun sendClientHello(): Boolean` sends CLIENT_HELLO with payload `{\"protocolVersion\":1,\"capabilities\":{\"planRevisions\":true,\"verifiedLocal\":true}}`.\n  - KDoc: only capabilities the plugin honors. planRevisions is required because after any hello the daemon refuses approvals without it (WebSocketServer.ts assertApprovalCapabilities), and approveTask and the board drag already send expectedPlanRevision.\n- `fun requestExecutionReadiness(): Boolean` sends GET_EXECUTION_READINESS with payload `{\"refresh\":true}`.\n- Both go through the existing best-effort sendMessage, never throw, and do NOT call ensureConnected. The service checks the connection itself, so a readiness probe publishes no \"Not connected\" status.\n\n**3. moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt.**\n- The constructor gains `onExecutionReadiness: (ReadinessReply) -> Unit = {}`.\n- New `\"EXECUTION_READINESS\"` case: an object payload goes to ExecutionReadinessJson.parse. A parse gives Answered(readiness); null, or a missing or non-object payload, gives Failed(MALFORMED). Call the callback directly on the receiving thread, NOT through applyMessageOnEdt: completing a future needs no EDT.\n- In the `\"ERROR\"` branch, first: when `operation` is \"GET_EXECUTION_READINESS\" or the message contains \"GET_EXECUTION_READINESS\", call onExecutionReadiness(Failed(DAEMON_ERROR)) and return.\n  - That covers the daemon's 'GET_EXECUTION_READINESS failed', its refresh-type error and an older daemon's 'Unknown message type: GET_EXECUTION_READINESS'.\n  - The launcher shows its own dialog, so no duplicate generic error notification is published.\n  - Every other ERROR keeps today's handling unchanged.\n- SERVER_CAPABILITIES needs no case: the `when` has no else branch, so it stays ignored.\n\nThese pieces are tested end to end through the loopback rows in step 2.\n\nError handling: the parser and the dispatcher case never throw. A bad payload becomes Failed(MALFORMED), never Answered.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/ExecutionReadiness.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/ExecutionReadiness.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+      ],
+      "note": "Added ExecutionReadiness/ReadinessReply/ReadinessFailure + strict ExecutionReadinessJson.parse (four fields, unknown keys ignored, ready+missing refused, ≤64 ids of 1-128 chars); MoeCommandSender.sendClientHello + requestExecutionReadiness (best-effort, no ensureConnected); dispatcher onExecutionReadiness callback (default no-op), EXECUTION_READINESS case on the receiving thread, and ERROR diversion when operation==GET_EXECUTION_READINESS or the message names it. Compiled + tested in step 3's gate via step 2's loopback rows. Shared tree has 27 peer dirty paths (none in moe-jetbrains), untouched.",
+      "startedAt": "2026-11-01T11:22:11.977Z",
+      "completedAt": "2026-11-01T11:24:01.939Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Wire the hello and the readiness request into moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt, and prove every DoD row over a real loopback socket in moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt.\n\n**1. MoeProjectService.**\n- **The hello.** In onOpen, right after the open bookkeeping (connected = true …) and before publishStatus and GET_STATE, call commandSender.sendClientHello(). It is then the socket's first outgoing frame. A new socket gets a new hello, and a second hello on the same socket would be refused CLIENT_CAPABILITIES_LOCKED.\n- **The pending set.** `private val pendingReadiness = ConcurrentLinkedQueue<CompletableFuture<ReadinessReply>>()`. Pass `onExecutionReadiness = { reply -> completeReadiness(reply) }` to the dispatcher. completeReadiness drains the set and completes each future with that reply. The daemon answers on the same socket with no correlation id, so one fresh answer serves every waiter.\n- **The request.** `fun requestExecutionReadiness(timeoutMs: Long = READINESS_TIMEOUT_MS): CompletableFuture<ReadinessReply>`, with `READINESS_TIMEOUT_MS = 20_000L` in the companion (it covers the evaluator's 11 s probe guard):\n  - If not connected or disposed, return `CompletableFuture.completedFuture(Failed(NOT_CONNECTED))` and send nothing.\n  - Otherwise create the future and call `completeOnTimeout(Failed(TIMEOUT), timeoutMs, MILLISECONDS)` and `whenComplete { pendingReadiness.remove(it) }`.\n  - Add it to the set BEFORE sending, so a fast reply cannot be missed.\n  - If commandSender.requestExecutionReadiness() returns false, complete it with Failed(NOT_CONNECTED).\n  - It never completes exceptionally.\n- **Failing pending requests.** `private fun failPendingReadiness(reason)` completes every pending future with Failed(reason). Call it with DISCONNECTED from disconnect(notifyStatus) (dispose goes through it), and from onClose and onError of the CURRENT client only; stale clients keep their early return.\n\n**2. Tests in MoeProjectConnectionTest.kt.**\n- **Extend ConnectionFixture.** The loopback server records every received frame in a CopyOnWriteArrayList and answers through a settable `reply: (String) -> String? = { null }` (conn.send when non-null). Existing tests keep their behavior. Use JsonParser for comparisons, and future.get(5, SECONDS) for waits.\n- **Rows:**\n  1. **Hello (DoD 1).** After connect, the first recorded frame is CLIENT_HELLO, and its payload equals `{\"protocolVersion\":1,\"capabilities\":{\"planRevisions\":true,\"verifiedLocal\":true}}` as JSON. A GET_STATE frame comes later.\n  2. **Approval after the hello (DoD 4).** service.approveTask(\"task-1\", 3L) records APPROVE_TASK carrying expectedPlanRevision 3. Leave PlanApprovalContractTest.kt unchanged.\n  3. **Round trip (DoD 2).** The server answers GET_EXECUTION_READINESS, whose payload must equal {\"refresh\":true}, with EXECUTION_READINESS {profile: \"verified-local\", ready: false, missingCapabilities: [\"isolated-check-vm\"], evaluatedAt: \"2026-11-01T00:00:00.000Z\"}. The future gives exactly that Answered. Also a ready: true / [] reply gives Answered with ready true.\n  4. **Malformed table (DoD 3).** Each of these gives Failed(MALFORMED): a missing field, profile \"bogus\", ready \"true\", a number inside missingCapabilities, evaluatedAt 5, ready true with a non-empty list, and a non-object payload.\n  5. **Daemon errors (DoD 3).** An ERROR with operation GET_EXECUTION_READINESS, and an ERROR 'Unknown message type: GET_EXECUTION_READINESS', each give Failed(DAEMON_ERROR). An unrelated ERROR leaves the request to time out: with timeoutMs = 300 it gives Failed(TIMEOUT).\n  6. **Timeout (DoD 3).** With no reply and timeoutMs = 300, the result is Failed(TIMEOUT), and the pending set is empty afterwards.\n  7. **Disconnect (DoD 3).** A pending request followed by service.disconnect() gives Failed(DISCONNECTED).\n  8. **Not connected (DoD 3).** A new, never-connected service gives Failed(NOT_CONNECTED) at once and sends no frame. Dispose it.\n\nError handling: no path throws to the caller. Every failure is a Failed with its reason, and no future can stay pending past its timeout.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "note": "MoeProjectService: CLIENT_HELLO sent in onOpen right after register and before publishStatus/GET_STATE; pendingReadiness ConcurrentLinkedQueue; requestExecutionReadiness(timeoutMs = READINESS_TIMEOUT_MS=20_000) — NOT_CONNECTED completed future when disposed/not connected, else completeOnTimeout(TIMEOUT) + whenComplete remove, added before send, send-false → NOT_CONNECTED; completeReadiness drains all; failPendingReadiness(DISCONNECTED) from disconnect(notifyStatus) (dispose path) and current-client onClose/onError. Tests: 8 new loopback rows in MoeProjectConnectionTest (fixture records frames + reply hook): hello first frame/exact payload/once, approval expectedPlanRevision after hello, Answered round trip + refresh:true + ready/null/extra-key, 9-case MALFORMED table, DAEMON_ERROR for operation and 'Unknown message type' plus unrelated ERROR → TIMEOUT and still published, timeout leaves pending set, onError/disconnect → DISCONNECTED, never-connected → NOT_CONNECTED with no frame. Gate runs in step 3.",
+      "startedAt": "2026-11-01T11:24:03.276Z",
+      "completedAt": "2026-11-01T11:26:46.708Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, after steps 1-2.\n\nAcquire the `jetbrains-gradle` lease (`mem:convention-jetbrains-gradle-lease`): moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId }. Then run exactly this. Its command, exit code and output tail are the complete_task evidence:\n`cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`\nRelease the lease right after, even on failure.\n\n- There is no JDK in WSL, so this is the accepted Windows gate.\n- If a peer's dirty JetBrains file makes the shared tree red (`mem:gotcha-jetbrains-shared-tree-gate-peer-red`), run the same command on a snapshot of the exact paths (`mem:gotcha-jetbrains-gate-snapshot`), and say so.\n- Expect BUILD SUCCESSFUL with 0 failures. Cite the counts for MoeProjectConnectionTest, PlanApprovalContractTest (unchanged, DoD 4) and MoeMessageDispatcherErrorTest. That last one proves every other ERROR keeps today's handling.\n\nState in the completion summary that a live daemon's EXECUTION_READINESS needs CQ-M07d (task-b0485bb1). These rows use a loopback server speaking its planned wire format.\n\nError handling: if Gradle fails, fix the cause and re-run the whole command fresh under the lease; never cite a partial or stale run.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Under the jetbrains-gradle lease (acquired 11:26:49Z, released after): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" → EXIT 0, BUILD SUCCESSFUL in 1m 4s, in place on the shared tree (no peer moe-jetbrains dirt, no MERGE_HEAD). TEST-*.xml (timestamps 11:28Z): 526 tests, 0 failures/errors/skipped. MoeProjectConnectionTest 13/13 (8 new), PlanApprovalContractTest 20/20 (file unchanged vs HEAD), MoeMessageDispatcherErrorTest 5/5.",
+      "startedAt": "2026-11-01T11:26:47.954Z",
+      "completedAt": "2026-11-01T11:28:56.157Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt`, plus the new ExecutionReadiness.kt, as an attacker would.\n\n- **Never falsely ready.** No path turns a missing, malformed, contradictory, errored, late or disconnected answer into Answered with ready = true. The parser requires a real boolean, and ready with missing ids is refused.\n- **Hello.** It is sent exactly once per socket, before GET_STATE, and declares only planRevisions and verifiedLocal. Approvals still carry expectedPlanRevision.\n- **Concurrency.** A reply racing a timeout completes each future once, and later completions are no-ops. The pending set cannot grow without bound: every future leaves it on completion. A reply from a stale client cannot complete a current request (stale onMessage is already ignored). Nothing blocks the WebSocket thread or the EDT.\n- **Errors.** Only GET_EXECUTION_READINESS errors are diverted. Every other ERROR still publishes as today (MoeMessageDispatcherErrorTest).\n- **Scope.** TerminalAgentLauncher, RuntimeSelectionPolicy, Models.kt and MoeJson.kt are untouched (CQ-M07o and CQ-M07l own them).\n- **Size.** At most 400 net changed lines, measured with `git diff --numstat HEAD` plus `wc -l` of the new file. If it is over, file an EPIC ADD_RAIL size exception (moe.propose_rail) with the exact numstat before complete_task, and cite it.\n\nFix anything found, re-run step 3's gate under the lease, and submit its fresh output. Error handling and every test row must still hold after any fix.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "note": "Adversarial review fixes: (1) requestExecutionReadiness now adds to pendingReadiness BEFORE registering whenComplete/completeOnTimeout — before, a ~0 ms timeout could run remove() before add() and strand a completed future in the set. (2) CLIENT_HELLO moved ahead of `connected = true` in onOpen (still after the stale/disposed check), so no ensureConnected command from another thread can precede it; strictly stronger than the plan's position, same hello-before-GET_STATE contract. (3) Added a server-side close case (onClose of current client → DISCONNECTED). Considered, theoretical: future dependents run on the completing thread (WS reader / Delayer / disconnect caller) — CQ-M07o must hop via thenAccept→invokeLater as planned; a readiness ERROR/answer with no pending request is a silent no-op; a reply racing a stale-client swap is pre-existing onMessage semantics. Fresh gate under lease (11:30:25Z, released): EXIT 0, BUILD SUCCESSFUL in 33s, 526 tests 0 failures; MoeProjectConnectionTest 13/13, PlanApprovalContractTest 20/20 unchanged, MoeMessageDispatcherErrorTest 5/5. Size: numstat +276/-3 plus new 60-line file = 333 net (≤400). TerminalAgentLauncher, RuntimeSelectionPolicy, Models.kt, MoeJson.kt untouched.",
+      "startedAt": "2026-11-01T11:28:57.403Z",
+      "completedAt": "2026-11-01T11:32:03.651Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.075,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T11:11:14.527Z",
+  "updatedAt": "2026-11-01T12:16:14.616Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T11:16:27.154Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T12:15:16.780Z",
+    "wallClockMs": 3529626
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-0e1ab990",
+    "qa-1e84238e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T11:19:29.586Z",
+  "executionContract": {
+    "intendedBehavior": "On every WebSocket open, the JetBrains plugin first sends CLIENT_HELLO declaring planRevisions and verifiedLocal. MoeProjectService.requestExecutionReadiness() sends GET_EXECUTION_READINESS {refresh:true} and returns a future. The future completes with Answered(strictly parsed readiness) on EXECUTION_READINESS, or with Failed(NOT_CONNECTED | DISCONNECTED | TIMEOUT | DAEMON_ERROR | MALFORMED) otherwise. It never completes exceptionally and never stays pending past its timeout.",
+    "acceptanceCriteria": [
+      "CLIENT_HELLO {protocolVersion:1, capabilities:{planRevisions:true, verifiedLocal:true}} is the socket's first frame, before GET_STATE.",
+      "An EXECUTION_READINESS reply completes the request as Answered with the parsed four fields; the request frame carries {refresh:true}.",
+      "Malformed replies, GET_EXECUTION_READINESS errors, no connection, a disconnect and a timeout each complete as Failed with that reason.",
+      "approveTask after the hello still carries expectedPlanRevision; PlanApprovalContractTest is unchanged and passes.",
+      "./gradlew test passes under the jetbrains-gradle lease."
+    ],
+    "invariants": [
+      "A failed, malformed, contradictory, late or missing answer is never reported as ready.",
+      "CLIENT_HELLO declares only planRevisions and verifiedLocal, and is sent once per socket.",
+      "Every ERROR not about GET_EXECUTION_READINESS keeps today's handling.",
+      "No blocking on the EDT or the WebSocket thread; pending requests always complete."
+    ],
+    "compatibility": [
+      "Every existing command, message case and listener keeps its behavior; the dispatcher's new callback defaults to a no-op.",
+      "Models.kt, MoeJson.kt, TerminalAgentLauncher and RuntimeSelectionPolicy are untouched (CQ-M07l and CQ-M07o).",
+      "An older daemon that rejects GET_EXECUTION_READINESS yields Failed(DAEMON_ERROR), not a hang."
+    ],
+    "approvedScope": [
+      "com.moe.model ExecutionReadiness, ReadinessReply, ReadinessFailure and ExecutionReadinessJson.parse.",
+      "MoeCommandSender.sendClientHello and requestExecutionReadiness.",
+      "MoeMessageDispatcher onExecutionReadiness, the EXECUTION_READINESS case and the readiness ERROR diversion.",
+      "MoeProjectService: the hello in onOpen, requestExecutionReadiness, READINESS_TIMEOUT_MS, pendingReadiness, completeReadiness and failPendingReadiness."
+    ],
+    "reuse": [
+      "MoeCommandSender.sendMessage (best-effort transport).",
+      "The MoeMessageDispatcher callback-parameter pattern (onWorkerDeregistered).",
+      "MoeProjectConnectionTest's loopback WebSocketServer fixture and its reflective doConnect."
+    ],
+    "sourceAssumptions": [
+      "MoeProjectService.kt:51-73 builds the dispatcher with callbacks; :74-88 the commandSender send lambda; onOpen at :326-354 sends GET_STATE at :349; onClose :371 and onError :387 handle only the current client; disconnect(notifyStatus) :427; dispose :576 calls it.",
+      "MoeMessageDispatcher.kt:17-26 constructor; the `when (type)` at :78 has no else branch; ERROR at :180 publishes publishError and publishDaemonError.",
+      "MoeCommandSender.kt:301-319 dispatch and sendMessage (best-effort, returns Boolean); approveTask at :134 always sends expectedPlanRevision.",
+      "MoeProjectConnectionTest.kt:137-180 ConnectionFixture: a loopback org.java_websocket WebSocketServer plus a reflective doConnect.",
+      "Daemon wire (CQ-M07d plan): EXECUTION_READINESS {profile, ready, missingCapabilities, evaluatedAt}; errors 'GET_EXECUTION_READINESS failed' or 'GET_EXECUTION_READINESS refresh must be a boolean'; a thrown error carries operation; an unknown type gives 'Unknown message type: X'."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **A request id echoed by the daemon.** Rejected: CQ-M07d's reply carries none. One answer completes every waiter instead, which is correct because each answer is the daemon's current held readiness.\n- **Blocking the caller with a latch.** Rejected: a CompletableFuture lets CQ-M07o continue on the EDT through thenAccept without blocking it.\n- **Exact key-set equality in the parser.** Rejected: an additive daemon field would refuse every VM launch. The parser reads only the four fields, strictly, as decodeClientHello does.\n- **Separate unit test files for the parser, sender and dispatcher.** Rejected: the existing loopback fixture exercises all of them through real frames, in one file, which keeps the plan at 5 files.\n- **A hello declaring every server capability.** Rejected: declare only what the plugin honors (planRevisions, verifiedLocal).",
+    "codebaseInsights": "- **After any CLIENT_HELLO,** the daemon checks planRevisions on APPROVE_TASK and on the AWAITING_APPROVAL→WORKING drag (WebSocketServer.ts:331-338, 590, 715).\n- **The JetBrains dispatcher ignores unknown message types** (no else branch).\n- **MoeProjectService.onMessage** ignores stale clients and queues frames while not connected.\n- **The connection test** runs a real org.java_websocket loopback server and calls the private doConnect reflectively. Recording received frames there gives exact wire assertions.",
+    "risks": "- **Hello rejected by an older daemon.** A foreign or very old daemon that doesn't know CLIENT_HELLO answers ERROR 'Unknown message type: CLIENT_HELLO', and the user sees one generic error notification per connect. The bundled daemon supports it.\n- **Waits in tests.** Async loopback rows must wait with bounded future.get, never sleep-and-hope. The timeout rows use 300 ms, so the suite stays fast.\n- **The hello's position.** It moves ahead of publishStatus. Listeners reacting to the Connected status are posted later through invokeLater in production, so the hello stays the first frame.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "56fb4b4506b9e5d33509d5e9a8ffda53df062de6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T11:19:29.612Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T11:22:11.977Z",
+  "reviewStartedAt": "2026-11-01T11:32:34.122Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :compileKotlin\n> Task :compileTestKotlin\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :test\n\nBUILD SUCCESSFUL in 33s\n11 actionable tasks: 7 executed, 4 up-to-date\n\nTEST-*.xml (timestamps 2026-11-01T11:31Z): total tests=526 failures=0 errors=0 skipped=0\ncom.moe.services.MoeProjectConnectionTest tests=13 failures=0 errors=0 (8 new rows)\ncom.moe.services.PlanApprovalContractTest tests=20 failures=0 errors=0 (file unchanged vs HEAD)\ncom.moe.services.MoeMessageDispatcherErrorTest tests=5 failures=0 errors=0\nRun in place under the jetbrains-gradle lease (acquired 11:30:25Z, released after).",
+    "reportedAt": "2026-11-01T11:32:34.122Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/ExecutionReadiness.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt",
+    ".moe/tasks/task-08062ce85dc94dcd80c62053e30f561f.json",
+    ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+    ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json",
+    ".moe/tasks/task-a89361db41f24ef2aee19667aefc2135.json",
+    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json"
+  ],
+  "completionSummary": "CQ-M07o1 delivered in moe-jetbrains. (1) New com/moe/model/ExecutionReadiness.kt: ExecutionReadiness, ReadinessReply{Answered,Failed}, ReadinessFailure{NOT_CONNECTED,DISCONNECTED,TIMEOUT,DAEMON_ERROR,MALFORMED}, strict ExecutionReadinessJson.parse. It reads exactly the four fields: profile in legacy|observe|verified-local|unreadable, a real boolean ready, ≤64 strings of 1-128 chars, and evaluatedAt as a string or null. It refuses ready with missing ids, ignores unknown keys, and gives null rather than throwing. (2) MoeCommandSender.sendClientHello() sends {protocolVersion:1,capabilities:{planRevisions:true,verifiedLocal:true}}. requestExecutionReadiness() sends GET_EXECUTION_READINESS {refresh:true}. Both are best-effort and skip ensureConnected. (3) MoeMessageDispatcher gains onExecutionReadiness (default no-op), called on the receiving thread. EXECUTION_READINESS gives Answered, or MALFORMED when the payload is refused. An ERROR whose operation or message names GET_EXECUTION_READINESS gives DAEMON_ERROR with no generic notification. Every other ERROR is unchanged (MoeMessageDispatcherErrorTest 5/5). (4) MoeProjectService sends CLIENT_HELLO once per socket as its first frame: in onOpen, after the stale check and before connected=true, publishStatus and GET_STATE. requestExecutionReadiness(timeoutMs=READINESS_TIMEOUT_MS=20_000) adds to the pending set before the timeout and removal hooks and before the send, and never completes exceptionally. Disconnect, dispose and current-client onClose/onError give DISCONNECTED. Self-review fixes: add-before-whenComplete ordering, and the hello moved ahead of connected=true. Tests: 8 loopback rows in MoeProjectConnectionTest cover DoD 1-4. Fresh gate under lease: 526 tests, 0 failures. Size: 333 net lines. TerminalAgentLauncher, RuntimeSelectionPolicy, Models.kt and MoeJson.kt are untouched. A live daemon's EXECUTION_READINESS needs CQ-M07d (task-b0485bb1); these rows use a loopback server speaking its planned wire format. No sep",
+  "commits": [
+    {
+      "sha": "40e5994610c761ae1e23f5262fc05a85785c1a08",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0e1ab990@2026-11-01T11:21:37Z",
+      "paths": [
+        ".moe/tasks/task-08062ce85dc94dcd80c62053e30f561f.json",
+        ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+        ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json",
+        ".moe/tasks/task-a89361db41f24ef2aee19667aefc2135.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/ExecutionReadiness.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "recordedBy": "worker-0e1ab990",
+      "recordedAt": "2026-11-01T11:32:56.898Z",
+      "treeId": "20a1539fe28480ea6982574ba72dca8c687cbeb6",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "faeff8c17bfb42ece8c7f1c9f7c22a0d251b16fe",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1e84238e@2026-11-01T12:11:04Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+        ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json"
+      ],
+      "recordedBy": "qa-1e84238e",
+      "recordedAt": "2026-11-01T12:16:14.616Z",
+      "treeId": "d6c327448c81534efd0d64fe2226445959078454",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/ExecutionReadiness.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1e84238e@2026-11-01T12:11:04Z",
+    "at": "2026-11-01T12:16:14.616Z"
+  },
+  "completedAt": "2026-11-01T12:15:16.780Z",
+  "reviewCompletedAt": "2026-11-01T12:15:16.780Z",
+  "reviewSummary": "Reviewed completion 40e59946 on moe/work-2026-10-24. HEAD 6bc52f2e has no moe-jetbrains drift or dirt, so the in-place gate tests the exact bytes. Re-ran under the jetbrains-gradle lease (12:12:24Z, released after): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" gave EXIT 0, BUILD SUCCESSFUL in 27s (Windows gate). TEST-*.xml (12:12-12:13Z): 526 tests, 0 fail/err/skip; MoeProjectConnectionTest 13/13, PlanApprovalContractTest 20/20 (not in the commit), MoeMessageDispatcherErrorTest 5/5. DoD1: JUnit checks that CLIENT_HELLO is the first frame, appears once, is before GET_STATE and carries the exact payload. It is sent in onOpen under wsLock before connected=true; every other send runs later. The payload matches daemon decodeClientHello, and planRevisions satisfies assertApprovalCapabilities. DoD2: request payload is {refresh:true}; Answered matches exactly (ready false; ready true with null evaluatedAt and an extra key). DoD3: 9-case MALFORMED table; DAEMON_ERROR for the operation-tagged and 'Unknown message type' errors, with no generic notification; an unrelated ERROR still publishes and the request then times out; TIMEOUT at 300 ms and the pending set empties; DISCONNECTED via onError, disconnect and server close; NOT_CONNECTED with zero frames. Future: never exceptional, bounded by completeOnTimeout, added before the remove hook and the send. DoD4: approval after the hello carries expectedPlanRevision. DoD5: gate above. Rails: only the 2 capabilities declared; no path reports a bad answer as ready; no forbidden patterns. Scope: only the 5 planned files; TerminalAgentLauncher, RuntimeSelectionPolicy, Models.kt and MoeJson.kt untouched. Size: +339/-5 (334 net incl. 173 test lines) plus 4 .moe/tasks records. Complexity pass: lean. Unverified: live daemon EXECUTION_READINESS needs CQ-M07d (task-b0485bb1), which is not yet in WebSocketServer.ts; rows use a loopback server. No manual IDE run.",
+  "requiredCheckAtDone": null
+}

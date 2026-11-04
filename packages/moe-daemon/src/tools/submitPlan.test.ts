@@ -1703,6 +1703,13 @@ describe('rail refusal on the MCP wire', () => {
     });
     expect(response.error?.message).toContain('moe.propose_rail');
     expect(response.error?.message).toContain('taskId: "task-1"');
+    // Only a GLOBAL MODIFY_RAIL or REMOVE_RAIL of the quoted entry can lift a rail
+    // refusal (task-dd1e00f8): the plan check reads no EPIC, TASK or customRules rail.
+    const entry = violation.slice(violation.indexOf(': ') + 2);
+    expect(response.error?.message).toContain(
+      `moe.propose_rail { proposalType: "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL", taskId: "task-1", currentValue: ${JSON.stringify(entry)}, `
+    );
+    expect(response.error?.message).not.toMatch(/EPIC|TASK|ADD_RAIL/);
     expect(fs.readFileSync(file, 'utf8')).toBe(before);
     expect(h.state.getTask('task-1')?.status).toBe('PLANNING');
     expect(h.state.getTask('task-1')?.implementationPlan).toEqual([]);

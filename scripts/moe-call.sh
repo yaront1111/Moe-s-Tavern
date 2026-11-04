@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # moe-call.sh - CLI helper for calling Moe daemon tools via the proxy
 # Usage: moe-call.sh <tool_name> [json_arguments] [--project <path>]
 #
@@ -9,6 +9,24 @@
 #   moe-call.sh submit_plan '{"taskId":"task-xxx","plan":[...]}'
 #   moe-call.sh wait_for_task '{"statuses":["PLANNING"],"workerId":"architect-abc","timeoutMs":300000}'
 #   moe-call.sh add_comment '{"taskId":"task-xxx","content":"my question","workerId":"architect-abc"}'
+
+# task-0d9ebe5b: run by path, a fixed /bin/sh starts and hands over to bash once, using
+# builtins only (under sh any other word is a PATH lookup a project file could answer).
+# MOE_RUNTIME_PROTECTED=1 takes exactly /bin/bash; otherwise `bash` is found by PATH, as
+# the old `#!/usr/bin/env bash` did. A bash not in POSIX mode (`bash moe-call.sh`) skips
+# it. MOE_CALL_BASH_ENTRY allows one hand-over, so POSIXLY_CORRECT cannot loop.
+if [ -z "${MOE_CALL_BASH_ENTRY:-}" ]; then
+    if [ -z "${BASH_VERSION:-}" ] || case ":${SHELLOPTS:-}:" in *:posix:*) true ;; *) false ;; esac; then
+        MOE_CALL_BASH_ENTRY=1; export MOE_CALL_BASH_ENTRY
+        if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then
+            [ -x /bin/bash ] || { echo "Error: MOE_PROTECTED_INTERPRETER_NOT_FOUND: /bin/bash is not executable; under MOE_RUNTIME_PROTECTED=1 run moe-call.sh as '<absolute path to bash> moe-call.sh'. Refusing to start." >&2; exit 1; }
+            exec /bin/bash "$0" "$@"
+        fi
+        exec bash "$0" "$@"
+    fi
+fi
+unset MOE_CALL_BASH_ENTRY
+[ -n "${BASH_VERSION:-}" ] || { echo "Error: moe-call.sh must run under bash; refusing to start." >&2; exit 1; }
 
 set -euo pipefail
 
@@ -103,13 +121,43 @@ find_python() {
     echo ""
     return 1
 }
-PYTHON_CMD=$(find_python)
-if [ -z "$PYTHON_CMD" ]; then
-    echo "Error: python3 (or py -3) not found on PATH" >&2
-    exit 1
+# Trust directories, not PATH lookup results: links/case cannot hide the project.
+protected_trusted_dir() { # $1 = directory, $2 = project's real path
+    local real up
+    case "$1" in /*) ;; *) return 1 ;; esac
+    real=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+    up="$real"
+    while :; do
+        [ "$up" -ef "$2" ] && return 1
+        [ "$up" != / ] || break
+        up="${up%/*}"; [ -n "$up" ] || up=/
+    done
+    printf '%s\n' "$real"
+}
+if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then
+    PYTHON_CMD="" # Only the legacy install-path fallback needs Python.
+    # task-0b2ea570: as moe-agent.sh does, keep only absolute PATH entries outside the
+    # project before the first bare-name command (node). With no project real path no
+    # entry can be proven outside it, and an empty PATH makes bash search the current
+    # directory: keeping nothing refuses as a missing node does.
+    PROJECT_REAL=$(cd -- "$PROJECT" 2>/dev/null && pwd -P) || PROJECT_REAL=""
+    KEEP=""
+    IFS=: read -r -a PATH_ENTRIES <<< "$PATH"
+    for ENTRY in ${PATH_ENTRIES[@]+"${PATH_ENTRIES[@]}"}; do
+        REAL=$(protected_trusted_dir "$ENTRY" "$PROJECT_REAL") && [ -n "$PROJECT_REAL" ] && KEEP="${KEEP:+$KEEP:}$REAL"
+    done
+    [ -n "$KEEP" ] || { echo "Error: node not found" >&2; exit 1; }
+    export PATH="$KEEP"
+else
+    PYTHON_CMD=$(find_python)
+    if [ -z "$PYTHON_CMD" ]; then
+        echo "Error: python3 (or py -3) not found on PATH" >&2
+        exit 1
+    fi
 fi
 
-# Find node
+# The protected wrapper prepends its pinned node directory. Standalone calls
+# still find node by PATH lookup.
 find_node() {
     if command -v node &> /dev/null; then
         echo "node"

@@ -22,6 +22,7 @@ import {
   unmetDependsOn,
 } from './dependencyUnblock.js';
 import { runBlockedTimeoutSweep } from './sweeps.js';
+import { StateManager } from './StateManager.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { McpAdapter, type JsonRpcResponse } from '../server/McpAdapter.js';
 import { recordCheckRun } from './checkRunStore.js';
@@ -152,14 +153,93 @@ describe('dependencyUnblock', () => {
     it('a still-assigned hold returns to its parked worker (grantNextLeases parity)', async () => {
       h.createTask({ id: 'task-p4e4eq', status: 'REVIEW' });
       blockedRow('task-1egacy', ['task-p4e4eq'], { assignedWorkerId: 'worker-parked' });
-      h.createWorker({ id: 'worker-parked', status: 'BLOCKED', currentTaskId: 'task-1egacy' });
+      const lastActivityAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      h.createWorker({
+        id: 'worker-parked', status: 'BLOCKED', currentTaskId: 'task-1egacy',
+        lastError: 'waiting on task-p4e4eq', lastActivityAt,
+      });
       await h.state.load();
+      const updateWorker = vi.spyOn(h.state, 'updateWorker');
 
       await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
 
       const restored = h.state.getTask('task-1egacy')!;
       expect(restored.status).toBe('WORKING');
       expect(restored.assignedWorkerId).toBe('worker-parked');
+      // The seat is repaired the way grantNextLeases repairs it: resumed, error
+      // cleared, presence untouched (an unblock is not a heartbeat).
+      expect(h.state.getWorker('worker-parked')).toMatchObject({
+        status: 'READING_CONTEXT', lastError: null, lastActivityAt, currentTaskId: 'task-1egacy',
+      });
+      expect(updateWorker).toHaveBeenCalledWith(
+        'worker-parked',
+        { status: 'READING_CONTEXT', lastError: null, lastActivityAt },
+        'WORKER_UNBLOCKED'
+      );
+    });
+
+    it('a restored seat is not timed out by the blocked-timeout sweep', async () => {
+      const staleTs = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      h.createTask({ id: 'task-p4e4eq', status: 'REVIEW' });
+      blockedRow('task-1egacy', ['task-p4e4eq'], { assignedWorkerId: 'worker-parked', blockedAt: staleTs });
+      h.createWorker({
+        id: 'worker-parked', status: 'BLOCKED', currentTaskId: 'task-1egacy',
+        lastError: 'waiting on task-p4e4eq', lastActivityAt: staleTs,
+      });
+      await h.state.load();
+
+      await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
+      await h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state));
+
+      const task = h.state.getTask('task-1egacy')!;
+      expect(task.status).toBe('WORKING');
+      expect(task.assignedWorkerId).toBe('worker-parked');
+      expect(h.state.getWorker('worker-parked')).toMatchObject({
+        status: 'READING_CONTEXT', currentTaskId: 'task-1egacy',
+      });
+    });
+
+    it('seats that are not a parked hold on this row are left untouched', async () => {
+      h.createTask({ id: 'task-p4e4eq', status: 'REVIEW' });
+      blockedRow('task-c0d1ng', ['task-p4e4eq'], { assignedWorkerId: 'worker-coding' });
+      blockedRow('task-else01', ['task-p4e4eq'], { assignedWorkerId: 'worker-elsewhere' });
+      blockedRow('task-dead02', ['task-p4e4eq'], { assignedWorkerId: 'worker-dead' });
+      h.createWorker({
+        id: 'worker-coding', status: 'CODING', currentTaskId: 'task-c0d1ng', lastError: 'old error',
+      });
+      h.createWorker({
+        id: 'worker-elsewhere', status: 'BLOCKED', currentTaskId: 'task-other9', lastError: 'waiting elsewhere',
+      });
+      h.createWorker({
+        id: 'worker-dead', status: 'DEAD', currentTaskId: 'task-dead02', lastError: 'gone',
+      });
+      await h.state.load();
+      const ids = ['worker-coding', 'worker-elsewhere', 'worker-dead'];
+      const before = ids.map((id) => structuredClone(h.state.getWorker(id)));
+
+      await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
+
+      expect(h.state.getTask('task-c0d1ng')!.assignedWorkerId).toBe('worker-coding');
+      expect(h.state.getTask('task-else01')!.assignedWorkerId).toBeNull();
+      expect(h.state.getTask('task-dead02')!.assignedWorkerId).toBeNull();
+      ids.forEach((id, i) => expect(h.state.getWorker(id)).toEqual(before[i]));
+    });
+
+    it('a failed worker write is logged and never undoes the restore', async () => {
+      h.createTask({ id: 'task-p4e4eq', status: 'REVIEW' });
+      blockedRow('task-f1rst1', ['task-p4e4eq'], { assignedWorkerId: 'worker-first' });
+      blockedRow('task-s3cnd1', ['task-p4e4eq'], { assignedWorkerId: 'worker-second' });
+      h.createWorker({ id: 'worker-first', status: 'BLOCKED', currentTaskId: 'task-f1rst1', lastError: 'e1' });
+      h.createWorker({ id: 'worker-second', status: 'BLOCKED', currentTaskId: 'task-s3cnd1', lastError: 'e2' });
+      await h.state.load();
+      vi.spyOn(h.state, 'updateWorker').mockRejectedValueOnce(new Error('worker write failed'));
+
+      await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
+
+      expect(h.state.getTask('task-f1rst1')).toMatchObject({ status: 'WORKING', assignedWorkerId: 'worker-first' });
+      expect(h.state.getTask('task-s3cnd1')).toMatchObject({ status: 'WORKING', assignedWorkerId: 'worker-second' });
+      expect(h.state.getWorker('worker-first')!.status).toBe('BLOCKED');
+      expect(h.state.getWorker('worker-second')!.status).toBe('READING_CONTEXT');
     });
 
     it('a still-assigned hold whose owner is DEAD, IDLE-with-no-pointer, or missing returns UNASSIGNED', async () => {
@@ -276,8 +356,9 @@ describe('dependencyUnblock', () => {
       expect(depRow.assignedWorkerId).toBeNull();
       // Dep-less hold: parked to BACKLOG for human triage (unchanged behavior).
       expect(h.state.getTask('task-n0dep1')!.status).toBe('BACKLOG');
-      // The timed-out worker itself is still released to IDLE.
-      expect(h.state.getWorker('worker-t1meout')!.status).toBe('IDLE');
+      // The timed-out seat owns nothing now and keeps its real lastActivityAt
+      // (2 h old), so the same pass's Layer-3 prune removes it.
+      expect(h.state.getWorker('worker-t1meout')).toBeNull();
 
       // The dep lands → the row returns WORKING-unassigned and another worker
       // can claim it (the starvation the old skip produced).
@@ -412,6 +493,64 @@ describe('dependencyUnblock', () => {
       expect(roleMsgs[0][1]).toContain('the blocked timeout');
     });
 
+    it('pages a block instance once while the row stays BLOCKED, however often it stops and starts qualifying', async () => {
+      const now = Date.now();
+      staleDepRow('task-c0n5um', ['task-p4e4eq'], 1.5 * HOUR); // past the timeout, under the 2× bound
+      h.createTask({ id: 'task-p4e4eq', status: 'BACKLOG' });
+      await h.state.load();
+      const roleMsgs = captureRolePosts();
+      const blockedAt = h.state.getTask('task-c0n5um')!.blockedAt;
+
+      expect(await alertStaleBlocks(h.state, now)).toBe(1); // parked BACKLOG prerequisite
+      await h.state.updateTask('task-p4e4eq', { status: 'WORKING' });
+      expect(await alertStaleBlocks(h.state, now + 60_000)).toBe(0); // moving, under 2×: does not qualify
+      expect(await alertStaleBlocks(h.state, now + HOUR)).toBe(0); // past 2×: qualifies again, same instance
+      await h.state.updateTask('task-p4e4eq', { status: 'BACKLOG' });
+      expect(await alertStaleBlocks(h.state, now + HOUR + 60_000)).toBe(0); // stalls again
+      expect(roleMsgs).toHaveLength(1);
+      expect(h.state.getTask('task-c0n5um')).toMatchObject({ status: 'BLOCKED', blockedAt });
+    });
+
+    it('pages a new block instance: a re-block under a new blockedAt, and a row resolved then blocked again', async () => {
+      const now = Date.now();
+      staleDeplessRow('task-n3wat1', 2 * HOUR);
+      staleDeplessRow('task-r350lv', 2 * HOUR);
+      await h.state.load();
+      const roleMsgs = captureRolePosts();
+      const firstBlockedAt = h.state.getTask('task-r350lv')!.blockedAt;
+      expect(await alertStaleBlocks(h.state, now)).toBe(2);
+
+      await h.state.updateTask('task-n3wat1', { blockedAt: new Date(now).toISOString() });
+      await h.state.updateTask('task-r350lv', { status: 'WORKING', blockedReason: null, blockedFromStatus: null, blockedAt: null } as never);
+      expect(await alertStaleBlocks(h.state, now + 2 * HOUR)).toBe(1); // task-n3wat1; task-r350lv is seen resolved
+      // Blocked again under the very same blockedAt (a restored file): the resolve dropped its key.
+      await h.state.updateTask('task-r350lv', { status: 'BLOCKED', blockedReason: 'asked again', blockedFromStatus: 'WORKING', blockedAt: firstBlockedAt } as never);
+      expect(await alertStaleBlocks(h.state, now + 2 * HOUR)).toBe(1);
+      const pagesFor = (id: string) => roleMsgs.filter(([, m]) => m.startsWith(`⚠️ ${id} `)).length;
+      expect([pagesFor('task-n3wat1'), pagesFor('task-r350lv')]).toEqual([2, 2]);
+    });
+
+    it('a daemon restart reads #governors back: no second page for a standing block, a page for one it never paged', async () => {
+      const now = Date.now();
+      staleDeplessRow('task-5ta1e1', 2 * HOUR); // paged before the restart
+      staleDeplessRow('task-qu0te1', 30 * 60 * 1000); // under the timeout: never paged by the daemon
+      staleDeplessRow('task-n3wb1k', 2 * HOUR); // paged, then re-blocked under a new blockedAt
+      await h.state.load();
+      const posted = vi.spyOn(h.state, 'postToRoleChannel'); // calls through: the pages land in #governors
+      expect(await alertStaleBlocks(h.state, now)).toBe(2);
+      expect(posted).toHaveBeenCalledTimes(2);
+      const governors = Array.from(h.state.channels.values()).find((ch) => ch.type === 'role' && ch.name === 'governors')!;
+      // A governor quoting the page format is not the daemon's page.
+      await h.state.sendMessage({ channel: governors.id, sender: 'governor-x', content: '⚠️ task-qu0te1 (Test Task) has been BLOCKED 90m with no blockedOnTaskIds' });
+      await h.state.updateTask('task-n3wb1k', { blockedAt: new Date(now + 60_000).toISOString() });
+
+      const restarted = new StateManager({ projectPath: h.testDir });
+      await restarted.load();
+      const reposted = vi.spyOn(restarted, 'postToRoleChannel');
+      expect(await alertStaleBlocks(restarted, now + 3 * HOUR)).toBe(2);
+      expect(reposted.mock.calls.map(([, m]) => String(m).split(' ')[1]).sort()).toEqual(['task-n3wb1k', 'task-qu0te1']);
+    });
+
     it('the blocked-timeout sweep runs the extended alert pass', async () => {
       staleDepRow('task-a1a1a1', ['task-b2b2b2'], 3 * HOUR);
       staleDepRow('task-b2b2b2', ['task-a1a1a1'], 3 * HOUR);
@@ -456,6 +595,8 @@ describe('dependencyUnblock — delivery evidence on a DONE prerequisite', () =>
     autoCommit: true,
     qualityGate: GATE,
     qualityGateScope: 'everyTask',
+    // The shared-mode path; with a gate, unset now means 'on' (WT-19).
+    worktreeMode: 'off',
   };
   const STRICT_SETTINGS = { ...DEFAULT_POLICY_SETTINGS, deliveryPolicy: 'local-branch' };
 

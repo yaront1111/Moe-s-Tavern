@@ -1,0 +1,292 @@
+{
+  "id": "task-921ca494fac241aa96b85cb9ae3e63ab",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-23] VS Code task detail: refresh the Delivery section and Release Agent button live, and pin blocker labels to MoeBundle",
+  "description": "Filed by VSC-18 (task-43363b5d) from its adversarial pass over the epic diff.\n1. The Delivery section (VSC-8) and the Release Agent button (VSC-11) are rendered only in the initial HTML (TaskDetailPanel.getWebviewContent). The live path, debouncedUpdate posting 'updateTask' to media/taskDetail.js (around line 336), rebuilds only the status badge, #blockerSection, the plan and the comments. So a candidate, check run or receipt recorded while the panel is open stays stale until it is reopened. A task assigned after the panel opened gets no Release Agent button, and a released one keeps a stale button (that click answers with the info message). JetBrains refreshes its delivery section on every state update (TaskDetailDialog.refreshDeliverySection). Fix idea from architect comment-97b50ba7 on VSC-18: the panel posts the precomputed deliveryRows and labels with 'updateTask', and taskDetail.js rebuilds an always-present #deliverySection from DOM text nodes, as renderBlocker does. Do the same for the button's visibility.\n2. BLOCK_CAUSE_LABEL and BLOCK_CAUSE_CLEARS exist in 3 VS Code copies: TaskDetailPanel.ts, media/board.js and media/taskDetail.js. They equal moe.blocker.* in MoeBundle.properties today, but no test pins that: tests/blocker-corpus.test.cjs compares the chip with the panel's own constant. Add a bundle-equality assertion, as delivery-corpus does for moe.delivery.*.",
+  "definitionOfDone": [
+    "With the panel open, an 'updateTask' carrying new delivery evidence re-renders #deliverySection, and one without delivery removes it. A node:test drives the real panel and the raw media/taskDetail.js in vm, every daemon string goes through text nodes or escapeHtml, and the test proves it.",
+    "The Release Agent button appears or disappears on a live 'updateTask' when assignedWorkerId changes, with a test.",
+    "A test asserts that the blocker cause and clearance labels in all 3 VS Code copies equal moe.blocker.* in MoeBundle.properties.",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0 and no existing test is weakened."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Tests first (RED). Write tool only; never cp into the checkout. Create moe-vscode/tests/task-detail-live.test.cjs (node:test, no new dependency: npm test's tests/*.test.cjs glob picks it up). A reference implementation of this exact design passed the full snapshot gate and all three checkRefs at ed60ab31: /mnt/d/moe-scratch/vsc23-prototype/moe-vscode/tests/task-detail-live.test.cjs (read it, then write the tracked file with the Write tool).\n\nHarness: production source only, nothing re-implemented.\n- Extension side: transpile src/panels/TaskDetailPanel.ts and src/panels/PlanReviewPanel.ts with ts.transpileModule (CommonJS, ES2020, esModuleInterop). Run them under node:vm with a strict require map: vscode and './PlanReviewPanel' only, anything else throws (mem:gotcha-vscode-panel-strict-require-map).\n- The panel's vm context also needs a recording setTimeout and a no-op clearTimeout. debouncedUpdate arms a 200 ms timer, and a vm context has no timers of its own.\n- openPanel(task) loads a fresh module each time, because the panel keeps a static map. It opens the panel with TaskDetailPanel.createOrShow and keeps the onStateChanged listener and every webview.postMessage call.\n- update(next) replaces the task in the client state, fires the listener and runs the recorded timer. It asserts exactly one posted message of type 'updateTask' and returns it JSON-round-tripped. That is what a webview receives, and it carries no vm-realm prototypes.\n- Page side: run the raw media/taskDetail.js in a fresh vm context per page. Supply acquireVsCodeApi with a recording postMessage, document { getElementById, createElement, createTextNode }, and window.addEventListener capturing the 'message' handler (throw if none was registered).\n- The page is built from the panel's real initial HTML. Every id=\"...\" becomes an element, in document order: children of a main-content element until #actionsBar, children of #actionsBar after it. #initial-data gets the tag's data-* attributes as its dataset, following tests/task-release.test.cjs initialDataset.\n- The DOM fake is strict in both directions, and that is how this file proves every daemon string reaches the page as text. Each node is a Proxy: get throws on a member the node lacks, and set throws on any property outside the allowlist className, id, title, textContent, value, scrollTop.\n- So the markup-injection DOM property the forbidden-pattern rail greps for, and outerHTML, throw without this file ever naming them. Never spell any globalRails.forbiddenPatterns token in the test.\n- getElementById walks the tree from the body and answers null for an id that is not attached, as a real DOM does.\n- Nodes keep parentNode, children, nextSibling, appendChild, insertBefore (a reference that is not a child throws), removeChild (a non-child throws), addEventListener and click().\n\nTests: keep these exact name prefixes, because checkref 2 greps 'not ok N - L1:' and 'not ok N - L4:'.\n- L0: harness self-check. Writing outerHTML on #blockerSection throws (refused write). Reading an unknown member throws. getElementById answers null for #deliverySection and #releaseAgentBtn on an unassigned task with no delivery.\n- L1: replay every row of moe-jetbrains/src/test/resources/client-delivery.json. That corpus is read-only: never edit it.\n  - For each row, open the panel on a task with no delivery and deliver update(task with row.delivery) to the page.\n  - Read the live #deliverySection as { title, rows: [className, label text, value title, value text] }.\n  - It must equal the same read of the initial markup of a panel opened directly on that delivery. Both are null when there are no rows.\n  - Collect failures as '<row id>: expected ..., got ...' and assert the list empty.\n- L2: run it for a page that starts without a delivery and for one that starts with one.\n  - After each of two successive deliveries there is exactly one #deliverySection, immediately after #blockerSection in its parent, matching the initial markup.\n  - Then a task with delivery:null removes it (getElementById answers null), and so does a task without the member.\n  - Values typed into titleInput, descriptionInput and dodInput before the updates are unchanged after them.\n- L3: use a hostile runner string such as '<img src=x onerror=\"alert(1)\"> & \\'quoted\\'' as the check command and as the receipt target.\n  - The posted message carries it unescaped in value and fullValue. The page writes text, so escaping in the message would double-escape.\n  - Each live value node has textContent and title equal to the raw string, and no child nodes.\n- L4: run it for a page that starts unassigned and one that starts assigned, over a sequence of assignedWorkerId values: non-blank ids, null, '', whitespace and absent.\n  - The posted releaseAgentLabel is the bundle's moe.button.releaseAgent text exactly when the id is non-blank, else null. Read that text from MoeBundle.properties; never copy it.\n  - After each delivery, #releaseAgentBtn is absent for a blank id. Otherwise there is exactly one, immediately before #prevBtn.\n  - A button that was already shown is the same node afterwards, never rebuilt.\n  - A button built live reproduces the initial render's element. Compare its tagName, className and text with a panel opened on that assignment.\n  - Finally, one click posts exactly [{type:'releaseAgent'}].\n\nRED: run the new file against HEAD's sources in a scratch copy outside the checkout (git show HEAD:<file> into a mktemp dir with the same layout, then NODE_PATH=<repo>/moe-vscode/node_modules node --test <file>; mem:convention-vscode-renderer-tests). L1 to L4 fail and L0 passes.\n\nSize: target at most 265 lines for this file. The prototype is 256.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/task-detail-live.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/task-detail-live.test.cjs"
+      ],
+      "note": "Wrote tests/task-detail-live.test.cjs (256 lines) with the Write tool. RED proof in a scratch copy of HEAD sources: L0 ok, L1-L4 not ok. 43 other dirty paths in the shared checkout belong to other sessions; untouched.",
+      "startedAt": "2026-11-02T16:03:20.367Z",
+      "completedAt": "2026-11-02T16:04:20.595Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Panel, Edit tool only: moe-vscode/src/panels/TaskDetailPanel.ts. Add no new import: several test files load this panel through closed require maps (mem:gotcha-vscode-panel-strict-require-map). Prototype: /mnt/d/moe-scratch/vsc23-prototype/moe-vscode/src/panels/TaskDetailPanel.ts.\n\n- Directly after deliveryRows, add `export function deliveryDisplay(delivery: unknown)` returning { title: DELIVERY_LABELS[DELIVERY_TITLE_KEY], rows: deliveryRows(delivery).map(row => ({ ...row, label: DELIVERY_LABELS[row.labelKey] ?? row.labelKey })) }.\n  - This is the one label lookup behind both renderers.\n  - The text stays raw: the initial markup escapes it, and the page writes it as DOM text.\n- renderDelivery(task) builds from deliveryDisplay(task.delivery) and emits byte-identical markup. escapeHtml stays on title, label, fullValue and value. tests/delivery-corpus.test.cjs pins this markup and must stay unchanged.\n- Beside the other Release Agent constants, add the module-level `function releaseAgentLabel(task: Task): string | null`. It returns nonBlankString(task.assignedWorkerId) !== null ? RELEASE_AGENT_LABEL : null.\n  - The actions-bar button condition in getWebviewContent uses it. The button markup is unchanged.\n- debouncedUpdate posts { type: 'updateTask', task, delivery: deliveryDisplay(task.delivery), releaseAgentLabel: releaseAgentLabel(task) }.\n- Keep the 'releaseAgent' message handler's fresh-state check and its 'No agent is assigned to this task.' info message, because a click can still race a live update. Reword three comments:\n  - the handler's comment, because 'the actions bar is static' is no longer true;\n  - the HTML comment above ${this.renderDelivery(task)}: 'rendered once ... no live refresh yet' becomes live-refreshed by media/taskDetail.js;\n  - renderDelivery's doc comment.\n\nError handling: deliveryRows is already total (a malformed delivery yields no rows), so deliveryDisplay cannot throw, and this step adds no new failure path.\n\nSize: net at most +20 lines. The prototype is +28/-10.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "note": "Edit-tool only: deliveryDisplay (exported), releaseAgentLabel (module-private), debouncedUpdate posts delivery + releaseAgentLabel, renderDelivery on deliveryDisplay with identical markup, 3 comments reworded. No new import. numstat +30/-10 (net +20, at budget). Compile/test run in step 5 snapshot.",
+      "startedAt": "2026-11-02T16:04:25.503Z",
+      "completedAt": "2026-11-02T16:04:59.416Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Page, Edit tool only: moe-vscode/media/taskDetail.js. Prototype: /mnt/d/moe-scratch/vsc23-prototype/moe-vscode/media/taskDetail.js. Keep renderDelivery and renderReleaseAgent as top-level function declarations with exactly these names, never `var x = function`, because checkref 2 overrides each one by appending a same-named declaration.\n\n- Extract `function postReleaseAgent() { vscodeApi.postMessage({ type: 'releaseAgent' }); }` and attach it at load to an existing #releaseAgentBtn, as today.\n- `function removeNode(node)` detaches a node only when node && node.parentNode. The guard is load-bearing.\n  - tests/task-blocker-visibility.test.cjs and tests/approval-paths.test.cjs deliver old-shape updateTask messages, which carry no delivery and no releaseAgentLabel. Their fakes return a parentless node for every id.\n  - Both files must pass unchanged, including task-blocker-visibility's touched-set assertion: exactly blockerSection, commentsList, planContent and statusBadge.\n  - So a message with no delivery rows and no label may only remove attached nodes. It must never write to an existing element.\n- `function renderDelivery(delivery)`:\n  - rows = delivery && Array.isArray(delivery.rows) ? the rows that are non-null objects : [].\n  - No rows: removeNode(#deliverySection).\n  - Otherwise reuse #deliverySection, or create div.delivery-section#deliverySection and insert it right after #blockerSection with blocker.parentNode.insertBefore(section, blocker.nextSibling). Do nothing if #blockerSection is missing or detached.\n  - Clear the section with textContent = '', then append the title line, blockerLine('section-title', title).\n  - For each row, append a div whose className is 'delivery-row', plus ' delivery-pass' for outcome 'PASS' or ' delivery-fail' for 'FAIL' (nothing for any other value). It holds blockerLine('field-label', label) and blockerLine('delivery-value', value), and the value node's title property is set to fullValue.\n  - Node order and classes match TaskDetailPanel.renderDelivery.\n- `function renderReleaseAgent(label)`:\n  - A non-string or empty label: removeNode(#releaseAgentBtn).\n  - A button that is already shown stays as it is, with no second listener.\n  - Otherwise create a button with className 'btn btn-secondary', id 'releaseAgentBtn' and textContent = label. Its click calls postReleaseAgent. Insert it before #prevBtn in its parent; do nothing if #prevBtn is missing or detached.\n- In the 'updateTask' branch, call renderDelivery(msg.delivery) and then renderReleaseAgent(msg.releaseAgentLabel) LAST, after renderComments, so nothing new can hold up the renderedPlanRevision assignment. Update the handler's header comment ('only update plan + comments').\n\nError handling: a missing, null or malformed delivery, rows list, row or label never throws. It renders no section and no button. Text only ever goes in through textContent or the title property, never through markup.\n\nSize: net at most +62 lines. The prototype is +65/-7. L0 to L4 now pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/media/taskDetail.js"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/media/taskDetail.js"
+      ],
+      "note": "Edit-tool only. Added removeNode, renderDelivery(delivery), renderReleaseAgent(label), postReleaseAgent as top-level declarations; updateTask branch calls renderDelivery then renderReleaseAgent last. numstat +65/-7. In-place node --test (no npm) of task-detail-live + delivery-corpus + task-release + task-blocker-visibility + approval-paths + task-time-budget: 86 pass / 0 fail.",
+      "startedAt": "2026-11-02T16:05:00.165Z",
+      "completedAt": "2026-11-02T16:05:33.760Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Bundle pin, Edit tool only, additions only: moe-vscode/tests/blocker-corpus.test.cjs. Append one test, 'C3: ...', after C2 and touch nothing above it. Prototype: /mnt/d/moe-scratch/vsc23-prototype/moe-vscode/tests/blocker-corpus.test.cjs.\n\n- Parse moe-jetbrains/src/main/resources/messages/MoeBundle.properties (UTF-8) with /^moe\\.blocker\\.([A-Za-z.]+)=(.*?)\\r?$/gm.\n  - Assert no value holds a backslash, because that would be a properties escape this parser does not decode.\n  - Assert the parsed key set equals the keys this test pins, so a new moe.blocker.* key fails until someone maps it. The pinned keys: cause.resourceWait, cause.dependencyWait, cause.externalBlock, the same three under clears., attention.badge, attention.clears, section.title, reason, reason.missing, prerequisites, resourceId, fromStatus, blockedAt.\n- The mapping is fixed in the test, never derived from the code under test.\n  - On all three surfaces:\n    - BLOCK_CAUSE_LABEL[RESOURCE_WAIT | DEPENDENCY_WAIT | EXTERNAL_BLOCK] maps to cause.*;\n    - BLOCK_CAUSE_CLEARS[same] maps to clears.*;\n    - ATTENTION_LABEL maps to attention.badge, and ATTENTION_CLEARS to attention.clears.\n  - On TaskDetailPanel.ts and taskDetail.js only (board.js carries just the card's labels):\n    - BLOCKER_SECTION_TITLE to section.title;\n    - BLOCKER_REASON_LABEL to reason, and BLOCKER_REASON_MISSING to reason.missing;\n    - BLOCKER_PREREQUISITES_LABEL to prerequisites;\n    - BLOCKER_RESOURCE_LABEL to resourceId;\n    - BLOCKER_FROM_STATUS_LABEL to fromStatus;\n    - BLOCKER_BLOCKED_AT_LABEL to blockedAt.\n- Read the panel's copy from panelModule's exports. Read the board.js and taskDetail.js copies inside the contexts this file already loads, with vm.runInContext.\n  - board.js declares its copies with top-level const, which never becomes a context property.\n  - JSON-stringify inside the context to leave the vm realm.\n- Each surface's two maps must name exactly the three causes.\n- Collect every value mismatch as '<surface> moe.blocker.<key>: expected <bundle value>, got <value>' and assert the list empty once, at the end. Use the existing SURFACES names TaskDetailPanel.ts, board.js and taskDetail.js, because checkref 3 greps '<surface> moe.blocker.clears'.\n\nAll three copies match today, so C3 passes at once; checkref 3 proves it catches a drift in each copy.\n\nSize: at most 40 added lines. The prototype adds 37.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/blocker-corpus.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/blocker-corpus.test.cjs"
+      ],
+      "note": "Edit-tool only, additions only: appended C3 after C2 (+37/-0). In-place node --test of blocker-corpus: C0-C3 ok. Running size total: js +58, panel +20, C3 +37, new test 256 = 371 net (cap 375).",
+      "startedAt": "2026-11-02T16:05:34.818Z",
+      "completedAt": "2026-11-02T16:06:12.442Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Verification: run once, fresh, from the repo root. The complete_task evidence is checkref 1, verbatim:\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc23-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/panels/TaskDetailPanel.ts moe-vscode/media/taskDetail.js moe-vscode/tests/task-detail-live.test.cjs moe-vscode/tests/blocker-corpus.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'; C=$?; cd \"$R\"; rm -rf \"$S\"; echo \"gate exit: $C\"; [ \"$C\" = 0 ]\n\nThen run checkref 2 and checkref 3 verbatim. Each prints 'mutants killed: 1' and exits 0.\n- checkref 2 appends a same-named empty declaration to a scratch copy of taskDetail.js. L1 must fail with renderDelivery emptied, and L4 with renderReleaseAgent emptied.\n- checkref 3 sets BLOCK_CAUSE_CLEARS.EXTERNAL_BLOCK to 'x' in all three copies. C3 must name each surface.\n\nAlso report git diff --numstat for the 4 paths:\n- blocker-corpus.test.cjs shows 0 deleted lines;\n- delivery-corpus, task-blocker-visibility, task-release and approval-paths tests are untouched, which is DoD 4's \"no existing test weakened\";\n- the total net (added minus deleted) is at most 375. QA rejects over 400; the prototype is 369.\n\nExpected at ed60ab31: lint 0, compile 0, and npm test 562 tests / 558 pass / 4 skip / 0 fail. That is the baseline 556/552/4 plus these 6 tests, verified on the prototype. A peer's newly landed test moves the counts, which is fine.\n\nError handling for a red gate: if a failure comes from a file this task does not touch, such as a peer's wip checkpoint on HEAD (mem:gotcha-snapshot-gate-peer-wip-checkpoint), confirm it with git log on that file. Re-run the same command with only that file removed from the snapshot, submit that run and disclose both.\n\nNever run npm in the shared checkout. Never pattern-kill. Delete only your own temp dirs; the three commands clean up after themselves.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkref 1 (git archive HEAD fb0b5ab9 snapshot + 4 overlaid files): npm ci, lint 0, compile 0, npm test 564 tests / 560 pass / 4 skip / 0 fail, gate exit 0. checkref 2: mutants killed: 1 (exit 0). checkref 3: mutants killed: 1 (exit 0). numstat: taskDetail.js +65/-7, TaskDetailPanel.ts +30/-10, blocker-corpus +37/-0 (0 deleted), new test 256 lines; total net 371 (<=375). delivery-corpus, task-blocker-visibility, task-release, approval-paths untouched. No forbidden-pattern tokens in touched files; no new panel import.",
+      "startedAt": "2026-11-02T16:06:13.561Z",
+      "completedAt": "2026-11-02T16:06:53.923Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "6. Adversarial self-review: load adversarial-self-review and cover this task's diff only, then complete_task with step 5's evidence. Check each of these:\n- Two state changes inside one debounce window give one post, and the rebuild is idempotent.\n- assigned, then unassigned, then assigned again gives one button with one listener.\n- A delivery with rows, then none, then rows again re-inserts the section right after #blockerSection, not at the end of the page.\n- Hostile text in every delivery field, and malformed message fields.\n- CSP: no inline handlers, DOM APIs only.\n- renderedPlanRevision is still cleared before, and set after, renderSteps.\n- No globalRails.forbiddenPatterns token appears in any touched file.\n- The panel has no new import.\n\nmoe-vscode/README.md 'Known issues' and MANUAL_TESTS.md step 6 still describe this limit. Leave them alone: VSC-18 (task-43363b5d, in REVIEW) owns them, and a docs follow-up drops them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/tests/blocker-corpus.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/tests/blocker-corpus.test.cjs",
+        "moe-vscode/tests/task-detail-live.test.cjs"
+      ],
+      "note": "Adversarial pass over this task's diff only. (1) Debounce: debouncedUpdate clears and re-arms its timer, so two changes in one 200 ms window post once; renderDelivery clears the section and rebuilds, so it is idempotent. (2) assigned→unassigned→assigned: L4 walks 10 assignedWorkerId values from two starting states; one #releaseAgentBtn just before #prevBtn every time, a shown button is the same node, and a final click posts exactly [{type:'releaseAgent'}] (one listener). (3) rows→none→rows: L2 re-inserts the section right after #blockerSection, never at the end. (4) Hostile text: L3 plus a DOM fake that throws on any write outside className/id/title/textContent/value/scrollTop. Malformed delivery (string, number, no rows, non-object rows) or a missing label never throws: it only detaches attached nodes. Theoretical only: a malformed message with rows but no title would render the text \"undefined\", and only the panel posts these messages. (5) CSP: addEventListener only, no inline handlers. (6) renderedPlanRevision is cleared before and set after renderSteps, unchanged; the new renderers run after renderComments. (7) No forbidden-pattern token in any touched file; no new panel import. (8) Initial HTML is byte-identical: delivery-corpus, task-release, task-blocker-visibility, approval-paths pass unchanged. The host 'releaseAgent' handler's fresh-state check is untouched, so a click that races a live update still gets the info message. README Known issues and MANUAL_TESTS step 6 left alone (VSC-18 owns them). Scratch dirs from the mktemp commands were all removed.",
+      "startedAt": "2026-11-02T16:06:54.888Z",
+      "completedAt": "2026-11-02T16:07:16.569Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under \"keep the board moving\" (10:52Z) and \"go on the vscode epic\". VSC-18 filed this from its adversarial pass. It is lane-free: no open row plans TaskDetailPanel.ts or media/taskDetail.js.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 25,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T15:11:46.174Z",
+  "updatedAt": "2026-11-02T17:07:02.884Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T15:16:25.568Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T15:36:46.514Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-02T16:10:52.127Z",
+    "wallClockMs": 2045613
+  },
+  "contextFetchedBy": [
+    "architect-d54b05fd",
+    "worker-81a7999f",
+    "qa-564d8bce"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T16:01:43.979Z",
+  "executionContract": {
+    "intendedBehavior": "With a task detail panel open, every state update refreshes the read-only Delivery section and the Release Agent button. The panel's debouncedUpdate posts the delivery rows it already computes for the initial page, with their English labels resolved (deliveryDisplay), and the button label when the task has a non-blank assignedWorkerId (releaseAgentLabel, else null). media/taskDetail.js then rebuilds #deliverySection right after #blockerSection from DOM text nodes, or removes it when there are no rows, and adds #releaseAgentBtn just before #prevBtn or removes it, with one click listener. A new test pins the blocker cause, clearance and caption labels in TaskDetailPanel.ts, media/board.js and media/taskDetail.js to moe.blocker.* in JetBrains' MoeBundle.properties.",
+    "acceptanceCriteria": [
+      "DoD 1: L1 (every client-delivery.json row, live equals initial), L2 (insert after #blockerSection, rebuild in place, removal for delivery:null and for an absent member) and L3 (hostile text posted raw, lands as text) pass. They drive the real panel and the raw taskDetail.js under node:vm, against a DOM fake that refuses markup writes (L0 proves it does).",
+      "DoD 2: L4 passes. The button appears, follows and disappears with assignedWorkerId on live updates, stays a single node with one listener, sits before #prevBtn and posts {type:'releaseAgent'} once per click.",
+      "DoD 3: C3 in tests/blocker-corpus.test.cjs pins every moe.blocker.* key, and checkref 3 kills a clears drift in each of the three copies.",
+      "DoD 4: checkref 1 exits 0 in a git-archive snapshot (npm ci, lint, compile, test), and no existing test file is edited except the additions-only C3."
+    ],
+    "invariants": [
+      "Daemon or runner text reaches the page only through escapeHtml (initial render) or textContent and the title property (live).",
+      "Live updates never write the title, description, Definition of Done or reopen inputs.",
+      "At most one #deliverySection and one #releaseAgentBtn exist, and the button has exactly one click listener.",
+      "renderedPlanRevision handling is unchanged and runs before the new renderers."
+    ],
+    "compatibility": [
+      "The initial webview HTML stays byte-identical for every task. delivery-corpus, task-release, task-blocker-visibility and approval-paths pin it, unchanged.",
+      "An old-shape updateTask message (no delivery, no releaseAgentLabel) never throws and never writes to an existing element. It only detaches attached nodes.",
+      "The panel adds no new import, because several tests load it through closed require maps.",
+      "The 'releaseAgent' host handler behaves as before, including its fresh-state check."
+    ],
+    "approvedScope": [
+      "TaskDetailPanel.ts: new export deliveryDisplay(delivery); module-private releaseAgentLabel(task); debouncedUpdate's updateTask message gains delivery and releaseAgentLabel; renderDelivery refactored onto deliveryDisplay with byte-identical markup; comment rewording.",
+      "media/taskDetail.js: postReleaseAgent, removeNode, renderDelivery(delivery) and renderReleaseAgent(label) as top-level function declarations; the updateTask branch calls the last two after renderComments.",
+      "tests/task-detail-live.test.cjs (new): L0 to L4. tests/blocker-corpus.test.cjs: C3 appended."
+    ],
+    "reuse": [
+      "deliveryRows plus DELIVERY_LABELS (VSC-8), through deliveryDisplay, for both renderers.",
+      "blockerLine for every live text line.",
+      "nonBlankString for the button rule.",
+      "Test harness patterns: the strict require-map loadModule and the initial-data dataset parse from task-release.test.cjs and delivery-corpus.test.cjs, plus the SURFACES contexts already loaded in blocker-corpus.test.cjs."
+    ],
+    "sourceAssumptions": [
+      "TaskDetailPanel.ts debouncedUpdate (around line 398) posts {type:'updateTask', task} after setTimeout(200). getWebviewContent renders the button when nonBlankString(task.assignedWorkerId) !== null (around line 1020) and calls renderDelivery (around line 1090) only in the initial HTML.",
+      "media/taskDetail.js updateTask branch (lines 334-357) refreshes the badge, blocker, plan and comments only. blockerLine (line 109) builds a div from text.",
+      "MoeBundle.properties holds 15 moe.blocker.* keys (lines 224-238) with no backslash escapes, plus moe.button.releaseAgent=Release Agent and moe.delivery.title=Delivery.",
+      "JetBrains TaskDetailDialog.refreshDeliverySection (line 290) refreshes delivery on every state update. Its Release Agent action is built once (line 719)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc23-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/panels/TaskDetailPanel.ts moe-vscode/media/taskDetail.js moe-vscode/tests/task-detail-live.test.cjs moe-vscode/tests/blocker-corpus.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'; C=$?; cd \"$R\"; rm -rf \"$S\"; echo \"gate exit: $C\"; [ \"$C\" = 0 ]",
+      "K=0; R=$(git rev-parse --show-toplevel) && M=$(mktemp -d) && cd \"$R\" && cp --parents moe-vscode/{media/taskDetail.js,src/panels/{TaskDetail,PlanReview}Panel.ts,tests/task-detail-live.test.cjs} moe-jetbrains/src/{test/resources/client-delivery.json,main/resources/messages/MoeBundle.properties} \"$M/\" && cd \"$M/moe-vscode\" && cp media/taskDetail.js ../d0 && t() { cp ../d0 media/taskDetail.js && echo \"function $1() {}\" >> media/taskDetail.js && NODE_PATH=\"$R/moe-vscode/node_modules\" node --test --test-reporter=tap tests/task-detail-live.test.cjs > ../o 2>&1; grep -q \"^not ok [0-9]* - $2:\" ../o; } && t renderDelivery L1 && t renderReleaseAgent L4 && K=1; cd \"$R\"; rm -rf \"$M\"; echo \"mutants killed: $K\"; [ \"$K\" = 1 ]",
+      "K=0; R=$(git rev-parse --show-toplevel) && M=$(mktemp -d) && cd \"$R\" && cp --parents moe-vscode/{media/{board,taskDetail}.js,src/panels/{TaskDetail,PlanReview}Panel.ts,tests/blocker-corpus.test.cjs} moe-jetbrains/src/{test/resources/client-blocker.json,main/resources/messages/MoeBundle.properties} \"$M/\" && cd \"$M/moe-vscode\" && for f in media/board.js media/taskDetail.js src/panels/TaskDetailPanel.ts; do echo 'BLOCK_CAUSE_CLEARS.EXTERNAL_BLOCK = \"x\";' >> \"$f\"; done && { NODE_PATH=\"$R/moe-vscode/node_modules\" node --test --test-reporter=tap tests/blocker-corpus.test.cjs > ../o 2>&1 || :; } && grep -q 'board.js moe.blocker.clears' ../o && grep -q 'taskDetail.js moe.blocker.clears' ../o && grep -q 'TaskDetailPanel.ts moe.blocker.clears' ../o && K=1; cd \"$R\"; rm -rf \"$M\"; echo \"mutants killed: $K\"; [ \"$K\" = 1 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. An always-present #deliverySection wrapper (the idea in comment-97b50ba7). Rejected because tests/delivery-corpus.test.cjs asserts that a task without delivery renders no 'deliverySection' at all, and DoD 1 says an update without delivery removes the section. Instead, live mirrors the initial render: the section is created after #blockerSection when there are rows and removed when there are none.\n2. Always rendering the Release Agent button and hiding it. Rejected because task-release.test.cjs asserts that an unassigned page has no releaseAgentBtn. The button is created and removed instead.\n3. A fourth copy of deliveryRows in the page script. Rejected: the panel resolves the rows and labels once, in the new deliveryDisplay, and posts them.\n4. Having the page derive button visibility from task.assignedWorkerId. Rejected: the panel posts releaseAgentLabel, so there is one rule (releaseAgentLabel(task), also used by the initial HTML) and no copy of the label in the page.\n5. Fixing the docs here. Deferred: moe-vscode/README.md Known issues line 71 and MANUAL_TESTS.md step 6 describe this limit, but they are VSC-18's open paths (REVIEW). A docs follow-up drops them, which keeps this row at 4 files.\nJetBrains parity: TaskDetailDialog.refreshDeliverySection rebuilds delivery on every state update, which this row matches. JetBrains builds its modal's Release Agent action once, so a live button is VS Code-only and needs no corpus row; both clients use the same visibility rule, a non-blank assignedWorkerId.",
+    "codebaseInsights": "- A node:vm context has no setTimeout. The panel's debouncedUpdate needs one injected into its context.\n- media/board.js declares its blocker constants with top-level const (lines 26-37). Those are readable through vm.runInContext(name, ctx), never as context properties. taskDetail.js uses var (lines 47-65).\n- Node 24's node --test uses the spec reporter even when piped. The mutant checkRefs force --test-reporter=tap so they can grep 'not ok N - L1:'.\n- Two existing files send old-shape updateTask messages: task-blocker-visibility.test.cjs (lazily created parentless nodes, plus a touched-set assertion at line 547) and approval-paths.test.cjs (plain nodes). That is why removal is guarded by parentNode and why an empty update never writes to an existing element.\n- Several test files load TaskDetailPanel with closed require maps, so the panel gets no new import.\n- I built a full prototype at /mnt/d/moe-scratch/vsc23-prototype (base ed60ab31; none of the involved paths changed since c02dc7cb). It passed lint, compile and npm test at 562/558/4 skip/0 fail, and all three checkRefs. Negative controls fail each checkRef: removing C3, skipping board.js in C3, and a vacuous L1 or L4. Treat it as a reference only: write the tracked files with the Edit/Write tools.",
+    "risks": "- Size: QA rejects more than 400 net changed lines. The prototype is 369, so keep to the per-step budgets.\n- Spelling the markup-injection property in the test trips the forbidden-pattern rail. The allowlisting set trap covers it without naming it.\n- A second click listener on a kept button, or a section appended at the end of the page instead of after #blockerSection.\n- Escaping in the posted message would show '&lt;' literally in the page. L3 pins that it stays raw.\n- Never edit client-delivery.json or client-blocker.json (VSC-26 adds a delivery row; L1 replays every row).\n- Leave README/CHANGELOG/MANUAL_TESTS alone: VSC-18 owns them.\n- Shared host: never npm in the checkout and never pattern-kill.",
+    "keyFiles": [
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/media/taskDetail.js",
+      "moe-vscode/tests/blocker-corpus.test.cjs",
+      "moe-vscode/tests/task-blocker-visibility.test.cjs",
+      "moe-vscode/tests/task-release.test.cjs",
+      "moe-vscode/tests/delivery-corpus.test.cjs",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/test/resources/client-delivery.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ed60ab316c94c38750f80f1dc62ba2e9f1fae818",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T16:01:44.006Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T16:03:20.367Z",
+  "reviewStartedAt": "2026-11-02T16:07:47.387Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc23-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/panels/TaskDetailPanel.ts moe-vscode/media/taskDetail.js moe-vscode/tests/task-detail-live.test.cjs moe-vscode/tests/blocker-corpus.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'; C=$?; cd \"$R\"; rm -rf \"$S\"; echo \"gate exit: $C\"; [ \"$C\" = 0 ]",
+    "exitCode": 0,
+    "outputTail": "✔ L0: the DOM fake refuses markup writes and unknown members, and finds only attached ids\n✔ L1: a live update renders every corpus row exactly as the initial markup does (52.785882ms)\n✔ L2: #deliverySection goes right after #blockerSection, is rebuilt in place and goes with the delivery (17.218853ms)\n✔ L3: runner-reported text is posted unescaped and lands as a plain text value (8.078767ms)\n✔ L4: the Release Agent button follows assignedWorkerId, stays single, and posts once per click (14.398504ms)\n✔ C3: every surface's blocker labels equal moe.blocker.* in MoeBundle.properties (2.81537ms)\nℹ tests 564\nℹ suites 0\nℹ pass 560\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\ngate exit: 0\n(npm ci, npm run lint and npm run compile exited 0 in the same chained command; checkref 2: mutants killed: 1; checkref 3: mutants killed: 1)",
+    "reportedAt": "2026-11-02T16:07:47.387Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/task-detail-live.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/media/taskDetail.js",
+    "moe-vscode/tests/blocker-corpus.test.cjs",
+    ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+    ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+    ".moe/tasks/task-86431c315e524b3b89af3bb3d2e7c98d.json"
+  ],
+  "completionSummary": "VSC-23 delivered. With a task detail panel open, every state update now refreshes the Delivery section and the Release Agent button. TaskDetailPanel.ts: new exported deliveryDisplay(delivery) (one label lookup behind both renderers), module-private releaseAgentLabel(task), debouncedUpdate posts {type:'updateTask', task, delivery, releaseAgentLabel}, renderDelivery is built on deliveryDisplay with byte-identical markup, no new import (+30/-10). media/taskDetail.js: removeNode (parentNode-guarded), renderDelivery(delivery), renderReleaseAgent(label), postReleaseAgent as top-level declarations, called last in the updateTask branch; text goes in only through textContent/title (+65/-7). New tests/task-detail-live.test.cjs (256 lines): L0 harness self-check, L1 replays every client-delivery.json row (live equals initial), L2 placement right after #blockerSection/rebuild/removal for delivery:null and absent, L3 hostile text lands as text, L4 button follows assignedWorkerId and stays one node with one listener. The DOM fake throws on any write outside className/id/title/textContent/value/scrollTop. blocker-corpus.test.cjs: C3 appended (+37/-0) pins all 15 moe.blocker.* keys to MoeBundle.properties on TaskDetailPanel.ts, board.js and taskDetail.js. Evidence at HEAD fb0b5ab9 in a git-archive snapshot: npm ci, lint 0, compile 0, npm test 564 tests / 560 pass / 4 skip / 0 fail, gate exit 0. checkref 2 and checkref 3: mutants killed: 1, exit 0. RED proof against HEAD sources: L0 ok, L1-L4 not ok. Size: net 371 (panel +20, js +58, C3 +37, new test 256). delivery-corpus, task-blocker-visibility, task-release and approval-paths tests untouched and passing. README Known issues and MANUAL_TESTS step 6 still describe the old limit; VSC-18 owns them, so a docs follow-up should drop them.",
+  "commits": [
+    {
+      "sha": "17ebbe810669e845018b9b7861912a16984a625c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T16:02:00Z",
+      "paths": [
+        ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+        ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/tests/blocker-corpus.test.cjs",
+        "moe-vscode/tests/task-detail-live.test.cjs"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T16:08:18.713Z",
+      "treeId": "242ff1e994c11715e3827363271a188cc0703616",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "51ba4f6a110e2b16278aff3c114ff0b317da5180",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-d54b05fd@2026-11-02T15:36:45Z",
+      "paths": [
+        ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+        ".moe/tasks/task-86431c315e524b3b89af3bb3d2e7c98d.json"
+      ],
+      "recordedBy": "architect-d54b05fd",
+      "recordedAt": "2026-11-02T17:07:02.884Z",
+      "treeId": "c85707587743ed3a097bc5c4395a3bcc27474b97",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/task-detail-live.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/media/taskDetail.js",
+    "moe-vscode/tests/blocker-corpus.test.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-d54b05fd@2026-11-02T15:36:45Z",
+    "at": "2026-11-02T17:07:02.884Z"
+  },
+  "completedAt": "2026-11-02T16:10:52.127Z",
+  "reviewCompletedAt": "2026-11-02T16:10:52.127Z",
+  "reviewSummary": "Approved. Reviewed completion commit 17ebbe81 (moe/work-2026-10-24, pushed) via git show; owned paths clean in tree.\nRe-ran task.verification (checkref 1) verbatim in a git-archive snapshot: npm ci, lint 0, compile 0, npm test 564 tests / 560 pass / 4 skip / 0 fail, gate exit 0. Checkref 2 and checkref 3: both \"mutants killed: 1\", exit 0.\nDoD 1: renderDelivery inserts #deliverySection after #blockerSection, rebuilds in place, removes it for no rows, delivery:null and absent member. L1 replays every client-delivery.json row (live equals initial); L2 placement/rebuild/removal, unsaved inputs untouched; L3 hostile text lands as textContent/title, no child nodes; the DOM fake refuses markup writes (L0 proves it).\nDoD 2: L4 walks 10 assignedWorkerId values from 2 start states: one button before #prevBtn, same node kept, markup equals initial render, one listener, one {type:'releaseAgent'} per click.\nDoD 3: C3 pins all 15 moe.blocker.* keys on the 3 copies, fails on a new unpinned key (+37/-0).\nDoD 4: gate green; no existing test edited or weakened.\nInvariants: no new panel import; no forbidden-pattern token; initial HTML byte-identical (delivery-corpus, task-release, task-blocker-visibility, approval-paths unchanged and passing); removeNode guard protects old-shape messages; renderers run last so renderedPlanRevision is unchanged; host releaseAgent fresh-state check untouched.\nSize: net 371 (js +65/-7, panel +30/-10, C3 +37, new test +256), under 400.\nComplexity: nothing to cut. Non-blocking: a hand-made updateTask with rows but no title shows \"undefined\"; only the panel posts these. Follow-up for VSC-18: README Known issues and MANUAL_TESTS step 6 still describe the old limit.",
+  "requiredCheckAtDone": null
+}

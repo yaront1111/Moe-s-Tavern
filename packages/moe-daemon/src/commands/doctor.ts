@@ -10,6 +10,7 @@ import net from 'net';
 import path from 'path';
 import { DaemonJsonTooLargeError, readDaemonJsonText } from '../util/daemonJsonFile.js';
 import { canonicalProjectPath, isSameProjectPath } from '../util/projectPath.js';
+import { foreignProbeHosts, healthProbeAddress, isForeignDaemonInfo, isLocalAddress, isOtherPidNamespace, isValidPort, recordedProbeHost } from '../server/probeHost.js';
 import { probeWorktreeReadiness, type WorktreeProbeOptions } from './doctorWorktree.js';
 
 export interface ProbeResult {
@@ -70,15 +71,19 @@ interface DaemonJsonProbe {
   result: ProbeResult;
   port?: number;
   pid?: number;
+  /** daemon.json's recorded bindHost: unchecked JSON, so it may not be a string. */
+  bindHost?: string;
   alive: boolean;
+  /** A foreign record's reachability verdict, reached at the host that answered; null when none did. Never re-dialed. */
+  foreignReachability?: ProbeResult | null;
 }
 
-async function probeDaemonJson(moePath: string): Promise<DaemonJsonProbe> {
+async function probeDaemonJson(moePath: string, expectedProjectPath: string): Promise<DaemonJsonProbe> {
   const daemonJson = path.join(moePath, 'daemon.json');
   if (!fs.existsSync(daemonJson)) {
     return { result: { symbol: 'pass', message: 'daemon.json absent (daemon not running)' }, alive: false };
   }
-  let parsed: { port?: number; pid?: number; projectPath?: string };
+  let parsed: { port?: unknown; pid?: number; projectPath?: string; bindHost?: string; pidNamespace?: unknown };
   try {
     parsed = JSON.parse(readDaemonJsonText(daemonJson));
   } catch (err) {
@@ -90,29 +95,48 @@ async function probeDaemonJson(moePath: string): Promise<DaemonJsonProbe> {
       alive: false,
     };
   }
-  if (typeof parsed.port !== 'number') {
+  // JSON.parse also returns null (a file holding just `null`), which has no port to read: it reads as missing.
+  const port = parsed?.port;
+  if (port === undefined) {
     return { result: { symbol: 'fail', message: 'daemon.json missing port' }, alive: false };
   }
+  // The port is unchecked JSON and http.request and Socket#connect throw on one outside 1-65535 (or a fraction), so it
+  // is judged once, with the lifecycle's own rule, before the pid check, the local/foreign split and any dial. A
+  // number is shown through String (JSON.stringify prints Infinity as null); any other value through JSON.stringify,
+  // which escapes control characters, capped as probeDaemonReachability shows a hostile bindHost.
+  if (!isValidPort(port)) {
+    const shown = typeof port === 'number' ? String(port) : String(JSON.stringify(port)).slice(0, 120);
+    return { result: { symbol: 'fail', message: `daemon.json port ${shown} is not a valid TCP port (1-65535); not dialed` }, alive: false };
+  }
   if (typeof parsed.pid === 'number') {
+    if (typeof parsed.projectPath === 'string' && isForeignDaemonInfo({ projectPath: parsed.projectPath })) {
+      const side = `written on the other side of the WSL boundary (pid ${parsed.pid}, port ${port})`;
+      const hosts = await foreignProbeHosts({ bindHost: parsed.bindHost }, HEALTH_PROBE_TIMEOUT_MS);
+      return probeForeignDaemonJson(port, parsed.pid, hosts, side, expectedProjectPath);
+    }
+    if (isOtherPidNamespace(parsed.pidNamespace)) {
+      return probeNamespacedDaemonJson(port, parsed.pid, parsed.bindHost, expectedProjectPath);
+    }
     const alive = isProcessAlive(parsed.pid);
     if (!alive) {
       return {
         result: { symbol: 'warn', message: `daemon.json present but pid ${parsed.pid} not running (stale)` },
-        port: parsed.port,
+        port,
         pid: parsed.pid,
         alive: false,
       };
     }
     return {
-      result: { symbol: 'pass', message: `daemon.json valid (pid ${parsed.pid}, port ${parsed.port})` },
-      port: parsed.port,
+      result: { symbol: 'pass', message: `daemon.json valid (pid ${parsed.pid}, port ${port})` },
+      port,
       pid: parsed.pid,
+      bindHost: parsed.bindHost,
       alive: true,
     };
   }
   return {
     result: { symbol: 'warn', message: 'daemon.json missing pid' },
-    port: parsed.port,
+    port,
     alive: false,
   };
 }
@@ -127,7 +151,7 @@ interface HealthProbeOutcome {
 // GET /health and parse the JSON body. A bare TCP connect proves only that
 // *something* holds the port (pid/port reuse after a crash is common), so the
 // daemon is only "healthy" when its own health endpoint confirms identity.
-function probeHealth(port: number, timeoutMs: number): Promise<HealthProbeOutcome> {
+function probeHealth(host: string, port: number, timeoutMs: number): Promise<HealthProbeOutcome> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (outcome: HealthProbeOutcome) => {
@@ -136,7 +160,7 @@ function probeHealth(port: number, timeoutMs: number): Promise<HealthProbeOutcom
       resolve(outcome);
     };
     const req = http.request(
-      { hostname: '127.0.0.1', port, path: '/health', method: 'GET', timeout: timeoutMs },
+      { hostname: host, port, path: '/health', method: 'GET', timeout: timeoutMs },
       (res) => {
         let raw = '';
         res.setEncoding('utf-8');
@@ -165,43 +189,114 @@ function probeHealth(port: number, timeoutMs: number): Promise<HealthProbeOutcom
   });
 }
 
+function endpoint(host: string, port: number): string {
+  return net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
+// Judge a parsed 200 /health body: healthy, this project, and daemon.json's pid when it records one.
+function judgeHealthBody(body: NonNullable<HealthProbeOutcome['body']>, where: string, expectedProjectPath: string, pid: number | undefined): ProbeResult {
+  // As the daemon lifecycle does (index.ts): resolve only our own --project; the reported path is compared as written.
+  const projectMatches = typeof body.projectPath === 'string'
+    && isSameProjectPath(body.projectPath, canonicalProjectPath(expectedProjectPath));
+  const pidMatches = typeof pid !== 'number' || body.pid === pid;
+  if (body.status === 'healthy' && projectMatches && pidMatches) {
+    return { symbol: 'pass', message: `/health OK on ${where} (status healthy, project matches)` };
+  }
+  if (!projectMatches) {
+    return { symbol: 'fail', message: `/health on ${where} reports a different project (${body.projectPath ?? 'unknown'}) — port reused by another daemon` };
+  }
+  if (!pidMatches) {
+    return { symbol: 'fail', message: `/health on ${where} reports pid ${String(body.pid)} but daemon.json says ${pid} — pid/port reuse` };
+  }
+  return { symbol: 'fail', message: `/health on ${where} reports status '${body.status ?? 'unknown'}' (not healthy)` };
+}
+
+// A daemon.json written on the other side of the WSL boundary names a pid in another pid namespace, so kill -0 proves
+// nothing either way: a live Windows daemon read from WSL looked stale, and a pid number that happened to be live here
+// sent the probe to loopback alone. As the daemon lifecycle does (index.ts validateDaemonInfoForProject), only /health
+// judges it, at foreignProbeHosts' addresses in order. The first answer confirming this daemon wins, else the first
+// HTTP answer of any status is reported as the local probe would judge it (a live but unhealthy daemon answers 503);
+// it is stale only when no address gives an HTTP answer at all. The port arrives validated by probeDaemonJson, which
+// refuses a corrupt one (outside 1-65535, or a fraction) before any dial, for local and foreign records alike.
+// A record from another pid namespace (a container) is judged the same way, at the one local probe address; `side`
+// names which of the two the record is.
+async function probeForeignDaemonJson(port: number, pid: number, hosts: string[], side: string, expectedProjectPath: string): Promise<DaemonJsonProbe> {
+  let answered: { where: string; verdict: ProbeResult } | undefined;
+  for (const host of hosts) {
+    const where = endpoint(host, port);
+    const health = await probeHealth(host, port, HEALTH_PROBE_TIMEOUT_MS);
+    if (health.statusCode === undefined) continue; // refused, timed out or not HTTP: no answer here
+    const verdict: ProbeResult = health.ok && health.statusCode === 200 && health.body
+      ? judgeHealthBody(health.body, where, expectedProjectPath, pid)
+      : { symbol: 'warn', message: `${where} answered but /health did not confirm a healthy Moe daemon (${health.error ?? `HTTP ${health.statusCode}`})` };
+    if (verdict.symbol === 'pass') {
+      return { result: { symbol: 'pass', message: `daemon.json valid: ${side}; /health answered on ${where}` }, port, pid, alive: true, foreignReachability: verdict };
+    }
+    answered ??= { where, verdict };
+  }
+  if (answered) {
+    return { result: { symbol: 'warn', message: `daemon.json ${side}: /health on ${answered.where} answered but did not confirm this daemon` }, port, pid, alive: false, foreignReachability: answered.verdict };
+  }
+  const asked = hosts.length > 0 ? hosts.map((host) => endpoint(host, port)).join(', ') : 'no address (its bindHost is not this machine and there is no WSL gateway)';
+  return { result: { symbol: 'warn', message: `daemon.json ${side}: no /health answered on ${asked} (stale)` }, port, pid, alive: false, foreignReachability: null };
+}
+
+// Dial what the daemon's own daemon.json probes dial (server/probeHost.ts), never a name or address that is not
+// this machine: daemon.json is repository content, and a /health answer from another host could name any pid
+// (task-d6ebe4ab). Returns the IP literal to dial, or the refusal, before any dial. JSON escapes control characters,
+// so the shown value is safe.
+async function localProbeAddress(bindHost: string | undefined): Promise<string | ProbeResult> {
+  const shown = String(JSON.stringify(bindHost)).slice(0, 120);
+  const host = await healthProbeAddress(recordedProbeHost({ bindHost }), HEALTH_PROBE_TIMEOUT_MS);
+  if (host === null) {
+    return { symbol: 'fail', message: `daemon.json bindHost ${shown} gave no IP address to dial (not a string, or its lookup failed or took over ${HEALTH_PROBE_TIMEOUT_MS}ms); not dialed` };
+  }
+  if (!isLocalAddress(host)) {
+    return { symbol: 'fail', message: `daemon.json bindHost ${shown} resolves to ${host}, which is not an address of this machine; not dialed` };
+  }
+  return host;
+}
+
+// A daemon.json from another pid namespace (a daemon in a container, task-da89f620) names a pid that means nothing
+// here, so, as the lifecycle does, only /health judges it: at the one local probe address of its bindHost, never a
+// pid check. A bindHost that gives no local address is refused before any dial, with the local probe's own text.
+async function probeNamespacedDaemonJson(port: number, pid: number, bindHost: string | undefined, expectedProjectPath: string): Promise<DaemonJsonProbe> {
+  const side = `written in another pid namespace (pid ${pid}, port ${port})`;
+  const address = await localProbeAddress(bindHost);
+  if (typeof address !== 'string') {
+    return { result: { symbol: 'warn', message: `daemon.json ${side}: its bindHost is not dialed, so /health cannot judge it` }, port, pid, alive: false, foreignReachability: address };
+  }
+  return probeForeignDaemonJson(port, pid, [address], side, expectedProjectPath);
+}
+
 async function probeDaemonReachability(
   probe: DaemonJsonProbe,
   expectedProjectPath: string,
 ): Promise<ProbeResult | null> {
-  const { port, pid, alive } = probe;
+  if (probe.foreignReachability !== undefined) return probe.foreignReachability;
+  const { port, pid, bindHost, alive } = probe;
   if (!alive || typeof port !== 'number') return null;
 
-  const health = await probeHealth(port, HEALTH_PROBE_TIMEOUT_MS);
+  const host = await localProbeAddress(bindHost);
+  if (typeof host !== 'string') return host;
+  const where = endpoint(host, port);
+
+  const health = await probeHealth(host, port, HEALTH_PROBE_TIMEOUT_MS);
   if (health.ok && health.statusCode === 200 && health.body) {
-    const body = health.body;
-    // As the daemon lifecycle does (index.ts): resolve only our own --project; the reported path is compared as written.
-    const projectMatches = typeof body.projectPath === 'string'
-      && isSameProjectPath(body.projectPath, canonicalProjectPath(expectedProjectPath));
-    const pidMatches = typeof pid !== 'number' || body.pid === pid;
-    if (body.status === 'healthy' && projectMatches && pidMatches) {
-      return { symbol: 'pass', message: `/health OK on 127.0.0.1:${port} (status healthy, project matches)` };
-    }
-    if (!projectMatches) {
-      return { symbol: 'fail', message: `/health on 127.0.0.1:${port} reports a different project (${body.projectPath ?? 'unknown'}) — port reused by another daemon` };
-    }
-    if (!pidMatches) {
-      return { symbol: 'fail', message: `/health on 127.0.0.1:${port} reports pid ${String(body.pid)} but daemon.json says ${pid} — pid/port reuse` };
-    }
-    return { symbol: 'fail', message: `/health on 127.0.0.1:${port} reports status '${body.status ?? 'unknown'}' (not healthy)` };
+    return judgeHealthBody(health.body, where, expectedProjectPath, pid);
   }
 
   // No usable /health response. Fall back to a bare TCP probe: if something is
   // listening it is NOT our daemon (or not healthy), so this is a warning, not
   // a pass — a dead daemon behind a reused port must never show green.
-  const tcpOk = await probeTcp('127.0.0.1', port, TCP_PROBE_TIMEOUT_MS);
+  const tcpOk = await probeTcp(host, port, TCP_PROBE_TIMEOUT_MS);
   if (tcpOk) {
     return {
       symbol: 'warn',
-      message: `127.0.0.1:${port} accepts TCP but /health did not confirm a healthy Moe daemon (${health.error ?? `HTTP ${health.statusCode}`}) — possible pid/port reuse`,
+      message: `${where} accepts TCP but /health did not confirm a healthy Moe daemon (${health.error ?? `HTTP ${health.statusCode}`}) — possible pid/port reuse`,
     };
   }
-  return { symbol: 'fail', message: `nothing reachable on 127.0.0.1:${port} (${health.error ?? 'TCP refused'})` };
+  return { symbol: 'fail', message: `nothing reachable on ${where} (${health.error ?? 'TCP refused'})` };
 }
 
 async function probeRoleDocs(moePath: string): Promise<ProbeResult> {
@@ -327,7 +422,7 @@ export async function runDoctor(projectPath: string, options: WorktreeProbeOptio
   }
 
   // 2. daemon.json
-  const daemonJsonProbe = await probeDaemonJson(moePath);
+  const daemonJsonProbe = await probeDaemonJson(moePath, projectPath);
   probes.push(['daemon.json', daemonJsonProbe.result]);
 
   // 3. Health reachability when daemon is supposed to be running. A bare TCP

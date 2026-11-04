@@ -1,0 +1,225 @@
+{
+  "id": "task-b3daad343a474830a6bd243991d5353d",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-19] JetBrains: shared seat-tracker corpus for AgentSeatTracker",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). First wave: no dependencies, files disjoint from the other first-wave rows. JetBrains first: this row writes the held-out corpus that VS Code's seat tracker (VSC-20) must pass unchanged.\n\nContext: a wrapper killed together with its terminal (tab closed, IDE exit or crash) never runs the exit trap that deregisters its worker, so the worker keeps every task it held. JetBrains handles this with AgentSeatTracker (moe-jetbrains/src/main/kotlin/com/moe/services/AgentSeatTracker.kt, wired in MoeProjectService.kt and TerminalAgentLauncher.trackSeat): launched(workerId) marks the seat open and persists it in `known`; closed(workerId) sends DEREGISTER_WORKER (reason terminal_closed) only for an open seat; resendGone(), on every connect, deregisters each known seat that is not open (after an IDE restart every known seat counts as gone); acked(workerId), on the daemon's WORKER_DEREGISTERED reply, forgets the seat. VS Code launches seats into integrated terminals (moe-vscode/src/util/AgentLauncher.ts) and tracks none of this.\n\nReuse decision (VSC-0): one client-neutral JSON corpus per shared behaviour, executed by both test suites (CQ-I06b pattern, moe-jetbrains/src/test/resources/client-verdicts.json; rule in the header of ClientVerdictCorpusTest.kt). Each new corpus gets its own file.\n\nDeliverable:\n- new moe-jetbrains/src/test/resources/client-seat-tracker.json: `{ \"version\": 1, \"rows\": [ { \"id\": \"S01\", \"persisted\": [ids loaded at start], \"events\": [ { \"op\": \"launched\" | \"closed\" | \"connect\" | \"acked\" | \"restart\", \"workerId\": \"...\" } ], \"expectDeregistered\": [ids in call order], \"expectPersisted\": [the last saved list] } ] }`, where `restart` rebuilds the tracker from the last saved list (a new IDE session) and `connect` calls resendGone. At least 10 rows: launch then close; close of an unknown seat; a double close; connect with only open seats; connect after a restart resending every known seat; an ack removing a seat from the saved list; an ack for an unknown id; launching the same id twice; a close followed by a connect before any ack (the seat stays known, so it is sent again); several seats with interleaved acks.\n- new moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt: replays each row against the real AgentSeatTracker with recording load, save and deregister fakes, compares the deregister calls and the last saved list, asserts unique `S[0-9]{2}` ids, and reports every failing id at once.\nIf a row exposes a JetBrains bug, fix AgentSeatTracker.kt here and name it in the summary.\n\nNot in scope: VS Code files (VSC-20, VSC-21), AgentSeatTrackerTest.kt (unchanged), the daemon.\n\nVerification (WSL has no JDK): take the `jetbrains-gradle` lease (mem:convention-jetbrains-gradle-lease); `git archive HEAD | tar -x -C /mnt/d/moe-scratch/<dir>`; overlay this task's files; run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\<dir>\\moe-jetbrains && .\\gradlew.bat test --rerun'` (mem:gotcha-jetbrains-snapshot-gradle-test); release the lease even on failure.",
+  "definitionOfDone": [
+    "moe-jetbrains/src/test/resources/client-seat-tracker.json exists with version 1 and at least 10 rows with unique S[0-9]{2} ids, covering every case listed in the description.",
+    "SeatTrackerCorpusTest.kt replays every row against the real AgentSeatTracker and asserts the deregister calls in order and the last saved list, reporting all failing ids at once.",
+    "A scratch-copy mutant that makes closed() deregister a seat that is not open makes SeatTrackerCorpusTest fail (mutant discarded afterwards).",
+    "The full JetBrains suite passes in a git-archive snapshot under the jetbrains-gradle lease: `gradlew.bat test --rerun` reports BUILD SUCCESSFUL, with the JUnit total in the summary.",
+    "The diff touches only the two new files, plus AgentSeatTracker.kt if a row exposed a JetBrains bug (named in the summary)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the held-out corpus moe-jetbrains/src/test/resources/client-seat-tracker.json: `{ \"version\": 1, \"rows\": [ { \"id\", \"note\", \"persisted\", \"events\", \"expectDeregistered\", \"expectPersisted\" } ] }`. Each event is `{ \"op\": \"launched\"|\"closed\"|\"connect\"|\"acked\"|\"restart\", \"workerId\"? }`; workerId is required for launched, closed and acked and absent for connect and restart. Replay semantics, which the test in step 2 implements: the store starts as `persisted`; save() overwrites the store; `restart` builds a new AgentSeatTracker loading from the store (a new IDE session, so nothing is open); `connect` calls resendGone(); the deregister log accumulates across restarts; expectPersisted is the store at the end (the last list passed to save, or `persisted` when save never ran). The real semantics come from moe-jetbrains/src/main/kotlin/com/moe/services/AgentSeatTracker.kt. launched adds the seat to `open` and saves only when it is new to `known` (a LinkedHashSet, so insertion order is preserved). closed deregisters only when the seat was open, and neither forgets nor saves it. resendGone deregisters each known seat that is not open, in known order, without saving. acked forgets and saves only a known seat. Write at least these 12 rows (ids S01..S12, one-line `note` each), with the expected values computed from those semantics: S01 launched w1, closed w1 -> dereg [w1], store [w1]. S02 closed w9 on an empty store -> [], []. S03 launched w1, closed w1, closed w1 -> [w1], [w1]. S04 launched w1, launched w2, connect -> [], [w1,w2]. S05 persisted [a,b], connect -> [a,b], [a,b] (a new session: every known seat is gone). S06 launched w1, closed w1, acked w1 -> [w1], []. S07 persisted [a], acked w9 -> [], [a]. S08 launched w1, launched w1, closed w1, closed w1 -> [w1], [w1]. S09 launched w1, closed w1, connect -> [w1,w1], [w1]. S10 launched a, b, c; closed b; connect; acked b; closed a; connect; acked a -> [b,b,a,a], [c]. S11 launched w1, restart, connect, launched w1, connect -> [w1], [w1]. S12 persisted [a], connect, acked a, connect -> [a], []. Use realistic ids (worker-aaaa1111, qa-bbbb2222, architect-cccc3333). If the real tracker disagrees with a value here, the tracker is the reference for this JetBrains-first row: correct the row and say so in the summary, unless the behaviour is a bug (then fix AgentSeatTracker.kt, name it, and include it in the gate overlay).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/test/resources/client-seat-tracker.json"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-seat-tracker.json"
+      ],
+      "note": "12 rows S01..S12; expected values hand-checked against AgentSeatTracker.kt, all as planned. Peers' dirty paths left alone.",
+      "startedAt": "2026-11-02T09:53:22.360Z",
+      "completedAt": "2026-11-02T09:53:41.312Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt (JUnit 4 + Gson, the test dependencies already in build.gradle.kts), modelled on moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt. Load the corpus with `javaClass.getResourceAsStream(\"/client-seat-tracker.json\")`. Error handling: a missing or unparseable resource throws an AssertionError naming the resource, as loadCorpus there does; an unknown op, or a missing workerId where one is required, fails THAT row with a message instead of aborting the run. Test 1, `the corpus is well formed`: version 1, at least 10 rows, unique ids matching `S[0-9]{2}`, every op in the allowed set, workerId present exactly where required. Test 2, `every row replays to its expected deregistrations and saved list`: for each row keep `var store = persisted` and a `deregistered` list; build `AgentSeatTracker(load = { store }, save = { store = it }, deregister = { deregistered += it })`; apply the events (restart builds a fresh tracker over the current store); compare deregistered with expectDeregistered (order included) and store with expectPersisted; collect `\"<id>: expected ..., got ...\"` for every mismatch (catching exceptions per row) and finish with a single `assertEquals(\"seat rows that diverge\", emptyList<String>(), failures)`. Add a header KDoc saying the corpus is client-neutral, that moe-vscode's AgentSeatTracker port (VSC-20, task-7fa27666) replays the same bytes, and the CQ-I06b rule: a disagreement is fixed or filed, never given a client-specific expectation. Leave AgentSeatTrackerTest.kt unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt"
+      ],
+      "note": "Two tests: corpus well-formed, and replay against the real AgentSeatTracker with per-row failure collection. Not compiled yet; the gate is step 3.",
+      "startedAt": "2026-11-02T09:53:42.150Z",
+      "completedAt": "2026-11-02T09:53:56.898Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate and mutation proof, in a snapshot under the jetbrains-gradle lease, never in the shared tree (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-snapshot-gradle-test, mem:gotcha-jetbrains-gradle-from-wsl: WSL has no JDK; from bash, single-quote the whole cmd string). Take the lease with moe.acquire_resource {resourceId:'jetbrains-gradle', taskId, workerId, note}; if it is busy, park with moe.report_blocked {resourceId:'jetbrains-gradle'}. 1) Focused red/green: build the snapshot as in the checkRef, then `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc19-gate\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.SeatTrackerCorpusTest --rerun'` must pass with 2 tests. 2) Mutant: in the SNAPSHOT copy only, edit AgentSeatTracker.closed so it deregisters even when the seat is not open (replace `if (open.remove(workerId)) deregister(workerId)` with `open.remove(workerId); deregister(workerId)`, asserting exactly one replacement). Re-run the focused test: it must FAIL, naming at least S02 and S03. Restore the file and re-run: it passes again. 3) Run the checkRef verbatim (it rebuilds a clean snapshot, then runs the full suite) and confirm BUILD SUCCESSFUL, with the JUnit total from build/test-results/test/TEST-*.xml. Release the lease (moe.release_resource) even on failure. If this task changed AgentSeatTracker.kt, add it to the checkRef's cp list and say so in the summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/resources/client-seat-tracker.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt"
+      ],
+      "note": "Focused: 2 tests pass. Mutant in snapshot (closed() deregisters unconditionally): FAILED naming S02, S03, S08. Full checkRef: BUILD SUCCESSFUL, 546 tests, 0 failures/errors/skipped. Lease released, scratch removed.",
+      "startedAt": "2026-11-02T09:53:58.006Z",
+      "completedAt": "2026-11-02T09:56:59.206Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff, the only review step. Would the test still pass if replay ignored `restart` (S11 must catch it), if resendGone also saved (S05 and S12 pin the store), or if the deregister log reset at a restart (S11)? Is every DoD case covered by a named row? Is the corpus free of anything Kotlin-specific (plain strings and arrays only, so VSC-20's TypeScript replay reads the same bytes)? Run `git status --porcelain -- moe-jetbrains` and confirm the task touched only the two new files (plus AgentSeatTracker.kt if a bug was fixed); never revert, stage or commit peers' dirty paths. Confirm no D:\\\\moe-scratch\\\\vsc19-gate leftovers matter (deleting it is fine; it is this task's scratch).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/resources/client-seat-tracker.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-seat-tracker.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt"
+      ],
+      "note": "Self-review: ignoring restart is caught by S11 (w1 would stay open, no resend); deregister log lives outside the tracker so a restart cannot reset it, S11 pins the single expected call. A resendGone that saved the same list is NOT distinguishable by the store (the saved list equals the persisted one in S05/S12/S04) — known limit, not a bug in the tracker. Corpus is plain strings/arrays. git status shows only the 2 new files under moe-jetbrains; AgentSeatTracker.kt unchanged; no bug found.",
+      "startedAt": "2026-11-02T09:57:00.093Z",
+      "completedAt": "2026-11-02T09:57:04.064Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 2.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:45:00.055Z",
+  "updatedAt": "2026-11-02T10:00:44.665Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T09:51:28.827Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T10:00:13.421Z",
+    "wallClockMs": 524594
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-81a7999f",
+    "qa-564d8bce"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T09:52:40.267Z",
+  "executionContract": {
+    "intendedBehavior": "JetBrains' AgentSeatTracker behaviour (persist on launch, deregister on close of an open seat, resend gone seats on connect, forget on ack, a new session after restart) is pinned by a client-neutral JSON corpus that a Kotlin test replays against the real class. VS Code's port (VSC-20) will replay the same file unchanged.",
+    "acceptanceCriteria": [
+      "client-seat-tracker.json has version 1 and at least 10 rows (S01..S12 planned) covering every DoD case.",
+      "SeatTrackerCorpusTest replays each row against the real AgentSeatTracker and reports all diverging ids in one assertion.",
+      "The closed()-without-open-check mutant fails the test; the restored source passes.",
+      "The full JetBrains suite passes in a snapshot under the jetbrains-gradle lease."
+    ],
+    "invariants": [
+      "AgentSeatTracker.kt changes only if a corpus row exposes a real bug, and the summary names it.",
+      "AgentSeatTrackerTest.kt and client-verdicts.json are unchanged.",
+      "No Gradle run in the shared checkout; every run is in /mnt/d/moe-scratch/vsc19-gate under the jetbrains-gradle lease."
+    ],
+    "reuse": [
+      "ClientVerdictCorpusTest.kt's loadCorpus and assertRows shape (resource loading, per-row failure collection)."
+    ],
+    "checkRefs": [
+      "S=/mnt/d/moe-scratch/vsc19-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/resources/client-seat-tracker.json moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc19-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Extending client-verdicts.json with a seat section was rejected: one file per behaviour keeps the corpus slices file-disjoint, and VSC-0 decided it. Replaying with a mocked tracker was rejected: the test must drive the real AgentSeatTracker, so the corpus pins production behaviour.",
+    "codebaseInsights": "AgentSeatTracker(load, save, deregister) reads load() once in its constructor (LinkedHashSet), so a restart is a new instance over the current store. closed() never removes a seat from known and never saves; only acked() forgets. MoeProjectService wires deregister to MoeCommandSender.deregisterWorker(workerId, \"terminal_closed\").",
+    "risks": "(1) Gradle in the shared checkout compiles peers' half-done Kotlin: use the snapshot only. (2) Concurrent Gradle runs corrupt Kotlin IC caches, so hold the jetbrains-gradle lease. (3) A quoted --tests filter gets mangled through WSL interop: single-quote the whole cmd string and leave the filter unquoted. (4) The expected values in step 1 were computed by the architect from the source; the real class is the reference for any disagreement, unless the class is buggy.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/AgentSeatTracker.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/AgentSeatTrackerTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "aacc03ad51cc488a26f15e0575fb0d39cfd73b0a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T09:52:40.290Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T09:53:22.360Z",
+  "reviewStartedAt": "2026-11-02T09:57:07.951Z",
+  "verification": {
+    "command": "S=/mnt/d/moe-scratch/vsc19-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/resources/client-seat-tracker.json moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc19-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'",
+    "exitCode": 0,
+    "outputTail": "> Task :test\n\nBUILD SUCCESSFUL in 50s\n11 actionable tasks: 11 executed\nJUnit total from TEST-*.xml: tests 546, skipped 0, failures 0, errors 0",
+    "reportedAt": "2026-11-02T09:57:07.951Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/resources/client-seat-tracker.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt",
+    ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+    ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json",
+    ".moe/tasks/task-2ef8e36c29f4490884dff27c9f3ed9fb.json"
+  ],
+  "completionSummary": "Added client-seat-tracker.json (version 1, 12 rows S01..S12, all planned values matched the real tracker, no JetBrains bug found, AgentSeatTracker.kt unchanged) and SeatTrackerCorpusTest.kt (well-formedness test + replay against the real AgentSeatTracker, all diverging ids reported at once). Mutant (closed() deregisters even when not open) in a snapshot copy fails the test naming S02, S03, S08; discarded. Full JetBrains suite in a git-archive snapshot under the jetbrains-gradle lease: BUILD SUCCESSFUL, 546 tests, 0 failures/errors/skipped. Note: a resendGone that saved the unchanged list is indistinguishable via the store.",
+  "commits": [
+    {
+      "sha": "25e70ba1ef1b271fb0868013ffe48bb1941e046d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T09:52:56Z",
+      "paths": [
+        ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+        ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt",
+        "moe-jetbrains/src/test/resources/client-seat-tracker.json"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T09:57:29.519Z",
+      "treeId": "562e89a2f9d17cb202b073b2d97fefa85ef6e478",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "c61d8d0031e157c7c3e1686e243140943dbf928c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T09:57:37Z",
+      "paths": [
+        ".moe/tasks/task-2ef8e36c29f4490884dff27c9f3ed9fb.json",
+        ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T10:00:44.665Z",
+      "treeId": "283726c7d1e87c104d3003015f08b93ea083c4a2",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/resources/client-seat-tracker.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T09:57:37Z",
+    "at": "2026-11-02T10:00:44.665Z"
+  },
+  "completedAt": "2026-11-02T10:00:13.421Z",
+  "reviewCompletedAt": "2026-11-02T10:00:13.421Z",
+  "reviewSummary": "Approved. Completion commit 25e70ba1 (on moe/work-2026-10-24, pushed) adds client-seat-tracker.json (151 lines) and SeatTrackerCorpusTest.kt (102 lines), 253 net LOC of tests/resources, plus board records. AgentSeatTracker.kt, AgentSeatTrackerTest.kt and client-verdicts.json are untouched.\nDoD1: version 1, 12 rows S01..S12, unique ids, every listed case covered (launch/close, unknown close, double close, connect with open seats, restart resend, ack removal, unknown ack, double launch, close-then-connect, interleaved acks, restart, resend-until-ack). I hand-traced every row against AgentSeatTracker.kt and all expected values match. The corpus is plain strings and arrays, so VSC-20's TS replay can read it unchanged.\nDoD2: the test replays each row against the real tracker with recording load/save/deregister fakes. restart rebuilds the tracker over the current store, the dereg log spans restarts, and call order is compared. Exceptions are caught per row and all diverging ids come out in one assertEquals. A second test checks the corpus is well formed. A missing resource throws an AssertionError naming it.\nDoD3 (my own mutant run): in a scratch snapshot of 25e70ba1 I replaced the open-check in closed() with an unconditional deregister (exactly one replacement asserted). The focused run failed with S02, S03 and S08 in one assertion; the snapshot was then deleted.\nDoD4 (my re-run): under the jetbrains-gradle lease, `gradlew.bat test --rerun` via cmd.exe on a git-archive snapshot of 25e70ba1: BUILD SUCCESSFUL in 1m5s; JUnit XML total 546 tests, 0 failures, 0 errors, 0 skipped (matches the worker's count). SeatTrackerCorpusTest 2/2. Lease released.\nDoD5: only the two new files under moe-jetbrains; no tracker bug found.\nNon-blocking: a resendGone that re-saved an identical list is undetectable through the store (S04/S05/S12). The worker documented this limit; it is not a tracker defect. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

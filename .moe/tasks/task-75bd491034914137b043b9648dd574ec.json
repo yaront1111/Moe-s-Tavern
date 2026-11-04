@@ -1,0 +1,249 @@
+{
+  "id": "task-75bd491034914137b043b9648dd574ec",
+  "epicId": "epic-be924fb8",
+  "title": "bug: leave_team and team deletion stamp lastActivityAt on the worker records they un-point, so a DEAD record's stale prune slips a full staleWorkerTimeoutMs",
+  "description": "Files: packages/moe-daemon/src/state/teamStore.ts (2 lines), new packages/moe-daemon/src/state/teamStore.presence.test.ts. No open row declares either file (checked 2026-11-02 17:30Z).\n\nRepro, measured on the live board by governor-4764040b (task-2c95c5d1 comment, 2026-10-30 20:56Z): 16 leave_team calls at 20:42:10-20:42:23Z on DEAD members set each record's lastActivityAt to the call time. That moved their stale prune (state/sweeps.ts:550, `now - lastActivityAt > staleWorkerTimeoutMs`) from about 20:53Z to about 21:12Z.\n\nCause: removeTeamMember (teamStore.ts:238) and deleteTeam's member loop (teamStore.ts:102) call `state.updateWorker(id, { teamId: null })` with no lastActivityAt. workerStore.updateWorker (state/workerStore.ts:182-187) stamps the current time on every update except a DEAD flip, unless the caller passes lastActivityAt. The sibling repairs already pass it back: evictDeadMembers (teamStore.ts:157) and joinTeam.ts refreshWorkerType (:33, \"so a type change never counts as presence\").\nReach: the leave_team tool (tools/leaveTeam.ts:27), and the plugin's /ws REMOVE_TEAM_MEMBER and DELETE_TEAM handlers (server/WebSocketServer.ts:903 and :875). The same write also makes a quiet live seat that a governor or human removes from a team show as present for the 120s isWorkerAlive window.\n\nOrigin: QA's non-blocking note on task-2c95c5d1 (\"needs its own row\"). That row's planner replied in its comment thread that this is \"a separate one-line fix with one test ... deleteTeam's member loop has the same shape. File it as its own row if you want it tracked.\" Nobody filed it.\n\nFix: in both updateWorker calls, pass the record's own lastActivityAt. A seat's presence comes from its own calls and heartbeats, and a membership write is not presence. Everything else stays byte-identical: the team writes, tombstone clearing, WORKER_UPDATED emission order, and the deleteTeam rollback semantics.\nOut of scope: addTeamMember (:219). A join's presence is tied to the plan-sanctioned DEAD-revive path from task-8333866a; leave it alone.",
+  "definitionOfDone": [
+    "packages/moe-daemon/src/state/teamStore.ts: removeTeamMember's teamId repair and deleteTeam's member loop each pass the worker record's own lastActivityAt to state.updateWorker. git diff of the file shows only those two calls changed.",
+    "New packages/moe-daemon/src/state/teamStore.presence.test.ts: a DEAD worker and an IDLE worker, each with lastActivityAt set to a fixed past ISO time, keep that exact lastActivityAt and their status after removeTeamMember (directly and through the leave_team tool handler) and after deleteTeam. Their teamId becomes null and the team's memberIds drop them, as before.",
+    "The same file proves the prune is not postponed: after a leave, with the clock set past the fixed time + staleWorkerTimeoutMs, runBlockedTimeoutSweep deletes the DEAD record that owns nothing.",
+    "RED first: the new tests fail against the unchanged teamStore.ts, the failing output is quoted in the completion evidence, and they pass after the fix. The existing removeTeamMember/deleteTeam cases in src/state/StateManager.test.ts pass unchanged.",
+    "Verification runs in a git-archive snapshot of HEAD with only the two files overlaid, never as an in-place build or test in the shared checkout: `cd <snapshot>/packages/moe-daemon && npm ci && npx vitest run src/state/teamStore.presence.test.ts src/state/StateManager.test.ts src/tools/joinTeam.deadMembers.test.ts src/util/teamMembershipHeal.test.ts` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. RED first: write the new test, then run the gate against the unchanged teamStore.ts.\n\nCreate packages/moe-daemon/src/state/teamStore.presence.test.ts with the Write tool (GLOBAL customRule: no shell writes to tracked files). The architect dry-ran exactly this content at 771f7441: RED gave 4 failed and 1 passed, GREEN gave 5 passed. Keep it as is, unless a symbol it imports has moved:\n\nimport { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';\nimport { ToolTestHarness } from '../tools/toolTestHarness.js';\nimport { leaveTeamTool } from '../tools/leaveTeam.js';\nimport { runBlockedTimeoutSweep } from './sweeps.js';\nimport type { Team, Worker } from '../types/schema.js';\n\n// A seat's presence (lastActivityAt) comes from its own calls and heartbeats.\n// Un-pointing a record from a team is not presence: before this fix,\n// removeTeamMember (moe.leave_team, /ws REMOVE_TEAM_MEMBER) and deleteTeam\n// (/ws DELETE_TEAM) stamped the write time on it. That postponed a DEAD\n// record's stale prune by a full staleWorkerTimeoutMs, and made a quiet live\n// seat look alive for the isWorkerAlive window.\nconst FIXED = '2026-01-01T00:00:00.000Z';\n\ndescribe('team membership writes do not count as presence', () => {\n  const h = new ToolTestHarness();\n  let team: Team;\n\n  beforeEach(async () => {\n    h.init();\n    h.setupMoeFolder();\n    await h.state.load();\n    team = await h.state.createTeam({ name: 'Workers', maxSize: 5 });\n    for (const id of ['w-dead', 'w-idle']) {\n      await h.state.createWorker({ id, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1', currentTaskId: null, status: 'IDLE' });\n      await h.state.addTeamMember(team.id, id);\n      await h.state.updateWorker(id, { lastActivityAt: FIXED });\n    }\n    // A DEAD flip keeps the stored lastActivityAt, so this record stays at FIXED.\n    await h.state.updateWorker('w-dead', { status: 'DEAD' });\n  });\n  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); h.cleanup(); });\n\n  const worker = (id: string): Worker => h.state.getWorker(id)!;\n  const expectUnpointedNotTouched = (): void => {\n    expect(worker('w-dead')).toMatchObject({ status: 'DEAD', teamId: null, lastActivityAt: FIXED });\n    expect(worker('w-idle')).toMatchObject({ status: 'IDLE', teamId: null, lastActivityAt: FIXED });\n  };\n\n  it('starts from two members at the fixed time (fixture guard)', () => {\n    expect(h.state.getTeam(team.id)!.memberIds).toEqual(['w-dead', 'w-idle']);\n    expect(worker('w-dead')).toMatchObject({ status: 'DEAD', teamId: team.id, lastActivityAt: FIXED });\n    expect(worker('w-idle')).toMatchObject({ status: 'IDLE', teamId: team.id, lastActivityAt: FIXED });\n  });\n\n  it('removeTeamMember keeps each record lastActivityAt and status', async () => {\n    await h.state.removeTeamMember(team.id, 'w-dead');\n    await h.state.removeTeamMember(team.id, 'w-idle');\n    expectUnpointedNotTouched();\n    expect(h.state.getTeam(team.id)!.memberIds).toEqual([]);\n  });\n\n  it('the moe.leave_team handler keeps them as well', async () => {\n    for (const workerId of ['w-dead', 'w-idle']) {\n      await leaveTeamTool(h.state).handler({ teamId: team.id, workerId }, h.state);\n    }\n    expectUnpointedNotTouched();\n    expect(h.state.getTeam(team.id)!.memberIds).toEqual([]);\n  });\n\n  it('deleteTeam keeps them as well', async () => {\n    await h.state.deleteTeam(team.id);\n    expectUnpointedNotTouched();\n    expect(h.state.getTeam(team.id)).toBeNull();\n  });\n\n  it('a leave does not postpone the DEAD record stale prune', async () => {\n    vi.useFakeTimers({ toFake: ['Date'] });\n    const t0 = Date.parse(FIXED);\n    vi.setSystemTime(t0 + 60_000);\n    await leaveTeamTool(h.state).handler({ teamId: team.id, workerId: 'w-dead' }, h.state);\n\n    vi.setSystemTime(t0 + h.state.staleWorkerTimeoutMs - 1_000);\n    await h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state));\n    expect(h.state.getWorker('w-dead')).not.toBeNull();\n\n    vi.setSystemTime(t0 + h.state.staleWorkerTimeoutMs + 1_000);\n    await h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state));\n    expect(h.state.getWorker('w-dead')).toBeNull();\n  });\n});\n\nWhat it pins (DoD 2 and DoD 3):\n- Fixture: two members, 'w-dead' (DEAD) and 'w-idle' (IDLE), both at FIXED.\n  - Order matters. addTeamMember stamps the current time, so lastActivityAt is set after the join.\n  - The DEAD flip comes last: on a DEAD flip, updateWorker keeps the stored time and ignores any lastActivityAt passed with it.\n  - The first test guards the fixture, so the RED cases cannot fail on a broken setup.\n- removeTeamMember called directly, the moe.leave_team handler, and deleteTeam each leave both records with their status, teamId null and lastActivityAt FIXED. memberIds drop them; after deleteTeam the team is gone.\n- The prune case fakes only Date.\n  - The leave happens at FIXED+60s.\n  - A sweep at FIXED+staleWorkerTimeoutMs-1s keeps the DEAD record (the control).\n  - A sweep at FIXED+staleWorkerTimeoutMs+1s deletes it.\n  - Before the fix, the leave re-stamps the record at FIXED+60s, so the second sweep keeps it. That is the reported slip.\n\nThen run C1 (executionContract.checkRefs) verbatim from the checkout root (/mnt/d/projexts/moes).\n- Expect exit 1, with 4 failed tests, all in teamStore.presence.test.ts. The four failing test names are: removeTeamMember keeps..., the moe.leave_team handler keeps them as well, deleteTeam keeps them as well, a leave does not postpone the DEAD record stale prune.\n- The other three files pass.\n- Keep those lines and one AssertionError line for the completion evidence (DoD 4).\n- If anything else fails, stop and read it: the RED must come from this behaviour alone.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/teamStore.presence.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/teamStore.presence.test.ts"
+      ],
+      "note": "RED in snapshot /tmp/75bd4910-gate.AB5Z92: 4 failed, 164 passed (3 other files pass). Failing: removeTeamMember keeps..., moe.leave_team handler keeps them as well, deleteTeam keeps them as well, a leave does not postpone the DEAD record stale prune. AssertionError: expected w-dead ... to be null. 27 dirty paths of other sessions untouched.",
+      "startedAt": "2026-11-02T17:34:23.665Z",
+      "completedAt": "2026-11-02T17:34:59.277Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. The fix: two calls in packages/moe-daemon/src/state/teamStore.ts. Edit tool only.\n- In deleteTeam's member loop (line 102 at 771f7441), change\n  `      await state.updateWorker(worker.id, { teamId: null });`\n  to\n  `      await state.updateWorker(worker.id, { teamId: null, lastActivityAt: worker.lastActivityAt });`\n- In removeTeamMember's teamId repair (line 238), change\n  `    await state.updateWorker(workerId, { teamId: null });`\n  to\n  `    await state.updateWorker(workerId, { teamId: null, lastActivityAt: worker.lastActivityAt });`\n\nNothing else in the file changes, not even a comment. DoD 1 reads the git diff as exactly those two calls, and C2 counts 4 changed lines. The rationale lives in the new test's header comment. The same idiom is already in evictDeadMembers (teamStore.ts:157) and in joinTeam.ts refreshWorkerType.\n\nOut of scope, per the description: addTeamMember's `updateWorker(workerId, { teamId })` keeps stamping presence, because a join's presence is tied to the DEAD-revive path from task-8333866a. The WebSocketServer REMOVE_TEAM_MEMBER and DELETE_TEAM handlers call these same functions, so they are fixed without being edited.\n\nThe error handling stays unchanged by design:\n- updateWorker still throws `Worker not found` only when the record has vanished, and both calls sit behind the existing `worker` guards.\n- deleteTeam's unlink failure still rethrows after the pointer writes, as the existing 'deleteTeam rollback semantics' test pins.\n- Old .moe/ worker files stay compatible (epic rail): a legacy record without lastActivityAt passes undefined, and updateWorker's `updates.lastActivityAt ?? now` falls back to today's stamp.\n- The emission order is unchanged: WORKER_UPDATED (WORKER_DELETED for a DEAD record), then the team writes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts"
+      ],
+      "startedAt": "2026-11-02T17:34:59.887Z",
+      "completedAt": "2026-11-02T17:35:03.558Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Verification: run once, fresh, from the checkout root (/mnt/d/projexts/moes). C1 is the complete_task evidence.\n- C2 (static, DoD 1) prints the four changed lines, then DIFF-OK. It diffs against the pinned base 771f7441 rather than HEAD, so QA can re-run it after the completion commit lands.\n- C1 (about a minute, DoD 2 to DoD 5):\n  - It exports HEAD into a fresh ${TMPDIR:-/tmp}/75bd4910-gate.XXXXXX and overlays only teamStore.ts and the new test.\n  - It then runs `npm ci && npx vitest run` on the four DoD files. Expect `Test Files  4 passed (4)` and exit 0.\n  - It never builds or tests in the shared checkout (GLOBAL customRule).\n  - vitest.config.ts already blanks the seat's MOE_WORKER_ID, MOE_TASK_ID and MOE_PROJECT_PATH, so no env scrub is needed.\n\nError handling for a red run:\n- After the fix, a failure in StateManager.test.ts, joinTeam.deadMembers.test.ts or teamMembershipHeal.test.ts means the change leaked beyond the two calls. Compare it with the RED run, where those three files passed.\n- A flaky prune case points at the clock: only Date may be faked (toFake: ['Date']), and afterEach must restore real timers.\n- Kill only PIDs you started; never pattern-kill.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/teamStore.presence.test.ts"
+      ],
+      "note": "C2 DIFF-OK; C1 in /tmp/75bd4910-gate.9mQxLb: 4 files passed, 168 tests, exit 0.",
+      "startedAt": "2026-11-02T17:35:04.027Z",
+      "completedAt": "2026-11-02T17:35:26.251Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Adversarial self-review, then complete_task. Load adversarial-self-review, then check:\n(1) `git status --short -- packages/moe-daemon/src/state` shows only teamStore.ts and the new test as yours, and C2 prints DIFF-OK.\n(2) Run twice concurrently: both call paths serialize on the state mutex (MCP tools through McpAdapter's runExclusive, /ws through withMutex). Passing the record's own value is idempotent, so a repeated leave or delete writes the same lastActivityAt.\n(3) Odd input: a record with no lastActivityAt behaves as before. A DEAD record that deleteTeam un-points still emits WORKER_DELETED, as updateWorker always did for a DEAD record.\n(4) Wrong assumptions: a live seat that leaves its own team still refreshes its presence through its heartbeat and its next calls; only the membership write stopped counting. A governor or human removing a quiet seat no longer makes it look alive for the 120 s isWorkerAlive window, which is the second symptom in the description.\n(5) The test fakes only Date, restores timers in afterEach, and uses its own temp project (ToolTestHarness), so it cannot leak into other files.\n\nIf any byte changes during review, re-run C2 and C1 and use the fresh C1.\n\nThen call complete_task with:\n- verification: C1 (command, exitCode 0, and an outputTail with the four-files-passed summary);\n- modifiedFiles: exactly [packages/moe-daemon/src/state/teamStore.ts, packages/moe-daemon/src/state/teamStore.presence.test.ts];\n- a summary that quotes the RED output from step 1 (the four failing test lines and one AssertionError line), C2's DIFF-OK, and the snapshot path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/teamStore.presence.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/state/teamStore.presence.test.ts"
+      ],
+      "note": "Self-review: only teamStore.ts and the new test are changed in state/; passing the record's own value is idempotent under the mutex; legacy records fall back to now; no bytes changed after C1.",
+      "startedAt": "2026-11-02T17:35:26.747Z",
+      "completedAt": "2026-11-02T17:35:31.494Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under \"keep the board moving\" (the human asked at 17:10Z why only one coder is working). This is fleet-filed, off-lane work for idle workers. Overlap check at 17:22Z: no open row mentions teamStore in a raw grep of all open rows. It touches no lane path, and its DoD keeps verification in a git-archive snapshot, per the shared-checkout rail.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 327.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:19:58.910Z",
+  "updatedAt": "2026-11-02T17:40:20.708Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:22:34.327Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T17:24:54.800Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T17:39:08.852Z",
+    "wallClockMs": 854052
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-81a7999f",
+    "qa-1106e678"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T17:32:49.611Z",
+  "executionContract": {
+    "intendedBehavior": "Un-pointing a worker record from a team (removeTeamMember, reached by moe.leave_team and /ws REMOVE_TEAM_MEMBER; deleteTeam, reached by /ws DELETE_TEAM) no longer counts as that worker's presence: the record keeps its own lastActivityAt and status. A DEAD record that owns nothing is therefore pruned once staleWorkerTimeoutMs has passed since its real last activity, and a quiet live seat removed by someone else no longer looks alive.",
+    "acceptanceCriteria": [
+      "DoD 1: C2 prints DIFF-OK. Against 771f7441, teamStore.ts differs by exactly 4 lines: the two `{ teamId: null }` calls each gain `lastActivityAt: worker.lastActivityAt`.",
+      "DoD 2: in teamStore.presence.test.ts, a DEAD and an IDLE worker at a fixed past lastActivityAt keep that value and their status after removeTeamMember (directly and through the leave_team handler) and after deleteTeam, with teamId null and memberIds dropping them.",
+      "DoD 3: after a leave at FIXED+60s, runBlockedTimeoutSweep keeps the DEAD record at FIXED+staleWorkerTimeoutMs-1s and deletes it at FIXED+staleWorkerTimeoutMs+1s.",
+      "DoD 4: with the test added and teamStore.ts unchanged, C1 fails exactly the 4 behaviour cases (the fixture guard passes), and that output is quoted in the evidence. After the fix C1 passes, and the existing StateManager.test.ts team cases pass unchanged.",
+      "DoD 5: C1 runs in a git-archive snapshot of HEAD with only the two files overlaid (`npm ci && npx vitest run` on the four DoD files) and exits 0."
+    ],
+    "invariants": [
+      "addTeamMember is untouched: a join still stamps presence, as the DEAD-revive path from task-8333866a expects.",
+      "The team writes, tombstone clearing (clearMembershipTombstone), WORKER_UPDATED/WORKER_DELETED emission order, and deleteTeam's rollback (unlink failure rethrows) are byte-identical.",
+      "updateWorker is unchanged: a DEAD flip keeps the stored time, and any other update stamps now unless the caller passes lastActivityAt.",
+      "No MCP tool contract changes: leave_team still returns { team }."
+    ],
+    "compatibility": [
+      "Old .moe/ worker files: a record without lastActivityAt passes undefined, and updateWorker falls back to now, exactly as before.",
+      "The /ws REMOVE_TEAM_MEMBER and DELETE_TEAM handlers (WebSocketServer.ts, under withMutex) and moe.leave_team (McpAdapter runExclusive) reach the same two functions, so all three get the fix with no edits of their own."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/state/teamStore.ts: the `state.updateWorker(worker.id, { teamId: null })` call in deleteTeam's member loop and the `state.updateWorker(workerId, { teamId: null })` call in removeTeamMember. Nothing else.",
+      "New packages/moe-daemon/src/state/teamStore.presence.test.ts, built on ToolTestHarness, leaveTeamTool and runBlockedTimeoutSweep."
+    ],
+    "reuse": [
+      "The explicit-lastActivityAt idiom already used by evictDeadMembers and joinTeam.ts refreshWorkerType; ToolTestHarness from joinTeam.deadMembers.test.ts; the `h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state))` pattern from dependencyUnblock.test.ts."
+    ],
+    "sourceAssumptions": [
+      "At 771f7441, packages/moe-daemon/src/state/teamStore.ts: line 102 is deleteTeam's `await state.updateWorker(worker.id, { teamId: null });`, line 238 is removeTeamMember's `await state.updateWorker(workerId, { teamId: null });`, and evictDeadMembers (line 157) already passes `lastActivityAt: worker.lastActivityAt`.",
+      "packages/moe-daemon/src/state/workerStore.ts updateWorker (lines 182-187) stamps `updates.lastActivityAt ?? new Date().toISOString()` unless the update flips status to DEAD.",
+      "packages/moe-daemon/src/state/sweeps.ts runBlockedTimeoutSweep (line 411) reads Date.now() once and, in Layer 3 (around line 550), deletes a worker when now - lastActivityAt > staleWorkerTimeoutMs; a DEAD record is always eligible (isWorkerEligibleForStaleCleanup).",
+      "packages/moe-daemon/vitest.config.ts blanks MOE_WORKER_ID, MOE_TASK_ID and MOE_PROJECT_PATH, so seat env cannot leak into these tests."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d \"${TMPDIR:-/tmp}/75bd4910-gate.XXXXXX\") && git archive HEAD | tar -x -C \"$S\" && cp packages/moe-daemon/src/state/teamStore.ts packages/moe-daemon/src/state/teamStore.presence.test.ts \"$S/packages/moe-daemon/src/state/\" && echo \"snapshot=$S\" && cd \"$S/packages/moe-daemon\" && npm ci && npx vitest run src/state/teamStore.presence.test.ts src/state/StateManager.test.ts src/tools/joinTeam.deadMembers.test.ts src/util/teamMembershipHeal.test.ts",
+      "b=771f7441c36b4c5f027e84f1edef7ba413b30caf; f=packages/moe-daemon/src/state/teamStore.ts; d=$(git diff -U0 $b -- $f); printf '%s\\n' \"$d\" | grep -E '^[-+] '; test \"$(printf '%s\\n' \"$d\" | grep -cE '^[-+] ')\" = 4 && test \"$(printf '%s\\n' \"$d\" | grep -cF '+      await state.updateWorker(worker.id, { teamId: null, lastActivityAt: worker.lastActivityAt });')\" = 1 && test \"$(printf '%s\\n' \"$d\" | grep -cF '+    await state.updateWorker(workerId, { teamId: null, lastActivityAt: worker.lastActivityAt });')\" = 1 && echo DIFF-OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Pass the record's own lastActivityAt at the two call sites, chosen: it is the idiom evictDeadMembers and refreshWorkerType already use, and the DoD fixes the diff to those two calls. (2) Teach updateWorker to skip the stamp for teamId-only updates: rejected. It changes a shared primitive that every caller relies on, including addTeamMember's join, which must keep stamping. (3) Exempt DEAD records in the stale-prune math: rejected. It treats the symptom, and a live quiet seat would still look present after someone else removed it.",
+    "codebaseInsights": "updateWorker merges `{...worker, ...updates}` and then overrides lastActivityAt last. A lastActivityAt passed together with status DEAD is therefore ignored (the stored value wins), so test fixtures must set the time before the DEAD flip. Non-blocking MCP tools run under state.runExclusive (McpAdapter.ts:309), and the /ws team handlers use withMutex. runBlockedTimeoutSweep reads Date.now() once at the top, so faking only Date drives its Layer 3 prune deterministically. Architect dry-run at 771f7441 in an ext4 snapshot: RED gave 4 failed and 164 passed across the four DoD files. GREEN gave 168 passed, with tsc --noEmit clean. C2 printed DIFF-OK both before and after a simulated commit, and failed on the base file.",
+    "risks": "If another row lands a teamStore.ts change before this worker runs, C2's 4-line count against the pinned base trips. Treat that as a real overlap to coordinate, not a reason to loosen the check. Governor checks at 17:22Z and 17:30Z, and an architect re-scan at plan time, found no open row declaring teamStore.ts or the three companion test files. The shared checkout's node_modules are a Windows install and its dist is live, so everything runs in C1's snapshot. The fake clock must cover Date only: faking setTimeout could stall the store's async writes.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/teamStore.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/state/sweeps.ts",
+      "packages/moe-daemon/src/tools/leaveTeam.ts",
+      "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "771f7441c36b4c5f027e84f1edef7ba413b30caf",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T17:32:49.641Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T17:34:23.665Z",
+  "reviewStartedAt": "2026-11-02T17:35:34.985Z",
+  "verification": {
+    "command": "S=$(mktemp -d \"${TMPDIR:-/tmp}/75bd4910-gate.XXXXXX\") && git archive HEAD | tar -x -C \"$S\" && cp packages/moe-daemon/src/state/teamStore.ts packages/moe-daemon/src/state/teamStore.presence.test.ts \"$S/packages/moe-daemon/src/state/\" && echo \"snapshot=$S\" && cd \"$S/packages/moe-daemon\" && npm ci && npx vitest run src/state/teamStore.presence.test.ts src/state/StateManager.test.ts src/tools/joinTeam.deadMembers.test.ts src/util/teamMembershipHeal.test.ts",
+    "exitCode": 0,
+    "outputTail": "snapshot=/tmp/75bd4910-gate.9mQxLb\n Test Files  4 passed (4)\n      Tests  168 passed (168)\n   Duration  4.91s",
+    "reportedAt": "2026-11-02T17:35:34.985Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/teamStore.presence.test.ts",
+    "packages/moe-daemon/src/state/teamStore.ts",
+    ".moe/tasks/task-75bd491034914137b043b9648dd574ec.json",
+    ".moe/tasks/task-e856c24678e94ff4b38ef79c99069e24.json"
+  ],
+  "completionSummary": "removeTeamMember and deleteTeam now pass the worker's own lastActivityAt to updateWorker (4-line diff; C2 prints DIFF-OK), so un-pointing a team no longer counts as presence. New teamStore.presence.test.ts (5 cases). RED against unchanged teamStore.ts (snapshot /tmp/75bd4910-gate.AB5Z92): 4 failed, 164 passed — failing: 'removeTeamMember keeps each record lastActivityAt and status', 'the moe.leave_team handler keeps them as well', 'deleteTeam keeps them as well', 'a leave does not postpone the DEAD record stale prune'; AssertionError: expected { id: 'w-dead', ... } to be null. GREEN (snapshot /tmp/75bd4910-gate.9mQxLb): 4 files, 168 tests passed, exit 0.",
+  "commits": [
+    {
+      "sha": "754dfb35057e07bf2ff42d917e992d9e3c0e9bbb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T17:33:12Z",
+      "paths": [
+        ".moe/tasks/task-75bd491034914137b043b9648dd574ec.json",
+        ".moe/tasks/task-e856c24678e94ff4b38ef79c99069e24.json",
+        "packages/moe-daemon/src/state/teamStore.presence.test.ts",
+        "packages/moe-daemon/src/state/teamStore.ts"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T17:36:18.651Z",
+      "treeId": "beeffb4f8dcf32dd169cfbab8cde64c9ae695e50",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "2bb683f84cc876b7ac8f6e563584094e825899fe",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T17:37:00Z",
+      "paths": [
+        ".moe/tasks/task-75bd491034914137b043b9648dd574ec.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T17:40:20.708Z",
+      "treeId": "298abff770bf000c47e8e8d7e8acd9afe628870a",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/teamStore.presence.test.ts",
+    "packages/moe-daemon/src/state/teamStore.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T17:37:00Z",
+    "at": "2026-11-02T17:40:20.708Z"
+  },
+  "completedAt": "2026-11-02T17:39:08.852Z",
+  "reviewCompletedAt": "2026-11-02T17:39:08.852Z",
+  "reviewSummary": "Reviewed completion commit 754dfb35 (on moe/work-2026-10-24, pushed). Code diff in packages/moe-daemon/src/state/teamStore.ts is 2 lines (+2/-2): deleteTeam's member loop (l.102) and removeTeamMember's teamId repair (l.238) now pass `lastActivityAt: worker.lastActivityAt` to updateWorker, same idiom as evictDeadMembers (l.157). addTeamMember (l.219) is untouched as scoped. Re-ran C2 (diff vs pinned base 771f7441): exactly 4 changed lines, prints DIFF-OK. Re-ran C1 myself in a fresh git-archive snapshot of HEAD (/tmp/75bd4910-gate.JlmlSH, npm ci rc 0, nothing built or tested in the shared checkout): `npx vitest run` on teamStore.presence.test.ts, StateManager.test.ts, joinTeam.deadMembers.test.ts, teamMembershipHeal.test.ts -> 4 files passed, 168 tests passed, exit 0. Independently confirmed RED: swapped base teamStore.ts into the snapshot and ran the presence test -> 4 failed / 1 passed (removeTeamMember, leave_team handler, deleteTeam, stale-prune cases fail; fixture-guard case passes), AssertionErrors match the worker's quoted evidence. DoD 1-5 all map to evidence. Test spot-check: new teamStore.presence.test.ts (81 lines, 5 cases) uses exact-value assertions (toMatchObject with fixed lastActivityAt + status + teamId null), covers DEAD and IDLE workers through direct removeTeamMember, the leave_team handler and deleteTeam, and the prune boundary (kept at FIXED+stale-1s, deleted at FIXED+stale+1s via runBlockedTimeoutSweep); fakes only Date and restores timers in afterEach. No existing tests deleted or weakened. Net non-board size ~83 LOC, well under 400. Board files in the commit (.moe/tasks/*.json) are intentional daemon records. Workspace state dir clean (git status on packages/moe-daemon/src/state empty). Non-blocking note: none; ponytail pass found nothing to cut. Handoff memory retired after approval.",
+  "requiredCheckAtDone": null
+}

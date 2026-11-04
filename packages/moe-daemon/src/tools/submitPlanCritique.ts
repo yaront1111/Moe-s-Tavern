@@ -135,7 +135,7 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
         updates.reopenReason = `Plan blocked by governor critique: ${(concerns ?? []).slice(0, 3).join(' | ').slice(0, 500)}`;
       }
 
-      const updated = await state.updateTask(task.id, updates, 'TASK_UPDATED');
+      const updated = await state.updateTask(task.id, updates, 'TASK_UPDATED', params.workerId);
 
       // Only a block that actually flipped the task to PLANNING orphans the prior
       // worker — updateTask cleared the task's assignee but left the worker

@@ -59,8 +59,22 @@ data class ProjectSettings(
     val qualityGate: String = "",
     val qualityGateScope: String = "epicFinal",
     val attributionUndeclared: String = "solo",
-    val taskSizing: TaskSizingThresholds = TaskSizingThresholds()
-)
+    val taskSizing: TaskSizingThresholds = TaskSizingThresholds(),
+    /**
+     * The stored `worktreeMode` when it is exactly "on" or "off", else null (unset). The
+     * computed values below mirror `resolveWorktreeMode`/`resolveWorktreeTarget` in the
+     * daemon's `state/validators.ts`. A malformed stored mode reads as unset here, while
+     * the daemon refuses it: this display copy degrades instead of throwing.
+     */
+    val worktreeMode: String? = null
+) {
+    /** Unset mode with a non-blank gate ([qualityGate] is already strict and trimmed). */
+    val worktreeModeFromDefault: Boolean get() = worktreeMode == null && qualityGate.isNotBlank()
+    val worktreeModeOn: Boolean get() = worktreeMode == "on" || worktreeModeFromDefault
+    /** The literal [consolidationBranch] (already trimmed) with no `*`, `?` or `[`, else main. */
+    val worktreeTarget: String
+        get() = consolidationBranch.takeIf { it.isNotEmpty() && it.none { c -> c == '*' || c == '?' || c == '[' } } ?: "main"
+}
 
 /** Plan-size bands from `settings.taskSizing`; defaults mirror `util/planSize.ts`. */
 data class TaskSizingThresholds(
@@ -89,6 +103,15 @@ data class TaskComment(
     val timestamp: String
 )
 
+/** One moe.amend_plan_step revision of a step's text. Read-only display data. */
+data class StepAmendment(
+    val amendmentId: String,
+    val description: String,
+    val reason: String? = null,
+    val amendedBy: String? = null,
+    val amendedAt: String? = null
+)
+
 data class ImplementationStep(
     val stepId: String,
     val description: String,
@@ -97,8 +120,28 @@ data class ImplementationStep(
     val modifiedFiles: List<String>? = null,
     val note: String? = null,
     val startedAt: String? = null,
-    val completedAt: String? = null
-)
+    val completedAt: String? = null,
+    val amendments: List<StepAmendment> = emptyList(),
+    val activeAmendmentId: String? = null
+) {
+    /**
+     * The amendment in force: the entry [activeAmendmentId] names, never simply the latest.
+     * A blank or dangling id resolves to null. Mirrors the daemon's
+     * packages/moe-daemon/src/util/planAmendments.ts `activeAmendment`.
+     */
+    val activeAmendment: StepAmendment?
+        get() {
+            val id = activeAmendmentId?.takeIf { it.isNotEmpty() } ?: return null
+            return amendments.firstOrNull { it.amendmentId == id }
+        }
+
+    /**
+     * The step's instructions as they stand: the active amendment's text, else [description].
+     * The one rule every renderer uses; mirrors planAmendments.ts `effectiveStepDescription`.
+     */
+    val effectiveDescription: String
+        get() = activeAmendment?.description ?: description
+}
 
 data class TaskMetrics(
     val plannedStepCount: Int? = null,
@@ -121,10 +164,11 @@ data class TaskVerification(
     val reportedAt: String? = null
 )
 
+/** release_task hand-off note, keyed as HandoffNote in packages/moe-daemon/src/types/schema.ts. */
 data class HandoffNote(
-    val from: String? = null,
-    val to: String? = null,
-    val createdAt: String? = null,
+    val releasedBy: String? = null,
+    val releasedAt: String? = null,
+    val reason: String? = null,
     val whatIsDone: String? = null,
     val whatRemains: String? = null,
     val pitfalls: String? = null,
@@ -161,7 +205,18 @@ data class DeliveryCandidate(
     val baseRevision: String? = null
 )
 
-data class DeliveryCheckRun(val command: String? = null, val exitCode: Int? = null, val source: String? = null)
+data class DeliveryCheckRun(
+    val command: String? = null,
+    /** Any JS safe integer, the daemon's rule (deliveryProjection.ts, Number.isSafeInteger), e.g. Windows NTSTATUS 3221225477, which overflows Int. */
+    val exitCode: Long? = null,
+    val source: String? = null,
+    /**
+     * The REPORTED daemon CheckOutcome (passed, code-failure, infra-failure, timeout, skipped or inconclusive;
+     * packages/moe-daemon/src/types/schema.ts), verbatim. Null when the daemon predates CQ-V12b or the run
+     * was recorded without an outcome.
+     */
+    val outcome: String? = null
+)
 
 data class DeliveryReceipt(val target: String? = null, val landedRevision: String? = null)
 
@@ -236,7 +291,11 @@ data class DaemonInfo(
     val port: Int,
     val pid: Int,
     val startedAt: String,
-    val projectPath: String
+    val projectPath: String,
+    // The daemon records it only for a --host or MOE_BIND_HOST other than 127.0.0.1 (packages/moe-daemon/src/index.ts startDaemon).
+    val bindHost: String? = null,
+    // A Linux daemon records its pid namespace, `pid:[N]` (packages/moe-daemon/src/index.ts buildDaemonInfo, task-da89f620).
+    val pidNamespace: String? = null
 )
 
 data class ActivityEvent(
@@ -314,7 +373,14 @@ data class ClaudeAccount(
     /** The account the next claude launch gets. */
     val active: Boolean,
     /** Worker ids whose last launch leased this account. */
-    val seats: List<String>
+    val seats: List<String>,
+    /**
+     * Whether Moe holds a VM token for this account (for Moe VM jobs, CQ-M07k),
+     * as the daemon reports it from a stat. Null when the daemon does not report
+     * it (an older daemon); the tab shows that as unknown, never as set. It is
+     * never a token.
+     */
+    val vmToken: Boolean? = null
 )
 
 data class UsageWindow(

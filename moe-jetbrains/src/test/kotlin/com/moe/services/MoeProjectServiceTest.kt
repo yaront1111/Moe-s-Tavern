@@ -1,5 +1,6 @@
 package com.moe.services
 
+import com.intellij.ide.lightEdit.LightEditCompatible
 import com.intellij.openapi.project.Project as IdeaProject
 import com.moe.model.MoeState
 import com.moe.util.MoeDaemonRegistrationTracker
@@ -46,10 +47,52 @@ class MoeProjectServiceTest {
         MoeProjectRegistry.clearDaemonRefCountsForTest()
     }
 
-    private fun fakeProject(): IdeaProject {
+    @Test
+    fun `connect on a LightEdit project does nothing and publishes no status`() {
+        val service = MoeProjectService(lightEditProject()) { runnable -> runnable() }
+        try {
+            val statuses = collectStatuses(service)
+
+            service.connect()
+
+            assertEquals(emptyList<Pair<Boolean, String>>(), statuses)
+            assertFalse(service.isConnected())
+        } finally {
+            service.dispose()
+        }
+    }
+
+    @Test
+    fun `connect on a normal project without a base path reports not initialized`() {
+        val service = MoeProjectService(fakeProject()) { runnable -> runnable() }
+        try {
+            val statuses = collectStatuses(service)
+
+            service.connect()
+
+            assertEquals(listOf(false to "Project not initialized"), statuses)
+        } finally {
+            service.dispose()
+        }
+    }
+
+    private fun collectStatuses(service: MoeProjectService): MutableList<Pair<Boolean, String>> {
+        val statuses = mutableListOf<Pair<Boolean, String>>()
+        service.addListener(object : MoeStateListener {
+            override fun onState(state: MoeState) {}
+            override fun onStatus(connected: Boolean, message: String) {
+                statuses.add(connected to message)
+            }
+        })
+        return statuses
+    }
+
+    private fun lightEditProject(): IdeaProject = fakeProject(LightEditCompatible::class.java)
+
+    private fun fakeProject(vararg extraInterfaces: Class<*>): IdeaProject {
         return Proxy.newProxyInstance(
             IdeaProject::class.java.classLoader,
-            arrayOf(IdeaProject::class.java)
+            arrayOf(IdeaProject::class.java, *extraInterfaces)
         ) { _, method, args ->
             when (method.name) {
                 "getName" -> "Test Project"
