@@ -112,3 +112,14 @@ test('the repository itself is in sync with its daemon version', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, new RegExp(`PASS release versions: ${version.replace(/\./g, '\\.')}`));
 });
+
+test('both npm packages ship the root LICENSE byte for byte', () => {
+  const rootLicense = fs.readFileSync(path.join(repoRoot, 'LICENSE'));
+  for (const pkg of ['packages/moe-daemon', 'packages/moe-proxy']) {
+    const copy = path.join(repoRoot, pkg, 'LICENSE');
+    assert.ok(fs.existsSync(copy), `${pkg}/LICENSE is missing: npm packs only the package directory, not the repo root`);
+    assert.ok(fs.readFileSync(copy).equals(rootLicense), `${pkg}/LICENSE differs from the root LICENSE`);
+    const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, pkg, 'package.json'), 'utf8'));
+    assert.ok(Array.isArray(manifest.files) && manifest.files.includes('LICENSE'), `${pkg}/package.json files must list LICENSE`);
+  }
+});
