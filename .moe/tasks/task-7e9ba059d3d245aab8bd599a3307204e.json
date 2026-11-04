@@ -56,24 +56,34 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once. From your worktree root, run exactly this command. Submit its fresh result as moe.complete_task verification { command, exitCode, outputTail }:\n(cd /mnt/d/moe-scratch/plan-7e9ba059 && sha256sum -c --quiet SHA256SUMS) && bash /mnt/d/moe-scratch/plan-7e9ba059/r0.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r1.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r2.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r3.sh\n\nThe four scripts are byte-identical to the executionContract checkRefs, and SHA256SUMS pins them and the prototype files. What each one checks:\n- R0 (DoD 1 and 2):\n  - architect.md's Tasks-per-session line names `submit_plan` reply with `accountSwitch`, `claim_next_task` reply with `accountSwitch` and `hasNext:false`, and keeps 'claim nothing more and end the turn'.\n  - The file is at most 40 lines.\n  - The DoD 2 grep passes.\n  - The **Claude account switch** section holds the new phrases, and its submit_plan bullet and closing paragraph stay.\n- R1 (DoD 4, the project qualityGate): scripts/tests/parity-check.sh, then npm run lint.\n- R2: scope against B. Only the three named files may change under docs, packages, scripts, moe-jetbrains and moe-vscode.\n- R3 (DoD 3): runs in a clone at B, outside the repo.\n  - It proves the base initFiles.ts is generator-fresh.\n  - It overlays your three files, regenerates, and checks with sha1sum -c that initFiles.ts is byte-identical.\n  - It runs the vitest files initFiles, daemonGitDocs, targetedContextGuidance, qaCommitPolicy and blockedSeatGuidance.\n  - On the prototype: 5 files, 44 tests, about 26 s.\n\nOn a failure, read the FAIL line, fix it in the step that owns the file, and re-run the whole command. Never edit the scripts or SHA256SUMS.\n\nThis gate is the full regression for this change. The prototype ran the whole daemon suite: every test file that reads the architect entries' content is in R3, and the rest of the suite was unaffected (README.txt).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T09:00:40.866Z"
+      "note": "Gate exit 0: sha256sum, R0, R1 (parity + lint), R2, R3 (regen byte-identical, 5 files / 44 tests).",
+      "startedAt": "2026-11-04T09:00:40.866Z",
+      "completedAt": "2026-11-04T09:01:12.931Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's own diff, run once (load adversarial-self-review). Check against base B (step 3's formula):\n\n(1) The docs diff matches the prototype. On the fast path, `git diff $B -- docs | diff - /mnt/d/moe-scratch/plan-7e9ba059/proto-doc.diff` prints nothing. Otherwise, only line 34 of architect.md changes, plus one added paragraph and its blank line in architect.reference.md. No CRLF churn.\n\n(2) initFiles.ts changes only the architect.md and architect.reference.md entries:\n- their markers;\n- their body lines;\n- one added sha in each of their SHIPPED_ROLE_BODY_SHAS lists.\nNo other doc's entry, marker or sha list moved, and every old sha is still listed.\n\n(3) Every claim matches the source at B:\n- claimNextTask.ts, the acceptsAccountSwitch branch: hasNext:false and accountSwitchReply, no nextAction, after alreadyAssigned and before any ranking or write.\n- accountStore.ts accountSwitchReply: the six fields.\n- register.ts MARKED, SIGNALS and HELD: claim_next_task is marked, and a later claim is refused.\nIf task-d27edf88's QA rework changed any of these, align the text with the code before completing.\n\n(4) The text adds no claim the source does not back, and puts no full task id in architect.md.\n\n(5) Nothing else changed:\n- docs/MCP_SERVER.md;\n- task-a160251a's files (scripts/CLAUDE.md, packages/moe-daemon/CLAUDE.md, the accountStore.ts comments, docs/TROUBLESHOOTING.md);\n- the governor, worker and qa role docs;\n- docs/plans/**;\n- .moe/**.\nR2 enforces the tracked part.\n\nError handling: fix anything you find in its owning step. If you changed a byte, re-run step 4's command and submit that fresh result.\n\nTests: step 4's gate is the test evidence. This step adds no new test.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/roles/architect.md",
         "docs/roles/architect.reference.md",
         "packages/moe-daemon/src/generated/initFiles.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/roles/architect.md",
+        "docs/roles/architect.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Self-review: docs diff equals proto; initFiles changes only the 2 architect entries, markers, body and one added sha each; claims match claimNextTask.ts, register.ts; no task id in architect.md; 3 files only.",
+      "startedAt": "2026-11-04T09:01:13.890Z",
+      "completedAt": "2026-11-04T09:01:22.222Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,12 +98,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:33:42.652Z",
-  "updatedAt": "2026-11-04T09:00:40.866Z",
+  "updatedAt": "2026-11-04T09:02:19.472Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:34:11.813Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -106,7 +116,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:47:45.474Z",
@@ -182,11 +194,43 @@
   "planApprovedAt": "2026-11-04T08:47:45.510Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-cd0ac706@2026-11-04T08:34:09Z",
-    "at": "2026-11-04T08:48:54.379Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T08:59:07Z",
+    "at": "2026-11-04T09:02:19.472Z"
   },
-  "workStartedAt": "2026-11-04T09:00:03.448Z"
+  "workStartedAt": "2026-11-04T09:00:03.448Z",
+  "reviewStartedAt": "2026-11-04T09:01:30.191Z",
+  "verification": {
+    "command": "(cd /mnt/d/moe-scratch/plan-7e9ba059 && sha256sum -c --quiet SHA256SUMS) && bash /mnt/d/moe-scratch/plan-7e9ba059/r0.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r1.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r2.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r3.sh",
+    "exitCode": 0,
+    "outputTail": "R0 OK; PASS parity-check.sh; OK: docs/roles/architect.md has 39 lines (max 40); R1 OK: parity + role-doc lint; R2 OK: scope vs generator base 3cd127c0; Generated initFiles.ts (8 role docs + 3 subagents, sha-stamped) x2; src/generated/initFiles.ts: OK; vitest: Test Files 5 passed (5), Tests 44 passed (44)",
+    "reportedAt": "2026-11-04T09:01:30.191Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/roles/architect.md",
+    "docs/roles/architect.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts"
+  ],
+  "completionSummary": "Both architect role docs now name the claim_next_task accountSwitch case. architect.md line 34 gets one in-place sentence (still 39 lines): a claim_next_task reply with accountSwitch claims nothing (hasNext:false), like submit_plan's. architect.reference.md '## Claude account switch' gains one paragraph: a row ended without submit_plan (archive_task) gets the switch at the next in-session claim_next_task, which answers hasNext:false with the same accountSwitch, claims nothing, and names no nextAction; the architect writes any missing handoff memory and ends the turn. initFiles.ts carries the same text via the 6 Edit pairs: both ROLE_DOCS markers and bodies, plus one added sha per SHIPPED_ROLE_BODY_SHAS list with every old sha kept. The docs diff equals the prototype diff, and initFiles.ts is byte-identical (cmp) to the prototype and to a fresh generate-init-files run in a clone at base 3cd127c0. Only the three scoped files changed.",
+  "commits": [
+    {
+      "sha": "2941e097a5ade34889997c23f35d09b1ca1c942b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T08:59:07Z",
+      "paths": [
+        "docs/roles/architect.md",
+        "docs/roles/architect.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T09:02:19.472Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

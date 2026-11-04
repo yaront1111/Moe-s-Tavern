@@ -47,24 +47,34 @@
     {
       "stepId": "step-3",
       "description": "Verification runs once, fresh, on the whole JetBrains suite, under the jetbrains-gradle lease. Acquire it right before and release it right after, even on failure. Run this exact command from the worktree, and submit its output as complete_task evidence labelled as the Windows gradlew.bat route. It is be7d169f's gate with MoeSnapshotProjectCheckTest added for the STATE_SNAPSHOT site:\n```bash\ncd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; for c in DaemonIdentityTest MoeDaemonSupervisorTest MoeProjectForeignDaemonTest MoeSnapshotProjectCheckTest; do X=$R/TEST-com.moe.services.$c.xml; echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X | head -1)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; grep -q 'skipped=\"0\"' $R/TEST-com.moe.services.DaemonIdentityTest.xml || r=1; exit $r\n```\n- It must exit 0.\n- DaemonIdentityTest must show skipped=\"0\". That proves the dirLink symlink and junction cases really ran (on the gate host through cmd /c mklink /J) and still classify Same through the real disk check (DoD 2).\n- Every existing case passes unedited, except MoeDaemonSupervisorTest:101, which step 1 flipped on purpose.\n- Quote the BUILD line, the xml totals and the four class lines in the summary, next to step 1's RED lines.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T09:00:37.832Z"
+      "note": "Windows gradlew.bat route under the jetbrains-gradle lease (released), exit 0. BUILD SUCCESSFUL in 35s. xml tests=683 skipped=6 failures=0 errors=0. DaemonIdentityTest: tests=26 skipped=0 failures=0 errors=0 (the dirLink symlink/junction cases ran). MoeDaemonSupervisorTest: tests=94 skipped=2 failures=0 (the 2 skips are the pre-existing F1b/F1c rows). MoeProjectForeignDaemonTest: tests=12 skipped=0 failures=0. MoeSnapshotProjectCheckTest: tests=5 skipped=0 failures=0. No verification-only file changes.",
+      "startedAt": "2026-11-04T09:00:37.832Z",
+      "completedAt": "2026-11-04T09:01:29.408Z"
     },
     {
       "stepId": "step-4",
       "description": "Close the memory, then self-review.\n(1) DoD 3: in mem:decision-daemon-identity-probe, replace the bullet that starts \"GAP (QA, 2026-11-04, posted in #governors)\". Use Serena edit_memory in literal mode (the memory is not a tracked file). Replace it with a CLOSED bullet: \"CLOSED (task-9c67c6b6, 2026-11-04): JetBrains now matches VS Code. DaemonIdentityProbe.isSameProjectPath calls its sameDirectoryOnDisk seam only when both spellings pass isLocalHostAbsolute: a drive path on Windows, a POSIX root elsewhere, never two leading separators. Every other spelling is answered by comparableProjectPath alone. Relative spellings lost their canonical fallback at every site, daemon.json included (MoeDaemonSupervisorTest:101 now asserts false).\"\n(2) Final adversarial self-review of the three-file diff (load adversarial-self-review):\n- Can any spelling with two leading separators of either kind, a drive-relative or rooted form, or leading whitespace still reach the seam?\n- Did any call site change signature or start throwing?\n- Does a symlinked or junction project still classify Same (dirLink cases ran with skipped=0)?\n- Does a WSL-share spelling still match by spelling (the existing rows)?\n- Is the seam restored in tearDown even when a case fails?\n- Does `git status --porcelain --untracked-files=all` in the worktree list only DaemonIdentity.kt, DaemonIdentityTest.kt and MoeDaemonSupervisorTest.kt?\n(3) If anything changed after step 3, rerun its command and submit the fresh output.\n(4) The summary records:\n- the relative-case decision: dropped at every site, for the 9f6857ee reason;\n- step 1's RED lines;\n- step 3's totals;\n- the residual risk. A project opened through a mapped drive whose daemon reports the UNC spelling (or the reverse) now reads as Foreign, the same as in VS Code. The plugin starts its own daemon with its own basePath spelling, so that case is rare.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "mem:decision-daemon-identity-probe GAP bullet replaced with a CLOSED bullet (Serena edit_memory, literal). Adversarial self-review of the three-file diff: any spelling with two leading separators of either kind (\\\\, //, \\/, /\\, \\\\?\\, \\\\.\\) is rejected by the guard on both host branches; drive-relative (D:x, D:), rooted (\\x, /x on Windows) and leading-whitespace forms fail the host-absolute anchors; no call site changed signature or can throw (the guard is a pure string check, the disk check keeps both runCatching); dirLink cases ran with skipped=0 so symlink/junction projects stay Same; WSL-share spellings still match by comparableProjectPath (existing rows pass); tearDown restores the seam first; git status lists only the three files. Nothing changed after step 3, so no rerun was needed. Residual: a mapped-drive vs UNC spelling of one folder now reads Foreign, as in VS Code (rare, the plugin spawns its own daemon with its own basePath spelling); a mapped network drive letter still reaches the disk check but the attacker cannot pick its host.",
+      "startedAt": "2026-11-04T09:01:30.362Z",
+      "completedAt": "2026-11-04T09:01:59.340Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -76,12 +86,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:42:33.111Z",
-  "updatedAt": "2026-11-04T09:00:37.833Z",
+  "updatedAt": "2026-11-04T09:02:18.360Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:48:24.603Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -93,7 +103,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:57:44.169Z",
@@ -156,5 +168,19 @@
   },
   "planApprovedAt": "2026-11-04T08:57:44.208Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T08:58:59.909Z"
+  "workStartedAt": "2026-11-04T08:58:59.909Z",
+  "reviewStartedAt": "2026-11-04T09:02:18.358Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; for c in DaemonIdentityTest MoeDaemonSupervisorTest MoeProjectForeignDaemonTest MoeSnapshotProjectCheckTest; do X=$R/TEST-com.moe.services.$c.xml; echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X | head -1)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; grep -q 'skipped=\"0\"' $R/TEST-com.moe.services.DaemonIdentityTest.xml || r=1; exit $r",
+    "exitCode": 0,
+    "outputTail": "(Windows gradlew.bat route, fresh run under the jetbrains-gradle lease)\nBUILD SUCCESSFUL in 35s\nxml tests=683 skipped=6 failures=0 errors=0\nDaemonIdentityTest: tests=\"26\" skipped=\"0\" failures=\"0\" errors=\"0\"\nMoeDaemonSupervisorTest: tests=\"94\" skipped=\"2\" failures=\"0\" errors=\"0\"\nMoeProjectForeignDaemonTest: tests=\"12\" skipped=\"0\" failures=\"0\" errors=\"0\"\nMoeSnapshotProjectCheckTest: tests=\"5\" skipped=\"0\" failures=\"0\" errors=\"0\"\nexit=0",
+    "reportedAt": "2026-11-04T09:02:18.358Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+  ],
+  "completionSummary": "JetBrains DaemonIdentityProbe.isSameProjectPath now reaches its disk check (File.canonicalPath, else Files.isSameFile) only when both spellings pass the new internal isLocalHostAbsolute: a drive path on Windows, a POSIX root elsewhere, never two leading separators (UNC, \\\\?\\, \\\\.\\). Every other spelling is answered by comparableProjectPath alone, matching VS Code's isSameProject. sameDirectoryOnDisk is now an @Volatile internal var test seam (same body, RuntimeSelectionPolicy.sameDirectory convention). classify, MoeDaemonSupervisor.isSameProject (daemon.json) and MoeMessageDispatcher (STATE_SNAPSHOT) are unedited; WSL-share spellings still match through comparableProjectPath. Tests: UNC/`//host/share/x`/`\\\\?\\UNC\\...`/`\\\\.\\C:\\x`/`\\\\?\\C:\\x` never reach the seam (stub answers Same) and are Foreign, a positive control proves two local dirs still reach it, relative spellings stay off it, isLocalHostAbsolute rows cover both host branches, and the seam is restored first in tearDown. The dirLink symlink/junction cases still classify Same through the real disk check (DaemonIdentityTest skipped=0). Relative-case decision (MoeDaemonSupervisorTest:101): dropped at every site, daemon.json included, now assertFalse, because File(\".\") is the IDE's cwd, not the daemon's, VS Code refuses it, and since 9f6857ee the daemon records an absolute path. RED run (step 1, 119 tests): 3 FAILED = DaemonIdentityTest `a UNC or device spelling never reaches the disk check and is Foreign`, DaemonIdentityTest `a relative spelling is answered by its spelling alone`, MoeDaemonSupervisorTest `isSameProject compares cross OS literals before canonical paths`. Gate (Windows gradlew.bat route, jetbrains-gradle lease held and released): BUILD SUCCESSFUL in 35s; xml tests=683 skipped=6 failures=0 errors=0; DaemonIdentityTest 26/skipped 0/fail 0; MoeDaemonSupervisorTest 94/skipped 2 (pre-existing F1b/F1c)/fail 0; MoeProjectForeignDaemonTest 12/0/0; MoeSnapshotProjectCheckTest 5/0/0. Project qualityGate also "
 }
