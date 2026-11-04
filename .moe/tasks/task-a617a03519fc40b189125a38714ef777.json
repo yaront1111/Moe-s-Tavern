@@ -72,7 +72,7 @@
     {
       "stepId": "step-5",
       "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written (918 chars). The same text is at /mnt/d/moe-scratch/plan-a617a035/checkref-gate.txt.\n\nWhat it does:\n- builds a whole-tree `git archive HEAD` snapshot in `mktemp -d` (mem:gotcha-harness-snapshot-needs-full-archive);\n- overlays the four owned code files with cp --parents from packages/moe-daemon/src;\n- under env -i, with nvm Node v24.21.0 and NO_COLOR=1, runs npm ci, `npx tsc --noEmit`, and a typecheck of the new test through a scratch tt.json (the package tsconfig excludes tests; mem:gotcha-daemon-linux-snapshot-gate);\n- runs `npx vitest run src/tools/chat src/state/StateManager.test.ts`: every chat tool suite, plus StateManager's chat and pin tests.\n\nExpected: exit 0, 'Test Files  10 passed (10)' and 'Tests  282 passed (282)'. The counts may grow if peers land chat tests first. The last line is 'chatMessageLookup ok (<tmp dir>)', which requires the new file's row with exactly 7 tests, so keep exactly the 7 cases.\n\nArchitect dry runs, from a --shared clone at d1062cb0 with the prototype uncommitted:\n- the gate: exit 0, in about 16 s;\n- control A (base runtime with the new test): exit 1 on TS2305/TS2551;\n- control B (a planted TS2322 in the test): exit 1;\n- the full daemon suite on the prototype: 281 files, 7441 passed, 24 skipped.\n\nNever run npm ci or npm test in the shared checkout or the worktree (global rail). Submit verification { command: <the checkRef>, exitCode: 0, outputTail: <its last lines> }.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/chatStore.ts",
         "packages/moe-daemon/src/state/StateManager.ts",
@@ -81,16 +81,19 @@
       "newFiles": [
         "packages/moe-daemon/src/tools/chatMessageLookup.test.ts"
       ],
-      "startedAt": "2026-11-04T05:47:38.800Z"
+      "note": "Ran the executionContract checkRef verbatim from the worktree root, in a git-archive snapshot (/tmp/tmp.V9IjjXTS1M): exit 0, Test Files 10 passed (10), Tests 282 passed (282), last line 'chatMessageLookup ok (/tmp/tmp.V9IjjXTS1M)'. The full tsc and the test typecheck passed. Nothing was modified in this step.",
+      "startedAt": "2026-11-04T05:47:38.800Z",
+      "completedAt": "2026-11-04T05:48:13.122Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of your own diff, last, before moe.complete_task (mutant mechanics: mem:convention-daemon-vitest-mutant-checkref).\n\n- The split holds: chatRead.ts and chatBacklog.ts are untouched, and both still call state.messageExistsInChannel.\n- Mutants. Run them in the gate's snapshot only, never in the worktree. Apply each with one sed, and restore from your overlay copy:\n  - M1: point chatRead.ts:120 and chatBacklog.ts:316 at messageExistsAnywhereInChannel. Cases 6 and 7 must fail.\n  - M2: drop the exact id compare (return true on any needle hit). Case 4 must fail.\n  - M3: reset the carry on every chunk. Case 5 must fail.\n  - M4: keep pinMessage's bare Error. Case 4 must fail.\n  In the architect's runs, each mutant failed exactly the named case(s) and nothing else.\n- Edge inputs:\n  - an id with JSON-escaped characters: the needle is JSON.stringify(id), the same spelling sendMessage writes;\n  - an empty file, and a file with no trailing newline;\n  - a malformed line or a `null` line (`parsed?.id`);\n  - a deleted channel log: ENOENT gives false, so chat_send refuses INVALID_INPUT and chat_pin refuses NOT_FOUND.\n- Resources: the fd closes on every path, including a throw from readSync. There is no stream and no async iterator, so nothing is left open.\n- Cost: the scan runs only on a window miss, synchronously, under the tool mutex. The architect measured about 5 ms per 16.7 MB miss on a native filesystem, on a copy of the live #general.\n- The test does not copy the hunt repro's `{ message: { replyTo } }` assertion.\n\nIf anything changes, re-run the step-5 command and submit that fresh output.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/state/chatStore.ts",
         "packages/moe-daemon/src/tools/chatMessageLookup.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T05:48:13.587Z"
     }
   ],
   "planRevision": 1,
@@ -107,12 +110,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:02:16.939Z",
-  "updatedAt": "2026-11-04T05:47:38.800Z",
+  "updatedAt": "2026-11-04T05:48:13.587Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:22:40.468Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -127,7 +130,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:44:54.579Z",

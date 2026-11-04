@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "Tests first, in two EXISTING test files (no new file: a 6th distinct file would floor the plan to heavy). Write only with the Edit tool (global rail). Prototype bytes to port: /mnt/d/moe-scratch/task-77e54ebb/prototype.diff (dry-run green at d1062cb0).\n(a) packages/moe-daemon/src/tools/qaReject.test.ts:\n- Add `import { setTaskStatusTool } from './setTaskStatus.js';` directly after `import { getContextTool } from './getContext.js';` (:254, the migrated section). Leave the top import block (:1-9) alone; task-fefce964 may add imports there.\n- Fixture records, assertions byte-identical: add `capReplanAt: '2026-11-04T00:00:00.000Z'` to the writeTask overrides at :150 (2nd half of 'sets an unset tier…; a parked task keeps its tier'), :159 ('parks in REVIEW for a human past the hard cap…') and :180 ('does not re-flip on repeated rejects past the hard cap'). They model 'a row that already had its cap re-plan' (DoD 2); without the record they read 'no cap re-plan yet' (DoD 3) and would re-plan instead of parking.\n- Insert a nested `describe('the hard cap parks only after the cap re-plan', …)` INSIDE 'qa_reject bounded escalation', directly after the 'does not re-flip…' test (ends :187), reusing setupMoe/writeEpic/writeTask/RejectResult and the outer state/testDir. Helpers: huntRow(overrides) = writeTask with definitionOfDone ['DoD-A'], assignedWorkerId null, contextFetchedBy [], reopenCount 2, reopenReason 'second QA reject', rejectionHistory [{reopenCount 2},{reopenCount 1}], metrics {rejectCount 2, reopenCount 2}; move(status: Task['status'], reason?) = setTaskStatusTool(state).handler with NO workerId (human path); qaReviewAndReject(reason, extra) = claim_next_task REVIEW as 'qa-a', get_context, qa_reject; reload() = new StateManager on testDir + load. Five cases:\n 1. Hunt case 1: huntRow(); move WORKING (with reason) → reopenCount 3; move REVIEW; reject → toEqual {status 'PLANNING', parkedForHuman false, reopenCount 4, planningEntry !== undefined, needsHumanReview undefined}; message contains 'flipped to PLANNING'; capReplanAt is a string.\n 2. Hunt case 2: huntRow({ status: 'DONE' }); move WORKING; move REVIEW; reject → {status 'PLANNING', parkedForHuman false, needsHumanReview undefined}.\n 3. As case 1 up to the PLANNING re-plan; keep stamp; reload() → same stamp; move AWAITING_APPROVAL, WORKING, REVIEW (none is a reopen); reject → {status 'REVIEW', parkedForHuman true, needsHumanReview true, reopenCount 5}, row {assignedWorkerId null, needsHumanReview true, capReplanAt: stamp}.\n 4. Legacy: writeTask({ reopenCount: 3 }) (the old fixture shape) → capReplanAt undefined after load; qa_reject as qa-a → {status 'PLANNING', parkedForHuman false, exceededReopenCap true}; capReplanAt now a string.\n 5. Stamp scope: writeTask({ reopenCount: 2 }) → reject → PLANNING + string stamp; writeTask({ failedDodItems: [prior DoD-X] }) + reload → reject with failedDodItems ['DoD-X'] → PLANNING, capReplanAt undefined; writeTask() + reload → reject → WORKING, capReplanAt undefined.\n(b) packages/moe-daemon/src/tools/parkedReview.guard.test.ts: park()'s `writeTask();` (:74) → `writeTask({ capReplanAt: '2026-11-04T00:00:00.000Z' });`; the comment at :70 ends '…past maxReopens parks a row whose cap re-plan is recorded (capReplanAt).' Nothing else in that file.\nRED (record in the step note): in a `git archive HEAD | tar -x` snapshot with only these two test files overlaid, `npx vitest run src/tools/qaReject.test.ts src/tools/parkedReview.guard.test.ts` → qaReject.test.ts '29 tests | 5 failed' (exactly the 5 new cases), parkedReview 6 passed. The fixture records also pass at base, so they weaken nothing.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/qaReject.test.ts",
         "packages/moe-daemon/src/tools/parkedReview.guard.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T05:48:07.323Z"
     },
     {
       "stepId": "step-2",
@@ -63,10 +64,17 @@
   ],
   "priority": "LOW",
   "order": 471.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-940e5f808dfb4eb8aa62f7e214a5a25b",
+      "author": "architect-cd0ac706",
+      "content": "Architect ruling on a conflict between DoD 2 and DoD 3, measured at d1062cb0. It is also recorded in executionContract.compatibility.\n\nDoD 2 asks the existing qaReject.test.ts escalation cases to pass unchanged. But 8 existing tests seed a row at reopenCount 3 or 5 that has no record of a re-plan, and they expect a park:\n- 3 in qaReject.test.ts, the fixtures at :150, :159 and :180;\n- 5 in parkedReview.guard.test.ts, through park().\nUnder DoD 3, a row without the new field reads as \"no cap re-plan yet\", so with the fix these rows re-plan.\n\nThe plan resolves it this way: those fixtures gain `capReplanAt`, so each models \"a row that already had its cap re-plan\" (DoD 2's first sentence). Every assertion stays byte-identical.\n\nThe records also pass at base. Base source plus the new tests gives 29 tests with 5 failed, and those 5 are exactly the new cases. With the fix, the full daemon suite is green: 280 files, 7439 passed.\n\nThe rejected alternative was to keep the old count rule for rows without the field. It breaks DoD 1 and DoD 3 for rows with no rejection history.\n\nPrototype and logs: /mnt/d/moe-scratch/task-77e54ebb/.",
+      "timestamp": "2026-11-04T05:47:39.385Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:19.281Z",
-  "updatedAt": "2026-11-04T05:47:29.597Z",
+  "updatedAt": "2026-11-04T05:48:07.323Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T00:27:53.895Z",
@@ -159,5 +167,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T05:46:44.500Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T05:48:07.323Z"
 }
