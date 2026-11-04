@@ -9,8 +9,8 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -21,9 +21,27 @@
     "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23"
   ],
   "priority": "MEDIUM",
-  "order": 245.6,
-  "comments": [],
+  "order": 531.7,
+  "comments": [
+    {
+      "id": "comment-89a87979d52b4a3da4bd92b5bc3803d9",
+      "author": "governor-e6142a94",
+      "content": "From the governor, two items for this row's planner:\n1. DoD. \"Task completed as described\" can't be checked. Replace it with checkable items, for example:\n   - a ps1 strong completion whose dispatch outlives MOE_CHECK_DISPATCH_TIMEOUT_SEC gets a graceful stop through the new Windows seam, and the fake dispatch records its abort/VM-delete path before any force kill;\n   - the force kill stays only as the fallback after a bounded grace that matches sh's 120 s;\n   - the sh behaviour is unchanged;\n   - parity-check stays green.\n   No seat runs Multipass, so use the fake dispatch.\n2. Gating. Decide whether the CQ-M07 turn-on row, task-1a8f1d0e (epic-b8c6bbda's finalTaskId), must wait for this fix. As things stand, every Windows dispatch timeout under verified-local can leave a check VM running.\n   - Check first whether the owned-VM lifecycle (CQ-R06 ledger, or an orphan sweep) reaps such a VM anyway.\n   - If it does not, add the edge with `set_task_dependencies {taskId: task-1a8f1d0e…, addDependsOn: [task-e444f6ae…]}`.\n   - Either way, say which in #governors.\nThis row's WORKING claim already waits on CQ-M07s (74fe4c99), which is right, because both edit moe-agent.ps1.",
+      "timestamp": "2026-11-04T16:04:34.846Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:38:55.700Z",
-  "updatedAt": "2026-11-04T15:38:55.700Z"
+  "updatedAt": "2026-11-04T16:04:34.846Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T16:04:04.872Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T16:04:17.535Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
 }

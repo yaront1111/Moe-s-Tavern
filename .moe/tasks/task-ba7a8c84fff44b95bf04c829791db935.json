@@ -82,20 +82,28 @@
     {
       "stepId": "step-6",
       "description": "Verification, once, from the task worktree root. Run checkRefs[0] exactly and submit its fresh exit code and output tail with moe.complete_task:\n\nbash -c 'for v in $(compgen -e); do case \"$v\" in MOE_*|CLAUDE*|FAKE_*) unset \"$v\" ;; esac; done; export MOE_POSTFLIGHT_TIMEOUT_SEC=360; bash -n scripts/moe-agent.sh && bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && npm run lint'\n\npostflight.sh runs postflight-vm-route.sh (every [strong gate] row and the unedited G1-G8 rows), the worktree suite (postflight-worktree.cjs, unedited) and WT-10G's sliced gate rows. parity-check.sh proves that no compared family gained a one-sided code.\n\nError handling for a red run:\n- Read the first failing row's name.\n- Fix the runtime or the new rows, never an existing row or assertion (DoD 3).\n- If a row outside this diff is also red on the base, describe it in one sentence and a task comment naming it; never skip it.\n- Stop only PIDs your own run started; never pattern-kill on this shared host.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T15:37:55.875Z"
+      "note": "QA round 2, route (c). checkRefs[0] ran verbatim and fresh from the task worktree root, on the round-2 bytes: HEAD 2566f0ec plus the +23/-0 working-tree diff to scripts/tests/postflight-vm-route.sh.\n- It ran 15:38:24Z to 16:16:53Z and exited 0 after 2309 s.\n- The tail:\n  - '[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, missing, crash, unparsable, env, env-malformed, timeout, protected'\n  - '[strong gate] ok SG-interrupt'\n  - '[strong gate] ok SGV, SGU U1-U7 and SG8' (V-results-object and V-two-newlines are in the SGV table)\n  - PASS postflight-vm-route.sh, PASS postflight.sh, PASS parity-check.sh\n  - lint: OK architect.md 39/40, worker.md 30/40, qa.md 36/40.\n- The existing rows ([vm candidate] R1-R9, [strong intent] G1-G8, the worktree suite and the rest) all passed with their assertions unedited (DoD 3). That includes frozen candidate 106, owner guard 16 and migration landing 12.\n- The harness left no test process behind (checked by looking only; nothing was killed). The tracked tree is unchanged by the run: git diff is still only +23/-0 in postflight-vm-route.sh.\n- The EPIC size-exception proposal prop-b13705c27dc24e709956069a67ed920c was filed BEFORE this run, per QA route (b), and #governors was pinged (msg-d7859cd9).",
+      "startedAt": "2026-11-04T15:37:55.875Z",
+      "completedAt": "2026-11-04T16:18:29.845Z"
     },
     {
       "stepId": "step-7",
       "description": "Adversarial self-review of this diff only, the final step. Use the adversarial-self-review skill. Check each point:\n1. THE RAIL. Under the strong profile no path reaches run_frozen_gate or `bash -c \"$QUALITY_GATE\"`; read every new branch. A strong_landing_task python failure reads as legacy only for a task this session does not pin: the pinned profile decides the VM seat's own task first.\n2. FAIL CLOSED. Every verdict path ends in return 1 and only PASS returns 0. The paths: empty, oversize, two lines, a carriage return, a non-object, bad codes, a mismatched task or candidate, empty results, rc != 0, timeout, a missing CLI, a bad bound and a python crash.\n3. LEAKAGE. The child's stderr never reaches the terminal. Nothing from the reply is printed except a fixed code and a fullmatched id. The override path is never printed.\n4. PROCESSES. Only CHECK_DISPATCH_PID's own group is signalled, and the job-table check guards KILL. The EXIT trap stops a running dispatch before finalize. `set -m` is off again on every path, and the child's stdin is /dev/null.\n5. G8 and SG8 pass. `git diff -U0` shows the legacy elif line unchanged except `if` -> `elif`, and no hunk in run_frozen_gate, freeze_candidate, wt_strong_intent or strong_landing_task.\n6. PARITY. `grep -oE 'MOE_[A-Z0-9_]+'` over the added lines lists only MOE_CHECK_DISPATCH_* names plus the reused MOE_COMMIT_FAILED_GATE and MOE_WORKTREE_PROJECT_NOT_TOP. parity-check.sh passes.\n7. SHELL. The syntax is bash 3.2; set -e holds at top level (the resolver returns 0 on every path).\n8. CONCURRENCY. One dispatch runs at a time per seat, and SECURE_TEMP_DIR is per seat, so two rounds or two seats never share the out file.\n\nRecord the findings and fixes in this step's note.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Adversarial self-review, QA round 2.\n\nThe runtime is unchanged since 9e9e7345. Round 1's review of points 1-4, 7 and 8 therefore stands: the rail, fail-closed, leakage, processes, bash 3.2 / set -e, and concurrency. I re-ran the mechanical points on the FINAL diff vs 9463e77d:\n- (5) The moe-agent.sh hunks are only cleanup_temp, wt_land_rounds and the top-level resolver call. The legacy L6 line changes only `if` -> `elif`, with no hunk in run_frozen_gate, freeze_candidate, wt_strong_intent or strong_landing_task. G8 and SG8 pass in the fresh gate.\n- (6) The MOE_ names on added runtime lines are:\n  - the MOE_CHECK_DISPATCH_* family;\n  - the reused MOE_COMMIT_FAILED_GATE and MOE_WORKTREE_PROJECT_NOT_TOP;\n  - pre-existing names: MOE_RUNTIME_PROTECTED (a comment and the warning text), MOE_REL (the existing sh-only guard), and MOE_COMMIT_FAILED_REF_CONTENTION and MOE_LAND_LEASE_WAIT_SEC (comments only; both exist in both wrappers).\n  So there is no new one-sided code in a compared family, and parity-check.sh passes.\n\nThe round-2 rows (+23):\n- Timing: the wrapper's INT/TERM trap is installed at startup, long before L6. A TERM that lands while it waits on `sleep 1` runs the trap at most 1 s later. The fake writes its check-dispatch row synchronously inside require(), before the helper's timer is armed, so the row always exists before the TERM.\n- No vacuous pass: if the TERM missed the wrapper, 'Agent stopped.' would be absent and the dispatch would outlive it. Stale rows would make the check-dispatch count != 1. G and G2 are killed.\n- Processes: only the recorded SG_PID (from the evidence row) is killed, only after kill -0 says it is alive, and before any assertion. That is the sgu_dead pattern; there is no pattern kill. The hang fake also ends by itself after 300 s. The fresh gate left no test process behind.\n\nTheoretical, noted, not fixed:\n- (i) PID reuse between the wrapper's exit and the probe would need a full pid_max wrap within milliseconds. The U5/U7 probes share this property.\n- (ii) SG-interrupt is POSIX-only. CQ-M07s (ps1) needs its own pin of its finally order: stop before finalize.\n- (iii) The row pins that an interrupted strong landing still finalizes the attempt. CQ-M07t adjusts it if it ever defers finalize.\n\nNo real risk found, so nothing was changed in this step.",
+      "startedAt": "2026-11-04T16:18:42.427Z",
+      "completedAt": "2026-11-04T16:20:55.931Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a408f113",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -126,12 +134,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:01.667Z",
-  "updatedAt": "2026-11-04T15:37:55.875Z",
+  "updatedAt": "2026-11-04T16:22:43.701Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T11:56:07.434Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 12,
+    "executedStepCount": 14,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -151,7 +159,9 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:37:25.109Z",
@@ -241,21 +251,20 @@
   "planApprovedAt": "2026-11-04T12:37:25.157Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T12:56:28.064Z",
-  "reviewStartedAt": "2026-11-04T14:32:24.200Z",
+  "reviewStartedAt": "2026-11-04T16:21:44.682Z",
   "verification": {
     "command": "bash -c 'for v in $(compgen -e); do case \"$v\" in MOE_*|CLAUDE*|FAKE_*) unset \"$v\" ;; esac; done; export MOE_POSTFLIGHT_TIMEOUT_SEC=360; bash -n scripts/moe-agent.sh && bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && npm run lint'",
     "exitCode": 0,
-    "outputTail": "[vm candidate] R1: one changed file becomes one checkpoint commit, hooks never run\n[vm candidate] R1u: a deletion and a new path with a space and Unicode\n[vm candidate] R2-R5: refusals write nothing\n[vm candidate] R6: a lost CAS parks the commit and restores W\n[vm candidate] R7: a failed W update parks the commit; the branch stays\n[vm candidate] R8: an empty candidate writes nothing\n[vm candidate] R9: the test seam never runs under MOE_RUNTIME_PROTECTED\n[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] a no-op for legacy; the strong profile needs the frozen candidate of exactly M on B\n[strong intent] ok G1-G7 and G8\n[strong gate] SG-pass: the check VMs pass the frozen candidate; main moves to C; the host qualityGate never runs\n[strong gate] SG-legacy, SG-observe: the host qualityGate runs (run_frozen_gate worktree), the override unused\n[strong gate] every non-pass fails the round as MOE_COMMIT_FAILED_GATE: main stays at B, one fixed-code line\n[strong gate] SG-protected: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1, and never printed\n[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, missing, crash, unparsable, env, env-malformed, timeout, protected\n[strong gate] SGV: check_dispatch_verdict prints PASS or one fixed code, never the reply\n[strong gate] SGU: run_check_dispatch sliced: the bundled CLI, the override, the bound, the stop, the project top\n[strong gate] SG8: L6 takes the check VMs only for the strong profile, before wt_strong_intent\n[strong gate] ok SGV, SGU U1-U7 and SG8\nPASS postflight-vm-route.sh\nPASS postflight.sh\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n(exit 0 after 2261 s)",
-    "reportedAt": "2026-11-04T14:32:24.200Z",
+    "outputTail": "[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] a no-op for legacy; the strong profile needs the frozen candidate of exactly M on B\n[strong intent] ok G1-G7 and G8\n[strong gate] SG-pass: the check VMs pass the frozen candidate; main moves to C; the host qualityGate never runs\n[strong gate] SG-legacy, SG-observe: the host qualityGate runs (run_frozen_gate worktree), the override unused\n[strong gate] every non-pass fails the round as MOE_COMMIT_FAILED_GATE: main stays at B, one fixed-code line\n[strong gate] SG-protected: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1, and never printed\n[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, missing, crash, unparsable, env, env-malformed, timeout, protected\n[strong gate] SG-interrupt: a wrapper TERMed mid-dispatch stops the dispatch from its EXIT trap (cleanup_temp), before finalize\n[strong gate] ok SG-interrupt\n[strong gate] SGV: check_dispatch_verdict prints PASS or one fixed code, never the reply\n[strong gate] SGU: run_check_dispatch sliced: the bundled CLI, the override, the bound, the stop, the project top\n[strong gate] SG8: L6 takes the check VMs only for the strong profile, before wt_strong_intent\n[strong gate] ok SGV, SGU U1-U7 and SG8\nPASS postflight-vm-route.sh\nPASS postflight.sh\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)",
+    "reportedAt": "2026-11-04T16:21:44.682Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/moe-agent.sh",
-    "scripts/tests/postflight-fake-check-dispatch.js",
     "scripts/tests/postflight-fake-proxy.js",
     "scripts/tests/postflight-vm-route.sh"
   ],
-  "completionSummary": "CQ-M07r delivered in moe-agent.sh only; CQ-M07s ports it to ps1.\n\nmoe-agent.sh:\n- L6 in wt_land_rounds: when a qualityGate is set and strong_landing_task says strong, it runs freeze_candidate then run_check_dispatch, never run_frozen_gate or the host gate.\n- The legacy line is byte-identical except if -> elif, so legacy, observe and task-less landings keep run_frozen_gate worktree.\n- New block:\n  - resolve_check_dispatch_cli: the bundled local-runner/check-dispatch.mjs. MOE_CHECK_DISPATCH_PATH is honored only without MOE_RUNTIME_PROTECTED=1; under it, the MOE_CHECK_DISPATCH_PATH_IGNORED warning prints.\n  - check_dispatch_verdict: prints PASS or one fixed code, plus environment=<id> only for a fullmatched moe-local-vm-v1 id.\n  - run_check_dispatch: the child runs in its own process group, stdin /dev/null, stderr discarded, with the 5 credentials and GIT_* unset. Bound: MOE_CHECK_DISPATCH_TIMEOUT_SEC, default 3600.\n  - stop_check_dispatch: TERM once, 120 s grace, KILL, guarded by the job table.\n  - A cleanup_temp hook, so the EXIT trap stops a live dispatch before finalize.\n- Every non-pass ends as MOE_COMMIT_FAILED_GATE through the unchanged unlanded gate route, with one `[WARN] MOE_CHECK_DISPATCH_REFUSED: <code>` line.\n\nTests:\n- New postflight-fake-check-dispatch.js: 11 modes, a canary, and a witness of argv, tree, parents and credentials.\n- postflight-fake-proxy.js: a FAKE_ATTEMPT_PROFILE knob, inert when unset.\n- postflight-vm-route.sh [strong gate]: 14 end-to-end rows, the SGV verdict rows, sliced SGU U1-U7, and SG8. No existing row was edited (0 deletions).\n\nDeviations:\n1. stop_check_dispatch clears the pid last and never sends a second TERM. Plan 1(d) cleared it first, which leaked the dispatch when the EXIT trap fired mid-stop. The new U7 row pins this, so the end line says U1-U7.\n2. Extra SGV rows: V-at-limit, V-oversize, V-not-utf8, V-indented, V-crlf.\n3. The fake's hang modes stop by themselves after 300 s.\n\nVerification: checkRefs[0] exits 0 after 2261 s. ",
+  "completionSummary": "QA round 2 (qa-96811257, comment-ce086b4f), routes (a)-(c), test-only.\n\nThe round-2 delta is scripts/tests/postflight-vm-route.sh +23/-0, all pure additions. moe-agent.sh and both fakes are byte-identical to the landed 9e9e7345: no landed byte was re-sliced, rewritten or re-landed.\n\n(a) Pins\n- SG-interrupt: the row's own ppid-guarded dispatch entry TERMs the real wrapper mid-dispatch. The wrapper's EXIT trap, cleanup_temp, must TERM the dispatch exactly once, before finalize_attempt. The fake is probed by its recorded pid only.\n- SGV V-results-object: results {\"outcome\":\"passed\"} at rc 0 -> REPLY_INVALID.\n- SGV V-two-newlines: a pass line plus \\n\\n -> REPLY_INVALID.\n\nMutants, on a [strong gate]-only harness built from these bytes (green unmutated):\n- G (the cleanup_temp stop line deleted) fails SG-interrupt: 'the dispatch <pid> outlived the wrapper'.\n- G2 (the stop moved after finalize_postflight) fails SG-interrupt.\n- D fails V-two-newlines; E fails V-results-object.\n\n(b) Filed before the gate: EPIC ADD_RAIL prop-b13705c27dc24e709956069a67ed920c, 'CQ-M07r size exception', status PENDING. #governors was pinged (msg-d7859cd9).\n- It names both completions: 9e9e7345 +486/-2, and this one +23/-0.\n- FINAL per-file numstat: moe-agent.sh +138/-1, postflight-fake-check-dispatch.js +88, postflight-fake-proxy.js +5/-1, postflight-vm-route.sh +278.\n- That is 511 changed lines (+509/-2, net 507): runtime net 137, tests net 370.\n- It waives size only.\n\n(c) checkRefs[0], verbatim and fresh from the task worktree root, exited 0 after 2309 s.\n- 'ok SG-interrupt' and 'ok SGV, SGU U1-U7 and SG8';\n- PASS postflight-vm-route.sh, postflight.sh and parity-check.sh; lint OK.\n\nThe target moved 9e9e7345 -> 342423a3 (a deps-only change to packages/*/package*.json). None of the 4 files is touched.\n\nTheoretical:\n- SG-interrupt is POSIX-only, so CQ-M07s needs its own finally-order pin.\n- It also pins that an interrupted strong landing still finalizes. CQ-M07t adjusts that if it defers finalize.",
   "commits": [
     {
       "sha": "9e9e7345d3479a61318c1a2c2584e3a10d68178f",
@@ -273,15 +282,28 @@
       "recordedAt": "2026-11-04T14:33:52.602Z",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "da80b2d853f249f455955c374ff765e0ef028523",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T15:12:23Z",
+      "paths": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T16:22:43.701Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-96811257@2026-11-04T14:34:08Z",
-    "at": "2026-11-04T15:13:24.388Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a408f113@2026-11-04T15:12:23Z",
+    "at": "2026-11-04T16:22:43.701Z"
   },
   "reviewCompletedAt": "2026-11-04T15:12:26.121Z",
   "rejectionDetails": {

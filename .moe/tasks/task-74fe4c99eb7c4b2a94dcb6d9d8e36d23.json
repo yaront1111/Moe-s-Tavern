@@ -51,26 +51,40 @@
     {
       "stepId": "step-3",
       "description": "postflight-vm-route.ps1 rows, 1:1 with CQ-M07r's postflight-vm-route.sh rows (the port contract from step 1). Reuse R's scripts/tests/postflight-fake-check-dispatch.js through node; never add a second fake.\n\nAdd a new section (for example `[strong gate]`) after the landed [strong intent] G-rows, so a peer's appended rows merge cleanly:\n- canary: the host qualityGate is a command that would write a witness file. Under strong, the witness is absent, and the target moves only after the fake passes;\n- one row per non-pass case (non-zero exit, a stopped report, RUNNER_NOTHING_OWED, RUNNER_DEPENDENCIES_UNDECLARED, a missing CLI, a crashing CLI, an unparsable reply): each is MOE_COMMIT_FAILED_GATE with nothing published, and the line byte-identical to the sh row's expected line;\n- an environment id is printed; a malformed one is not;\n- MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1, with the warning;\n- the legacy control: a non-strong completion still runs the host gate.\n\nKeep the landed [vm candidate] R1-R9 and [strong intent] G1-G8 rows unedited.\n\nFollow mem:decision-ps1-harness-pin-inline-wrapper-block and mem:gotcha-wrapper-slice-tests-execute-text. Mind PS 5.1 encodings in fake output (mem:gotcha-windows-python-text-mode-crlf-in-node-tests): compare decoded strings, never raw bytes.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-04T15:39:19.738Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "New [strong gate] section in postflight-vm-route.ps1 (+273/-0, purely additive; Invoke-SgSections called after Invoke-VmjSections; R1-R9, G1-G8 and every other existing row unedited). It reuses R's postflight-fake-check-dispatch.js through node; there is no second fake.\nRows:\n- E2E 1:1 with sh (real wrapper, fake seat VM, codex worker, all 5 credentials exported):\n  - SG-pass and the SG-legacy/SG-observe host controls;\n  - SG-nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env (the line names the id), env-malformed (code alone), missing and timeout (<60 s);\n  - SG-protected (exactly one PATH_IGNORED line, the override never printed).\n  - Assert-SgRow ports sg_check assertion by assertion, including the byte-exact REFUSED and MOE_COMMIT_FAILED_GATE lines.\n- SGV: sh's whole verdict table, plus R's round-2 D (pass + two newlines) and E (results object at rc 0), plus V-missing. D, E and G are ported from their descriptions; R's round 2 has not landed.\n- SGU U1-U6 run in process. U7 is a runspace Stop() mid hang-hard: the grace is honored, the fake is dead and the record cleared.\n- G: static check of the four consecutive outer-finally lines, plus a behavioral run of the exact wrapper line against a recorded hang-hard fake.\n- SG8: static order strong-if < Invoke-MoeCheckDispatch < elseif < Invoke-MoeFrozenGate < intent.\nPort deviation: where sh expects one check-dispatch-term, ps1 expects 0 TERMs and a dead pid (U5, U7, SG-timeout).\nResults:\n- The full harness prints PASS postflight-vm-route.ps1 on pwsh 7.6.9 and PS 5.1.26100 (MOE_POSTFLIGHT_TIMEOUT_SEC=360).\n- Mutants were run in a scratch copy outside the checkout, and each fails at the intended row:\n  - PASS also accepting NOT_PASSED fails at SG-nonzero;\n  - env anchor \\z changed to $ fails at V-env-malformed \"<id>\\n\";\n  - Test-MoeStrongLandingTask always $false fails at the SG-pass canary (\"the qualityGate ran on the host\");\n  - the outer-finally stop line dropped fails at G.\nHarness gotchas fixed along the way:\n- the comma binds tighter than + inside @(), so concatenated SGV elements needed parentheses, and a 4-field guard now catches that;\n- $X and $x are the same variable;\n- a one-row scriptblock answer unrolls to a PSCustomObject, which has no .Count on 5.1, so every call site wraps in @().",
+      "startedAt": "2026-11-04T15:39:19.738Z",
+      "completedAt": "2026-11-04T16:09:27.957Z"
     },
     {
       "stepId": "step-4",
       "description": "Parity. CQ-M07r may have added its codes in a family parity-check does not compare yet, to keep its own sh-only landing green. If so, add that family, and any new required literal (the env var name, the warning text), to BOTH scripts/tests/parity-check.sh and scripts/tests/parity-check.ps1, so that sh and ps1 must carry the same set from now on. If R reused only already-compared codes, change neither file and say so in the step note.\n\nProve it in a scratch copy, reverted after: renaming one new code in moe-agent.ps1 alone fails both parity-check.sh and parity-check.ps1. parity-check.sh:324 already enforces the moe-agent.ps1 BOM; keep it passing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "R added a code family that neither parity script compared: MOE_CHECK_DISPATCH_.\n- sh and ps1 carry the identical 10-token set: NOT_PASSED, NO_REPORT, PATH, PATH_IGNORED, REFUSED, REPLY_INVALID, TIMEOUT, TIMEOUT_INVALID, TIMEOUT_SEC, UNAVAILABLE.\n- parity-check.sh now adds 'MOE_CHECK_DISPATCH_' to the section-1 family loop. parity-check.ps1 now adds 'MOE_CHECK_DISPATCH_[A-Z_]+' to $dynamicPatterns.\n- Both get a 'check dispatch' required-literal group: 'Post-flight: owed checks in check VMs: task', 'check VMs passed every owed check of candidate', 'was not frozen, recorded and passed by the check VMs', 'only the bundled local-runner/check-dispatch.mjs runs.'\nProof, in a scratch copy outside the checkout (removed after):\n- RED: before the edit, renaming MOE_CHECK_DISPATCH_NO_REPORT to MOE_CHECK_DISPATCH_NO_REPLY in moe-agent.ps1 alone passed both scripts (exit 0, the gap).\n- GREEN: after the edit, the same rename fails both (exit 1), each naming both tokens.\n- In place, parity-check.sh, parity-check.ps1 on pwsh 7.6.9 and parity-check.ps1 on PS 5.1 all PASS. The moe-agent.ps1 BOM is ef bb bf, and parity-check.sh's BOM check still passes.\npostflight-vm-route.ps1: label-only renames to match R's round-2 pin names in its size rail: V-pass-two-newlines became V-two-newlines, and the G row became SG-interrupt. It still parses on both engines.\nSIZE (amendment): `git diff --numstat moe/work-2026-10-24...HEAD` prints nothing, because nothing of mine is committed yet and HEAD 9e9e7345 is the merge base. The working-tree diff is moe-agent.ps1 +144/-1, parity-check.ps1 +6/-2, parity-check.sh +8/-3, postflight-vm-route.ps1 +273/-0, which is +431/-6, net 425. That is over 400, so the size-exception rail is filed next.",
+      "startedAt": "2026-11-04T16:09:32.435Z",
+      "completedAt": "2026-11-04T16:13:01.277Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification, once, from the task worktree: run checkRefs[0] exactly. It runs postflight.ps1 under pwsh.exe, then powershell.exe (5.1), with MOE_*/CLAUDE*/FAKE_* scrubbed and MOE_POSTFLIGHT_TIMEOUT_SEC=360, then parity-check.sh, parity-check.ps1 and npm run lint.\n- It takes up to about 1h45m under load. Start it detached (nohup, record $!) and poll with bounded until-loops (mem:gotcha-qa-ps1-postflight-from-wsl). Kill only that recorded PID.\n- A `UtilAcceptVsock` WSL error with no harness output is an interop flake: rerun the leg.\n- On a red row, rerun the same leg on the target's bytes before blaming this change.\n- complete_task's verification is this command. The summary gives each engine's section counts (frozen, owner, migration, worktree, vm-route) and every new [strong gate] row's result.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T16:13:22.235Z"
     },
     {
       "stepId": "step-6",
@@ -109,16 +123,17 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:19.711Z",
-  "updatedAt": "2026-11-04T15:39:19.738Z",
+  "updatedAt": "2026-11-04T16:13:22.235Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:08:35.564Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "architect-cd0ac706"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -126,7 +141,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:10:48.551Z",
