@@ -1,0 +1,28 @@
+{
+  "id": "task-93e09a54bd2a435da06a4ecfc6602e8d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a task file written before reopenCount existed can never be un-archived: set_task_status and the board compute undefined + 1 for the ARCHIVED to BACKLOG/WORKING reopen and updateTask refuses the NaN with an uncoded \"reopenCount must be a non-negative integer\", because StateManager.load backfills priority and comments but not reopenCount (48 live ARCHIVED rows)",
+  "description": "Filed by defect hunt #15 (task-928a468d), lane 3 (state persistence: backward compatibility with existing .moe/ state files). Verified at HEAD d5431577 in a git-archive snapshot outside the shared checkout.\n\nPROBLEM\n- StateManager.load() backfills legacy task fields in memory (packages/moe-daemon/src/state/StateManager.ts:1066-1079): priority, comments, contextFetchedBy and stepsCompleted. It does not backfill reopenCount.\n- An un-archive counts as a reopen and computes task.reopenCount + 1. That happens in set_task_status (src/tools/setTaskStatus.ts:249) and in the board drag (src/server/WebSocketServer.ts:622). REOPEN_TASK (src/state/taskStore.ts:816) does the same for DONE/REVIEW rows. With no reopenCount on disk, the result is NaN.\n- taskStore.ts:486-488 refuses NaN with a plain Error, \"reopenCount must be a non-negative integer\". So the un-archive fails, uncoded, and the row stays ARCHIVED.\n- A null reopenCount happens to work, because null + 1 is 1.\n- createTask already defaults a missing count to 0 (taskStore.ts:338). load never does.\n\nCONTRACT\n- docs/MCP_SERVER.md:1649 (### moe.set_task_status): \"`ARCHIVED → BACKLOG/WORKING` un-archives.\"\n- docs/SCHEMA.md:488: `reopenCount: number`.\n- Epic rail: \"Fixes must be backward-compatible with existing .moe/ state files\".\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-928a468d/A/sideLeads.test.ts, case 1 (\"legacy ARCHIVED row without reopenCount can be un-archived by a human\"). Copy it into packages/moe-daemon/src/__hunt__/ of a d5431577 snapshot and run `npx vitest run src/__hunt__/sideLeads.test.ts -t \"legacy ARCHIVED\"`.\n  - Expected: \"error\": null, \"status\": \"BACKLOG\"\n  - Received: \"error\": \"reopenCount must be a non-negative integer\", \"status\": \"ARCHIVED\"\n- Output: /mnt/d/moe-scratch/hunt-928a468d/A/sideLeads.vitest.txt\n- Live exposure, from a read-only scan of .moe/tasks on 2026-11-03 at about 23:45Z:\n  - 48 ARCHIVED rows have no reopenCount key, mostly the 2026-02 bug-* imports;\n  - 10 more ARCHIVED rows have reopenCount null.\n  - None of them is active, so the failure shows only when a human un-archives one.\n\nFIX DIRECTION\n- In load()'s task backfill loop, set reopenCount to 0 when it is not a non-negative integer (missing, null or anything else), beside the priority and comments backfills.\n- This fixes every reopen path at once, and it touches no file an open row holds: setTaskStatus.ts is held by task-a133bd6a, and WebSocketServer.ts is named by the IDE rows.\n- Like its siblings, the backfill is in memory only. The next write of the row persists it.\n\nFILES\n- packages/moe-daemon/src/state/StateManager.ts\n- packages/moe-daemon/src/state/legacyTaskBackfill.test.ts (new)\n- Docs: none. The fix restores the documented un-archive, so no contract changes.\n\nPlacement: no open row holds these files at filing time. setTaskStatus.test.ts is only run here, never edited, because task-a133bd6a (REVIEW) edits it.",
+  "definitionOfDone": [
+    "Loading a task file with no reopenCount key, and one with reopenCount null, gives state.getTask(id).reopenCount === 0 for both (new test file packages/moe-daemon/src/state/legacyTaskBackfill.test.ts)",
+    "moe.set_task_status ARCHIVED to BACKLOG on such a loaded row succeeds and stores reopenCount 1 (same test file)",
+    "`cd packages/moe-daemon && npx vitest run src/state/legacyTaskBackfill.test.ts src/state/StateManager.test.ts src/tools/setTaskStatus.test.ts` passes, run in a snapshot outside the shared checkout"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 469.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:00:00.696Z",
+  "updatedAt": "2026-11-04T00:00:00.696Z"
+}

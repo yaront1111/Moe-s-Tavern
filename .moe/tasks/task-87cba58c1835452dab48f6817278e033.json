@@ -1,0 +1,29 @@
+{
+  "id": "task-87cba58c1835452dab48f6817278e033",
+  "epicId": "epic-be924fb8",
+  "title": "bug: submit_plan keeps a re-planned task's stored effort with no tier minimum when effort is omitted, so a plan the size floor raises to heavy is stored and launched at effort high, below heavy's xhigh minimum, while the same plan with effort high passed explicitly is raised to xhigh",
+  "description": "Filed by defect hunt #15 (task-928a468d), lane 2 (the plan intake gates). Verified at HEAD d5431577 in a git-archive snapshot outside the shared checkout.\n\nPROBLEM\n- packages/moe-daemon/src/tools/submitPlan.ts:516-520: a requested effort is clamped and then raised to effortFloor(tier, …).\n- submitPlan.ts:522-523: when the task already has an effort, the code is `effort = clampEffort(effort ? maxEffort(effort, task.effort) : task.effort, …)`. With effort omitted, that is task.effort clamped to the allowed list, with no effortFloor(tier).\n- So take a row whose earlier standard-tier plan stored effort high, re-planned into the heavy band (6+ distinct files, or tier heavy passed). It is stored at tier heavy with effort high.\n- resolveLaunch (src/util/routing.ts:261) passes a stored effort through clampEffort only. So the claim_next_task launch hint is heavy/high too.\n- Every path back to PLANNING keeps tier and effort: a human plan reject, a critique block, request_replan, the qa_reject auto-replan. A re-plan with a stored effort is therefore the normal case.\n\nCONTRACT\n- docs/MCP_SERVER.md:388 (### moe.submit_plan, \"Launch effort and models\"): effort is raised \"to the tier minimum (light/standard high, heavy xhigh), and never below the task's existing effort\".\n- The code's own comment at submitPlan.ts:506-510 says the effort is raised to \"the tier minimum\".\n- The sibling branch for an explicit effort (submitPlan.ts:516-520) applies the floor.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-928a468d/B/replanEffortFloor.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a d5431577 snapshot and run `npx vitest run src/__hunt__/replanEffortFloor.test.ts`.\n- The test seeds a PLANNING row with {tier: standard, effort: high} and re-plans it with 6 distinct files, which puts planSizeFloor at heavy.\n- Result: 3 failed, 1 passed. The passing control uses an explicit effort high, which is raised to xhigh.\n  - × an omitted effort on the heavy re-plan never runs below the heavy minimum (xhigh). AssertionError: expected [ 'xhigh', 'max' ] to include 'high'\n  - × the claim-time worker launch hint for that stored row is below xhigh too: the same assertion.\n  - × an explicit tier heavy with effort omitted never runs below xhigh either: the same assertion.\n- Output: /mnt/d/moe-scratch/hunt-928a468d/B/replanEffortFloor.output.txt\n- Exposure: 0 of the 197 live heavy rows sit below xhigh, so this is a guard gap, not a live incident. Its precondition is common, though: 130 of 614 routed rows have planRevision ≥ 3.\n\nFIX DIRECTION\n- Apply effortFloor(tier, settings, lowEffortEligible) to the stored-effort branch's result too, so no branch can store an effort below the tier minimum. Report the raise through the existing effortRaised field.\n- Also floor a stored effort in resolveLaunch by effortFloor(task.tier, settings, low). Then an older row, or one written over /ws, can never launch below its tier minimum.\n\nFILES\n- packages/moe-daemon/src/tools/submitPlan.ts\n- packages/moe-daemon/src/util/routing.ts\n- packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts (new)\n- docs/MCP_SERVER.md: sync your own section, `### moe.submit_plan`. Its Launch effort note (:388) already states the floor. Say there that the floor also applies to a kept stored effort and to the claim-time launch hint.\n\nPlacement: no open row holds these files at filing time. Two held-back plan-intake leads also edit submitPlan.ts, so they wait for this row:\n- the plan sanitizer keeps 50 steps while submit_plan and taskSizing.maxSteps allow 100;\n- planningNotes has no type or length check.",
+  "definitionOfDone": [
+    "A PLANNING row stored at {tier: standard, effort: high}, re-planned with 6 distinct files and no effort, is stored with tier heavy and an effort of xhigh or max, and submit_plan's response launch hint carries the same effort (new test file packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts)",
+    "resolveLaunch on a WORKING row stored as {tier: heavy, effort: high} returns an effort of at least xhigh, while a light or standard row stored at high still launches at high (new test)",
+    "docs/MCP_SERVER.md's ### moe.submit_plan section says the tier minimum also applies to a kept stored effort and to the launch hint",
+    "`cd packages/moe-daemon && npx vitest run src/tools/submitPlan.effortFloor.test.ts src/tools/submitPlan.test.ts src/util/routing.test.ts` passes, run in a snapshot outside the shared checkout"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 467.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:59:31.684Z",
+  "updatedAt": "2026-11-03T23:59:31.684Z"
+}

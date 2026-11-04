@@ -58,25 +58,36 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written (text also at /mnt/d/moe-scratch/plan-29342b49/checkref-gate.txt, 884 chars).\n- What it does: it overlays chatWho.ts, chatJoin.ts and the new test onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive). It checks that no PRESENCE_TIMEOUT_MS is left in either tool and that both call isWorkerAlive(, printing 'inline presence left (<dir>)' on failure. Then, under env -i with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci && npx vitest run src/tools/{chatPresence,chatChannelRef,workerType,listWorkers}`: the new file plus every existing chat_who, chat_join and list_workers suite.\n- Expected: exit 0; 'Test Files 4 passed'; the last line is 'presence ok (/tmp/m2934.XXXX)'.\n- Architect dry run with a prototype of this plan: exit 0, 4 files and 84 tests. The base chatWho.ts exits 1 at the structural check.\n- Then `rm -rf` the printed literal /tmp/m2934.XXXX path.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit, read the printed snapshot path and log tail first, then fix the owning step's file.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T23:59:13.151Z"
+      "note": "checkRef exit 0: Test Files 4 passed, 88 tests; 'presence ok (/tmp/m2934.nSUZ)'. Snapshot removed.",
+      "startedAt": "2026-11-03T23:59:13.151Z",
+      "completedAt": "2026-11-03T23:59:26.043Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- Boundaries: isWorkerAlive's `<=` at exactly 120 s against the old inline `>` skip in chat_who (the same edge) and chat_join's old strict `<` (it now admits the boundary instant).\n- A missing, unparsable or future lastActivityAt: isWorkerAlive returns false for NaN, and a future stamp counts as alive, as before.\n- A DEAD record in activeChatWaiters is never listed. An all-channel waiter (channels null) is still honoured for live records.\n- The chat_join caller itself appears when it is alive. 'human' and 'system' callers are unchanged.\n- RED re-proof: in a scratch snapshot outside the repo, restore `git show $(git merge-base HEAD moe/work-2026-10-24):packages/moe-daemon/src/tools/chatWho.ts` and chatJoin.ts, then run `npx vitest run src/tools/chatPresence.test.ts`. The DEAD and IDLE assertions must fail. Paste the failing names into the completion summary, then rm -rf the literal scratch path.\n- Scope: only the four planned files changed: no mentionRouter.ts, workerLiveness.ts or listWorkers.ts.\nIf this review changes any file, re-run step 4's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in the owning step's file.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatWho.ts",
         "packages/moe-daemon/src/tools/chatJoin.ts",
         "packages/moe-daemon/src/tools/chatPresence.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts",
+        "packages/moe-daemon/src/tools/chatJoin.ts",
+        "packages/moe-daemon/src/tools/chatPresence.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review: boundary now <= 120s everywhere (chat_join admits the exact instant); NaN/missing lastActivityAt -> not alive; DEAD never listed even via waiter; no files changed by review. RED re-proof on base code: 4 of 5 chatPresence tests fail (chat_who no-channel, chat_who channel, chat_join, list_workers parity); fixture-sanity passes. Scratch removed.",
+      "startedAt": "2026-11-03T23:59:28.045Z",
+      "completedAt": "2026-11-03T23:59:41.888Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,12 +99,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:34:06.481Z",
-  "updatedAt": "2026-11-03T23:59:13.151Z",
+  "updatedAt": "2026-11-04T00:00:44.851Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:54:34.552Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -106,7 +117,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T23:57:08.496Z",
@@ -173,5 +186,46 @@
   },
   "planApprovedAt": "2026-11-03T23:57:08.534Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-03T23:58:22.847Z"
+  "workStartedAt": "2026-11-03T23:58:22.847Z",
+  "reviewStartedAt": "2026-11-03T23:59:49.448Z",
+  "verification": {
+    "command": "checkRef from executionContract (git archive snapshot; npm ci && npx vitest run src/tools/{chatPresence,chatChannelRef,workerType,listWorkers})",
+    "exitCode": 0,
+    "outputTail": "Test Files  4 passed (4)\n      Tests  88 passed (88)\npresence ok (/tmp/m2934.nSUZ)",
+    "reportedAt": "2026-11-03T23:59:49.448Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatWho.ts",
+    "packages/moe-daemon/src/tools/chatJoin.ts",
+    "packages/moe-daemon/src/tools/chatPresence.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "chat_who and chat_join now take presence from isWorkerAlive (not DEAD, active within 120 s), with no inline PRESENCE_TIMEOUT_MS left. chat_who's Pass 2 never lists a DEAD waiter, but a live waiter parked past the window still counts. chat_join no longer drops IDLE seats (the doc's rule). The two MCP_SERVER.md Notes sections state the same rule. New tools/chatPresence.test.ts has 5 cases: DEAD and stale exclusion, IDLE inclusion, parity with list_workers isAlive, waiter source. RED re-proof on the base code: 4 of 5 fail (chat_who without a channel, chat_who with a channel, chat_join, list_workers parity). The fixture-sanity case passes.",
+  "commits": [
+    {
+      "sha": "f76c55f34a1aaa21dc4d06edb3397378c7bb1958",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T23:57:25Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/chatJoin.ts",
+        "packages/moe-daemon/src/tools/chatPresence.test.ts",
+        "packages/moe-daemon/src/tools/chatWho.ts"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-04T00:00:44.851Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d6c1cb7a@2026-11-03T23:57:25Z",
+    "at": "2026-11-04T00:00:44.851Z"
+  }
 }
