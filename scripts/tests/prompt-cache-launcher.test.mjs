@@ -447,7 +447,7 @@ for (const [ext, engine] of engines) {
 // cut's protected-command gate reads under set -u; the fixture sets 0, the value
 // the launcher has when MOE_RUNTIME_PROTECTED is unset. Refusals under protected
 // are covered by protected-agent-command.test.mjs.
-const typeCases = [['claude', 'CLAUDE'], ['bin/codex', 'CODEX'], ['C:/tools/gemini.cmd', 'GEMINI'], ['grok.exe', 'GROK'], ['aider', 'CLAUDE']];
+const typeCases = [['claude', 'CLAUDE'], ['bin/codex', 'CODEX'], ['C:/tools/gemini.cmd', 'GEMINI'], ['agy', 'GEMINI'], ['C:/tools/agy.exe', 'GEMINI'], ['grok.exe', 'GROK'], ['aider', 'CLAUDE']];
 for (const [ext, engine] of engines) {
   for (const [command, expected] of typeCases) {
     const inherited = expected === 'GROK' ? 'CODEX' : 'GROK';

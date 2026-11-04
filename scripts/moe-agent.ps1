@@ -646,7 +646,8 @@ if ($script:MoeRuntimeProtected) {
 }
 $script:MoeProtectedCli = $null
 if ($script:MoeRuntimeProtected) {
-    $Command = Resolve-MoeProtectedCli $Command
+    # Gemini mode runs Antigravity only: the trusted lookup takes agy, never the Gemini CLI.
+    $Command = Resolve-MoeProtectedCli $(if ($Command -ceq 'gemini') { 'agy' } else { $Command })
     $script:MoeProtectedCli = $Command
 }
 
@@ -1224,7 +1225,7 @@ if ($cmdForDetect) {
 }
 $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
-elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
+elseif ($cmdBase -eq "gemini" -or $cmdBase -eq "agy") { $cliType = "gemini" }
 elseif ($cmdBase -eq "grok") { $cliType = "grok" }
 # The seat's worker.type: moe-proxy forwards it on claim_next_task/join_team.
 # Replaces an inherited value (the in-process hot reload keeps env).
@@ -11149,14 +11150,20 @@ $mentionsJson
             }
         }
     } elseif ($cliType -eq "gemini") {
-        if ($Command -eq "gemini") {
-            if (Get-Command agy -ErrorAction SilentlyContinue) {
+        # Gemini mode runs Antigravity (agy) only, never the Gemini CLI, which rejects agy's flags.
+        # MOE_AGY_COMMAND names agy when the IDE's PATH lacks it; a blank value counts as unset.
+        # Under the protected marker $Command is already the trusted agy (Resolve-MoeProtectedCli).
+        if (-not $script:MoeRuntimeProtected) {
+            if (-not [string]::IsNullOrWhiteSpace($env:MOE_AGY_COMMAND)) {
+                $Command = $env:MOE_AGY_COMMAND
+            } elseif ($cmdBase -eq "gemini") {
+                # Detection's base name: GetFileNameWithoutExtension throws on 5.1 for a quoted -Command.
                 $Command = "agy"
             }
         }
-        $geminiCheck = Get-Command $Command -ErrorAction SilentlyContinue
-        if (-not $geminiCheck) {
-            Write-Error "Antigravity command not found: $Command. Please ensure Antigravity CLI (agy) is installed."
+        if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+            # Not Write-Error: under $ErrorActionPreference='Stop' it throws before exit 1.
+            [Console]::Error.WriteLine("[ERROR] Antigravity CLI (agy) not found: $Command. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).")
             $script:MoeExitStatus = 1
             exit 1
         }

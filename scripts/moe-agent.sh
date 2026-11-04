@@ -636,7 +636,7 @@ CMD_BASE=$(basename "$CMD_FIRST")
 CMD_BASE="${CMD_BASE%.*}"
 if [ "$CMD_BASE" = "codex" ]; then
     CLI_TYPE="codex"
-elif [ "$CMD_BASE" = "gemini" ]; then
+elif [ "$CMD_BASE" = "gemini" ] || [ "$CMD_BASE" = "agy" ]; then
     CLI_TYPE="gemini"
 elif [ "$CMD_BASE" = "grok" ]; then
     CLI_TYPE="grok"
@@ -953,7 +953,8 @@ protected_resolve_cli() { # $1 = the CLI name; sets COMMAND_BIN to its absolute 
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
     require_protected_runtime_file MOE_PROXY_PATH "$PROXY_PATH_OVERRIDE"
     require_protected_runtime_file MOE_DAEMON_PATH "$DAEMON_PATH_OVERRIDE"
-    protected_resolve_cli "$COMMAND"
+    # Gemini mode runs Antigravity only: the trusted lookup takes agy, never the Gemini CLI.
+    if [ "$CLI_TYPE" = "gemini" ]; then protected_resolve_cli agy; else protected_resolve_cli "$COMMAND"; fi
 fi
 
 # serena_ignore_override ROOT -- hand Serena git's own ignore sources (docs/MEMORY.md,
@@ -11634,12 +11635,18 @@ $PROMPT_BODY"
         rm -f "$CODEX_SEAT_INSTRUCTIONS_FILE" 2>/dev/null || true
         rm -f "$CODEX_SESSION_CONTEXT_FILE" 2>/dev/null || true
     elif [ "$CLI_TYPE" = "gemini" ]; then
-        if [ "$COMMAND_BIN" = "gemini" ] && command -v agy &> /dev/null; then
-            COMMAND_BIN="agy"
+        # Gemini mode runs Antigravity (agy) only, never the Gemini CLI, which rejects agy's flags.
+        # MOE_AGY_COMMAND names agy when the IDE's PATH lacks it; a blank value counts as unset.
+        # Under the protected marker COMMAND_BIN is already the trusted agy (protected_resolve_cli).
+        if [ "$RUNTIME_PROTECTED" != 1 ]; then
+            case "${MOE_AGY_COMMAND:-}" in
+                *[![:space:]]*) COMMAND_BIN="$MOE_AGY_COMMAND" ;;
+                *) if [ "$CMD_BASE" = "gemini" ]; then COMMAND_BIN="agy"; fi ;;
+            esac
         fi
-        # Check agy is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
-            echo -e "${RED}[ERROR]${NC} Antigravity command not found: $COMMAND_BIN. Please ensure Antigravity CLI (agy) is installed."
+            # printf, not echo -e: a backslash in the path (agy\c) must not end or mangle the line.
+            printf '%b[ERROR]%b %s\n' "$RED" "$NC" "Antigravity CLI (agy) not found: $COMMAND_BIN. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH)."
             exit 1
         fi
 

@@ -737,3 +737,79 @@ cp.spawnSync = function (cmd) { const r = real.apply(this, arguments); fs.append
     }
   }
 });
+
+// Gemini mode runs Antigravity (agy) only, never the Gemini CLI (PR #208's port).
+// Without the marker: a non-blank MOE_AGY_COMMAND, else agy on PATH; no agy stops
+// with one fixed line. Under the marker: the trusted lookup takes agy and
+// MOE_AGY_COMMAND is not read. Each stub logs '<where> <name> <MOE_WORKER_TYPE>'.
+function typedStub(fx, dir, name, where) {
+  const file = path.join(dir, windows ? `${name}.cmd` : name);
+  writeFileSync(file, windows ? `@echo ${where} ${name} %MOE_WORKER_TYPE%>>"${fx.ran}"\r\n` : `#!/bin/sh\necho "${where} ${name} $MOE_WORKER_TYPE" >> '${fx.ran}'\n`);
+  if (!windows) chmodSync(file, 0o755);
+  return file;
+}
+const ranText = (fx) => (existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8') : '').replaceAll('\r', '');
+// pwsh 7 colours and wraps rendered error records at the console width; match on flattened text.
+const flat = (r) => `${r.stdout}\n${r.stderr}`.replace(/\x1B\[[0-9;?]*[A-Za-z]/g, '').replace(/\r?\n[ \t]*\|?[ \t]*/g, ' ').replace(/\s+/g, ' ');
+const agyMissing = (cmd) => `Antigravity CLI (agy) not found: ${cmd}. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).`;
+for (const engine of ENGINES) {
+  const opts = { skip: engine.skip };
+  const name = (row) => `${engine.name}: ${row}`;
+  const legacy = (fx, command, env = {}) => run(engine, fx, { command, marker: null, role: 'governor', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL, ...(GIT_DIR ? [GIT_DIR] : [])], env: { MOE_NODE_COMMAND: undefined, ...env } });
+  // '"gemini"': a quoted command; PowerShell 5.1's GetFileNameWithoutExtension throws on the quote.
+  for (const command of ['gemini', 'agy', '"gemini"']) {
+    test(name(`AG1 gemini mode: ${command} runs agy, never the Gemini CLI`), opts, async (t) => {
+      const fx = fixture(t);
+      typedStub(fx, fx.trusted, 'gemini', 'path'); typedStub(fx, fx.trusted, 'agy', 'path');
+      const r = await legacy(fx, command);
+      assert.equal(r.code, 0, show(r));
+      assert.equal(ranText(fx), 'path agy GEMINI\n', show(r));
+      assert.ok(existsSync(path.join(fx.project, '.gemini', 'GEMINI.md')), `no gemini-mode instructions\n${show(r)}`);
+    });
+  }
+  test(name('AG2 gemini mode: a non-blank MOE_AGY_COMMAND names the agy that runs; a blank one counts as unset'), opts, async (t) => {
+    const fx = fixture(t);
+    typedStub(fx, fx.trusted, 'gemini', 'path'); typedStub(fx, fx.trusted, 'agy', 'path');
+    for (const [value, want] of [[typedStub(fx, fx.custom, 'agy', 'custom'), 'custom agy GEMINI\n'], [' ', 'path agy GEMINI\n']]) {
+      rmSync(fx.ran, { force: true });
+      const r = await legacy(fx, 'gemini', { MOE_AGY_COMMAND: value });
+      assert.equal(r.code, 0, show(r));
+      assert.equal(ranText(fx), want, show(r));
+    }
+  });
+  test(name('AG3 gemini mode: with no agy the launcher stops with the fixed line and runs nothing'), opts, async (t) => {
+    const fx = fixture(t);
+    typedStub(fx, fx.trusted, 'gemini', 'path');
+    // agy\c: a backslash in the shown path must not end or mangle the line (sh echo -e would).
+    for (const shown of ['agy', path.join(fx.custom, 'agy'), path.join(fx.custom, 'agy\\c')]) {
+      const env = shown === 'agy' ? {} : { MOE_AGY_COMMAND: shown };
+      const r = await legacy(fx, 'gemini', env);
+      assert.equal(r.code, 1, show(r));
+      assert.equal(flat(r).split(agyMissing(shown)).length - 1, 1, show(r));
+      assert.equal(existsSync(fx.ran), false, `a CLI ran\n${show(r)}`);
+    }
+  });
+  test(name('AG4 gemini mode: under the marker gemini resolves the trusted agy, never the Gemini CLI or MOE_AGY_COMMAND'), opts, async (t) => {
+    const fx = fixture(t);
+    typedStub(fx, fx.trusted, 'gemini', 'trusted'); const file = typedStub(fx, fx.trusted, 'agy', 'trusted');
+    const r = await run(engine, fx, { command: 'gemini', pathEntries: [fx.empty, fx.trusted, ...TAIL], stopOn: 'MOE_PROTECTED_AGENT_CLI:', env: { MOE_AGY_COMMAND: typedStub(fx, fx.custom, 'agy', 'custom') } });
+    assertResolved(fx, r, 'agy', file);
+  });
+  test(name('AG5 gemini mode: under the marker a governor seat runs the trusted agy'), opts, async (t) => {
+    const fx = fixture(t);
+    typedStub(fx, fx.trusted, 'gemini', 'trusted'); typedStub(fx, fx.trusted, 'agy', 'trusted');
+    const r = await run(engine, fx, { command: 'gemini', role: 'governor', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL, ...(GIT_DIR ? [GIT_DIR] : [])], env: { MOE_NODE_COMMAND: undefined, MOE_AGY_COMMAND: typedStub(fx, fx.custom, 'agy', 'custom') } });
+    assert.equal(r.code, 0, show(r));
+    assert.equal(ranText(fx), 'trusted agy GEMINI\n', show(r));
+  });
+  test(name('AG6 gemini mode: under the marker with no trusted agy the launcher refuses'), opts, async (t) => {
+    const fx = fixture(t);
+    typedStub(fx, fx.trusted, 'gemini', 'trusted');
+    assertRefused(engine, fx, await run(engine, fx, { command: 'gemini', pathEntries: [fx.trusted, ...TAIL] }), notFoundLine('agy'));
+  });
+  test(name('AG7 gemini mode: under the marker agy itself is refused'), opts, async (t) => {
+    const fx = fixture(t);
+    typedStub(fx, fx.trusted, 'agy', 'trusted');
+    assertRefused(engine, fx, await run(engine, fx, { command: 'agy', pathEntries: [fx.trusted, ...TAIL] }), refusedLine('agy'));
+  });
+}
