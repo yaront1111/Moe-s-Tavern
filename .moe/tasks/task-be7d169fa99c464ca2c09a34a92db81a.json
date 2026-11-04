@@ -1,0 +1,34 @@
+{
+  "id": "task-be7d169fa99c464ca2c09a34a92db81a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains' /health identity check compares project paths by spelling only (DaemonIdentityProbe.classify), while its daemon.json check (isSameProject) also accepts equal canonical paths, so a live same-project daemon reached through a symlinked path passes the first check and is then judged Foreign: handleForeignDaemon deletes its daemon.json and the reconnect starts a second daemon on the same .moe/ (JetBrains twin of task-e07e695c)",
+  "description": "Hunt #19 (task-443e8eac) held this as item (c), a lead from reading code only, since there is no JDK in WSL. The governor confirmed the code path at 3cd256eb. This is the JetBrains twin of task-e07e695c, VS Code's symlink case, which was reproduced end to end with two live daemons on one .moe inode.\n\nThe two checks disagree:\n- moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:1028-1030: `isSameProject(path, base)` is `comparableProjectPath(path) == comparableProjectPath(base) || File(path).canonicalPath == File(base).canonicalPath`.\n- DaemonIdentity.kt:72-82: `classify(status, body, projectPath)` returns Same only when `comparableProjectPath(served) == comparableProjectPath(projectPath)`, and Foreign(served) otherwise. It has no canonical fallback. comparableProjectPath normalises drive, WSL and UNC spellings and collapses '.' and '..', but never resolves a symlink.\n- MoeProjectService.kt:298-327: probeThenOpen sends Foreign to handleForeignDaemon. That calls deleteDaemonInfoIfUnchanged(daemonInfo), publishes \"serves another project … this project's daemon will start on the next free port\", and schedules a reconnect, which spawns a second daemon on the same .moe/.\n\nScenario: a daemon started with the real path R (a terminal `start`, a launcher, or another IDE window) while the IDE opened the project through a symlink S, where S resolves to R.\n1. daemon.json's projectPath R passes isSameProject(R, S) through the canonical fallback.\n2. The /health reply, which names R, is then classified Foreign(R) against S.\n3. The live daemon's daemon.json is deleted and a second daemon is started.\n\nFix direction: give classify the same canonical-equality fallback isSameProject has, best-effort. A canonicalPath that throws, or an unreadable path, keeps today's answer. Better still, put the comparison in one shared helper that both stages call. Leave the drive, WSL and UNC rules exactly as they are, and keep Unknown for a non-absolute or missing projectPath.\n\nEvidence plan: the first step is RED. Add a JUnit case to DaemonIdentityTest.kt with a temp real directory R and a symlink S to it (Files.createSymbolicLink; skip with Assume when the OS refuses symlinks, as Windows does without the privilege). classify(200, {\"projectPath\": R}, S) must return Same. Run it on today's code before any fix. If it already returns Same, the lead does not reproduce: post that in #governors and archive the row with no code change.\n\nNo dependency edge is needed. The JetBrains files of fe811130 and 8383080c are DONE, and VS Code's e07e695c and c203c09a touch other files. The Kotlin gate is gradlew.bat test from Windows, under the jetbrains-gradle lease.",
+  "definitionOfDone": [
+    "Before any fix, a RED JUnit case in DaemonIdentityTest.kt (temp real dir R, symlink S to R, skipped via Assume where symlinks are refused) shows classify(200, {projectPath: R}, S) returning Foreign on today's code, with its output quoted in the verification. If it returns Same, the row is closed as not reproduced with no code change.",
+    "After the fix, classify returns Same for R vs S. A mismatched real project still returns Foreign, and a relative or missing projectPath still returns Unknown. The drive, WSL and UNC spelling rules are unchanged, and the existing DaemonIdentityTest and MoeProjectForeignDaemonTest cases pass unedited.",
+    "gradlew.bat test passes from Windows under the jetbrains-gradle lease, and the verification quotes the class totals."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-c33f294e",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 500.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:00:17.961Z",
+  "updatedAt": "2026-11-04T08:11:31.429Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:11:28.945Z"
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e"
+  ]
+}

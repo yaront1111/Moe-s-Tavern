@@ -1,0 +1,170 @@
+{
+  "id": "task-c203c09ad69c4a07ac19633e2f8257ab",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code never reads daemon.json bindHost and dials 127.0.0.1 only, so for a live same-project daemon bound to ::1 or a LAN address every connect spawns a start the daemon refuses and fails naming nothing, and when another project's daemon holds the same port on 127.0.0.1 VS Code deletes the live daemon's daemon.json and starts a second daemon on the same .moe/ (VS Code twin of task-fe811130)",
+  "description": "Filed by hunt #19 (task-443e8eac), lane 1: the VS Code extension's daemon lifecycle. HEAD 3cd256eb.\n\nJETBRAINS TWIN. task-fe811130 (DONE, f9395bf5) added MoeDaemonSupervisor.offLoopbackBindRefusal (moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:965). It is used in ensureDaemonRunningImpl (:166) and in MoeProjectService.connect (MoeProjectService.kt:178). When a live same-project daemon is bound off loopback, JetBrains keeps daemon.json, starts nothing, publishes a status naming the host and schedules no reconnect. The loopback-serving set is LOOPBACK_SERVING_BIND_HOSTS (:1078): {127.0.0.1, 0.0.0.0, ::, wsl}, the daemon's probeHostFor set (packages/moe-daemon/src/server/probeHost.ts).\n\nPROBLEM (moe-vscode/src/services/MoeDaemonClient.ts)\n- Nothing under moe-vscode/src reads bindHost (0 grep hits). The daemon records it for every --host or MOE_BIND_HOST other than 127.0.0.1 (packages/moe-daemon/src/index.ts:848).\n- Every dial uses moe.daemon.host, whose default is 127.0.0.1: getDaemonInfo :1563/:1588, ensureDaemonRunning :1664-1669, waitForDaemonInfo :1811.\n- Live same-project daemon on ::1 or a LAN address, and nothing else on 127.0.0.1:<port>:\n  - ensureDaemonRunning's TCP probe fails, so it spawns `start --project <path>` (:1669) on every connect.\n  - The daemon's guard refuses that start: nocollide.sh shows exit 0 with daemon.json unchanged.\n  - connect() then dials ws://127.0.0.1:<port>, which is ECONNREFUSED. The 5 s reconnect loop (maxReconnectAttempts 10, :777) repeats both steps, and no message names the bind host.\n- Another project's daemon on 127.0.0.1:<port>:\n  - The two binds can share a port, because the daemon's port check isLoopbackPortFree (index.ts:481, called from isPortAvailable :464) dials only 127.0.0.1. So a 127.0.0.1 daemon started after a ::1 or LAN-bound one takes the same number.\n  - getVerifiedDaemonInfo's /health probe then reads 'foreign'. removeDaemonJsonIfUnchanged deletes the live daemon's daemon.json (:1542), and startDaemon('start') (:1543) starts a SECOND daemon on the same .moe/.\n\nEVIDENCE (a snapshot of HEAD 3cd256eb outside the shared checkout; scripts and outputs are in /mnt/d/moe-scratch/hunt-443e8eac/mine/)\n1. zz-hunt443e-bindhost.test.cjs uses the tests/daemon-identity.test.cjs fixture with a stubbed spawn. daemon.json is {projectPath: <project>, bindHost: \"::1\", pid: <live>}, and a same-project daemon listens on [::1]:P. Output (bindhost-harness.out):\n   no-collision: OBSERVED {\"outcome\":\"rejected: connect ECONNREFUSED 127.0.0.1:33655\",\"spawns\":[[\"bundled-daemon.js\",\"start\",\"--project\",\"<project>\"]],\"daemonJsonKept\":true,\"ownHealth\":0,\"ownWs\":0,\"messagesNamingBindHost\":0}\n   port-collision: OBSERVED {\"outcome\":\"rejected: Moe could not find this workspace's daemon after refusing a foreign daemon.\",\"spawns\":[[\"bundled-daemon.js\",\"start\",\"--project\",\"<project>\"]],\"daemonJsonKept\":false,\"ownHealth\":0,\"ownWs\":0,\"otherHealth\":1,\"messagesNamingBindHost\":0}\n2. zz-hunt443e-e2e.cjs uses real snapshot daemons:\n   - A is `init --project A --host ::1 --port 19950`.\n   - B is `init --project B --port 19950` and takes 127.0.0.1:19950 too.\n   The real client, with a real spawn, then (bindhost-e2e.out):\n   warning: \"Moe: the daemon on 127.0.0.1:19950 serves .../projB, not this workspace (<A>). Starting this project's daemon on the next free port.\"\n   A daemon.json now {\"port\":19960,\"pid\":2880254,\"bindHost\":null}\n   health old A [::1]:19950 -> <A> (pid 2880002 alive: true)\n   health new 127.0.0.1:19960 -> <A>\n   That is two live writers on one .moe/.\n\nFIX DIRECTION (JetBrains parity)\n- Add an exported helper, offLoopbackBindRefusal(info, workspace). It returns a message when all of these hold, and null otherwise:\n  - daemon.json's bindHost is a non-empty string outside {127.0.0.1, 0.0.0.0, ::, wsl};\n  - the record names this workspace;\n  - the record is from this side of WSL;\n  - its pid is a positive integer that is alive (process.kill(pid, 0), as isPidAlive :1498).\n- Only compare and show bindHost. Never dial, resolve or probe it: daemon.json is repository content. Put fixed words first, then the host.\n- Run the helper in connect() before ensureDaemonRunning (:915). That makes it precede both the spawn and getVerifiedDaemonInfo's foreign removal.\n- On a refusal: keep daemon.json, spawn nothing, show the message, and schedule no reconnect (manualDisconnect = true, as the protected refusal at :939 does).\n- A configured moe.daemon.port endpoint keeps today's path.\n- Out of scope: dialing bindHost. Also out of scope: a VS Code WSL-remote window facing a Windows-owned daemon, which is held back as a separate lead.\n\nFILES: moe-vscode/src/services/MoeDaemonClient.ts; a new moe-vscode/tests/daemon-bindhost.test.cjs.\n\nPLACEMENT: shares MoeDaemonClient.ts with task-e07e695c (the symlink row from this hunt). That row owns the four project-path comparisons (:184, :1576, :1656, :1861) and a helper beside pathsMatch. This row owns connect()'s new pre-check and its own helper. For \"names this workspace\", use task-e07e695c's helper if it has landed, or pathsMatch otherwise. There is no dependsOn.",
+  "definitionOfDone": [
+    "With daemon.json {projectPath: <workspace>, bindHost: \"::1\", pid: <live>} and a same-project daemon on [::1]:P, connect() spawns nothing, leaves daemon.json byte-identical, schedules no reconnect and shows one message containing ::1. The same holds when 127.0.0.1:P answers /health as another project. A node --test file under moe-vscode/tests pins both and fails at 3cd256eb.",
+    "These keep today's path: bindHost absent, 127.0.0.1, 0.0.0.0, :: or wsl; a dead pid; a pid of 0 or less; a record from the other side of WSL. tests/daemon-identity.test.cjs and tests/daemon-start.test.cjs pass unchanged.",
+    "`cd moe-vscode && npm test && npm run compile` passes, run in a snapshot of the commit outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (DoD 1 and 2). Load test-driven-development. Create moe-vscode/tests/daemon-bindhost.test.cjs with the session's own editing tool (Write/Edit on a Claude seat, apply_patch on a codex exec seat; never a shell write or a subagent).\n\nHarness: copy fixture() and the server helper from tests/daemon-identity.test.cjs:\n- ts.transpileModule of src/services/MoeDaemonClient.ts, run in vm.runInNewContext;\n- a vscode stub that records warnings, errors and output-channel lines;\n- a child_process.spawn stub that records argv;\n- client.resolveBundledDaemonPath = () => 'bundled-daemon.js' and client.waitForDaemonInfo = async () => {}.\nGive fixture an options bag { configPort = 0, configHost, autoConnect = true }, so getConfiguration answers 'daemon.port', 'daemon.host' and 'autoConnect' from it. Pass the real process, or { ...process } (the spread keeps kill). Every row registers t.after(() => f.client.disconnect()), so no reconnect timer outlives it. A listen helper for '::1' calls t.skip('no IPv6 loopback') on EADDRNOTAVAIL or EAFNOSUPPORT. Each row writes daemon.json as {port, pid: process.pid, startedAt, projectPath: <project>, bindHost} into a mkdtemp project with .moe/.\n\nRows (exact-value assertions; each must fail at the base commit):\n- B1 no collision: a same-project server on [::1]:P that counts /health and /ws; bindHost '::1'; nothing on 127.0.0.1:P. Assert:\n  - connect() rejects;\n  - f.spawns deep-equals [];\n  - daemon.json is byte-identical;\n  - exactly one of warnings+errors contains '::1';\n  - f.client.manualDisconnect === true, and after f.client.scheduleReconnect(), f.client.reconnectTimeout === undefined (as tests/protected-daemon-provenance.test.cjs:139);\n  - the ::1 server saw 0 /health and 0 /ws.\n- B2 port collision: B1 plus a server on 127.0.0.1:P answering /health {projectPath:'/other/project'}. Same assertions, and that server also saw 0 /health and 0 /ws.\n- B3 LAN literal: bindHost '192.0.2.10' (TEST-NET), nothing listening anywhere. Same refusal; the message contains '192.0.2.10'; no spawn.\n- B4 unsafe host text: bindHost '[x](command:workbench.action.reloadWindow)'. Still refused (no spawn, daemon.json kept), but the message contains neither '](' nor 'command:'.\n- B5 helper matrix. offLoopbackBindRefusal(record, workspace, windows) returns null for:\n  - bindHost missing, '', 42, '127.0.0.1', '0.0.0.0', '::' or 'wsl';\n  - pid 2147483646 (dead), 0, -1, 1.5 or '123';\n  - a projectPath naming another folder;\n  - a record from the other side of WSL: windows=false with projectPath 'D:\\\\x\\\\y' and workspace '/mnt/d/x/y'; windows=true with projectPath '/mnt/d/x/y' and workspace 'D:\\\\x\\\\y';\n  - record null, [] or 'text'.\n  It returns a string containing the host for '::1' and for '192.0.2.10', with pid process.pid and projectPath equal to the workspace or absent.\n- B6 today's path is kept, and no refusal message appears, for each of:\n  - configPort > 0;\n  - configHost '[::1]';\n  - a missing daemon.json, where connect spawns `start` exactly once, as today;\n  - an unparseable daemon.json;\n  - an oversized (over 64 KiB) daemon.json.\n\nRun RED in a whole-repo snapshot of the base with only this file overlaid: the step-3 command without its MoeDaemonClient.ts cp. In the step note, record which B rows fail and why. Every other suite must pass unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/daemon-bindhost.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/daemon-bindhost.test.cjs"
+      ],
+      "note": "Wrote tests/daemon-bindhost.test.cjs (13 tests). RED run in a whole-repo git-archive snapshot of HEAD 90c499e1 with only this file overlaid (node v24.21.0, npm ci ok): 8 fail, 5 pass. B1/B2/B3/B4 fail because connect() spawns `bundled-daemon.js start --project <project>` (deepEqual(f.spawns, []) gets one spawn): the refused `start` on every connect, as in hunt #19. B5 x4 (null matrix, message, EPERM pid, isOtherSideOfWsl) fail with 'offLoopbackBindRefusal / isOtherSideOfWsl is not a function'. The 5 B6 rows (configured port, configured host '[::1]', missing, unparseable and oversized daemon.json) pass at base by design: they guard today's path, so they cannot fail before the change. IPv6 loopback was available, so B1/B2 ran, not skipped.",
+      "startedAt": "2026-11-04T08:06:52.389Z",
+      "completedAt": "2026-11-04T08:09:24.804Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT (DoD 1 and 2) in moe-vscode/src/services/MoeDaemonClient.ts, with the session's own editing tool. Mirror JetBrains' offLoopbackBindRefusal (task-fe811130, f9395bf5: moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:965 and LOOPBACK_SERVING_BIND_HOSTS :1078). Do not edit JetBrains files.\n\n1. Module scope, right after removeDaemonJsonIfUnchanged (:231-240), away from pathsMatch (:152), which task-e07e695c edits:\n   - const LOOPBACK_SERVING_BIND_HOSTS = new Set(['127.0.0.1', '0.0.0.0', '::', 'wsl']). Comment it as the daemon's probeHostFor set (packages/moe-daemon/src/server/probeHost.ts) and JetBrains' twin.\n   - const SHOWABLE_HOST = /^[0-9A-Za-z.:%_-]{1,255}$/. It allows no brackets, parentheses or spaces, because VS Code toasts render [text](link) markup (mem:gotcha-vscode-protected-refusal-ux).\n   - export function isOtherSideOfWsl(projectPath: string, windows: boolean): boolean, with the JetBrains regexes: windows → /^\\/(?![\\\\/])/; otherwise /^(?:[A-Za-z]:[\\\\/]|[\\\\/]{2}[^\\\\/])/.\n   - export function offLoopbackBindRefusal(record: unknown, workspace: string, windows: boolean): string | null. It returns a message only when all of these hold, and null otherwise:\n     - isPlainObject(record) (:282);\n     - bindHost is a string whose trim() is non-empty and outside the set;\n     - projectPath is absent or '' (this workspace's own .moe/, as ensureDaemonRunning :1656 already treats it), or a string where pathsMatch(projectPath, workspace) holds. Use task-e07e695c's same-project helper instead if that row has landed;\n     - a string projectPath is not isOtherSideOfWsl;\n     - pid is an integer > 0 and alive.\n   - Liveness: process.kill(pid, 0) means alive. An error whose errorCode (:275) is ESRCH means dead; any other error (EPERM) means alive, exactly as isPidAlive (:1498).\n   - Error handling: the whole body is in try/catch returning null, so the helper never throws on malformed input.\n   - Message: fixed words first, then the validated pid, then the host only when SHOWABLE_HOST matches, else 'an address other than 127.0.0.1'. For example: `Moe kept .moe/daemon.json and started no second daemon: this project's daemon (pid ${pid}) listens on ${shown}, but VS Code connects on 127.0.0.1 only. Stop that daemon, or restart it without --host or MOE_BIND_HOST, then reconnect.`\n   - bindHost is compared and shown only. It is never dialed, resolved or probed, because daemon.json is repository content.\n2. Add a private daemonBindRefusal(): string | null just before getVerifiedDaemonInfo (:1527). It returns null when:\n   - moe.daemon.port > 0, or moe.daemon.host is not '127.0.0.1' (the user chose the endpoint);\n   - there is no workspace;\n   - daemon.json cannot be read or parsed: readDaemonJsonText plus JSON.parse in try/catch, so a missing, oversized or malformed file keeps today's path.\n   Otherwise it returns offLoopbackBindRefusal(parsed, workspace, process.platform === 'win32').\n3. connect(): call it synchronously right after `this.daemonShuttingDown = false;` and before `await this.ensureDaemonRunning();` (:913-915). On a refusal: this.manualDisconnect = true; log(refusal); vscode.window.showErrorMessage(refusal); throw new Error(refusal).\n   - This mirrors the protected refusal at :937-941: no retry, JetBrains parity.\n   - An explicit moe.connect or moe.reconnect re-runs the check, because connect() clears manualDisconnect at entry.\n   - ensureDaemonRunning and getVerifiedDaemonInfo have no caller other than connect() (:915, :922).\n\nDo not touch pathsMatch, comparableProjectPath, classifyIdentity, getDaemonInfo, ensureDaemonRunning or the STATE_SNAPSHOT handler: task-e07e695c owns those hunks. Then run the step-1 test file in the snapshot: every B row passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-bindhost.test.cjs"
+      ],
+      "note": "MoeDaemonClient.ts: after removeDaemonJsonIfUnchanged I added LOOPBACK_SERVING_BIND_HOSTS, SHOWABLE_HOST, MAX_PID, exported isOtherSideOfWsl and exported offLoopbackBindRefusal(record, workspace, windows). I added a private daemonBindRefusal() before getVerifiedDaemonInfo. connect() calls it synchronously after `daemonShuttingDown = false` and before ensureDaemonRunning. On a refusal it sets manualDisconnect, logs, calls showErrorMessage and throws. pathsMatch, getDaemonInfo, ensureDaemonRunning, classifyIdentity and the STATE_SNAPSHOT handler are untouched. Two deviations from the plan text, both stricter. First, a pid above 2**31-1 reads as null: process.kill throws ERR_INVALID_ARG_TYPE for it, which would otherwise have counted as alive. Second, a non-string, non-null projectPath keeps today's path. I added the pid cases 2**31 and 1e300 and projectPath 42 to B5. GREEN in the scratch snapshot: daemon-bindhost 13/13, plus daemon-identity, daemon-start and protected-daemon-provenance unchanged, 123/123 pass, 0 skipped. Mutants M1-M5 on the scratch copy (no int32 cap, no other-side check, no manualDisconnect, no SHOWABLE check, ESRCH read as alive) each fail at least one B row. The full-suite gate is step 3.",
+      "startedAt": "2026-11-04T08:09:26.366Z",
+      "completedAt": "2026-11-04T08:10:30.309Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY (DoD 3), once. From the task worktree root, run exactly:\nS=$(mktemp -d /tmp/moe-c203-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp moe-vscode/src/services/MoeDaemonClient.ts \"$S/moe-vscode/src/services/MoeDaemonClient.ts\" && cp moe-vscode/tests/daemon-bindhost.test.cjs \"$S/moe-vscode/tests/daemon-bindhost.test.cjs\" && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund >/dev/null && npm test && npm run compile'\n\nIt must exit 0.\n- The snapshot is the whole repo, because several suites read moe-jetbrains files (mem:gotcha-vscode-tests-need-full-repo-snapshot).\n- It is Linux-native, so `npm run compile` resolves TS7 (mem:gotcha-vscode-gate-from-wsl).\n- Never run npm ci, npm test or compile in the shared checkout.\n\nIts fresh output is the complete_task verification evidence: pass, fail and skip counts, with tests/daemon-identity.test.cjs and tests/daemon-start.test.cjs passing unchanged. B1 and B2 skip only on a host with no IPv6 loopback; say so if they do.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-bindhost.test.cjs"
+      ],
+      "note": "Ran the plan's gate verbatim (whole-repo git-archive snapshot of HEAD 90c499e1, the two owned files overlaid, env -i, node v24.21.0, umask 022): `npm ci && npm test && npm run compile` EXIT=0. npm test: 785 tests, 775 pass, 0 fail, 10 skipped (all Windows-only or Windows-host-only: four 'Windows ... PATH' rows, five 'L5 PowerShell', 'W7'). The 13 new daemon-bindhost rows all ran and passed; the host has an IPv6 loopback, so B1 and B2 were not skipped. The D connect, B same, C guarded rows of tests/daemon-identity.test.cjs, tests/daemon-start.test.cjs and tests/protected-daemon-provenance.test.cjs pass unchanged. `npm run compile` (tsc -p ./) is clean. Log: /tmp/moe-c203-gate.log.",
+      "startedAt": "2026-11-04T08:10:33.461Z",
+      "completedAt": "2026-11-04T08:10:58.750Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an attacker who controls .moe/daemon.json, and as an unlucky user:\n- Can any repository text other than a SHOWABLE_HOST-matching host reach a toast or a log line? projectPath must never be shown, and the pid only as a validated positive integer.\n- Can any path still unlink daemon.json or spawn `start` for a live same-project off-loopback record (B2)? Check the reconnect timer, moe.reconnect and a connect() raced by disconnect().\n- Do these behave exactly as before: a configured port or host, autoStart=false, a missing, unparseable or oversized daemon.json, a dead or reused pid, and a record from the other side of WSL?\n- Is bindHost ever dialed, resolved or probed? It must not be.\n- Does the diff stay out of task-e07e695c's hunks (pathsMatch, :184, :1576, :1656, :1861)?\n- Does the new test file leave no listener, timer or temp dir behind (t.after cleanup)?\nIf anything changes, re-run the step-3 command and use that fresh output for complete_task.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "startedAt": "2026-11-04T08:11:00.457Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-593560ee",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 497.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:58:04.053Z",
+  "updatedAt": "2026-11-04T08:11:00.457Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:00:29.051Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-593560ee"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:05:51.785Z",
+  "executionContract": {
+    "intendedBehavior": "When .moe/daemon.json names this workspace's own live daemon (a positive integer pid that is alive, a record from this side of WSL, projectPath matching or absent) with a bindHost outside {127.0.0.1, 0.0.0.0, ::, wsl}, and VS Code would dial its default 127.0.0.1 (moe.daemon.port unset and moe.daemon.host 127.0.0.1), connect() refuses before any startup work. It keeps daemon.json byte-identical, spawns no daemon, probes nothing, shows one error naming the host (only when it matches /^[0-9A-Za-z.:%_-]{1,255}$/, otherwise a fixed phrase) and schedules no reconnect. Every other daemon.json keeps today's connect path. This is VS Code parity with JetBrains' offLoopbackBindRefusal (task-fe811130).",
+    "acceptanceCriteria": [
+      "A same-project live daemon.json with bindHost '::1': connect() spawns nothing, keeps daemon.json byte-identical, shows exactly one message containing ::1 and leaves no reconnect timer; the [::1] server sees no request.",
+      "The same record while another project's daemon answers on 127.0.0.1:<port>: no /health probe, no daemon.json removal, no spawn.",
+      "bindHost absent, '127.0.0.1', '0.0.0.0', '::' or 'wsl', a dead pid, a pid of 0 or less or non-integer, another project's record, a record from the other side of WSL, a missing, unparseable or oversized daemon.json, and a configured port or host all keep today's path.",
+      "A bindHost carrying link markup still refuses, but the message shows a fixed phrase instead of the text."
+    ],
+    "invariants": [
+      "bindHost is never dialed, resolved or probed.",
+      "No repository text reaches a notification unless it matches SHOWABLE_HOST; projectPath is never shown; the pid is shown only as a validated positive integer.",
+      "The pre-check never throws on malformed input: any read, parse or liveness error keeps today's path.",
+      "pathsMatch, comparableProjectPath, classifyIdentity, getDaemonInfo, ensureDaemonRunning and the STATE_SNAPSHOT handler are unchanged (task-e07e695c owns them)."
+    ],
+    "compatibility": [
+      "A daemon.json written without bindHost (every 127.0.0.1 daemon) keeps today's connect path.",
+      "tests/daemon-identity.test.cjs, tests/daemon-start.test.cjs and tests/protected-daemon-provenance.test.cjs pass unchanged.",
+      "extension.ts's auto-connect .catch only logs (extension.ts:491-493), and moe.reconnect shows 'Failed to reconnect: <message>' as for any refusal."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/services/MoeDaemonClient.ts: exported offLoopbackBindRefusal and isOtherSideOfWsl, module constants LOOPBACK_SERVING_BIND_HOSTS and SHOWABLE_HOST, private daemonBindRefusal, and one synchronous pre-check in connect() before ensureDaemonRunning.",
+      "moe-vscode/tests/daemon-bindhost.test.cjs (new)."
+    ],
+    "reuse": [
+      "readDaemonJsonText (64 KiB cap) for the read.",
+      "pathsMatch, or task-e07e695c's same-project helper if it has landed, for the workspace match.",
+      "isPlainObject and errorCode (MoeDaemonClient.ts:275-283).",
+      "The protected refusal's manualDisconnect + showErrorMessage + throw pattern (:937-941).",
+      "JetBrains MoeDaemonSupervisor.offLoopbackBindRefusal semantics and its loopback-serving set (MoeDaemonSupervisor.kt:965, :1078)."
+    ],
+    "sourceAssumptions": [
+      "connect() (MoeDaemonClient.ts:895) calls ensureDaemonRunning at :915 and getVerifiedDaemonInfo at :922; neither has another caller.",
+      "The daemon records bindHost only for a host other than 127.0.0.1 (packages/moe-daemon/src/index.ts:848).",
+      "process.kill(pid, 0) throws ESRCH for a dead pid and EPERM for another user's live pid (checked on Node v24.21.0).",
+      "At 3cd256eb, nothing under moe-vscode/src reads bindHost (0 grep hits)."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/moe-c203-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp moe-vscode/src/services/MoeDaemonClient.ts \"$S/moe-vscode/src/services/MoeDaemonClient.ts\" && cp moe-vscode/tests/daemon-bindhost.test.cjs \"$S/moe-vscode/tests/daemon-bindhost.test.cjs\" && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund >/dev/null && npm test && npm run compile'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Dial bindHost when it names this machine, which is the daemon CLI's rule (decision-daemon-cli-bindhost-local-rule). Rejected: JetBrains' fe811130 twin never dials it, and dialing needs the CLI's isLocalAddress and IPv6-zone rules ported into the extension.\n2) Guard only getVerifiedDaemonInfo's foreign removal. Rejected: it fixes the collision deletion but keeps the refused `start` spawn on every connect and the silent ECONNREFUSED loop.\n3) Chosen: one synchronous pre-check at the top of connect(). It precedes ensureDaemonRunning's spawn, getVerifiedDaemonInfo's probe and removal, and every reconnect attempt, and the user-visible behavior matches JetBrains.",
+    "codebaseInsights": "- Hunt #19 repros, failing at 3cd256eb, are in /mnt/d/moe-scratch/hunt-443e8eac/mine/:\n  - zz-hunt443e-bindhost.test.cjs (harness, stubbed spawn) and bindhost-harness.out;\n  - zz-hunt443e-e2e.cjs (real snapshot daemons A on [::1]:19950 and B on 127.0.0.1:19950, then two live daemons for A's .moe/) and bindhost-e2e.out;\n  - nocollide.sh: the spawned `start` against a live ::1 daemon exits 0 and leaves daemon.json unchanged, so the no-collision case costs a refused spawn per connect, not a second daemon.\n- The ports collide because the daemon's isLoopbackPortFree (packages/moe-daemon/src/index.ts:481) dials only 127.0.0.1.\n- extension.ts auto-connect logs a rejection only, so the refusal toast is the single toast at activation.\n- process.kill on { ...process } keeps working in the vm harness: the spread copies kill.",
+    "risks": "- A reused pid makes a stale off-loopback record read as live. VS Code then keeps the record and asks for a restart. That is conservative, and JetBrains has the same trade-off.\n- A user who set moe.daemon.host to reach an off-loopback daemon keeps today's path on purpose.\n- task-e07e695c edits the same file in other hunks. Keep the new code at the placements named in step 2, so the worktree merge-tree lands both cleanly.\n- Node's process.kill(pid, 0) on Windows works for existence checks. A pid that is not an integer must never reach it, because it throws ERR_INVALID_ARG_TYPE.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/daemon-identity.test.cjs",
+      "moe-vscode/tests/protected-daemon-provenance.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-vscode/src/extension.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "90c499e15849f8666145f159ea2c060d33bfcf6f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:05:51.821Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:06:52.389Z"
+}

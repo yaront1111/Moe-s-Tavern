@@ -1,0 +1,28 @@
+{
+  "id": "task-fc10f071434443ecad20b9afb6bc0bac",
+  "epicId": "epic-be924fb8",
+  "title": "bug: only qa_reject keeps metrics.reopenCount in step with task.reopenCount; the three non-QA reopen paths (set_task_status, StateManager.reopenTask, the board drag) leave the mirror stale through buildReopenClearingUpdates, and list_metrics, the JetBrains and VS Code Reopens KPI and the board card all read the mirror first, so a row reopened after a QA reject under-counts (2 live rows show 1 for 2)",
+  "description": "Filed by defect hunt #18 (task-1c736204, lane 3: the metrics surfaces), 2026-11-04.\n\nPROBLEM\n- qa_reject writes both counters: packages/moe-daemon/src/tools/qaReject.ts:265 and :285 set reopenCount and metrics.reopenCount.\n- The three non-QA reopen paths bump only task.reopenCount:\n  - setTaskStatus.ts:248;\n  - taskStore.ts:816 (StateManager.reopenTask, the board's REOPEN_TASK);\n  - WebSocketServer.ts:622 (a board drag out of DONE/ARCHIVED).\n- All three merge util/reopen.ts:49 buildReopenClearingUpdates(task). It rebuilds `metrics` only to strip doneAt and wallClockMs (:58-61) and never touches metrics.reopenCount.\n- qaReject.ts:214 itself says reopenCount \"is monotonic (never reset) and the non-QA reopens bump it too\", so the mirror is simply stale.\n- Every reader prefers the mirror:\n  - util/metrics.ts:99 `reopenSum += m.reopenCount ?? task.reopenCount ?? 0` (list_metrics and /ws GET_METRICS avgReopenCount);\n  - util/metrics.ts:154-160 toPerTaskMetric passes task.metrics through raw (list_metrics per-task metrics.reopenCount);\n  - moe-jetbrains TaskDetailDialog.kt:861 and board/TaskCard.kt:141;\n  - moe-vscode TaskDetailPanel.ts:1238 and media/board.js:969.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB_metricsReopenStale.test.ts (copy it into packages/moe-daemon/src/tools/ of a `git archive 320918dc` snapshot). `npx vitest run` fails both cases at HEAD with \"expected 1 to be 2\" (B/out/zzHuntB_metricsReopenStale.txt). The hunt holder re-ran it.\n  - set_task_status DONE→WORKING on a row with reopenCount 1 and metrics.reopenCount 1 leaves list_metrics avgReopenCount at 1.\n  - StateManager.reopenTask gives the same.\n- Live census of a 07:13:57Z copy of .moe/: 86 rows carry metrics.reopenCount; 2 disagree with task.reopenCount: task-07474ee4 (ARCHIVED, mirror 1, task 2) and task-bde86540 (DONE, mirror 1, task 2). The aggregate sum reads 148 instead of 150 (B/out/census-reopenCount.txt).\n\nFIX DIRECTION (daemon only, one writer and one reader)\n- Writer: buildReopenClearingUpdates (util/reopen.ts) sets metrics.reopenCount to task.reopenCount + 1 whenever the task has a metrics object. Every caller sets reopenCount to exactly that, so the mirror stays in step for every client, the JetBrains and VS Code KPIs included, with no client change.\n  - Update the helper's \"Does NOT set ... reopenCount\" doc comment to say it keeps the metrics mirror.\n- Reader: util/metrics.ts:99 reads the canonical task.reopenCount, falling back to the mirror only when task.reopenCount is not a number. toPerTaskMetric overlays reopenCount from task.reopenCount when the mirror exists. That self-heals the two legacy rows in list_metrics without a migration.\n- Error handling: a non-object metrics or a non-integer reopenCount is left as today. Never throw.\n- Out of scope:\n  - client code (the JetBrains and VS Code readers keep reading the mirror, which is now kept in step);\n  - rewriting the two legacy rows (their client KPI shows 1 until their next reopen; cosmetic).\n\nFILES (3): packages/moe-daemon/src/util/reopen.ts; packages/moe-daemon/src/util/metrics.ts; packages/moe-daemon/src/tools/listMetrics.reopen.test.ts (new). None is held at filing (lanes.js 08:05Z). No dependsOn.",
+  "definitionOfDone": [
+    "`npx vitest run src/tools/listMetrics.reopen.test.ts` passes, in a snapshot outside the shared checkout, on a row with reopenCount 1 and metrics.reopenCount 1. After each of set_task_status DONE→WORKING, state.reopenTask and the board drag's update (a /ws UPDATE_TASK out of DONE, or the same merged payload), the stored task.metrics.reopenCount === 2, list_metrics aggregate.avgReopenCount === 2 and tasks[0].metrics.reopenCount === 2.",
+    "The same file shows that a legacy row stored with metrics.reopenCount 1 and reopenCount 2 reads 2 in list_metrics (aggregate and per-task) with no write, and `grep -n \"m.reopenCount ?? task.reopenCount\" packages/moe-daemon/src/util/metrics.ts` prints nothing.",
+    "`npx vitest run src/util/metrics.test.ts src/tools/listMetrics.delivered.test.ts src/tools/qaReject.test.ts src/tools/setTaskStatus.test.ts` passes in the same snapshot, and the diff touches no file under moe-jetbrains/ or moe-vscode/."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 504.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:04:57.380Z",
+  "updatedAt": "2026-11-04T08:04:57.380Z"
+}

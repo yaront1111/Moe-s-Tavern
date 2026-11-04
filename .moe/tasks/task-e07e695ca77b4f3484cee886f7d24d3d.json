@@ -1,0 +1,41 @@
+{
+  "id": "task-e07e695ca77b4f3484cee886f7d24d3d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code compares a daemon's project path by spelling only, so a workspace opened through a symlink reads its own live daemon as another project, deletes its daemon.json without a /health probe and starts a second daemon on the same .moe/ (JetBrains' isSameProject also accepts equal canonical paths)",
+  "description": "Filed by hunt #19 (task-443e8eac), lane 1: the VS Code extension's daemon lifecycle. HEAD 3cd256eb.\n\nJETBRAINS TWIN. MoeDaemonSupervisor.isSameProject (moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:1029-1031, since c8a2a173) accepts a comparable-spelling match OR equal File.canonicalPath. JetBrains uses it for daemon.json (:99, :155) and for STATE_SNAPSHOT (MoeMessageDispatcher.kt:96). VS Code has no canonical fallback.\n\nPROBLEM (moe-vscode/src/services/MoeDaemonClient.ts)\n- pathsMatch (:152) compares comparableProjectPath (:126) of both sides. That is spelling only, with no realpath.\n- Four callers act on a mismatch, and none checks whether the recorded daemon is alive:\n  - ensureDaemonRunning :1656-1661 unlinks daemon.json, then calls startDaemon('start');\n  - getDaemonInfo :1576-1580 unlinks daemon.json (removeStale);\n  - classifyIdentity :184 reads /health as 'foreign', so getVerifiedDaemonInfo removes daemon.json (:1542) and starts (:1543);\n  - the STATE_SNAPSHOT handler :1858-1866 unlinks daemon.json and disconnects.\n- The daemon's own start guard would refuse the second start. In symguard.sh, `start --project <link>/proj` against the live <real>/proj daemon exits 0 and leaves daemon.json unchanged. But VS Code deletes daemon.json first, so the guard never sees it.\n- Spellings differ whenever the daemon was started through a different path to the same folder than the one VS Code opened:\n  - a symlinked home or checkout;\n  - macOS /tmp -> /private/tmp;\n  - a terminal start, a launcher seat (moe-agent.sh:865 keeps the logical `pwd`) or a JetBrains start.\n\nEVIDENCE (a snapshot of HEAD 3cd256eb outside the shared checkout; scripts and outputs are in /mnt/d/moe-scratch/hunt-443e8eac/mine/)\n1. zz-hunt443e-symlink.test.cjs uses tests/daemon-identity.test.cjs's fixture with a stubbed spawn. <root>/link is a symlink to <root>/real. daemon.json, /health and STATE_SNAPSHOT all name <real>/proj, and the workspace is <link>/proj. Output (symlink-harness.out):\n   OBSERVED {\"outcome\":\"rejected: Daemon not running. Start daemon first.\",\"spawns\":[[\"bundled-daemon.js\",\"start\",\"--project\",\"<link>/proj\"]],\"daemonJsonKept\":false,\"liveWs\":0,\"log\":[\"Stale daemon.json: expected project <link>/proj, found <real>/proj\"],\"pathsMatch\":false}\n2. zz-hunt443e-symlink-e2e.cjs uses a real snapshot daemon, `init --project <root>/real/proj`. Through <root>/link/proj it is the same directory, with the same .moe inode. The real client, with a real spawn, then (symlink-e2e.out):\n   client spawned: [\"<daemon>\",\"start\",\"--project\",\"<root>/link/proj\"]\n   daemon.json now {\"port\":19985,\"pid\":2880846,\"projectPath\":\"<root>/link/proj\"}\n   first daemon pid 2880696 alive=true /health 127.0.0.1:19980 -> <root>/real/proj\n   second daemon pid 2880846 alive=true /health 127.0.0.1:19985 -> <root>/link/proj\n   That is two live writers on one .moe/.\n\nFIX DIRECTION\n- Add one \"same project\" helper beside pathsMatch: pathsMatch(a, b), or both absolute (isAbsoluteAnyOs) and fs.realpathSync.native(a) === fs.realpathSync.native(b). Any realpath error falls back to the spelling rule, like JetBrains' canonicalPath fallback.\n- Use the helper at all four callers: :184 (so /health stops reading a symlinked spelling as foreign), :1576, :1656 and :1861.\n- Keep pathsMatch and comparableProjectPath unchanged. tests/daemon-identity.test.cjs pins their spelling rules.\n- Out of scope: JetBrains' /health classify (DaemonIdentity.kt:72-82) has no canonical fallback either, so JetBrains' /health stage may have the same gap. This row does not edit JetBrains files; the hunt reported that to the governor.\n\nFILES: moe-vscode/src/services/MoeDaemonClient.ts; a new moe-vscode/tests/daemon-symlink-project.test.cjs.\n\nPLACEMENT: shares MoeDaemonClient.ts with the VS Code bindHost row filed by the same hunt (named in a comment). This row owns the four project-path comparisons and the new helper beside pathsMatch. That row owns a new pre-check in connect() and its own helper. Their hunks are distinct, so there is no dependsOn.",
+  "definitionOfDone": [
+    "A workspace opened through a symlink to the folder its live daemon serves (daemon.json, /health and STATE_SNAPSHOT name the canonical path): connect() spawns nothing, leaves daemon.json byte-identical, opens /ws on that daemon and is still connected after its STATE_SNAPSHOT. A node --test file under moe-vscode/tests that uses a real symlink in a temp dir pins this and fails at 3cd256eb (skip only where creating a symlink is refused, such as Windows without the privilege).",
+    "Two distinct folders still mismatch at all four sites: a /health reply naming another existing folder still refuses with today's warning, and a path that cannot be resolved falls back to the spelling rule. tests/daemon-identity.test.cjs passes unchanged.",
+    "`cd moe-vscode && npm test && npm run compile` passes, run in a snapshot of the commit outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 496.7,
+  "comments": [
+    {
+      "id": "comment-c5ceb9b730b04eafadf293694b0fe008",
+      "author": "architect-cd0ac706",
+      "content": "Placement (hunt #19): the VS Code bindHost row is task-c203c09ad69c4a07ac19633e2f8257ab. It shares moe-vscode/src/services/MoeDaemonClient.ts with this row.\n- That row owns a new pre-check at the top of connect(), before ensureDaemonRunning (:915), and its own offLoopbackBindRefusal helper.\n- This row owns the four project-path comparisons (:184, :1576, :1656, :1861) and the new same-project helper beside pathsMatch.\n- That row's pre-check calls this row's helper if this row has landed first.\nThe hunks are distinct, so there is no dependsOn.",
+      "timestamp": "2026-11-04T07:58:41.122Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:57:42.392Z",
+  "updatedAt": "2026-11-04T07:58:41.122Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T07:57:48.048Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}

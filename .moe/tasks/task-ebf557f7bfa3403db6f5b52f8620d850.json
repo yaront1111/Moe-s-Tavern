@@ -1,0 +1,28 @@
+{
+  "id": "task-ebf557f7bfa3403db6f5b52f8620d850",
+  "epicId": "epic-be924fb8",
+  "title": "bug: scripts/analyze-task-metrics.mjs counts a bucket's done as status DONE only, so delivered rows the Done-column Clear archived (ARCHIVED with metrics.doneAt) drop out: on today's board the 9-12 and 13+ step buckets read 0 done though 12 of their 13 rows were delivered, and 205 of 824 delivered rows are missing (script twin of task-83cf11f5)",
+  "description": "Filed by defect hunt #18 (task-1c736204, lane 3: the metrics surfaces), 2026-11-04.\n\nPROBLEM\n- scripts/analyze-task-metrics.mjs:163 `const done = inBucket.filter((t) => t.status === 'DONE')`; it is reported as the bucket's `done` at :175, and in the table header at :199.\n- The board's Done-column Clear archives delivered rows, so they drop out of `done` but stay in `tasks`. The done rate per size bucket, which the script's own footer tells you to tune settings.taskSizing from, is understated, and every Clear makes it worse.\n- task-83cf11f5 (DONE, 2f03c0f6) fixed the same rule in the daemon: packages/moe-daemon/src/util/metrics.ts:60-64 isDelivered counts DONE, or ARCHIVED with a non-blank metrics.doneAt. The script was not updated.\n\nEVIDENCE (under /mnt/d/moe-scratch/hunt-1c736204/B/)\n- The script run read-only on a 07:15Z copy of today's .moe/ (1008 tasks, 947 with a plan), out/analyze-task-metrics.txt: done 265 / 354 / 0 / 0 for the 1-4 / 5-8 / 9-12 / 13+ step buckets.\n- A hand count with the isDelivered rule, out/handcount-delivered-by-bucket.txt: delivered 338 / 473 / 11 / 1. In total 619 vs 824: 205 delivered rows are missing.\n- Repro: zzHuntB-analyze-task-metrics-done.test.mjs (copy it into scripts/tests/ of a `git archive 320918dc` snapshot). `node --test` fails at HEAD with \"done=1: the delivered-then-archived row is missing; 1 !== 2\" (out/zzHuntB-analyze-task-metrics-done.txt). The hunt holder re-ran it.\n\nFIX DIRECTION\n- Count done with the daemon's isDelivered rule, inlined. The .mjs script cannot import the TS module, so say so in a one-line comment that names util/metrics.ts isDelivered as the twin.\n- Keep the JSON key `done` and the table column, so --json consumers do not break.\n- Error handling: a row whose metrics is missing or not an object counts as DONE-only, exactly as today. Never throw on a malformed record.\n- Add the new test to the node --test list in .github/workflows/ci.yml (:267 holds the scripts list).\n\nFILES (3): scripts/analyze-task-metrics.mjs; scripts/tests/analyze-task-metrics.test.mjs (new); .github/workflows/ci.yml. None is held at filing (lanes.js 08:05Z). No dependsOn.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/analyze-task-metrics.test.mjs` passes against a temp project fixture with one DONE row, one ARCHIVED row with metrics.doneAt and one ARCHIVED row without it, each with plannedStepCount 2. `node scripts/analyze-task-metrics.mjs --project <fixture> --json` gives buckets[0].tasks === 3 and done === 2.",
+    "The same test file shows that an all-ARCHIVED fixture whose rows carry metrics.doneAt gives done === tasks in every non-empty bucket, and that a blank doneAt ('  ') or a missing metrics object is not counted as delivered.",
+    "`grep -n \"analyze-task-metrics.test.mjs\" .github/workflows/ci.yml` prints a line, and the hunt repro (B/zzHuntB-analyze-task-metrics-done.test.mjs) passes in a snapshot of the fix."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 503.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:04:04.228Z",
+  "updatedAt": "2026-11-04T08:04:04.228Z"
+}

@@ -1,0 +1,202 @@
+{
+  "id": "task-c1162cba27544d78adf5b7261e923b73",
+  "epicId": "epic-be924fb8",
+  "title": "docs: a plan step's mem: pointer to a dependsOn task's handoff is dead when the worker reads it, because QA archives that handoff at qa_approve and dependsOn withholds the claim until then; moe-planning's \"cite only live names\" is checked only at plan time (task-62ec51f1's seat got FileNotFoundError on 11-04 07:32Z)",
+  "description": "Filed by hunt #19 (task-443e8eac), lane 2: Serena memory conventions. HEAD 3cd256eb.\n\nPROBLEM: two conventions combine so that a pointer is dead by construction.\n- docs/skills/moe-planning/SKILL.md:82-83 and docs/MEMORY.md:86 tell the architect to name memories in plan steps as `mem:<name>` and to \"cite only live names\". That check can only happen at plan time.\n- docs/roles/qa.md:23 and docs/MEMORY.md:78 and :99 retire a task's task-<id>-handoff to _archive/ at moe.qa_approve.\n- A dependsOn edge withholds the dependent's WORKING claim until the dependency is DONE, which is after that qa_approve.\n- So a step that cites a dependency's handoff (live when planned) always reaches its worker after the handoff was archived.\n- Nothing falls back:\n  - read_memory refuses the old name (not found) and the _archive/ name (ignored_memory_patterns);\n  - Serena's read_file refuses it too, because the ignored_paths has .serena. That contradicts MEMORY.md:80 (\"read_file still reads the raw file\"); the sibling row named in a comment owns that sentence.\n  - qa.md:23's \"delete only when no live memory cites it\" never sees plan steps.\n\nEVIDENCE (/mnt/d/moe-scratch/hunt-443e8eac/A/)\n- Live: task-62ec51f1 (WORKING) cites mem:task-task-828e7d21602e4cf2a0f242e024db7dea-handoff in step 0, and 828e7d21 is one of its dependsOn.\n  - 828e7d21 went DONE at 2026-11-03T20:43:17Z. Its handoff now exists only at .serena/memories/_archive/.\n  - The seat's Serena log ~/.serena/logs/2026-11-04/mcp_20261104-093217_2810895.txt (local +02:00) shows (A2-serena-log-excerpt.txt):\n    INFO 09:32:28,780 read_memory: memory_name='task-task-828e7d21602e4cf2a0f242e024db7dea-handoff'\n    ERROR 09:32:28,785 FileNotFoundError: Memory named 'task-task-828e7d21602e4cf2a0f242e024db7dea-handoff' not found\n- A2-dead-pointer-repro.sh runs Serena 1.6.2 on a fixture copy (A2-dead-pointer-out.txt):\n  - read_memory(name) -> FileNotFoundError;\n  - read_memory('_archive/'+name) -> \"matches an ignored_memory_patterns pattern ... Use the read_file tool\";\n  - read_file(.serena/memories/_archive/...) -> \"is ignored; cannot access for safety reasons\".\n- A2-quantify-out.txt: across .moe/tasks, 12 plan-step pointers name a dependsOn task's handoff. Of those handoffs, 9 were archived BEFORE the citing step started, 1 after, and 2 are live.\n\nFIX DIRECTION (docs only)\n- moe-planning SKILL.md:82-83: forbid citing another task's task-<id>-handoff in a plan step, and give the reason (QA retires it at qa_approve, before any dependent can claim). The plan quotes the needed fact in the step, or cites a gotcha-/pattern-/decision- memory. Do not name there which file hides _archive/; the sibling row moves that source.\n- MEMORY.md:86: restate the same rule in place.\n- qa.md:23, in place with no new line (the role-doc cap is 40, and qa.md has 36): before retiring, fold any fact a dependent row's plan relies on into a topic memory.\n- Regenerate packages/moe-daemon/src/generated/skillFiles.ts and initFiles.ts in a Linux clone with history (`git clone --shared`; `npm ci && npm run generate-init-files && npm run generate-skill-files` in its packages/moe-daemon), and apply the generated hunks with the session's own editor. Never run npm run build in the shared checkout; see mem:gotcha-moe-doc-generated-artifacts.\n\nFILES: docs/skills/moe-planning/SKILL.md, docs/MEMORY.md (:86 only), docs/roles/qa.md, packages/moe-daemon/src/generated/skillFiles.ts, packages/moe-daemon/src/generated/initFiles.ts.\n\nPLACEMENT: shares docs/MEMORY.md with the Serena archive-hiding row filed by the same hunt (named in a comment). That row owns MEMORY.md:80 and :139-143; this row owns :86. There is no dependsOn.",
+  "definitionOfDone": [
+    "`grep -n handoff docs/skills/moe-planning/SKILL.md docs/MEMORY.md` shows a rule forbidding a plan step from citing another task's task-<id>-handoff, with the qa_approve retirement as its reason. docs/roles/qa.md:23 tells QA to fold the facts a dependent plan relies on before retiring.",
+    "Root `npm run lint` passes (qa.md stays at 40 lines or fewer).",
+    "Regenerated in a clone with history, skillFiles.ts and initFiles.ts compare equal (`cmp`) to the committed copies, and each generator printed 'Generated ...', not a skip."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "EDIT THE THREE DOCS (DoD 1 and 2) with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat. Never use Serena (it ignores docs/) or a shell write. Keep every untouched line byte-identical.\n\n1. docs/skills/moe-planning/SKILL.md:83. Rewrite only this bullet; :82's `mem:<name>` guidance stays. The new bullet must contain the literal phrase \"another task's\" (the step-3 gate greps for it). Suggested wording:\n   \"- Cite only live names, and never another task's `task-<id>-handoff` or `task-<id>-qa-handoff`: QA retires those to `_archive/` at `moe.qa_approve`, and a dependsOn edge holds this task's claim until then, so the worker's read_memory finds nothing (task-62ec51f1's seat, 2026-11-04). Quote the fact the step needs, or cite a `gotcha-`/`pattern-`/`decision-` memory. Serena hides `_archive/` names, and read_memory refuses them.\"\n   Name no file as the source of the `_archive/` hiding, because task-3ef33217 moves that source to the launcher's managed Serena block.\n2. docs/MEMORY.md:86, in place, as one bullet. Keep the `mem:<name>` sentence and replace \"Cite only live names, never an `_archive/` name.\" with the same rule. It must also contain the phrase \"another task's\":\n   \"Cite only live names: never an `_archive/` name, and never another task's `task-<id>-handoff`, which QA retires at `moe.qa_approve` before any dependent can claim. Quote the fact in the step, or cite a `gotcha-`/`pattern-`/`decision-` memory.\"\n   Do not touch MEMORY.md:80 or :139-143: task-3ef33217 owns them.\n3. docs/roles/qa.md:23, in place on the same line. The file stays at 36 lines; the lint cap is 40. Two changes:\n   - Extend the fold clause so it reads like \"fold any reusable fact from this task's ... memories, including any fact an open dependent task's plan cites from them (`grep -l 'mem:task-<id>-' .moe/tasks/*.json` lists those rows), into a gotcha-/pattern-/decision- memory\". The line must now contain the word \"dependent\".\n   - Change \"use delete_memory only when nothing is reusable and no live memory cites it\" to \"... and no live memory or open task's plan cites it\".\n   Keep the archive command, `(cd .serena/memories && mkdir -p _archive && for f in ...)`, byte-identical.\n\nError handling: if any anchor text above is not found exactly once, stop and say so in the step note. Do not guess a nearby line.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/MEMORY.md",
+        "docs/roles/qa.md"
+      ],
+      "modifiedFiles": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/MEMORY.md",
+        "docs/roles/qa.md"
+      ],
+      "note": "Edited SKILL.md:83, MEMORY.md:86, qa.md:23 in place; qa.md still 36 lines.",
+      "startedAt": "2026-11-04T08:10:17.409Z",
+      "completedAt": "2026-11-04T08:10:28.613Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "REGENERATE THE VENDORED COPIES (DoD 3), following mem:gotcha-moe-doc-generated-artifacts.\n- packages/moe-daemon/src/generated/skillFiles.ts embeds SKILL.md (key moe-planning/SKILL.md).\n- packages/moe-daemon/src/generated/initFiles.ts embeds qa.md (ROLE_DOCS, its marker sha and the SHIPPED_ROLE_BODY_SHAS list).\n- MEMORY.md is not vendored.\n\nNever run npm run build, prebuild or npm ci in the shared checkout or the task worktree. Generate in a Linux clone with history instead. From the task worktree root:\nR=$PWD && C=$(mktemp -d /tmp/moe-c116-gen-XXXXXX) && git clone -q --shared /mnt/d/projexts/moes \"$C/repo\" && git -C \"$C/repo\" checkout -q \"$(git rev-parse HEAD)\" && cp --parents docs/skills/moe-planning/SKILL.md docs/roles/qa.md docs/MEMORY.md \"$C/repo/\" && cd \"$C/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund >/dev/null && npm run generate-init-files && npm run generate-skill-files'\n\nThen:\n- Each generator must print 'Generated ...', not a skip.\n- Run `diff -u \"$R/packages/moe-daemon/src/generated/<file>\" \"$C/repo/packages/moe-daemon/src/generated/<file>\"` for both files. Expect only:\n  - skillFiles.ts: the moe-planning/SKILL.md marker sha and the :83 body line;\n  - initFiles.ts: the qa.md marker sha, its :23 body line (backticks escaped as \\\\`), and one new sha in the qa.md SHIPPED_ROLE_BODY_SHAS list.\n- Apply exactly those hunks to the worktree copies with the session's own editing tool. Never cp or a shell write into the tree: the landing needs a TOOL witness.\n- Error handling: any other hunk, or a 'skipping' line, means a stale clone or a peer's doc edit. Stop and report it instead of applying it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Regenerated in a --shared clone; both generators printed 'Generated ...'. Applied only the expected hunks (marker shas, SKILL.md:83 line, qa.md:23 line, one new qa.md shipped sha) via Edit.",
+      "startedAt": "2026-11-04T08:10:29.316Z",
+      "completedAt": "2026-11-04T08:10:58.882Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY (DoD 1-3), once. From the task worktree root, run exactly:\nR=$PWD && C=$(mktemp -d /tmp/moe-c116-gate-XXXXXX) && git clone -q --shared /mnt/d/projexts/moes \"$C/repo\" && git -C \"$C/repo\" checkout -q \"$(git rev-parse HEAD)\" && cp --parents docs/skills/moe-planning/SKILL.md docs/roles/qa.md docs/MEMORY.md packages/moe-daemon/src/generated/skillFiles.ts packages/moe-daemon/src/generated/initFiles.ts \"$C/repo/\" && cd \"$C/repo\" && grep -Fq \"another task's\" docs/skills/moe-planning/SKILL.md && grep -Fq \"another task's\" docs/MEMORY.md && grep -Fq \"dependent\" docs/roles/qa.md && npm run lint && cd packages/moe-daemon && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund >/dev/null && npm run generate-init-files && npm run generate-skill-files' && cmp src/generated/initFiles.ts \"$R/packages/moe-daemon/src/generated/initFiles.ts\" && cmp src/generated/skillFiles.ts \"$R/packages/moe-daemon/src/generated/skillFiles.ts\"\n\nIt must exit 0. Its fresh output is the complete_task verification evidence: the role-doc lint line and both 'Generated ...' lines.\n- The regenerated files must equal the worktree copies byte for byte.\n- The lint covers qa.md's 40-line cap.\n- This is a docs-only change with no test file. Its tests are the greps for the new rules, the role-doc lint and the regenerate-and-cmp check, as earlier docs rows in this epic (57fe7ad1, b22f82b2) were gated.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/qa.md"
+      ],
+      "note": "Gate exit 0: greps pass, lint OK (qa.md 36 lines), both generators printed Generated, cmp equal.",
+      "startedAt": "2026-11-04T08:10:59.528Z",
+      "completedAt": "2026-11-04T08:11:16.677Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Re-read the full diff:\n- Does any edited sentence still tell an architect to cite, or a worker to read, another task's handoff?\n- Does SKILL.md:83 still name .serena/project.yml as the source of the `_archive/` hiding? It must name no file, because task-3ef33217 moves the source.\n- Is qa.md's archive command byte-identical, and is qa.md at 36 lines?\n- Do MEMORY.md:80 and :139-143 show no change? task-3ef33217 owns them.\n- Do the vendored copies contain only the expected hunks?\n- Would a planner reading only the new SKILL.md bullet know what to do instead? It should say to quote the fact or cite a gotcha-/pattern-/decision- memory.\nIf anything changes, re-run step 2's regeneration and step 3's command, and use that fresh output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/skills/moe-planning/SKILL.md"
+      ],
+      "modifiedFiles": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/MEMORY.md",
+        "docs/roles/qa.md",
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Self-review clean: diff is 5 files, 8+/8-; MEMORY.md only :86; SKILL.md names no file; qa.md 36 lines; no regeneration needed.",
+      "startedAt": "2026-11-04T08:11:17.508Z",
+      "completedAt": "2026-11-04T08:11:24.033Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 498.7,
+  "comments": [
+    {
+      "id": "comment-d467f0fb4a44403886098d6259fa1157",
+      "author": "architect-cd0ac706",
+      "content": "Placement (hunt #19): the Serena archive-hiding row is task-3ef3321758f94dad89875a5b64792e12. It shares docs/MEMORY.md with this row.\n- That row owns MEMORY.md:80 (the \"`.serena/project.yml` carries ignored_memory_patterns ... read_file still reads the raw file\" sentence) and :139-143, plus scripts/moe-serena-ignore.mjs and its test.\n- This row owns MEMORY.md:86, moe-planning SKILL.md:82-83, qa.md:23 and the regenerated skillFiles.ts and initFiles.ts.\nWhen this row rewrites SKILL.md:83, it should not name which file hides _archive/, because that row moves the source to the launcher's managed block. There is no dependsOn.",
+      "timestamp": "2026-11-04T07:58:43.650Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:58:21.718Z",
+  "updatedAt": "2026-11-04T08:11:32.100Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:06:14.182Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-a0305b0b"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:08:57.790Z",
+  "executionContract": {
+    "intendedBehavior": "The planning docs forbid a plan step from citing another task's task-<id>-handoff or task-<id>-qa-handoff. QA retires those at moe.qa_approve, before any dependsOn dependent can claim, so such a pointer is dead when the worker reads it. The docs tell the planner to quote the needed fact or cite a gotcha-/pattern-/decision- memory instead. qa.md tells QA to fold the facts an open dependent task's plan cites from the handoffs before retiring them, and to delete a handoff only when no live memory or open task's plan cites it. The vendored copies in skillFiles.ts and initFiles.ts match the edited docs.",
+    "acceptanceCriteria": [
+      "docs/skills/moe-planning/SKILL.md and docs/MEMORY.md each state the rule, with the phrase \"another task's\" and the qa_approve retirement as the reason, plus the alternative: quote the fact or cite a topic memory.",
+      "docs/roles/qa.md:23 tells QA to fold facts that an open dependent task's plan cites, names how to find those rows (grep of .moe/tasks for mem:task-<id>-), and limits delete_memory to handoffs no live memory or open plan cites.",
+      "skillFiles.ts and initFiles.ts regenerated in a clone with history are byte-identical to the committed copies."
+    ],
+    "invariants": [
+      "qa.md stays at or under the 40-line role-doc cap; it is edited in place on line 23.",
+      "The qa.md archive command text is byte-identical.",
+      "docs/MEMORY.md:80 and :139-143 are unchanged (task-3ef33217 owns them).",
+      "SKILL.md names no file as the source of the _archive/ hiding.",
+      "No daemon runtime code changes: only docs and their generated mirrors."
+    ],
+    "compatibility": [
+      "Existing plans that already cite a dependency's handoff keep working as far as they can: the QA fold rule preserves those facts in topic memories.",
+      "The generators' output format (marker shas, SHIPPED_ROLE_BODY_SHAS) is unchanged; only the edited entries move."
+    ],
+    "approvedScope": [
+      "docs/skills/moe-planning/SKILL.md :83 bullet (and :82 only if needed for flow)",
+      "docs/MEMORY.md :86 bullet",
+      "docs/roles/qa.md :23",
+      "packages/moe-daemon/src/generated/skillFiles.ts moe-planning/SKILL.md entry",
+      "packages/moe-daemon/src/generated/initFiles.ts qa.md entry and its shipped-sha list"
+    ],
+    "reuse": [
+      "The daemon's own generators (npm run generate-init-files, generate-skill-files) in a Linux clone with history, per mem:gotcha-moe-doc-generated-artifacts.",
+      "The root role-doc linter (npm run lint, scripts/lint-role-docs.sh) for the 40-line cap."
+    ],
+    "sourceAssumptions": [
+      "shippedBodyShas (packages/moe-daemon/scripts/generate-init-files.ts:83-96) always includes the current body sha, so the regenerated initFiles.ts is the same before and after the landing commit.",
+      "The generators read only docs/roles, docs/agents and docs/skills; docs/MEMORY.md is not vendored.",
+      "At 3cd256eb, the mem: pointer rule appears only in SKILL.md:82-83 and MEMORY.md:86, and the retirement rule in qa.md:23 and MEMORY.md:78/:99 (git grep).",
+      "core.autocrlf is false here, and the docs and generated files are LF, so cmp is meaningful."
+    ],
+    "checkRefs": [
+      "R=$PWD && C=$(mktemp -d /tmp/moe-c116-gate-XXXXXX) && git clone -q --shared /mnt/d/projexts/moes \"$C/repo\" && git -C \"$C/repo\" checkout -q \"$(git rev-parse HEAD)\" && cp --parents docs/skills/moe-planning/SKILL.md docs/roles/qa.md docs/MEMORY.md packages/moe-daemon/src/generated/skillFiles.ts packages/moe-daemon/src/generated/initFiles.ts \"$C/repo/\" && cd \"$C/repo\" && grep -Fq \"another task's\" docs/skills/moe-planning/SKILL.md && grep -Fq \"another task's\" docs/MEMORY.md && grep -Fq \"dependent\" docs/roles/qa.md && npm run lint && cd packages/moe-daemon && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund >/dev/null && npm run generate-init-files && npm run generate-skill-files' && cmp src/generated/initFiles.ts \"$R/packages/moe-daemon/src/generated/initFiles.ts\" && cmp src/generated/skillFiles.ts \"$R/packages/moe-daemon/src/generated/skillFiles.ts\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) A daemon guard that refuses to let QA archive a handoff an open plan cites. Rejected: archiving is a file move outside the daemon.\n2) Tell workers to read `_archive/` via the host's reader. Rejected: it treats the symptom, and Serena refuses _archive/ names.\n3) Chosen: stop the dead pointer at its source, in the planning rule, and have QA fold any fact an existing plan already cites. Docs only, plus the vendored mirrors.",
+    "codebaseInsights": "Hunt #19 evidence is in /mnt/d/moe-scratch/hunt-443e8eac/A/:\n- A2-serena-log-excerpt.txt: task-62ec51f1's seat got FileNotFoundError at 07:32Z on 11-04.\n- A2-dead-pointer-repro.sh: Serena 1.6.2 refuses all three read paths.\n- A2-quantify-out.txt: 9 of 12 dependency-handoff pointers were archived before the citing step started.\n\nThe generators stamp a sha marker. initFiles.ts also keeps SHIPPED_ROLE_BODY_SHAS per role doc, which is the current body plus every git-history body, so editing qa.md adds one sha there.",
+    "risks": "- task-3ef33217 edits docs/MEMORY.md at :80 and :139-143 and leaves SKILL.md:83 to this row. Keep to :86, or the worktree merge-tree conflicts.\n- A peer's uncommitted docs/roles edits never reach the clone, because it checks out committed HEAD and overlays only this row's files.\n- Do not paste typographic quotes. The docs use ASCII apostrophes (mem:gotcha-moe-doc-generated-artifacts).",
+    "keyFiles": [
+      "docs/skills/moe-planning/SKILL.md",
+      "docs/MEMORY.md",
+      "docs/roles/qa.md",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/scripts/generate-skill-files.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "90c499e15849f8666145f159ea2c060d33bfcf6f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:08:57.822Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:10:17.409Z",
+  "reviewStartedAt": "2026-11-04T08:11:32.098Z",
+  "verification": {
+    "command": "R=$PWD && C=$(mktemp -d /tmp/moe-c116-gate-XXXXXX) && git clone -q --shared /mnt/d/projexts/moes \"$C/repo\" && git -C \"$C/repo\" checkout -q \"$(git rev-parse HEAD)\" && cp --parents docs/skills/moe-planning/SKILL.md docs/roles/qa.md docs/MEMORY.md packages/moe-daemon/src/generated/skillFiles.ts packages/moe-daemon/src/generated/initFiles.ts \"$C/repo/\" && cd \"$C/repo\" && grep -Fq \"another task's\" docs/skills/moe-planning/SKILL.md && grep -Fq \"another task's\" docs/MEMORY.md && grep -Fq \"dependent\" docs/roles/qa.md && npm run lint && cd packages/moe-daemon && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund >/dev/null && npm run generate-init-files && npm run generate-skill-files' && cmp src/generated/initFiles.ts \"$R/packages/moe-daemon/src/generated/initFiles.ts\" && cmp src/generated/skillFiles.ts \"$R/packages/moe-daemon/src/generated/skillFiles.ts\"",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/qa.md has 36 lines (max 40)\nGenerated .../src/generated/initFiles.ts (8 role docs + 3 subagents, sha-stamped)\nGenerated .../src/generated/skillFiles.ts (65 skill files across 17 skills)\nEXIT=0",
+    "reportedAt": "2026-11-04T08:11:32.098Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/skills/moe-planning/SKILL.md",
+    "docs/MEMORY.md",
+    "docs/roles/qa.md",
+    "packages/moe-daemon/src/generated/skillFiles.ts",
+    "packages/moe-daemon/src/generated/initFiles.ts"
+  ],
+  "completionSummary": "Docs now forbid a plan step from citing another task's task-<id>-handoff (QA retires it at qa_approve before any dependsOn dependent can claim); the planner must quote the fact or cite a gotcha-/pattern-/decision- memory. qa.md:23 tells QA to fold facts an open dependent plan cites (grep -l 'mem:task-<id>-' .moe/tasks/*.json) and to delete only when no live memory or open plan cites the handoff. skillFiles.ts/initFiles.ts regenerated in a clone with history and byte-identical (cmp). Diff is 5 files, 8+/8-. qa.md is 36 lines. MEMORY.md changed only at :86."
+}

@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -94,12 +94,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:54:04.824Z",
-  "updatedAt": "2026-11-04T07:43:08.025Z",
+  "updatedAt": "2026-11-04T08:11:30.643Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T05:54:07.529Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T08:10:55.775Z",
+    "wallClockMs": 8208246
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -236,9 +238,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T06:50:50Z",
-    "at": "2026-11-04T07:42:31.613Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T07:42:45Z",
+    "at": "2026-11-04T08:11:30.643Z"
+  },
+  "completedAt": "2026-11-04T08:10:55.775Z",
+  "reviewCompletedAt": "2026-11-04T08:10:55.775Z",
+  "reviewSummary": "Reviewed landed 16e14abd (diff 16e14abd^..16e14abd): 6 declared paths, +233/-52, ~181 net LOC. The target moved past the worker's base (561d347c and e76f32a0 touched the sh wrapper, the cjs suite and the fake proxy), so I re-gated the exact sha from a --detach clone with blobs sha256-matched and the ps1 BOM kept. I ran the checkRef verbatim, env-scrubbed, split into two concurrent legs:\n- sh: bash -n OK, parity PASS, postflight-worktree 77/0, worktree-landing 18/0, EXIT=0.\n- PS 5.1: ParseFile 0 errors, parity PASS, postflight-worktree 77/0, worktree-landing 18/0, EXIT=0.\n- npm run lint: rc 0.\nRED and mutants (wt-qa-gate, wt-qa-park):\n- The parent wrappers fail both arms on sh and PS 5.1 (exit 1, expected 0).\n- An sh mutant without blockedOnTaskIds [] fails both arms.\n- A ps1 mutant without the do-while flag fails both arms (the seat deregisters).\nDoD:\n(1) A no-completion row gets one report_blocked with [] and no CLI, then a fresh pre-flight and claim. wt-qa-park shows the second claim reviewed by the same seat.\n(2) Seat-level misses still stop through the unchanged worktree_stop / Stop-MoeWorktreeSeat: no or mismatched context, an unreadable HEAD, a git error, HEAD without QA_LAND_B, a failed park with no retry. The split is documented in scripts/CLAUDE.md and design §6.4.\n(3) Parity, parse checks and the suites are green.\nAdversarial: moe_rpc and Invoke-MoeRpc treat a daemon isError as failure, so there is no park loop. The dynamic context resets every pass, local-mode sync only reads, and the detail strings are byte-identical with no new MOE_* code.\nPre-existing, out of scope: a row claimed inside the landing window is still parked BLOCKED with no auto-unblock.",
+  "requiredCheckAtDone": null
 }

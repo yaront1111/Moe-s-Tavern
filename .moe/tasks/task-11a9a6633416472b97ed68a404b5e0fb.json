@@ -7,14 +7,75 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD, tests first (mem:gotcha-daemon-doctor-daemon-json-is-hostile-input). In doctor.test.ts add a new top-level describe 'runDoctor — a local daemon.json whose port is not a TCP port' right after the WSL-boundary block (it ends at :368, before the worktree section). Fixture: beforeEach mkdtemp testDir + scaffoldMoe; requestSpy = vi.spyOn(http, 'request') and connectSpy = vi.spyOn(net.Socket.prototype, 'connect') (call-through, no mock implementation); afterEach vi.restoreAllMocks() and rmSync. Write daemon.json as RAW text {\"port\":<raw>,\"pid\":<pid>,\"projectPath\":<JSON.stringify(testDir)>,\"startedAt\":\"<iso>\"} so that 1e999 parses to Infinity (JSON.stringify cannot write Infinity); pid defaults to process.pid (alive, and testDir is a local path on every OS). Every title starts 'P<n>: ' because the gate counts them:\n- P1 it.each over [raw, shown] = ['99999','99999'], ['65536','65536'], ['0','0'], ['-1','-1'], ['1.5','1.5'], ['1e999','Infinity'], ['\"8080\"','\"8080\"']: runDoctor resolves; result.output.filter(l => l.startsWith('[FAIL]')) toEqual exactly [`[FAIL] daemon.json: daemon.json port ${shown} is not a valid TCP port (1-65535); not dialed`]; no 'daemon health reachability' line; requestSpy and connectSpy not called; exitCode 1.\n- P2: a string port made of the ESC control character (U+001B), '[2J' and 300 '9' characters, written via JSON.stringify: the daemon.json line equals the same message with shown = JSON.stringify(value).slice(0, 120); no raw U+001B anywhere in the output; nothing dialed; exit 1.\n- P3: a dead local pid (2147483646) with port 99999: the same exact [FAIL] line; no output line contains '(stale)'; nothing dialed; exit 1 (the port is judged before liveness, as for a foreign record).\n- P4: no port key, live pid: the daemon.json line is exactly '[FAIL] daemon.json: daemon.json missing port'; nothing dialed; exit 1 (today's text, pinned).\n- P5 it.each [1, 65535] with a 15_000 ms test timeout (a refused loopback dial takes about 2 s per probe on Windows): the daemon.json line is exactly `[OK] daemon.json: daemon.json valid (pid ${process.pid}, port ${port})`, a 'daemon health reachability' line exists, and requestSpy was called with expect.objectContaining({ port }); never assert the reachability outcome (whatever listens there decides it).\nEdit no existing row (F6 must pass unchanged later). Then run the checkRefs command once for RED and record it: expect Tests 9 failed (P1 x7: 99999/65536/-1/1.5/Infinity as a runDoctor rejection ERR_SOCKET_BAD_PORT, 0 as a dial of port 80, \"8080\" as 'missing port'; P2 as 'missing port'; P3 as a stale WARN), with P4, P5 and F6 passing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "note": "Added describe 'runDoctor — a local daemon.json whose port is not a TCP port' (P1 x7, P2, P3, P4, P5 x2 = 12 rows) after the WSL-boundary block; no existing row edited. RED in a git-archive snapshot (checkRefs command as written): Test Files 1 failed | 3 passed, Tests 9 failed | 177 passed | 1 skipped; P: 3/12 passing (P4, P5 x2), F6: 4/4. Failing: P1 x7, P2, P3 — exactly the predicted set. tsc --noEmit and the doctor.test.ts type-check were clean.",
+      "startedAt": "2026-11-04T08:09:28.971Z",
+      "completedAt": "2026-11-04T08:10:12.224Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Share the daemon lifecycle's port rule instead of keeping a second copy (mem:gotcha-daemon-lifecycle-wsl-foreign). doctor.ts cannot import index.ts (index.ts:27 imports runDoctor, a cycle into the CLI entry), so move it the way task-d7b24cab moved isForeignDaemonInfo and wslGatewayHost: in server/probeHost.ts add `export function isValidPort(port: unknown): port is number` with index.ts:101-103's body verbatim (typeof number, Number.isInteger, 1 to 65535) and a short doc comment: the one daemon.json port rule shared by the lifecycle's isDaemonInfoShape (index.ts) and doctor's probeDaemonJson; daemon.json is unchecked JSON that a hand edit or a broken writer can corrupt; http.request and Socket#connect throw ERR_SOCKET_BAD_PORT synchronously outside 0-65535 or on a fraction, and http.request dials port 0 as port 80. In index.ts delete the local isValidPort and add isValidPort to the existing './server/probeHost.js' import at :22; isDaemonInfoShape, isValidPid and every other line stay untouched. Keep probeHost.ts's default dns/fs/net/os imports (tests spy those module objects). No behavior change: the lifecycle's error handling for a malformed record stays covered by index.test.ts 'rejects malformed daemon info'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/probeHost.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/probeHost.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "isValidPort moved verbatim from index.ts to server/probeHost.ts (exported, with a doc comment); index.ts deletes its private copy and imports it on the existing './server/probeHost.js' line. isDaemonInfoShape, isValidPid and all other lines untouched; probeHost.ts default dns/fs/net/os imports kept. Verified with the step-3/4 gate run below.",
+      "startedAt": "2026-11-04T08:10:14.485Z",
+      "completedAt": "2026-11-04T08:10:23.171Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "The fix: give the crash path real error handling by refusing a bad port before anything dials, once, for every record. In commands/doctor.ts import isValidPort from '../server/probeHost.js'. In probeDaemonJson type the parsed record's port as unknown and replace the `typeof parsed.port !== 'number'` check (:98-100) with, in order: (1) parsed.port === undefined -> the unchanged { symbol: 'fail', message: 'daemon.json missing port' } result; (2) !isValidPort(parsed.port) -> { result: { symbol: 'fail', message: `daemon.json port ${shown} is not a valid TCP port (1-65535); not dialed` }, alive: false }, where shown is String(port) for a number (JSON.stringify would print Infinity as null) and String(JSON.stringify(port)).slice(0, 120) otherwise (probeDaemonReachability's bindHost display rule: escapes control characters and caps hostile input). Both checks run before the pid check and before the foreign split, so a live local, dead local, pid-less and foreign record share this one check. Delete probeForeignDaemonJson's own guard (:207-209) and reword the last sentence of its header comment (:204-205) to say the port arrives validated by probeDaemonJson; keep its `port: number` parameter and every message. Do not touch probeHealth, probeTcp, probeDaemonReachability or any other probe. In new comments call daemon.json unchecked JSON, not repository content (.moe/daemon.json is gitignored runtime state). Re-run doctor.test.ts in the snapshot: every P row and the 4 F6 rows are green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "note": "probeDaemonJson: parsed port typed unknown; 'daemon.json missing port' only for an absent key; then !isValidPort(port) -> the named [FAIL] (String(port) for a number, String(JSON.stringify(port)).slice(0,120) otherwise) before the pid check and foreign split. probeForeignDaemonJson: own guard deleted, header comment's last sentence reworded, messages unchanged. Imported isValidPort from ../server/probeHost.js. probeHealth/probeTcp/probeDaemonReachability untouched. The green re-run is step 4's checkRefs gate (same command, run once).",
+      "startedAt": "2026-11-04T08:10:26.701Z",
+      "completedAt": "2026-11-04T08:10:45.057Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once: from the task worktree run the checkRefs command exactly as written (mem:gotcha-daemon-linux-snapshot-gate). Its fresh output (the Test Files/Tests lines, 'P: 12/12 F6: 4/4', exit 0) is moe.complete_task's verification evidence. It archives HEAD's packages/moe-daemon into a mktemp dir, overlays the four owned files, then runs npm ci, tsc --noEmit, a type-check of doctor.test.ts, and vitest on src/commands/doctor (doctor.test.ts and doctor.bindHost.test.ts), src/index.test.ts and src/index.relativeProject.test.ts: every test file that imports a changed module. The landing qualityGate adds parity-check and the role-doc lint. Never run npm ci or any test in the shared checkout (project rail). A failure prints the snapshot path and v.log's tail: fix the code, never weaken a test assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs command run exactly as written in a git-archive snapshot (node v24.21.0, env -i): tsc --noEmit and the doctor.test.ts type-check clean; Test Files 4 passed (4); Tests 186 passed | 1 skipped (187); 'P: 12/12 F6: 4/4'; exit 0. Before the fix (step 1) the same command gave Tests 9 failed | 177 passed.",
+      "startedAt": "2026-11-04T08:10:45.921Z",
+      "completedAt": "2026-11-04T08:11:04.608Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's own diff (load the adversarial-self-review skill). Check: every path from parsed daemon.json to probeHealth, probeTcp, foreignProbeHosts or healthProbeAddress passes isValidPort first; null, true, [], {}, '', -0 and 1e21 each give the named [FAIL] without a throw; a non-number shown value carries no raw control character and is at most 120 chars; the 'daemon.json missing port', 'daemon.json valid (pid N, port P)' and F6 texts are byte-identical to 90c499e1; isDaemonInfoShape still rejects what it rejected. Then kill mutants in a snapshot (back up each file once, restore from `git show HEAD:<path>`, cmp before citing the gate): drop doctor's new guard (P1, P3 and F6 die); `port >= 1` -> `port >= 0` in isValidPort (P1 '0' dies); `port >= 1` -> `port > 1` (P5 port 1 dies); `<= 65535` -> `< 65535` (P5 65535 dies); show numbers through JSON.stringify (P1 Infinity dies); drop .slice(0, 120) (P2 dies). Put the RED count from step 1 and each mutant's killed/survived result in the completion summary. If any byte changed during review, re-run step 4's command before moe.complete_task.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T08:11:06.880Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-5772dacf",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Promoted from BACKLOG because its only dependency, task-d7b24cab, is DONE (approved 07:53:42Z, landed as 90c499e1). The basis is the human's standing \"move from backlog\" of 2026-11-02 21:00Z. Plan against 90c499e1's doctor.ts and share its foreign-record port refusal for the local record. The acceptance points are in comment-8e022e4a.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "LOW",
@@ -29,8 +90,108 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:48:30.637Z",
-  "updatedAt": "2026-11-04T07:49:16.864Z",
+  "updatedAt": "2026-11-04T08:11:06.880Z",
   "dependsOn": [
     "task-d7b24caba2a14229acfbaa2b6e55cb94"
-  ]
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T07:54:09.598Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T07:54:26.456Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-5772dacf"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:08:04.275Z",
+  "executionContract": {
+    "intendedBehavior": "moe-daemon doctor never rejects on a parsed daemon.json. probeDaemonJson judges the recorded port once, before the pid check, before the local/foreign split and before any dial, with the daemon lifecycle's own rule isValidPort (an integer 1-65535), now exported from server/probeHost.ts and shared with index.ts isDaemonInfoShape. A port that fails it gives exactly one [FAIL] 'daemon.json port <shown> is not a valid TCP port (1-65535); not dialed' and exit 1, whatever the pid: a live local pid (the crash today), a dead local pid, no pid, or a foreign record (today's F6 refusal, same text). <shown> is String(port) for a number and JSON.stringify(port) capped at 120 chars otherwise. A record with no port key still reads 'daemon.json missing port'. A valid port behaves exactly as at 90c499e1.",
+    "acceptanceCriteria": [
+      "(a) With a live local pid and port 99999, 65536, 0, -1, 1.5, Infinity (raw JSON 1e999) or the string \"8080\", runDoctor resolves; its output has exactly one [FAIL] line, '[FAIL] daemon.json: daemon.json port <shown> is not a valid TCP port (1-65535); not dialed' (shown 99999, 65536, 0, -1, 1.5, Infinity, \"8080\"); there is no 'daemon health reachability' line; http.request and net.Socket.prototype.connect are never called; the exit code is 1.",
+      "(b) A valid port behaves as today: ports 1 and 65535 with a live local pid read exactly '[OK] daemon.json: daemon.json valid (pid <pid>, port <port>)' and are dialed (http.request called with that port); every pre-existing doctor.test.ts and doctor.bindHost.test.ts row passes unchanged, F6 included.",
+      "(c) The rows are in doctor.test.ts in their own describe block 'runDoctor — a local daemon.json whose port is not a TCP port', titled P1-P5 (12 rows), and the checkRefs gate exits 0: tsc --noEmit, the doctor.test.ts type-check, and vitest on doctor.test.ts, doctor.bindHost.test.ts, index.test.ts and index.relativeProject.test.ts with at least 12 P rows and exactly 4 F6 rows passed.",
+      "A non-number port carrying a control character and 300+ chars is shown as JSON.stringify(value).slice(0, 120); no raw control character reaches doctor's output.",
+      "A dead local pid with port 99999 gets the same [FAIL] and exit 1, never '(stale)'; a record with no port key reads exactly '[FAIL] daemon.json: daemon.json missing port'; neither dials anything."
+    ],
+    "invariants": [
+      "Nothing is dialed (http.request, Socket#connect, DNS lookup, foreignProbeHosts) for a daemon.json whose port fails isValidPort.",
+      "runDoctor resolves for every parseable daemon.json; it never rejects on the record's content.",
+      "The texts 'daemon.json missing port', 'daemon.json valid (pid N, port P)' and F6's 'daemon.json port N is not a valid TCP port (1-65535); not dialed' are byte-identical to 90c499e1.",
+      "isDaemonInfoShape's verdicts are unchanged: the same predicate, moved.",
+      "probeHost.ts keeps its default dns, fs, net and os imports (tests spy those module objects)."
+    ],
+    "compatibility": [
+      "Every daemon-written daemon.json (an integer port 1-65535) is judged exactly as at 90c499e1, local or foreign.",
+      "Only a corrupt port changes outcome: today's crash (live local pid), WARN (dead or missing pid) or 'missing port' (a non-number value) becomes the named [FAIL] with exit 1.",
+      "index.ts's exported surface is unchanged (isValidPort was module-private); probeHost.ts only gains an export. No MCP contract or .moe/ state shape changes."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/server/probeHost.ts: one new export isValidPort(port: unknown): port is number, index.ts:101-103's body verbatim, with a doc comment.",
+      "packages/moe-daemon/src/index.ts: delete the module-private isValidPort and import it from ./server/probeHost.js (:22); isDaemonInfoShape, isValidPid and every other line unchanged.",
+      "packages/moe-daemon/src/commands/doctor.ts probeDaemonJson: parsed port typed unknown; 'missing port' only for an absent key; the isValidPort refusal before the pid check and the foreign split. probeForeignDaemonJson: its own guard removed, its header comment's guard sentence reworded; every message unchanged.",
+      "packages/moe-daemon/src/commands/doctor.test.ts: one new describe block (P1-P5) after the WSL-boundary block; no existing row edited.",
+      "Out of scope: probeHealth, probeTcp, probeDaemonReachability, server/healthHost.ts's inline Host-port check, the other doctor probes, docs, and comments outside the edited lines."
+    ],
+    "reuse": [
+      "index.ts isValidPort, the lifecycle's daemon.json port rule, moved verbatim into server/probeHost.ts the way task-d7b24cab moved isForeignDaemonInfo and wslGatewayHost: doctor.ts cannot import index.ts, which imports runDoctor (a cycle into the CLI entry).",
+      "probeForeignDaemonJson's refusal text, now produced once in probeDaemonJson for every record.",
+      "probeDaemonReachability's bindHost display rule String(JSON.stringify(x)).slice(0, 120), for a non-number port.",
+      "doctor.test.ts's scaffoldMoe and line helpers."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/commands/doctor.ts:98 probeDaemonJson checks only typeof parsed.port === 'number'; a live local pid returns alive:true (:114-120) and probeDaemonReachability (:232-269) then calls probeHealth (http.request at :147) and probeTcp (socket.connect at :55) inside promise executors; runDoctor (:394-400) has no catch.",
+      "Node v24.21.0, checked 2026-11-04: http.request and Socket#connect throw ERR_SOCKET_BAD_PORT synchronously for 99999, 65536, -1, 1.5, Infinity and null; port 0 does not throw (http.request dials port 80, Socket#connect port 0); the string '8080' is dialed.",
+      "probeForeignDaemonJson (doctor.ts:206-230) refuses !Number.isInteger(port) || port < 1 || port > 65535 at :207-209; F6 (doctor.test.ts:335-343) pins it for 99999, 1.5, -1 and 0.",
+      "packages/moe-daemon/src/index.ts:101-103 isValidPort(port: unknown): port is number is used only by isDaemonInfoShape (:112); index.ts:22 already imports from ./server/probeHost.js and index.ts:27 imports runDoctor from ./commands/doctor.js.",
+      "JSON.parse('{\"port\":1e999}').port is Infinity, and JSON.stringify(Infinity) is 'null'.",
+      "doctor.ts and doctor.test.ts read http/net/fs through default imports at call time, so vi.spyOn(http, 'request') and vi.spyOn(net.Socket.prototype, 'connect') see doctor's dials (the WSL-boundary block's fs.readFileSync spy relies on the same).",
+      "Architect dry run of the checkRefs command at 90c499e1 (2026-11-04, WSL, node v24.21.0): Test Files 4 passed, Tests 174 passed | 1 skipped, 'P: 0/12 F6: 4/4', then FAIL as expected with no P rows yet; vitest took about 6 s. The filter src/commands/doctor matches exactly doctor.test.ts and doctor.bindHost.test.ts."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon && git archive HEAD $P | tar -x -C \"$S\" && (cd $P/src && cp --parents index.ts server/probeHost.ts commands/doctor.ts commands/doctor.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/commands/doctor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/commands/doctor src/index.test.ts src/index.relativeProject.test.ts --reporter=verbose > ../v.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; G=$(grep -acE '✓ .*TCP port > P[1-5]: ' ../v.log); F=$(grep -acE '✓ .*WSL boundary > F6: ' ../v.log); echo \"P: $G/12 F6: $F/4\"; [ $E = 0 ] && [ \"$G\" -ge 12 ] && [ \"$F\" = 4 ] || { echo \"FAIL $S\"; tail -30 ../v.log; exit 1; } )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Make probeHealth/probeTcp resolve on a synchronous throw: rejected. It would still dial port 0 (http.request turns it into port 80) and a string port, and it leaves two port checks in doctor; mem:gotcha-daemon-doctor-daemon-json-is-hostile-input prefers validating once in probeDaemonJson. (2) Guard only the live-local branch: rejected, because the governor asked for one check shared by the local and foreign records (comment-8e022e4a), and a guard placed before the split is that one check. (3) A doctor-local predicate: rejected, because index.ts already has isValidPort with the identical rule; moving it to probeHost.ts (the d7b24cab precedent) makes doctor and the lifecycle agree by construction. (4) A full daemon-suite gate: not chosen. isEpicFinal here is the Stability & Hardening bucket epic's drifting highest-order fallback (mem:decision-epic-final-designation), the change is 4 files in one package, every test file importing a changed module is in the gate, and the full suite's known load flakes (bindHosts D-fail, index.version) would make the gate noisy on the shared host. No docs change: no doc quotes doctor's port messages (git grep 'missing port' / 'not a valid TCP port' hits only doctor.ts and its test).",
+    "codebaseInsights": "server/probeHost.ts is the module the lifecycle (index.ts) and doctor share so their dial rules cannot drift. Its header requires keeping the default dns/fs/net/os imports, because tests spy those module objects. doctor.test.ts has top-level helpers scaffoldMoe and line. The WSL-boundary block (F1-F8) stubs /proc/net/route through fs.readFileSync; the new local block needs no stub. A record whose projectPath is testDir is local on every OS. After this change F6 exercises the shared guard, not a foreign-only one, with the same text. The checkRefs command was dry-run at 90c499e1 by the architect and its plumbing works (see sourceAssumptions); it no longer runs the role-doc lint because the landing qualityGate does.",
+    "risks": "Write Infinity as raw JSON 1e999: JSON.stringify cannot produce it. Show a number with String(): JSON.stringify(Infinity) is 'null'. Port 0 never throws (http.request dials it as port 80), so only the < 1 bound refuses it. P5's boundary rows dial loopback ports 1 and 65535: a refused loopback dial takes about 2 s per probe on Windows, hence the 15 s timeout, and the reachability outcome must not be asserted. If a child_process stdio pipe from the off-mode worktree git probes ever trips connectSpy, filter its calls by port; never drop the assertion. The 'exactly one [FAIL]' assertion relies on scaffoldMoe plus the off-mode worktree probes emitting no FAIL in a temp dir, which the reachability block's exit-0 row already proves. .moe/daemon.json is gitignored runtime state (governor correction), so new comments must not call it repository content. Project rails: never run npm ci, build or tests in the shared checkout (snapshot only); never pattern-kill processes.",
+    "keyFiles": [
+      "packages/moe-daemon/src/commands/doctor.ts",
+      "packages/moe-daemon/src/commands/doctor.test.ts",
+      "packages/moe-daemon/src/server/probeHost.ts",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/commands/doctor.bindHost.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "90c499e15849f8666145f159ea2c060d33bfcf6f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:08:04.309Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:09:28.971Z"
 }

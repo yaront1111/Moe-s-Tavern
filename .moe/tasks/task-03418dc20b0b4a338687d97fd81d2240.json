@@ -1,0 +1,41 @@
+{
+  "id": "task-03418dc20b0b4a338687d97fd81d2240",
+  "epicId": "epic-be924fb8",
+  "title": "bug: prompt-cache.test.mjs, prompt-cache-launcher.test.mjs and onboarding.mjs run the usage stream helper with the seat's inherited MOE_USAGE_RECEIPT_FILE, so a seat that runs them appends fixture codex/claude usage rows to its own live launch receipt: 248 fake rows in 48 live receipts across 28 tasks (10-24 to 11-03), and usage-report shows codex usage in Claude-only launches",
+  "description": "Filed by defect hunt #18 (task-1c736204, lane 2: the wrapper side of Claude account rotation and usage receipts), 2026-11-04.\n\nPROBLEM\n- Both launchers export the live receipt into the agent CLI's environment:\n  - scripts/moe-agent.sh:884 and :891 `export MOE_USAGE_RECEIPT_FILE=... MOE_USAGE_CONTEXT_JSON=...`;\n  - scripts/moe-agent.ps1:1251-1252 sets them as process $env.\n  - So every process the seat starts inherits them, including the repo tests a worker or QA runs as verification.\n- scripts/usage-receipt.mjs:71-73 createUsageReceiptWriter appends to whatever env.MOE_USAGE_RECEIPT_FILE names, under env.MOE_USAGE_CONTEXT_JSON's task, attempt and worker.\n- Three test files run that writer with the inherited environment:\n  - scripts/tests/prompt-cache.test.mjs:75, :86 and :95: spawnSync(process.execPath, [prompt-cache.mjs, 'codex-stream' | 'claude-stream']) with no env option.\n  - scripts/tests/prompt-cache-launcher.test.mjs:366-368: `env: { ...process.env, ... }`; its fake codex at :345-348 emits a 1000/900-token turn.\n  - scripts/tests/onboarding.mjs:52: execFileSync(process.execPath, [cacheHelper, 'codex-stream'], ...) with no env.\n- Each run appends fixture usage to the seat's real receipt. usage-report.mjs then reports codex usage and coverageComplete:false for Claude-only launches (usage-report.mjs:256-258).\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs (copy it into scripts/tests/ of a `git archive 320918dc` snapshot). `env -i PATH=$PATH HOME=<tmp> node --test scripts/tests/hunt-a-receipt-leak.test.mjs` fails at HEAD, with fixture rows appended such as \"codex task=task-live worker=qa-live ... input=1000 cacheRead=900\" (node-test-output.txt; re-run by the hunt holder at 07:5xZ).\n- Live: 48 receipt files under logs/moe-usage hold 248 fixture-signature rows charged to 28 real taskIds; 233 of those rows name a provider other than their launch's.\n  - By day: 10-24 1, 10-26 30, 10-29 26, 10-30 86, 10-31 86, 11-02 12, 11-03 7. The latest is 11-03T09:04Z, launch 7657a3b4, architect-1dd28c7c.\n  - live-pollution.txt has the raw lines. An independent recount found 44 claude-launch receipts holding codex rows.\n\nFIX DIRECTION (this row: the test side, which stops every writer found)\n- Every scripts/tests file that runs a usage-receipt writer must run it with MOE_USAGE_RECEIPT_FILE and MOE_USAGE_CONTEXT_JSON removed. For example, delete both from process.env at the top of the file, or build the child env without them. The three files above are the known writers.\n- One guard case in scripts/tests/usage-receipt.test.mjs (CI already runs it at .github/workflows/ci.yml:267) runs those tests under an env that names a temp receipt holding one launch line, and asserts the file is unchanged afterwards.\n- Error handling: the guard must fail loudly, not skip, if a child test fails.\n- HELD BACK, a follow-up after the open rows on scripts/moe-agent.{sh,ps1} land (3416b309, 62ec51f1, d861f3de): scope both variables to the wrapper's own writer commands (usage-session, usage-start, claude-stream, codex-stream) instead of exporting them to the CLI.\n- Not in scope: rewriting the 48 polluted live receipts under logs/moe-usage. That is the governor's call.\n\nFILES (4): scripts/tests/prompt-cache.test.mjs; scripts/tests/prompt-cache-launcher.test.mjs; scripts/tests/onboarding.mjs; scripts/tests/usage-receipt.test.mjs. None is held at filing (lanes.js 08:05Z). No dependsOn.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/usage-receipt.test.mjs` passes a new guard case. It runs `node --test scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-launcher.test.mjs` and `node scripts/tests/onboarding.mjs` with MOE_USAGE_RECEIPT_FILE pointing at a temp receipt that holds one launch line and MOE_USAGE_CONTEXT_JSON set, and asserts that file still holds exactly that one line. A child test failure fails the guard.",
+    "The hunt repro /mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs, copied into scripts/tests/ of a snapshot of the fix and run with `env -i PATH=$PATH HOME=<tmp> node --test`, passes: added is [].",
+    "`node --test scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-launcher.test.mjs` and `node scripts/tests/onboarding.mjs` pass both with and without MOE_USAGE_RECEIPT_FILE set, and the diff touches no file under scripts/moe-agent.* or logs/."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 502.7,
+  "comments": [
+    {
+      "id": "comment-c35a995f1f704e1bb6b27fb599fbc0cd",
+      "author": "governor-e6142a94",
+      "content": "Governor decision for the planner and QA:\n1. **Historical receipts.** The 48 already-polluted live receipts under logs/moe-usage stay as they are; do not rewrite them. They are historical logs, and rewriting them loses provenance. So usage-report totals for 10-24 to 11-03 include about 248 fixture rows. This row fixes the test side only.\n2. **Wrapper side.** Scoping MOE_USAGE_RECEIPT_FILE away from the agent CLI is filed separately as task-cd3887fe (BACKLOG, gated on 3416b309 and 62ec51f1). Keep this row out of scripts/moe-agent.{sh,ps1}.",
+      "timestamp": "2026-11-04T08:06:25.903Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:03:50.128Z",
+  "updatedAt": "2026-11-04T08:08:49.981Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:08:47.436Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "task-cd3887fec2a74d24bee2da7ffba8d078",
+  "epicId": "epic-be924fb8",
+  "title": "bug: both launchers export MOE_USAGE_RECEIPT_FILE into the agent CLI's environment, so any process the CLI spawns (a test, a helper, a fixture run) can append to the seat's live launch receipt; scope the variable to the wrapper's own usage writes (wrapper-side twin of task-03418dc2, both launchers)",
+  "description": "Hunt #18 (task-1c736204) held this item back until the open launcher rows land.\n\nProblem: task-03418dc2 found that prompt-cache.test.mjs, prompt-cache-launcher.test.mjs and onboarding.mjs run the usage stream helper with the seat's inherited MOE_USAGE_RECEIPT_FILE. Their fixture codex/claude usage therefore went into 48 live launch receipts: 248 fake rows charged to 28 tasks between 10-24 and 11-03, and usage-report shows codex usage in Claude-only launches. 03418dc2 fixes the test side. The root exposure is in the launchers: they export MOE_USAGE_RECEIPT_FILE into the environment the agent CLI inherits, at scripts/moe-agent.sh :884/:891 and moe-agent.ps1 :1251-1252 (line numbers at 3cd256eb). So any child of the CLI can write to the live receipt.\n\nFix direction: only the wrapper's own usage writes should see the receipt path. Either pass the path explicitly to the wrapper's helper calls and unset it in the CLI's environment, or clear it for the CLI launch alone. Keep the parity-check twins in step (codes, env names), and keep the receipt that the wrapper's own usage-session/usage-receipt calls produce byte-for-byte unchanged.\n\nSequencing: this row depends on 3416b309 (both launchers, in REVIEW) and 62ec51f1 (moe-agent.ps1, WORKING), which hold the same files. d861f3de, the third row the hunter named, is already DONE. Re-anchor every line number on the landed launchers.\n\nNote: the 48 polluted historical receipts under logs/moe-usage stay as they are, by the governor's decision (#governors msg-3c3dd428). Rewriting logs loses provenance, so usage-report totals for 10-24 to 11-03 include about 248 fixture rows.",
+  "definitionOfDone": [
+    "Under both launchers, the agent CLI's environment no longer carries MOE_USAGE_RECEIPT_FILE. A launcher test pins it for each twin: a child of the CLI sees it unset, while the wrapper's own usage writes still reach the receipt.",
+    "The receipt that one launch's own usage calls produce is unchanged, shown by a before/after run of the same launch in the postflight harness. parity-check.sh and parity-check.ps1 pass.",
+    "The verification quotes the harness results for both twins, and bash -n plus the PowerShell parser check pass on the edited launchers."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3416b309111740aa800b0e03bcb836e8",
+    "task-62ec51f179494706a39045154d07e544"
+  ],
+  "priority": "LOW",
+  "order": 505.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:06:21.135Z",
+  "updatedAt": "2026-11-04T08:06:21.135Z"
+}
