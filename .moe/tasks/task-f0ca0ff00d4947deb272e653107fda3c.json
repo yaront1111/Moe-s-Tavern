@@ -13,44 +13,65 @@
     {
       "stepId": "step-1",
       "description": "Tests first (red). Create packages/moe-daemon/src/tools/getContextWorkingHint.test.ts from the three hunt-16 repros, copied to /mnt/d/moe-scratch/f0ca0ff0-plan/zzHuntA_*.test.ts. Use the same ToolTestHarness setup and the `call(name, args)` helper over getTools(h.state). Do not commit the zzHuntA file names.\nEvery case reads the hint through moe.get_context, then follows it VERBATIM with call(hint.tool, hint.args), and asserts exact values.\n(1) After start_step(step-1) on a 2-step plan, the hint is tool 'moe.complete_step', args { taskId:'task-1', stepId:'step-1', workerId:'worker-1' }, and its reason starts 'Finish in-progress step step-1: First step'. Following it does not throw, and step-1 becomes COMPLETED.\n(2) An IN_PROGRESS LAST step carries recommendedSkill equal to recommendSkillFor('worker','final_step'): compare with the call, not a literal. With reopenCount 1, the 'reopened' skill wins.\n(3) A plan-less row moved BACKLOG -> WORKING by set_task_status with no workerId, then claimed by worker-1, is hinted 'moe.request_replan', never 'moe.complete_task', with a non-empty args.reason. Following it succeeds and the row becomes PLANNING.\n(4) After amend_plan_step by 'architect-1', a PENDING step's reason === 'Begin step: Keep the cache module; only add a TTL option'. An amended IN_PROGRESS step's complete_step reason contains the amended text and not the original.\n(5) Regression: a fresh PENDING plan still gets 'moe.start_step', 'Begin step: First step' and the first_start_step skill. An all-COMPLETED plan still gets 'moe.complete_task'.\nRun the file in your snapshot (the step-4 recipe) and record the red result in complete_step's note: cases 1-4 fail before step 2, and case 5 passes. Write this file with your own Edit/Write tool (global rail 3).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/getContextWorkingHint.test.ts"
       ],
-      "startedAt": "2026-11-04T06:10:18.348Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContextWorkingHint.test.ts"
+      ],
+      "note": "Red proof (gate.sh snapshot, fix not applied): getContextWorkingHint.test.ts 6 failed / 4 passed. Failing: IN_PROGRESS hint (start_step vs complete_step), final_step skill, reopened skill, plan-less (complete_task vs request_replan), amended PENDING reason (original text quoted), amended IN_PROGRESS. Passing: out-of-order guard, fresh PENDING, later PENDING, all-COMPLETED. Other 4 files green (106 total pass). Setup note: start_step needs contextFetchedBy, seeded in the helper.",
+      "startedAt": "2026-11-04T06:10:18.348Z",
+      "completedAt": "2026-11-04T06:11:23.269Z"
     },
     {
       "stepId": "step-2",
       "description": "The fix (green). In packages/moe-daemon/src/util/contextNextAction.ts, rewrite ONLY the `if (task.status === 'WORKING')` branch (:29-55 at b9205914). The governor, PLANNING and REVIEW branches stay byte-identical, including e44fbbf3's needsHumanReview guard. A proven prototype is /mnt/d/moe-scratch/f0ca0ff0-plan/proto-contextNextAction.diff: with it the hunt repros and 4 existing files pass and tsc is clean. Apply it with your own Edit tool, never patch or cp.\nRules:\n(a) An empty plan answers { tool:'moe.request_replan', args:{ taskId, workerId: workerId || undefined, reason:'This WORKING task has no implementation plan; an architect must plan it before any step can start.' }, reason:'No implementation plan: request a plan instead of starting or completing work.' } with no recommendedSkill. It is callable verbatim: request_replan requires only taskId and reason (requestReplan.ts:32), accepts WORKING (:55) and checks the assignee (:60).\n(b) If the first unfinished step (`find` PENDING or IN_PROGRESS, in plan order, as completeStep.ts does) is IN_PROGRESS, answer { tool:'moe.complete_step', args:{ taskId, stepId, workerId: workerId || undefined }, reason:`Finish in-progress step ${stepId}: ${desc}` }. Its recommendedSkill is reopenedSkill, else recommendSkillFor('worker','final_step') on the last step, else undefined. This mirrors completeStep.ts:194-201.\n(c) A PENDING step keeps today's start_step hint and skills, with reason 'Begin step: ' + desc.\n(d) desc = effectiveStepDescription(nextStep).slice(0, 80), imported from './planAmendments.js' (types-only imports, so no cycle). It never throws and falls back to the original text.\n(e) A non-empty plan with no step left keeps today's complete_task hint.\nThe function is pure, with no IO, so nothing new to catch. Keep `workerId || undefined` so a workerId-less read still omits the key.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/contextNextAction.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/contextNextAction.ts"
+      ],
+      "note": "WORKING branch rewritten (plan-less → request_replan; IN_PROGRESS → complete_step with final_step/reopened skill; PENDING keeps start_step; all hints quote effectiveStepDescription sliced to 80). Governor/PLANNING/REVIEW branches untouched. Gate in snapshot: tsc clean, 5 files / 112 tests pass (was 6 red).",
+      "startedAt": "2026-11-04T06:11:24.748Z",
+      "completedAt": "2026-11-04T06:11:46.787Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs: one paragraph in docs/MCP_SERVER.md, inside `### moe.get_context` only. Place it right after the `contextFetchedBy` paragraph (\"When a `workerId` is supplied … See **Ownership & Ordering** below.\", :217 at 2a1c5a36) and before **Returns:**. Suggested text:\n\"**WORKING `nextAction`.** On a WORKING task the hint follows the plan:\n- no plan → `moe.request_replan` with its `reason` filled in (every step tool and `moe.complete_task` refuse a plan-less row);\n- the first unfinished step `IN_PROGRESS` → `moe.complete_step` for it (`moe.start_step` accepts only `PENDING`, and `moe.complete_step`'s own hint does the same);\n- `PENDING` → `moe.start_step`;\n- nothing left → `moe.complete_task`.\nA step hint's reason quotes the step's effective text: its active amendment when one is in force.\"\nUse your own Edit tool. Change nothing else in the file; other open rows own other sections (report_blocked: 31a2aa2f and 590b98bd; release_task: 47652916; deregister_worker and finalize_attempt: efe07ce5; qa_reject: 77e54ebb). Error handling: re-grep the anchor first. If a peer moved it, place the paragraph at the same spot relative to **Returns:**.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "One paragraph (\"WORKING nextAction\", 4 bullets + effective-text sentence) inserted in ### moe.get_context between the contextFetchedBy paragraph and **Returns:**. No other hunk in the file.",
+      "startedAt": "2026-11-04T06:11:48.298Z",
+      "completedAt": "2026-11-04T06:11:57.159Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, run once. From your worktree root, run exactly the executionContract checkRef (byte-identical to /mnt/d/moe-scratch/f0ca0ff0-plan/gate.sh; check it with `cd /mnt/d/moe-scratch/f0ca0ff0-plan && sha256sum -c SHA256SUMS`). Submit its fresh output as moe.complete_task verification { command, exitCode, outputTail }.\nThe checkRef runs outside the shared checkout:\n1. clones your HEAD into a mktemp dir;\n2. overlays your 3 working-tree files;\n3. runs npm ci, then `npx tsc --noEmit -p .`;\n4. runs vitest on getContextWorkingHint, getContext, getContextGovernance, accountTools and recommendSkill.\nThe architect proved it on a clone at 2a1c5a36 with the IN_PROGRESS repro as the new file: without the fix 2 tests fail, with the prototype 5 files and 104 tests pass. Expect more tests with your full file.\nNEVER run npm ci, npm test or a build in /mnt/d/projexts/moes or in your worktree (global rail 1). When you prototype in a scratch clone, use absolute paths and a `set -e` subshell: a failed `cd` followed by a relative `cp` writes into whatever directory you are in.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh checkRef run (gate.sh checksum OK): exit 0, tsc --noEmit clean, 5 test files / 112 tests passed (getContextWorkingHint, getContext 55, getContextGovernance 15, accountTools 19, recommendSkill 13). git status: exactly docs/MCP_SERVER.md, contextNextAction.ts, new getContextWorkingHint.test.ts.",
+      "startedAt": "2026-11-04T06:11:58.696Z",
+      "completedAt": "2026-11-04T06:12:12.772Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of your own diff, run once (load adversarial-self-review). Check:\n(1) Only the WORKING branch of contextNextAction.ts changed; the governor, PLANNING and REVIEW branches and the e44fbbf3 needsHumanReview guard are untouched.\n(2) Out-of-order plans: the PENDING-or-IN_PROGRESS `find` picks the same step completeStep.ts picks. Any IN_PROGRESS step gets complete_step, never start_step.\n(3) A workerId-less read omits workerId from args. A non-assignee following the request_replan or complete_step hint is refused by ownership, as start_step already is; say so in your summary.\n(4) The reason text uses effectiveStepDescription in BOTH step branches, sliced to 80.\n(5) getContextGovernance's 'retains $tool guidance' cases and accountTools' start_step assertion still pass unchanged.\n(6) The docs paragraph matches the code word for word on tool names, and sits inside `### moe.get_context` only.\n(7) The diff is exactly 3 files.\nFix anything you find. If any byte changed, re-run the step-4 checkRef and submit that fresh output.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/util/contextNextAction.ts",
         "packages/moe-daemon/src/tools/getContextWorkingHint.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "startedAt": "2026-11-04T06:12:14.513Z"
     }
   ],
   "planRevision": 1,
@@ -67,11 +88,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:02:45.982Z",
-  "updatedAt": "2026-11-04T06:10:18.348Z",
+  "updatedAt": "2026-11-04T06:12:14.513Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:03:57.994Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -81,7 +103,12 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:09:13.344Z",
   "executionContract": {

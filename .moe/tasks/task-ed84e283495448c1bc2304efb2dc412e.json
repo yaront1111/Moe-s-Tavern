@@ -89,8 +89,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -102,12 +102,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:04:19.361Z",
-  "updatedAt": "2026-11-04T06:10:13.655Z",
+  "updatedAt": "2026-11-04T06:12:19.930Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:27:15.137Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:11:53.168Z",
+    "wallClockMs": 20678031
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -235,9 +237,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T05:41:15Z",
-    "at": "2026-11-04T05:44:18.058Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T06:09:55Z",
+    "at": "2026-11-04T06:12:19.930Z"
+  },
+  "completedAt": "2026-11-04T06:11:53.168Z",
+  "reviewCompletedAt": "2026-11-04T06:11:53.168Z",
+  "reviewSummary": "Reviewed completion bf35a0a7 (parent b9205914; on moe/control and moe/work-2026-10-24; tree 26c34fda matches currentCandidate). 5 files, +7/-7, docs plus vendored initFiles.ts only. Each doc has one one-line hunk with the same phrase \"the union of every step's `affectedFiles` and `newFiles`\": CONFIGURATION.md taskSizing parenthetical, governor.md Size rubric, MCP_SERVER.md Plan-size gate bullet (:383 only), packages/moe-daemon/CLAUDE.md gates bullet. initFiles.ts has exactly the 3 governor.md hunks (marker sha 6cedbe83add8 -> c9d4b13ad50b, rubric body line, c9d4b13ad50b added to SHIPPED_ROLE_BODY_SHAS with old 6cedbe83add8 kept so stale marked copies still upgrade). Source claim matches submitPlan.ts:427-432 ([...step.affectedFiles, ...step.newFiles] into assessPlanSize). Re-ran task.verification in a clean clone of bf35a0a7 outside the repo (no build/npm in the shared checkout): SHA256SUMS ok; R0 OK; R1 OK (parity-check PASS, role-doc lint 39/30/36 lines, within the 40 cap); R3 OK (base initFiles.ts generator-fresh, regenerate then sha1sum -c OK, vitest 4 files / 61 tests pass). R2 checked by hand against bf35a0a7^ (the script's own R2 is vacuous in that clone): exactly the 5 named files, nothing out of scope. Invariants hold: architect.md, SCHEMA.md, docs/skills, .moe/, .gemini/ untouched; submitPlan.ts and planSize.ts unchanged. Broader grep finds no remaining affectedFiles-only distinct-file wording (SCHEMA.md:1042 already says affectedFiles + newFiles). Collision notice on MCP_SERVER.md with task-f0ca0ff0: bytes already landed here, and its committed branch has no MCP_SERVER.md hunks, so no overlap. Not covered: no runtime behavior here; initFiles.ts only reaches users via a plugin/daemon rebuild.",
+  "requiredCheckAtDone": null
 }
