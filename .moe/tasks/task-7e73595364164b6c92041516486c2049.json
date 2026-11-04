@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:58:43.276Z",
-  "updatedAt": "2026-11-04T06:18:55.084Z",
+  "updatedAt": "2026-11-04T06:20:15.586Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T06:07:00.780Z",
@@ -107,7 +107,9 @@
     "firstClaimAt": "2026-11-04T06:09:31.504Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:19:54.988Z",
+    "wallClockMs": 623484
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -223,9 +225,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T06:13:56Z",
-    "at": "2026-11-04T06:18:26.031Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T06:18:37Z",
+    "at": "2026-11-04T06:20:15.586Z"
+  },
+  "completedAt": "2026-11-04T06:19:54.988Z",
+  "reviewCompletedAt": "2026-11-04T06:19:54.988Z",
+  "reviewSummary": "Reviewed completion 6da87f7c (on moe/control and moe/work-2026-10-24; 3 files, +108/-7, runtime ~+10/-3; no size issue). Re-ran task.verification (checkRef) in a fresh mktemp clone of HEAD: npm ci, tsc --noEmit clean, vitest 5 files / 127 tests passed, EXIT=0 (parkedUnlandedLanding 6, finalizeAttempt 63, finalizingCloseRetry 11, parkedReview.guard 6, attemptHandback 41). Red proof: restoring pre-fix workerLifecycle.ts (6da87f7c^) in the scratch clone fails 5 of 6 new tests (finalize unlanded conflict + diverged, deregister_worker, DEAD prune, startup purge; each got WORKING); the no-flag control passes. DoD 1: tests assert REVIEW, unassigned, needsHumanReview kept, reopenCount 5, landingRetry {reason,count 1}, one moe-daemon comment, WORKING-pool and REVIEW-pool claims never return the row, explicit-taskId claim refused 'parked for human review'. DoD 2: finalizeAttempt.test.ts, finalizingCloseRetry.test.ts, finalizeAttempt.ts untouched and passing; MCP_SERVER.md edits are exactly the finalize_attempt 'unlanded' Routing sub-bullet and the deregister_worker retry bullet, matching the code. Code: parked = REVIEW && needsHumanReview === true (strict); routing {} so no status/assignment/blocked* write, landingRetry + one comment still written; non-parked paths unchanged. Only two callers (finalizeAttempt.ts:153, retryUnrecordedLanding:287), both covered by the one guard. Scope matches approvedScope; no complexity findings. Not covered: root cause (qa_reject accepting a hard-cap reject during a finalizing landing, qaReject.ts:137-155) is out of scope per the row. I did not re-run the quality gate (parity-check.sh + npm run lint); worker reported it passing and the diff touches no scripts or role docs.",
+  "requiredCheckAtDone": null
 }
