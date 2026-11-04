@@ -32,9 +32,10 @@ import type { AccountRotationView } from '../types/accounts';
  */
 type ApproveTaskPayload = Extract<PluginOutboundMessage, { type: 'APPROVE_TASK' }>['payload'];
 
-/** The at-most-three context keys an onError subscriber may see. */
+/** The at-most-four context keys an onError subscriber may see. */
 interface DaemonErrorContext {
     taskId?: string;
+    epicId?: string;
     expectedPlanRevision?: number;
     currentPlanRevision?: number;
 }
@@ -92,7 +93,7 @@ function isRotationView(value: unknown): value is AccountRotationView {
  *
  * The daemon's error contexts are free-form debugging data — internal field
  * names, reason strings, project paths — so the received object is NEVER spread
- * into the public event. At most these three keys cross, and only with the
+ * into the public event. At most these four keys cross, and only with the
  * right type. Returns undefined when nothing survives, so the caller can omit
  * the property entirely rather than publish an empty object.
  */
@@ -104,6 +105,9 @@ function allowlistedErrorContext(context: unknown): DaemonErrorContext | undefin
     const picked: DaemonErrorContext = {};
     if (typeof source.taskId === 'string') {
         picked.taskId = source.taskId;
+    }
+    if (typeof source.epicId === 'string') {
+        picked.epicId = source.epicId;
     }
     if (typeof source.expectedPlanRevision === 'number' && Number.isFinite(source.expectedPlanRevision)) {
         picked.expectedPlanRevision = source.expectedPlanRevision;
@@ -1308,11 +1312,12 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.sendMessage('CREATE_EPIC', { title, description, architectureNotes, epicRails });
     }
 
+    /** Returns false when nothing was sent; a caller that gates UI on delivery must check it. */
     updateEpic(
         epicId: string,
         updates: { title?: string; description?: string; architectureNotes?: string; epicRails?: string[]; status?: EpicStatus }
-    ): void {
-        this.sendMessage('UPDATE_EPIC', { epicId, updates });
+    ): boolean {
+        return this.sendMessage('UPDATE_EPIC', { epicId, updates });
     }
 
     deleteEpic(epicId: string): void {

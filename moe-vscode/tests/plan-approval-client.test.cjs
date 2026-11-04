@@ -280,15 +280,12 @@ test('a throwing socket returns false and reports the failed APPROVE_TASK', () =
 
 const MISMATCH_MESSAGE = '[PLAN_REVISION_MISMATCH] Task task-1 was approved at plan revision 4 but is now at 9';
 
-function assertMismatchPayload(payload) {
+function assertMismatchPayload(payload, contextKeys) {
     assert.equal(payload.operation, 'APPROVE_TASK');
     assert.equal(payload.message, MISMATCH_MESSAGE);
     assert.equal(payload.code, -32002);
     assert.equal(payload.codeName, 'PLAN_REVISION_MISMATCH');
-    assert.deepEqual(
-        Object.keys(payload.context).sort(),
-        ['currentPlanRevision', 'expectedPlanRevision', 'taskId']
-    );
+    assert.deepEqual(Object.keys(payload.context).sort(), contextKeys);
     assert.equal(payload.context.taskId, 'task-1');
     assert.equal(payload.context.expectedPlanRevision, 4);
     assert.equal(payload.context.currentPlanRevision, 9);
@@ -305,9 +302,9 @@ test('a modern top-level ERROR frame reaches the error event fully correlated', 
             context: { taskId: 'task-1', epicId: 'epic-1', expectedPlanRevision: 4, currentPlanRevision: 9 }
         });
         assert.equal(h.errors.length, 1);
-        assertMismatchPayload(h.errors[0]);
-        // epicId is deliberately not promoted.
-        assert.equal(Object.prototype.hasOwnProperty.call(h.errors[0].context, 'epicId'), false);
+        assertMismatchPayload(h.errors[0], ['currentPlanRevision', 'epicId', 'expectedPlanRevision', 'taskId']);
+        // A string epicId is promoted, so a refusal can be tied to its epic.
+        assert.equal(h.errors[0].context.epicId, 'epic-1');
     });
 });
 
@@ -324,7 +321,7 @@ test('a legacy payload-nested ERROR frame is promoted the same way', () => {
             }
         });
         assert.equal(h.errors.length, 1);
-        assertMismatchPayload(h.errors[0]);
+        assertMismatchPayload(h.errors[0], ['currentPlanRevision', 'expectedPlanRevision', 'taskId']);
     });
 });
 
@@ -360,8 +357,19 @@ test('unrelated daemon context keys are never promoted into the public payload',
         });
         assert.deepEqual(
             Object.keys(h.errors[0].context).sort(),
-            ['currentPlanRevision', 'expectedPlanRevision', 'taskId']
+            ['currentPlanRevision', 'epicId', 'expectedPlanRevision', 'taskId']
         );
+    });
+});
+
+test('EC1 allowlist: only a string epicId crosses, alone or beside taskId', () => {
+    withHarness(h => {
+        const errorWith = context => { h.deliver({ type: 'ERROR', message: 'boom', operation: 'UPDATE_EPIC', context }); return h.errors[h.errors.length - 1]; };
+        assert.equal(JSON.stringify(errorWith({ epicId: 'epic-1' }).context), '{"epicId":"epic-1"}');
+        for (const bad of [1, null, true, {}, ['epic-1']]) {
+            assert.equal('context' in errorWith({ epicId: bad }), false, `epicId ${JSON.stringify(bad)}`);
+        }
+        assert.deepEqual(Object.keys(errorWith({ taskId: 'task-1', epicId: 7 }).context), ['taskId']);
     });
 });
 
