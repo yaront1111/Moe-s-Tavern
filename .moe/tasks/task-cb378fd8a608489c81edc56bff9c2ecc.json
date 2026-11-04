@@ -1,0 +1,56 @@
+{
+  "id": "task-cb378fd8a608489c81edc56bff9c2ecc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: gemini mode silently falls back to the Gemini CLI with Antigravity's flags when agy is missing (moe-agent.sh about :11612-11617, moe-agent.ps1 about :10993-11003), and agentCommand 'agy' is not recognized as gemini mode (moe-agent.sh :639): port PR #208's Antigravity-only gemini mode (MOE_AGY_COMMAND, one fixed not-found error, parity needles, docs and labels) to the work branch so #208 can close",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04. The human left the decision on PR #208 to the governor (\"as u decide\"), and the decision is to port it.\n\nPROBLEM, on moe/work-2026-10-24, the same as main since 3272b871 (\"feat: use Antigravity (agy) for gemini agent mode\", 2026-09-29):\n- moe-agent.sh about :11612-11617, and moe-agent.ps1 about :10993-11003: when agentCommand is `gemini`, the launcher switches to `agy` only if agy is on PATH.\n- Otherwise it keeps `gemini` and runs the Gemini CLI with the agy-mode argv. The Gemini CLI rejects agy's flags, so the seat fails confusingly instead of saying Antigravity is missing.\n- The not-found message (\"Antigravity command not found: <cmd>\") names whichever binary is missing, which may be `gemini`.\n- moe-agent.sh :639 maps only `gemini` to the gemini cliType, so `agentCommand: \"agy\"` is not recognized at all.\n\nFIX: PR #208 (fix/agy-bom-flake, commit \"fix(wrapper): restore ps1 UTF-8 BOM, run Antigravity only in gemini mode\"). Read it with `gh.exe pr diff 208` and `gh.exe pr view 208` (WSL has only gh.exe). Re-apply its intent to the CURRENT files by anchor, never by line. The PR is against 09-29 main and conflicts.\n1. Both launchers. Gemini mode always runs Antigravity:\n   - take the binary from `MOE_AGY_COMMAND`, else `agy` on PATH;\n   - never fall back to the Gemini CLI;\n   - map both `gemini` and `agy` to the gemini cliType;\n   - with no agy, stop with ONE fixed message in both launchers: 'Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path' (take the exact strings from #208).\n2. scripts/tests/parity-check.sh and parity-check.ps1: require the shared literals (MOE_AGY_COMMAND and the not-found message), as #208's parity hunk does.\n3. Docs and labels, as in #208:\n   - README.md: the CLI list names Antigravity (agy);\n   - docs/CONFIGURATION.md: the `MOE_AGY_COMMAND` row, and `agentCommand` gemini \"runs Antigravity agy\";\n   - docs/GETTING_STARTED.md: sign-in with `agy`;\n   - docs/SCHEMA.md: the 'GEMINI' comment;\n   - JetBrains: TerminalAgentLauncher.kt `GEMINI(\"Antigravity\", \"gemini\")` and MoeBundle.properties `moe.panel.provider.gemini=Antigravity`.\n   JetBrains is first. If moe-vscode shows a provider label for gemini, give it parity in the same row; otherwise say none exists.\n4. A test pins the behaviour on both engines with fake binaries. No real agy or gemini is needed: gemini plus a fake agy runs the fake agy, and gemini with no agy stops with the message and never runs a fake `gemini`.\n\nALREADY ON THE BRANCH. Skip these parts of #208:\n- the ps1 UTF-8 BOM, which CLAUDE.md requires and parity-check enforces;\n- the heartbeatStop.test.ts flake, which the work branch fixed differently with `PWSH_CASE = { retry: 2, timeout: 15000 }`.\n\nORDER. dependsOn CQ-M07t (task-527735ea), which edits both launchers. task-e444f6ae also edits moe-agent.ps1 after t, in the check-dispatch stop area, far from the gemini launch block. Serialize the two with an edge if your plan touches nearby code; otherwise say why parallel is safe.\nNo change to the CQ-M07 turn-on row: gemini mode is outside the verified-local acceptance.\n\nCLOSE-OUT. When this row is DONE, the governor closes PR #208 as superseded, with a comment naming this row and its commit. Never close it from this row.",
+  "definitionOfDone": [
+    "Both launchers run agy for agentCommand gemini or agy (from MOE_AGY_COMMAND, else PATH) and never the Gemini CLI. With no agy, both stop with the same fixed not-found message naming MOE_AGY_COMMAND. A fake-binary test pins this on bash and on both PowerShell engines.",
+    "parity-check.sh and parity-check.ps1 require the shared literals. README, CONFIGURATION, GETTING_STARTED, SCHEMA and the JetBrains provider label say gemini mode runs Antigravity (agy), with VS Code parity if it shows a label. The plan's verification passes fresh.",
+    "The summary maps each PR #208 hunk to ported, already on the branch (BOM, heartbeat flake) or N/A, so the governor can close #208 as superseded."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23"
+  ],
+  "priority": "MEDIUM",
+  "order": 537.7,
+  "comments": [
+    {
+      "id": "comment-8c983720bcb4446d9a2d5f91acf4055c",
+      "author": "governor-e6142a94",
+      "content": "@architect-cd0ac706 Governor dependency change, 17:56Z: this row now depends on CQ-M07s (task-74fe4c99) instead of CQ-M07t, so it can run IN PARALLEL with t once s lands, rather than after t. Please plan for that.\n- Why: coders are idle and nothing is claimable. epic-be924fb8 has no file-disjoint-only rail.\n- This row and t touch different regions of the launchers. This row edits the gemini launch block (moe-agent.sh about :639 and :11612, ps1 about :10993). t edits the worktree journal and receipt code. merge-tree lands disjoint hunks cleanly.\n- Keep these constraints in the plan:\n  1. Do not touch postflight-vm-route.{sh,ps1}. t and e444f6ae own them. Put the fake-binary gemini test in its own place, for example a new scripts/tests/ file or the existing launcher test that covers agentCommand.\n  2. Anchor by name, never by line. s's bytes land on the target before your claim, and t's may land during your work.\n  3. parity-check.{sh,ps1}: s adds the MOE_CHECK_DISPATCH_ family there. Add the MOE_AGY needles after s's landed lines, so the hunks don't overlap.\nIt must still never land before s: an overlap there would send s, which is on the critical path, through a conflict resume and a second 2-hour verification.",
+      "timestamp": "2026-11-04T17:56:16.693Z"
+    },
+    {
+      "id": "comment-1a9850e24dfd4b22a90e48ec59caccac",
+      "author": "governor-e6142a94",
+      "content": "@architect-cd0ac706 Gate guidance from the human's decision at about 18:05Z: mid-epic launcher rows run only the suites they touch, not the full postflight.sh or postflight.ps1. PR #230's CI runs the full suites at every landing, and #230 merges only at all-green CI.\nFor this row, checkRefs[0] should be:\n- the new fake-binary gemini/agy test on bash, pwsh.exe and powershell.exe;\n- parity-check.sh, parity-check.ps1 and npm run lint;\n- bash -n and ParseFile on both wrappers;\n- the JetBrains test that covers the provider label, under the jetbrains-gradle lease if a Kotlin test changes.\nDo not run postflight.ps1 or postflight.sh.",
+      "timestamp": "2026-11-04T18:07:21.541Z"
+    },
+    {
+      "id": "comment-547248443e9744dcb8ea8815d848aa9f",
+      "author": "governor-e6142a94",
+      "content": "@architect-cd0ac706 One addition to comment-1a9850e2, from the human at 18:07Z: \"gates should be 20min tops\" (rail proposal prop-440d064f). This row's checkRefs[0] must finish within 20 minutes of wall time, for the worker and again for QA's re-run. Run independent legs in parallel. The scoped gate from my last comment should fit easily.",
+      "timestamp": "2026-11-04T18:08:28.985Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T17:48:59.958Z",
+  "updatedAt": "2026-11-04T18:08:28.985Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T17:49:00.398Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}

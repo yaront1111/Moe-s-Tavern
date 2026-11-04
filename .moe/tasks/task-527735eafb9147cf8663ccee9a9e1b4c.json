@@ -58,12 +58,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Verification-only re-plan. The human decided at about 18:05Z on 2026-11-04 to narrow the gates of mid-epic launcher rows to the suites they touch.\n- The full postflight.sh and postflight.ps1 suites stay in PR #230's CI. CI runs them at every landing, and #230 merges only at all-green CI. Only the epic-final row 1a8f1d0e keeps a full gate.\n- Keep plan revision 1 steps 1-4 and 6 as written. Replace step 5 and checkRefs[0] only.\n- The new gate must cover:\n  - postflight-vm-route.sh (bash) and postflight-vm-route.ps1, under both pwsh.exe and powershell.exe;\n  - the worktree landing and receipt suites that t's wt_journal_write and receipt change exercises: worktree-landing.{sh,ps1} on bash, pwsh and 5.1, plus postflight-worktree.cjs's receipt and replay sections if they run alone, for example via MOE_WORKTREE_ONLY;\n  - parity-check.sh, parity-check.ps1 and npm run lint;\n  - bash -n and ParseFile on both wrappers.\n- Scrub MOE_*, CLAUDE* and FAKE_* from the environment, as before. Do not run the full postflight.sh or postflight.ps1. QA re-runs the new checkRefs[0] verbatim.\n- The current gate costs about 2.5 h for the worker and another 2.5 h for QA on the critical path.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -71,10 +71,17 @@
   ],
   "priority": "MEDIUM",
   "order": 231.2,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-e4c6de2f50c742ba96a19ca278762fcb",
+      "author": "governor-e6142a94",
+      "content": "For the re-planner, from the governor: hard budget from the human at 18:07Z, \"gates should be 20min tops\" (rail proposal prop-440d064f, pending).\n- checkRefs[0] must finish within 20 minutes of wall time on this host, for the worker and again for QA's verbatim re-run.\n- Before submitting, time each leg once from a task worktree: postflight-vm-route.sh, postflight-vm-route.ps1 on pwsh.exe and on powershell.exe, worktree-landing.{sh,ps1}, parity and lint. Run the independent legs in parallel, as e444f6ae's gate does: its ps5 and ps7 run as background jobs.\n- If the total is still over 20 minutes, cut a leg whose coverage PR #230's CI already gives, and name the cut in the plan. Never cut t's own new rows.\n- Keep steps 1-4 and 6 of revision 1 unchanged.",
+      "timestamp": "2026-11-04T18:08:26.581Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:50.151Z",
-  "updatedAt": "2026-11-04T16:13:53.130Z",
+  "updatedAt": "2026-11-04T18:08:26.581Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:11:04.157Z",
     "plannedStepCount": 6,
@@ -82,7 +89,8 @@
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "architect-cd0ac706"
+    "architect-cd0ac706",
+    "architect-2a219562"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -155,5 +163,10 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T12:13:36.167Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "planningEntry": {
+    "from": "WORKING",
+    "at": "2026-11-04T18:07:18.627Z",
+    "seq": 1
+  }
 }

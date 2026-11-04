@@ -1,0 +1,28 @@
+{
+  "id": "task-669e6affa6fd41a7b654b0bddb696312",
+  "epicId": "epic-be924fb8",
+  "title": "ci: only the nightly runs everything. Per-push and PR CI (ci.yml) keep the fast jobs, while a new nightly workflow (schedule plus workflow_dispatch, on the consolidation branch and main) runs the full suites: the bash, Windows PowerShell and PowerShell 7 wrapper postflights and the other long steps",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 from two human rulings: \"gates should be 20min tops\" (18:07Z) and \"only nightly should run all\" (18:10Z). The matching global rail is proposal prop-bb985ab8.\n\nWHY\n- ci.yml runs everything on every push to PR #230 (moe/work-2026-10-24 into main). The concurrency group replaces only the queued run, so a run completes only every ~4 h. Hardly any landing gets its own CI result.\n- The long poles are the three wrapper postflight steps of build-all-platforms. Measured on real runners on 11-04:\n  - \"Test Bash wrapper postflight and parity\" on ubuntu: 44:48-45:50.\n  - \"Test Windows PowerShell wrapper postflight\": hit the 60-min cap at lastScenario P, about 3350 of postflight.ps1's 6165 lines. After d36d5bb7 it has a 180-min cap, an estimated 85-100 min.\n  - \"Test PowerShell 7 wrapper postflight and parity\": an estimated 90-108 min.\n- Everything else is minutes: builds, lint, daemon/proxy/claude-plugin tests with coverage, the launcher node tests, the landing guards, VS Code startup and package, the JetBrains build, fresh-linux-install.\n\nCHANGE\n1. ci.yml (pull_request and push to main): keep every job and step EXCEPT the long ones. Drop at least the three wrapper postflight steps. Time each remaining step from the last completed runs (gh.exe run view <id> --json jobs, e.g. 41848822541 and 41862780104) and move any other step over about 10 min.\n   - Target: every PR job finishes in at most about 20 minutes.\n   - Keep the concurrency group.\n2. A new .github/workflows/nightly.yml:\n   - triggers: `schedule` (one nightly cron, chosen and documented) plus `workflow_dispatch` with a `ref` input;\n   - runs everything: today's full ci.yml jobs, including the three wrapper postflights on their OSes and engines;\n   - default ref: the consolidation branch, read from a repository variable (for example vars.NIGHTLY_REFS, default 'main'), so main and moe/work-2026-10-24 can both be tested.\n   - Note in the file: GitHub fires `schedule` only from the default branch's copy, so the nightly starts firing once PR #230 has merged. workflow_dispatch can be used before that.\n   - Share the step definitions instead of copying ~300 lines, for example a reusable workflow (`workflow_call`) that ci.yml and nightly.yml both call with a `full: true|false` input. Your choice; justify it in the plan.\n3. Tests that read ci.yml must keep passing and must not lose their meaning. A test asserting \"CI runs this suite\" must accept nightly.yml where the suite moved. These files read .github/workflows or ci.yml:\n   - scripts/tests/daemon-json-cap.test.mjs, seat-registration.test.mjs, runtime-requirements.test.mjs, usage-receipt.test.mjs;\n   - local-runner-agents, -bundle, -check, -pinned-client, -seat-capacity, -seat and -snapshot .test.mjs.\n4. Docs: the CI paragraph in CLAUDE.md, plus docs/DEVELOPMENT.md and docs/RELEASING.md wherever they describe what CI runs. Generated init files are only touched if a role doc changes, and none should.\n\nOUT OF SCOPE\n- release.yml, docker.yml and pages.yml are unchanged. release.yml still builds everything on v* tags.\n- Make no GitHub API settings changes, such as required checks or rulesets. Name any the human should make in the summary.\n\nGATE. This row follows the same 20-min rule: actionlint, if installed, or a YAML parse of every workflow; the ci-reading node tests above; and npm run lint. The real proof is the next PR #230 CI run, which the governor watches.",
+  "definitionOfDone": [
+    "ci.yml (pull_request and push to main) no longer runs the three wrapper postflight steps or any other step over about 10 min. Using step timings from real runs, the plan shows every remaining PR job at about 20 min or less.",
+    "nightly.yml runs on schedule and on workflow_dispatch (with a ref input) and executes the full set, including the bash, WinPS and PS7 wrapper postflights. Its header documents the default-branch rule for schedule. Shared steps are not copy-pasted, or the plan justifies the duplication.",
+    "Every scripts/tests file that reads the workflows passes and still asserts something real: a suite moved to the nightly is asserted there. CLAUDE.md, DEVELOPMENT.md and RELEASING.md describe the PR-versus-nightly split. The gate finishes in 20 min or less."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 538.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T18:10:13.646Z",
+  "updatedAt": "2026-11-04T18:10:13.646Z"
+}

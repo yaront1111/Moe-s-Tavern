@@ -82,20 +82,28 @@
     {
       "stepId": "step-5",
       "description": "Verification, once, from the task worktree: run checkRefs[0] exactly. It runs postflight.ps1 under pwsh.exe, then powershell.exe (5.1), with MOE_*/CLAUDE*/FAKE_* scrubbed and MOE_POSTFLIGHT_TIMEOUT_SEC=360, then parity-check.sh, parity-check.ps1 and npm run lint.\n- It takes up to about 1h45m under load. Start it detached (nohup, record $!) and poll with bounded until-loops (mem:gotcha-qa-ps1-postflight-from-wsl). Kill only that recorded PID.\n- A `UtilAcceptVsock` WSL error with no harness output is an interop flake: rerun the leg.\n- On a red row, rerun the same leg on the target's bytes before blaming this change.\n- complete_task's verification is this command. The summary gives each engine's section counts (frozen, owner, migration, worktree, vm-route) and every new [strong gate] row's result.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T16:13:22.235Z"
+      "note": "checkRefs[0] was run once, verbatim, from the task worktree: started 16:13:32Z, ended about 18:03Z, EXIT=0. No UtilAcceptVsock flake and no reruns.\n- pwsh 7.6.9: frozen candidate 106, owner guard 16, migration 11, worktree 77 ok/0 failed, WT-14 11, PASS postflight-vm-route.ps1, PASS postflight.ps1.\n- PS 5.1.26100.9711: the same counts (106/16/11/77/11), PASS postflight-vm-route.ps1, PASS postflight.ps1.\n- New rows on both engines: \"[strong gate] ok SGV, SGU U1-U7, SG8 and SG-interrupt\" and \"[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected\".\n- PASS parity-check.sh and PASS parity-check.ps1. npm run lint OK (architect.md 39, worker.md 30, qa.md 36). The BOM ef bb bf is intact. No file edits in this step.",
+      "startedAt": "2026-11-04T16:13:22.235Z",
+      "completedAt": "2026-11-04T18:03:38.011Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this diff, the final step. Use the adversarial-self-review skill.\n\n(1) Byte parity: diff every new literal in moe-agent.ps1 against the port contract. Any drift from sh is a defect.\n(2) Legacy: every hunk in Invoke-MoeWorktreeRounds is under the strong branch. Show the non-strong path's lines unchanged in `git diff -U0`.\n(3) Host never runs candidate code: no Invoke-MoeFrozenGate call and no qualityGate command can be reached under strong. Grep the strong branch.\n(4) The invoker on every exit path: credentials are restored, encodings are restored, the child is stopped by recorded PID on timeout or Ctrl+C, and a stale $LASTEXITCODE from an earlier command is never read as the dispatch's.\n(5) Inputs: a JSON line with extra keys, a huge line, an environment with uppercase hex or a trailing newline. Each fails closed or prints nothing extra.\n(6) Concurrency: two strong completions racing on the land lease each dispatch their own commit, and a round-2 retry re-dispatches for the new M. It never reuses the round-1 verdict.\n\nFix any finding in this row's files, and re-run only the affected rows before finishing. A deeper defect gets its own bug row.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Adversarial review, one fix.\n\nFIX: postflight-vm-route.ps1 Assert-SgDead taskkilled a pid read back from the fake's evidence log, after the wrapper had disposed of that process's handle. Windows can reuse that pid, so the probe could kill a foreign node process, against the kill-by-recorded-pid rail. It now only throws; the fakes end themselves after 300 s. The sh twin's sgu_dead does kill -KILL, but Linux pids are sequential, so it was not filed. The cleanup kill at line 272 is kept: it holds the undisposed Process object, so its pid cannot be reused. Net size is unchanged (+431/-6). The SG-only sections were rerun from the regenerated scratch copy: RC=0 on pwsh 7 and PS 5.1, with both [strong gate] ok lines.\n\n(1) Literal parity: grep -F counts of all 17 literals and codes match sh in both files.\n(2) git diff -U0: the only Invoke-MoeWorktreeRounds change turns `if (configuredGate)` into `if (strong) {...} elseif (configuredGate)`; the legacy body is untouched.\n(3) The strong branch calls only New-MoeFrozenCandidate, Send-MoeCandidate and Invoke-MoeCheckDispatch; no FrozenGate or qualityGate call. MOE_DISABLE_QUALITY_GATE is handled inside the host-gate path in both twins, so under strong the VMs still run (parity).\n(4) Credentials and GIT_* are restored in an inner finally. No console encoding is changed: the reply is read as bytes with strict UTF-8. The child is stopped by its held handle's pid (taskkill /T /F), and the handle stops the pid being reused. $p.ExitCode is used, never $LASTEXITCODE.\n(5) Probed both engines: extra keys are ignored; over 1 MiB is REPLY_INVALID; an uppercase hex environment id or one with a trailing newline prints the code alone (\\z, case-sensitive). Exact duplicate keys are last-wins, like python. Keys that differ only in case are REPLY_INVALID in ps1 where python reads them case-sensitively: stricter, never a pass python refuses.\n(6) Every round recomputes B and M and freezes and dispatches again, and CheckDispatchCode is reset; no verdict is reused. The land lease serialises racing completions.\nTheoretical: a temp file leaks if the 2nd or 3rd GetTempFileName throws; taskkill /T walks children by parent pid (an upgrade is the existing MoeFrozenGateProcess job object).",
+      "startedAt": "2026-11-04T18:03:42.514Z",
+      "completedAt": "2026-11-04T18:09:10.026Z"
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5772dacf",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -129,12 +137,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:19.711Z",
-  "updatedAt": "2026-11-04T16:23:03.346Z",
+  "updatedAt": "2026-11-04T18:11:58.230Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:08:35.564Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -149,7 +157,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:10:48.551Z",
@@ -223,5 +233,46 @@
   },
   "planApprovedAt": "2026-11-04T12:10:48.584Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T15:19:46.983Z"
+  "workStartedAt": "2026-11-04T15:19:46.983Z",
+  "reviewStartedAt": "2026-11-04T18:09:45.265Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-74fe4c99eb7c4b2a94dcb6d9d8e36d23 && P='D:\\projexts\\moes\\.worktrees\\task-74fe4c99eb7c4b2a94dcb6d9d8e36d23\\scripts\\tests' && r=0 && for e in pwsh.exe powershell.exe; do env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC $e -NoProfile -ExecutionPolicy Bypass -File \"$P\\postflight.ps1\" || r=1; done; bash scripts/tests/parity-check.sh || r=1; pwsh.exe -NoProfile -File \"$P\\parity-check.ps1\" || r=1; npm run lint || r=1; echo EXIT=$r; [ $r = 0 ]",
+    "exitCode": 0,
+    "outputTail": "postflight.ps1 host=7.6.9 child=pwsh\nPASS frozen candidate scenarios: 106\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 11\n[worktree] 77 ok, 0 failed\n[WT-14] ok: 11 scenarios\n[strong gate] ok SGV, SGU U1-U7, SG8 and SG-interrupt\n[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected\nPASS postflight-vm-route.ps1\nPASS postflight.ps1\npostflight.ps1 host=5.1.26100.9711 child=powershell\nPASS frozen candidate scenarios: 106\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 11\n[worktree] 77 ok, 0 failed\n[WT-14] ok: 11 scenarios\n[strong gate] ok SGV, SGU U1-U7, SG8 and SG-interrupt\n[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected\n[vm route] ok today path (legacy x2, observe, unreadable, refuse, unknown, fail, malformed, case trap, taskless idle and mention)\n[vm route] ok refusals (C1/C2, S1-S6, N1-N4; R1/R2 in vm seat)\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\nPASS postflight.ps1\nPASS parity-check.sh\nPASS parity-check.ps1\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nEXIT=0",
+    "reportedAt": "2026-11-04T18:09:45.265Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1"
+  ],
+  "completionSummary": "Ports CQ-M07r (9e9e7345) to moe-agent.ps1. Under verified-local, the L6 of a worktree completion freezes M on B, records it, then runs local-runner/check-dispatch.mjs on that commit; the host qualityGate never runs. Every non-pass is MOE_COMMIT_FAILED_GATE with sh's byte-identical line, and nothing is published. legacy, observe and task-less completions are unchanged. The BOM is kept, and the file parses with 0 errors on both engines.\n\nVerification, run once at 16:13-18:03Z, EXIT=0:\n- pwsh 7.6.9 and PS 5.1 have the same counts: frozen 106, owner 16, migration 11, worktree 77 ok/0 failed, WT-14 11, and PASS for vm-route and postflight.ps1.\n- New rows, ok on both: SGV, SGU U1-U7, SG8, SG-interrupt, SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected.\n- Both parity scripts pass, and they compare MOE_CHECK_DISPATCH_* plus 4 literals (a renamed code turned both red, then green). Lint is OK.\n\nAfter that run, the self-review changed one test line. Assert-SgDead no longer taskkills a pid read back from the fake's log, because Windows can reuse it; the fakes end themselves after 300 s. Only the rows that call it were rerun (SG-only), with RC=0 on both engines; the full command was not rerun.\n\nWindows deviation: the wrapper never signals the dispatch. The console's Ctrl+C reaches it once, then after a 120 s grace (0 s on a timeout) it runs taskkill /T /F on the pid of the handle it holds. So the ps1 rows expect 0 term rows and a dead pid, where sh expects one TERM.\n\nPorted from descriptions because R's round 2 has not landed: pins G (now SG-interrupt), D and E.\n\nEngine notes:\n- ConvertFrom-Json accepts single quotes, comments and a trailing U+00A0, which python refuses.\n- Keys that differ only in case give REPLY_INVALID in ps1. That is stricter than python, never a pass python refuses.\n- MOE_DISABLE_QUALITY_GATE is ignored under strong in both twins.\n\nOpen: bug task-e444f6ae (no graceful stop",
+  "commits": [
+    {
+      "sha": "edc3e937ef390df064eccf1ffde6f1a813130d55",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T15:18:36Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T18:11:58.230Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5772dacf@2026-11-04T15:18:36Z",
+    "at": "2026-11-04T18:11:58.230Z"
+  }
 }
