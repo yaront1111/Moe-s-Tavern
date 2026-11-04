@@ -10,6 +10,7 @@ import com.moe.model.ReadinessFailure
 import com.moe.model.ReadinessReply
 import com.moe.util.MoeProjectRegistry
 import org.java_websocket.WebSocket
+import org.java_websocket.WebSocketImpl
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.framing.CloseFrame
 import org.java_websocket.handshake.ClientHandshake
@@ -219,6 +220,38 @@ class MoeProjectConnectionTest {
     }
 
     @Test
+    fun `a frame queued without a write demand stays unsent until flush re-arms it`() = withConnection { fixture ->
+        fixture.connect(41019)
+        val pending = fixture.service.requestExecutionReadiness()
+        fixture.awaitFrame("GET_EXECUTION_READINESS")
+        val conn = fixture.serverConnection()
+        fixture.strand(conn, readiness("""{"profile":"verified-local","ready":true,"missingCapabilities":[],"evaluatedAt":null}"""))
+
+        // The control: nothing else writes on this connection, so no write demand comes and the frame stays queued.
+        Thread.sleep(300)
+        assertFalse("A stranded frame must not leave on its own", pending.isDone)
+
+        assertTrue("flush must drain the stranded frame", fixture.flush(conn))
+        assertEquals(
+            ReadinessReply.Answered(ExecutionReadiness("verified-local", true, emptyList(), null)),
+            pending.get(5, TimeUnit.SECONDS)
+        )
+    }
+
+    @Test
+    fun `a reply the loopback server strands still answers the request`() = withConnection { fixture ->
+        fixture.connect(41020)
+        // Every answer is queued the way the race leaves it, so only the fixture's flush can deliver it.
+        fixture.enqueue = fixture::strand
+        fixture.answerReadiness(readiness("""{"profile":"verified-local","ready":true,"missingCapabilities":[],"evaluatedAt":null}"""))
+
+        assertEquals(
+            ReadinessReply.Answered(ExecutionReadiness("verified-local", true, emptyList(), null)),
+            fixture.service.requestExecutionReadiness().get(5, TimeUnit.SECONDS)
+        )
+    }
+
+    @Test
     fun `only a readiness error fails the request, without a generic notification`() = withConnection { fixture ->
         val errors = CopyOnWriteArrayList<String>()
         fixture.service.addListener(object : MoeStateListener {
@@ -299,6 +332,8 @@ class MoeProjectConnectionTest {
         val frames = CopyOnWriteArrayList<String>()
         /** Answers a received frame; null sends nothing. */
         @Volatile var reply: (String) -> String? = { null }
+        /** Queues an answer on the server connection; a test swaps in [strand] to replay the race deterministically. */
+        @Volatile var enqueue: (WebSocket, String) -> Unit = { conn, text -> conn.send(text) }
         private val started = CountDownLatch(1)
         private val clients = mutableListOf<WebSocketClient>()
         private val server = object : WebSocketServer(InetSocketAddress("127.0.0.1", 0), 1) {
@@ -307,7 +342,10 @@ class MoeProjectConnectionTest {
             override fun onMessage(conn: WebSocket?, message: String?) {
                 if (message == null) return
                 frames.add(message)
-                reply(message)?.let { conn?.send(it) }
+                val answer = reply(message) ?: return
+                val socket = conn ?: return
+                this@ConnectionFixture.enqueue(socket, answer)
+                this@ConnectionFixture.flush(socket)
             }
             override fun onClose(conn: WebSocket?, code: Int, reason: String?, remote: Boolean) {
                 closed.countDown()
@@ -352,6 +390,38 @@ class MoeProjectConnectionTest {
 
         /** The daemon side hangs up: the client sees onClose. */
         fun closeConnectionsFromServer() = server.connections.forEach { it.close() }
+
+        /** The server side of the fixture's one open connection. */
+        fun serverConnection(): WebSocket = server.connections.single()
+
+        /**
+         * Re-arms [conn]'s write demand until the server has written everything queued on it, for at most 2 s, and
+         * returns whether the queue drained.
+         *
+         * Root cause of the malformed-readiness flake (task-8784d35d): Java-WebSocket 1.6.0's WebSocketServer can
+         * leave a sent frame queued while the connection's selection key is back on OP_READ. send() queues the frame
+         * and sets OP_READ|OP_WRITE, the selector's doWrite sets OP_READ alone once it finds the queue empty, and
+         * nothing orders the two. The frame then waits for the next write demand on that connection. This server
+         * writes nothing but its answers, so a stranded answer never left and the request's get(5, SECONDS) timed out.
+         * A standalone harness on the same jar stranded about 1 reply in 6,600, every time with one frame queued and
+         * interestOps OP_READ, and one more onWriteDemand delivered it at once. Production is not exposed: the plugin
+         * talks to the Node daemon, never to this server.
+         */
+        fun flush(conn: WebSocket): Boolean {
+            val queue = (conn as WebSocketImpl).outQueue
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            while (queue.isNotEmpty() && System.nanoTime() < deadline) {
+                server.onWriteDemand(conn)
+                Thread.sleep(1)
+            }
+            return queue.isEmpty()
+        }
+
+        /** Queues [text] on [conn] with no write demand: the stranded state [flush] exists for. */
+        fun strand(conn: WebSocket, text: String) {
+            val impl = conn as WebSocketImpl
+            impl.draft.createFrames(text, false).forEach { impl.outQueue.put(impl.draft.createBinaryFrame(it)) }
+        }
 
         /** Answers only GET_EXECUTION_READINESS, with [message]. */
         fun answerReadiness(message: String) {
