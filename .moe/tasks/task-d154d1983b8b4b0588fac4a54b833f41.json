@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,17 +94,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T18:43:01.164Z",
-  "updatedAt": "2026-11-04T20:58:24.827Z",
+  "updatedAt": "2026-11-04T21:03:59.379Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T18:43:07.388Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T21:03:34.512Z",
+    "wallClockMs": 8427124
   },
   "contextFetchedBy": [
     "architect-67c762f6",
     "architect-2a219562",
-    "worker-a408f113"
+    "worker-a408f113",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "high",
@@ -186,10 +189,11 @@
   "planApprovedAt": "2026-11-04T18:59:22.487Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T20:55:09Z",
-    "at": "2026-11-04T20:58:24.827Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T21:01:55Z",
+    "at": "2026-11-04T21:03:59.379Z"
   },
   "workStartedAt": "2026-11-04T20:56:24.750Z",
   "reviewStartedAt": "2026-11-04T20:57:25.911Z",
@@ -224,5 +228,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T21:03:34.512Z",
+  "reviewCompletedAt": "2026-11-04T21:03:34.512Z",
+  "reviewSummary": "Reviewed completion bcedcb26 (on moe/work-2026-10-24, pushed): 3 files, +10/-5 (docs/SCHEMA.md, plugin.xml, moe-vscode/package.json); no code, test, script or .moe path. Re-ran checkRefs[0] byte-exact (extracted from the task JSON) AND the worker's task.verification command in a `git clone --shared` detached at the sha with MOE_LAND_TARGET=<sha>^: both print OK, rc 0 (0.35 s). The two differ only by an equivalent extra backslash level inside double quotes. Hand checks: no CR in the diff; xmllint ok; package.json parses; 'Gemini' gone from both manifests; label L=Antigravity matches MoeBundle.properties:24, extension.ts:323, TerminalAgentLauncher.kt:208; the map-back cmp proves every other byte of plugin.xml/package.json is unchanged. The four WorkerType union lines are untouched. The old 'reserved values' note is gone. Traced every note claim to code at the sha: moe-agent.sh:632-647 and moe-agent.ps1:1219-1232 export MOE_WORKER_TYPE (agy/gemini -> GEMINI, other -> CLAUDE); moe-proxy utils.ts:289/:302-322 (blank env sends nothing, caller key wins) + index.ts:734; joinTeam.ts:9-14 exact case-sensitive else CLAUDE; refreshWorkerType skips undefined (:28); new record normalizeWorkerType (joinTeam.ts:79, claimNextTask.ts:829); refresh at joinTeam.ts:97 and claimNextTask.ts:484/:508; enterGovernance.ts:91 'CLAUDE'. Added lines match none of the daemonGitDocs/taskTimeBudgetDocs doc-contract patterns. Governor's '(agy)' hint not applied: DoD and checkRef mandate the bare landed label, and the worker's choice is right. Out-of-scope 'Gemini CLI' leftovers (README/npm/docs/index.html) correctly deferred to comment-a9525846.",
+  "requiredCheckAtDone": null
 }

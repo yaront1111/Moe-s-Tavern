@@ -15,10 +15,11 @@
     {
       "stepId": "step-1",
       "description": "docs/CONFIGURATION.md: rewrite its verified-local claims from the landed code at HEAD. By claim time CQ-M07r/s/t/w and v2 have landed; checkRef 0 proves it. Read first:\n- delivery/executionReadiness.ts: READINESS_CAPABILITIES, READINESS_EVIDENCE_IDS, READINESS_IDS;\n- delivery/readinessHolder.ts: refreshReadiness, the 5-minute interval at :120, productionReadinessInputs;\n- delivery/executionProfile.ts: assertExecutionProfileReady;\n- state/profileRollout.ts: activationGaps (no client gap since CQ-M07d2);\n- tools/getExecutionReadiness.ts;\n- scripts/local-runner/check-dispatch.mjs: owedChecks, and the RUNNER_ENVIRONMENT_NOT_APPROVED stop with its environment field;\n- the gate line that the landed r/s code prints.\n\n(a) The `executionProfile` row (one table line, ~:206).\n- Verified-local is refused (-32003 / `EXECUTION_PROFILE_NOT_READY`) only until the daemon's own readiness evaluation passes from evidence.\n- Name all 15 READINESS_IDS as backticked ids, in that order: the five capabilities, each with what proves it, then the ten evidence ids.\n- The daemon evaluates readiness at start and every 5 minutes, and backticked `moe.get_execution_readiness` reads it.\n- No environment variable, setting, persisted label, caller argument or project-supplied file grants it.\n- Fix the rollout-controls sentences. An `activate` is accepted when the held snapshot is ready. Otherwise `EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED` names the vm/check gaps.\n- Change the values column from `verified-local` (refused) to e.g. `verified-local` (refused until ready).\n- Keep the README pointer sentence word for word: the final row records the promotion decision.\n\n(b) The `repairPolicy` (~:208) and `checkEnvironments` (~:209) rows.\n- Drop ', and `verified-local` itself is still refused' from both.\n- In checkEnvironments, say how the operator learns the id. An owed check in an unlisted environment stops check-dispatch before any VM with `RUNNER_ENVIRONMENT_NOT_APPROVED`, and the wrapper names the `moe-local-vm-v1:<sha256>` id. Quote the exact output from HEAD's moe-agent.sh.\n- Keep 'Set it in `.moe/project.json` only'.\n\n(c) The `### Agent Scripts` env table.\n- Add a row for `MOE_AGENT_SEAT_PATH` (moe-agent.sh ~:9572, ps1 ~:9399): a dev override of the bundled local-runner/agent-seat.mjs, ignored under MOE_RUNTIME_PROTECTED=1 with MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED.\n- Add a row for each env override CQ-M07r/s added, written from their code.\n\n(d) The `### Worktree mode` code table: add a row for each new MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH|MIGRATION)_* code that r/s/t added. checkRef 4 derives every new MOE_ token those rows put in the wrappers and needs each one in CONFIGURATION.md or TROUBLESHOOTING.md (v2 owns the MOE_VERIFIED_LOCAL_*/MOE_SEAT_*/MOE_VM_* rows there).\n\nError handling:\n- Document only what HEAD's code does. If a planned name (say MOE_CHECK_DISPATCH_PATH) does not exist, write nothing about it, and put the grep that shows it is absent in the completion summary.\n- checkRef 3 fails any backticked code, path or moe.<tool> in the two rows that HEAD lacks.\n- Each row stays one physical line.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "startedAt": "2026-11-04T21:01:45.906Z"
     },
     {
       "stepId": "step-2",
@@ -94,7 +95,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:57:24.860Z",
-  "updatedAt": "2026-11-04T21:00:56.026Z",
+  "updatedAt": "2026-11-04T21:01:45.906Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:15:09.520Z",
     "plannedStepCount": 7,
@@ -196,5 +197,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T12:35:26.351Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T21:01:45.906Z"
 }
