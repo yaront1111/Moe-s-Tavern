@@ -55,17 +55,23 @@
     {
       "stepId": "step-4",
       "description": "postflight-vm-route.ps1 [strong gate] rows for the seam.\n\nFirst read the landed section from CQ-M07s, and any CQ-M07t change to Assert-SgRow. Change only the stop rows and the dispatch-argv checks. SGV, SG8, the outer-finally order pin and the E2E pass/refused/host expectations stay otherwise unedited.\n\n- Assert-SguDispatch, and Assert-SgRow's dispatch check:\n  - argv is the 6 tokens, then '--stop-file' and a rooted path;\n  - that path no longer exists after the row;\n  - stopAtStart is $false as a [bool], never $null;\n  - stop rows are exactly @(dispatch pid) for MOE_CHECK_DISPATCH_TIMEOUT, and none otherwise;\n  - check-dispatch-term rows stay none.\n- U5 (hang-hard, bound 1 s, grace 1 s): one stop row, no TERM row, the fake dead, at most 15 s.\n- U8, new (hang, bound 1 s, grace 30 s): `rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT` and one stop row. The fake writes that row after its 1 s stand-in, so it exited by itself. The fake is dead, and the row takes under 15 s, so the wrapper did not wait out the grace.\n- U7 (runspace Stop() mid-dispatch, hang-hard, grace 3 s): as today, plus exactly one stop row, delivered by the invoker's finally.\n- U9, new: a runspace Stop() during the TIMEOUT grace (bound 1 s, hang-hard, grace 5 s; call Stop() once the stop row exists). The fake must still end dead, and the done file must read record=False. Both hold only when the record is cleared last.\n- SG-timeout (E2E, hang, bound 2 s, default grace): exactly one stop row. Keep the 60 s bound; a wrapper that waits out the 120 s grace fails it.\n- SG-interrupt's hand-spawned fake has no stop file: expect no stop row.\n- Update the section's header comment (the deviation text) and its ok line (U1-U9).\n\nAny row that can leave a fake running must first probe it and kill it by its recorded pid (Assert-SgDead), never by name. To run these rows from WSL, read mem:gotcha-launcher-ps1-rows-from-wsl and mem:gotcha-qa-ps1-postflight-from-wsl. This test file is edited with the session's editing tool only.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-04T21:00:18.954Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "postflight-vm-route.ps1 [strong gate], edited only with Edit. Assert-SgRow's dispatch check and Assert-SguDispatch now require: the 6 tokens plus '--stop-file' and a rooted path; that path gone after the row; stopAtStart a [bool] $false; stop rows exactly @(dispatch pid) for MOE_CHECK_DISPATCH_TIMEOUT (Assert-SgRow) or when the new [bool]$Stopped parameter is set (Assert-SguDispatch), none otherwise; no term rows. U5 expects one stop row. New U8 (hang, bound 1, grace 30): TIMEOUT, one stop row, fake dead, under 15 s. U7 expects one stop row; its runspace script now lives in $body with a Grace argument. New U9 (bound 1, hang-hard, grace 5, Stop() once the stop row exists): fake dead, record=False. SG-interrupt (hand-spawned, no stop file): no stop row. Header deviation text and ok line ('U1-U9') updated. No new function. ParseFile: 0 errors on pwsh.exe and powershell.exe. Full run: PS 5.1 (via node spawnSync) rc=0 and PS 7 rc=0, both 'PASS postflight-vm-route.ps1' with '[strong gate] ok SGV, SGU U1-U9, SG8 and SG-interrupt'. The unedited sh harness also passes ('PASS postflight-vm-route.sh'). Scratch mutants (clear-first, kill-at-once, wait-out-grace) are running in copies outside the checkout.",
+      "startedAt": "2026-11-04T21:00:18.954Z",
+      "completedAt": "2026-11-04T21:14:45.077Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification, once, from the task worktree root: run checkRefs[0] exactly.\n- It runs postflight-vm-route.ps1 on two background legs: pwsh -> node -> Windows PowerShell 5.1 (CI's shape), and pwsh 7.\n- In the foreground it runs local-runner-dispatch.test.mjs under WSL node and under Windows node.exe (CI runs that file on all three OSes), then postflight-vm-route.sh (the fake's sh rows).\n- Then parity-check.sh, parity-check.ps1 and npm run lint.\n- Logs go to /mnt/d/moe-scratch/te444.*, never into the worktree.\n\nUnder load it takes about 10-20 min. Start it detached and record $!, poll with bounded until-loops, and kill only that PID.\n\nError handling for a red run:\n- A UtilAcceptVsock WSL error with no harness output is an interop flake: rerun that leg.\n- Any other red row: rerun the same leg on the target's bytes (a git archive of the landing target) before blaming this change.\n- Fix only in this row's files.\n\nSize: measure the squash numstat. If the net changed lines exceed 400, file the EPIC ADD_RAIL size exception before complete_task (mem:gotcha-cq-plan-size-vs-qa-cap).\n\ncomplete_task's verification is this command. The summary names each leg's result and every new or changed test row: S1-S4, U5, U7, U8, U9, SG-timeout.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T21:14:54.746Z"
     },
     {
       "stepId": "step-6",
@@ -99,7 +105,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:38:55.700Z",
-  "updatedAt": "2026-11-04T21:00:18.954Z",
+  "updatedAt": "2026-11-04T21:14:54.746Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T16:04:04.872Z",
@@ -109,7 +115,7 @@
     "firstClaimAt": "2026-11-04T16:04:17.535Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -122,7 +128,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T16:27:54.911Z",

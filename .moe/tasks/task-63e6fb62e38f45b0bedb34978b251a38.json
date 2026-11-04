@@ -43,33 +43,53 @@
     {
       "stepId": "step-3",
       "description": "docs/CERTIFICATION.md.\n\n(a) Replace the ~:10 paragraph ('Certification is not activation...'). A certified report filed in the host store is one input of verified-local readiness; point to `## Activation`. Also fix ~:134, '..., and `verified-local` stays refused, as above.': a host with no report stays unsupported, because the isolation capabilities stay missing.\n\n(b) Add a section headed EXACTLY `## Activation`, immediately before `## Certified platforms`; checkRef 5 reads from that heading to the next `## `. Write a numbered operator flow from the code, each step with its exact command, or the exact UI action when none exists:\n1. On each host (Windows x64, Linux x64): run `prerequisites`, then `node scripts/local-runner/cli.mjs certify --work-dir <work-dir>` from the install the daemon runs; readinessHolder.productionReadinessInputs compares the report with that install's pins. A native, certified run files the report in `<OS account home>/.moe/certification` (CONFIGURATION.md ~:547). A pin change needs a re-certify.\n2. For each rotation account: `node <daemon>/dist/index.js accounts vm-token <id>`, or the JetBrains Accounts tab's action. It runs `claude setup-token` and stores the token.\n3. A plugin-installed daemon, whose install tree lies outside the project (`protected-host-control-plane`). A daemon run from the project's own dist never passes.\n4. Project settings, each with how it is written (a dialog, UPDATE_SETTINGS, or `.moe/project.json`): `deliveryPolicy` `local-branch`, `worktreeMode` `on`, a non-blank `qualityGate` and its scope.\n5. Confirm with `moe.get_execution_readiness` (`ready: true`, empty `missingCapabilities`). Give the exact call that works for an operator; check the tool's audience before naming moe-call.sh.\n6. Set `executionProfile` `verified-local`.\n7. JetBrains **Start Agent** for worker and QA seats (claude or codex).\n8. The first owed check names the check environment id (`moe-local-vm-v1:<sha256>`, RUNNER_ENVIRONMENT_NOT_APPROVED). Add it to `checkEnvironments` in `.moe/project.json`.\n\nThen an unsupported list, one line each, with the code that refuses it:\n- macOS: no certified report;\n- gemini and grok;\n- shared mode, i.e. worktreeMode off: MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED;\n- `check-architecture` as a required check until a trusted install exists: `required-check-untrusted-checker`.\n\nError handling:\n- Verify every command against its parser before writing it: scripts/local-runner/cli.mjs usage, packages/moe-daemon/src/accounts/cli.ts, and each setting's writer (StateManager.updateSettings).\n- Give both the Windows (PowerShell) and POSIX forms wherever paths or quoting differ.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CERTIFICATION.md"
       ],
-      "startedAt": "2026-11-04T21:12:25.719Z"
+      "modifiedFiles": [
+        "docs/CERTIFICATION.md"
+      ],
+      "note": "Replaced the :10 'Certification is not activation' paragraph; the :134 sentence now says a host with no report keeps the isolation capabilities missing. Added a `## Activation` section before `## Certified platforms` with 8 numbered operator steps (certify, VM token, plugin daemon, settings, readiness confirm via moe-call.sh, executionProfile, Start Agent, checkEnvironments approval), each with its POSIX and Windows command, plus a Still-unsupported list. checkRef 5 is green.",
+      "startedAt": "2026-11-04T21:12:25.719Z",
+      "completedAt": "2026-11-04T21:18:33.780Z"
     },
     {
       "stepId": "step-4",
       "description": "docs/roles/architect.reference.md: add a section headed EXACTLY `## Verified-local plans`, right after `## Dependencies and evidence at breakdown time`. checkRef 5b reads it to the next `## `.\n\nThe rule, from check-dispatch.mjs owedChecks/lockfileDirs and delivery/policy.ts:\n- In a verified-local project, a plan must declare `executionContract.requiredChecks` for every check the task owes.\n- When the `qualityGate` is owed (qualityGateScope everyTask, or the epic's final task), one entry's `command` must equal the trimmed qualityGate, with `configs` naming its lockfiles (their directories become the check VM's dependency installs) and `assertionRoots` naming the test roots it asserts.\n- Otherwise check-dispatch stops the whole set before any VM with `RUNNER_DEPENDENCIES_UNDECLARED`, and a verified-local task that owes nothing gets `required-checks-undeclared` at moe.qa_approve.\n- An architecture check counts only as the installed `moe-daemon check-architecture` (`required-check-untrusted-checker`).\n\nKeep it terse and free of task ids. Keep the sentinels 'memory-name inventory' and 'once per session', which util/targetedContextGuidance.test.ts requires.\n\nError handling: if owedChecks or lockfileDirs at HEAD differ from this description, write what the code does.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/roles/architect.reference.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/roles/architect.reference.md"
+      ],
+      "note": "Added `## Verified-local plans` after `## Dependencies and evidence at breakdown time`, traced to owedChecks/lockfileDirs in check-dispatch.mjs (the gate is owed only when autoCommit is not false; configs count only package-lock.json) and policy.ts (required-checks-undeclared, required-check-untrusted-checker). The sentinels are intact; lint passes.",
+      "startedAt": "2026-11-04T21:18:34.505Z",
+      "completedAt": "2026-11-04T21:19:22.357Z"
     },
     {
       "stepId": "step-5",
       "description": "packages/moe-daemon/src/generated/initFiles.ts: regenerate the vendored copy of architect.reference.md. Follow mem:convention-role-doc-edits-regenerate-initfiles (its WORKTREE MODE part) and mem:convention-docs-vendored-regen-gate. Never run npm in the checkout.\n\nIn a /tmp dir S:\n1. `B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD)`.\n2. `git clone -q --shared --no-checkout \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q --detach $B`.\n3. Run `npm ci` in packages/moe-daemon under env -i with the nvm Node 24 PATH.\n4. Prove the base is fresh: `npm run -s generate-init-files`, then `git diff --quiet -- src/generated/initFiles.ts`. It was fresh at planning.\n5. Copy the edited docs/roles/architect.reference.md in, regenerate, and diff the task worktree's initFiles.ts against the output by lines.\n6. Apply each hunk with the Edit tool (a cp leaves no TOOL witness). The hunks are the entry's marker sha, its changed content, and one new sha in its SHIPPED_ROLE_BODY_SHAS list.\n7. `cmp` the two files.\n\nError handling:\n- The Edit tool trims a trailing space at the end of new_string, so end every replacement at a non-space character.\n- If the unmodified base is not fresh, the extra hunks are another row's role-doc edit. Apply them too, because the generator output is the only valid file, and name them in the completion summary.\n- Any later edit to architect.reference.md means regenerating again.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/generated/initFiles.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Base B=bcedcb26 was fresh (the generator gave no diff). The edited architect.reference.md was regenerated in /tmp/v1gen-CRkZvl. I applied 3 hunks with Edit: the marker sha 168bfad12f83→c342299c94ea, the new section's content, and c342299c94ea added to SHIPPED_ROLE_BODY_SHAS. cmp shows the file identical to the generator output.",
+      "startedAt": "2026-11-04T21:19:23.030Z",
+      "completedAt": "2026-11-04T21:20:21.036Z"
     },
     {
       "stepId": "step-6",
       "description": "Verification. Run executionContract.checkRefs 0-8 fresh, from the task worktree, joined with ' && ' in order. Submit that exact command and its output tail as moe.complete_task verification.\n- [0] Prerequisites r, s, t, w and v2 have landed, and the diff touches only this plan's 5 files.\n- [1] DoD 1: the git grep, plus a joined-line scan of every docs/*.md for the stale phrases, including the 3 fragments found at planning and 'No DeliveryReceipt is sent:'.\n- [2] DoD 2: the executionProfile row names all 15 READINESS_IDS, moe.get_execution_readiness, both refusal codes and the 5-minute re-evaluation. Neither row says '(refused)' or 'is still refused'. checkEnvironments names RUNNER_ENVIRONMENT_NOT_APPROVED, and MOE_AGENT_SEAT_PATH is documented.\n- [3] DoD 2 reverse guard: every backticked code, path and moe.<tool> in those two rows exists at HEAD.\n- [4] Every MOE_ token that r/s/t added is documented.\n- [5] DoD 3: tokens in the CERTIFICATION `## Activation` section.\n- [6] DoD 4: tokens in the ARCHITECTURE section, the `- **Seat VM route.**` bullet and the architect.reference section.\n- [7] `npm run lint` and parity-check.sh.\n- [8] DoD 5: a clone at B with the 5 files overlaid, then npm ci and build. Build's prebuild regenerates initFiles.ts, so `sha1sum -c` proves the Edit-applied hunks. Then the full daemon test suite. A clone snapshot outside the repo is allowed by the customRules, and the generator needs its git history, which a git archive lacks.\n\nPlanning baseline of [8] at HEAD: 293 test files, 7594 passed, 24 skipped, about 1 minute. Every check was dry-run RED at HEAD, GREEN on a simulated edit, and RED on five mutants. Put the DoD 2 greps in the completion summary.\n\nError handling:\n- Fix a red check in the doc, never by editing the check.\n- If [0] fails because a prerequisite has not landed, call moe.report_blocked naming it. Do not document unlanded code.\n- If [1] fails only on docs/MCP_SERVER.md, that sentence belongs to CQ-M07v2 (comment-6afa8b4d): report_blocked naming task-636745311cc444f58ebb4b8ac53b96fd, and do not edit MCP_SERVER.md.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
+      "note": "Ran checkRefs 0-8 fresh, each verbatim in its own subshell and chained with &&: EXIT=0. [8]: 294 test files passed, 7627 tests passed, 24 skipped; sha1sum -c confirmed the Edit-applied initFiles.ts matches the prebuild output.",
+      "startedAt": "2026-11-04T21:20:21.779Z",
+      "completedAt": "2026-11-04T21:21:44.116Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -84,13 +104,19 @@
     {
       "stepId": "step-7",
       "description": "Self-review: one adversarial pass over this task's diff, at the end.\n1. Re-trace every new claim to a file and symbol at HEAD: no planned or guessed names, no invented command, no promotion claim (the README decision stays the final row's).\n2. Legacy and observe statements keep their meaning: diff each touched paragraph against B.\n3. Cross-platform: every command has both its Windows and its POSIX form where they differ, and its paths agree with CERTIFICATION's existing How-to-run text.\n4. The doc-guard tests still pass: util/daemonGitDocs, targetedContextGuidance, executionContractDocs and taskTimeBudgetDocs. Checks [8] and [7] run them.\n5. Nothing is edited outside the 5 files.\n6. The completion summary lists the DoD 2 greps and checkRef 4's derived token list.\n\nError handling: any claim you cannot trace is deleted, not softened.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/CERTIFICATION.md"
+      ],
+      "note": "Self-review. Activation step 1 lacked the Windows prerequisites form, so step 1 now gives both forms as fenced bash and powershell blocks matching How to run it. Every claim re-traced: owedChecks/lockfileDirs, policy.ts tokens, the MOE_CHECK_DISPATCH_REFUSED line, plugin layout. Scope is the 5 files (ref 0). The full chain was re-run fresh after the fix: EXIT=0, 294 files, 7627 passed, 24 skipped. Docs-only, so the concurrency and input checks do not apply.",
+      "startedAt": "2026-11-04T21:21:44.783Z",
+      "completedAt": "2026-11-04T21:23:20.420Z"
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a408f113",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -104,15 +130,22 @@
   ],
   "priority": "MEDIUM",
   "order": 231.22,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-9770e6c252e64e0391d266cc3a46cc54",
+      "author": "worker-a408f113",
+      "content": "For QA, the completion summary was cut off at \"Deviation:\" by the 2000-character cap. Here is the rest.\n- Deviation from the plan's \"keep 'Set it in `.moe/project.json` only'\": the checkEnvironments row now reads \"Set it only in `project.json` in the project's `.moe` folder\". checkRef 3 resolves backticked paths on disk, and the sparse task worktree has no .moe, so the old wording was red there. No test pins the phrase.\n- Verification: checkRefs 0-8 each ran in its own subshell, chained with && (amend-1), exit 0. The daemon suite in a /tmp clone at B passed: 294 files, 7627 passed, 24 skipped.\n- Self-review: added the Windows `prerequisites` form to Activation step 1 and re-ran the full chain after that fix.",
+      "timestamp": "2026-11-04T21:24:17.427Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:57:24.860Z",
-  "updatedAt": "2026-11-04T21:12:25.719Z",
+  "updatedAt": "2026-11-04T21:25:22.475Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:15:09.520Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -124,7 +157,12 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:35:26.321Z",
@@ -214,5 +252,48 @@
   },
   "planApprovedAt": "2026-11-04T12:35:26.351Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T21:01:45.906Z"
+  "workStartedAt": "2026-11-04T21:01:45.906Z",
+  "reviewStartedAt": "2026-11-04T21:24:06.513Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && for t in ba7a8c84fff44b95bf04c829791db935 74fe4c99eb7c4b2a94dcb6d9d8e36d23 527735eafb9147cf8663ccee9a9e1b4c 0bcc0b33ad354437bd6c18d9eb3a78da 636745311cc444f58ebb4b8ac53b96fd; do git log -1 --format=%h -E --grep=\"^[a-z]+\\(task-$t\\)\" HEAD | grep -q . || { echo \"not landed: $t\"; exit 1; }; done && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && X=$(git diff --name-only \"$B\" -- docs packages scripts moe-jetbrains moe-vscode CLAUDE.md | grep -vxE 'docs/(CONFIGURATION|ARCHITECTURE|CERTIFICATION)\\.md|docs/roles/architect\\.reference\\.md|packages/moe-daemon/src/generated/initFiles\\.ts'); [ -z \"$X\" ] || { echo \"out of scope: $X\"; exit 1; } ) && ( cd \"$(git rev-parse --show-toplevel)\" && ! git grep -n -e 'unconditionally unavailable' -e 'Nothing here is active yet' -e 'Certification is not activation' -e 'nothing invokes it per candidate yet' -- docs/ && ! for f in $(git ls-files 'docs/*.md'); do tr '\\n' ' ' < \"$f\" | tr -s ' ' | grep -oiE 'unconditionally unavailable|nothing here is active yet|certification is not activation|nothing invokes it per candidate yet|No DeliveryReceipt is sent:|itself is still refused|stays refused, as above|until certification and the client gate' | sed \"s|^|stale in $f: |\"; done | grep . ) && ( cd \"$(git rev-parse --show-toplevel)\" && f=docs/CONFIGURATION.md && E=$(grep '^| `executionProfile` |' $f) && C=$(grep '^| `checkEnvironments` |' $f) && ids=$(sed -n '/^export const READINESS_CAPABILITIES/,/^export const READINESS_IDS/p' packages/moe-daemon/src/delivery/executionReadiness.ts | grep -oE \"'[a-z0-9-]+'\" | tr -d \"'\") && [ $(echo \"$ids\" | wc -l) -ge 15 ] && for i in $ids moe.get_execution_readiness EXECUTION_PROFILE_NOT_READY EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED; do echo \"$E\" | grep -qF \"\\`$i\\`\" || { echo \"executionProfile row lacks $i\"; exit 1; }; done && echo \"$E\" | grep -qiE '(5|five)[ -]minute' && ! echo \"$E$C\" | grep -qiE '\\(refused\\)|is still refused' && echo \"$C\" | grep -qF RUNNER_ENVIRONMENT_NOT_APPROVED && grep -qw MOE_AGENT_SEAT_PATH $f ) && ( cd \"$(git rev-parse --show-toplevel)\" && for t in $(grep -E '^\\| `(executionProfile|checkEnvironments)` \\|' docs/CONFIGURATION.md | grep -oE '`(moe\\.[a-z_]+|[A-Z][A-Z0-9]*(_[A-Z0-9]+)+|[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)`' | tr -d '`' | sort -u); do case $t in moe.*) git grep -qF \"'$t'\" -- packages/moe-daemon/src/tools ;; */*) for d in . packages/moe-daemon/src scripts docs; do [ -e \"$d/$t\" ] && break; done ;; *) git grep -qwF -- \"$t\" -- packages scripts ;; esac || { echo \"no such name at HEAD: $t\"; exit 1; }; done ) && ( cd \"$(git rev-parse --show-toplevel)\" && c=$(git log --format=%H -E --grep='^[a-z]+\\(task-(ba7a8c84fff44b95bf04c829791db935|74fe4c99eb7c4b2a94dcb6d9d8e36d23|527735eafb9147cf8663ccee9a9e1b4c)\\)' HEAD) && { [ -n \"$c\" ] || { echo \"no CQ-M07r/s/t completion in HEAD\"; exit 1; }; } && p=$(echo \"$c\" | tail -1)^ && for v in $(comm -13 <(git show \"$p:scripts/moe-agent.sh\" | grep -oE 'MOE_[A-Z0-9_]*[A-Z0-9]' | sort -u) <(for h in $c; do git show --format= $h -- scripts/moe-agent.sh scripts/moe-agent.ps1; done | grep '^+' | grep -oE 'MOE_[A-Z0-9_]*[A-Z0-9]' | sort -u)); do cat docs/CONFIGURATION.md docs/TROUBLESHOOTING.md | grep -qw -- \"$v\" || { echo \"undocumented: $v\"; exit 1; }; done ) && ( cd \"$(git rev-parse --show-toplevel)\" && s(){ awk -v h=\"$2\" -v e=\"$3\" '$0==h{p=1;next} p&&$0~e{exit} p' \"$1\" | tr '\\n' ' ' | tr -s ' '; } && need(){ x=$1; shift; for k in \"$@\"; do printf '%s' \"$x\" | grep -qF -- \"$k\" || { echo \"missing: $k\"; exit 1; }; done; } && need \"$(s docs/CERTIFICATION.md '## Activation' '^## ')\" 'cli.mjs certify' .moe/certification 'accounts vm-token' executionProfile verified-local deliveryPolicy local-branch worktreeMode qualityGate checkEnvironments moe-local-vm-v1: protected-host-control-plane 'Start Agent' moe.get_execution_readiness macOS gemini grok shared check-architecture required-check-untrusted-checker ) && ( cd \"$(git rev-parse --show-toplevel)\" && s(){ awk -v h=\"$2\" -v e=\"$3\" '$0==h{p=1;next} p&&$0~e{exit} p' \"$1\" | tr '\\n' ' ' | tr -s ' '; } && b(){ awk -v h=\"$2\" 'index($0,h)==1{p=1;print;next} p&&/^(- \\*\\*|#)/{exit} p' \"$1\" | tr '\\n' ' ' | tr -s ' '; } && need(){ x=$1; shift; for k in \"$@\"; do printf '%s' \"$x\" | grep -qF -- \"$k\" || { echo \"missing: $k\"; exit 1; }; done; } && need \"$(s docs/ARCHITECTURE.md '### The verified-local path' '^##')\" check-dispatch.mjs moe.record_delivery_receipt && need \"$(b docs/ARCHITECTURE.md '- **Seat VM route.**')\" agent-seat.mjs reset CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY WSL gemini grok SEAT_CAPACITY_FULL && need \"$(s docs/roles/architect.reference.md '## Verified-local plans' '^## ')\" requiredChecks qualityGate configs assertionRoots RUNNER_DEPENDENCIES_UNDECLARED required-checks-undeclared ) && ( cd \"$(git rev-parse --show-toplevel)\" && npm run -s lint && bash scripts/tests/parity-check.sh ) && ( cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && S=$(mktemp -d /tmp/v1-XXXXXX) && git clone -q --shared --no-checkout \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q --detach $B && cp --parents docs/CONFIGURATION.md docs/ARCHITECTURE.md docs/CERTIFICATION.md docs/roles/architect.reference.md packages/moe-daemon/src/generated/initFiles.ts $S/r && cd $S/r/packages/moe-daemon && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -o pipefail; npm ci --no-audit -q >/dev/null 2>&1 && sha1sum src/generated/initFiles.ts > ../g.sha && npm run -s build | grep Generated && sha1sum -c --quiet ../g.sha && npm test 2>&1 | grep -aE \"Test Files |Tests |FAIL\"' )",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nPASS parity-check.sh\nGenerated /tmp/v1-pgZ2tX/r/packages/moe-daemon/src/generated/initFiles.ts (8 role docs + 3 subagents, sha-stamped)\nGenerated /tmp/v1-pgZ2tX/r/packages/moe-daemon/src/generated/skillFiles.ts (65 skill files across 17 skills)\n Test Files  294 passed (294)\n      Tests  7627 passed | 24 skipped (7651)\nEXIT=0",
+    "reportedAt": "2026-11-04T21:24:06.513Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/CONFIGURATION.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CERTIFICATION.md",
+    "docs/roles/architect.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts"
+  ],
+  "completionSummary": "Docs-only: verified-local activation documented from the landed code, in the 5 plan files.\n- CONFIGURATION: the executionProfile row names the readiness evaluation (executionReadiness.ts, readinessHolder.ts; re-evaluated at start and every 5 minutes), all 15 ids, moe.get_execution_readiness, EXECUTION_PROFILE_NOT_READY and EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED.\n- CONFIGURATION: the repairPolicy and checkEnvironments rows lost 'is still refused'. checkEnvironments now gives the RUNNER_ENVIRONMENT_NOT_APPROVED WARN line and MOE_COMMIT_FAILED_GATE.\n- CONFIGURATION: new env rows MOE_AGENT_SEAT_PATH, MOE_CHECK_DISPATCH_PATH (it does exist) and MOE_CHECK_DISPATCH_TIMEOUT_SEC.\n- ARCHITECTURE: check-dispatch at L6 on commit-tree M -p B, the strong worktree receipt arm (moe.record_delivery_receipt, duplicate:true, DELIVERY_RECEIPT_CONFLICT), and a Seat VM route bullet.\n- CERTIFICATION: the 'Certification is not activation' paragraph replaced, plus a `## Activation` section: 8 operator steps, each with its POSIX and Windows command or UI action, and the still-unsupported list (macOS, gemini/grok, shared mode, check-architecture/required-check-untrusted-checker).\n- architect.reference: `## Verified-local plans` (requiredChecks, gate entry with configs/assertionRoots, RUNNER_DEPENDENCIES_UNDECLARED, RUNNER_NOTHING_OWED, required-checks-undeclared).\n- initFiles.ts: regenerated (marker c342299c94ea; the base was fresh, so no foreign hunks), cmp-identical to the generator output.\n\nDoD 2 greps (checkRef 2), run on the executionProfile row:\n- each READINESS_IDS id, moe.get_execution_readiness and both codes, backticked;\n- '(5|five)[ -]minute';\n- no '(refused)' or 'is still refused' in either row;\n- checkEnvironments contains RUNNER_ENVIRONMENT_NOT_APPROVED;\n- MOE_AGENT_SEAT_PATH is documented.\n\ncheckRef 4's derived tokens: MOE_CHECK_DISPATCH_{NOT_PASSED,NO_REPORT,PATH,PATH_IGNORED,REFUSED,REPLY_INVALID,TIMEOUT,TIMEOUT_INVALID,TIMEOUT_SEC,UNAVAILABLE}, all documented.\n\nDeviation: ",
+  "commits": [
+    {
+      "sha": "32dd9888ba0f4bfea0170ac393da27041fb99b53",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T21:00:40Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/CERTIFICATION.md",
+        "docs/CONFIGURATION.md",
+        "docs/roles/architect.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T21:25:22.475Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a408f113@2026-11-04T21:00:40Z",
+    "at": "2026-11-04T21:25:22.475Z"
+  }
 }
