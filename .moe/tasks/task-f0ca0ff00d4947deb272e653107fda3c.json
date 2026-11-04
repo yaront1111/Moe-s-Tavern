@@ -82,8 +82,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a408f113",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -95,7 +95,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:02:45.982Z",
-  "updatedAt": "2026-11-04T06:12:31.451Z",
+  "updatedAt": "2026-11-04T06:13:42.199Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:03:57.994Z",
     "plannedStepCount": 5,
@@ -185,5 +185,44 @@
   },
   "planApprovedAt": "2026-11-04T06:09:13.375Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T06:10:18.348Z"
+  "workStartedAt": "2026-11-04T06:10:18.348Z",
+  "reviewStartedAt": "2026-11-04T06:12:52.920Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git clone -q --shared --no-checkout . $S/r && git -C $S/r checkout -q --detach $(git rev-parse HEAD) && tar -cf $S/e.tar packages/moe-daemon/src/util/contextNextAction.ts packages/moe-daemon/src/tools/getContextWorkingHint.test.ts docs/MCP_SERVER.md && tar -xf $S/e.tar -C $S/r && cd $S/r/packages/moe-daemon && env -i HOME=$HOME NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin bash -c 'set -o pipefail; npm ci --no-audit -q && npx tsc --noEmit -p . && npx vitest run src/tools/getContextWorkingHint.test.ts src/tools/getContext.test.ts src/tools/getContextGovernance.test.ts src/tools/accountTools.test.ts src/util/recommendSkill.test.ts'",
+    "exitCode": 0,
+    "outputTail": " ✓ src/tools/getContext.test.ts (55 tests) 1461ms\n\n Test Files  5 passed (5)\n      Tests  112 passed (112)\n   Start at  08:12:07\n   Duration  2.60s (tests 60%, transform 34%, import 6%)",
+    "reportedAt": "2026-11-04T06:12:52.920Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getContextWorkingHint.test.ts",
+    "packages/moe-daemon/src/util/contextNextAction.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "get_context's WORKING nextAction now names calls the daemon accepts. A plan-less row is hinted moe.request_replan with a filled reason (never moe.complete_task). A first unfinished step that is IN_PROGRESS is hinted moe.complete_step (reopened skill, else final_step on the last step), mirroring completeStep.ts. PENDING keeps start_step and an all-COMPLETED plan keeps complete_task, both with unchanged skills. Both step hints quote effectiveStepDescription(...).slice(0,80), so an amended step shows its replacement text. Only the WORKING branch of contextNextAction.ts changed (+ one import). New getContextWorkingHint.test.ts (10 tests; 6 failed before the fix, built from the three hunt repros, each following the hint verbatim). One paragraph added to docs/MCP_SERVER.md inside ### moe.get_context. A non-assignee following the new hints is refused by ownership, as start_step already is. Gate: checkRef exit 0, tsc clean, 5 files / 112 tests; qualityGate (parity-check.sh + npm run lint) also passes.",
+  "commits": [
+    {
+      "sha": "6fbdc22f3dace6d1c39fc74c062e4656e078b98a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T06:09:20Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/getContextWorkingHint.test.ts",
+        "packages/moe-daemon/src/util/contextNextAction.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T06:13:42.199Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a408f113@2026-11-04T06:09:20Z",
+    "at": "2026-11-04T06:13:42.199Z"
+  }
 }
