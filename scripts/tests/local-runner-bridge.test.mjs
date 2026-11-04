@@ -490,7 +490,9 @@ test('I1 a peer that is not the agent identity is closed at accept and nothing i
   assert.ok(alive(host.child), 'a refused peer does not end the bridge');
   assert.deepEqual(await host.end(), [74, null]);
   assert.deepEqual(host.requests(), []);
-  assert.equal(alive(host.child), false);
+  // relay() kills the job group but reaps only the guard: PID 1 reaps the job, so give it the S9 wait (:1172).
+  for (let waited = 0; waited < 5000 && running(host.child); waited += 100) await sleep(100);
+  assert.equal(running(host.child), false);
 });
 
 test('I2 supervisor ids keep connections apart and each rebuilt response reaches only its requester', { skip: NO_GUEST, timeout: 30_000 }, async () => {
@@ -529,7 +531,8 @@ test('I3 an unknown, answered or malformed host response ends the bridge as a pr
     assert.deepEqual(await host.exited, [76, null], bytes.toString('latin1'));
     await until(() => peer.closed, 'agent closed');
     assert.ok(peer.frames.length <= 1 && host.frames.every(frame => frame.kind !== 'observation'));
-    assert.equal(alive(host.child), false);
+    for (let waited = 0; waited < 5000 && running(host.child); waited += 100) await sleep(100);
+    assert.equal(running(host.child), false);
     await host.end();
   }
 });
