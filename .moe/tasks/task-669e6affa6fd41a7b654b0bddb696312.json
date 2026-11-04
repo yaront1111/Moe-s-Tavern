@@ -95,7 +95,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,17 +121,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T18:10:13.646Z",
-  "updatedAt": "2026-11-04T19:12:45.308Z",
+  "updatedAt": "2026-11-04T19:21:58.289Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T18:32:55.533Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T19:21:07.936Z",
+    "wallClockMs": 2892403
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
     "worker-5772dacf",
-    "architect-67c762f6"
+    "architect-67c762f6",
+    "qa-1cd86a39"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -263,9 +266,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T19:01:04Z",
-    "at": "2026-11-04T19:12:45.308Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T19:13:25Z",
+    "at": "2026-11-04T19:21:58.289Z"
+  },
+  "completedAt": "2026-11-04T19:21:07.936Z",
+  "reviewCompletedAt": "2026-11-04T19:21:07.936Z",
+  "reviewSummary": "Reviewed completion d05e6e0b (pushed, on moe/work-2026-10-24). Diff: 7 files, +231/-19, about 212 net LOC, exactly the approved scope.\n\nRe-run:\n- checkRefs[0] verbatim on a git-archive snapshot: EXIT 0 in 4 s. YAML OK 5; 38/0; 17/0; the 9 named rows; parity PASS; lint OK.\n- actionlint v1.7.7 (/mnt/c/Users/Yaron/go/bin/actionlint.exe) on ci.yml + nightly.yml: exit 0. A negative control (an undefined `with:` input, a bad context) was caught, so the workflow_call inputs and expression contexts are validated.\n- RED: edc3e937's ci.yml fails R1, R2, R4 and R6.\n- 8 extra mutations of my own: all killed.\n- PyYAML compare of a PR/push run against edc3e937: same jobs, headers and names. Only the 4 long commands (plus their exit-check lines) are gone, and only the ci-workflows test step is added.\n\nDoD:\n(1) Real timings (gh run view --json jobs, 41862780104 and 41848822541): Windows 178.6 − 83.9 − 83.3 + about 4 = about 16 min; ubuntu about 6.4; macOS 5.2; the others at most 3.5.\n(2) nightly.yml: cron + workflow_dispatch(ref). It calls ci.yml with full: true per matrix ref, with fail-fast false, the job-index suffix and contents: read. The header states the default-branch rule. No steps copied.\n(3) The CI-reading rows pass; R2/R5 assert the moved suites under the nightly. CLAUDE.md, DEVELOPMENT.md and RELEASING.md describe the split. release, docker and pages are untouched, no role docs changed, and nothing downloads the renamed artifacts.\n\nNotes:\n- The docs say `gh workflow run ci.yml --ref <branch> -f full=true` works before merge. GitHub may refuse it until main's ci.yml has workflow_dispatch; the worker flagged this.\n- Human: set the NIGHTLY_REFS variable.\n- The 7 unwired test files are task-5f5c8999.",
+  "requiredCheckAtDone": null
 }
