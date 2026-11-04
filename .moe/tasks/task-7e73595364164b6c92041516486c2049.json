@@ -27,40 +27,62 @@
     {
       "stepId": "step-2",
       "description": "The fix (green). In packages/moe-daemon/src/state/workerLifecycle.ts, routeUnlandedLanding (:310 at 2a1c5a36; it came from efe07ce5's 3500ae19). Compute `const parked = task.status === 'REVIEW' && task.needsHumanReview === true;`. For a parked row:\n- keep the status and the assignment: routing is {} exactly as for a non-REVIEW row, so it never goes to WORKING or BLOCKED and gets no blocked fields;\n- STILL write landingRetry (count = prior + 1) and the one moe-daemon comment, with ', kept parked for human review (needsHumanReview)' appended. Then a human who later moves the row to WORKING hands the next worker a LANDING-RETRY with the rescue ref.\nUpdate the function's docblock with one sentence for the exception. Leave every other path byte-identical: non-parked REVIEW to WORKING or BLOCKED (diverged, count >= 3), non-REVIEW unchanged, and retryUnrecordedLanding's guards. Both callers, finalizeAttempt.ts:153 and retryUnrecordedLanding, get the fix through this one function, so neither caller file changes. The prototype is /mnt/d/moe-scratch/7e735953-plan/proto-workerLifecycle.diff; apply it with your own Edit tool. Error handling is unchanged: it is a single updateTask write, and retryUnrecordedLanding's try/catch still keeps a failed write from failing the close.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/workerLifecycle.ts"
       ],
-      "startedAt": "2026-11-04T06:15:45.233Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts"
+      ],
+      "note": "routeUnlandedLanding: added `parked = REVIEW && needsHumanReview === true` (strict). A parked row keeps its status and assignment (routing {}, no blocked fields) but still gets landingRetry (count+1) and one moe-daemon comment with ', kept parked for human review (needsHumanReview)' appended. Docblock gained one sentence. Every other path is byte-identical; neither caller file changed. Applied with my own Edit tool; diff matches the architect's proto.",
+      "startedAt": "2026-11-04T06:15:45.233Z",
+      "completedAt": "2026-11-04T06:15:59.592Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs in docs/MCP_SERVER.md, two sections only, using your own Edit tool.\n(a) `### moe.finalize_attempt`, the 'unlanded' **Routing.** sub-bullet (:641 at 2a1c5a36). Append: \"A `REVIEW` task parked for a human (`needsHumanReview`, the `qa_reject` hard cap) also keeps its status and assignment, so no worker can claim it; it still gets the retry record and the comment.\"\n(b) `### moe.deregister_worker`, the bullet 'A worktree landing with nothing recorded goes back for a retry.' (:2179). Add the same exception: such a row stays `REVIEW`, unassigned, flag kept, with `landingRetry` and the comment only.\nEdit nothing else in the file. Other open rows own other sections: report_blocked is 31a2aa2f and 590b98bd, get_context is f0ca0ff0, release_task is 47652916. Re-grep each anchor first; if a peer moved it, edit the same sub-bullet wherever it now is.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md, two sub-bullets only, own Edit tool: (a) moe.finalize_attempt 'unlanded' Routing sub-bullet (line 649) gained the parked-REVIEW sentence; (b) moe.deregister_worker 'A worktree landing with nothing recorded goes back for a retry' bullet (line 2187) gained the needsHumanReview exception before 'Every other row keeps the plain close'. Anchors re-grepped first; no peer had moved them.",
+      "startedAt": "2026-11-04T06:16:01.768Z",
+      "completedAt": "2026-11-04T06:16:09.998Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, run once. From your worktree root, run exactly the executionContract checkRef, which is byte-identical to /mnt/d/moe-scratch/7e735953-plan/gate.sh; check it first with `cd /mnt/d/moe-scratch/7e735953-plan && sha256sum -c SHA256SUMS`. Submit the gate's fresh output as moe.complete_task verification.\nThe gate:\n1. clones your HEAD into mktemp, outside the shared checkout;\n2. overlays your 3 working-tree files;\n3. runs npm ci and `npx tsc --noEmit -p .`;\n4. runs vitest on parkedUnlandedLanding, finalizeAttempt, finalizingCloseRetry, parkedReview.guard and attemptHandback.\nThe architect's run with the prototype gave 5 files and 127 tests passing. DoD 2 requires finalizeAttempt.test.ts and finalizingCloseRetry.test.ts to pass with no edits to those files.\nNever run npm ci, npm test or a build in /mnt/d/projexts/moes or in your worktree (global rail 1). For any scratch prototyping, use absolute destination paths inside `( set -e; ... )` (mem:gotcha-scratch-clone-relative-cp-falls-through).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the checkRef via gate.sh (SHA256SUMS verified first; the file is byte-identical to the executionContract checkRef) from the worktree root: clone of HEAD in mktemp, overlay of my 3 files, npm ci, tsc --noEmit -p . clean, vitest 'Test Files 5 passed (5) | Tests 127 passed (127)', EXIT=0. finalizeAttempt.test.ts and finalizingCloseRetry.test.ts pass unedited. Nothing was installed, built or run in the shared checkout or the worktree.",
+      "startedAt": "2026-11-04T06:16:13.973Z",
+      "completedAt": "2026-11-04T06:16:33.165Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of your own diff, run once (load adversarial-self-review). Check:\n(1) Only routeUnlandedLanding changed in workerLifecycle.ts. Its non-parked paths are byte-identical: REVIEW to WORKING, BLOCKED on diverged or the 3rd landing, and non-REVIEW unchanged.\n(2) A parked row gets no status, assignedWorkerId or blocked* fields in the update, but does get landingRetry and exactly one comment.\n(3) `needsHumanReview === true` is a strict check, so an absent or false flag routes as before; the control case pins this.\n(4) The reply's taskStatus reads 'REVIEW' for a parked row. The wrappers never branch on taskStatus (moe-agent.sh only acknowledges finalize), so nothing downstream breaks.\n(5) Both doc sentences match the code.\n(6) The diff is exactly 3 files, and finalizeAttempt.test.ts and finalizingCloseRetry.test.ts are untouched.\nFix anything you find. If any byte changed, re-run the step-4 checkRef and submit that fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/workerLifecycle.ts",
         "packages/moe-daemon/src/state/parkedUnlandedLanding.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/parkedUnlandedLanding.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial review of my own diff, no findings, no byte changed after the step-4 gate. (1) Only routeUnlandedLanding changed (docblock and body); non-parked paths are textually the same expressions (REVIEW to WORKING, BLOCKED on diverged or count >= 3, non-REVIEW unchanged). (2) A parked row's update is only { landingRetry, comments }: routing is {}, so no status, assignedWorkerId or blocked* fields; the test asserts exactly one moe-daemon comment. (3) needsHumanReview === true is strict; the control case (flag absent) still routes to WORKING. (4) taskStatus reads 'REVIEW' for a parked row (asserted); applyTaskOutcome only passes the returned task to response(). (5) Both doc sentences match the code. (6) Diff is exactly 3 files; finalizeAttempt.test.ts and finalizingCloseRetry.test.ts untouched. Checked consumers of landingRetry on a REVIEW row: nextStatusForRelease keeps REVIEW as REVIEW, and get_context only surfaces the record, so a human who later moves the row to WORKING hands the next worker a LANDING-RETRY. The appended comment text has no at-token. Theoretical only: repeated unlanded outcomes on a parked row grow count (the third+ then blocks only after a human unparks it), which is the same counter semantics as before.",
+      "startedAt": "2026-11-04T06:16:37.810Z",
+      "completedAt": "2026-11-04T06:17:02.392Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:58:43.276Z",
-  "updatedAt": "2026-11-04T06:15:45.233Z",
+  "updatedAt": "2026-11-04T06:18:26.031Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T06:07:00.780Z",
@@ -85,7 +107,7 @@
     "firstClaimAt": "2026-11-04T06:09:31.504Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -96,7 +118,11 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:13:41.038Z",
@@ -161,5 +187,44 @@
   },
   "planApprovedAt": "2026-11-04T06:13:41.079Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T06:15:07.534Z"
+  "workStartedAt": "2026-11-04T06:15:07.534Z",
+  "reviewStartedAt": "2026-11-04T06:17:19.299Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git clone -q --shared --no-checkout . $S/r && git -C $S/r checkout -q --detach $(git rev-parse HEAD) && tar -cf $S/e.tar packages/moe-daemon/src/state/workerLifecycle.ts packages/moe-daemon/src/state/parkedUnlandedLanding.test.ts docs/MCP_SERVER.md && tar -xf $S/e.tar -C $S/r && cd $S/r/packages/moe-daemon && env -i HOME=$HOME NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin bash -c 'set -o pipefail; npm ci --no-audit -q && npx tsc --noEmit -p . && npx vitest run src/state/parkedUnlandedLanding.test.ts src/tools/finalizeAttempt.test.ts src/state/finalizingCloseRetry.test.ts src/tools/parkedReview.guard.test.ts src/state/attemptHandback.test.ts'",
+    "exitCode": 0,
+    "outputTail": " ✓ src/tools/parkedReview.guard.test.ts (6 tests)\n ✓ src/state/finalizingCloseRetry.test.ts (11 tests)\n ✓ src/state/parkedUnlandedLanding.test.ts (6 tests)\n ✓ src/tools/finalizeAttempt.test.ts (63 tests)\n ✓ src/state/attemptHandback.test.ts (41 tests)\n\n Test Files  5 passed (5)\n      Tests  127 passed (127)\nEXIT=0 (tsc --noEmit -p . clean; quality gate: parity-check.sh PASS, npm run lint OK)",
+    "reportedAt": "2026-11-04T06:17:19.299Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/parkedUnlandedLanding.test.ts",
+    "packages/moe-daemon/src/state/workerLifecycle.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "routeUnlandedLanding (state/workerLifecycle.ts) now leaves a REVIEW row parked for a human (needsHumanReview === true, the qa_reject hard cap) in REVIEW when a worktree landing ends unlanded. It stays unassigned with the flag and reopenCount kept; status is never set to WORKING or BLOCKED, even for 'diverged' or the 3rd landing. It still gets landingRetry (count + 1) and the one moe-daemon comment, which ends ', kept parked for human review (needsHumanReview)'. So a human who later unparks the row hands the next worker a LANDING-RETRY with the rescue ref. One function covers both routes: finalize_attempt 'unlanded' (reply taskStatus reads REVIEW) and the finalizing close by moe.deregister_worker, the DEAD-record prune and the startup purge. Every other row routes as before; neither caller file changed.\n\nTests: new state/parkedUnlandedLanding.test.ts, 6 cases (finalize unlanded conflict and diverged; the 3 closers; control without the flag still goes to WORKING). Each parked case asserts REVIEW, unassigned, needsHumanReview kept, reopenCount 5, landingRetry {reason, count 1}, exactly one moe-daemon comment, no WORKING-pool or REVIEW-pool claim returns the row, and an explicit-taskId claim is refused 'parked for human review'. RED at HEAD 6fbdc22f: 5 failed, 1 passed (the control). GREEN: 5 files, 127 tests (with finalizeAttempt, finalizingCloseRetry, parkedReview.guard, attemptHandback), tsc clean; finalizeAttempt.test.ts and finalizingCloseRetry.test.ts pass unedited.\n\nDocs: docs/MCP_SERVER.md, the finalize_attempt 'unlanded' Routing sub-bullet and the deregister_worker 'goes back for a retry' bullet only. Quality gate (parity-check.sh and npm run lint) passes. Diff: 3 files, runtime +10/-3 lines.",
+  "commits": [
+    {
+      "sha": "6da87f7c131a8ad227b4d6f5beb6f08688437bf4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T06:13:56Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/parkedUnlandedLanding.test.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T06:18:26.031Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T06:13:56Z",
+    "at": "2026-11-04T06:18:26.031Z"
+  }
 }
