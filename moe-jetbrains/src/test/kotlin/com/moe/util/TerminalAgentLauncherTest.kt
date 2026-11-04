@@ -357,6 +357,18 @@ class TerminalAgentLauncherTest {
     }
 
     @Test
+    fun `AgentProvider GEMINI is labelled Antigravity and keeps the gemini command`() {
+        val gemini = TerminalAgentLauncher.AgentProvider.GEMINI
+        assertEquals(gemini, TerminalAgentLauncher.AgentProvider.fromCommand("gemini"))
+        assertEquals("gemini", gemini.command)
+        assertEquals("Antigravity", gemini.displayName)
+        // The Agents menu shows the bundle string (MoeToolWindowPanel), not displayName.
+        val bundle = java.util.Properties()
+        javaClass.getResourceAsStream("/messages/MoeBundle.properties")!!.use { bundle.load(it) }
+        assertEquals("Antigravity", bundle.getProperty("moe.panel.provider.gemini"))
+    }
+
+    @Test
     fun `PowerShell architect command no longer sets MOE_NO_PRINT_MODE env var`() {
         val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",

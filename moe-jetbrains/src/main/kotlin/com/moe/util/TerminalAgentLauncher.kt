@@ -205,7 +205,7 @@ object TerminalAgentLauncher {
     enum class AgentProvider(val displayName: String, val command: String) {
         CLAUDE("Claude", "claude"),
         CODEX("Codex", "codex"),
-        GEMINI("Gemini", "gemini"),
+        GEMINI("Antigravity", "gemini"),  // the wrappers run Antigravity (agy) for gemini mode
         GROK("Grok", "grok"),
         CUSTOM("Custom...", "");
 
