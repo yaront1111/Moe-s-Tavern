@@ -1269,7 +1269,7 @@ If the epic touched shared types, schema, wire protocol, or migrations, say so i
 
 Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
-# moe-generated: sha=a2881f92c874
+# moe-generated: sha=247fee8eaf61
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -1282,7 +1282,7 @@ Your job: turn the task in front of you into an implementation plan that a worke
 
 ## Size triage — before drafting steps
 
-Count before you draft. If an honest plan needs **more than 8 steps or more than 5 distinct \`affectedFiles\`**, the *task* is too big — no plan fixes that. Do not pad several actions into one step to duck the cap: the step still executes at its real size, and the daemon counts distinct files regardless. \`moe.submit_plan\` returns \`warnings\` past 8 steps / 5 distinct files and hard-rejects past 12 steps / 10 distinct files with \`CONSTRAINT_VIOLATION\` (thresholds: \`project.json\` \`settings.taskSizing\`). Right-sized is ≤60 min human-equivalent, 1–3 files, one deliverable.
+Count before you draft. If an honest plan needs **more than 8 steps or more than 5 distinct files** (the union of every step's \`affectedFiles\` and \`newFiles\`), the *task* is too big — no plan fixes that. Do not pad several actions into one step to duck the cap: the step still executes at its real size, and the daemon counts distinct files regardless. \`moe.submit_plan\` returns \`warnings\` past 8 steps / 5 distinct files and hard-rejects past 12 steps / 10 distinct files with \`CONSTRAINT_VIOLATION\` (thresholds: \`project.json\` \`settings.taskSizing\`). Right-sized is ≤60 min human-equivalent, 1–3 files, one deliverable.
 
 Oversized means go back to breakdown, not to a denser plan: create smaller sibling tasks via \`moe-epic-breakdown\` (SPIDR split) and narrow this task to the first slice — or \`moe.report_blocked\` with the proposed split if the task isn't yours to split. A project or epic rail that forbids splitting wins over this: plan the work as ONE task within the daemon's \`taskSizing\` limits instead.
 
@@ -1490,7 +1490,7 @@ If the diff is large or touches an unfamiliar subsystem, before deciding:
 
 If after that you still can't tell — \`moe.add_comment\` on the task asking the worker a specific clarifying question. Don't reject for ambiguity; reject for defect.`,
   'ponytail/SKILL.md': `---
-# moe-generated: sha=ad8f5eeab200
+# moe-generated: sha=22cebfcbaa64
 name: ponytail
 description: >
   Forces the laziest solution that actually works, simplest, shortest, most
@@ -1626,9 +1626,10 @@ rails are the "explicitly requested" tier — never YAGNI them away.
   here: search the project (Serena, or grep) for an existing helper before
   writing one.
 - **Architect, while sizing steps.** \`moe.submit_plan\` warns past 8 steps / 5
-  distinct \`affectedFiles\` and hard-rejects past 12 / 10. The ladder is the
-  cheapest way under the cap: a rung-3 step (stdlib does it) is one step, a
-  hand-rolled equivalent is four.
+  distinct files (the union of every step's \`affectedFiles\` and \`newFiles\`)
+  and hard-rejects past 12 / 10. The ladder is the cheapest way under the
+  cap: a rung-3 step (stdlib does it) is one step, a hand-rolled equivalent
+  is four.
 - **A step you believe is unnecessary is a conversation, not a silent skip.**
   The plan is what QA reviews and what the wrapper attributes. Say so in
   \`moe.complete_step { note }\`, or \`moe.report_blocked\` for the architect to
