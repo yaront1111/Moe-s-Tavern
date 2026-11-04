@@ -64,18 +64,20 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of the diff against the merge base. This is the one review step, before complete_task. If it changes any file, re-run the checkRef and submit that output.\n- Mutants, in the gate's snapshot only, never in the worktree. `python3 /mnt/d/moe-scratch/plan-590b98bd/mutate.py <snapshot>/packages/moe-daemon/src/state/dependencyUnblock.ts <name>` applies one. Then `npx vitest run src/state/dependencyUnblock.test.ts` must fail exactly the named case:\n  - M1_liveKeys_after_qualify: (a);\n  - M2_no_seed: (c);\n  - M3_any_sender: (c);\n  - M4_ignore_blockedAt: (c);\n  - M5_no_prune: (b).\n  The architect's prototype run failed exactly those. The script's anchors are the prototype's text; if yours differs, make the same five mutations by hand. Restore the file after each.\n- The hunt's scratch repro (/mnt/d/moe-scratch/hunt-151a2c54/B): case 2 passes. Case 1 still fails, because it mocks postToRoleChannel, so no page ever reaches #governors; re-paging a block whose page never landed is the designed behavior. (c) is case 1 with the page landing. Say so in the completion summary.\n- Never throws: an unreadable log, a missing channel, a malformed or null line, non-string content, an unparseable timestamp.\n- Cost: once per StateManager, at most 1 MiB, inside the 5-minute sweep under the global mutex. Only lines containing ' has been BLOCKED ' are parsed.\n- Unchanged: the alert text, the four alert classes, alert-only behavior and the resource-row exclusion. No new .moe path, and no schema.ts edit.\n- DoD 3: no existing test changed, because none encoded prune-on-miss. State that in the summary.\n- Only the Stale-block visibility line of MCP_SERVER.md changed. No added line contains any string from project.json globalRails.forbiddenPatterns.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/dependencyUnblock.ts",
         "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
         "docs/MCP_SERVER.md"
       ],
-      "startedAt": "2026-11-04T06:25:30.204Z"
+      "note": "Adversarial review, no file changed (so no checkRef re-run needed). Five mutants applied in the snapshot only, each failed exactly its named case: M1 (a), M2 (c), M3 (c), M4 (c), M5 (b); file restored. Hunt scratch repro: case 2 passes; case 1 fails by design because it mocks postToRoleChannel so no page reaches #governors (test (c) is case 1 with the page landing). Never-throws traced: readTailJsonl in try/catch (ENOENT silent, else logger.warn), JSON.parse guarded, null line via message?.sender, non-string content, NaN timestamps skipped. No forbidden patterns in added lines; docs diff is the one Stale-block visibility line.",
+      "startedAt": "2026-11-04T06:25:30.204Z",
+      "completedAt": "2026-11-04T06:26:12.923Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,12 +89,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:01:39.792Z",
-  "updatedAt": "2026-11-04T06:25:30.204Z",
+  "updatedAt": "2026-11-04T06:27:32.576Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:01:46.958Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -106,7 +108,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:21:46.798Z",
@@ -173,5 +176,44 @@
   },
   "planApprovedAt": "2026-11-04T06:21:46.828Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T06:22:55.077Z"
+  "workStartedAt": "2026-11-04T06:22:55.077Z",
+  "reviewStartedAt": "2026-11-04T06:26:31.668Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'reads the newest 1 MiB of `#governors` back' docs/MCP_SERVER.md && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/{dependencyUnblock.ts,dependencyUnblock.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/state/dependencyUnblock.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ] && grep -aqE \" ✓ src/state/dependencyUnblock\\.test\\.ts \\((6[2-9]|[7-9][0-9]) tests\\)\" ../v.log && echo \"stale-block pin ok\"; }'",
+    "exitCode": 0,
+    "outputTail": "npm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\n Test Files  289 passed (289)\n      Tests  7503 passed | 24 skipped (7527)\nstale-block pin ok\nexit=0",
+    "reportedAt": "2026-11-04T06:26:31.668Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "alertStaleBlocks now pages a BLOCKED row at most once per block instance (taskId + blockedAt), in one daemon lifetime and across a restart. (1) The key goes into liveKeys for every BLOCKED row with a parseable blockedAt before the qualification checks (resource skip moved below it), so a row that stops qualifying (deps all met, or moving deps under 2x) is no longer pruned while still BLOCKED. The prune now drops only rows that left BLOCKED or changed blockedAt. (2) Restart decided as option 1, persist by reading back what the daemon already writes: new module-private seedAlertedStaleBlocks seeds the memo from the newest CHAT_READ_WINDOW_BYTES (the chat_read window) of #governors, keeping only sender 'system' pages matching the alert prefix whose timestamp is strictly after the row's blockedAt. It never throws (ENOENT silent, other errors one logger.warn), so the worst case is one repeat page, never silence. A page that left the 1 MiB window or never landed is re-paged once after a restart. No schema.ts, tool contract or .moe path change; alert text and the four classes unchanged. Tests: 3 new cases in describe('stale-block alert') (a once per instance across qualify/stop/qualify, b new blockedAt and resolved-then-reblocked still re-page, c restart reads #governors back, a governor quoting the page format does not count); dependencyUnblock.test.ts is 62 tests, was 59. No existing test encoded prune-on-miss, so none changed. RED at base: 2 failed | 60 passed ((a),(c)); mutants M1-M5 each fail exactly their named case. docs/MCP_SERVER.md: only the Stale-block visibility bullet. Note for QA: the hunt's scratch repro case 2 passes; its case 1 still fails by design because it mocks postToRoleChannel so no page ever reaches #governors, and re-paging a block whose page never landed is the designed behavior. Test (c) is case 1 with a real post.",
+  "commits": [
+    {
+      "sha": "bb0bc17e6abbd6a9ab799297e16daffcbd1eccb5",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T06:21:57Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T06:27:32.576Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T06:21:57Z",
+    "at": "2026-11-04T06:27:32.576Z"
+  }
 }
