@@ -1,0 +1,28 @@
+{
+  "id": "task-9c67c6b645c4463884196d0c3742d737",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains DaemonIdentityProbe.isSameProjectPath runs File.canonicalPath and Files.isSameFile on UNC and device spellings, so a /health reply, daemon.json or STATE_SNAPSHOT naming \\\\host\\share\\x makes the IDE open an SMB session on Windows (NTLM exposure), while VS Code's isSameProject keeps such spellings off the disk (parity gap after be7d169f / b96465c5)",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 from qa-96811257's follow-up lead after approving task-be7d169f (#governors msg-58743251, 08:41Z). The governor re-read every citation at origin/moe/work-2026-10-24 58e54180.\n\nPROBLEM\n- moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt:49 `ABSOLUTE = ^(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]|/)` accepts UNC spellings such as `\\\\host\\share\\x`.\n- classify (:76-83) passes any absolute served projectPath to isSameProjectPath (:90-91). When the comparable spellings differ, that falls through to sameDirectoryOnDisk (:94-96): `File(path).canonicalPath` and `Files.isSameFile(Paths.get(path), Paths.get(base))`. On Windows, either call against `\\\\host\\share\\x` opens an SMB session to that host, which can leak the user's NTLM credentials.\n- The same helper serves all three sites:\n  - /health, via classify. Any local listener on daemon.json's port can answer.\n  - daemon.json, via MoeDaemonSupervisor.isSameProject (MoeDaemonSupervisor.kt:1029). The file comes from the project folder, so a cloned repo can carry it.\n  - STATE_SNAPSHOT, via MoeMessageDispatcher.\n- b96465c5 extended the disk check to /health and added isSameFile to all three sites. The daemon.json and STATE_SNAPSHOT sites already ran canonicalPath before it.\n- VS Code already refuses this: moe-vscode/src/services/MoeDaemonClient.ts:156-164 isSameProject lets only fully qualified, non-UNC, non-device spellings reach realpath and otherwise falls back to the spelling verdict. mem:decision-daemon-identity-probe records that rule, and its \"GAP (QA, 2026-11-04)\" bullet names this hole.\n\nFIX (JetBrains parity)\n- In isSameProjectPath, run the disk check only when both spellings are host-absolute and neither is UNC or device. That excludes any spelling starting with two separators, `^[\\\\/]{2}`, which covers `\\\\?\\` and `\\\\.\\` too. Everything else answers by the comparable-spelling rule alone.\n- WSL-share spellings (`\\\\wsl$\\...`, `//wsl.localhost/...`) already compare equal by spelling through comparableProjectPath, so they lose nothing.\n- MoeDaemonSupervisorTest:101 asserts that a relative `.` matches through the canonical fallback. Either keep relative spellings for the daemon.json stage only, with the reason in a comment, or drop that case if nothing needs it. The summary says which.\n\nSCOPE AND CHECKS\n- DaemonIdentity.kt, plus MoeDaemonSupervisor.kt only if the relative-path decision needs it, plus DaemonIdentityTest.kt and/or MoeDaemonSupervisorTest.kt. No VS Code change.\n- No open row holds these files (lanes.js at filing time).\n- Gate: `./gradlew test` on the Windows gate host under the jetbrains-gradle lease, like be7d169f.\n- Update the GAP bullet in mem:decision-daemon-identity-probe so it says the gap is closed.",
+  "definitionOfDone": [
+    "isSameProjectPath reaches File.canonicalPath or Files.isSameFile only when both spellings are host-absolute and neither starts with two separators (UNC, \\\\?\\ or \\\\.\\ device forms). Every other spelling is answered by comparableProjectPath equality alone, matching VS Code's isSameProject.",
+    "A JetBrains unit test proves that a served `\\\\host\\share\\x`, a `//host/share/x` and a `\\\\?\\UNC\\host\\share\\x` never reach the disk check (through a seam or counter) and classify as Foreign against a local project. The existing symlink and junction tests (dirLink) still pass, and the summary records the decision on MoeDaemonSupervisorTest:101's relative case.",
+    "`./gradlew test` passes on the gate host, and mem:decision-daemon-identity-probe's GAP bullet is updated to say the gap is closed."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 510.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:42:33.111Z",
+  "updatedAt": "2026-11-04T08:42:33.111Z"
+}
