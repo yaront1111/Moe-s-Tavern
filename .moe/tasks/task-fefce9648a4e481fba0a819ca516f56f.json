@@ -68,8 +68,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -84,7 +84,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:30.681Z",
-  "updatedAt": "2026-11-04T06:07:04.551Z",
+  "updatedAt": "2026-11-04T06:09:08.482Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T00:27:56.803Z",
@@ -94,11 +94,14 @@
     "firstClaimAt": "2026-11-04T05:24:06.558Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T06:08:36.682Z",
+    "wallClockMs": 2670124
   },
   "contextFetchedBy": [
     "architect-67c762f6",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "high",
@@ -214,9 +217,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T05:36:10Z",
-    "at": "2026-11-04T05:39:06.115Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T06:07:01Z",
+    "at": "2026-11-04T06:09:08.482Z"
+  },
+  "completedAt": "2026-11-04T06:08:36.682Z",
+  "reviewCompletedAt": "2026-11-04T06:08:36.682Z",
+  "reviewSummary": "Reviewed completion b9205914 (kind=completion, pushed; ancestor of moe/work-2026-10-24 and control HEAD 2a1c5a36). Diff +125/-2, 3 files, under the 400 cap. qaApprove.ts and qaReject.ts change only the handoffWorkerId line (+7/-1 each, comment included, byte-identical, same position: after assertContextFetched, before the candidate gate). New value: task.assignedWorkerId || (workerId && state.getWorker(workerId)?.currentTaskId === task.id ? workerId : null). touchWorker call and payload, the needsHumanReview fence, gate order, refusals and description strings are untouched; touchWorker no-ops null/missing/DEAD ids.\nRe-ran task.verification verbatim in a snapshot outside the shared checkout (git archive HEAD, Node v24.21.0, env -i): exit 0; tsc and tsc -p tt.json clean; vitest 8 files, 242 passed (worker's 237 plus task-77e54ebb's later tests at HEAD); qaVerdictHandoff.test.ts reports exactly (6 tests), 'handoff ok'.\nMutation check in the scratch snapshot (restored after): the original `assignedWorkerId || params.workerId` fails exactly the two 'caller holds another task' cases (hunt repro case 2, both tools); the 'touch no one' mutant fails exactly the two 'caller's own pointer is on the row' cases.\nDoD 1: cases (a) and (b). DoD 2: case (c) plus unchanged qaOwnership release tests. DoD 3: identical in both tools; the 8-file suite passes. Assertions are toEqual on {status, currentTaskId}.\nNo docs owed: MCP_SERVER.md qa_approve/qa_reject sections do not describe which seat a verdict idles (grepped), ruling msg-71db57ac. Ponytail: nothing to cut. Not run: full daemon suite (architect's dry run: 281 files, 7440 passed); the plan's gate is the 8-file checkRef.",
+  "requiredCheckAtDone": null
 }
