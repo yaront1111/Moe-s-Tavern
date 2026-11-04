@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,16 +92,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:53:50.379Z",
-  "updatedAt": "2026-11-04T07:26:21.591Z",
+  "updatedAt": "2026-11-04T07:35:44.336Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:58:16.989Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T07:35:18.055Z",
+    "wallClockMs": 2221066
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -179,10 +182,11 @@
   "planApprovedAt": "2026-11-04T07:15:05.261Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T07:15:17Z",
-    "at": "2026-11-04T07:26:21.591Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T07:32:53Z",
+    "at": "2026-11-04T07:35:44.336Z"
   },
   "workStartedAt": "2026-11-04T07:16:25.978Z",
   "reviewStartedAt": "2026-11-04T07:25:30.610Z",
@@ -219,5 +223,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T07:35:18.055Z",
+  "reviewCompletedAt": "2026-11-04T07:35:18.055Z",
+  "reviewSummary": "Reviewed completion 3cd256eb via git show (on moe/work-2026-10-24, in moe/control HEAD; 4 files, +219/-24, ~195 net LOC, under the 400 cap).\n\nRe-ran the Windows `gradlew.bat test --rerun` in the task worktree under the jetbrains-gradle lease (released). I first confirmed `git diff --quiet 3cd256eb <worktree HEAD> -- moe-jetbrains` is clean. BUILD SUCCESSFUL, exit 0. XML totals: 44 classes, 676 tests, 6 skipped, 0 failures, 0 errors. MoeDaemonCommandOverrideTest 5/5, timestamp 07:34:04Z, after the 07:33:55Z run start. The worker's 671 plus 5 sibling tests from f9395bf5 (same supervisor file) gives 676, so the merge compiles and passes. parity-check.sh PASS, npm run lint OK.\n\nDoD 1: a non-blank override is selected ahead of the direct script. PROTECTED never reads the seam, and there is one read per call. O1 and O2 pin both cases, including unset, blank and throwing seams.\nDoD 2: `start` is appended unless a word after the first is a daemon subcommand. A --project or {projectPath} command is used as written. WSL mode adds one --host. O3 (quoted-path fixture with a standalone `start`), O4 and O5 use literal expectations.\nDoD 3: the CONFIGURATION.md row states precedence, the start rule, the WSL rule and the installer note. Gradle is green.\n\nInvariants hold: the positional constructor call in RuntimeSelectionPolicyTest is intact, the no-override path and isReachable are untouched, and MoeDaemonSupervisorTest changed only in W1/W2. No tests were weakened. I did not rerun the worker's mutants.\n\nNot blocking: `--host=wsl` and a flag value equal to a subcommand are not special-cased (documented). Windows cmd /c quoting of a quoted first word is unchanged by this commit and I did not run it.",
+  "requiredCheckAtDone": null
 }
