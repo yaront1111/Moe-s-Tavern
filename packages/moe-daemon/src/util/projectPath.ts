@@ -12,13 +12,21 @@ const WSL_SHARE = /^\/\/(?:wsl\$|wsl\.localhost)\/[^/]+(\/.*)?$/i;
 const MNT_DRIVE = /^\/mnt\/([A-Za-z])(?:\/(.*))?$/;
 
 /**
+ * The project path the daemon records in daemon.json, /health and project.json rootPath.
+ * A relative --project or MOE_PROJECT_PATH is resolved once against the cwd, because every
+ * later reader has its own cwd; a POSIX-absolute, drive or UNC value is kept as given.
+ */
+export function absoluteProjectPath(projectPath: string): string {
+  return WINDOWS_FORM.test(projectPath) || projectPath.startsWith('/') ? projectPath : path.resolve(projectPath);
+}
+
+/**
  * Comparison-only form of a project path; never written anywhere. The contract
  * is documented on moe-proxy's comparableProjectPath (packages/moe-proxy/src/utils.ts).
  * Keep the two equivalent: scripts/tests/daemon-json-cap.test.mjs checks both dists against one table.
  */
 export function comparableProjectPath(projectPath: string): string {
-  const raw = projectPath.trim();
-  const abs = WINDOWS_FORM.test(raw) || raw.startsWith('/') ? raw : path.resolve(raw);
+  const abs = absoluteProjectPath(projectPath.trim());
   if (!WINDOWS_FORM.test(abs)) return posixKey(abs);
   const s = abs.replace(/\\/g, '/');
   const share = WSL_SHARE.exec(s);

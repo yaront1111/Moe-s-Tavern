@@ -313,7 +313,7 @@ describe('daemon lifecycle validation', () => {
       for (const p of ['/mnt/d/p', '/home/u/p']) {
         expect([p, foreign(p, 'win32'), foreign(p, 'linux'), foreign(p, 'darwin')]).toEqual([p, true, false, false]);
       }
-      // `--project` is recorded as given: a relative path names no side.
+      // A daemon before task-78fa7110 recorded a relative --project as given: it names no side.
       for (const p of ['.', 'proj', 'sub/proj', 'sub\\proj']) {
         expect([p, foreign(p, 'win32'), foreign(p, 'linux'), foreign(p, 'darwin')]).toEqual([p, false, false, false]);
       }

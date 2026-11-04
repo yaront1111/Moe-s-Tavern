@@ -25,7 +25,7 @@ import { healthProofFields, parseHealthRequest, takeSpawnProofKey } from './serv
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { reconcileRunningAttempts } from './state/attemptStore.js';
 import { runDoctor } from './commands/doctor.js';
-import { canonicalProjectPath, comparableProjectPath, isSameProjectPath } from './util/projectPath.js';
+import { absoluteProjectPath, canonicalProjectPath, comparableProjectPath, isSameProjectPath } from './util/projectPath.js';
 import { runCheckArchitecture } from './commands/checkArchitecture.js';
 import { logger } from './util/logger.js';
 import { VERSION } from './util/version.js';
@@ -56,18 +56,17 @@ const SUPERVISOR_RESTART_WINDOW_MS = 60_000;
 const SUPERVISOR_MAX_BACKOFF_MS = 30_000;
 const SUPERVISOR_CHILD_KILL_TIMEOUT_MS = 10_000;
 
-function parseArgs() {
-  const args = process.argv.slice(2);
+function parseArgs(args: string[] = process.argv.slice(2), env: NodeJS.ProcessEnv = process.env) {
   const command = args[0] || 'start';
   const projectIndex = args.indexOf('--project');
   const portIndex = args.indexOf('--port');
   const nameIndex = args.indexOf('--name');
   const hostIndex = args.indexOf('--host');
 
-  const projectPath = projectIndex >= 0 ? args[projectIndex + 1] : process.env.MOE_PROJECT_PATH || process.cwd();
+  const projectPath = absoluteProjectPath(projectIndex >= 0 ? args[projectIndex + 1] : env.MOE_PROJECT_PATH || process.cwd());
   const port = portIndex >= 0 ? Number(args[portIndex + 1]) : undefined;
   const name = nameIndex >= 0 ? args[nameIndex + 1] : undefined;
-  const host = hostIndex >= 0 ? args[hostIndex + 1] : process.env.MOE_BIND_HOST || undefined;
+  const host = hostIndex >= 0 ? args[hostIndex + 1] : env.MOE_BIND_HOST || undefined;
 
   return { command, projectPath, port, name, host };
 }
@@ -91,8 +90,8 @@ function lockFilePath(projectPath: string): string {
  * on Windows. The writer's pid lives in another pid namespace, so
  * `process.kill(pid, 0)` proves nothing either way and only /health may judge
  * it. Mirrors moe-agent.sh's pre-flight, which detects a Windows-owned
- * daemon.json by its drive-letter projectPath. A relative projectPath (the
- * daemon records `--project` as given) names no side, so it stays local.
+ * daemon.json by its drive-letter projectPath. A relative projectPath (only a
+ * daemon before task-78fa7110 recorded one) names no side, so it stays local.
  */
 function isForeignDaemonInfo(info: Pick<DaemonInfo, 'projectPath'>, platform: NodeJS.Platform = process.platform): boolean {
   return platform === 'win32'
@@ -1302,6 +1301,7 @@ async function main() {
 }
 
 export {
+  parseArgs,
   canonicalProjectPath,
   comparableProjectPath,
   isSameProjectPath,
