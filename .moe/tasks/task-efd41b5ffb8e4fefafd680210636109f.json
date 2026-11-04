@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -98,12 +98,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:15:10.120Z",
-  "updatedAt": "2026-11-04T12:45:54.362Z",
+  "updatedAt": "2026-11-04T12:47:38.228Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:38:13.921Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T12:47:14.622Z",
+    "wallClockMs": 540701
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -227,9 +229,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T12:41:56Z",
-    "at": "2026-11-04T12:45:24.395Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T12:45:37Z",
+    "at": "2026-11-04T12:47:38.228Z"
+  },
+  "completedAt": "2026-11-04T12:47:14.622Z",
+  "reviewCompletedAt": "2026-11-04T12:47:14.622Z",
+  "reviewSummary": "Reviewed completion 8db399a6 (on moe/work-2026-10-24; 5 files, +118/-28, net 90 LOC, under the 400 cap; no .moe or out-of-scope paths). Re-ran checkRefs[0] verbatim (archive snapshot outside the checkout): `PASS release versions: 0.8.0`, node --test 21/21 pass, exit 0; matches the worker's evidence.\nDoD 1: the guard is a 15-entry FIELDS table (daemon/proxy/claude-plugin/vscode x package.json + lock version + lock packages[\"\"].version, plugin.json, build.gradle.kts, moe-installer.iss). The test file has a failing-then-passing row per field (names the field, `found 0.6.0, expected 0.8.0`, no other field named, restore -> PASS), covering both lockfile fields of all four packages and claude-plugin package.json + plugin.json.\nDoD 2: plugin.json and .iss synced 0.1.0->0.8.0 and guarded; RELEASING.md list matches the guard table order and names scripts/mods/* plugin.json as deliberately unsynced with the reason; `git grep 0.1.0` over installer/ and claude-plugin (excluding lockfiles) is empty.\nDoD 3: PASS for v0.8.0 in a snapshot.\nMy own mutation checks in a scratch copy: dropping the lockfile packages[\"\"] entries from the guard failed 5 rows; dropping plugin.json + iss entries failed 3 rows (the test's field list is independent of the guard). Deleting packages/moe-proxy/package-lock.json gave two one-line `unreadable, expected 0.8.0` verdicts, exit 1, no stack; a malformed tag `v0.8` gave a one-line message, exit 1.\nCLI contract unchanged (tag regex, PASS text, stderr + exit 1); ci.yml:238 and release.yml:42 untouched; the four existing fields keep the `<file>: found <v>, expected <X.Y.Z>` shape. CRLF .iss row and a repo-sync row (guard on the real tree) pass, so a future bump must touch all 15 fields or CI fails. Ponytail pass: nothing to cut. Nothing tagged, pushed or published.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }

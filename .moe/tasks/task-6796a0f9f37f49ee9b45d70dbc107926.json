@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "Model field and the supervisor rule. The edits are exact; an architect seat cannot dry-run Gradle (mem:gotcha-architect-cannot-take-gradle-lease).\n\n(a) moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, data class DaemonInfo (:290-297). Change the last parameter `val bindHost: String? = null` to `val bindHost: String? = null,` and append:\n    // A Linux daemon records its pid namespace, `pid:[N]` (packages/moe-daemon/src/index.ts buildDaemonInfo, task-da89f620).\n    val pidNamespace: String? = null\nGson leaves it null when the key is absent, so every positional DaemonInfo(...) in the tests still compiles.\n\n(b) moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt.\n1. Constructor: the last parameter `private val docSync: (File, Boolean) -> Unit = ::syncBundledDocs` gains a trailing comma, followed by:\n    // This IDE's own pid namespace, injected by tests; null when it cannot be read (not Linux).\n    private val ownPidNamespace: () -> String? = { readOwnPidNamespace() }\n2. Companion object, beside isOtherSideOfWsl (:1025), add:\n    // The daemon's pidNamespace format (packages/moe-daemon/src/server/probeHost.ts PID_NAMESPACE, task-da89f620).\n    internal val PID_NAMESPACE = Regex(\"\"\"^pid:\\[[0-9]{1,20}\\]$\"\"\")\n    /** This process's pid namespace, readlink /proc/self/ns/pid on Linux; null when unreadable (not Linux) or malformed. Never throws. */\n    internal fun readOwnPidNamespace(link: () -> String = { Files.readSymbolicLink(File(\"/proc/self/ns/pid\").toPath()).toString() }): String? =\n        try { link().takeIf { PID_NAMESPACE.matches(it) } } catch (_: Exception) { null }\n3. Members beside isReachable (:948), add:\n   - `fun isOtherPidNamespace(info: DaemonInfo): Boolean { val recorded = info.pidNamespace ?: return false; return PID_NAMESPACE.matches(recorded) && recorded != ownPidNamespace() }`\n     KDoc: written in another pid namespace than this IDE's (a container, another WSL distro), so its pid names no process here. As for isOtherSideOfWsl, it is never probed or signalled and the port alone judges it. Only a well-formed pid:[N] counts (daemon.json is repository content). An absent or malformed value, or this IDE's own namespace, keeps the pid rules. With no readable own namespace, any recorded value differs.\n   - `private fun pidUnjudgeable(info: DaemonInfo): Boolean = isOtherSideOfWsl(info.projectPath, isWindows()) || isOtherPidNamespace(info)`\n4. Use it at every pid site:\n   - :161 `if (isOtherSideOfWsl(info.projectPath, isWindows())) return false` becomes `if (pidUnjudgeable(info)) return false`. Never verify or replace such a daemon.\n   - :317 in replacementMetadataCleared, `!isOtherSideOfWsl(info.projectPath, isWindows())` becomes `!pidUnjudgeable(info)`.\n   - :949 in isReachable, `(isOtherSideOfWsl(info.projectPath, isWindows()) || isProcessAlive(info.pid))` becomes `(pidUnjudgeable(info) || isProcessAlive(info.pid))`.\n   - :969 in offLoopbackBindRefusal, `isOtherSideOfWsl(info.projectPath, isWindows())` becomes `pidUnjudgeable(info)`. Its KDoc names a record from another pid namespace beside the WSL one.\n5. stopDaemonForRestart (:349): right after the WSL refusal block and before `if (windowsRestart())`, add\n    if (info != null && isOtherPidNamespace(info)) {\n        return \"Restart Daemon did not stop pid ${info.pid}, which .moe/daemon.json records in another pid namespace (for example a container): \" +\n            \"this IDE can neither see nor signal that process. Stop that daemon where it runs (for example with docker stop), \" +\n            \"then use Restart Daemon.\"\n    }\n   Today LEGACY destroys whatever host process holds that pid number. That is an unrelated process.\n6. stopWindowsRestart (:386) is reached only after that early return, so it needs no change.\n7. MoeProjectService.kt needs no edit: connect() (:177, :206) and connectWithRetry decide through isReachable.\n\nError handling: readOwnPidNamespace catches every exception. isOtherPidNamespace does a regex match and a string compare and never throws with the default provider. The existing try/catch wrappers around isReachable and offLoopbackBindRefusal stay.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "startedAt": "2026-11-04T12:46:59.011Z"
     },
     {
       "stepId": "step-2",
@@ -63,7 +64,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:17.897Z",
-  "updatedAt": "2026-11-04T12:45:52.617Z",
+  "updatedAt": "2026-11-04T12:46:59.011Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:25:31.605Z",
     "plannedStepCount": 4,
@@ -137,5 +138,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T12:32:18.293Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T12:46:59.011Z"
 }
