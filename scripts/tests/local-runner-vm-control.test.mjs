@@ -432,3 +432,19 @@ test('VC-P1 the runner probe sends signal 0 only, to a pid parsed from a record 
   assert.deepEqual([localRunnerHost({ platform: 'win32', env: { COMPUTERNAME: 'DESK-1' } }), localRunnerHost({ platform: 'linux', hostname: () => ' My Host ' })],
     ['desk-1', 'myhost']);
 });
+
+test('VC-P2 with no probe injected, a runner alive on this host holds its seat VM through cleanupReport, reconcileReport and runVmControl', async t => {
+  const { ledger, names: [name] } = await ledgerWith(t, [{ workerId: 'me', runner: `${process.pid}@x`, host: localRunnerHost() }]); // this process
+  const { calls, provider } = fakeProvider({ [name]: 'Running' });
+  const daemon = fakeDaemon({ seats: { me: gone('me') } }); // the seat is gone and no lease is held: only the runner probe keeps the VM
+  const proof = { ledger, provider: { ...provider, keyDir: scratch(t) }, call: daemon.call };
+  const held = [{ instance: name, reason: 'runner-alive' }];
+  const cleanup = { schema: 'moe-vm-cleanup-v1', deleted: [], preserved: held, errors: [], invalid: 0 };
+  const reconcile = { schema: 'moe-vm-reconcile-v1', reconciled: [], unknown: [], invalid: 0, held, retired: [] };
+  assert.deepEqual([await cleanupReport(proof), await reconcileReport(proof)], [cleanup, reconcile]);
+  for (const [command, report] of [['cleanup', cleanup], ['reconcile', reconcile]]) {
+    const out = await captured([command, '--project', scratch(t)], proof);
+    assert.deepEqual([out.code, JSON.parse(out.stdout)], [0, report]);
+  }
+  assert.deepEqual([calls, daemon.calls, (await ledger.read(name)).phase], [[], [SL, SL, SL, SL], 'owned']); // no provider call, no lease read
+});

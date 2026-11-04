@@ -65,6 +65,16 @@ const VARIANTS: Array<[string, Report, boolean]> = [
   ['executionReady true', valid({ executionReady: true }), false], ['a finishedAt without millis', valid({ finishedAt: '2026-11-01T09:20:00Z' }), false],
 ];
 for (const { platform, arch, versionSuffix: v } of CERTIFICATION_PINS.hosts) VARIANTS.push([`a ${platform}/${arch} report`, { ...provider(`1.17.0${v}`), platform, arch }, true]);
+// JSON type confusion: each value is == (never ===) to what its field accepts, so an === to == swap of that one comparison accepts it.
+const CONFUSED: Array<[string, 'SCHEMA' | 'CHECKS', Report]> = [
+  ['(t1) version as the string 1', 'SCHEMA', valid({ version: '1' })], ['(t2) version true', 'SCHEMA', valid({ version: true })],
+  ['(t3) kind as a one-item array', 'SCHEMA', valid({ kind: ['isolation-certification'] })], ['(t4) executionReady 0', 'SCHEMA', valid({ executionReady: 0 })],
+  ['(t5) transport injected as a one-item array', 'SCHEMA', { ...injected, transport: ['injected'] }],
+  ['(t6) transport native as a one-item array', 'SCHEMA', valid({ transport: ['native'], certified: false })],
+  ['(t7) provider name as a one-item array', 'SCHEMA', valid({ provider: { name: ['multipass'], version: null } })],
+  ['(t8) a check id as a one-item array', 'CHECKS', valid({ checks: edit(passing(), 0, { id: ['provision'] }) })],
+];
+for (const [name, , value] of CONFUSED) VARIANTS.push([name, value, false]);
 
 describe('drift', () => {
   it('CERTIFY_CHECK_IDS are certify.mjs CERTIFY_CHECKS ids in order; the pins equal certified-provider.json and guest-supervisor.py', async () => {
@@ -84,6 +94,9 @@ describe('drift', () => {
     let original = true;
     try { validateCertificationReport(value); } catch { original = false; }
     expect([checkCertificationReport(value).ok, original]).toEqual([accepted, accepted]);
+  });
+  it.each(CONFUSED)('%s is refused as CERTIFICATION_REPORT_%s', (_name, code, value) => {
+    expect(checkCertificationReport(value)).toStrictEqual({ ok: false, code: `CERTIFICATION_REPORT_${code}` });
   });
   it('accepts a deep-frozen copy and names CHECKS or SCHEMA on refusal, whatever the input', () => {
     expect(new Set(VARIANTS.map(([, , ok]) => ok))).toEqual(new Set([true, false]));
