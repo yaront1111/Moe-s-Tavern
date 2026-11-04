@@ -76,8 +76,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -89,16 +89,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:01:39.792Z",
-  "updatedAt": "2026-11-04T06:28:24.227Z",
+  "updatedAt": "2026-11-04T06:31:49.236Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:01:46.958Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:31:14.608Z",
+    "wallClockMs": 1767650
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-1cd86a39"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -211,9 +214,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T06:21:57Z",
-    "at": "2026-11-04T06:27:32.576Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-cd0ac706@2026-11-04T06:01:43Z",
+    "at": "2026-11-04T06:31:49.236Z"
+  },
+  "completedAt": "2026-11-04T06:31:14.608Z",
+  "reviewCompletedAt": "2026-11-04T06:31:14.608Z",
+  "reviewSummary": "APPROVED. Reviewed completion bb0bc17e (kind=completion, pushed, on moe/work-2026-10-24; HEAD==bb0bc17e). 123+/11- over 3 files, under the 400 cap.\n\nRe-ran the task's checkRef verbatim in a mktemp git-archive snapshot of HEAD (no npm in the shared tree): doc grep ok, both tsc runs clean, full daemon suite 289 files, 7511 passed | 24 skipped, 'stale-block pin ok', exit 0.\nRED independently: reverting only dependencyUnblock.ts to bb0bc17e^ in the snapshot gives 2 failed | 60 passed. Cases (a) and (c) fail, (b) passes. Snapshot deleted.\n\nDoD:\n1. liveKeys.add(staleBlockKey) now runs for every BLOCKED row with a parseable blockedAt before the qualification checks (resource skip moved below), so the prune drops only resolved or re-blocked rows. Test (a): qualify, moving, past 2x, stall again = 1 post. Test (b): new blockedAt and resolved-then-reblocked each page twice.\n2. Restart decided as option 1: seedAlertedStaleBlocks reads the newest 1 MiB of #governors, keeps only sender 'system' page-format lines strictly after blockedAt, never throws. Test (c) uses a real post and a fresh StateManager: standing block not re-paged; a never-paged row and a row re-blocked after its page are paged; a governor quoting the format does not count. Docs: only the Stale-block visibility bullet.\n3. Test diff is additions only (59+/0-); no existing test changed, as the worker said.\n\nAdversarial: the 4 alert sites in dependencyUnblock.ts are the only emitters of ' has been BLOCKED ', so the seed cannot be fooled by another poster. No schema.ts, tool-contract or .moe path change; memo stays a per-StateManager WeakMap; no forbidden patterns. A page that left the window or never landed is re-paged once after a restart, by design. The hunt repro's case 1 mocks postToRoleChannel so it fails by design; test (c) is that case with a real post. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
