@@ -414,7 +414,10 @@ Check if a plan was approved.
 
 **Parameters:**
 ```typescript
-{ taskId: string }
+{
+  taskId: string,
+  workerId?: string  // caller (auto-injected by proxy); refreshes the seat's lastActivityAt, and an approved plan's nextAction (moe.wait_for_task) carries it in its args
+}
 ```
 
 **Returns:**
@@ -1644,17 +1647,24 @@ Block (long-poll) until a claimable task matching the given `statuses` appears. 
 
 ### moe.set_task_status
 
-Set task status (optionally with a reopen reason).
+Architect/governor/human: set task status (optionally with a reopen reason).
 
 **Parameters:**
 ```typescript
-{ taskId: string, status: string, reason?: string }
+{
+  taskId: string,
+  status: "BACKLOG" | "PLANNING" | "AWAITING_APPROVAL" | "WORKING" | "REVIEW" | "BLOCKED" | "DONE" | "ARCHIVED",  // must be a legal transition from the current status (below)
+  reason?: string,   // recorded as reopenReason, and as blockedReason when status is BLOCKED
+  workerId?: string  // caller (auto-injected by proxy), recorded as the actor; its role must resolve to architect or governor. Omitted only on the human path
+}
 ```
 
 **Returns:**
 ```typescript
 { success: true, taskId, status }
 ```
+
+**Role gate:** a call that carries `workerId` must act as an architect or governor (team role, else the `architect-`/`governor-` id prefix; see `moe.amend_plan_step`). Any other caller, such as a worker or QA seat, is refused `NOT_ALLOWED` before the task lookup and any write, and the message tells it to ask a governor in `#governors` to move the row. Only an omitted `workerId` key is the human path: a seat's proxy injects `MOE_WORKER_ID` whenever the key is missing, and a `workerId` of `""` or `null` skips that injection, so it is judged like any other id and refused.
 
 The valid transitions allow `ARCHIVED` from any resting status — `BACKLOG`,
 `REVIEW`, or `DONE` — and from `PLANNING` and `BLOCKED`, to shelve a row that
@@ -1847,7 +1857,7 @@ Create a new task in an epic. **Guardrails are ALL ADVISORY — creation never h
   description?: string,
   definitionOfDone?: string[],
   taskRails?: string[],
-  status?: string,
+  status?: "BACKLOG" | "PLANNING" | "AWAITING_APPROVAL" | "WORKING" | "REVIEW" | "DONE",  // omitted = BACKLOG; BLOCKED and ARCHIVED are refused
   priority?: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
   parentTaskId?: string,
   order?: number,                // finite; omitted = one more than the epic's highest finite order (non-finite stored orders are skipped)
@@ -1859,7 +1869,7 @@ Create a new task in an epic. **Guardrails are ALL ADVISORY — creation never h
 
 **Input refusals.** Malformed input is refused before any write, so nothing is created and a retry cannot duplicate a row. Refused inputs:
 - a missing `epicId` or `title` (`MISSING_REQUIRED`);
-- an unknown `status` or `priority`;
+- a `status` outside the six listed above (a task cannot be created `BLOCKED` or `ARCHIVED`), or an unknown `priority`;
 - a `dependsOn` that is not an array of strings;
 - a `definitionOfDone` that is present (not `null`) but not an array of strings;
 - a `taskRails` that is present (not `null`) but not an array of at most 100 non-empty strings of at most 10000 characters each. These are the bounds `moe.create_epic` applies to `epicRails`;
@@ -2417,13 +2427,13 @@ Teams allow multiple agents to work in parallel within an epic. Teams can be rol
 
 ### moe.create_team
 
-Create a team or return an existing team with the same name+role (idempotent). If `role` is omitted, idempotency is name-only and the team is project-wide.
+Create a team or return an existing team with the same name and role (idempotent; the name is trimmed first). If `role` is omitted, the team is project-wide, and only a role-less team of that name is returned: a role-less create never adopts a role-bound team that shares its name.
 
 **Parameters:**
 ```typescript
 {
   name: string,          // Required: team display name (e.g. "Coders")
-  role?: 'architect' | 'worker' | 'qa', // Optional: team role (omit for project team)
+  role?: 'architect' | 'worker' | 'qa' | 'governor', // Optional: team role (omit for project team)
   maxSize?: number       // Maximum members (default 10)
 }
 ```
@@ -2435,6 +2445,8 @@ Create a team or return an existing team with the same name+role (idempotent). I
   created: boolean       // true if newly created, false if already existed
 }
 ```
+
+**Governor teams:** `role: 'governor'` creates a governor team. Its members act as governors, because a seat's team role wins over its id prefix (`util/workerRole.ts`), so `moe.claim_next_task` answers them `hasNext: false` with a `moe.enter_governance` nextAction instead of a claim.
 
 ---
 
@@ -2516,6 +2528,7 @@ Return tasks with unanswered human task comments, using bounded defaults so a la
 ```typescript
 {
   epicId?: string,             // Optional epic filter
+  includeArchived?: boolean,   // default: false — ARCHIVED tasks are left out unless true
   limit?: number,              // Task entries to return (default: 10, max: 50)
   maxQuestionsPerTask?: number,// Human comments per task (default: 3, max: 20)
   maxContentChars?: number     // Max chars/question (default: 1000, max: 10000; 0 = full)
@@ -2546,6 +2559,7 @@ Return tasks with unanswered human task comments, using bounded defaults so a la
 **Notes:**
 - Only human comments after the last non-human response are treated as pending.
 - Long question content is truncated by default; pass `maxContentChars: 0` only when exact full text is needed.
+- `ARCHIVED` tasks are left out by default, because archiving does not clear `hasPendingQuestion`; pass `includeArchived: true` to include them.
 
 ---
 
@@ -3068,9 +3082,11 @@ Release your lease on a shared resource (and/or leave its queue). The freed capa
   resourceId: string,
   workerId?: string, // required, except on a human's force:true call, which omits it
   taskId?: string,   // Limit the release to this task's lease/queue entry. Default: everything held by workerId
-  force?: boolean    // Governor/human override: release regardless of ownership.
+  force?: boolean,   // Governor/human override: release regardless of ownership.
                      // With taskId: that lease; without: ALL leases and queue entries.
                      // A seat whose workerId resolves to no governor role is refused NOT_ALLOWED
+  ifHolderWorkerId?: string, // Precondition: every lease this call would release is held by this worker
+  ifAcquiredAt?: string      // Precondition: every such lease was acquired at exactly this ISO time (list_resources acquiredAt)
 }
 ```
 
@@ -3091,6 +3107,7 @@ Release your lease on a shared resource (and/or leave its queue). The freed capa
 - **Ownership is task-keyed like the lease itself:** the caller matches a lease/queue entry when its `workerId` equals the recorded one **or** when the caller is the **current assignee of the entry's task** — so a successor wrapper session (fresh `workerId` after a daemon-restart worker purge) that re-claimed the task can release the predecessor's lease.
 - The grant runs inline: the next waiter(s) in grant order get leases, and each granted task that is `BLOCKED` on this resource is flipped back to its `blockedFromStatus` (auto-unblock) with a `🟢` post to the task channel and `#general`.
 - `force: true` is the governor/human lever for a stuck lease (crashed holder that never released). It is enforced: only governor seats and workerId-less human calls may pass it; any other seat is refused `NOT_ALLOWED` and nothing is released. Without `taskId` it clears **all** leases and queue entries on the resource — scope it with `taskId` unless you mean that.
+- **Compare-and-swap preconditions** (`ifHolderWorkerId`, `ifAcquiredAt`): with either one set, the call first collects the leases it would release, the same set the release strips: under `force`, the `taskId` lease, or every holder when `taskId` is omitted; otherwise the caller's own leases (matched by `workerId` or as the task's current assignee), narrowed to `taskId` when given. It is refused `-32002` / `INVALID_STATE`, and nothing is released or dequeued, when that set is empty, when any lease in it is held by a worker other than `ifHolderWorkerId`, or when any was acquired at a time other than `ifAcquiredAt`; the error names the current holder. With a precondition, releasing a lease you no longer hold is a refusal, not the idempotent no-op. The preconditions guard leases, not queue entries, and the check runs in the same exclusive dispatch as the release. Pass one whenever time passed between reading `moe.list_resources` and this call: `taskId` scopes a task, not a lease generation, and that task's lease may have changed hands since.
 - Activity events: `RESOURCE_RELEASED` per released lease (with `forced` flag), then `RESOURCE_GRANTED` per grant.
 
 ---
