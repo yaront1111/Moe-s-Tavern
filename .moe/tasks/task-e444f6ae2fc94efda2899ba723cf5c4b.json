@@ -11,20 +11,27 @@
     {
       "stepId": "step-1",
       "description": "Add the Windows stop seam to the CLI, with its node rows. Edit with the session's editing tool only.\n\n(a) argumentsFor: accept exactly today's 6 tokens, or the same 6 followed by `--stop-file <path>` (8 tokens). The path must be absolute (path.isAbsolute) and contain no CONTROL character. Return it as `stopFile` (undefined without the pair). Every other shape stays RUNNER_CLI_INPUT_INVALID before anything runs: no open, no export, no VM.\n\n(b) runDispatchCli: when input.stopFile is set, arm a watcher just before reportFor and disarm it in a finally.\n- The watcher checks existsSync(stopFile) at once, then every `pollMs` (a new injectable option, default 250), from a setInterval that is unref()'d so it never keeps the process alive.\n- The first hit aborts a local AbortController. The abort is latched: the file disappearing later changes nothing.\n- reportFor receives AbortSignal.any([signal, local.signal]) (CI runs Node 24), or the local signal alone when no `signal` was injected. The stop file and the entry's SIGINT/SIGTERM then take the same path: dispatchFocusedChecks returns RUNNER_ABORTED before the next VM, and runCheckJob's signal deletes the VM in flight.\n- Without --stop-file, pass `signal` through unchanged. moe-agent.sh never passes the flag, so its behavior is unchanged.\n\n(c) Error handling: existsSync returns false on any error, so an unreadable path only means no graceful stop; the wrapper's grace and kill still follow. The path is never printed, and the report stays one JSON line of fixed codes.\n\n(d) Header comment. Explain why the seam exists: Windows cannot deliver SIGTERM to this one process, and a console Ctrl+C reaches every process on the console. State the contract (the file existing means stop; latched; polled; unref'd) and that the sh wrapper never passes it.\n\nTests: new rows in local-runner-dispatch.test.mjs. The existing rows (K, D, CL, CD) must pass unedited. Use pollMs 20 in S1-S3, and exact-value asserts.\n- S1, argv. The 8-token form runs exactly like the 6-token form: the same report and exit 0 for a passing harness run, opened 1. Each of these is refused with opened 0: a missing value, a relative path, a control character in the path, a misspelt flag, a 9th token, and the pair placed before --project.\n- S2, stop mid-run. Drive the real runCheckJob through landedSeam and jobSteps; let jobSteps' session step accept a function of its input. That session creates the stop file, then waits for its `signal` to abort, and fails after 3 s rather than hanging.\n  - Expect no abort while the file is absent (at least 3 polls).\n  - The VM's remove/removed completes before the CLI resolves, and there is no second create.\n  - report.stopped.code is RUNNER_ABORTED, the exit is 2, and the output is one line.\n  - Also: with --stop-file given, aborting the injected `signal` mid-run (the entry's SIGINT/SIGTERM path) still stops the run before the next VM.\n- S3. A stop file that exists before the run: no VM is created, RUNNER_ABORTED, exit 2.\n- S4, the entry. spawnSync the real check-dispatch.mjs with a valid 8-token argv: a temp non-repo --project, MOE_RUNNER_STATE_DIR set to a temp dir in the child env, a stop path that never appears, and timeout 20000. Expect status 2, one fixed-code JSON line, empty stderr and no timeout error. This proves the armed watcher never keeps the process alive.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/check-dispatch.mjs",
         "scripts/tests/local-runner-dispatch.test.mjs"
       ],
-      "startedAt": "2026-11-04T20:49:15.909Z"
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "check-dispatch.mjs: argumentsFor accepts 6 tokens or 8 with a trailing `--stop-file <absolute, no control chars>` (FLAGS gains '--stop-file'); new stopWatch(file, pollMs) (existsSync at once then every pollMs from an unref'd interval, latched abort, close() clears); runDispatchCli gains pollMs (default 250) and passes AbortSignal.any([signal, watch.signal]) (or watch.signal alone) to reportFor, closing the watch in a finally. Without the flag `signal` passes through unchanged. Header comment explains the seam. Tests: jobSteps' session accepts a function of its input; dispatchCli helper gains optional stopFile/signal (pollMs 20); new S1 (argv shapes, 9 refusals with opened 0/loaded 0), S2 (3 variants: file + entry signal, file alone, entry signal alone, through the real runCheckJob via landedSeam: trace RAN with no second create, RUNNER_ABORTED, exit 2), S3 (pre-existing file: only get_context), S4 (real entry spawn exits by itself, status 2, one fixed-code line, empty stderr). WSL node 24.21 27/27, Windows node.exe 24.16 27/27. Mutants: no-abort, any-drops-file, any-drops-signal, no-initial-look, no-abs-check each killed; unref and close individually survive (belt and braces), both removed hangs the run (killed).",
+      "startedAt": "2026-11-04T20:49:15.909Z",
+      "completedAt": "2026-11-04T20:55:47.152Z"
     },
     {
       "stepId": "step-2",
       "description": "Teach R's fake the seam, additively. Never write a second fake.\n- `stopFile = flag('stop-file')`.\n- The check-dispatch row gains `stopAtStart`: null without --stop-file, else fs.existsSync(stopFile) at start.\n- hang, when stopFile is set:\n  - Poll the file every 100 ms from an unref()'d setInterval, so the 300 s self-limit still ends the process.\n  - On the first sight, stop polling and wait 1 s (a stand-in for VM deletion). Then append {tool:'check-dispatch-stop', args:{pid}} and exit 143.\n  - A wrapper that kills without waiting therefore leaves no stop row.\n- hang-hard, when stopFile is set: append the same row once on the first sight and keep waiting. It ignores the stop, as it ignores SIGTERM.\n- Without --stop-file both modes behave exactly as today, so postflight-vm-route.sh's rows stay green unedited.\n- Update the header comment for the new row, the field and both modes.\n\nError handling: a failed existsSync counts as absent, and record() keeps its current behaviour. Edit with the session's editing tool only.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-fake-check-dispatch.js"
-      ]
+      ],
+      "startedAt": "2026-11-04T20:55:48.347Z"
     },
     {
       "stepId": "step-3",
@@ -80,7 +87,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:38:55.700Z",
-  "updatedAt": "2026-11-04T20:49:15.909Z",
+  "updatedAt": "2026-11-04T20:55:48.347Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T16:04:04.872Z",
@@ -89,7 +96,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-04T16:04:17.535Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -99,7 +107,9 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T16:27:54.911Z",
   "executionContract": {
