@@ -13,45 +13,72 @@
     {
       "stepId": "step-1",
       "description": "Write the regression test first. Create packages/moe-daemon/src/state/finalizingCloseRetry.test.ts with your own editor (Write on Claude, apply_patch on codex exec), never a shell copy or a subagent: the TOOL witness matters at landing (global rail). Start from the architect's dry-run prototype /mnt/d/moe-scratch/plan-efe07ce5/finalizingCloseRetry.test.ts (151 lines, 11 tests, ToolTestHarness).\n\nThe fixture seeds task-1 in REVIEW, unassigned, reopenCount 1, both plan steps COMPLETED and workStartedAt as the round start. worker-1 is registered IDLE. Its attempt on task-1 is opened with openAttempt (workspaceMode 'worktree' unless the case says otherwise), then set finalizing with setAttemptPhase, the same pattern as tools/finalizeAttempt.test.ts:424-429.\n\nCases:\n(a) it.each over the three close paths. Each must leave the attempt [[1,'closed']] and the task WORKING, unassigned, reopenCount 1, implementationPlan and stepsCompleted unchanged. landingRetry must equal { reason: 'contention', paths: [], rescueRef: 'refs/heads/moe/task/task-1', targetTip: null, count: 1, at: any string }, plus one moe-daemon comment naming the attempt id, worker-1, 'no completion recorded', 'Landing unlanded (contention) 1 time(s)' and 'task WORKING'. The paths:\n  - the moe.deregister_worker tool (deregisterWorkerTool handler, reason terminal_closed, result success and releasedTaskIds []);\n  - the DEAD-record prune: updateWorker DEAD, then state.deleteWorker;\n  - the startup purge: updateWorker DEAD, reconcileRunningAttempts, then state.purgeAllWorkers.\n(b) A completion recorded before this round started does not count, so the row still routes.\n(c) it.each, the plain close is kept (attempt closed; status, assignee, comment count unchanged; landingRetry undefined) for:\n  - a completion recorded this round;\n  - a 'shared' attempt;\n  - a mode-less (legacy) attempt;\n  - a row no longer in REVIEW (WORKING);\n  - a REVIEW row another seat holds (assignedWorkerId 'qa-1').\n(d) A prior landingRetry with count 2 becomes count 3, and the row goes BLOCKED with blockedFromStatus 'WORKING', exactly as finalize's unlanded route.\n(e) updateTask rejected once (vi.spyOn mockRejectedValueOnce): deregister still succeeds, the attempt is closed, the row stays REVIEW and landingRetry stays undefined.\n\nRED: run the step-5 checkRef now, before steps 2-3. It must exit 1 at its first stage with exactly 5 failures in this file ((a) x3, (b) and (d)) and 6 passes. The architect's run at d1062cb0 gave 'Tests 5 failed | 110 passed (115)' across the 3 focused files. Put your RED in the step summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/finalizingCloseRetry.test.ts"
       ],
-      "startedAt": "2026-11-04T05:52:30.688Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/finalizingCloseRetry.test.ts"
+      ],
+      "note": "New state/finalizingCloseRetry.test.ts (11 tests, Write tool). RED via the step-5 checkRef at HEAD 9224de15 before steps 2-3: tsc --noEmit and tsc -p tt.json clean; stage 1 'Test Files 1 failed | 2 passed (3)' / 'Tests 5 failed | 110 passed (115)', EXIT=1. The 5 failures are exactly (a) x3 (deregister, deleteWorker prune, startup purge), (b) prior-round completion, (d) third unlanded -> BLOCKED; all AssertionError on status (REVIEW, not WORKING/BLOCKED). The 6 plain-close/failed-write cases pass on today's code.",
+      "startedAt": "2026-11-04T05:52:30.688Z",
+      "completedAt": "2026-11-04T05:54:15.662Z"
     },
     {
       "stepId": "step-2",
       "description": "Share finalize's unlanded routing; finalize's behavior must not change. Move the body of `if (params.unlanded) { ... }` in applyTaskOutcome (packages/moe-daemon/src/tools/finalizeAttempt.ts:153-172) into a new export in packages/moe-daemon/src/state/workerLifecycle.ts:\n  export async function routeUnlandedLanding(state, task: Task, attempt: Pick<ExecutionAttempt,'id'|'generation'>, unlanded: Omit<LandingRetry,'count'|'at'>, actor: string, note?: string): Promise<Task>\nIt is the same count, status, comment, routing and BLOCKED logic, and the same updateTask call. The one change: a given `note` opens the comment, as `${note} Landing unlanded (...`. With no note, the comment and the blockedReason are byte-identical to today's.\n\nIn finalizeAttempt.ts, applyTaskOutcome's branch becomes `if (params.unlanded) return routeUnlandedLanding(state, task, attempt, params.unlanded, actor);`. Replace its now-unused `import { generateId } from '../util/ids.js';` with `import { routeUnlandedLanding } from '../state/workerLifecycle.js';`. The LandingRetry type import stays, because FinalizeParams uses it.\n\nworkerLifecycle.ts gains the ExecutionAttempt and LandingRetry type imports and `import { generateId } from '../util/ids.js';`. Give the helper a docblock: the one definition behind finalize's 'unlanded' outcome and the close routing in step 3; caller holds state.mutex.\n\nNo import cycle: tools already import state/workerLifecycle.js (claimNextTask, deregisterWorker, releaseTask), and no state module imports tools/. finalizeAttempt.test.ts pins the comment text, BLOCKED rule and counting, and must pass unchanged.\n\nThe dry-run diff is /mnt/d/moe-scratch/plan-efe07ce5/code.diff (2 files, +73/-22, steps 2 and 3 together). Use your own editor (Edit, apply_patch or a Serena editor), never a shell write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/workerLifecycle.ts",
         "packages/moe-daemon/src/tools/finalizeAttempt.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts"
+      ],
+      "note": "Moved applyTaskOutcome's unlanded body into exported routeUnlandedLanding(state, task, attempt, unlanded, actor, note?) in state/workerLifecycle.ts (docblock: one definition for finalize 'unlanded' and the close routing; caller holds state.mutex). finalizeAttempt.ts: branch is now `if (params.unlanded) return routeUnlandedLanding(state, task, attempt, params.unlanded, actor);`, generateId import swapped for routeUnlandedLanding. Fidelity: the 18-line moved body diffed against `git show HEAD:...finalizeAttempt.ts` :154-171 is IDENTICAL once the note prefix and params.unlanded->unlanded rename are normalised. No cycle (workerLifecycle imports no tools/ module). Tests run at step 5.",
+      "startedAt": "2026-11-04T05:54:16.474Z",
+      "completedAt": "2026-11-04T05:54:54.378Z"
     },
     {
       "stepId": "step-3",
       "description": "Route the close. In closeOwnFinalizingAttempts (packages/moe-daemon/src/state/workerLifecycle.ts:248), right after `announceAttemptClosed(state, attempt.taskId);`, add `await retryUnrecordedLanding(state, attempt);`. That is a new, non-exported function, given in code.diff:\n- Error handling: the whole body sits in try/catch. On error: logger.warn({ workerId, attemptId, taskId, error }, '... the row stays in REVIEW'). It never throws, so deregister, the prune and the purge never fail on it, and the close stands.\n- The predicate: attempt.workspaceMode === 'worktree', and state.getTask(attempt.taskId) exists, has status 'REVIEW', has no assignedWorkerId, and completionCommitsForReview(task).length === 0. Import completionCommitsForReview from '../delivery/policy.js'; state/taskStore.ts already imports that module, so this adds no cycle.\n- The route: routeUnlandedLanding(state, task, attempt, { reason: 'contention', paths: [], rescueRef: `refs/heads/moe/task/${task.id}`, targetTip: null }, attempt.workerId, a note). The note is `The runner of ${attempt.workerId} ended mid-landing: attempt ${attempt.id} was closed with no completion recorded for this round.`\n\nWhy:\n- 'contention' is a reason both launchers already accept (moe-agent.sh:7984 and its ps1 twin), so no launcher edit is needed.\n- The task branch is the ref that holds the bytes: L0-L2 committed W there, and the next pre-flight's recovery checkpoint commits any dirt W still has.\n- The 3rd unlanded landing in a row goes BLOCKED, exactly as finalize's route does.\n- The unassigned guard means a row another seat holds is never yanked.\n\nKeep:\n- The close first and unconditional (task-686afecb's rail: never close or release on an idle signal).\n- The DEAD-record backstop DEAD-only. state/workerStore.ts needs no change: deleteWorker (:249) and purgeAllWorkers (:372) already call closeOwnFinalizingAttempts, so they inherit the routing.\n- No git reads. A commit a dead runner published without recording it is settled by the next pre-flight's receipt replay.\n\nAlso add one sentence about the routing to the 'WHAT IT IS NOT' paragraph of closeOwnFinalizingAttempts' docblock (:228-234).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/workerLifecycle.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts"
+      ],
+      "note": "closeOwnFinalizingAttempts now calls `await retryUnrecordedLanding(state, attempt)` right after announceAttemptClosed (the close stays first and unconditional; a failed close still `continue`s before it). New private retryUnrecordedLanding: try/catch around everything, logger.warn on error ('... the row stays in REVIEW'), never throws. Predicate: workspaceMode 'worktree' && task exists && status REVIEW && !assignedWorkerId && completionCommitsForReview(task).length === 0 (imported from ../delivery/policy.js). Route: routeUnlandedLanding(..., { reason 'contention', paths [], rescueRef `refs/heads/moe/task/<id>`, targetTip null }, attempt.workerId, note naming the worker, the attempt and 'no completion recorded for this round'). One sentence added to the 'WHAT IT IS NOT' docblock paragraph. workerStore.ts untouched; no git reads. workerLifecycle.ts was already 379 lines at HEAD (now 453), placement is the approved scope.",
+      "startedAt": "2026-11-04T05:54:55.335Z",
+      "completedAt": "2026-11-04T05:55:24.398Z"
     },
     {
       "stepId": "step-4",
       "description": "Sync the docs and comments. Use your own editor (Edit on Claude, apply_patch on codex), never Serena for docs/ (it ignores the folder) and never a shell write. Re-grep each heading first; the line numbers are from d1062cb0. Edit only these spots; two open rows (87cba58c, 1f84f4e4) own other docs/MCP_SERVER.md sections.\n(1) docs/MCP_SERVER.md `### moe.deregister_worker` (:2166). In the '**Closes its own finalizing attempts, first.**' list, add a bullet after '**It is not evidence of a landing.**', titled '**A worktree landing with nothing recorded goes back for a retry.**'. Its content:\n  - the predicate: a worktree attempt (`workspaceMode: 'worktree'`) whose task is in REVIEW, held by no seat, with no `completion` entry in `task.commits` for the current work round (the round qa_approve's commit gate counts);\n  - why: nothing is known to have published, and QA's landed gate would park the row BLOCKED;\n  - the routing, exactly as finalize_attempt's `unlanded`: reason `contention`, no paths, `rescueRef` = the task branch `refs/heads/moe/task/<taskId>`, no target tip. landingRetry is set, one moe-daemon comment names the attempt, and the row goes WORKING, unassigned, keeping reopenCount and its completed steps (BLOCKED on the third unlanded landing in a row);\n  - the next worker's pre-flight merges the target and prompts `LANDING-RETRY: contention`;\n  - every other row keeps the plain close (a completion recorded for the round, a shared-mode or mode-less attempt, a row not in REVIEW, one another seat holds);\n  - no git reads (the receipt replay settles an unrecorded publish); a failed routing write is logged and the close stands;\n  - removing a DEAD record routes the same way.\n(2) docs/MCP_SERVER.md `### moe.finalize_attempt` (:602), the '**Every end of a finalizing attempt.**' list. Item 2 (deregister_worker) gains that such a close also routes the row back for a landing retry, as `unlanded` does (see moe.deregister_worker). Item 5 (removing a DEAD record) gains 'with the same landing-retry routing as item 2'.\n(3) docs/SCHEMA.md:\n  - :501 landingRetry comment: set by finalize_attempt 'unlanded', or by the finalizing close of a worktree landing with no completion recorded.\n  - :847: replace 'Only `moe.finalize_attempt` writes it: ...' with the two writers: finalize 'unlanded', and closing a worktree attempt whose REVIEW task has no completion recorded for its round (moe.deregister_worker, or removing a DEAD worker record), with reason 'contention' and the task branch as rescueRef. Landed and nothing-to-commit still null it.\n  - :855 rescueRef comment: a refs/moe/rescue/<taskId>/... ref, or the task branch refs/heads/moe/task/<taskId> when a finalizing close set the retry.\n(4) packages/moe-daemon/src/types/schema.ts, comment-only: the :1063 landingRetry doc comment ('finalize_attempt alone sets ...') names both writers, and the :873 rescueRef comment adds the task-branch case.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md",
         "docs/SCHEMA.md",
         "packages/moe-daemon/src/types/schema.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Edit tool only. docs/MCP_SERVER.md: ### moe.deregister_worker gains the bullet '**A worktree landing with nothing recorded goes back for a retry.**' after 'It is not evidence of a landing' (predicate, why, routing as unlanded: contention / no paths / task-branch rescueRef / no target tip, WORKING unassigned keeping reopenCount and steps, BLOCKED on the 3rd, LANDING-RETRY: contention, plain-close list, no git reads, failed write logged, DEAD-record removal routes the same). ### moe.finalize_attempt 'Every end of a finalizing attempt' items 2 and 5 extended. No other section touched. docs/SCHEMA.md :501, :847 (two writers; landed/nothing-to-commit null it), :855 rescueRef. types/schema.ts comment-only at the LandingRetry.rescueRef and Task.landingRetry doc comments.",
+      "startedAt": "2026-11-04T05:55:25.204Z",
+      "completedAt": "2026-11-04T05:56:09.669Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written. The same text (971 chars) is at /mnt/d/moe-scratch/plan-efe07ce5/checkref-gate.txt.\n\nWhat it does (mem:convention-daemon-full-suite-gate-checkref, mem:gotcha-harness-snapshot-needs-full-archive):\n- It overlays the six owned files (the two runtime files, the new test, types/schema.ts and both docs) onto a whole-tree `git archive HEAD` snapshot made by mktemp, outside the repo.\n- Under env -i, with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci`, `tsc --noEmit`, then `tsc -p tt.json`, which types the new test.\n- Stage 1 runs vitest on finalizingCloseRetry, attemptHandback and finalizeAttempt, and pins '(11 tests)'.\n- Stage 2 runs the full `npm test` (plain `vitest run`, no pretest), as DoD 3 asks.\n\nExpected, from the architect's dry run of the prototype at d1062cb0: stage 1 'Test Files 3 passed (3)' / 'Tests 115 passed (115)'; full suite 'Test Files 281 passed (281)' / 'Tests 7445 passed | 24 skipped (7469)'; exit 0, about 50 s. Your counts may differ by the tests siblings landed since.\n\nRules:\n- Never run npm in the shared checkout (global rail).\n- Never pass TMPDIR into the env -i.\n- The outer command needs bash, for its brace expansion.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T05:56:10.471Z"
     },
     {
       "stepId": "step-6",
@@ -77,11 +104,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:33:38.409Z",
-  "updatedAt": "2026-11-04T05:52:30.688Z",
+  "updatedAt": "2026-11-04T05:56:10.471Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T05:36:24.918Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 6
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -94,7 +122,12 @@
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:50:33.740Z",
   "executionContract": {

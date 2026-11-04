@@ -1,0 +1,34 @@
+{
+  "id": "task-3416b309111740aa800b0e03bcb836e8",
+  "epicId": "epic-be924fb8",
+  "title": "bug: QA's landed gate exits the whole QA wrapper (worktree_stop → exit 1) on a row-level miss such as no recorded completion commit, so every landed-gate park permanently costs a QA seat until a human relaunches it: qa-7328a40d on 7cef0861 (11-03 22:44Z) and qa-58a8e460 on 87cba58c (11-04 05:25Z) (both launchers)",
+  "description": "Seen twice. The seat is lost each time:\n- 2026-11-03 22:44:34Z: qa-7328a40d's pre-flight on task-7cef0861 printed MOE_CONTROL_CHECKOUT_BEHIND \"no recorded completion commit\" and report_blocked the row. At 22:44:35Z the #general system line says \"qa-7328a40d left (unexpected_exit:1)\".\n- 2026-11-04 05:25:21Z: qa-58a8e460 on task-87cba58c, same code. At 05:25:21.925Z: \"qa-58a8e460 left (unexpected_exit:1)\", and its .moe/workers record is DEAD.\nAfter the second loss the board was down to 2 QA seats with 7 REVIEW rows queued.\n\nCause:\n- qa_landed_gate (scripts/moe-agent.sh:7068, called at :11005) routes every miss through worktree_stop (:3227).\n- worktree_stop prints the code, sends one report_blocked, stops the sidecar and runs `exit 1`. The EXIT trap then deregisters the seat.\n- The ps1 twin does the same: Assert-MoeQaLandedCommit (moe-agent.ps1:6536, called at :10244) goes through Stop-MoeWorktreeSeat (:3115).\n- worktree_stop was written for worker provisioning guards (git too old, the control checkout not on moe/control, a path too long). Those are seat-level conditions that would recur on every iteration, so stopping the seat is right there.\n- \"This task has no recorded completion commit\" is a fact about one row. The report_blocked has already parked that row (a non-resource block by the assignee frees the seat), so the next claim would pick a different REVIEW row. Exiting only removes review capacity, with no human told to relaunch.\n\nExpected:\n- For a row-level miss, at least the no-recorded-completion case, the QA pre-flight parks the row with its one report_blocked, launches no CLI, and goes back to the loop top for a fresh pre-flight and claim, as after any other ended session. The seat stays registered.\n- Keep stopping the seat for seat-level failures, such as a control HEAD that cannot be read. Classify the other branches (completion not a commit; completion not in the control HEAD after a successful follow), and document the split.\n- Placement: scripts/moe-agent.{sh,ps1} are shared with open rows on other functions: cc4213c0 (REVIEW, the sh VM-route outage), 561d347c (PLANNING, wt_publish's journal), 62ec51f1 and d861f3de (the ps1 VM route). That needs no edge in worktree mode. Put the new harness arm in its own block, and edit both twins with a TOOL-witnessed editor, then run bash -n / ParseFile.",
+  "definitionOfDone": [
+    "In both launchers, a QA pre-flight whose task has no recorded completion commit report_blocks that row once, launches no CLI, and continues to a fresh pre-flight instead of exiting. A harness arm (postflight-worktree.cjs or the worktree landing harness) shows the same seat claiming and starting a second REVIEW row after the park. The arm fails on today's wrappers.",
+    "A seat-level failure (for example an unreadable control HEAD) still stops the seat as today. The split between the gate's branches is stated in scripts/CLAUDE.md (the qa_landed_gate sentence under Control follow) and in the design doc's QA-gate text.",
+    "parity-check.{sh,ps1} passes, bash -n and the ps1 ParseFile check pass, and the existing postflight-worktree and worktree-landing arms stay green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 478.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T05:54:04.824Z",
+  "updatedAt": "2026-11-04T05:54:10.001Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T05:54:07.529Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}

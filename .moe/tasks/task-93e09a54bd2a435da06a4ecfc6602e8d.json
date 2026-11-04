@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -75,17 +75,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:00:00.696Z",
-  "updatedAt": "2026-11-04T05:28:12.694Z",
+  "updatedAt": "2026-11-04T05:57:07.654Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:19:35.281Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T05:56:42.554Z",
+    "wallClockMs": 20227273
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
     "worker-fdb2af60",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-1cd86a39"
   ],
   "tier": "light",
   "effort": "high",
@@ -190,9 +193,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T05:24:16Z",
-    "at": "2026-11-04T05:28:12.694Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T05:54:29Z",
+    "at": "2026-11-04T05:57:07.653Z"
+  },
+  "completedAt": "2026-11-04T05:56:42.554Z",
+  "reviewCompletedAt": "2026-11-04T05:56:42.554Z",
+  "reviewSummary": "Approved. Reviewed completion d7e17aa3 (on moe/work-2026-10-24, in control HEAD 4469377b): +72/-1, 2 files only (StateManager.ts +4/-1, new legacyTaskBackfill.test.ts +68); under the size cap. setTaskStatus.ts, WebSocketServer.ts, taskStore.ts, qaReject.ts untouched (invariants hold). Re-ran the plan's checkRef myself in a git-archive snapshot outside the shared checkout: npm ci, tsc --noEmit and the tt.json typecheck clean; stage 1 (DoD command over legacyTaskBackfill, StateManager, setTaskStatus tests) 3 files/164 tests passed; stage 2 full daemon suite 285 files/7464 passed, 24 skipped; exit 0. Negative control: with the fix line deleted in the snapshot, legacyTaskBackfill.test.ts fails 2 of 3 ('reopenCount must be a non-negative integer', taskStore.ts:488); only the null case passes (null+1=1), as predicted, so the tests catch the bug. DoD 1: missing/null/-1/1.5/'2' load as 0, 3 is kept. DoD 2: set_task_status ARCHIVED->BACKLOG (no workerId) stores BACKLOG + reopenCount 1 in memory and in the file, for no-key and null rows. DoD 3: passes in snapshot. load() file bytes pinned unchanged by the test. Backfill is in-memory only in load()'s existing loop; Number.isInteger rejects NaN/Infinity/strings/null/fractions, <0 catches negatives; valid counts preserved, so a FileWatcher reload cannot reset a count. updateTask's check stays as the backstop. No docs change needed (MCP_SERVER.md:1649, SCHEMA.md:488 already state it). Complexity pass: nothing to cut. Snapshot removed; no npm run in the shared checkout.",
+  "requiredCheckAtDone": null
 }
