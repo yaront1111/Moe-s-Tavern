@@ -1173,8 +1173,13 @@ type WorkerType =
   | 'CODEX'     // OpenAI Codex CLI
   | 'GEMINI'    // gemini mode: runs the Antigravity CLI (agy)
   | 'GROK';     // xAI Grok Build CLI
-// NOTE: the daemon cannot see which CLI a worker runs — claim_next_task / join_team
-// record every worker as 'CLAUDE' today; CODEX / GEMINI / GROK are reserved values.
+// NOTE: worker.type is the CLI a seat reports; the daemon cannot check which CLI really runs.
+// The launchers (scripts/moe-agent.{sh,ps1}) export MOE_WORKER_TYPE from the CLI they start:
+// CLAUDE, CODEX, GEMINI or GROK (any other command is CLAUDE). moe-proxy adds it as workerType
+// to claim_next_task and join_team unless the call sets its own. The daemon keeps an exact,
+// case-sensitive name and records any other value as 'CLAUDE'. An omitted workerType keeps an
+// existing record's type and makes a new record 'CLAUDE'. A governor record that
+// enter_governance rebuilds after a purge is 'CLAUDE' until the seat reports again.
 
 type WorkerStatus =
   | 'IDLE'              // Connected, no task
