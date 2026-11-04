@@ -98,7 +98,9 @@ class MoeDaemonSupervisorTest {
         val pairs = listOf("/mnt/d/proj" to "D:\\proj", "D:/proj/" to "D:\\proj",
             "d:\\PROJ" to "D:\\proj", "D:\\proj" to "/mnt/d/proj", "\\\\wsl$\\Ubuntu\\home\\me\\p" to "/home/me/p")
         pairs.forEach { (path, base) -> assertTrue(path, MoeDaemonSupervisor.isSameProject(path, base)) }
-        assertTrue("relative paths need canonical fallback", MoeDaemonSupervisor.isSameProject(".", File(".").canonicalPath))
+        // A relative daemon.json projectPath names the daemon's cwd, but File(".") is the IDE's cwd, so the old canonical match
+        // was a coincidence. VS Code refuses it too, and since 9f6857ee the daemon records an absolute path.
+        assertFalse("a relative spelling never reaches the disk check", MoeDaemonSupervisor.isSameProject(".", File(".").canonicalPath))
         listOf("D:\\other", "/mnt/d/other").forEach { assertFalse(MoeDaemonSupervisor.isSameProject(it, "D:\\proj")) }
     }
 

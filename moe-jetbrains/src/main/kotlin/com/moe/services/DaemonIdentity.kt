@@ -24,7 +24,11 @@ import java.util.concurrent.TimeUnit
  * (the caller deletes daemon.json and spawns a second daemon), so the rule errs toward [Same] or
  * [Unknown]: only an absolute served path that differs by [DaemonIdentityProbe.comparableProjectPath]
  * and is not the same directory on disk (a symlink or junction to it) is Foreign, the rule of
- * [DaemonIdentityProbe.isSameProjectPath]. A relative one is Unknown, because /health reports the
+ * [DaemonIdentityProbe.isSameProjectPath]. The disk check runs only for two local host-absolute
+ * spellings: the served path comes from any local listener (and daemon.json from repository content), and
+ * on Windows resolving a UNC or device spelling on disk opens an SMB session to the named host (NTLM
+ * exposure). Such a spelling is Foreign unless it equals ours by comparableProjectPath, which still folds
+ * WSL-share spellings. A relative one is Unknown, because /health reports the
  * daemon's raw --project, relative to a cwd the IDE cannot know. The twin is moe-proxy's
  * packages/moe-proxy/src/daemonIdentity.ts, over comparableProjectPath in packages/moe-proxy/src/utils.ts.
  */
@@ -47,6 +51,10 @@ object DaemonIdentityProbe {
     private val MNT_DRIVE = Regex("^/mnt/([A-Za-z])(?:/(.*))?$")
     private val WSL_SHARE = Regex("^//(?:wsl\\$|wsl\\.localhost)/[^/]+(/.*)?$", RegexOption.IGNORE_CASE)
     private val ABSOLUTE = Regex("^(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]|/)")
+
+    /** Two leading separators of either kind: UNC (`\\host\share`, `//host/share`) and device (`\\?\`, `\\.\`) forms. */
+    private val NETWORK_OR_DEVICE = Regex("""^[\\/]{2}""")
+    private val DRIVE_ABSOLUTE = Regex("""^[A-Za-z]:[\\/]""")
 
     /**
      * GETs http://127.0.0.1:[port]/health. Never throws. The whole exchange (connect, status line,
@@ -84,16 +92,37 @@ object DaemonIdentityProbe {
 
     /**
      * Whether [path] and [base] name one project: equal [comparableProjectPath] spellings, else the same
-     * directory on disk. The disk check is best effort and never throws: an unreadable or unparsable
-     * path (a WSL path on Windows) just answers false.
+     * directory on disk, but only when both spellings are [isLocalHostAbsolute]. daemon.json is repository
+     * content, and /health and STATE_SNAPSHOT come from any local listener, so [path] is hostile input: on
+     * Windows `File.canonicalPath` or `Files.isSameFile` on a UNC or device spelling opens an SMB session to
+     * the named host (NTLM exposure), and a relative spelling names the daemon's cwd, not the IDE's. Those
+     * are answered by the comparable spelling alone, as VS Code's isSameProject does. WSL-share spellings
+     * (`\\wsl$\...`, `//wsl.localhost/...`) still match, because [comparableProjectPath] folds them first.
+     * The disk check never throws: an unreadable or unparsable path just answers false.
      */
     fun isSameProjectPath(path: String, base: String): Boolean =
-        comparableProjectPath(path) == comparableProjectPath(base) || sameDirectoryOnDisk(path, base)
+        comparableProjectPath(path) == comparableProjectPath(base) ||
+            (isLocalHostAbsolute(path) && isLocalHostAbsolute(base) && sameDirectoryOnDisk(path, base))
 
-    /** File.canonicalPath resolves a POSIX symlink and a relative path; Files.isSameFile also a Windows junction. */
-    private fun sameDirectoryOnDisk(path: String, base: String): Boolean =
+    /**
+     * An absolute path of the host OS (a drive path on Windows, a POSIX root elsewhere) that does not start
+     * with two separators of either kind. That leaves out UNC (`\\host\share`, `//host/share`) and device
+     * (`\\?\`, `\\.\`) forms, which Windows resolves over the network. A pure string check: it never throws.
+     */
+    internal fun isLocalHostAbsolute(path: String, windows: Boolean = MoeDaemonSupervisor.isWindowsHost()): Boolean =
+        !NETWORK_OR_DEVICE.containsMatchIn(path) &&
+            if (windows) DRIVE_ABSOLUTE.containsMatchIn(path) else path.startsWith("/")
+
+    /**
+     * The disk identity check: File.canonicalPath resolves a POSIX symlink, Files.isSameFile also a Windows
+     * junction. Reached only through the [isLocalHostAbsolute] guard of [isSameProjectPath]; tests replace
+     * it to see which spellings reach the disk.
+     */
+    @Volatile
+    internal var sameDirectoryOnDisk: (String, String) -> Boolean = { path, base ->
         runCatching { File(path).canonicalPath == File(base).canonicalPath }.getOrDefault(false) ||
             runCatching { Files.isSameFile(Paths.get(path), Paths.get(base)) }.getOrDefault(false)
+    }
 
     /**
      * A form of [path] comparable across Windows, WSL and UNC spellings, whatever OS the IDE runs on:

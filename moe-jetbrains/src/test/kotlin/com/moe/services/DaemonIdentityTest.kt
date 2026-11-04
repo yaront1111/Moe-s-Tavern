@@ -32,9 +32,11 @@ class DaemonIdentityTest {
     private val rawServers = mutableListOf<ServerSocket>()
     private val links = mutableListOf<Path>()
     private val dirs = mutableListOf<Path>()
+    private val realDiskCheck = DaemonIdentityProbe.sameDirectoryOnDisk
 
     @After
     fun tearDown() {
+        DaemonIdentityProbe.sameDirectoryOnDisk = realDiskCheck
         servers.forEach { it.stop(0) }
         executors.forEach { it.shutdownNow() }
         rawServers.forEach { it.close() }
@@ -291,6 +293,59 @@ class DaemonIdentityTest {
         for (path in listOf("", "  ", ".", "..", "./x", "sub/p", "D:x", "D:", "\\x", "~/p", "1:/x", " /x", "\\\\\\x")) {
             assertFalse(path, DaemonIdentityProbe.isAbsoluteAnyOs(path))
         }
+    }
+
+    @Test
+    fun `a UNC or device spelling never reaches the disk check and is Foreign`() {
+        val local = tempDir("moe-id-local").toString()
+        val asked = CopyOnWriteArrayList<Pair<String, String>>()
+        // A disk check that says Same: only the guard can keep these spellings Foreign, and no run opens SMB.
+        DaemonIdentityProbe.sameDirectoryOnDisk = { a, b -> asked += a to b; true }
+        for (spelling in listOf("""\\host\share\x""", "//host/share/x", """\\?\UNC\host\share\x""", """\\.\C:\x""", """\\?\C:\x""")) {
+            assertEquals(spelling, DaemonIdentity.Foreign(spelling), DaemonIdentityProbe.classify(200, health(spelling), local))
+            assertFalse(spelling, MoeDaemonSupervisor.isSameProject(spelling, local))
+            assertFalse(spelling, DaemonIdentityProbe.isSameProjectPath(local, spelling))
+        }
+        assertEquals(emptyList<Pair<String, String>>(), asked)
+    }
+
+    @Test
+    fun `two local spellings that differ still reach the disk check`() {
+        val local = tempDir("moe-id-local").toString()
+        val other = tempDir("moe-id-other").toString()
+        val asked = CopyOnWriteArrayList<Pair<String, String>>()
+        DaemonIdentityProbe.sameDirectoryOnDisk = { a, b -> asked += a to b; false }
+        assertEquals(DaemonIdentity.Foreign(other), DaemonIdentityProbe.classify(200, health(other), local))
+        assertEquals(listOf(other to local), asked)
+    }
+
+    @Test
+    fun `a relative spelling is answered by its spelling alone`() {
+        val local = tempDir("moe-id-local").toString()
+        val asked = CopyOnWriteArrayList<Pair<String, String>>()
+        DaemonIdentityProbe.sameDirectoryOnDisk = { a, b -> asked += a to b; true }
+        for (spelling in listOf(".", "proj", "sub/p", "D:proj", """\proj""")) {
+            assertFalse(spelling, MoeDaemonSupervisor.isSameProject(spelling, local))
+            assertFalse(spelling, DaemonIdentityProbe.isSameProjectPath(local, spelling))
+        }
+        assertEquals(emptyList<Pair<String, String>>(), asked)
+    }
+
+    @Test
+    fun `isLocalHostAbsolute keeps network, device and relative spellings off the disk`() {
+        val windowsYes = listOf("""D:\x""", "d:/x", """D:\""", "D:/")
+        val windowsNo = listOf(
+            """\\host\share\x""", "//host/share/x", """\\?\UNC\host\share\x""", """\\?\D:\x""", """\\.\C:\x""", "//?/D:/x",
+            """\/host/x""", "/x", "/mnt/d/x", """\x""", "D:x", "D:", ".", "proj", "", " D:/x",
+        )
+        val posixYes = listOf("/x", "/", "/mnt/d/x", "/home/u/p")
+        val posixNo = listOf(
+            "//host/share/x", """\\host\share\x""", "//wsl$/Ubuntu/x", """/\host""", """D:\x""", "d:/x", ".", "proj", "", """\x""", " /x",
+        )
+        for (path in windowsYes) assertTrue("windows $path", DaemonIdentityProbe.isLocalHostAbsolute(path, windows = true))
+        for (path in windowsNo) assertFalse("windows $path", DaemonIdentityProbe.isLocalHostAbsolute(path, windows = true))
+        for (path in posixYes) assertTrue("posix $path", DaemonIdentityProbe.isLocalHostAbsolute(path, windows = false))
+        for (path in posixNo) assertFalse("posix $path", DaemonIdentityProbe.isLocalHostAbsolute(path, windows = false))
     }
 
     private fun probe(status: Int, body: String, own: String = OWN): DaemonIdentity =
