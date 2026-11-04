@@ -31,18 +31,25 @@
     {
       "stepId": "step-2",
       "description": "SERVICE: connect() keeps that daemon.json too. The step-1 editor rule applies.\n\n1. MoeProjectService.kt, connect(): at the top of the if (!daemonSupervisor.isReachable(daemonInfo)) { branch, before its deleteDaemonInfoIfUnchanged call:\n   // A live daemon bound off 127.0.0.1 is out of reach, not stale. Its bind is the operator's choice: keep its daemon.json\n   // and schedule no reconnect, which would only overwrite this status. Restart Daemon tries again.\n   daemonSupervisor.offLoopbackBindRefusal(daemonInfo)?.let {\n       connecting = false\n       publishStatus(false, it)\n       return\n   }\n   - The rest of the branch (the delete, its log line, the status and scheduleReconnect) stays byte-identical. This branch decides alone whenever ensureDaemonRunning returned before reading daemon.json: a restart in flight, an unresolved Windows tree, or a protected replacement in flight. Without the guard it would delete the file the supervisor just kept.\n   - Scheduling no retry follows the selectionRefusal precedent a few lines above.\n   - connectWithRetry is unchanged: it runs only after this plugin spawned a daemon, and it deletes nothing.\n\n2. MoeProjectForeignDaemonTest.kt: add two tests. This file already has the fixture a connect() case needs: a temp project, the service's status listener, and the daemonSupervisor injection used by `connect and readiness retry reach health without probing an other-side pid`. MoeProjectServiceTest's fake project has no basePath, so it is not used. Inject MoeDaemonSupervisor(f.basePath, \"Test\", portProbe = { _, _ -> false }, processAliveProbe = ..., processStarter = ...) through the daemonSupervisor field, exactly as that test does.\n   - `BH4 connect keeps a live off-loopback daemon's json, starts nothing and schedules no reconnect` (DoD 2). Write Gson().toJson(f.writeDaemonJson(\"S1\").copy(bindHost = \"::1\")) to f.daemonJson; before = its text. Use processAliveProbe = { it == 4242 } and a processStarter that counts its calls and throws. Call f.service.connect(). Assert: the daemon.json text equals before; there were 0 starts; some status contains \"::1\" and \"127.0.0.1\"; the reconnectFuture field is null; the wsClient field is null; f.assertNoWebSocketRequest().\n   - `BH5 connect's own stale check removes every record but a live off-loopback one`. Rows (bindHost, alive, kept): (\"::1\", true, true), (null, true, false), (\"wsl\", true, false), (\"::1\", false, false), each in its own withFixture. Before connect(), set the injected supervisor's private windowsRestartInFlight AtomicBoolean to true by reflection. Write the FQN java.util.concurrent.atomic.AtomicBoolean and add no import. ensureDaemonRunning then returns before it reads daemon.json, so connect()'s own branch decides alone. Assert per row: when kept, the text equals before, else the file is gone; f.statuses.any { \"::1\" in it } == kept; (reconnectFuture == null) == kept.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
       ],
-      "startedAt": "2026-11-04T07:15:22.426Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "note": "connect(): offLoopbackBindRefusal guard at the top of the !isReachable branch (connecting=false, publishStatus, return; no scheduleReconnect); rest of the branch byte-identical. Tests BH4 and BH5 in MoeProjectForeignDaemonTest plus a private injectSupervisor helper (the same reflection as the existing other-side test; no existing test edited). Windows gradlew.bat runs under jetbrains-gradle: (1) BH* of both classes with only step 1's guard: 5 tests, 2 failed, BH1-BH3 green (step 1 GREEN), BH4 and BH5's (::1, true, true) row failed with daemon.json 'was null' (connect() deleted it) = RED; (2) after the guard, --tests MoeDaemonSupervisorTest + MoeProjectForeignDaemonTest --rerun: BUILD SUCCESSFUL, supervisor tests=94 skipped=2 failures=0 errors=0 BH=3, foreign tests=12 failures=0 errors=0 BH=2.",
+      "startedAt": "2026-11-04T07:15:22.426Z",
+      "completedAt": "2026-11-04T07:16:59.029Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE, fresh. WSL has no JDK, so this is the Windows route (mem:gotcha-jetbrains-gradle-from-wsl); label it Windows in complete_task. Hold the jetbrains-gradle lease only around each Gradle run: moe.acquire_resource right before it and moe.release_resource right after, even on failure (mem:convention-jetbrains-gradle-lease). Edit only what a finding needs, with the step-1 editor rule.\n\n1. Mutants first, in an archive copy, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, section 'Worker variant: uncommitted diff'). Run each with --tests on com.moe.services.MoeDaemonSupervisorTest and com.moe.services.MoeProjectForeignDaemonTest. A kill counts only on an assertion failure, never a compile error. Expected kills:\n   a. WSL_BIND_HOST dropped from LOOPBACK_SERVING_BIND_HOSTS: the wsl rows of BH2 and BH5.\n   b. isProcessAlive moved before the other-side check: BH3 (probed is not empty).\n   c. The pid <= 0 check dropped: BH2's pid-0 row.\n   d. No guard in ensureDaemonRunningImpl: BH1 and BH4.\n   e. No guard in connect(): BH4 and BH5's kept row.\n   f. scheduleReconnect() added to connect()'s guard: BH4 and BH5's kept row.\n   g. The !isProcessAlive condition dropped: the dead-pid rows of BH2 and BH5.\n   Restore the copy, check its sha256, and list the kills in the completion summary.\n2. Then run the exact command below once, from the worktree, after `git status --porcelain -- moe-jetbrains` lists only this plan's five files. Its fresh output is the complete_task evidence. It runs the full plugin suite with --rerun. It fails unless both classes report failures=\"0\" errors=\"0\" and exactly 5 BH testcases ran, and it greps Models.kt for the nullable field (DoD 3). The architect dry-ran it with stubbed git, cmd.exe and wslpath: green exits 0, and a missing class XML exits 1.\ncd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"BH' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) BH=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 5 ] || r=1; grep -n bindHost moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T07:17:00.076Z"
     },
     {
       "stepId": "step-4",
@@ -72,12 +79,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:50:51.601Z",
-  "updatedAt": "2026-11-04T07:15:22.426Z",
+  "updatedAt": "2026-11-04T07:17:00.076Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:51:37.106Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -88,7 +95,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T07:09:55.690Z",

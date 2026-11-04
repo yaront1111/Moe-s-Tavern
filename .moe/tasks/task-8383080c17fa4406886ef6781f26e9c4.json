@@ -13,21 +13,28 @@
     {
       "stepId": "step-1",
       "description": "Implement the precedence and the command rewrite (DoD 1 and 2) in moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt with the session's own editing tool (Edit on a Claude seat, apply_patch on a codex exec seat), never a shell write or a subagent. Keep every hunk in the four places below: sibling task-fe811130 (bindHost probe, not yet planned) edits isReachable, the :151-166 reuse/delete block, DaemonInfo and this file's companion object.\n\n(a) Constructor seam, inserted directly after the `processLookup` parameter (:43), before `replaceConfirmer`:\n    // MOE_DAEMON_COMMAND, injected by tests because a JVM cannot change its own environment.\n    private val daemonCommandOverride: () -> String? = { System.getenv(\"MOE_DAEMON_COMMAND\") },\nNot earlier: RuntimeSelectionPolicyTest.kt:2243 passes the first 11 parameters (through processLookup) positionally, so an insertion before position 12 breaks its compile. Not after docSync: a seam fe811130 may append there would collide in the merge.\n\n(b) Spawn selection in ensureDaemonRunningImpl (:182). Replace\n    val direct = if (isProtected) protectedCommandOrRefuse(projectBasePath) ?: return false else buildDirectDaemonCommand(projectBasePath)\nwith\n    // A set MOE_DAEMON_COMMAND wins over every daemon script; the protected profile never reads the environment.\n    val overrideCommand = if (isProtected) null else daemonCommandOverrideOrNull()\n    val direct = when {\n        isProtected -> protectedCommandOrRefuse(projectBasePath) ?: return false\n        overrideCommand != null -> null\n        else -> buildDirectDaemonCommand(projectBasePath)\n    }\nand at :190 pass it on: `val command = buildDaemonCommand(projectBasePath, overrideCommand)`. One read per call, so the selection and the command always agree.\n\n(c) Replace buildDaemonCommand (:665-691). The installed start-daemon.cmd branch and the `moe-daemon start` fallback stay as they are; only the override branch changes, and hostSuffix moves to the top:\n    internal fun buildDaemonCommand(basePath: String, overrideCommand: String? = daemonCommandOverrideOrNull()): String {\n        val hostSuffix = if (wslAgentsEnabled()) \" --host $WSL_BIND_HOST\" else \"\"\n        val raw = overrideCommand?.trim()?.takeIf { it.isNotEmpty() }\n        if (raw != null) {\n            val words = commandWords(raw)\n            val command = when {\n                raw.contains(\"{projectPath}\") -> raw.replace(\"{projectPath}\", basePath)\n                raw.contains(\"--project\") -> raw\n                words.drop(1).any { it in daemonSubcommands } -> \"$raw --project \\\"$basePath\\\"\"\n                else -> \"$raw start --project \\\"$basePath\\\"\"\n            }\n            return if (\"--host\" in words) command else command + hostSuffix\n        }\n        // the installed branch and the fallback, unchanged\n    }\nKDoc it with the rules: {projectPath} is substituted, and a command carrying it or --project is otherwise used as written; any other command gets `start` unless a word after the first is a daemon subcommand, then `--project \"<basePath>\"`; WSL agent mode appends ` --host wsl` unless a word of the command is `--host`. Why `start` is only appended: the daemon reads its subcommand only as its first argument (packages/moe-daemon/src/index.ts parseArgs, `args[0] || 'start'`), so nothing appended fixes a command with arguments of its own, and CONFIGURATION.md tells the operator to name it. The DoD's \"leaves unchanged a command that already names a subcommand\" means no `start` is inserted; `--project` is still appended exactly as today.\n\n(d) Directly after buildDaemonCommand (not in the companion object) add:\n    private fun daemonCommandOverrideOrNull(): String? = try {\n        daemonCommandOverride()?.trim()?.takeIf { it.isNotEmpty() }\n    } catch (ex: Exception) {\n        log.warn(\"Cannot read MOE_DAEMON_COMMAND; starting the daemon without it\", ex)\n        null\n    }\n    // The daemon CLI's subcommands: the word cases of main() in packages/moe-daemon/src/index.ts, plus accounts.\n    private val daemonSubcommands = setOf(\"start\", \"stop\", \"status\", \"init\", \"doctor\", \"version\", \"accounts\", \"check-architecture\", \"_run\")\n    /** The command's words as a shell splits them, quotes removed: a quoted path with spaces is one word. */\n    private fun commandWords(command: String): List<String> =\n        Regex(\"\\\"[^\\\"]*\\\"|'[^']*'|\\\\S+\").findAll(command).map { it.value.trim('\"', '\\'') }.toList()\n-v and --version are left out: they are flags, not subcommands.\n\nError handling: a seam that throws (a SecurityException reading the environment) is logged and treated as unset, so the bundled daemon still starts; spawn failures stay in the existing try/catch that publishes onStatus(false, ...). The protected branch never calls daemonCommandOverride (test O2 pins it).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Added the daemonCommandOverride seam after processLookup, made the spawn selection prefer a set override (PROTECTED never reads it), and rewrote buildDaemonCommand: start appended unless a daemon subcommand is named, host suffix unless --host is present. Added daemonCommandOverrideOrNull, daemonSubcommands and commandWords. Not compiled yet; the Gradle run is step 4.",
+      "startedAt": "2026-11-04T07:16:25.978Z",
+      "completedAt": "2026-11-04T07:16:57.437Z"
     },
     {
       "stepId": "step-2",
       "description": "TESTS (DoD 1 and 2). Create moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt (JUnit 4 with a TemporaryFolder rule, like its neighbours) with the session's own editing tool. It is a class of its own so that task-fe811130's cases in MoeDaemonSupervisorTest.kt never meet these in a merge. MoeDaemonSupervisorTest.FakeProcess is private, so add a private nested `StubProcess : Process()`: alive until destroy() or waitFor(), empty input and error streams, a ByteArrayOutputStream output, and exitValue() throwing IllegalThreadStateException while alive. Expectations are literal strings with the literal \"wsl\", never the production constant or helpers. The spawn prefix is `if (MoeDaemonSupervisor.isWindowsHost()) listOf(\"cmd\", \"/c\") else listOf(\"bash\", \"-lc\")`, because the gate runs on Windows. Every supervisor gets profile = { RuntimeProfile.LEGACY } (O2 excepted) and docSync = { _, _ -> }. Below, p is /srv/my proj, Q is p wrapped in double quotes, and R is root.absolutePath wrapped in double quotes.\n\nO1 `O1 a set override wins over a resolving daemon script and an unset or blank one keeps the direct spawn`. root is a new folder holding .moe/ and a written packages/moe-daemon/dist/index.js (the script findInParents resolves, as in W1). A helper spawn(wsl, seam) builds a supervisor with processStarter = { started += it.command().toList(); StubProcess() }, wslAgentsEnabled = { wsl } and daemonCommandOverride = seam, asserts that ensureDaemonRunning() is true and returns started.single(). Pins:\n- { \"npx moe-daemon\" } gives the prefix + `npx moe-daemon start --project R`;\n- the same with wsl = true gives the prefix + `npx moe-daemon start --project R --host wsl`;\n- { null }, { \"\" }, { \"   \" } and { throw SecurityException(\"denied\") } each give cmd.drop(2) == listOf(\"start\", \"--project\", root.absolutePath) and File(cmd[1]).canonicalFile == script.canonicalFile: today's direct spawn. The throw covers the error handling: unreadable counts as unset.\nO2 `O2 the protected profile never reads the override`: profile = { RuntimeProfile.PROTECTED }, installedRoot = { null }, nodeExecutable = { null }, daemonCommandOverride = { reads++; \"npx moe-daemon\" } and a recording processStarter. ensureDaemonRunning() is false, reads == 0 and nothing started (installedArtifact(null, ...) refuses with \"installed Moe runtime not found\").\nO3 `O3 a command naming no daemon subcommand gets start and one naming a subcommand keeps its own` (wsl false; supervisor.buildDaemonCommand(p, raw); exact equality):\n- `npx moe-daemon` -> `npx moe-daemon start --project Q` (the documented example);\n- `moe-daemon` -> `moe-daemon start --project Q`;\n- `node /opt/moe/daemon/index.js` -> `node /opt/moe/daemon/index.js start --project Q`;\n- the installer's value, C:\\Program Files\\Moe\\moe-daemon\\start-daemon.cmd wrapped in double quotes -> that value + ` start --project Q`;\n- `node \"/opt/my start/index.js\"` -> that value + ` start --project Q` (a quoted word is not a subcommand);\n- `npx moe-daemon start` -> `npx moe-daemon start --project Q` (no second start);\n- `npx moe-daemon init` -> `npx moe-daemon init --project Q`;\n- `  npx moe-daemon  ` -> `npx moe-daemon start --project Q` (trimmed);\n- buildDaemonCommand(p, \"   \") == buildDaemonCommand(p, null): blank is unset. Compare the two, because the unset branch may find a real installed start-daemon.cmd on a Windows host.\nNo result above contains \"--host\".\nO4 `O4 a command carrying --project or {projectPath} is used as written` (wsl false):\n- `node /opt/moe/index.js start --project \"{projectPath}\"` -> `node /opt/moe/index.js start --project Q`;\n- `my-wrapper {projectPath}` -> `my-wrapper /srv/my proj`;\n- `npx moe-daemon start --project /srv/other` -> unchanged;\n- `npx moe-daemon --project /srv/other` -> unchanged. Comment it: the daemon reads its subcommand only as its first argument, so an appended start could not fix it, and CONFIGURATION.md tells the operator to name it.\nO5 `O5 WSL agent mode appends --host wsl unless the command carries --host` (wsl true):\n- `npx moe-daemon` -> `npx moe-daemon start --project Q --host wsl`;\n- `npx moe-daemon start --host 127.0.0.1` -> `npx moe-daemon start --host 127.0.0.1 --project Q` (exactly one --host);\n- `node /opt/moe/index.js start --project \"{projectPath}\"` -> `node /opt/moe/index.js start --project Q --host wsl`;\n- `npx moe-daemon start --project /srv/other` -> `npx moe-daemon start --project /srv/other --host wsl`.\n\nThen in MoeDaemonSupervisorTest.kt touch only W1 and W2 (:503-543), so that the new precedence cannot flip them on a machine whose environment sets MOE_DAEMON_COMMAND (the Windows installer sets it):\n- W1's constructor call gains `daemonCommandOverride = { null }`;\n- in W2, delete the stale comment line `// MOE_DAEMON_COMMAND is the operator's verbatim command and never carries --host.` and the `Assume.assumeTrue(System.getenv(\"MOE_DAEMON_COMMAND\").isNullOrBlank())` line, and add `daemonCommandOverride = { null }` to its constructor call.\nKeep the Assume import, which other tests use. Add nothing else to that file: task-fe811130 adds its cases there.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
       ],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt"
-      ]
+      ],
+      "startedAt": "2026-11-04T07:17:09.158Z"
     },
     {
       "stepId": "step-3",
@@ -64,11 +71,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:53:50.379Z",
-  "updatedAt": "2026-11-04T07:16:07.634Z",
+  "updatedAt": "2026-11-04T07:17:09.158Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:58:16.989Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -78,7 +86,9 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T07:15:05.229Z",
   "executionContract": {
@@ -149,5 +159,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-cd0ac706@2026-11-04T06:58:14Z",
     "at": "2026-11-04T07:16:07.634Z"
-  }
+  },
+  "workStartedAt": "2026-11-04T07:16:25.978Z"
 }
