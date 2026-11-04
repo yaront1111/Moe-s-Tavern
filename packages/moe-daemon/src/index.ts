@@ -1296,7 +1296,24 @@ export {
   isPortAvailable,
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/**
+ * Whether this module is the process entry. npm's bin is a symlink off Windows (npm install -g, npm link,
+ * npx), and Node loads the main module by its real path, so argv[1] as written can name a link while
+ * import.meta.url names its target. Compare as written first, then through fs.realpathSync, the call
+ * Node's own main-entry resolution makes. Any error means not the entry, so importing this module
+ * never starts the daemon.
+ */
+export function isEntryModule(argv1: string | undefined, moduleUrl: string): boolean {
+  if (!argv1) return false;
+  if (moduleUrl === pathToFileURL(argv1).href) return true;
+  try {
+    return moduleUrl === pathToFileURL(fs.realpathSync(argv1)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryModule(process.argv[1], import.meta.url)) {
   main().catch((err) => {
     logger.fatal({ error: err }, 'Fatal error');
     process.exit(1);
