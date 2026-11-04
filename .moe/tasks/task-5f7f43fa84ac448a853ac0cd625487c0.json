@@ -50,7 +50,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -70,16 +70,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:27:08.909Z",
-  "updatedAt": "2026-11-04T15:42:41.371Z",
+  "updatedAt": "2026-11-04T15:44:39.878Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T15:27:15.313Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T15:44:11.886Z",
+    "wallClockMs": 1016573
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-1cd86a39"
   ],
   "tier": "light",
   "effort": "high",
@@ -158,10 +161,11 @@
   "planApprovedAt": "2026-11-04T15:39:08.006Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T15:39:44Z",
-    "at": "2026-11-04T15:42:41.371Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T15:42:44Z",
+    "at": "2026-11-04T15:44:39.878Z"
   },
   "workStartedAt": "2026-11-04T15:40:37.064Z",
   "reviewStartedAt": "2026-11-04T15:41:42.470Z",
@@ -194,5 +198,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T15:44:11.886Z",
+  "reviewCompletedAt": "2026-11-04T15:44:11.886Z",
+  "reviewSummary": "Reviewed completion d36d5bb7 (on moe/work-2026-10-24; checkout bytes equal the commit). 2 files, +36/-7. Re-ran task.verification from repo root: postflight-safe.test.mjs 15/15 under WSL node and 15/15 under node.exe; 119-min mutant fails on 'is under 120 min' -> GATE_OK. Ran mutants.sh: all six mutants (60-min literal, SIGTERM, TIMEOUT branch dropped, bound 0, bound 24h, runPostflight unexported) rc=1, none NOOP.\nDoD1: POSTFLIGHT_TIMEOUT_MS = 180 min exported (>=120), used as the execFile timeout; SIGKILL kept; error mapping/cwd/maxBuffer unchanged; comment cites 3200 s, 3400 s, 1.5-1.6x, ubuntu 2690-2750 s; 'about 20 minutes' gone; both files ASCII.\nDoD2: new test reads the bound from the module (safe int, >=120 min, <360 min), asserts real execFile options carry the bound + SIGKILL, and a killed child maps to exit 1 TIMEOUT for bash/powershell/pwsh; 14 existing tests untouched; ci.yml not edited.\nDoD3: first PR #230 run containing the change is 41860566794 (headSha d36d5bb7), created 15:42:42Z, status pending behind the in-progress pre-fix run; its Windows postflight steps have no outcome yet (still-in-progress case). Pre-fix run 41848822541 at 15:43Z: in_progress; windows step 22 in_progress since 15:14:00Z (60-min kill predicted ~16:18Z), step 23 pending; ubuntu step 21 in_progress since 15:07:05Z.\nComplexity: run = execFile default param is the minimal seam; nothing to cut. Governor: confirm 41860566794's Windows postflight steps finish inside the bound (expected ~80-90 min each).",
+  "requiredCheckAtDone": null
 }
