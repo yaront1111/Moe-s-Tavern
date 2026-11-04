@@ -129,3 +129,15 @@ test('C5: effectivePolicyRows never throws and falls back to the defaults for an
         { qualityGate: {}, consolidationBranch: [], qualityGateScope: 7 }];
     for (const shape of shapes) { assert.equal(JSON.stringify(rowsOf(shape)), base, JSON.stringify(shape)); }
 });
+
+test('C6: in worktree mode a consolidationBranch holding *, ? or [ lands on main; any other branch, ] included, lands as written', () => {
+    const landing = consolidationBranch => rowsOf({ worktreeMode: 'on', consolidationBranch }).find(row => row.label === 'Landing branch');
+    const glob = 'A glob consolidationBranch is not a landing target; each completion lands on main.';
+    const literal = 'Each completion lands as one merge-tree squash commit on this branch.';
+    for (const branch of ['moe/work-*', 'release/v?', 'release/[ab]', '[']) {
+        assert.deepStrictEqual(landing(branch), { label: 'Landing branch', value: 'main', detail: glob }, branch);
+    }
+    for (const branch of ['release/train', 'release/a]b', 'feature/x-1']) {
+        assert.deepStrictEqual(landing(branch), { label: 'Landing branch', value: branch, detail: literal }, branch);
+    }
+});

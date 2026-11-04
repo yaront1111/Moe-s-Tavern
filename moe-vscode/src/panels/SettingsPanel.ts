@@ -70,7 +70,7 @@ function worktreeModeOf(s: JsonObject): { on: boolean; fromDefault: boolean } {
 }
 
 /** validators.ts resolveWorktreeTarget over an already-trimmed branch: the literal, else main (a glob reads main). */
-const worktreeTarget = (branch: string): string => (branch !== '' && !/[*?\[]/.test(branch) ? branch : 'main');
+const worktreeTarget = (branch: string): string => (branch !== '' && !/[*?[]/.test(branch) ? branch : 'main');
 
 function worktreeLandingRow(branch: string): PolicyRow {
     const label = 'Landing branch';
