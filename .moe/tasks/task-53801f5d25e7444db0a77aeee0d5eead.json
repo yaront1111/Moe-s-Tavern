@@ -1,0 +1,31 @@
+{
+  "id": "task-53801f5d25e7444db0a77aeee0d5eead",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #24): file 2-4 evidence-backed rows from two scripted parity audits at the tip: every registered tool's inputSchema (getTools) against its docs/MCP_SERVER.md section (parameter names, required, enums, defaults), and the field keys the live .moe/ task, epic, worker and attempt JSON actually carry against docs/SCHEMA.md",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04.\n\nWHY\n- The tool surface and the persisted shapes changed many times on 11-03 and 11-04: claim_next_task's acceptsAccountSwitch, finalize_attempt, record_check_run, amend_plan_step amendments, landingRetry, needsHumanReview, executionContract, deliveryEvidence and others.\n- Hunts #3 and #4 audited MCP_SERVER.md and SCHEMA.md on 11-03, before most of these landed.\n- A scripted diff gives hard evidence quickly, and docs rows clear QA in minutes.\n- At 13:00Z, 4 architects are idle, and the CQ-M07 wrapper chain (r, then s and t, then v1/v2, then integration) is the serial critical path.\n\nLANE, in order of preference\n1. MCP_SERVER.md parity.\n   - In a git-archive snapshot at HEAD acb1c766 or later, outside the shared checkout, with its own `npm ci && npm run build`, import the built daemon's getTools() (packages/moe-daemon/src/tools/index.ts). Diff each tool's inputSchema against its `### moe.<tool>` section in docs/MCP_SERVER.md.\n   - The diff covers parameter names present in one and missing from the other, required flags, enum values and stated defaults.\n   - Any real mismatch is a finding. A tool registered with no section is a finding too, because CLAUDE.md says every registered tool has one.\n   - Group findings by section so one docs row owns one or more whole sections.\n2. SCHEMA.md parity.\n   - With a read-only node script, collect the key set of every .moe/tasks/*.json, .moe/epics/*.json, .moe/workers/*.json and .moe/attempts/*.json. Reading the live files is fine; never write them.\n   - Diff that against the shapes docs/SCHEMA.md documents.\n   - A key written by the daemon but undocumented, or documented but never written by the current code (grep the writer), is a finding. Cite the writer's file:line.\n\nSKIP\n- Sections or files open rows hold. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` at start.\n  - task-63674531 (CQ-M07v2) edits MCP_SERVER.md's verified-local tool contracts, and task-63e6fb62 (CQ-M07v1) edits CONFIGURATION.md and ARCHITECTURE.md. Leave every section they name to them.\n  - A finding in one of those sections goes to the holder as a task comment, not into a new row.\n  - Per ruling msg-71db57ac, MCP_SERVER.md is shared by section.\n- The lanes of hunts #1-#23 (read the archived hunt-row titles), and every row filed on 11-03 or 11-04 (grep .moe/tasks first).\n- Before filing, grep open rows' descriptions for the same docs file and section, not only lanes.js, because a still-unplanned row can hold a section in its text.\n- Never build, install or test in the shared checkout: its packages/moe-daemon/dist is the live runtime.\n\nEVIDENCE BAR. Same as hunts #2-#23: the script's diff output, re-run at HEAD acb1c766 or later, plus file:line pairs for each mismatch (the schema field or writer line against the doc line). No style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the docs (epic-be924fb8), status PLANNING. Give each row a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Each docs row should name its sections.\n2. Post the ids, or \"nothing real\" with the diff summary, in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new rows are filed, or \"nothing real\" is posted with the diff summary. Either way, the outcome is posted in #governors with a mention of governor-e6142a94.",
+    "Every filed row cites the scripted diff, re-run at HEAD acb1c766 or later outside the shared checkout, plus a file:line pair per mismatch.",
+    "No filed row targets a section or file an open row holds, including CQ-M07v1/v2's sections, or duplicates a row filed on 11-03 or 11-04. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 529.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T13:00:48.010Z",
+  "updatedAt": "2026-11-04T13:00:53.726Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T13:00:53.726Z"
+  }
+}
