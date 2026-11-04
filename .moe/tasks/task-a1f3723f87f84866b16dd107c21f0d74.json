@@ -102,7 +102,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -128,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T20:29:26.340Z",
-  "updatedAt": "2026-11-04T22:22:28.879Z",
+  "updatedAt": "2026-11-04T22:35:06.236Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T20:30:16.813Z",
@@ -138,7 +138,9 @@
     "firstClaimAt": "2026-11-04T20:30:18.547Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-04T22:34:26.375Z",
+    "wallClockMs": 7447828
   },
   "dependsOn": [
     "task-527735eafb9147cf8663ccee9a9e1b4c",
@@ -147,7 +149,8 @@
   "contextFetchedBy": [
     "architect-cd0ac706",
     "architect-2a219562",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-96811257"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -240,10 +243,11 @@
   "planApprovedAt": "2026-11-04T20:58:40.569Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T21:48:23Z",
-    "at": "2026-11-04T22:22:28.879Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T22:22:50Z",
+    "at": "2026-11-04T22:35:06.235Z"
   },
   "workStartedAt": "2026-11-04T21:50:20.341Z",
   "reviewStartedAt": "2026-11-04T22:21:29.442Z",
@@ -286,5 +290,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T22:34:26.375Z",
+  "reviewCompletedAt": "2026-11-04T22:34:26.375Z",
+  "reviewSummary": "Reviewed completion 033ccbe9 (on moe/work-2026-10-24, parent b3b105f7; +144/-31 over 7 files, net 113). The task worktree's scripts/ is byte-equal to it.\nFix: sh receipt_send's conflict branch now uses the accepted branch's own keep test, `|| [ \"$strong\" = 1 ] ||`. ps1 Send-MoeReceipt drops `$ok -and` from $keep; $keep is read only inside `if ($ok)`, so a refused or unanswered receipt is unchanged. WARN text, RECEIPT_ACKED=true / $true and every caller are unchanged. Traced finalize_postflight :6034 and receipt_replay :6709-6733 (ps1 :8758, :2521): a kept strong journal goes only on a closed attempt. A non-strong journal is still deleted on a conflict.\nTests: the fixture mode is additive (existing modes unchanged). The frozen row's JS hunks in postflight.sh and .ps1 are identical (diffed). SR-T5 / SR-T5-replay in vm-route sh+ps1: T2's journal asserts moved verbatim into a helper; nothing loosened.\nRe-ran checkRefs[0] verbatim: CHAIN_EXIT=0, 22:24:43Z-22:33:05Z (8m22s, under the 20-min budget), 9 markers. Each of sh, pwsh 7 and 5.1 printed '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay', PASS vm-route and 'PASS frozen candidate scenarios: 8'. The sh leg also passed parity-check.sh, parity-check.ps1 and lint (the qualityGate).\nMy own mutants on git-archive snapshots (MOE_FROZEN_TEST_ONLY=receipt-conflict,reconcile-strong-conflict-finalize-lost): M1, the sh conflict branch with an unconditional rm, fails on bash. M2, ps1 $keep = $ok -and ..., fails on pwsh 7 AND on 5.1. Both fail at run 1's journal (false vs after); the legacy receipt-conflict row passes first. That covers governor points 1-4: both twins, RED/GREEN on 3 engines, parity green with no new string, one scoped gate.\nponytail-review: nothing to cut.",
+  "requiredCheckAtDone": null
 }
