@@ -508,10 +508,10 @@ export function accountSwitchCause(change: AccountSwitch): string {
 }
 
 /**
- * The input the moe-account-switch mod adds to submit_plan and chat_wait. Only
- * a session that ends itself and is relaunched by its wrapper's loop can act
- * on a switch between tasks; every other seat keeps its account until its
- * next launch, as before.
+ * The input the moe-account-switch mod adds to submit_plan, chat_wait and
+ * claim_next_task. Only a session that ends itself and is relaunched by its
+ * wrapper's loop can act on a switch between tasks; every other seat keeps its
+ * account until its next launch, as before.
  */
 export const ACCEPTS_ACCOUNT_SWITCH = {
   type: 'boolean',
@@ -519,7 +519,8 @@ export const ACCEPTS_ACCOUNT_SWITCH = {
 } as const;
 
 /**
- * The switch for a seat between tasks: an architect after submit_plan, a
+ * The switch for a seat between tasks: an architect after submit_plan or at
+ * its next claim_next_task (a row it ended without one, e.g. archive_task), a
  * governor in chat_wait. A seat holding a task waits for its step boundary.
  */
 export function idleSwitchFor(state: StateManager, workerId: string | undefined, nowMs: number = Date.now()): AccountSwitch | null {

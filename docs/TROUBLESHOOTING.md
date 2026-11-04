@@ -1000,7 +1000,8 @@ with no back-off and no resume attempt spent.
 `Moe: Claude account <label> is at <n>% of its usage limit (Moe switches at <m>%). This session ends in 10 s and restarts
 on the next account.` After that, the TUI exits by itself. The wrapper relaunches it with
 `MOE_ACCOUNT_SWITCHED from=<a> to=<b>`, and #governors gets a 🔁 post. It happens:
-- for an architect, right after a `submit_plan`;
+- for an architect, right after a `submit_plan`, or at its next in-session `claim_next_task` (for example after a row it
+  ended with `archive_task`), which then claims nothing;
 - for a governor, at a `chat_wait`.
 
 The toast reads `this Claude account reached its usage limit` instead when claude stopped the session at the limit
@@ -1008,8 +1009,8 @@ itself.
 
 **Cause:** expected. The wrapper loads the `moe-account-switch` mod (`scripts/mods/`) into a claude TUI whose loop
 relaunches it. The mod ends the session once the turn is over, after either of these:
-- the daemon put `accountSwitch` in a `submit_plan` or `chat_wait` reply, for the same reasons as a worker's switch
-  above;
+- the daemon put `accountSwitch` in a `submit_plan`, `claim_next_task` or `chat_wait` reply, for the same reasons as a
+  worker's switch above;
 - claude stopped at the usage limit (100%).
 
 The architect's plan is recorded first. The governor's unread chat stays unread for the new session. A call the
