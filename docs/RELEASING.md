@@ -7,10 +7,14 @@ Releases are tag-driven. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, 
 All package versions are kept in sync. Set the same `X.Y.Z` in:
 
 - `packages/moe-daemon/package.json` and `package-lock.json` (top-level `version` **and** `packages[""].version`)
-- `packages/moe-proxy/package.json` and `package-lock.json`
-- `packages/moe-claude-plugin/package.json` and `package-lock.json`
-- `moe-vscode/package.json` and `package-lock.json`
+- `packages/moe-proxy/package.json` and `package-lock.json` (both fields)
+- `packages/moe-claude-plugin/package.json` and `package-lock.json` (both fields)
+- `moe-vscode/package.json` and `package-lock.json` (both fields)
+- `packages/moe-claude-plugin/.claude-plugin/plugin.json` (`version`)
 - `moe-jetbrains/build.gradle.kts` (`version = "X.Y.Z"`)
+- `installer/moe-installer.iss` (`AppVersion=X.Y.Z`)
+
+`scripts/verify-release-version.mjs` checks exactly these fields. The session mods' own `scripts/mods/*/.claude-plugin/plugin.json` files keep their own versions: they ship inside both IDE plugin bundles (`scripts/bundle-manifest.json`) and are never released on their own, so the guard does not check them.
 
 Update `<change-notes>` in `moe-jetbrains/src/main/resources/META-INF/plugin.xml` and `moe-vscode/CHANGELOG.md`.
 
