@@ -1,0 +1,34 @@
+{
+  "id": "task-78fa711078cf4dda861262291e0adf83",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the daemon records a relative --project or MOE_PROJECT_PATH (the README's terminal-only `moe-daemon init --project .`) verbatim as daemon.json projectPath, /health projectPath and project.json rootPath, so a later start from another folder and the JetBrains plugin both read the live daemon as another project, delete its daemon.json and start a second daemon on the same .moe/",
+  "description": "Filed by defect hunt task-3488566e (11-04 #17, lane 2: the JetBrains plugin's daemon spawn/reuse, root cause on the daemon side). HEAD bb0bc17e.\n\nPROBLEM\n- packages/moe-daemon/src/index.ts:67 keeps --project, or MOE_PROJECT_PATH, exactly as typed. :844-850 writes it into daemon.json, /health reports it, and normalizeProject (state/persistence.ts:97, applied at StateManager.ts:1058-1062 on every load) rewrites project.json rootPath to it. index.ts:94-95 already notes that \"the daemon records `--project` as given\".\n- README.md:112 tells terminal-only users to run `moe-daemon init --project .`. The daemon then records projectPath \".\" and rootPath \".\".\n- \".\" names a different directory for every later reader whose cwd differs:\n  - The daemon's own start guard (existingDaemonBlocksStart, index.ts:619-625, through validateDaemonInfoForProject/namesOwnProject) run from another folder judges the live daemon stale, logs \"Cleaning up stale daemon lifecycle files\" and starts a second daemon. The first daemon released its lock once daemon.json was written (index.ts:859), so nothing stops the second one.\n  - JetBrains MoeDaemonSupervisor.kt:151-166: isSameProject(\".\", base) (:970-972; DaemonIdentity.kt:96 collapses \".\" to \"\", and File(\".\").canonicalPath is the IDE's cwd) is false. The plugin skips reuse, deletes the live daemon's daemon.json and spawns its own (:180-203) on project open, reconnect or Restart Daemon.\n  - Both plugins compare the STATE_SNAPSHOT rootPath and disconnect on \".\" (MoeMessageDispatcher.kt:93-98; moe-vscode MoeDaemonClient.ts:1860-1863).\n- The result is two daemons writing one .moe/, which breaks the sole-writer invariant. The agent launchers pass an absolute project, so seats alone never trigger it.\n\nEVIDENCE\n- Architect re-run on the bb0bc17e snapshot (ports 19886/19887, isolated HOME): /mnt/d/moe-scratch/hunt-3488566e/mine/relative-project-guard-rerun.txt\n  live daemon pid=2052204 projectPath=. port=19886; project.json rootPath=.\n  (start --project <abs> run from cwd /) WARN: Cleaning up stale daemon lifecycle files ... INFO: Moe daemon running\n  daemon.json now: pid 2052253 port 19887 projectPath /tmp/hunt-3488-snap/fixtures/relproj-mine; first pid 2052204 alive: yes\n- JetBrains path (Kotlin logic mirrored, no Gradle run): /mnt/d/moe-scratch/hunt-3488566e/A/repro-relative-project.sh and .out, plus kotlin-isSameProject-mirror.mjs.\n  isSameProject(\".\", \"/tmp/hunt-3488-A/fixtures/relproj\") = false\n  daemon.json now: {\"port\": 19877, \"pid\": 1937315, ..., \"projectPath\": \"/tmp/hunt-3488-A/fixtures/relproj\"}\n  first daemon _run pid 1937243 alive: yes; /health on 19876 still: 200\n\nFIX DIRECTION\n- In parseArgs (index.ts:59-72), resolve a relative --project or MOE_PROJECT_PATH to an absolute path once, before anything records or compares it.\n- Leave POSIX-absolute, drive-letter and UNC values unchanged. moe-proxy/src/utils.ts:39 uses the same rule: `WINDOWS_FORM.test(raw) || raw.startsWith('/') ? raw : path.resolve(raw)`.\n- normalizeProject rewrites rootPath from the daemon's project path at every load, so an existing project.json whose rootPath is \".\" heals at its next start. No client change is needed.\n- Out of scope: the JetBrains bindHost probe (a sibling row filed by the same hunt), Kotlin code, the README, docs/MCP_SERVER.md.\n\nFILES: packages/moe-daemon/src/index.ts, packages/moe-daemon/src/index.test.ts (or a new src/index.relativeProject.test.ts). No open row holds either (lanes.js 06:50Z). The same hunt held back a doctor row (WSL-foreign daemon.json) that wants to move isForeignDaemonInfo/wslGatewayHost out of index.ts; it waits for this row to land.",
+  "definitionOfDone": [
+    "A vitest starts the daemon CLI with `init --project .` from a temp cwd, and once more with MOE_PROJECT_PATH=. and no --project. It asserts that daemon.json projectPath, the /health projectPath and project.json rootPath each equal path.resolve(cwd).",
+    "A vitest proves that a second `start --project <absolute path>` run from another cwd while that daemon lives logs 'Moe daemon already running', leaves daemon.json's pid unchanged and starts no second daemon (the case /mnt/d/moe-scratch/hunt-3488566e/A/repro-relative-daemon-guard.sh drives). Absolute POSIX, drive-letter and UNC --project values are recorded unchanged.",
+    "`npx vitest run src/index.test.ts` (plus any new test file) passes in a snapshot outside the shared checkout, with the run's output as the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 488.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:50:29.049Z",
+  "updatedAt": "2026-11-04T06:50:46.765Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:50:33.037Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}

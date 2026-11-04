@@ -1,0 +1,34 @@
+{
+  "id": "task-fe8111309de04ddd92e109144b50a228",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains judges a daemon reachable by a TCP probe of 127.0.0.1 only and never parses daemon.json bindHost, so a live daemon bound to ::1 or a LAN address (--host / MOE_BIND_HOST) has its daemon.json deleted and a second daemon started on the same .moe/ (JetBrains twin of doctor's task-576e3005)",
+  "description": "Filed by defect hunt task-3488566e (11-04 #17, lane 2: the JetBrains plugin's daemon lifecycle). HEAD bb0bc17e.\n\nPROBLEM\n- moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt:290-295: DaemonInfo has no bindHost field, so the plugin cannot see the bind that the daemon records for any --host / MOE_BIND_HOST other than 127.0.0.1 (docs/CONFIGURATION.md:16, root CLAUDE.md \"Run\").\n- services/MoeDaemonSupervisor.kt:914-919: isReachable = pid alive && isPortOpen. defaultPortProbe (:1043-1047) connects to 127.0.0.1 only.\n- When a live same-project daemon is bound off loopback, two paths fire:\n  - ensureDaemonRunningImpl skips reuse, deletes its daemon.json (:163-166) and spawns `start --project <base>` (:180-203);\n  - MoeProjectService.connect() also deletes it (services/MoeProjectService.kt:175-178).\n- The daemon's own guard would have refused the duplicate. existingDaemonBlocksStart (packages/moe-daemon/src/index.ts:619-625) probes bindHost and logs \"Moe daemon already running\". The plugin removes daemon.json before its spawned `start` can run that guard, and the first daemon released its lock long ago (index.ts:859).\n- The plugin only ever dials ws://127.0.0.1 (MoeProjectService.kt:331; docs/DEVELOPMENT.md:366), so it cannot use such a daemon anyway. The defect is destroying its discovery file and starting a second writer.\n\nEVIDENCE: architect re-run on the bb0bc17e snapshot (port 19888, isolated HOME). The plugin's decision is mirrored, no Gradle run: /mnt/d/moe-scratch/hunt-3488566e/mine/bindhost-rerun.txt (script: A/repro-bindhost.sh).\n  daemon.json: \"pid\": 2056623, \"bindHost\": \"::1\"\n  pid 2056623 alive=true; 127.0.0.1:19888 open=false; [::1]:19888 open=true; plugin isReachable=false\n  (delete + spawn as at :163-166/:180-203) second daemon \"pid\": 2056776, no bindHost\n  first daemon _run pid 2056623 alive: yes; [::1]:19888/health: 200; 127.0.0.1:19888/health: 200\n  both /health projectPath: /tmp/hunt-3488-snap/fixtures/bindproj-mine | /tmp/hunt-3488-snap/fixtures/bindproj-mine\nThe daemon CLI's own guard on the same kind of record: A/repro-bindhost-daemon-guard.out shows \"INFO: Moe daemon already running\", and daemon.json pid unchanged.\n\nFIX DIRECTION\n- Parse bindHost (nullable).\n- When the recorded pid is alive and bindHost is set and is not loopback, 0.0.0.0, :: or wsl, never delete daemon.json and never spawn. Publish a status that names the bind host: the plugin connects on 127.0.0.1 only.\n- If the plugin probes bindHost at all, do so only when it is an address of a local interface (the daemon's BIND_HOST_NOT_LOCAL rule; the d6ebe4ab boundary: never dial a host that repository content names).\n- Out of scope: the daemon, a relative recorded projectPath (sibling row task-78fa7110 fixes it at the daemon), the VS Code client, docs/MCP_SERVER.md.\n\nFILES: moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt, moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt, moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt (MoeProjectServiceTest.kt if the connect() path gets its own case). No open row holds any of them (lanes.js 06:50Z). The gate is `./gradlew test` under the jetbrains-gradle lease.",
+  "definitionOfDone": [
+    "A JUnit case in MoeDaemonSupervisorTest.kt: daemon.json with bindHost \"::1\", processAliveProbe true and portProbe false. ensureDaemonRunning() returns false, processStarter is never called, daemon.json is byte-identical afterwards, and the published status names \"::1\".",
+    "A JUnit case proves MoeProjectService's connect() path also keeps that daemon.json (no deleteDaemonInfoIfUnchanged for a live pid with an off-loopback bindHost). A record with no bindHost, or bindHost \"wsl\", still behaves exactly as today, so the existing supervisor tests pass unchanged.",
+    "`./gradlew test` in moe-jetbrains (under the jetbrains-gradle lease) passes, and `grep -n bindHost moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt` shows the nullable field."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 489.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:50:51.601Z",
+  "updatedAt": "2026-11-04T06:51:48.022Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:51:37.106Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}

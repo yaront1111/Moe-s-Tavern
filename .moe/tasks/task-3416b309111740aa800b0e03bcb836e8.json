@@ -9,10 +9,52 @@
     "parity-check.{sh,ps1} passes, bash -n and the ps1 ParseFile check pass, and the existing postflight-worktree and worktree-landing arms stay green."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-67c762f6",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (DoD 1, 2): the harness arm and the fake-proxy knobs it needs. Port the two test-file hunks of the reference /mnt/d/moe-scratch/plan-3416b309/code.diff, prototyped at 2a1c5a36 and RED/GREEN on both engines. Use the Edit tool for a TOOL witness, and never run the scratch patch_*.py scripts against W. Read mem:task-task-3416b309111740aa800b0e03bcb836e8-handoff and mem:convention-postflight-scratch-harness first.\n(a) postflight-fake-proxy.js, two default-off knobs.\n- In get_context's FAKE_CTX_LANDING block, FAKE_CTX_LANDING_FROM_CLAIM=N serves task.landing only once .moe/claim-count is >= N. FAKE_CLAIM_ONCE/FAKE_CLAIM_LIMIT keep that file.\n- In `case 'report_blocked'`, FAKE_REPORT_BLOCKED_FAIL=1 logs the call (appendRpc), then answers a JSON-RPC error.\n(b) postflight-worktree.cjs, module-level helpers right after wtQaGate.\n- `qaRun(p,name,knobs)`:\n  - deletes .moe/claim-count and .moe/second-claim, which launch() keeps across runs;\n  - runs the qa role with the claude shim, FAKE_CLAIM_WORKSPACE null, FAKE_TASK_STATUS REVIEW and WT_CLI_RECORD;\n  - sets MOE_TASKLESS_WAIT_SEC '5' before ...knobs, so an idle claim ends a single-shot run in about 5 s instead of 300;\n  - returns {...r, prompt, launches: the number of recorded CLI runs}.\n- `qaParked(p,r,re)` asserts:\n  - exit 0;\n  - a `[WARN] MOE_CONTROL_CHECKOUT_BEHIND: ` line and no `[ERROR] MOE_CONTROL_CHECKOUT_BEHIND` line;\n  - exactly one report_blocked with [taskId, workerId, blockedOnTaskIds] = [TASK, WID, []], and a reason that starts with `MOE_CONTROL_CHECKOUT_BEHIND: ` and matches re;\n  - in rpcs(p), a claim_next_task before that report_blocked and one after it, with no deregister_worker before the second claim.\n(c) wtQaGate.\n- `const run=qaRun`.\n- wt-qa-behind gets FAKE_CLAIM_ONCE '1' and stays `refused`: HEAD lacks main's tip, a seat-level miss.\n- The six row-level cases (none, checkpoint, malformed, upper, unknown, git-fail) run with {FAKE_CLAIM_ONCE:'1', ...knobs} and assert qaParked(p,r,re) plus !r.cliRan.\n- wt-qa-git-fail parks because the stub's --is-ancestor exit 1 means 'not an ancestor' while HEAD equals main's tip.\n- Update the arm's header comment to the row/seat split.\n(d) New arm `wtQaPark` in its own block, registered as 'wt-qa-park' right after 'wt-qa-gate' in the cases map.\n1. repo('wt-qa-park'), c = commitOn main. Run with landed(c) + FAKE_CTX_LANDING_FROM_CLAIM '2' + FAKE_CLAIM_LIMIT '2'. Assert:\n   - qaParked(.., /no recorded completion commit/);\n   - launches === 1;\n   - the prompt names `Review commit ${c}: ` once;\n   - claim-count '2' and no second-claim.\n   This is the same seat claiming and starting a second REVIEW row. The fake reuses one task id, and the landing knob makes the second claim the next row.\n2. FAKE_CLAIM_ONCE + FAKE_REPORT_BLOCKED_FAIL: refused(r,'MOE_CONTROL_CHECKOUT_BEHIND'), the log has 'moe.report_blocked failed', and claim-count is '1'.\n3. FAKE_GET_CONTEXT_FAIL 'error' and 'mismatch', with landed(c) + FAKE_CLAIM_ONCE: refused, with a reason matching /did not answer for this task/.\nError handling in the harness: every QA-gate run is claim-bounded, so a park-and-reclaim regression fails in seconds instead of at the 180 s launch LIMIT.\n- Expected RED on today's wrappers (sh leg, fixture parent under /tmp, MOE_WORKTREE_ONLY=wt-qa-gate,wt-qa-park):\n  - `wt-qa-gate FAILED: AssertionError: wt-qa-none: exit code 1, expected 0`;\n  - `wt-qa-park FAILED: AssertionError: exit code 1, expected 0`.\n- `node --check` both files.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "startedAt": "2026-11-04T06:52:20.040Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "sh wrapper (DoD 1, 2), the scripts/moe-agent.sh hunks of code.diff. Edit in place in W with the Edit tool (in a task worktree the atomic-save rule does not apply), then `bash -n scripts/moe-agent.sh`. Leave worktree_stop untouched: every worker provisioning guard uses it.\n(a) qa_control_preflight.\n- Set the global `QA_LAND_B=\"\"` first, then: `if sync_land_target \"$target\"; then QA_LAND_B=\"$LAND_B\"; elif [ \"$LAND_WT_PUB\" = remote ]; then <the existing WARN line>; fi`, then follow_control_checkout.\n- In local mode sync_land_target only reads refs/heads/<target> (no fetch), so QA_LAND_B is the local tip read BEFORE the follow. In remote mode it is origin's tip, just fetched.\n- Extend the header comment.\n(b) New `qa_gate_park DETAIL` right after it. It sends one moe_rpc report_blocked with {taskId, workerId, reason: \"MOE_CONTROL_CHECKOUT_BEHIND: DETAIL\", blockedOnTaskIds: []}.\n- Why the explicit []: an omitted list makes report_blocked parse task ids out of the reason. If they are all DONE, it answers dependenciesSatisfied and does NOT block, so the row would stay claimable and the seat would re-claim it forever (mem:gotcha-report-blocked-reason-ids-become-blockers).\n- On success it prints `[WARN] MOE_CONTROL_CHECKOUT_BEHIND: DETAIL` and `[WARN] task <tid> is parked with no CLI run; this seat goes on to its next claim.`, then returns 0.\n- Error handling: when the args build or the RPC fails, it prints `[ERROR] MOE_CONTROL_CHECKOUT_BEHIND: DETAIL` and worktree_stop's `[WARN] moe.report_blocked failed for <tid>; the seat stops anyway.`, runs stop_heartbeat_sidecar, then exit 1. There is no second call, so a row the daemon never parked is never re-claimed in a loop.\n(c) qa_landed_gate.\n- The python takes \"$tid\" as argv[1]. It prints nothing unless the context's task.id equals it; it prints the sha when it is 40 lowercase hex, else 'none'.\n- Empty → worktree_stop \"task $tid: the pre-flight get_context did not answer for this task, so its recorded completion is unknown\". This is seat-level, as today.\n- 'none' → qa_gate_park <today's no-recorded-completion detail> and `return 1`.\n- Unreadable HEAD → unchanged.\n- Then a `why` variable:\n  - cat-file -e fails → why = <today's not-a-commit detail>;\n  - otherwise `merge-base --is-ancestor` rc != 0 → why = <today's not-in-HEAD detail>, and rc != 1 (a git error) → worktree_stop \"$why\".\n- With why set:\n  - QA_LAND_B non-empty and (== HEAD, or `merge-base --is-ancestor \"$QA_LAND_B\" \"$head\"` exits 0) → qa_gate_park \"$why\"; return 1;\n  - else worktree_stop \"$why\". HEAD lacks the synced tip (a failed sync or follow), which every row would hit, so the seat stops.\n- Keep every detail string byte-identical to today's, so the existing reason regexes still match. Rewrite the header comment to state the split.\n(d) Call site, the WT-13 (§6.4) block: `qa_landed_gate || continue`, with a 2-line comment.\n- The continue also skips the loop-end --no-loop break; the precedent is `account_wait_recheck || continue`.\n- FIRST_RUN=false was already set, so the next pass gets the poll sleep like any ended session.\n- The gate runs before the baseline, the live marker, the account lease and the heartbeat sidecar, so nothing needs undoing.\n- report_blocked's hand-back closes the QA claim's attempt (taskStore closeAttemptsOnHandBack).\n- Green check: the sh leg with MOE_WORKTREE_ONLY=wt-qa-gate,wt-qa-park → 2 ok.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "ps1 twin (DoD 1, 2), the scripts/moe-agent.ps1 hunks of code.diff, ported with the Edit tool. Keep the UTF-8 BOM, then ParseFile must report 0 errors. Leave Stop-MoeWorktreeSeat untouched.\n(a) Invoke-MoeQaControlPreflight.\n- Set `$script:MoeQaLandB = ''` first.\n- When Get-MoeGitTop answers:\n  - `$remote = -not (Test-MoeNoRemote $git.Top)`;\n  - `$L = @{ Remote = $remote; B = ''; Msg = '' }`;\n  - `$script:MoeQaLandB = [string](Sync-MoeLandTarget $git.Top $target $res $L)`. Use the RETURN value: it is '' on any failure, even when $L.B was set (diverged).\n- Print the existing WARN only when `$remote -and -not $script:MoeQaLandB`.\n- Then Invoke-MoeControlFollow.\n(b) New `Invoke-MoeQaGatePark([string]$Detail)` before Assert-MoeQaLandedCommit.\n- Inside try/catch: Invoke-MoeRpc report_blocked @{ taskId = $preflightTaskId; workerId = $WorkerId; reason = \"MOE_CONTROL_CHECKOUT_BEHIND: $Detail\"; blockedOnTaskIds = @() }. PS 5.1 serializes @() as [], and the harness asserts it.\n- Non-null reply → the same two [WARN] lines, `$script:MoeQaGateParked = $true`, return.\n- Error handling: a null reply or a throw → the [ERROR] line, '[WARN] moe.report_blocked failed for <tid>; the seat stops anyway.', Stop-HeartbeatSidecar, exit 1.\n(c) Assert-MoeQaLandedCommit, the same split.\n- `$task = Get-MoeProp $Context 'task'; $id = Get-MoeProp $task 'id'; if (-not ($id -is [string] -and $id -ceq $TaskId))` → Stop-MoeWorktreeSeat with the no-context detail. Use the -is [string] guard because an array on the left of -cne filters instead of comparing.\n- Bad sha → Invoke-MoeQaGatePark <detail>; return, with nothing on the pipeline.\n- Not a commit, or not an ancestor → $why. `$rc -ne 1` → Stop.\n- `$b = [string]$script:MoeQaLandB; if ($b -and ($b -ceq $head -or (Invoke-MoeGit ... 'merge-base','--is-ancestor',$b,$head).Rc -eq 0))` → park and return; else Stop.\n- Passing returns the dynamic-context string as today. Use the same detail strings as sh.\n(d) Call site:\n```\n$qaReview = Assert-MoeQaLandedCommit $preflightContext $preflightTaskId\nif ($script:MoeQaGateParked) { continue }\n$dynamicContext += $qaReview\n```\n(e) Loop top: `$script:MoeQaGateParked = $false` right after the in-loop `$script:AccountRelaunch = $false` (the 'Read once, just above' block, about :9540).\n(f) The do-while condition (about :11672) gains `-or $script:MoeQaGateParked`, and the comment above it is extended. PowerShell's continue in a do-while jumps to the condition, so without this a -NoLoop run ends after the park; mutant m5 proved it.\n- Green check: the ps1 leg via Windows node.exe, with WSLENV=MOE_WORKTREE_ONLY, MOE_WORKTREE_ONLY=wt-qa-gate,wt-qa-park and the fixture parent on /mnt/d → 2 ok.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs (DoD 2), exact text in /mnt/d/moe-scratch/plan-3416b309/docs.diff, ported with the Edit tool.\n(a) scripts/CLAUDE.md, the **Control follow** bullet: replace the sentence that begins 'QA reviews landed bytes only: `qa_landed_gate` / `Assert-MoeQaLandedCommit` stops the QA seat…' with the row/seat split. It names qa_gate_park / Invoke-MoeQaGatePark, the [WARN], the seat staying registered and claiming again even under --no-loop, and the seat-level list.\n(b) docs/plans/2026-10-30-per-task-worktrees.md §6 item 4 ('QA reviews what landed'): insert the split, with a task-3416b309 reference, before its closing 'The reviewed diff is `git diff <sha>^ <sha>`.' sentence.\nNo new MOE_* code, so docs/CONFIGURATION.md's code table stays as it is.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify and run the adversarial self-review (the adversarial-self-review skill), once, at the end.\n- Run the plan's one verification command fresh, from the task worktree root, and submit its output as complete_task evidence. It runs bash -n, ParseFile, parity sh/ps1, the full postflight-worktree suite on sh (fixture parent under /tmp, because of mkfifo) and PS 5.1, and worktree-landing sh/ps1.\n- The architect's prototype of these legs, run concurrently: 24 min, 77/77 worktree arms and 18/18 landing cases on each engine. Run sequentially, expect about 40-50 min. Launch it detached with a log and an `EXIT=` line (mem:convention-postflight-scratch-harness).\n- Kill only PIDs you started, by recorded PID; never kill by pattern.\nSelf-review checklist:\n1. Can a park loop? Only if report_blocked succeeds without blocking the row, and blockedOnTaskIds [] closes the dependenciesSatisfied path. A failed call exits.\n2. Can a seat-level condition now park rows en masse? Not when HEAD lacks QA_LAND_B (a failed fetch or follow), with an unreadable HEAD, on a git error, or with no context for this task.\n3. Are both twins spelled the same? Same strings, and no new MOE_* code; parity passes.\n4. Did anything set up before the gate need undoing at the continue? It must not.\n5. Do the hunks stay in your own functions? 561d347c (WORKING) and e76f32a0 edit other functions of these files; a landing conflict takes the unlanded route.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-a0305b0b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +66,98 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:54:04.824Z",
-  "updatedAt": "2026-11-04T05:54:10.001Z",
+  "updatedAt": "2026-11-04T06:52:20.040Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T05:54:07.529Z"
+    "firstClaimAt": "2026-11-04T05:54:07.529Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 6
   },
   "contextFetchedBy": [
-    "architect-67c762f6"
-  ]
+    "architect-67c762f6",
+    "worker-a0305b0b"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T06:50:15.717Z",
+  "executionContract": {
+    "intendedBehavior": "Change what a QA seat does when the landed gate misses. Today every miss exits the seat. After this change, a QA seat in a worktree-mode control checkout (HEAD on moe/control) handles a claimed REVIEW row whose recorded completion is not a landed commit it can review like this:\n- It parks only that row: one moe.report_blocked (blockedOnTaskIds []), a [WARN] MOE_CONTROL_CHECKOUT_BEHIND line, and no CLI.\n- It then goes back to its loop top for a fresh pre-flight and claim, still registered. This holds even under --no-loop / -NoLoop.\nOnly seat-level conditions still stop the seat with exit 1, exactly as worktree_stop / Stop-MoeWorktreeSeat do today:\n- no context for this task;\n- an unreadable control HEAD;\n- a git error in the ancestry check;\n- a completion miss while the control HEAD lacks the target tip the pre-flight synced;\n- a report_blocked that fails.",
+    "acceptanceCriteria": [
+      "Both launchers: a QA pre-flight whose own context records no usable completion sha sends exactly one report_blocked for that row and launches no CLI. It then claims again in the same wrapper run with no deregister_worker in between, and exits 0.",
+      "postflight-worktree.cjs arm 'wt-qa-park' shows one wrapper run that parks the first REVIEW row and then launches the CLI once for the next claim, which names `Review commit <c>`. The arm fails on today's wrappers (exit 1).",
+      "These still stop the seat (exit 1, an [ERROR] line, one report_blocked attempt, no CLI): wt-qa-behind (the follow is refused, so HEAD lacks main's tip), a failed report_blocked, and a get_context that failed or answered another task.",
+      "wt-qa-gate's row-level cases (none, checkpoint, malformed, upper, unknown, git-fail) park and continue. wt-qa-ff and wt-qa-later still review C, and wt-qa-shared (shared mode) has no gate.",
+      "scripts/CLAUDE.md's Control-follow sentence and the design doc's §6 item 4 state the row/seat split.",
+      "bash -n, ParseFile and parity-check.{sh,ps1} pass. The full postflight-worktree suite passes on sh and PS 5.1, and worktree-landing passes on sh and PS 5.1."
+    ],
+    "invariants": [
+      "worktree_stop and Stop-MoeWorktreeSeat are unchanged, so every worker provisioning guard still stops the seat.",
+      "No new MOE_* code; the existing gate detail strings are byte-identical.",
+      "At most one report_blocked per park, and a failed park exits instead of continuing.",
+      "Shared-mode QA (HEAD not on moe/control) runs no gate and is unchanged.",
+      "The gate runs before the baseline, the live marker, the account lease and the heartbeat sidecar.",
+      "moe-agent.ps1 keeps its UTF-8 BOM, and both twins stay in string parity."
+    ],
+    "compatibility": [
+      "The fake-proxy knobs are additive and default-off, so every existing arm and worktree-landing's embedded suite are unaffected; the prototype full run passed 77/77 and 18/18 on both engines.",
+      "report_blocked args gain blockedOnTaskIds: [], which the daemon's documented contract recommends (an explicit list suppresses reason-id parsing). No MCP contract changes."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: qa_control_preflight (QA_LAND_B), new qa_gate_park, qa_landed_gate, the WT-13 §6.4 call site (`qa_landed_gate || continue`).",
+      "scripts/moe-agent.ps1: Invoke-MoeQaControlPreflight ($script:MoeQaLandB), new Invoke-MoeQaGatePark, Assert-MoeQaLandedCommit, the §6.4 call site, the loop-top `$script:MoeQaGateParked = $false`, and the do-while condition plus its comment.",
+      "scripts/tests/postflight-fake-proxy.js: FAKE_CTX_LANDING_FROM_CLAIM in get_context's landing block, and FAKE_REPORT_BLOCKED_FAIL in case 'report_blocked'.",
+      "scripts/tests/postflight-worktree.cjs: qaRun and qaParked helpers, the wtQaGate edits, the new wtQaPark arm and its cases-map entry.",
+      "Docs: one sentence in scripts/CLAUDE.md; §6 item 4 of docs/plans/2026-10-30-per-task-worktrees.md."
+    ],
+    "reuse": [
+      "sync_land_target / Sync-MoeLandTarget: in local mode they only read the local target tip, which becomes QA_LAND_B with no new git plumbing.",
+      "worktree_stop / Stop-MoeWorktreeSeat for every seat-level branch; moe_rpc / Invoke-MoeRpc for the park.",
+      "The account-relaunch continue pattern (`account_wait_recheck || continue`, and $script:AccountRelaunch in the ps1 do-while).",
+      "Harness: launch(), refused(), landed(), rpcs(), FAKE_CLAIM_ONCE/FAKE_CLAIM_LIMIT, FAKE_GET_CONTEXT_FAIL error/mismatch, MOE_TASKLESS_WAIT_SEC."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh at 2a1c5a36:\n- worktree_stop: :3227;\n- qa_control_preflight: :7050;\n- qa_landed_gate: :7068;\n- sync_land_target: :7380 (local mode sets LAND_B from refs/heads/<target>);\n- QA gate call site: :11003-11006;\n- loop-end --no-loop break: :12442.",
+      "scripts/moe-agent.ps1 at 2a1c5a36:\n- Stop-MoeWorktreeSeat: :3115;\n- Invoke-MoeQaControlPreflight: :6514;\n- Assert-MoeQaLandedCommit: :6536;\n- Sync-MoeLandTarget: :6998 (returns '' on failure);\n- loop-top reset: :9540;\n- call site: :10242-10245;\n- do-while: :11672.",
+      "packages/moe-daemon/src/tools/reportBlocked.ts:\n- an omitted blockedOnTaskIds parses reason ids; the task's own id is skipped (:185);\n- all-DONE parsed ids return dependenciesSatisfied with no block (:262).\nstate/taskStore.ts closeAttemptsOnHandBack closes the QA attempt when the hand-back clears the assignee."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && T=scripts/tests A=scripts/moe-agent N=\"/mnt/c/Program Files/nodejs/node.exe\" P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass\" && S=$(mktemp -d /mnt/d/moe-scratch/3416-v.XXXXXX) && F=$(mktemp -d /tmp/3416-f.XXXXXX) && cp $T/postflight-fake-proxy.js $S/fp.js && w(){ wslpath -w \"$1\"; } && bash -n $A.sh && $P -Command \"\\$e=\\$null;[void][Management.Automation.Language.Parser]::ParseFile('$(w $A.ps1)',[ref]\\$null,[ref]\\$e);exit \\$e.Count\" && bash $T/parity-check.sh && $P -File \"$(w $T/parity-check.ps1)\" && env $E node $T/postflight-worktree.cjs sh \"$PWD/$A.sh\" $S/fp.js $F \"$BASH\" && env $E \"$N\" \"$(w $T/postflight-worktree.cjs)\" ps1 \"$(w $A.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell && env $E bash $T/worktree-landing.sh && $P -File \"$(w $T/worktree-landing.ps1)\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. A 'park' flag on worktree_stop / Stop-MoeWorktreeSeat. Rejected: about 10 worker guards share them, and their output order and semantics would change.\n2. Park every miss. Rejected: a control checkout that failed to fetch or follow misses every REVIEW row, so one seat would park the whole queue row by row. That is why a C miss is row-level only while HEAD holds the synced target tip (QA_LAND_B).\n3. A new code such as MOE_QA_NO_COMPLETION. Rejected: it adds contract and docs churn, and the DoD keeps the code.\n4. Checking report_blocked's taskStatus/seatFreed in the reply. Unnecessary: blockedOnTaskIds [] removes the only success-without-block path for a REVIEW row (dependenciesSatisfied), and the fake would need the real reply shape.\n5. A second task id in the fake for the 'second REVIEW row'. Rejected: attempts, context and claims are hard-wired to task-postflight. FAKE_CTX_LANDING_FROM_CLAIM models the next row instead.",
+    "codebaseInsights": "Loop mechanics:\n- sh: the main loop is `{ while ...; done; tail; exit; }`. A `continue` skips the loop-end `--no-loop` break, so a park re-runs pre-flight even single-shot, as the account relaunch does.\n- ps1: the loop is a do-while. `continue` jumps to the condition, hence the $script:MoeQaGateParked flag, reset at the loop top.\n- FIRST_RUN/$firstRun are already false before pre-flight, so the next pass gets the poll sleep.\nDaemon side:\n- report_blocked by the assignee frees the seat (IDLE).\n- updateTask's closeAttemptsOnHandBack closes the QA attempt, so no orphan attempt is left.\nHarness:\n- launch() keeps .moe/claim-count and second-claim across runs on one fixture.\n- The single-shot taskless wait defaults to 300 s, over the 180 s launch LIMIT.\nGit stub: WT_GIT_FAIL exits 1, the same as 'not an ancestor', so wt-qa-git-fail is a row-level park now.",
+    "risks": "- Overlap. Other rows edit other functions of the same files: 561d347c (WORKING) edits moe-agent.sh/.ps1, postflight-worktree.cjs, scripts/CLAUDE.md and the design doc, and e76f32a0 edits the fake proxy's get_commit_scope. Keep the hunks local. A landing conflict takes the unlanded route.\n- Run the cjs sh leg with its fixture parent under /tmp (marker-scan needs mkfifo, which drvfs lacks), and the ps1 leg from /mnt/d via Windows node.exe.\n- Under heavy load an arm can hit the 180 s launch LIMIT. MOE_POSTFLIGHT_TIMEOUT_SEC widens it, but changing the checkRef needs a re-plan, so report rather than edit.\n- The prototype's full legs ran the first version, before blockedOnTaskIds [] was added. The final version re-ran the two QA arms on both engines.\n- Mutants m1-m5 each went RED: no continue, park everything, no task.id check, a failed park continuing, and the ps1 flag missing from the do-while.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/CLAUDE.md",
+      "docs/plans/2026-10-30-per-task-worktrees.md",
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "/mnt/d/moe-scratch/plan-3416b309/code.diff",
+      "/mnt/d/moe-scratch/plan-3416b309/docs.diff"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "59e95024a08f312e6674ee329c693d6a284b5f7b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T06:50:15.747Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T06:52:20.040Z"
 }

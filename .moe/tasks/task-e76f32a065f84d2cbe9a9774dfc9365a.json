@@ -40,9 +40,11 @@
     {
       "stepId": "step-3",
       "description": "Verification, run ONCE (see mem:gotcha-qa-full-postflight-sh-runtime-and-summary-cap and mem:gotcha-qa-ps1-postflight-from-wsl).\n\n(1) The RED gate (second checkRef) takes seconds and must still print RED-AT-BASE. It runs your test file against 5592bcc0's fake, so the fix does not affect it.\n\n(2) The GREEN gate is the first checkRef, run verbatim, and it is complete_task's verification. It:\n- greps the fake's doc;\n- snapshots `git archive HEAD` under /mnt/d/moe-scratch, with your two files overlaid and cmp-checked;\n- runs the unit file and parity-check.sh;\n- runs the FULL bash postflight.sh, with the MOE_*/CLAUDE* env scrubbed;\n- runs the FULL postflight.ps1 under Windows PowerShell 5.1. The ps1 sibling is required because moe-agent.ps1 reads get_commit_scope.peersActive (:4245), and both harnesses run postflight-owner-guard.cjs.\n\nThe GREEN gate takes about 60-80 min, so never run it in the foreground:\n- From the worktree root, write /mnt/d/moe-scratch/run-e76f32a0.sh, a scratch file outside the checkout where a heredoc is fine. It holds `( <the exact GREEN command> )` and then `echo \"EXIT=$?\"`.\n- Start it with `( set -m; setsid nohup bash /mnt/d/moe-scratch/run-e76f32a0.sh > /mnt/d/moe-scratch/run-e76f32a0.log 2>&1 & echo $! > /mnt/d/moe-scratch/run-e76f32a0.pid )`.\n- Wait in foreground calls with a 600000 ms Bash timeout: `timeout 570 tail --pid=\"$(cat /mnt/d/moe-scratch/run-e76f32a0.pid)\" -f /dev/null; grep -a '^EXIT=' /mnt/d/moe-scratch/run-e76f32a0.log`. Repeat until EXIT= appears.\n- Do not end your turn while it runs.\n- Never kill by name or pattern (rail). A Windows leg cannot be stopped from WSL, so let it finish.\n\nEvidence for complete_task:\n- command: the GREEN checkRef text;\n- exitCode: the EXIT value, which must be 0;\n- outputTail: the output of `grep -aE 'ℹ (tests|pass|fail) |PASS |^EXIT=' <log> | tr -d '\\r'`. It shows the unit counts and the PASS lines for parity-check, the frozen and owner guard suites, postflight.sh and postflight.ps1.\n\nError handling for a red run:\n(i) A timeout (`wrapper exited with 124`, or a stalled leg under fleet load) is environmental. Re-run the whole GREEN command once, with the same text.\n(ii) Otherwise, find the first failing row (`grep -anE 'FAIL|failed|✖' <log> | head`). Re-run just that row in a second snapshot whose fake is 5592bcc0's (`git show 5592bcc0fb660da933ffbc8b96269e7657d5f5a1:scripts/tests/postflight-fake-proxy.js`):\n- owner-guard rows: MOE_OWNER_GUARD_ONLY=<case> with `node scripts/tests/postflight-owner-guard.cjs sh|ps1 <wrapper> <fake> <tmp> <engine>`, as postflight.sh:1258 and postflight.ps1:1238 call it;\n- frozen rows: MOE_FROZEN_TEST_ONLY=<mode>;\n- lettered scenarios: a trimmed scratch harness (mem:convention-postflight-scratch-harness).\nIf the row fails the same way on the base fake, it is not this change. Never weaken, skip or edit any harness, row or other file. Post the row, both excerpts and the snapshot paths in #general, then call moe.report_blocked with that evidence. If it fails only with the new fake, it is this task's bug: fix the fake (never the rows), re-run step 2's checks, then the RED and GREEN gates.\n\nAfter capturing the evidence, remove the printed `Verification snapshot:` dir and the run-e76f32a0.* files, by exact path.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
+      "note": "RED-AT-BASE printed (tests 17, pass 15, fail 2: f1,f4). GREEN gate re-run after a dead detached run: EXIT=0; unit 17/17, parity, postflight.sh and postflight.ps1 PASS; owner-guard finalizing-own and sequential ok in both legs.",
       "startedAt": "2026-11-03T22:21:49.107Z",
+      "completedAt": "2026-11-04T06:51:51.693Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -78,7 +80,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T21:02:55.403Z",
-  "updatedAt": "2026-11-04T05:24:43.320Z",
+  "updatedAt": "2026-11-04T06:52:15.217Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:03:54.168Z",
@@ -88,7 +90,7 @@
     "firstClaimAt": "2026-11-03T21:19:33.768Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -102,7 +104,8 @@
   "lowEffortEligible": true,
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:18:24.475Z",
@@ -166,10 +169,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T22:20:51.791Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
+    "outcome": "nothing",
     "kind": "checkpoint",
-    "sessionId": "worker-8cf0816c@2026-11-03T22:18:33Z",
-    "at": "2026-11-03T23:41:47.828Z"
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "worker-5772dacf@2026-11-04T05:24:13Z",
+    "at": "2026-11-04T06:52:15.217Z"
   },
   "commits": [
     {

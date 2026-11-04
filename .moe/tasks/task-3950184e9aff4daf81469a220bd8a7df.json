@@ -1,0 +1,34 @@
+{
+  "id": "task-3950184e9aff4daf81469a220bd8a7df",
+  "epicId": "epic-be924fb8",
+  "title": "bug: doctor's worktree control-branch and target probes check only refs/heads, so doctor exits 0 on two states that stop the fleet: a target branch origin does not have (remote mode cuts every new task worktree from refs/remotes/origin/<target>, so each worker seat dies at its first claim with MOE_WORKTREE_CREATE_FAILED) and a moe/control that diverged from the target (the control checkout stops following with MOE_CONTROL_CHECKOUT_DIVERGED and QA's landed gate stops every QA claim)",
+  "description": "Filed by defect hunt task-3488566e (11-04 #17, lane 3: doctor's probes against worktree mode as it runs now). HEAD bb0bc17e.\n\nPROBLEM\n- packages/moe-daemon/src/commands/doctorWorktree.ts:102-112 (probeTarget) only asks whether refs/heads/<target> resolves and whether a worktree has it checked out. The launchers need more than that:\n  - Both launchers are in remote mode whenever `git remote` prints anything (no_git_remote, scripts/moe-agent.sh:6062-6065). There they cut each new task worktree from refs/remotes/origin/<target>. When that ref is missing after the fetch, they stop the seat: moe-agent.sh:3450-3455 and moe-agent.ps1:3432-3436 raise MOE_WORKTREE_CREATE_FAILED, and worktree_stop (moe-agent.sh:3227-3235) report_blocks the claimed task and exits 1. That happens once per worker claim.\n  - A local target holding commits origin lacks also fails every landing with MOE_LAND_TARGET_DIVERGED (moe-agent.sh:7390).\n- doctorWorktree.ts:94-100 (probeControlBranch) only compares `symbolic-ref HEAD` with refs/heads/moe/control.\n  - The control follow needs moe/control to be an ancestor of the target. Otherwise moe-agent.sh:7019-7021 raises MOE_CONTROL_CHECKOUT_DIVERGED (\"nothing was reset, reconcile it by hand\").\n  - QA's landed gate (moe-agent.sh:7083-7084) then stops with MOE_CONTROL_CHECKOUT_BEHIND for every completion landed after the divergence. Until task-3416b309 lands, each such stop exits the QA wrapper.\n  - Agent commits there are refused by c4cd6dce's guard, but a human commit from the IDE's commit dialog is not: the control checkout is the IDE project.\n- The docs make doctor the gate: docs/TROUBLESHOOTING.md:1254-1255 (the control branch and target rows, which state only today's checks) and :1289 (\"Run doctor; it must exit 0. Then relaunch the seats\").\n\nEVIDENCE: architect re-run at bb0bc17e, /mnt/d/moe-scratch/hunt-3488566e/mine/doctor-worktree-refs-rerun.txt (subagent originals in B/remote-target-missing.txt and B/control-diverged.txt).\n- Fresh fixture: a bare origin holding only main, a local moe/work-2026-10-24, HEAD moe/control, worktreeMode on.\n  [OK] worktree control branch: control checkout is on refs/heads/moe/control\n  [OK] worktree target: target moe/work-2026-10-24 exists and is not checked out in any worktree\n  The launcher's check: fatal: couldn't find remote ref moe/work-2026-10-24; rev-parse refs/remotes/origin/moe/work-2026-10-24 rc=1 (=> MOE_WORKTREE_CREATE_FAILED).\n- Diverged fixture: a commit on moe/control that the target lacks, plus a landing on the target.\n  merge-base --is-ancestor moe/control target rc=1 (=> MOE_CONTROL_CHECKOUT_DIVERGED)\n  [OK] worktree control branch ... / [OK] worktree target ... / doctor exit=0\n- Live today, refs/remotes/origin/moe/work-2026-10-24, the local target and moe/control are all bb0bc17e, so the fix raises no false FAIL here.\n\nFIX DIRECTION. Offline reads only: doctor still never fetches.\n- probeTarget: when `git remote` lists any remote (the launchers' rule), also require refs/remotes/origin/<target> to resolve to a commit. Require refs/heads/<target> to be its ancestor: `merge-base --is-ancestor`, where exit 1 is a FAIL naming MOE_LAND_TARGET_DIVERGED.\n- probeControlBranch: when HEAD is moe/control, run `merge-base --is-ancestor refs/heads/moe/control refs/heads/<target>`:\n  - exit 0 passes, because behind or equal is normal between a landing and the follow;\n  - exit 1 fails, naming MOE_CONTROL_CHECKOUT_DIVERGED;\n  - any other exit fails as unreadable.\n- Update the two TROUBLESHOOTING.md rows to state these conditions.\n- Out of scope: the launchers (held by open rows), doctor.ts's daemon.json probe, docs/MCP_SERVER.md.\n\nFILES: packages/moe-daemon/src/commands/doctorWorktree.ts, packages/moe-daemon/src/commands/doctor.test.ts (the \"worktree readiness probes\" and \"worktree probes against a real repository\" describes), docs/TROUBLESHOOTING.md (worktree-mode readiness table, rows :1254-1255 only). No open row holds any of them (lanes.js 06:50Z).",
+  "definitionOfDone": [
+    "doctor.test.ts stub-git cases. With `git remote` answering \"origin\" and refs/remotes/origin/<target> unresolvable, the result is a `[FAIL] worktree target:` line naming that ref, exit 1. With that ref resolving but `merge-base --is-ancestor refs/heads/<target> refs/remotes/origin/<target>` exiting 1, the result is a `[FAIL] worktree target:` line naming MOE_LAND_TARGET_DIVERGED, exit 1. A repo whose `git remote` prints nothing keeps today's [OK] line, and the existing 'runs only bounded read-only Git commands, never the quality gate' case still passes, with no fetch.",
+    "doctor.test.ts real-repository cases. When moe/control holds a commit the target lacks, the result is `[FAIL] worktree control branch:` naming MOE_CONTROL_CHECKOUT_DIVERGED, exit 1. When the target is ahead of moe/control (moe/control is its ancestor), the result is `[OK] worktree control branch`, exit 0.",
+    "docs/TROUBLESHOOTING.md's control-branch and target rows state the ancestry and origin conditions (grep 'ancestor' and 'refs/remotes/origin' hit them), and `npx vitest run src/commands/doctor.test.ts src/commands/doctor.bindHost.test.ts` passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-c33f294e",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 490.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:51:17.766Z",
+  "updatedAt": "2026-11-04T06:52:38.717Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:52:35.559Z"
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e"
+  ]
+}
