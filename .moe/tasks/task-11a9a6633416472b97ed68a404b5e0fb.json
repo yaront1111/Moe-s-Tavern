@@ -1,0 +1,36 @@
+{
+  "id": "task-11a9a6633416472b97ed68a404b5e0fb",
+  "epicId": "epic-be924fb8",
+  "title": "bug: doctor crashes (runDoctor rejects ERR_SOCKET_BAD_PORT) on a daemon.json whose port is outside 1-65535 or a fraction while its pid is alive, because probeHealth and probeTcp call http.request/socket.connect inside a promise executor and the throw is never caught",
+  "description": "Found while reviewing task-d7b24cab (doctor's foreign-record probe, which now refuses such a port itself). For a LOCAL record, daemon.json `{port: 99999, pid: <live pid>, projectPath: <this project>}` makes `runDoctor` reject with \"Port should be >= 0 and < 65536. Received type number (99999)\" (also 1.5, -1, Infinity), because commands/doctor.ts probeDaemonJson only checks `typeof port === 'number'`, then probeHealth (http.request) and probeTcp (socket.connect) throw synchronously in their promise executors and runDoctor has no catch. daemon.json is repository content, so a pulled file can crash the doctor CLI. Repro: scratch vitest in a git-archive snapshot, runDoctor on that record, outcome REJECTED.\nFix direction: validate the port (integer 1-65535) in probeDaemonJson before any dial and report a [FAIL] as task-d7b24cab's probeForeignDaemonJson does, or make probeHealth/probeTcp resolve on a synchronous throw; add a local-record row to doctor.test.ts.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 495.7,
+  "comments": [
+    {
+      "id": "comment-8e022e4ac9e74dec899367077eccf6a8",
+      "author": "governor-e6142a94",
+      "content": "Governor note for the planner.\n1. **Dependency.** dependsOn task-d7b24cab was added. This row's fix edits the same function, probeDaemonJson in commands/doctor.ts, that d7b24cab is changing now (WORKING). Its fix direction also reuses d7b24cab's port refusal in probeForeignDaemonJson. That is a real logic edge, so the row stays in BACKLOG and promotes when d7b24cab is DONE, under the standing \"move from backlog\". Plan against d7b24cab's landed doctor.ts and share one port check for the local and foreign records rather than adding a second.\n2. **Correction.** .moe/daemon.json is gitignored runtime state (root CLAUDE.md, \"Only the runtime subset (daemon.json, …) is gitignored\"). It is not repository content, so no pull can deliver a bad one; only a hand edit or a broken writer can. The bug stands at LOW: doctor should FAIL a bad port, not crash.\n3. **Acceptance.** The row's DoD is only \"Task completed as described\", so put these checkable points in your executionContract:\n   - (a) With a live local pid and port 99999, 0, -1, 1.5, Infinity or a string, runDoctor resolves, prints one [FAIL] naming the bad port, exits 1, and dials nothing.\n   - (b) A valid port behaves as today.\n   - (c) Those rows are in doctor.test.ts in their own describe block, and the daemon tests for doctor pass.",
+      "timestamp": "2026-11-04T07:49:16.864Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:48:30.637Z",
+  "updatedAt": "2026-11-04T07:49:16.864Z",
+  "dependsOn": [
+    "task-d7b24caba2a14229acfbaa2b6e55cb94"
+  ]
+}
