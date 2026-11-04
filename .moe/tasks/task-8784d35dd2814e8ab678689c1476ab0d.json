@@ -35,15 +35,18 @@
     {
       "stepId": "step-3",
       "description": "Verification gate, run ONCE after steps 1-2, from the task worktree root, holding the jetbrains-gradle lease. Release it afterwards, even on failure. If a peer holds it briefly, moe.wait_for_resource in-session beats report_blocked.\n\nRun the checkRef exactly (copy in /mnt/d/moe-scratch/plan-8784d35d/checkref.txt, sha256 760ea08b142b72395eb1dcb8c5179e103787b5bd7f237d021d5962b49a674a94). It runs the Windows equivalents of the DoD's focused connection class and the full JetBrains suite, each with --rerun. gradlew.bat lives in moe-jetbrains/ (mem:gotcha-gradle-jetbrains-shared-box, section 2c). The command prints both BUILD lines, the module XML totals and MoeProjectConnectionTest's counts. It exits non-zero unless that class shows exactly tests=16 skipped=0 failures=0 errors=0.\n\nExpected: two BUILD SUCCESSFUL lines. The module total is the base plus 2: task-048bfae2's run gave 664, so about 666, plus any JetBrains landings since. Report it in complete_task as Windows evidence.\n\nError handling for a red run:\n- Read the log the command names; the first `e:` line is the compile error.\n- `> Task :test UP-TO-DATE` means nothing ran.\n- An exit 1 with green XML can be the Gradle daemon MessageIOException IPC flake: rerun once.\n- An unexplained compile error in an untouched file is a stale Kotlin IC: run `compileKotlin --rerun` once (mem:gotcha-jetbrains-stale-kotlin-ic).\n- A hang past 10 minutes follows mem:gotcha-jetbrains-connection-test-close-hang.\n- Never run cleanTest or --rerun-tasks, and never kill Gradle or java processes by name. Kill only PIDs you started, by recorded PID (project rail).\n\nThis run's fresh output is the complete_task verification evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T00:27:42.499Z"
+      "note": "Exact approved checkRef freshly executed from task worktree under jetbrains-gradle; exit 0. Log /tmp/tmp.ov5zZiDZ8Y: BUILD SUCCESSFUL in 5s and BUILD SUCCESSFUL in 28s; full Windows module XML tests=666 skipped=6 failures=0 errors=0; ConnectionTest tests=16 skipped=0 failures=0 errors=0. :test executed in both runs, not UP-TO-DATE. Released lease.",
+      "startedAt": "2026-11-04T00:27:42.499Z",
+      "completedAt": "2026-11-04T00:28:28.791Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of THIS task's diff: load adversarial-self-review. The epic is a rolling bucket and isEpicFinal comes from the highest-order fallback, so the review covers this task. Step 3's full plugin suite is the regression gate. Only one test file changes, and no production code.\n\nRun the mutants under the jetbrains-gradle lease in a copy outside the checkout, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, worker variant): `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/m-8784`, then cp --parents your changed file. Run `--tests com.moe.services.MoeProjectConnectionTest --rerun` once per mutant, restore the file, and cmp it at the end.\n- M1: drop `server.onWriteDemand(conn)` from flush. Both new tests must fail: flush returns false, and the wiring test's get(5, SECONDS) times out.\n- M2: drop the `flush(socket)` call from onMessage. 'a reply the loopback server strands still answers the request' must fail.\n- M3: make strand call `conn.send(text)`. The control assertion 'A stranded frame must not leave on its own' must fail.\n\nAlso check by reading:\n- flush runs on the server's single worker thread, so a 1 ms sleep only delays the next frame's processing.\n- flush's duplicate onWriteDemand calls are harmless: they re-set the same interest and wake the selector.\n- `server.connections.single()` holds because each fixture opens one connection per test.\n- No other assertion in the class changed.\n\nOut of scope, so do not touch it: MoeSnapshotProjectCheckTest also sends from its loopback server's onOpen, but 3,000 such greetings stranded none (OpenStress), so it gets no change here. Record the mutant results and the harness numbers in complete_task's summary.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T00:28:28.820Z"
     }
   ],
   "planRevision": 1,
@@ -60,7 +63,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:51:26.254Z",
-  "updatedAt": "2026-11-04T00:27:42.499Z",
+  "updatedAt": "2026-11-04T00:28:28.820Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T23:52:32.338Z",
@@ -70,7 +73,7 @@
     "firstClaimAt": "2026-11-03T23:55:23.261Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -82,7 +85,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:22:14.283Z",
