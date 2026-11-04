@@ -47,28 +47,37 @@
     {
       "stepId": "step-3",
       "description": "Verification gate, run ONCE (DoD 1, DoD 3). JetBrains gradle from WSL, per mem:gotcha-jetbrains-gradle-from-wsl.\n\n1. Take the lease with moe.acquire_resource { resourceId: \"jetbrains-gradle\" }. Release it with moe.release_resource when done, whether the run passes or fails.\n2. Run from this task's worktree (worktree mode: D:\\projexts\\moes\\.worktrees\\<taskId>). From bash, single-quote the whole cmd string and leave the --tests filters unquoted.\n   - RED/GREEN: temporarily remove the two guards and run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d <worktree>\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.listeners.MoeProjectOpenListenerTest --tests com.moe.services.MoeProjectServiceTest --rerun'`. Cases A and C must fail and B and D pass. Restore the guards and rerun: everything passes.\n   - Full: `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d <worktree>\\moe-jetbrains && .\\gradlew.bat test --rerun'` must end with BUILD SUCCESSFUL.\n   - Confirm that :test executed rather than reporting UP-TO-DATE: the fresh build/test-results/test/TEST-com.moe.listeners.MoeProjectOpenListenerTest.xml and TEST-com.moe.services.MoeProjectServiceTest.xml carry the new cases with 0 failures.\n3. complete_task evidence: the full Windows command exactly as run, its exit code and the output tail (BUILD SUCCESSFUL plus the test count). Label it as the Windows equivalent of `cd moe-jetbrains && ./gradlew test`, not as the POSIX command. Also report the RED run's failing cases.\n4. In the summary, name the manual one-off cleanup this row does not do:\n   - the existing <IDE config>/light-edit/.moe/ folder (here C:/Users/<u>/AppData/Roaming/JetBrains/PyCharm2026.1/light-edit/.moe);\n   - the LightEditProject entry in ~/.moe/projects.json.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
       ],
-      "startedAt": "2026-11-04T09:55:52.716Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "RED (guards disabled): MoeProjectOpenListenerTest LightEdit case and MoeProjectServiceTest LightEdit case failed (6 run, 2 failed); B and D passed. GREEN full: BUILD SUCCESSFUL, 687 tests, 0 failures. Guards restored; lease released.",
+      "startedAt": "2026-11-04T09:55:52.716Z",
+      "completedAt": "2026-11-04T09:57:29.299Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this row's diff, as the final step (load adversarial-self-review). Check:\n- The guard is the first statement in both entry points, before any registry write, wsLock or `connecting` change, status publish or supervisor call. A normal project's path, including its error handling, is unchanged apart from one instanceof check (cases B and D).\n- A second, concurrent connect() on a LightEdit project also returns before the lock, so no flag can stick.\n- Every test restores user.home in finally, even when an assertion fails, and deletes its temp dirs. No test can reach a real daemon spawn: both service cases keep basePath null, and the listener's LightEdit case dies at the service lookup when the guard is removed.\n- Nothing else in moe-jetbrains/src/main registers, scaffolds or spawns for an opened project without going through these two entry points. Re-grep for `registerProject(`, `ensureMoeInitialized`, `initializeProject(` and `ensureDaemonRunning(`, and list any new caller in the summary.\n- The diff touches only the four plan files, and nothing under .moe/ is edited by hand.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
-      ]
+      ],
+      "note": "Self-review: guard is first statement in both entry points (before registry write / wsLock / status / supervisor). Re-grep: registerProject/ensureMoeInitialized/initializeProject/ensureDaemonRunning callers are only the listener, connect(), supervisor internals, and explicit user Init actions (InitMoeAction, panel Init); restartDaemon ends in connect() (guarded). No new callers. Tests restore user.home in finally; service cases keep basePath null. Diff touches only the 4 plan files.",
+      "startedAt": "2026-11-04T09:57:30.190Z",
+      "completedAt": "2026-11-04T09:57:50.700Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5772dacf",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -80,12 +89,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:34:09.187Z",
-  "updatedAt": "2026-11-04T09:55:52.716Z",
+  "updatedAt": "2026-11-04T09:57:55.213Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:38:11.589Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -97,7 +106,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T09:44:56.501Z",
@@ -146,5 +157,20 @@
   },
   "planApprovedAt": "2026-11-04T09:44:56.550Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T09:55:17.409Z"
+  "workStartedAt": "2026-11-04T09:55:17.409Z",
+  "reviewStartedAt": "2026-11-04T09:57:55.211Z",
+  "verification": {
+    "command": "cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\.worktrees\\task-dbdc22f605d3414b9d7cac9cda92d8f4\\moe-jetbrains && .\\gradlew.bat test --rerun'  (Windows equivalent of `cd moe-jetbrains && ./gradlew test`, under the jetbrains-gradle lease)",
+    "exitCode": 0,
+    "outputTail": "> Task :test\n\nBUILD SUCCESSFUL in 32s\n11 actionable tasks: 6 executed, 5 up-to-date\nTEST-com.moe.listeners.MoeProjectOpenListenerTest.xml tests=2 failures=0; TEST-com.moe.services.MoeProjectServiceTest.xml tests=4 failures=0; total tests 687",
+    "reportedAt": "2026-11-04T09:57:55.211Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/listeners/MoeProjectOpenListenerTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
+  ],
+  "completionSummary": "LightEdit.owns(project) guard added as the first statement of MoeProjectOpenListener.projectOpened and MoeProjectService.connect() (before registry write, wsLock, status publish, ensureMoeInitialized/ensureDaemonRunning). New MoeProjectOpenListenerTest (LightEdit: no registry/.moe/getService; normal: registers) and two MoeProjectServiceTest cases (LightEdit: no status; normal: 'Project not initialized'). RED run with both guards disabled: the 2 LightEdit cases failed (6 run, 2 failed), normal cases passed. Full suite green: 687 tests, 0 failures. No new callers of registerProject/ensureMoeInitialized/initializeProject/ensureDaemonRunning; explicit Init actions left alone. NOT done (manual one-off, out of scope): delete the existing C:/Users/<u>/AppData/Roaming/JetBrains/PyCharm2026.1/light-edit/.moe folder and the LightEditProject entry in ~/.moe/projects.json."
 }
