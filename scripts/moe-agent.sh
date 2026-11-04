@@ -267,6 +267,7 @@ cleanup_temp() {
         stop_heartbeat_sidecar
     fi
     if [ "$(type -t finish_gate_observation)" = function ]; then finish_gate_observation || true; fi
+    if [ "$(type -t stop_check_dispatch)" = function ]; then stop_check_dispatch || true; fi
     # Teardown rescue BEFORE deregister: if this session holds a task with a
     # baseline and never completed a landing (Ctrl+C mid-CLI, set -e abort),
     # park its edits on refs/moe/rescue/<taskId>/<ts> so a peer re-claiming
@@ -7754,7 +7755,13 @@ wt_land_rounds() {
             LAND_OUTCOME=refused; LAND_CODE=MOE_COMMIT_REFUSED_UNRECONCILED_INTENT
             LAND_MESSAGE="receipt journal $journal still owes the completion row of $jc"; return 1
         fi
-        if [ -n "${QUALITY_GATE:-}" ] && ! { freeze_candidate "$b" "$m" && run_frozen_gate worktree; }; then
+        if [ -n "${QUALITY_GATE:-}" ] && [ -n "${LAND_TASK_ID:-}" ] && strong_landing_task "$LAND_TASK_ID"; then
+            # CQ-M07r: under the strong profile the owed checks run in check VMs on the frozen candidate, never on this host.
+            CHECK_DISPATCH_CODE=""
+            if ! { freeze_candidate "$b" "$m" && run_check_dispatch; }; then
+                LAND_CODE=MOE_COMMIT_FAILED_GATE; LAND_MESSAGE="the merged tree $m on $b was not frozen, recorded and passed by the check VMs (${CHECK_DISPATCH_CODE:-no dispatch})"; return 1
+            fi
+        elif [ -n "${QUALITY_GATE:-}" ] && ! { freeze_candidate "$b" "$m" && run_frozen_gate worktree; }; then
             LAND_CODE=MOE_COMMIT_FAILED_GATE; LAND_MESSAGE="the merged tree $m on $b was not frozen, recorded and passed by the qualityGate"; return 1
         fi
         wt_strong_intent "$m" "$b" || return 1
@@ -9613,6 +9620,136 @@ if [ -n "${MOE_AGENT_SEAT_PATH:-}" ]; then
     else AGENT_SEAT_CLI="$MOE_AGENT_SEAT_PATH"; fi
 fi
 SEAT_VM_INSTANCE=""
+
+# --- Verified-local check dispatch (CQ-M07r) ---------------------------------
+# Under the strong profile a worktree completion's L6 runs the task's owed checks
+# in check VMs: the bundled local-runner/check-dispatch.mjs on the frozen candidate
+# commit (tree M, sole parent B), never the qualityGate on this host.
+# MOE_CHECK_DISPATCH_PATH overrides that CLI only without MOE_RUNTIME_PROTECTED=1.
+# Only fixed codes and a fullmatched environment id leave its reply, and its stderr
+# is discarded. CQ-M07s ports this block to moe-agent.ps1.
+CHECK_DISPATCH_GRACE_SEC=120
+CHECK_DISPATCH_PID=""
+CHECK_DISPATCH_TERMED=""
+CHECK_DISPATCH_CODE=""
+resolve_check_dispatch_cli() {
+    CHECK_DISPATCH_CLI="$SCRIPT_DIR/local-runner/check-dispatch.mjs"
+    [ -n "${MOE_CHECK_DISPATCH_PATH:-}" ] || return 0
+    if [ "$RUNTIME_PROTECTED" = 1 ]; then
+        echo '[WARN] MOE_CHECK_DISPATCH_PATH_IGNORED: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/check-dispatch.mjs runs.' >&2
+    else CHECK_DISPATCH_CLI="$MOE_CHECK_DISPATCH_PATH"; fi
+    return 0
+}
+resolve_check_dispatch_cli
+# check_dispatch_verdict OUT RC TASK CANDIDATE -- one line from the dispatch's
+# reply file OUT and its exit RC: PASS, or the fixed code that refuses it, plus
+# ` environment=<id>` for a stop naming a well-formed one. A stop or a code beats
+# exit 0, and nothing else from the reply is ever printed.
+check_dispatch_verdict() {
+    $PYTHON_CMD -c 'import json,re,sys
+out,rc,task,cand=sys.argv[1:5]
+FIXED="[A-Z][A-Z0-9_]{0,63}"; BAD="MOE_CHECK_DISPATCH_REPLY_INVALID"
+def verdict():
+    try:
+        with open(out,"rb") as f: raw=f.read(1048577)
+    except FileNotFoundError: return "MOE_CHECK_DISPATCH_NO_REPORT"
+    if not raw: return "MOE_CHECK_DISPATCH_NO_REPORT"
+    if len(raw)>1048576: return BAD
+    try: text=raw.decode("utf-8")
+    except UnicodeDecodeError: return BAD
+    if text.endswith("\n"): text=text[:-1]
+    if "\n" in text or "\r" in text: return BAD
+    try: d=json.loads(text)
+    except Exception: return BAD
+    if not isinstance(d,dict): return BAD
+    if "stopped" in d:
+        s=d["stopped"]; c=s.get("code") if isinstance(s,dict) else None
+        if not (isinstance(c,str) and re.fullmatch(FIXED,c)): return BAD
+        e=s.get("environment")
+        return c+" environment="+e if isinstance(e,str) and re.fullmatch("moe-local-vm-v1:[0-9a-f]{64}",e) else c
+    if "code" in d:
+        c=d["code"]
+        return c if isinstance(c,str) and re.fullmatch(FIXED,c) else BAD
+    if d.get("taskId")!=task or d.get("candidateId")!=cand or not isinstance(d.get("results"),list): return BAD
+    if rc!="0": return "MOE_CHECK_DISPATCH_NOT_PASSED"
+    return "PASS" if d["results"] else BAD
+print(verdict())' "$1" "$2" "$3" "$4"
+}
+# stop_check_dispatch -- TERM the running dispatch's own process group once, give
+# it CHECK_DISPATCH_GRACE_SEC to delete its VM, then KILL the group while the job
+# still runs. Only the recorded job is signalled, and only while this shell's job
+# table lists it. The pid is cleared last, so the EXIT trap of a wrapper stopped
+# mid-stop still finishes it, without a second TERM: check-dispatch.mjs handles
+# one, and a second would end its VM deletion. A job that outlives the KILL is
+# never waited on (an unconditional wait can strand the wrapper).
+stop_check_dispatch() {
+    [ -n "${CHECK_DISPATCH_PID:-}" ] || return 0
+    local pid="$CHECK_DISPATCH_PID" n=0
+    if heartbeat_sidecar_running "$pid" && [ "${CHECK_DISPATCH_TERMED:-}" != "$pid" ]; then
+        CHECK_DISPATCH_TERMED="$pid"; kill -TERM -- "-$pid" 2>/dev/null || true
+    fi
+    while heartbeat_sidecar_running "$pid" && [ "$n" -lt "$CHECK_DISPATCH_GRACE_SEC" ]; do sleep 1; n=$((n + 1)); done
+    if heartbeat_sidecar_running "$pid"; then
+        kill -KILL -- "-$pid" 2>/dev/null || true
+        n=0; while heartbeat_sidecar_running "$pid" && [ "$n" -lt 5 ]; do sleep 1; n=$((n + 1)); done
+    fi
+    heartbeat_sidecar_running "$pid" || wait "$pid" 2>/dev/null || true
+    CHECK_DISPATCH_PID=""; CHECK_DISPATCH_TERMED=""
+}
+# run_check_dispatch -- L6 under the strong profile: check-dispatch.mjs on
+# FROZEN_COMMIT for LAND_TASK_ID, whose report must name FROZEN_CANDIDATE_ID. 0
+# only on PASS. Otherwise 1 with CHECK_DISPATCH_CODE set and, after the project-top
+# refusal, one `[WARN] MOE_CHECK_DISPATCH_REFUSED: <verdict>` line. It never runs
+# the qualityGate or records a CheckRun: the dispatch records its own over /runner.
+# The bound:
+# - MOE_CHECK_DISPATCH_TIMEOUT_SEC, default 3600 s = check-dispatch.mjs's
+#   CHECK_BUDGET_MS, so one full-budget check fits; the 120 s TERM grace comes on top.
+# - A gated worktree completion runs at most 2 rounds, so L3-L14 hold the
+#   git-land-<target> lease for up to about 2 x 3720 s (2 h 4 min) plus Git work.
+# - This project's git-land-moe-work-2026-10-24 maxLeaseMs is 7200000 (2 h; an
+#   undeclared id gets 24 h), so only a second full-budget round can outlive the
+#   lease. The daemon then force-releases it, and the round's CAS (the ref update
+#   from B, or the non-forced push) still refuses a moved target: the worst case is
+#   MOE_COMMIT_FAILED_REF_CONTENTION and an unlanded 'contention', never a wrong landing.
+# - MOE_LAND_LEASE_WAIT_SEC (default 1800) bounds only the acquire wait, never the hold.
+run_check_dispatch() {
+    local out="$SECURE_TEMP_DIR/check-dispatch.out" ms limit n=0 rc=0 verdict
+    CHECK_DISPATCH_CODE=""
+    if [ -n "${MOE_REL:-}" ]; then
+        echo "[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit." >&2
+        CHECK_DISPATCH_CODE=MOE_WORKTREE_PROJECT_NOT_TOP; return 1
+    fi
+    if ! ms=$(land_lease_budget "${MOE_CHECK_DISPATCH_TIMEOUT_SEC:-3600}"); then verdict=MOE_CHECK_DISPATCH_TIMEOUT_INVALID
+    elif [ -z "${NODE_CMD:-}" ] || [ ! -f "${CHECK_DISPATCH_CLI:-}" ]; then verdict=MOE_CHECK_DISPATCH_UNAVAILABLE
+    else
+        echo -e "$BLUE Post-flight: owed checks in check VMs: task $LAND_TASK_ID candidate $FROZEN_CANDIDATE_ID$NC"
+        set -m
+        (unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_API_KEY GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
+         exec "$NODE_CMD" "$CHECK_DISPATCH_CLI" --project "$PROJECT" --task "$LAND_TASK_ID" --commit "$FROZEN_COMMIT") </dev/null >"$out" 2>/dev/null &
+        CHECK_DISPATCH_PID=$!
+        set +m
+        limit=$(( (ms + 999) / 1000 ))
+        while heartbeat_sidecar_running "$CHECK_DISPATCH_PID" && [ "$n" -lt "$limit" ]; do sleep 1; n=$((n + 1)); done
+        if heartbeat_sidecar_running "$CHECK_DISPATCH_PID"; then
+            stop_check_dispatch; verdict=MOE_CHECK_DISPATCH_TIMEOUT
+        else
+            wait "$CHECK_DISPATCH_PID" || rc=$?
+            CHECK_DISPATCH_PID=""
+            verdict=$(check_dispatch_verdict "$out" "$rc" "$LAND_TASK_ID" "$FROZEN_CANDIDATE_ID" 2>/dev/null) && [ -n "$verdict" ] \
+                || verdict=MOE_CHECK_DISPATCH_REPLY_INVALID
+        fi
+        rm -f "$out"
+    fi
+    if [ "$verdict" = PASS ]; then
+        echo -e "$GREEN[OK]$NC check VMs passed every owed check of candidate $FROZEN_CANDIDATE_ID."
+        return 0
+    fi
+    CHECK_DISPATCH_CODE="$verdict"
+    echo "[WARN] MOE_CHECK_DISPATCH_REFUSED: $verdict" >&2
+    return 1
+}
+
+# --- Verified-local seat VM (CQ-M07m3), continued ----------------------------
 seat_cli() (
     unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_API_KEY
     exec "$NODE_CMD" "$AGENT_SEAT_CLI" "$@"

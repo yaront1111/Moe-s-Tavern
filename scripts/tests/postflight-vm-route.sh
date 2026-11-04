@@ -774,4 +774,259 @@ for k in 'for ((round = 1' 'run_frozen_gate worktree'; do [ "$(gline "$k")" -lt 
 for k in commit-tree wt_journal_write update-ref wt_publish; do [ "$SI" -lt "$(gline "$k")" ] || vmc_fail G8 "the call is not before the first $k"; done
 echo "[strong intent] ok G1-G7 and G8"
 
+# --- [strong gate] CQ-M07r: under verified-local a worktree completion's L6 runs
+# the task's owed checks in check VMs, the dispatch CLI on the frozen candidate
+# commit (tree M, sole parent B), never the qualityGate on this host. Real wrapper,
+# fake seat VM, fake dispatch CLI (postflight-fake-check-dispatch.js), real Git.
+# The qualityGate is the canary: a host run writes SG_WITNESS.
+(
+SG_FAKE="$ROOT_DIR/scripts/tests/postflight-fake-check-dispatch.js"; SG_WITNESS="$TMP_DIR/sg-witness"
+SG_READY='{"profile":"verified-local","ready":true,"missingCapabilities":[]}'
+export MOE_AGENT_SEAT_PATH="$ROOT_DIR/scripts/tests/postflight-fake-agent-seat.js"
+export GIT_AUTHOR_NAME=sg GIT_AUTHOR_EMAIL=sg@example.invalid GIT_COMMITTER_NAME=sg GIT_COMMITTER_EMAIL=sg@example.invalid
+# OPENAI_API_KEY is the codex seat's VM credential; none may reach the dispatch.
+export ANTHROPIC_API_KEY=sg-a ANTHROPIC_AUTH_TOKEN=sg-b CLAUDE_CODE_OAUTH_TOKEN=sg-c OPENAI_API_KEY=sg-d CODEX_API_KEY=sg-e
+sg_fixture() {
+  printf '.moe/\n.worktrees/\n.mcp.json\n' > "$PROJECT/.gitignore"
+  printf 'seed\n' > "$PROJECT/seed.txt"
+  git -C "$PROJECT" init -q -b main
+  git -C "$PROJECT" add .gitignore seed.txt; git -C "$PROJECT" commit -qm seed
+  git -C "$PROJECT" checkout -qb moe/control
+  "$NODE" -e 'const fs=require("fs"),[p,w]=process.argv.slice(1),d=JSON.parse(fs.readFileSync(p));Object.assign(d.settings,{autoCommit:true,checkpointPush:false,commitBoardState:false,qualityGate:"printf ran > \x27"+w+"\x27"});fs.writeFileSync(p,JSON.stringify(d))' "$PROJECT/.moe/project.json" "$SG_WITNESS"
+  rm -f "$SG_WITNESS"
+  git -C "$PROJECT" rev-parse HEAD > "$TMP_DIR/sg-base"
+  export FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' FAKE_CTX_WORKSPACE='{"mode":"worktree","target":"main"}' FAKE_TASK_STATUS=REVIEW
+}
+VMR_SETUP=sg_fixture
+# sg_check ROW KIND CODE [ENV] -- KIND pass (the check VMs passed: main moved to C),
+# host (legacy, observe: the host qualityGate ran, no dispatch) or refused (the line
+# names CODE, plus ` environment=ENV` for a well-formed stop id; nothing published).
+sg_check() {
+  "$NODE" - "$PROJECT" "$OUT" "$REC" "$CALLS" "$SG_WITNESS" "$TMP_DIR/sg-base" "$SG_FAKE" "$VMR_CODE" "$@" <<'JS' || vmr_fail "$1" 'see the assertion above'
+const fs=require('node:fs'),a=require('node:assert/strict'),cp=require('node:child_process');
+const [p,out,rec,calls,witness,baseFile,fake,rc,row,kind,code,env]=process.argv.slice(2);
+const read=f=>fs.existsSync(f)?fs.readFileSync(f,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[];
+const ev=p+'/.moe/evidence-rpcs.jsonl',raw=fs.existsSync(ev)?fs.readFileSync(ev,'utf8'):'',rows=read(ev),tools=read(calls).map(r=>r.tool);
+const text=fs.readFileSync(out,'utf8').replace(/\x1b\[[0-9;]*m/g,''),lines=text.split('\n'),count=l=>lines.filter(x=>x===l).length;
+const git=(...x)=>cp.execFileSync('git',['-C',p,...x],{encoding:'utf8'}).trim(),B=fs.readFileSync(baseFile,'utf8').trim();
+const main=git('rev-parse','refs/heads/main'),of=t=>rows.filter(r=>r.tool===t);
+a.equal(rc,'0',row+' exit code'); a.equal(fs.existsSync(rec),false,'a host CLI ran');
+a.ok(!raw.includes('DISPATCH-CANARY')&&!text.includes('DISPATCH-CANARY'),'the dispatch reply or stderr leaked');
+a.ok(!text.includes('MOE_CHECK_DISPATCH_PATH_IGNORED'),'an unprotected override was ignored');
+const cand=of('record_candidate'),d=of('check-dispatch'),done=of('record_commit').filter(r=>r.args.kind==='completion'),fin=of('finalize_attempt');
+a.equal(cand.length,1,'record_candidate rows'); const M=cand[0].args.treeSha; a.equal(cand[0].args.baseRevision,B);
+a.equal(of('record_delivery_receipt').length,0,'a receipt was recorded');
+if(kind==='host'){
+  a.equal(d.length,0,'the dispatch ran'); a.equal(fs.readFileSync(witness,'utf8'),'ran');
+  const runs=of('record_check_run'); a.equal(runs.length,1); a.equal(runs[0].args.outcome,'passed'); a.equal(count('[OK] qualityGate passed.'),1);
+} else {
+  a.equal(fs.existsSync(witness),false,'the qualityGate ran on the host'); a.equal(of('record_check_run').length,0,'a host CheckRun');
+  a.ok(!text.includes('Post-flight: quality gate:'),'the host gate started');
+  if(code==='MOE_CHECK_DISPATCH_UNAVAILABLE') a.equal(d.length,0,'a missing CLI ran');
+  else {
+    a.equal(d.length,1,'check-dispatch rows'); const x=d[0].args,X=x.argv[5];
+    a.match(X,/^[0-9a-f]{40}$/); a.deepEqual(x.argv,['--project',p,'--task','task-postflight','--commit',X]);
+    a.equal(x.entry,fake); a.equal(x.tree,M); a.deepEqual(x.parents,[B]); a.equal(x.heads['refs/heads/main'],B);
+    a.equal(x.candidateId,cand[0].args.id); a.deepEqual(x.credentials,[]);
+    a.equal(git('for-each-ref','--contains',X),'','a ref holds the frozen candidate commit');
+    const term=of('check-dispatch-term'); a.deepEqual(term.map(r=>r.args.pid),code==='MOE_CHECK_DISPATCH_TIMEOUT'?[x.pid]:[]);
+  }
+}
+if(kind==='refused'){
+  const v=code+(env?' environment='+env:'');
+  a.equal(main,B,'main moved');
+  a.equal(done.length,1); a.equal(done[0].args.outcome,'failed'); a.equal(done[0].args.code,'MOE_COMMIT_FAILED_GATE'); a.equal(done[0].args.pushed,false);
+  a.equal(fin.length,1); a.equal(fin[0].args.outcome,'unlanded'); a.equal(fin[0].args.unlandedReason,'gate');
+  a.equal(fin[0].args.targetTip,B); a.equal(fin[0].args.landedRevision,null);
+  const retry=JSON.parse(fs.readFileSync(p+'/.moe/landing-retry.json','utf8')); a.equal(retry.reason,'gate'); a.equal(retry.count,1);
+  a.equal(git('rev-parse',retry.rescueRef),git('rev-parse','refs/heads/moe/task/task-postflight'));
+  a.equal(JSON.parse(fs.readFileSync(p+'/.moe/attempts/attempt-postflight.json','utf8')).phase,'closed');
+  for(const t of ['set_task_status','complete_task','release_task','report_blocked','qa_approve','qa_reject']) a.ok(!tools.includes(t),t);
+  a.equal(lines.filter(l=>l.includes('MOE_CHECK_DISPATCH_REFUSED')).length,1); a.equal(count('[WARN] MOE_CHECK_DISPATCH_REFUSED: '+v),1);
+  a.equal(count(`[WARN] MOE_COMMIT_FAILED_GATE: task task-postflight -- the merged tree ${M} on ${B} was not frozen, recorded and passed by the check VMs (${v}); main did not move and the task's bytes stay on moe/task/task-postflight.`),1);
+} else {
+  a.notEqual(main,B); a.deepEqual(git('rev-list','--parents','-n','1',main).split(' ').slice(1),[B]); a.equal(git('rev-parse',main+'^{tree}'),M);
+  a.equal(done.length,1); a.equal(done[0].args.outcome,'committed'); a.equal(done[0].args.sha,main);
+  a.equal(fin.length,1); a.equal(fin[0].args.outcome,'landed'); a.equal(fin[0].args.landedRevision,main);
+  if(kind==='pass'){
+    a.notEqual(main,d[0].args.argv[5]); a.ok(rows.indexOf(d[0])<rows.indexOf(done[0])&&rows.indexOf(done[0])<rows.indexOf(fin[0]),'dispatch order');
+    a.equal(count(`[OK] check VMs passed every owed check of candidate ${cand[0].args.id}.`),1); a.ok(!text.includes('MOE_CHECK_DISPATCH_REFUSED'));
+    a.equal(fs.existsSync(p+'/.git/moe/receipt/task-postflight.json'),false,'the receipt journal stayed');
+  }
+}
+JS
+}
+SG_STRONG=(FAKE_ATTEMPT_PROFILE=verified-local MOE_CHECK_DISPATCH_PATH="$SG_FAKE")
+echo '[strong gate] SG-pass: the check VMs pass the frozen candidate; main moves to C; the host qualityGate never runs'
+vmr_run SG-pass worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATCH=pass
+sg_check SG-pass pass
+echo '[strong gate] SG-legacy, SG-observe: the host qualityGate runs (run_frozen_gate worktree), the override unused'
+vmr_run SG-legacy worker codex "$SG_READY" on 0 MOE_CHECK_DISPATCH_PATH="$SG_FAKE" FAKE_CHECK_DISPATCH=pass
+sg_check SG-legacy host
+vmr_run SG-observe worker codex "$SG_READY" on 0 FAKE_ATTEMPT_PROFILE=observe MOE_CHECK_DISPATCH_PATH="$SG_FAKE" FAKE_CHECK_DISPATCH=pass
+sg_check SG-observe host
+echo '[strong gate] every non-pass fails the round as MOE_COMMIT_FAILED_GATE: main stays at B, one fixed-code line'
+SG_HEX=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+SG_ENV="moe-local-vm-v1:$SG_HEX"; SG_ENV_UPPER="moe-local-vm-v1:$(printf %s "$SG_HEX" | tr a-f A-F)"
+# ROW|CODE|ENV|fake knobs. ENV is the environment id the line must name, if any.
+SG_ROWS=("SG-nonzero|MOE_CHECK_DISPATCH_NOT_PASSED||FAKE_CHECK_DISPATCH=not-passed"
+  "SG-stopped|RUNNER_VM_DELETE_FAILED||FAKE_CHECK_DISPATCH=stopped FAKE_CHECK_DISPATCH_CODE=RUNNER_VM_DELETE_FAILED"
+  "SG-nothing-owed|RUNNER_NOTHING_OWED||FAKE_CHECK_DISPATCH=stopped FAKE_CHECK_DISPATCH_CODE=RUNNER_NOTHING_OWED"
+  "SG-undeclared|RUNNER_DEPENDENCIES_UNDECLARED||FAKE_CHECK_DISPATCH=stopped FAKE_CHECK_DISPATCH_CODE=RUNNER_DEPENDENCIES_UNDECLARED"
+  "SG-crash|MOE_CHECK_DISPATCH_NO_REPORT||FAKE_CHECK_DISPATCH=crash"
+  "SG-unparsable|MOE_CHECK_DISPATCH_REPLY_INVALID||FAKE_CHECK_DISPATCH=garbage"
+  "SG-env|RUNNER_ENVIRONMENT_NOT_APPROVED|$SG_ENV|FAKE_CHECK_DISPATCH=stopped FAKE_CHECK_DISPATCH_CODE=RUNNER_ENVIRONMENT_NOT_APPROVED FAKE_CHECK_DISPATCH_ENVIRONMENT=$SG_ENV"
+  "SG-env-malformed|RUNNER_ENVIRONMENT_NOT_APPROVED||FAKE_CHECK_DISPATCH=stopped FAKE_CHECK_DISPATCH_CODE=RUNNER_ENVIRONMENT_NOT_APPROVED FAKE_CHECK_DISPATCH_ENVIRONMENT=$SG_ENV_UPPER")
+for r in "${SG_ROWS[@]}"; do
+  IFS='|' read -r row code env extra <<< "$r"; read -ra kv <<< "$extra"
+  vmr_run "$row" worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" "${kv[@]}"
+  sg_check "$row" refused "$code" "$env"
+done
+vmr_run SG-missing worker codex "$SG_READY" on 0 FAKE_ATTEMPT_PROFILE=verified-local MOE_CHECK_DISPATCH_PATH="$TMP_DIR/no-such-dispatch.js"
+sg_check SG-missing refused MOE_CHECK_DISPATCH_UNAVAILABLE
+SECONDS=0
+vmr_run SG-timeout worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATCH=hang MOE_CHECK_DISPATCH_TIMEOUT_SEC=2
+[ "$SECONDS" -lt 60 ] || vmr_fail SG-timeout "the timed-out dispatch took ${SECONDS}s to stop"
+sg_check SG-timeout refused MOE_CHECK_DISPATCH_TIMEOUT
+echo '[strong gate] SG-protected: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1, and never printed'
+VMR_CMD=claude
+vmr_run SG-protected worker claude '{"profile":"verified-local","ready":false,"missingCapabilities":[]}' on 0 MOE_RUNTIME_PROTECTED=1 \
+  MOE_DAEMON_PATH="$TMP_DIR/fake-daemon.js" MOE_CHECK_DISPATCH_PATH="$SG_FAKE"
+[ "$VMR_CODE" = 1 ] && [ "$(grep -c MOE_CHECK_DISPATCH_PATH_IGNORED "$OUT")" = 1 ] \
+  && [ "$(grep -Fxc '[WARN] MOE_CHECK_DISPATCH_PATH_IGNORED: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/check-dispatch.mjs runs.' "$OUT")" = 1 ] \
+  || vmr_fail SG-protected 'the override was not ignored with one warning'
+! grep -Fq "$SG_FAKE" "$OUT" || vmr_fail SG-protected 'the override value was printed'
+echo "[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, missing, crash, unparsable, env, env-malformed, timeout, protected"
+
+echo '[strong gate] SGV: check_dispatch_verdict prints PASS or one fixed code, never the reply'
+SGV="$TMP_DIR/sgv"; mkdir -p "$SGV"
+{ printf '%s\n' 'set -e'; vmc_slice check_dispatch_verdict; printf '%s\n' 'check_dispatch_verdict "$1" "$2" task-v cand-v'; } > "$SGV/driver.sh"
+# sgv ROW RC EXPECTED BYTES -- the reply file holds exactly BYTES; the dispatch exited RC.
+sgv() {
+  local got
+  printf %s "$4" > "$SGV/reply"
+  got="$(env PYTHON_CMD="$PY" bash "$SGV/driver.sh" "$SGV/reply" "$2" 2>&1)" || vmc_fail "$1" "the driver failed: $got"
+  [ "$got" = "$3" ] || vmc_fail "$1" "got '$got', expected '$3'"
+}
+SGV_NL=$'\n'; SGV_BAD=MOE_CHECK_DISPATCH_REPLY_INVALID; SGV_ID="moe-local-vm-v1:$SG_HEX"
+SGV_RESULT='{"command":"qualityGate","dispatchId":"dispatch-v","outcome":"passed","vm":"deleted","failure":null}'
+SGV_PASS='{"taskId":"task-v","candidateId":"cand-v","results":['"$SGV_RESULT"']}'
+sgv_env() { printf '{"taskId":"task-v","candidateId":"cand-v","results":[],"stopped":{"code":"RUNNER_ENVIRONMENT_NOT_APPROVED","environment":%s}}\n' "$1"; }
+sgv V-empty 0 MOE_CHECK_DISPATCH_NO_REPORT ''
+sgv V-empty-rc3 3 MOE_CHECK_DISPATCH_NO_REPORT ''
+sgv V-not-json 0 "$SGV_BAD" "not json$SGV_NL"
+sgv V-array 0 "$SGV_BAD" "[1]$SGV_NL"
+sgv V-not-utf8 0 "$SGV_BAD" $'\377'"$SGV_NL"
+sgv V-pass 0 PASS "$SGV_PASS$SGV_NL"
+sgv V-pass-bare 0 PASS "$SGV_PASS"
+sgv V-pass-rc2 2 MOE_CHECK_DISPATCH_NOT_PASSED "$SGV_PASS$SGV_NL"
+sgv V-other-candidate 0 "$SGV_BAD" '{"taskId":"task-v","candidateId":"cand-other","results":['"$SGV_RESULT"']}'"$SGV_NL"
+sgv V-other-task 0 "$SGV_BAD" '{"taskId":"task-other","candidateId":"cand-v","results":['"$SGV_RESULT"']}'"$SGV_NL"
+sgv V-no-results 0 "$SGV_BAD" '{"taskId":"task-v","candidateId":"cand-v","results":[]}'"$SGV_NL"
+sgv V-log-line 0 "$SGV_BAD" "dispatch log$SGV_NL$SGV_PASS$SGV_NL"
+# Two more one-line rules json.loads alone would let through: an indented reply, a CR.
+sgv V-indented 0 "$SGV_BAD" '{"taskId":"task-v",'"$SGV_NL"'"candidateId":"cand-v","results":['"$SGV_RESULT"']}'"$SGV_NL"
+sgv V-crlf 0 "$SGV_BAD" "$SGV_PASS"$'\r\n'
+sgv V-stop-beats-rc0 0 RUNNER_NOTHING_OWED '{"taskId":"task-v","candidateId":"cand-v","results":[],"stopped":{"code":"RUNNER_NOTHING_OWED"}}'"$SGV_NL"
+sgv V-stop-lower 2 "$SGV_BAD" '{"stopped":{"code":"lower case"}}'"$SGV_NL"
+sgv V-code 2 RUNNER_SEAM_UNAVAILABLE '{"code":"RUNNER_SEAM_UNAVAILABLE"}'"$SGV_NL"
+sgv V-code-bad 2 "$SGV_BAD" '{"code":"bad code"}'"$SGV_NL"
+sgv V-stop-and-code 2 RUNNER_CHECK_FAILED '{"code":"RUNNER_SEAM_UNAVAILABLE","stopped":{"code":"RUNNER_CHECK_FAILED"}}'"$SGV_NL"
+sgv V-env 2 "RUNNER_ENVIRONMENT_NOT_APPROVED environment=$SGV_ID" "$(sgv_env "\"$SGV_ID\"")$SGV_NL"
+# Per mem:decision-verified-local-check-gate item 5: a dropped anchor survives until a leading-text row exists.
+for bad in "\"x$SGV_ID\"" "\"$SGV_ID\\n\"" "\"$SG_ENV_UPPER\"" "\"moe-local-vm-v1:${SG_HEX:1}\"" 7 null; do
+  sgv "V-env-malformed $bad" 2 RUNNER_ENVIRONMENT_NOT_APPROVED "$(sgv_env "$bad")$SGV_NL"
+done
+# The 1 MiB bound: a pass padded with trailing spaces stays valid JSON when cut at
+# the bound, so only the size rule refuses its one byte over.
+sgv V-at-limit 0 PASS "$SGV_PASS$(printf '%*s' $((1048575 - ${#SGV_PASS})) '')$SGV_NL"
+sgv V-oversize 0 "$SGV_BAD" "$SGV_PASS$(printf '%*s' $((1048576 - ${#SGV_PASS})) '')$SGV_NL"
+
+echo '[strong gate] SGU: run_check_dispatch sliced: the bundled CLI, the override, the bound, the stop, the project top'
+SGU="$TMP_DIR/sgu"; SGU_DRIVER="$SGU/driver.sh"; SGU_EV="$SGU/project/.moe/evidence-rpcs.jsonl"; SGU_STUB="$SGU/scripts/local-runner/check-dispatch.mjs"
+mkdir -p "$SGU/project/.moe/candidates" "$SGU/sec" "$SGU/scripts/local-runner"
+printf 'sgu\n' > "$SGU/project/a.txt"; git -C "$SGU/project" init -q; git -C "$SGU/project" add a.txt; git -C "$SGU/project" commit -qm sgu
+SGU_C="$(git -C "$SGU/project" rev-parse HEAD)"
+printf '{"id":"cand-sgu","taskId":"task-sgu","treeSha":"%s","createdAt":"2026-11-04T00:00:00.000Z"}\n' \
+  "$(git -C "$SGU/project" rev-parse 'HEAD^{tree}')" > "$SGU/project/.moe/candidates/cand-sgu.json"
+# The bundled path under SCRIPT_DIR: an ESM stub that runs the same fake, so its row's entry names the stub.
+printf '%s\n' "import { createRequire } from 'node:module';" 'createRequire(import.meta.url)(process.env.SGU_FAKE);' > "$SGU_STUB"
+{ printf '%s\n' 'set -e' 'CHECK_DISPATCH_GRACE_SEC="${SGU_GRACE:-120}"'
+  vmc_slice resolve_check_dispatch_cli run_check_dispatch stop_check_dispatch check_dispatch_verdict heartbeat_sidecar_running land_lease_budget
+  # The wrapper's own traps: INT and TERM exit 0, and the EXIT trap (cleanup_temp) stops a running dispatch.
+  printf '%s\n' "trap 'exit 0' INT TERM" "trap 'stop_check_dispatch || true' EXIT" \
+    'resolve_check_dispatch_cli; rc=0; run_check_dispatch || rc=$?; echo "rc=$rc code=$CHECK_DISPATCH_CODE"'; } > "$SGU_DRIVER"
+SGU_ENV=(PYTHON_CMD="$PY" NODE_CMD="$NODE" PROJECT="$SGU/project" LAND_TASK_ID=task-sgu FROZEN_COMMIT="$SGU_C" FROZEN_CANDIDATE_ID=cand-sgu
+  SCRIPT_DIR="$SGU/scripts" SECURE_TEMP_DIR="$SGU/sec" RUNTIME_PROTECTED=0 MOE_REL= BLUE= GREEN= NC= SGU_FAKE="$SG_FAKE")
+# sgu ROW EXPECTED [VAR=VALUE...] -- one driver run (its output in $SGU/out); the last line must be EXPECTED.
+sgu() {
+  local row="$1" want="$2" got; shift 2
+  rm -f "$SGU_EV"
+  env "${SGU_ENV[@]}" "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" bash "$SGU_DRIVER" > "$SGU/out" 2>&1 || vmc_fail "$row" "the driver failed: $(cat "$SGU/out")"
+  got="$(tail -n 1 "$SGU/out")"
+  [ "$got" = "$want" ] || vmc_fail "$row" "got '$got', expected '$want': $(cat "$SGU/out")"
+}
+# sgu_pid ROW -- the fake's recorded pid; sgu_terms -- how many SIGTERMs it recorded.
+sgu_pid() { "$NODE" -e 'console.log(require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse).find(r=>r.tool==="check-dispatch").args.pid)' "$SGU_EV"; }
+sgu_terms() { grep -c '"tool":"check-dispatch-term"' "$SGU_EV" || true; }
+# sgu_dead ROW PID -- a probe only: the wrapper's stop must have ended the fake. Should
+# it survive, this run's own recorded child is killed, so a failure leaks nothing.
+sgu_dead() { if kill -0 "$2" 2>/dev/null; then kill -KILL "$2" 2>/dev/null || true; vmc_fail "$1" "the dispatch $2 outlived its stop"; fi; }
+# sgu_row ROW ENTRY -- exactly one dispatch ran, from ENTRY, on FROZEN_COMMIT, with no credential.
+sgu_row() {
+  "$NODE" - "$SGU_EV" "$2" "$SGU/project" "$SGU_C" <<'JS' || vmc_fail "$1" 'see the assertion above'
+const fs=require('node:fs'),a=require('node:assert/strict'),[ev,entry,p,c]=process.argv.slice(2);
+const rows=fs.readFileSync(ev,'utf8').trim().split('\n').map(JSON.parse).filter(r=>r.tool==='check-dispatch');
+a.equal(rows.length,1); a.equal(rows[0].args.entry,entry); a.deepEqual(rows[0].args.credentials,[]);
+a.deepEqual(rows[0].args.argv,['--project',p,'--task','task-sgu','--commit',c]); a.equal(rows[0].args.candidateId,'cand-sgu');
+JS
+}
+SGU_IGNORED='[WARN] MOE_CHECK_DISPATCH_PATH_IGNORED: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/check-dispatch.mjs runs.'
+sgu U1 'rc=1 code=RUNNER_SEAM_UNAVAILABLE' FAKE_CHECK_DISPATCH=code FAKE_CHECK_DISPATCH_CODE=RUNNER_SEAM_UNAVAILABLE
+sgu_row U1 "$SGU_STUB"; ! grep -q MOE_CHECK_DISPATCH_PATH_IGNORED "$SGU/out" || vmc_fail U1 'an IGNORED line without an override'
+sgu U2 'rc=0 code=' MOE_CHECK_DISPATCH_PATH="$SG_FAKE" FAKE_CHECK_DISPATCH=pass
+sgu_row U2 "$SG_FAKE"
+[ "$(grep -Fxc '[OK] check VMs passed every owed check of candidate cand-sgu.' "$SGU/out")" = 1 ] || vmc_fail U2 'not one [OK] line'
+sgu U3 'rc=0 code=' RUNTIME_PROTECTED=1 MOE_CHECK_DISPATCH_PATH="$SG_FAKE" FAKE_CHECK_DISPATCH=pass
+sgu_row U3 "$SGU_STUB"
+[ "$(grep -c MOE_CHECK_DISPATCH_PATH_IGNORED "$SGU/out")" = 1 ] && [ "$(grep -Fxc "$SGU_IGNORED" "$SGU/out")" = 1 ] \
+  || vmc_fail U3 'not exactly one MOE_CHECK_DISPATCH_PATH_IGNORED line'
+! grep -Fq "$SG_FAKE" "$SGU/out" || vmc_fail U3 'the override path was printed'
+for bound in 0 -1 abc 86401 1.0001; do
+  sgu "U4 $bound" 'rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT_INVALID' MOE_CHECK_DISPATCH_TIMEOUT_SEC="$bound" FAKE_CHECK_DISPATCH=pass
+  [ ! -e "$SGU_EV" ] || vmc_fail "U4 $bound" 'the dispatch ran'
+done
+SECONDS=0
+sgu U5 'rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT' SGU_GRACE=1 MOE_CHECK_DISPATCH_TIMEOUT_SEC=1 FAKE_CHECK_DISPATCH=hang-hard
+sgu_dead U5 "$(sgu_pid)"; [ "$SECONDS" -le 15 ] || vmc_fail U5 "the TERM-ignoring dispatch took ${SECONDS}s to stop"
+[ "$(sgu_terms)" = 1 ] || vmc_fail U5 "got $(sgu_terms) TERMs, expected one before the KILL"
+# U7: TERM the wrapper (the driver) during the timeout's grace. Its EXIT trap still
+# finishes the stop: no second TERM (check-dispatch.mjs handles one, and a second
+# would end its VM deletion), then the KILL. Bounded by a watchdog on our own PID.
+rm -f "$SGU_EV"
+env "${SGU_ENV[@]}" SGU_GRACE=5 MOE_CHECK_DISPATCH_TIMEOUT_SEC=1 FAKE_CHECK_DISPATCH=hang-hard bash "$SGU_DRIVER" > "$SGU/out" 2>&1 & SGU_BG=$!
+(sleep "$POSTFLIGHT_TIMEOUT_SEC"; kill -KILL "$SGU_BG" 2>/dev/null || true) >/dev/null 2>&1 & SGU_WATCH=$!
+n=0; until [ "$(sgu_terms 2>/dev/null)" = 1 ]; do n=$((n + 1)); [ "$n" -lt "$POSTFLIGHT_TIMEOUT_SEC" ] || break; sleep 1; done
+kill -TERM "$SGU_BG" 2>/dev/null || true; rc=0; wait "$SGU_BG" || rc=$?
+kill "$SGU_WATCH" 2>/dev/null || true; wait "$SGU_WATCH" 2>/dev/null || true
+sgu_dead U7 "$(sgu_pid)"
+[ "$rc" = 0 ] && [ "$(sgu_terms)" = 1 ] || vmc_fail U7 "exit $rc and $(sgu_terms) TERMs, expected exit 0 and one: $(cat "$SGU/out")"
+sgu U6 'rc=1 code=MOE_WORKTREE_PROJECT_NOT_TOP' MOE_REL=sub FAKE_CHECK_DISPATCH=pass
+[ ! -e "$SGU_EV" ] || vmc_fail U6 'the dispatch ran'
+[ "$(grep -Fxc '[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit.' "$SGU/out")" = 1 ] \
+  || vmc_fail U6 'not one MOE_WORKTREE_PROJECT_NOT_TOP line'
+
+echo '[strong gate] SG8: L6 takes the check VMs only for the strong profile, before wt_strong_intent'
+sg8_line() { printf '%s\n' "$BODY" | grep -n -x -F -e "$1" | cut -d: -f1 || true; }
+[ "$(printf '%s\n' "$BODY" | grep -c run_check_dispatch)" = 1 ] && [ "$(printf '%s\n' "$BODY" | grep -c strong_landing_task)" = 1 ] \
+  || vmc_fail SG8 'wt_land_rounds does not name run_check_dispatch and strong_landing_task exactly once each'
+SG8_IF="$(sg8_line '        if [ -n "${QUALITY_GATE:-}" ] && [ -n "${LAND_TASK_ID:-}" ] && strong_landing_task "$LAND_TASK_ID"; then')"
+SG8_ELIF="$(sg8_line '        elif [ -n "${QUALITY_GATE:-}" ] && ! { freeze_candidate "$b" "$m" && run_frozen_gate worktree; }; then')"
+SG8_RUN="$(gline run_check_dispatch)"; SG8_SI="$(gline 'wt_strong_intent "$m" "$b" || return 1')"
+[[ "$SG8_IF" =~ ^[0-9]+$ && "$SG8_ELIF" =~ ^[0-9]+$ && "$SG8_RUN" =~ ^[0-9]+$ && "$SG8_SI" =~ ^[0-9]+$ ]] \
+  && [ "$SG8_IF" -lt "$SG8_RUN" ] && [ "$SG8_RUN" -lt "$SG8_ELIF" ] && [ "$SG8_ELIF" -lt "$SG8_SI" ] \
+  || vmc_fail SG8 "got strong=$SG8_IF run_check_dispatch=$SG8_RUN legacy=$SG8_ELIF intent=$SG8_SI, expected that order, each line exactly once"
+echo "[strong gate] ok SGV, SGU U1-U7 and SG8"
+)
+
 echo "PASS postflight-vm-route.sh"

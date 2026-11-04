@@ -81,6 +81,9 @@ function attemptFixture() {
   // openAttempt records the runner's pair exactly as the claim sent it.
   // FAKE_ATTEMPT_PHASE=reconciling: a daemon restart parked the attempt before
   // the wrapper pinned it (the window a resume after a restart lands in).
+  // FAKE_ATTEMPT_PROFILE=<profile> (inert unset): openAttempt's
+  // executionPolicySnapshot {version: 2, profile, planRevision: 1}, which
+  // pin_attempt_identity pins (CQ-M07r's [strong gate] rows: verified-local, observe).
   // A FAKE_CLAIM_LIMIT loop claims again after a landing closed the attempt:
   // like openAttempt, that claim persists a running attempt before it answers.
   const reopen = claimLimit > 1 && fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).phase === 'closed';
@@ -88,7 +91,8 @@ function attemptFixture() {
     id, generation, taskId, workerId: args.workerId, runnerId: args.workerId,
     phase: process.env.FAKE_ATTEMPT_PHASE || 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString(),
     ...(args.processStartedAt === undefined ? {} : {processStartedAt: args.processStartedAt, host: args.host}),
-    ...(claimWorkspace ? {workspace: claimWorkspace.path, workspaceMode: claimWorkspace.mode} : {})
+    ...(claimWorkspace ? {workspace: claimWorkspace.path, workspaceMode: claimWorkspace.mode} : {}),
+    ...(process.env.FAKE_ATTEMPT_PROFILE ? {executionPolicySnapshot: {version: 2, profile: process.env.FAKE_ATTEMPT_PROFILE, planRevision: 1}} : {})
   }));
   if (process.env.FROZEN_MODE === 'claim-missing' || process.env.FAKE_CLAIM_TOKENS === 'missing') return {};
   return {attemptId: id, generation: process.env.FROZEN_MODE === 'claim-malformed' ? '7' : generation};
