@@ -100,7 +100,7 @@ vmr_launched() {
 # two legacy runs were measured to differ in:
 #   the run's MOE_SESSION_ID value (<workerId>@<preflight-iso>) -> <session>
 #   mktemp names directly under the fixed TMPDIR (system prompt dir) -> <tmp>
-#   uuids (MOE_USAGE_CONTEXT_JSON launchId, the usage receipt file) -> <uuid>
+# The usage receipt pair (its launchId uuids) no longer reaches the CLI (task-cd3887fe).
 vmr_normalized() {
   "$NODE" -e '
 const [file, tmp] = process.argv.slice(1);
@@ -109,8 +109,7 @@ delete rec.env.FAKE_READINESS;
 const sid = rec.env.MOE_SESSION_ID || "\u0000";
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const mask = (s) => s.split(sid).join("<session>")
-  .replace(new RegExp(esc(tmp) + "/[^/\\s\"\x27]+", "g"), tmp + "/<tmp>")
-  .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>");
+  .replace(new RegExp(esc(tmp) + "/[^/\\s\"\x27]+", "g"), tmp + "/<tmp>");
 const walk = (v) => typeof v === "string" ? mask(v) : Array.isArray(v) ? v.map(walk)
   : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, walk(v[k])])) : v;
 process.stdout.write(JSON.stringify(walk(rec), null, 1));
@@ -124,6 +123,29 @@ vmr_launched T-legacy
 vmr_normalized > "$TMP_DIR/T-base.json"
 "$NODE" -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(r.argv.some((a)=>a.includes("task-postflight"))&&r.env.MOE_WORKER_ID==="worker-vmr"?0:1)' "$REC" \
   || vmr_fail T-legacy "the CLI record does not name task-postflight and MOE_WORKER_ID=worker-vmr"
+# The launch's own usage receipt, printed with only timestamp and launchId masked
+# (the before/after evidence of task-cd3887fe), then pinned: the wrapper's pending
+# and missing rows land, and the CLI never inherits the receipt pair.
+"$NODE" -e '
+const fs = require("fs"), path = require("path");
+const [recFile, dir] = process.argv.slice(1);
+const fail = (why) => { process.stderr.write(why); process.exit(1); };
+let files = [];
+try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch {}
+if (files.length !== 1) fail(`expected one usage receipt file, saw ${files.length}`);
+const lines = fs.readFileSync(path.join(dir, files[0]), "utf8").split("\n").filter(Boolean);
+console.log("[vm route] T-legacy usage receipt: " + lines.map((l) => l.replace(/"timestamp":"[^"]*"/g, "\"timestamp\":\"<ts>\"")
+  .replace(/"launchId":"[^"]*"/g, "\"launchId\":\"<launch>\"")).join(" | "));
+const rows = lines.map((l) => JSON.parse(l));
+if (rows.length !== 2) fail(`expected 2 receipt rows, saw ${rows.length}`);
+const coverage = rows.map((r) => r.coverage).join(",");
+if (coverage !== "pending,missing") fail(`receipt coverage is ${coverage}, expected pending,missing`);
+if (!rows[0].launchId || rows[1].launchId !== rows[0].launchId) fail("the receipt rows do not share one launchId");
+const want = { provider: "claude", taskId: "task-postflight", workerId: "worker-vmr", role: "worker", launchMode: "headless" };
+for (const r of rows) for (const [k, v] of Object.entries(want)) if (r[k] !== v) fail(`receipt ${k} is ${r[k]}, expected ${v}`);
+const env = JSON.parse(fs.readFileSync(recFile, "utf8")).env;
+for (const k of ["MOE_USAGE_RECEIPT_FILE", "MOE_USAGE_CONTEXT_JSON"]) if (k in env) fail(`the CLI env carries ${k}`);
+' "$REC" "$PROJECT/logs/moe-usage" 2>"$TMP_DIR/receipt.why" || vmr_fail T-legacy "$(cat "$TMP_DIR/receipt.why")"
 vmr_run T-legacy2 worker claude "$LEGACY" - -
 vmr_launched T-legacy2
 vmr_normalized > "$TMP_DIR/T-again.json"

@@ -822,6 +822,21 @@ if (cli !== 'normalize') {
     $raw = Get-Content -Raw -LiteralPath $rec | ConvertFrom-Json
     $context = if (Test-Path -LiteralPath "$rec.context") { [IO.File]::ReadAllText("$rec.context") } else { '' }
     if ((-not ($raw.argv -match 'task-postflight') -and -not $context.Contains('task-postflight')) -or $raw.env.MOE_WORKER_ID -cne 'worker-vmr') { Stop-Vmr $r 'record lacks task and worker identity' }
+    # The launch's own usage receipt, printed with only timestamp and launchId masked
+    # (the before/after evidence of task-cd3887fe), then pinned: the wrapper's pending
+    # and missing rows land, and the CLI never inherits the receipt pair.
+    $receiptFiles = @(Get-ChildItem -LiteralPath (Join-Path $project 'logs\moe-usage') -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)
+    if ($receiptFiles.Count -ne 1) { Stop-Vmr $r "expected one usage receipt file, saw $($receiptFiles.Count)" }
+    $receiptLines = @([IO.File]::ReadAllLines($receiptFiles[0].FullName) | Where-Object { $_ })
+    Write-Host ('[vm route] T-legacy usage receipt: ' + (@($receiptLines | ForEach-Object { $_ -replace '"timestamp":"[^"]*"', '"timestamp":"<ts>"' -replace '"launchId":"[^"]*"', '"launchId":"<launch>"' }) -join ' | '))
+    $receiptRows = @($receiptLines | ForEach-Object { $_ | ConvertFrom-Json })
+    if ($receiptRows.Count -ne 2) { Stop-Vmr $r "expected 2 receipt rows, saw $($receiptRows.Count)" }
+    $coverage = @($receiptRows | ForEach-Object { $_.coverage }) -join ','
+    if ($coverage -cne 'pending,missing') { Stop-Vmr $r "receipt coverage is $coverage, expected pending,missing" }
+    if (-not $receiptRows[0].launchId -or $receiptRows[1].launchId -cne $receiptRows[0].launchId) { Stop-Vmr $r 'the receipt rows do not share one launchId' }
+    $want = [ordered]@{ provider = 'claude'; taskId = 'task-postflight'; workerId = 'worker-vmr'; role = 'worker'; launchMode = 'headless' }
+    foreach ($row in $receiptRows) { foreach ($k in $want.Keys) { if ($row.$k -cne $want[$k]) { Stop-Vmr $r "receipt $k is $($row.$k), expected $($want[$k])" } } }
+    foreach ($k in @('MOE_USAGE_RECEIPT_FILE', 'MOE_USAGE_CONTEXT_JSON')) { if ($raw.env.PSObject.Properties.Name -contains $k) { Stop-Vmr $r "the CLI env carries $k" } }
     $baseline = Get-VmrNormalized
     $tRows = @(
         "legacy2|$legacy",

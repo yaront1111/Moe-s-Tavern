@@ -1235,6 +1235,8 @@ $promptCacheHelper = Join-Path $script:MoeScriptRoot 'prompt-cache.mjs'
 function Start-MoeUsageReceipt([string]$Provider, [string]$LaunchMode) {
     $env:MOE_USAGE_RECEIPT_FILE = $null
     $env:MOE_USAGE_CONTEXT_JSON = $null
+    $script:MoeUsageReceiptFile = $null
+    $script:MoeUsageContextJson = $null
     if ($env:MOE_USAGE_REPORTING -eq 'off' -or $Provider -notin @('claude', 'codex')) { return }
     $savedExitCode = $global:LASTEXITCODE
     try {
@@ -1248,16 +1250,37 @@ function Start-MoeUsageReceipt([string]$Provider, [string]$LaunchMode) {
         if (-not $prepared) { throw 'unavailable' }
         $usageSession = $prepared | ConvertFrom-Json -ErrorAction Stop
         if (-not $usageSession.file -or -not $usageSession.context.launchId) { throw 'invalid' }
-        $env:MOE_USAGE_RECEIPT_FILE = [string]$usageSession.file
-        $env:MOE_USAGE_CONTEXT_JSON = $usageSession.context | ConvertTo-Json -Compress
+        $script:MoeUsageReceiptFile = [string]$usageSession.file
+        $script:MoeUsageContextJson = $usageSession.context | ConvertTo-Json -Compress
         # Pending survives a crash or interactive session with no usage stream;
         # a later reported/missing receipt supersedes only this pending marker.
-        & node $promptCacheHelper usage-start $Provider | Out-Null
+        Invoke-MoeUsageHelper { & node $promptCacheHelper usage-start $Provider | Out-Null }
     } catch {
+        $script:MoeUsageReceiptFile = $null
+        $script:MoeUsageContextJson = $null
+        Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE'
+    } finally {
         $env:MOE_USAGE_RECEIPT_FILE = $null
         $env:MOE_USAGE_CONTEXT_JSON = $null
-        Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE'
-    } finally { $global:LASTEXITCODE = $savedExitCode }
+        $global:LASTEXITCODE = $savedExitCode
+    }
+}
+
+# The launch's receipt path and context live in script scope and reach $env:
+# only for one wrapper usage helper call: a native process copies the
+# environment when it starts, so the agent CLI, the heartbeat job and every
+# later child (the post-flight quality gate included) never inherit them.
+# task-03418dc2 found fixture usage from processes a CLI started in 48 live
+# receipts. sh twin: the MOE_USAGE_* prefixes on its usage helper calls.
+function Invoke-MoeUsageHelper([scriptblock]$Call) {
+    try {
+        $env:MOE_USAGE_RECEIPT_FILE = $script:MoeUsageReceiptFile
+        $env:MOE_USAGE_CONTEXT_JSON = $script:MoeUsageContextJson
+        & $Call
+    } finally {
+        $env:MOE_USAGE_RECEIPT_FILE = $null
+        $env:MOE_USAGE_CONTEXT_JSON = $null
+    }
 }
 # End usage receipt helpers.
 if ($cliType -in @('claude', 'codex')) {
@@ -9699,6 +9722,8 @@ do {
     # Receipt metadata belongs to one actual CLI launch, never a prior task.
     $env:MOE_USAGE_RECEIPT_FILE = $null
     $env:MOE_USAGE_CONTEXT_JSON = $null
+    $script:MoeUsageReceiptFile = $null
+    $script:MoeUsageContextJson = $null
     if (-not $firstRun) {
         Write-Host ""
         if ($script:LaunchFailBackoffSec -gt 0) {
@@ -10903,6 +10928,8 @@ $mentionsJson
                         $psi.EnvironmentVariables['MOE_GIT_REL'] = $moeGit.Rel
                         $psi.EnvironmentVariables['MOE_SERENA_PROJECT_ROOT'] = $serenaProject
                     }
+                    # The usage receipt pair too (Invoke-MoeUsageHelper's why).
+                    if ($script:MoeUsageReceiptFile) { $psi.EnvironmentVariables['MOE_USAGE_RECEIPT_FILE'] = $script:MoeUsageReceiptFile; $psi.EnvironmentVariables['MOE_USAGE_CONTEXT_JSON'] = $script:MoeUsageContextJson }
                     $cacheStream = [System.Diagnostics.Process]::Start($psi)
                 } -Process {
                     $cacheBytes = [System.Text.Encoding]::UTF8.GetBytes("$_`n")
@@ -11451,7 +11478,7 @@ $mentionsJson
                         Write-Host "  [result] turns=$($evt.num_turns) dur=$dur stop=$($evt.stop_reason)" -ForegroundColor $color
                         # Only the result line goes through the helper: piping the
                         # whole stream into node stalls the console on PS 5.1.
-                        $line | & node $promptCacheHelper claude-stream | Select-Object -Skip 1 | ForEach-Object { Write-Host $_ }
+                        Invoke-MoeUsageHelper { $line | & node $promptCacheHelper claude-stream | Select-Object -Skip 1 | ForEach-Object { Write-Host $_ } }
                     }
                 }
             }
@@ -11495,8 +11522,8 @@ $mentionsJson
             }
             } finally {
                 Restore-MoeAccountEnv
-                if ($usePrintMode -and -not $script:MoeUsageResultSeen -and $env:MOE_USAGE_RECEIPT_FILE) {
-                    try { '' | & node $promptCacheHelper claude-stream | Out-Null }
+                if ($usePrintMode -and -not $script:MoeUsageResultSeen -and $script:MoeUsageReceiptFile) {
+                    try { Invoke-MoeUsageHelper { '' | & node $promptCacheHelper claude-stream | Out-Null } }
                     catch { Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE' }
                 }
                 Stop-HeartbeatSidecar

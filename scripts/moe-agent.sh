@@ -866,31 +866,36 @@ PROJECT=$(cd "$PROJECT" 2>/dev/null && pwd || echo "$PROJECT")
 
 # Shared policy applies to every resolved project before task claim/model calls.
 PROMPT_CACHE_HELPER="$SCRIPT_DIR/prompt-cache.mjs"
+# The launch's receipt path and context live in UNEXPORTED shell variables
+# (USAGE_RECEIPT_FILE / USAGE_RECEIPT_CONTEXT) and reach only the wrapper's own
+# usage helpers, as per-command MOE_USAGE_* prefixes. task-03418dc2 found fixture
+# usage from processes a CLI started in 48 live receipts, so no agent CLI, nothing
+# the CLI starts and no other wrapper child (the post-flight quality gate
+# included) may inherit the pair. ps1 twin: Invoke-MoeUsageHelper.
 start_moe_usage_receipt() {
-    unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON
+    unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON USAGE_RECEIPT_FILE USAGE_RECEIPT_CONTEXT
     [ "${MOE_USAGE_REPORTING:-}" != off ] || return 0
-    local provider="$1" mode="$2" requested_model="" requested_effort="" prepared="" receipt_file="" receipt_context=""
+    local provider="$1" mode="$2" requested_model="" requested_effort="" prepared="" receipt_file="" receipt_context="" supplied=""
     case "$provider" in
         claude) requested_model="${ITER_MODEL:-${RESOLVED_MODEL:-}}"; requested_effort="${ITER_EFFORT:-max}" ;;
         codex) requested_model="${ITER_CODEX_MODEL:-}"; requested_effort="${ITER_CODEX_EFFORT:-${MOE_CODEX_REASONING_EFFORT:-xhigh}}" ;;
         *) return 0 ;;
     esac
-    if ! MOE_USAGE_CONTEXT_JSON=$("$PYTHON_CMD" -c 'import json,sys
+    if ! supplied=$("$PYTHON_CMD" -c 'import json,sys
 keys=["taskId","workerId","role","attemptId","requestedModel","requestedEffort","launchMode"]
 print(json.dumps(dict(zip(keys,[v or None for v in sys.argv[1:]]))))' \
         "${PREFLIGHT_TASK_ID:-}" "$WORKER_ID" "$ROLE" "${MOE_ATTEMPT_ID:-}" "$requested_model" "$requested_effort" "$mode" 2>/dev/null); then
-        echo '[usage] MOE_USAGE_REPORT_UNAVAILABLE' >&2; unset MOE_USAGE_CONTEXT_JSON; return 0
+        echo '[usage] MOE_USAGE_REPORT_UNAVAILABLE' >&2; return 0
     fi
-    export MOE_USAGE_CONTEXT_JSON
-    prepared=$("$NODE_CMD" "$SCRIPT_DIR/usage-session.mjs" "$PROJECT" 2>/dev/null) || prepared=""
+    prepared=$(MOE_USAGE_CONTEXT_JSON="$supplied" "$NODE_CMD" "$SCRIPT_DIR/usage-session.mjs" "$PROJECT" 2>/dev/null) || prepared=""
     receipt_file=$("$PYTHON_CMD" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["context"]["launchId"]; print(d["file"])' "$prepared" 2>/dev/null) || receipt_file=""
     receipt_context=$("$PYTHON_CMD" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])["context"]))' "$prepared" 2>/dev/null) || receipt_context=""
     if [ -z "$receipt_file" ] || [ -z "$receipt_context" ]; then
-        echo '[usage] MOE_USAGE_REPORT_UNAVAILABLE' >&2; unset MOE_USAGE_CONTEXT_JSON; return 0
+        echo '[usage] MOE_USAGE_REPORT_UNAVAILABLE' >&2; return 0
     fi
-    export MOE_USAGE_RECEIPT_FILE="$receipt_file" MOE_USAGE_CONTEXT_JSON="$receipt_context"
+    USAGE_RECEIPT_FILE="$receipt_file" USAGE_RECEIPT_CONTEXT="$receipt_context"
     # Pending is a launch marker, not measured zero usage or a terminal result.
-    "$NODE_CMD" "$PROMPT_CACHE_HELPER" usage-start "$provider" >/dev/null || true
+    MOE_USAGE_RECEIPT_FILE="$USAGE_RECEIPT_FILE" MOE_USAGE_CONTEXT_JSON="$USAGE_RECEIPT_CONTEXT" "$NODE_CMD" "$PROMPT_CACHE_HELPER" usage-start "$provider" >/dev/null || true
 }
 # End usage receipt helpers.
 if [ "$CLI_TYPE" = "claude" ] || [ "$CLI_TYPE" = "codex" ]; then
@@ -9919,7 +9924,7 @@ sys.stdout.write("\x1f".join([p, "true" if r else "false", ", ".join(clean(x) fo
 {
 while [ "$LOOP_RUNNING" = true ]; do
     # Receipt metadata belongs to one actual CLI launch, never a prior task.
-    unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON
+    unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON USAGE_RECEIPT_FILE USAGE_RECEIPT_CONTEXT
     if [ "$FIRST_RUN" = false ]; then
         echo ""
         if [ "${LAUNCH_FAIL_BACKOFF_SEC:-0}" -gt 0 ]; then
@@ -11401,11 +11406,12 @@ $PROMPT_BODY"
             # forward the wrapper's environment to MCP servers, and the shared
             # .codex/config.toml cannot carry per-seat values without sibling
             # seats clobbering them. The helper alone gets the TOOL-witness env
-            # the Claude stream parser gets (prompt-cache-witness.mjs).
+            # the Claude stream parser gets (prompt-cache-witness.mjs), and the
+            # usage receipt pair (MOE_USAGE_RECEIPT_FILE / MOE_USAGE_CONTEXT_JSON).
             agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "$CODEX_MOE_OVERRIDE" \
-                "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
+                "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_USAGE_RECEIPT_FILE="${USAGE_RECEIPT_FILE:-}" MOE_USAGE_CONTEXT_JSON="${USAGE_RECEIPT_CONTEXT:-}" "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
 
             CLI_EXIT_CODE=${PIPESTATUS[0]}
 
@@ -12041,7 +12047,7 @@ PYEOF
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 # Pipe through the parser; the subshell's exit (the CLI's) is
                 # PIPESTATUS[0] — the parser's own status is irrelevant.
-                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | MOE_USAGE_RECEIPT_FILE="${USAGE_RECEIPT_FILE:-}" MOE_USAGE_CONTEXT_JSON="${USAGE_RECEIPT_CONTEXT:-}" "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
@@ -12054,7 +12060,7 @@ PYEOF
 
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 start_moe_usage_receipt "$CLI_TYPE" headless
-                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | MOE_USAGE_RECEIPT_FILE="${USAGE_RECEIPT_FILE:-}" MOE_USAGE_CONTEXT_JSON="${USAGE_RECEIPT_CONTEXT:-}" "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 start_moe_usage_receipt "$CLI_TYPE" interactive

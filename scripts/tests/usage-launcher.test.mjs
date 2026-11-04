@@ -50,11 +50,44 @@ function run(t, ext, engine, body, options = {}) {
   return { ...result, receipts, dir };
 }
 
+// The fake CLI records the receipt pair it inherited, then runs a fixture usage
+// helper as its own child: the task-03418dc2 path, which appends to whatever
+// receipt it inherits. The wrapper's own rows must still land, and only those.
+const cliPrelude = provider => `import { spawnSync as moeSpawn } from 'node:child_process';
+import { writeFileSync as moeWrite } from 'node:fs';
+import moePath from 'node:path';
+moeWrite(moePath.join(process.env.MOE_TEST_DIR, 'cli-env.json'), JSON.stringify({ receipt: process.env.MOE_USAGE_RECEIPT_FILE ?? null, context: process.env.MOE_USAGE_CONTEXT_JSON ?? null }));
+moeSpawn(process.execPath, [moePath.join(process.env.MOE_TEST_SCRIPTS, 'prompt-cache.mjs'), 'usage-start', '${provider}'], { stdio: 'ignore' });
+`;
+const cliEnv = dir => JSON.parse(readFileSync(path.join(dir, 'cli-env.json'), 'utf8'));
+const NO_PAIR = { receipt: null, context: null };
+const claudeFake = withResult => `${cliPrelude('claude')}import assert from 'node:assert/strict';
+const args=process.argv.slice(2);
+assert.equal(args[args.indexOf('--model')+1], 'claude-opus-5-5');
+assert.equal(args[args.indexOf('--effort')+1], 'max');
+${withResult ? `console.log(JSON.stringify({type:'result',subtype:'success',session_id:'session-fixture',uuid:'result-fixture',usage:{input_tokens:100,cache_read_input_tokens:900,cache_creation_input_tokens:0,output_tokens:80}}));` : ''}
+process.exitCode=23;`;
+// The launcher's real claude launch, cut from its source; print selects -p or the TUI.
+function claudeLaunch(ext, print) {
+  const text = source(ext);
+  if (ext === 'ps1') {
+    const parser = between(text, '            $parseStreamJson = {', '            # Usage receipt launch boundary.');
+    const pipeline = between(text, '            # Usage receipt launch boundary.', '\n        }\n    }\n\n    Remove-MoeAgentGitGuard');
+    return `function Start-HeartbeatSidecar {}\nfunction Stop-HeartbeatSidecar {}\n$Command=$env:MOE_TEST_NODE\n$CommandArgs=@($env:MOE_TEST_FAKE)\n$modelArgs=@('--model',$resolvedModel)\n$iterEffort='max'\n$printArgs=${print ? "@('--print')" : '@()'}\n$cacheArgs=@()\n$accountArgs=@()\nfunction Set-MoeAccountEnv {}\nfunction Restore-MoeAccountEnv {}\n$usePrintMode=$${print}\n$userPromptForCli='pointer'\n${parser}\n${pipeline}\nWrite-Output "CHILD_EXIT=$script:CliExitCode"`;
+  }
+  const from = text.lastIndexOf('        LAUNCH_SKIPPED=false');
+  assert.ok(from > 0);
+  const pipeline = between(text.slice(from), '        LAUNCH_SKIPPED=false', '\n    fi\n\n    if [ -n "${AGENT_GIT_GUARD_ROOT:-}" ]');
+  return `COMMAND_BIN="$MOE_TEST_NODE"\nCOMMAND_ARGV=("$MOE_TEST_FAKE")\nMODEL_ARGS=(--model "$RESOLVED_MODEL")\nITER_EFFORT=max\nPRINT_ARGS=(${print ? '--print' : ''})\nCACHE_ARGS=()\nACCOUNT_ARGS=()\napply_account_env() { :; }\nCLI_TYPE=claude\nAUTO_CLAIM=true\nPROMPT=pointer\nSTREAM_JSON_PARSER='import sys; sys.stdout.write(sys.stdin.read())'\n${pipeline}\nprintf 'CHILD_EXIT=%s' "$CLI_EXIT_CODE"`;
+}
+
 for (const [ext, engine] of engines) {
   test(`${engine}: usage metadata is fresh for each task and resume`, t => {
-    const body = ext === 'ps1' ? `$global:LASTEXITCODE=23\nStart-MoeUsageReceipt 'claude' 'headless'\nWrite-Output "SAVED_EXIT=$LASTEXITCODE"\nStart-MoeUsageReceipt 'claude' 'interactive'\n$preflightTaskId='task-B'\n$script:MoeAttemptId=$null\nStart-MoeUsageReceipt 'codex' 'headless'`
-      : `start_moe_usage_receipt claude headless\nstart_moe_usage_receipt claude interactive\nPREFLIGHT_TASK_ID=task-B\nMOE_ATTEMPT_ID=''\nstart_moe_usage_receipt codex headless`;
+    // CHILD_ENV is what any later wrapper child (the post-flight gate included) inherits.
+    const body = ext === 'ps1' ? `$global:LASTEXITCODE=23\nStart-MoeUsageReceipt 'claude' 'headless'\nWrite-Output "SAVED_EXIT=$LASTEXITCODE"\nWrite-Output "CHILD_ENV=[$($env:MOE_USAGE_RECEIPT_FILE)][$($env:MOE_USAGE_CONTEXT_JSON)]"\nStart-MoeUsageReceipt 'claude' 'interactive'\n$preflightTaskId='task-B'\n$script:MoeAttemptId=$null\nStart-MoeUsageReceipt 'codex' 'headless'`
+      : `start_moe_usage_receipt claude headless\n"$NODE_CMD" -e 'console.log("CHILD_ENV=[" + (process.env.MOE_USAGE_RECEIPT_FILE ?? "") + "][" + (process.env.MOE_USAGE_CONTEXT_JSON ?? "") + "]")'\nstart_moe_usage_receipt claude interactive\nPREFLIGHT_TASK_ID=task-B\nMOE_ATTEMPT_ID=''\nstart_moe_usage_receipt codex headless`;
     const r = run(t, ext, engine, body);
+    assert.match(r.stdout, /CHILD_ENV=\[\]\[\]/);
     assert.equal(r.receipts.length, 3);
     assert.equal(new Set(r.receipts.map(receipt => receipt.launchId)).size, 3);
     const claude = r.receipts.filter(receipt => receipt.provider === 'claude');
@@ -85,28 +118,20 @@ for (const [ext, engine] of engines) {
     assert.match(r.stdout, /PROVIDER_STILL_RUNS/);
     assert.doesNotMatch(r.stderr, /occupied|usage launcher|ENOENT|ENOTDIR/);
   });
+  test(`${engine}: interactive Claude launch keeps the receipt from the CLI and its child`, t => {
+    const r = run(t, ext, engine, claudeLaunch(ext, false), { fakeSource: claudeFake(false) });
+    assert.match(r.stdout, /CHILD_EXIT=23/);
+    assert.deepEqual(cliEnv(r.dir), NO_PAIR);
+    assert.equal(r.receipts.length, 1);
+    assert.equal(r.receipts[0].coverage, 'pending');
+    assert.equal(r.receipts[0].launchMode, 'interactive');
+  });
   for (const withResult of [true, false]) {
     test(`${engine}: real Claude launch ${withResult ? 'records cumulative usage' : 'keeps missing usage unknown'} and preserves child exit`, t => {
-      const text = source(ext);
-      const fakeSource = `import assert from 'node:assert/strict';
-const args=process.argv.slice(2);
-assert.equal(args[args.indexOf('--model')+1], 'claude-opus-5-5');
-assert.equal(args[args.indexOf('--effort')+1], 'max');
-${withResult ? `console.log(JSON.stringify({type:'result',subtype:'success',session_id:'session-fixture',uuid:'result-fixture',usage:{input_tokens:100,cache_read_input_tokens:900,cache_creation_input_tokens:0,output_tokens:80}}));` : ''}
-process.exitCode=23;`;
-      let body;
-      if (ext === 'ps1') {
-        const parser = between(text, '            $parseStreamJson = {', '            # Usage receipt launch boundary.');
-        const pipeline = between(text, '            # Usage receipt launch boundary.', '\n        }\n    }\n\n    Remove-MoeAgentGitGuard');
-        body = `function Start-HeartbeatSidecar {}\nfunction Stop-HeartbeatSidecar {}\n$Command=$env:MOE_TEST_NODE\n$CommandArgs=@($env:MOE_TEST_FAKE)\n$modelArgs=@('--model',$resolvedModel)\n$iterEffort='max'\n$printArgs=@('--print')\n$cacheArgs=@()\n$accountArgs=@()\nfunction Set-MoeAccountEnv {}\nfunction Restore-MoeAccountEnv {}\n$usePrintMode=$true\n$userPromptForCli='pointer'\n${parser}\n${pipeline}\nWrite-Output "CHILD_EXIT=$script:CliExitCode"`;
-      } else {
-        const from = text.lastIndexOf('        LAUNCH_SKIPPED=false');
-        assert.ok(from > 0);
-        const pipeline = between(text.slice(from), '        LAUNCH_SKIPPED=false', '\n    fi\n\n    if [ -n "${AGENT_GIT_GUARD_ROOT:-}" ]');
-        body = `COMMAND_BIN="$MOE_TEST_NODE"\nCOMMAND_ARGV=("$MOE_TEST_FAKE")\nMODEL_ARGS=(--model "$RESOLVED_MODEL")\nITER_EFFORT=max\nPRINT_ARGS=(--print)\nCACHE_ARGS=()\nACCOUNT_ARGS=()\napply_account_env() { :; }\nCLI_TYPE=claude\nAUTO_CLAIM=true\nPROMPT=pointer\nSTREAM_JSON_PARSER='import sys; sys.stdout.write(sys.stdin.read())'\n${pipeline}\nprintf 'CHILD_EXIT=%s' "$CLI_EXIT_CODE"`;
-      }
-      const r = run(t, ext, engine, body, { fakeSource });
+      const r = run(t, ext, engine, claudeLaunch(ext, true), { fakeSource: claudeFake(withResult) });
       assert.match(r.stdout, /CHILD_EXIT=23/);
+      assert.deepEqual(cliEnv(r.dir), NO_PAIR);
+      // pending + reported/missing: the CLI's child appended nothing.
       assert.equal(r.receipts.length, 2);
       assert.equal(r.receipts[0].coverage, 'pending');
       assert.equal(r.receipts[1].coverage, withResult ? 'reported' : 'missing');
@@ -115,7 +140,7 @@ process.exitCode=23;`;
     });
     test(`${engine}: real Codex launch ${withResult ? 'records each completed turn' : 'keeps missing usage unknown'} and preserves child exit`, t => {
       const text = source(ext);
-      const fakeSource = `import assert from 'node:assert/strict';
+      const fakeSource = `${cliPrelude('codex')}import assert from 'node:assert/strict';
 assert.ok(process.argv.includes('--json'));
 assert.ok(process.argv.includes('exec'));
 ${withResult ? `console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1000,cached_input_tokens:900,output_tokens:80}}));` : ''}
@@ -130,6 +155,8 @@ process.exitCode=23;`;
       }
       const r = run(t, ext, engine, body, { fakeSource });
       assert.match(r.stdout, /CHILD_EXIT=23/);
+      assert.deepEqual(cliEnv(r.dir), NO_PAIR);
+      // pending + reported/missing: the CLI's child appended nothing.
       assert.equal(r.receipts.length, 2);
       assert.equal(r.receipts[0].coverage, 'pending');
       assert.equal(r.receipts[1].coverage, withResult ? 'reported' : 'missing');
