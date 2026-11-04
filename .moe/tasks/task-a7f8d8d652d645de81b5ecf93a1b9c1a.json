@@ -72,8 +72,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -89,12 +89,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:47.791Z",
-  "updatedAt": "2026-11-04T13:01:32.244Z",
+  "updatedAt": "2026-11-04T13:03:05.747Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:32:32.482Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T13:03:05.744Z",
+    "wallClockMs": 1833262
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -206,5 +208,9 @@
     "kind": "completion",
     "sessionId": "worker-593560ee@2026-11-04T12:54:54Z",
     "at": "2026-11-04T13:01:01.160Z"
-  }
+  },
+  "completedAt": "2026-11-04T13:03:05.744Z",
+  "reviewCompletedAt": "2026-11-04T13:03:05.744Z",
+  "reviewSummary": "Reviewed completion 1fef1b76 (on moe/control + moe/work-2026-10-24; 2 files, +85/-1, wrapper +33; ps1 untouched, no new parity string). Diff matches the approved plan: NAMESPACED_DAEMON is set only when the drive-letter rule did not fire, pidNamespace matches exact `^pid:\\[[0-9]{1,20}]$` and differs from `readlink /proc/self/ns/pid` (unreadable counts as another); new elif before kill -0 probes ${MOE_DAEMON_HOST:-127.0.0.1}: rc0 -> [OK]+RUNNING=true, rc3 -> refuse_foreign_daemon (deletes nothing), else stale rm + normal start. Record pid never kill'd; new substitutions are set -e safe. Absent/own/malformed namespaces take the unchanged kill -0 path. Re-ran task.verification myself: bash -n clean; parity-check PASS; git-archive snapshot outside repo (/mnt/d/moe-scratch/a7f8.bfqwst, packages symlinked, nothing built): Linux full daemon-json-cap 109 tests/41 pass/0 fail/68 skipped with 9 pid-namespace oks; Windows node+Git Bash pid-namespace rows 9/8 pass/0 fail/1 skipped; GREEN-OK; vs 2037e856 wrapper exactly the 3 'another namespace' rows fail, 6 'dead pid' rows pass (RED-OK); chain exit 0; npm run lint OK. DoD 1 (adopt row: reachable, running=true so no daemon start, daemon.json byte-identical, one GET /health; fails on base), DoD 2 (no/own namespace + dead pid still removed as stale; existing cap rows green), DoD 3 (parity + bash -n) all met. Tests are mutation-resistant. Worker-named edges accepted, none blocking: trailing-newline 'pid:[1]\\n' counts as namespaced; probe timeout/remapped port reads stale; Git Bash reading a WSL record probes 127.0.0.1. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

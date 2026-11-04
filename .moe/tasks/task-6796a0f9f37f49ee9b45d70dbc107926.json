@@ -74,8 +74,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a408f113",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -90,7 +90,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:17.897Z",
-  "updatedAt": "2026-11-04T13:02:19.278Z",
+  "updatedAt": "2026-11-04T13:03:36.000Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:25:31.605Z",
     "plannedStepCount": 4,
@@ -171,5 +171,46 @@
   },
   "planApprovedAt": "2026-11-04T12:32:18.293Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T12:46:59.011Z"
+  "workStartedAt": "2026-11-04T12:46:59.011Z",
+  "reviewStartedAt": "2026-11-04T13:02:45.008Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"PN' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) PN=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 8 ] || r=1; grep -n pidNamespace moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r",
+    "exitCode": 0,
+    "outputTail": "log=/tmp/tmp.JaakEcNmvb\nBUILD SUCCESSFUL in 31s\nxml tests=695 skipped=6 failures=0 errors=0\nMoeDaemonSupervisorTest: tests=\"100\" skipped=\"2\" failures=\"0\" errors=\"0\" PN=6\nMoeProjectForeignDaemonTest: tests=\"14\" skipped=\"0\" failures=\"0\" errors=\"0\" PN=2\n298:    val pidNamespace: String? = null",
+    "reportedAt": "2026-11-04T13:02:45.008Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+  ],
+  "completionSummary": "The JetBrains plugin treats a .moe/daemon.json whose pidNamespace (pid:[N], written since task-da89f620) differs from the IDE's own like a record from the other side of the WSL boundary. It never probes or signals that pid, and the port alone decides reachability.\n- Models.kt: DaemonInfo gets a trailing `pidNamespace: String? = null`.\n- MoeDaemonSupervisor.kt:\n  - ctor seam ownPidNamespace (default readOwnPidNamespace: readlink /proc/self/ns/pid; null off Linux or on any error).\n  - companion PID_NAMESPACE, the same regex as probeHost.ts:103.\n  - isOtherPidNamespace, plus private pidUnjudgeable = isOtherSideOfWsl || isOtherPidNamespace, used at the start-path early return, replacementMetadataCleared, isReachable and offLoopbackBindRefusal.\n  - a Restart Daemon refusal naming the other pid namespace, placed before the Windows branch. LEGACY no longer destroys whatever host process holds the container's pid number.\n- Behavior:\n  - Open port: kept, no spawn, and connect() goes through the /health identity check.\n  - Closed port: stale, deleted and replaced, as today.\n  - No field, malformed, or own namespace: today's pid rules.\n- MoeProjectService.kt is unchanged. Its pid use at :358 is only a refcount key.\n- Tests: PN1-PN6 (MoeDaemonSupervisorTest) and PN7-PN8 (MoeProjectForeignDaemonTest). On 2037e856 they do not compile.\n- Mutants, run in an archive copy:\n  - M1 (namespace branch dropped): PN2, PN3, PN5, PN7, PN8 fail.\n  - M2 (restart refusal off): PN4 fails.\n  - M3 (regex `.*`): PN1, PN6 fail.\n  - M4 (own-namespace compare off): PN1, PN2, PN4, PN6 fail.\n- Gate, run fresh under the jetbrains-gradle lease (released): BUILD SUCCESSFUL, 695 tests, 6 skipped, 0 failures. Supervisor 100 (6 PN), foreign-daemon 14 (2 PN).\n- Diff: +204/-10 across 4 files.\n- Non-blocking: under PROTECTED, doConnect→activationRefusal→verifyProvenance reads host ProcessHandle facts (no signal) for the recorded pid, as WSL other-side records already do.",
+  "commits": [
+    {
+      "sha": "800786516043e13f0b8c6a503642ca4916a79011",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T12:45:35Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T13:03:36.000Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a408f113@2026-11-04T12:45:35Z",
+    "at": "2026-11-04T13:03:36.000Z"
+  }
 }
