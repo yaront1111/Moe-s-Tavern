@@ -9,10 +9,52 @@
     "The diff changes only the two tsconfig.json files."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-c33f294e",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add compilerOptions.noEmit true to both tracked mod configs, keeping the extends byte-identical. Edit scripts/mods/moe-account-switch/tsconfig.json and scripts/mods/moe-compaction-keeper/tsconfig.json with your own editing tool (Claude Edit/Write, or apply_patch in a one-shot codex seat), never a shell write: per the global rail a shell write leaves no TOOL witness and the path is HELD at landing. Each file becomes exactly this (2-space indent, LF, one trailing newline, as today):\n```json\n{\n  \"extends\": \"./.claude-plugin/types/tsconfig.json\",\n  \"compilerOptions\": {\n    \"noEmit\": true\n  }\n}\n```\nWhy it is safe: the engine-written base (.claude-plugin/types/tsconfig.json, gitignored at .gitignore:100) already sets noEmit true, and a child's compilerOptions merge over the base's, so with the base present nothing changes. With the base missing (every task worktree and git-archive snapshot) tsc still reports TS5083, but it now emits nothing instead of writing hooks/register.js and hooks/register.test.js beside the sources. Claude Code never overwrites the edited file: 2.1.318 creates a mod's root tsconfig.json only when it is missing (uVn calls e.make, which swallows EEXIST). Touch nothing else (DoD 3): not .claude-plugin/types/, not hooks/ (deleting the landed register.js and register.test.js is task-d27edf88's rework), not .gitignore, not docs. Do not run tsc -p or claude plugin test inside the worktree: step 2 runs both in a temp snapshot.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/mods/moe-account-switch/tsconfig.json",
+        "scripts/mods/moe-compaction-keeper/tsconfig.json"
+      ],
+      "modifiedFiles": [
+        "scripts/mods/moe-account-switch/tsconfig.json",
+        "scripts/mods/moe-compaction-keeper/tsconfig.json"
+      ],
+      "note": "Added compilerOptions.noEmit true to both tsconfig.json files; extends unchanged.",
+      "startedAt": "2026-11-04T08:49:06.002Z",
+      "completedAt": "2026-11-04T08:49:14.713Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Run this exact command once, in bash from the worktree root. It needs MOE_PROJECT_PATH (the control checkout, /mnt/d/projexts/moes on this WSL host), which every seat has. It must exit 0. Pass it verbatim as complete_task verification.command, with its output tail:\n```bash\nT=\"$MOE_PROJECT_PATH/moe-vscode/node_modules/.bin/tsc\"; A=\"${AFTER:-worktree}\"; B=\"${BEFORE:-HEAD}\"; W=$(mktemp -d); fail=0; declare -A C J; M=\"moe-account-switch moe-compaction-keeper\"\nfor s in B A; do r=$B; [ $s = A ] && r=$A; for b in nobase base; do S=\"$W/$s-$b\"; mkdir -p \"$S\"; if [ \"$r\" = worktree ]; then git ls-files -z scripts/mods | tar --null -T - -cf - | tar -x -C \"$S\"; else git archive \"$r\" scripts/mods | tar -x -C \"$S\"; fi; find \"$S\" -name '*.js' -delete\n  for m in $M; do d=\"$S/scripts/mods/$m\"; if [ $b = base ]; then cp -r \"$MOE_PROJECT_PATH/scripts/mods/$m/.claude-plugin/types\" \"$d/.claude-plugin/\" || fail=1; fi\n    out=$(\"$T\" -p \"$d/tsconfig.json\" 2>&1); rc=$?; C[$s/$b/$m]=$(grep -o 'error TS[0-9]*' <<<\"$out\" | sort -u | paste -sd' ' -); J[$s/$b/$m]=$(cd \"$S\" && find \"scripts/mods/$m\" -name '*.js' | sort | paste -sd' ' -)\n    echo \"$s/$b $m tsc_rc=$rc errors=[${C[$s/$b/$m]}] js=[${J[$s/$b/$m]}]\"; done; done; done\nfor m in $M; do\n  node -e 'const c=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(c.extends===\"./.claude-plugin/types/tsconfig.json\"&&c.compilerOptions&&c.compilerOptions.noEmit===true?0:1)' \"$W/A-nobase/scripts/mods/$m/tsconfig.json\" || { echo \"FAIL $m: AFTER tsconfig.json lacks the extends or compilerOptions.noEmit true\"; fail=1; }\n  [ -n \"${J[B/nobase/$m]}\" ] || { echo \"FAIL $m: BEFORE without base wrote no .js, so this run cannot show the bug\"; fail=1; }\n  [ -z \"${J[A/nobase/$m]}${J[A/base/$m]}\" ] || { echo \"FAIL $m: AFTER wrote .js\"; fail=1; }\n  [ \"${C[A/base/$m]}\" = \"${C[B/base/$m]}\" ] || { echo \"FAIL $m: errors with the base changed\"; fail=1; }\n  (cd \"$W/A-nobase\" && env -i PATH=\"$PATH\" HOME=\"$HOME\" CLAUDE_CONFIG_DIR=\"$(mktemp -d)\" claude plugin test \"scripts/mods/$m\" 2>&1 | tail -4; exit \"${PIPESTATUS[0]}\") || { echo \"FAIL $m: claude plugin test\"; fail=1; }\ndone; echo \"RESULT before=$B after=$A fail=$fail\"; [ \"$fail\" -eq 0 ]\n```\nWhat it does: it writes only under a fresh mktemp -d and runs no npm command (global rail). BEFORE is git archive HEAD. AFTER is the worktree's tracked files under scripts/mods (git ls-files | tar), so your uncommitted edit is included without git stash. It deletes each snapshot's pre-existing .js (5265909c's tracked register.js and register.test.js, which stay on the target until d27edf88's rework lands), so js=[...] lists only what tsc wrote. It runs tsc -p on each mod twice: without the base, then with the control checkout's .claude-plugin/types copied in. tsc is $MOE_PROJECT_PATH/moe-vscode/node_modules/.bin/tsc, TypeScript 7.0.2 native with linux-x64 and win32-x64 packages; packages/moe-daemon's TypeScript has no linux-x64 package on this host and fails with \"Unable to resolve\" (mem:gotcha-claude-mod-typecheck-on-linux). The checks: AFTER keeps the extends and sets noEmit true; BEFORE without the base writes register.js and register.test.js, which proves the run can see the bug; AFTER writes no .js either way; AFTER's errors with the base equal BEFORE's; claude plugin test passes for both mods under env -i with a temp CLAUDE_CONFIG_DIR (mem:gotcha-account-switch-plugin-test-stubs).\nError handling: the command never stops at the first failure. tsc's own non-zero exit is expected (diagnostics are the baseline), so it is captured as tsc_rc rather than treated as a failure. Every real failure prints a named FAIL line and makes the final exit non-zero: a missing base copy, a missing or unresolvable tsc (an unset MOE_PROJECT_PATH lands here, because BEFORE then writes no .js), a JSON parse error, an emitted .js, changed errors, or a plugin-test failure.\nExpected, as measured by the architect at 58e54180 in a scratch clone: B/nobase tsc_rc=2 and js=[scripts/mods/<mod>/hooks/register.js scripts/mods/<mod>/hooks/register.test.js] for both mods; A/nobase tsc_rc=1 js=[]; B/base and A/base give moe-account-switch errors=[error TS2769 error TS5097] and moe-compaction-keeper errors=[error TS5097], both js=[]; 94 pass and 8 pass; RESULT before=HEAD after=worktree fail=0.\nIf a wrapper checkpoint commit already holds the edit, the BEFORE check fails ('BEFORE without base wrote no .js'): rerun with `BEFORE=$(git merge-base HEAD moe/work-2026-10-24);` in front of the command. QA re-runs it against the landing as `BEFORE=<completion sha>^ AFTER=<completion sha>;` followed by the command.\nIn the completion summary, quote the eight B/ and A/ lines, both plugin-test pass counts and the RESULT line: DoD 1 wants the A/nobase listing, DoD 2 wants A/base against B/base. If the moe-account-switch errors with the base are not exactly TS2769 and TS5097 on both sides (for example after an engine refresh of the base types), report that and do not fix it: the scope is the two config files. This RED/GREEN run is also the regression proof for the epic rail 'All fixes must include regression tests or test updates'. DoD 3 limits the diff to the two tsconfig.json files, so do not add a test file.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the plan's snapshot command: RESULT fail=0. Before: unfixed nobase writes register.js + register.test.js (rc=2). After: nothing written either way, base errors unchanged (TS2769+TS5097 / TS5097), plugin tests 94 pass and 8 pass.",
+      "startedAt": "2026-11-04T08:49:15.534Z",
+      "completedAt": "2026-11-04T08:49:35.272Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Final adversarial self-review (load adversarial-self-review), then complete_task with step 2's evidence. Check: (a) git status --porcelain --untracked-files=all in the worktree lists no path other than ' M scripts/mods/moe-account-switch/tsconfig.json' and ' M scripts/mods/moe-compaction-keeper/tsconfig.json': nothing under hooks/, no .js file, no .claude-plugin/types/ (DoD 3). (b) git diff shows only the added compilerOptions block: the extends line is unchanged, and there are no comments or trailing commas (step 2 parses both files with JSON.parse). (c) With the base present, the effective options do not change: step 2's A/base lines equal its B/base lines. (d) Runtime does not change: hooks.json loads ./register.ts, and both IDE bundles copy scripts/mods/** minus *.test.ts and .claude-plugin/types/ (scripts/CLAUDE.md, the compaction keeper bullet), so the bundled tsconfig.json only gains one inert option. If anything changed after step 2, rerun its command and submit the fresh output. In the summary, name two possible follow-up rows and do neither: the launchers copying .claude-plugin/types into new task worktrees so the type check resolves its types there (out of scope per the task), and a durable guard against committed mod .js files (for example a .gitignore entry or a lint check).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/mods/moe-account-switch/tsconfig.json",
+        "scripts/mods/moe-compaction-keeper/tsconfig.json"
+      ],
+      "modifiedFiles": [
+        "scripts/mods/moe-account-switch/tsconfig.json",
+        "scripts/mods/moe-compaction-keeper/tsconfig.json"
+      ],
+      "note": "Self-review: git status lists only the two tsconfig.json files; diff is only the added compilerOptions block; no change since step 2's run.",
+      "startedAt": "2026-11-04T08:49:36.067Z",
+      "completedAt": "2026-11-04T08:49:42.707Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +66,110 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:32:51.123Z",
-  "updatedAt": "2026-11-04T08:33:06.888Z",
+  "updatedAt": "2026-11-04T08:50:40.615Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T08:32:52.813Z"
+    "firstClaimAt": "2026-11-04T08:32:52.813Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-c33f294e"
-  ]
+    "architect-c33f294e",
+    "worker-a0305b0b"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:47:50.203Z",
+  "executionContract": {
+    "intendedBehavior": "tsc -p scripts/mods/<mod>/tsconfig.json writes no file in any checkout. Without the gitignored, engine-written .claude-plugin/types/tsconfig.json (every task worktree and git-archive snapshot) it still reports TS5083 but exits 1 with nothing emitted, where it used to write hooks/register.js and hooks/register.test.js and exit 2. With that base present it reports the same errors as before (moe-account-switch TS2769 and TS5097, moe-compaction-keeper TS5097) and emits nothing.",
+    "invariants": [
+      "Both files keep \"extends\": \"./.claude-plugin/types/tsconfig.json\" unchanged",
+      "This task adds, changes or deletes no file under scripts/mods/*/hooks/ or scripts/mods/*/.claude-plugin/",
+      "With the base present, each mod's tsc diagnostics are unchanged"
+    ],
+    "compatibility": [
+      "Claude Code 2.1.318 creates a mod's root tsconfig.json only when it is missing (uVn -> e.make, EEXIST swallowed), so the engine keeps the edited file; the base it writes (dVn) already has noEmit true",
+      "hooks.json loads ./register.ts and claude plugin test runs the .ts sources, so mod runtime and tests are unchanged"
+    ],
+    "approvedScope": [
+      "scripts/mods/moe-account-switch/tsconfig.json and scripts/mods/moe-compaction-keeper/tsconfig.json gain compilerOptions.noEmit true; nothing else changes"
+    ],
+    "reuse": [
+      "Repeats the engine base's own noEmit option in the tracked child config; no new mechanism"
+    ],
+    "sourceAssumptions": [
+      ".gitignore:100 ignores scripts/mods/*/.claude-plugin/types/",
+      "The base sets noEmit true and include ../../hooks, ../../types, ../../tests; when it cannot be read, tsc falls back to **/* in the mod folder and, without noEmit, writes a .js beside each .ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: compilerOptions.noEmit true in each tracked child tsconfig.json. It is inert with the base and protective without it. Rejected: a .gitignore entry for scripts/mods/*/hooks/*.js (tsc would still write the files, the entry would only hide them, and it is outside DoD 3); the launchers copying .claude-plugin/types into worktrees (explicitly out of scope, a possible follow-up row); a committed regression test (DoD 3 limits the diff to the two files, and the step-2 RED/GREEN run is the proof); relying on --noEmit on the command line (every seat would have to remember it, which is how 5265909c happened). The verification command avoids git stash (mem:gotcha-claude-mod-typecheck-on-linux) by taring the worktree's tracked files.",
+    "codebaseInsights": "Engine 2.1.318 (binary strings): the root template fSs is exactly {\"extends\": \"./.claude-plugin/types/tsconfig.json\"}, written by uVn through e.make only when neither tsconfig.json nor jsconfig.json exists. The base template dVn has noEmit:true, and the base include ../../hooks, ../../types, ../../tests is relative to the base file. Without the base, TS 7 tsc reports TS5083, TS2307, TS5097 and TS7006, and with no noEmit it writes register.js and register.test.js beside the sources (exit 2: diagnostics, outputs generated); with noEmit it exits 1 (outputs skipped). The tsc that works on WSL is moe-vscode/node_modules/.bin/tsc (7.0.2 native via @typescript/native, linux-x64 present); packages/moe-daemon's 7.0.2 lacks the linux-x64 package. Measured in a scratch clone at 58e54180: RED (unfixed) exits 1 with 'AFTER wrote .js', GREEN exits 0, QA mode (BEFORE=sha^ AFTER=sha) exits 0, and a pre-committed fix with default BEFORE fails with the named BEFORE message.",
+    "risks": "(1) A checkpoint commit that already holds the edit makes BEFORE=HEAD fixed: the command fails with a named message, and the fix is BEFORE=$(git merge-base HEAD moe/work-2026-10-24). (2) task-d27edf88 (WORKING) deletes hooks/register.js and register.test.js on its own branch; this task must not touch hooks/, so the two rows never share a path. (3) An engine refresh of the base types could move the account-switch baseline off TS2769+TS5097. BEFORE == AFTER is the real invariant: report a moved baseline, don't chase it. (4) Never run tsc -p in the worktree or the shared checkout, and never npm install (global rail); the command runs only in mktemp dirs. (5) isEpicFinal is the rolling fallback of the Stability & Hardening bucket, so there is no epic-wide flow to integrate. The affected surface is the two mods, and the command covers both mods' type check and full plugin test; the landing qualityGate runs parity-check and lint.",
+    "keyFiles": [
+      "scripts/mods/moe-account-switch/tsconfig.json",
+      "scripts/mods/moe-compaction-keeper/tsconfig.json",
+      ".gitignore",
+      "scripts/CLAUDE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "a654bbb4a2a5ea803d0504e2249ea9aa8eda2495",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:47:50.237Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:49:06.002Z",
+  "reviewStartedAt": "2026-11-04T08:49:57.010Z",
+  "verification": {
+    "command": "T=\"$MOE_PROJECT_PATH/moe-vscode/node_modules/.bin/tsc\"; A=\"${AFTER:-worktree}\"; B=\"${BEFORE:-HEAD}\"; W=$(mktemp -d); fail=0; declare -A C J; M=\"moe-account-switch moe-compaction-keeper\"\nfor s in B A; do r=$B; [ $s = A ] && r=$A; for b in nobase base; do S=\"$W/$s-$b\"; mkdir -p \"$S\"; if [ \"$r\" = worktree ]; then git ls-files -z scripts/mods | tar --null -T - -cf - | tar -x -C \"$S\"; else git archive \"$r\" scripts/mods | tar -x -C \"$S\"; fi; find \"$S\" -name '*.js' -delete\n  for m in $M; do d=\"$S/scripts/mods/$m\"; if [ $b = base ]; then cp -r \"$MOE_PROJECT_PATH/scripts/mods/$m/.claude-plugin/types\" \"$d/.claude-plugin/\" || fail=1; fi\n    out=$(\"$T\" -p \"$d/tsconfig.json\" 2>&1); rc=$?; C[$s/$b/$m]=$(grep -o 'error TS[0-9]*' <<<\"$out\" | sort -u | paste -sd' ' -); J[$s/$b/$m]=$(cd \"$S\" && find \"scripts/mods/$m\" -name '*.js' | sort | paste -sd' ' -)\n    echo \"$s/$b $m tsc_rc=$rc errors=[${C[$s/$b/$m]}] js=[${J[$s/$b/$m]}]\"; done; done; done\nfor m in $M; do\n  node -e 'const c=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit(c.extends===\"./.claude-plugin/types/tsconfig.json\"&&c.compilerOptions&&c.compilerOptions.noEmit===true?0:1)' \"$W/A-nobase/scripts/mods/$m/tsconfig.json\" || { echo \"FAIL $m: AFTER tsconfig.json lacks the extends or compilerOptions.noEmit true\"; fail=1; }\n  [ -n \"${J[B/nobase/$m]}\" ] || { echo \"FAIL $m: BEFORE without base wrote no .js, so this run cannot show the bug\"; fail=1; }\n  [ -z \"${J[A/nobase/$m]}${J[A/base/$m]}\" ] || { echo \"FAIL $m: AFTER wrote .js\"; fail=1; }\n  [ \"${C[A/base/$m]}\" = \"${C[B/base/$m]}\" ] || { echo \"FAIL $m: errors with the base changed\"; fail=1; }\n  (cd \"$W/A-nobase\" && env -i PATH=\"$PATH\" HOME=\"$HOME\" CLAUDE_CONFIG_DIR=\"$(mktemp -d)\" claude plugin test \"scripts/mods/$m\" 2>&1 | tail -4; exit \"${PIPESTATUS[0]}\") || { echo \"FAIL $m: claude plugin test\"; fail=1; }\ndone; echo \"RESULT before=$B after=$A fail=$fail\"; [ \"$fail\" -eq 0 ]",
+    "exitCode": 0,
+    "outputTail": "A/base moe-account-switch tsc_rc=1 errors=[error TS2769 error TS5097] js=[]\nA/base moe-compaction-keeper tsc_rc=1 errors=[error TS5097] js=[]\n 94 pass\n 0 fail\nRan 94 tests across 1 file. [2.67s]\n 8 pass\n 0 fail\nRan 8 tests across 1 file. [0.27s]\nRESULT before=HEAD after=worktree fail=0",
+    "reportedAt": "2026-11-04T08:49:57.010Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/mods/moe-account-switch/tsconfig.json",
+    "scripts/mods/moe-compaction-keeper/tsconfig.json"
+  ],
+  "completionSummary": "Added compilerOptions.noEmit true to scripts/mods/moe-account-switch/tsconfig.json and scripts/mods/moe-compaction-keeper/tsconfig.json; extends unchanged; diff is only those two files.\nSnapshot run (RESULT before=HEAD after=worktree fail=0):\nB/nobase moe-account-switch tsc_rc=2 errors=[TS2307 TS5083 TS5097 TS7006] js=[hooks/register.js hooks/register.test.js]\nB/nobase moe-compaction-keeper tsc_rc=2 errors=[TS2307 TS5083 TS5097 TS7006] js=[hooks/register.js hooks/register.test.js]\nB/base moe-account-switch tsc_rc=1 errors=[TS2769 TS5097] js=[]\nB/base moe-compaction-keeper tsc_rc=1 errors=[TS5097] js=[]\nA/nobase moe-account-switch tsc_rc=1 errors=[TS2307 TS5083 TS5097 TS7006] js=[]\nA/nobase moe-compaction-keeper tsc_rc=1 errors=[TS2307 TS5083 TS5097 TS7006] js=[]\nA/base moe-account-switch tsc_rc=1 errors=[TS2769 TS5097] js=[]\nA/base moe-compaction-keeper tsc_rc=1 errors=[TS5097] js=[]\nclaude plugin test: 94 pass (account-switch), 8 pass (compaction-keeper).\nPossible follow-up rows (not done): launchers copy .claude-plugin/types into new task worktrees so the type check resolves there; a durable guard against committed mod .js files (.gitignore or lint).",
+  "commits": [
+    {
+      "sha": "bc4793cf09b67cd25b8b584bb9df5059c4813132",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T08:48:15Z",
+      "paths": [
+        "scripts/mods/moe-account-switch/tsconfig.json",
+        "scripts/mods/moe-compaction-keeper/tsconfig.json"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T08:50:40.615Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T08:48:15Z",
+    "at": "2026-11-04T08:50:40.615Z"
+  }
 }
