@@ -51,8 +51,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -67,12 +67,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:24:48.690Z",
-  "updatedAt": "2026-11-04T09:01:43.104Z",
+  "updatedAt": "2026-11-04T09:02:50.546Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:25:08.544Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T09:02:30.386Z",
+    "wallClockMs": 2241842
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -151,10 +153,11 @@
   "planApprovedAt": "2026-11-04T08:37:54.197Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T08:58:46Z",
-    "at": "2026-11-04T09:01:07.717Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T09:01:25Z",
+    "at": "2026-11-04T09:02:50.546Z"
   },
   "workStartedAt": "2026-11-04T08:59:32.168Z",
   "reviewStartedAt": "2026-11-04T09:00:17.177Z",
@@ -191,5 +194,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T09:02:30.386Z",
+  "reviewCompletedAt": "2026-11-04T09:02:30.386Z",
+  "reviewSummary": "Reviewed completion bd75f88a (on moe/work-2026-10-24; the shared checkout's 4 files equal the commit). Diff is +13/-11 across exactly the 4 approved files: scripts/CLAUDE.md, packages/moe-daemon/CLAUDE.md, packages/moe-daemon/src/state/accountStore.ts and docs/TROUBLESHOOTING.md. Re-ran task.verification, a 9-command grep chain plus `bash scripts/tests/parity-check.sh && npm run lint`: exit 0 (PASS parity-check; role docs 39/30/36 lines, max 40). DoD 1: `claim_next_task` is named in the rotation bullets of scripts/CLAUDE.md and packages/moe-daemon/CLAUDE.md and in both accountStore.ts JSDoc blocks (ACCEPTS_ACCOUNT_SWITCH and idleSwitchFor). DoD 2 and the TROUBLESHOOTING criterion: both bullets in 'An architect or governor session ends and restarts on its own' updated, and 'Both idle signals' is gone, replaced by 'All three idle signals need'. Invariants: accountStore.ts changed only ` * ` comment lines, with no code line and no `*/` touched. scripts/CLAUDE.md:42 is still one line, and its word-diff shows only the two intended hunks. No docs/roles, generated, .moe/ or docs/MCP_SERVER.md file changed. Wording checked against source: register.ts has MARKED = {submit_plan, chat_wait, claim_next_task}. claimNextTask.ts answers hasNext:false with accountSwitch and no nextAction when acceptsAccountSwitch === true and idleSwitchFor is non-null. That check sits after the held-task refusal and the caller's own ATTEMPT_FINALIZING refusal and before ranking or any write. Docs and comments only, so no vitest or tsc was run. The shared-tree dist/ rails were not touched. Size is 24 changed LOC, far below the 400 cap.",
+  "requiredCheckAtDone": null
 }
