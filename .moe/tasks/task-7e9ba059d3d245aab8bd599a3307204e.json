@@ -82,8 +82,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -98,12 +98,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:33:42.652Z",
-  "updatedAt": "2026-11-04T09:02:45.275Z",
+  "updatedAt": "2026-11-04T09:05:14.912Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:34:11.813Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T09:04:48.389Z",
+    "wallClockMs": 1836576
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -195,10 +197,11 @@
   "planApprovedAt": "2026-11-04T08:47:45.510Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T08:59:07Z",
-    "at": "2026-11-04T09:02:19.472Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T09:02:24Z",
+    "at": "2026-11-04T09:05:14.912Z"
   },
   "workStartedAt": "2026-11-04T09:00:03.448Z",
   "reviewStartedAt": "2026-11-04T09:01:30.191Z",
@@ -233,5 +236,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T09:04:48.389Z",
+  "reviewCompletedAt": "2026-11-04T09:04:48.389Z",
+  "reviewSummary": "Reviewed completion 2941e097 (git diff 2941e097^..2941e097; on moe/control and moe/work-2026-10-24). 3 files, +10/-6, docs-only, no CRLF churn: architect.md line 34 (one sentence in place; 39 lines), architect.reference.md (one paragraph in '## Claude account switch'), initFiles.ts (two ROLE_DOCS markers+bodies, one added sha per SHIPPED_ROLE_BODY_SHAS list, all old shas kept, no other entry touched).\n\nDoD 1: grep 'claim_next_task` reply with `accountSwitch' architect.md exits 0 (line 34); 39 lines; no full task id. DoD 2: grep accountSwitch architect.reference.md | grep claim_next_task exits 0 (line 87); submit_plan bullets and closing paragraph intact. DoD 3: in a fresh clone at parent bd75f88a (outside the shared checkout, env -i, node 24): npm ci, generate-init-files left parent initFiles.ts clean (generator-fresh); overlaid the 3 landed files, regenerated, sha1sum -c OK, so the landed bytes equal generator output. DoD 4: parity-check.sh && npm run lint exits 0.\n\nRe-ran the worker's full command (sha256sum -c, r0-r3): exit 0; R3 vitest 5 files / 44 tests passed. R2/R3 take their base from HEAD, which had moved past the completion, so the parent-based regenerate above makes DoD 3 non-vacuous.\n\nSource claims verified: claimNextTask.ts:553-570 (hasNext:false + accountSwitch, no nextAction, after alreadyAssigned/ATTEMPT_FINALIZING, before ranking); accountStore.ts accountSwitchReply (six fields, 'ACCOUNT-SWITCH:'); register.ts MARKED/SIGNALS include claim_next_task, HELD refuses it once a switch is pending. No unbacked claims. Out-of-scope paths untouched. Complexity pass: nothing to cut. No tests changed.",
+  "requiredCheckAtDone": null
 }

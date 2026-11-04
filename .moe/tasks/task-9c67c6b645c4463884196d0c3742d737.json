@@ -73,8 +73,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,16 +86,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:42:33.111Z",
-  "updatedAt": "2026-11-04T09:03:21.645Z",
+  "updatedAt": "2026-11-04T09:05:10.497Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:48:24.603Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T09:05:10.494Z",
+    "wallClockMs": 1005891
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -207,5 +210,9 @@
     "kind": "completion",
     "sessionId": "worker-593560ee@2026-11-04T08:57:43Z",
     "at": "2026-11-04T09:03:18.082Z"
-  }
+  },
+  "completedAt": "2026-11-04T09:05:10.494Z",
+  "reviewCompletedAt": "2026-11-04T09:05:10.494Z",
+  "reviewSummary": "Approved. Reviewed completion acea850b (on moe/work-2026-10-24 and control HEAD; 3 files, +93/-7, net 86 LOC; moe-jetbrains tree clean). Re-ran task.verification myself under the jetbrains-gradle lease (released), Windows gradlew.bat route: BUILD SUCCESSFUL in 34s; xml tests=683 skipped=6 failures=0 errors=0; DaemonIdentityTest 26/skipped 0 (dirLink symlink/junction cases ran, still Same via real disk check); MoeDaemonSupervisorTest 94/skipped 2 (pre-existing F1b/F1c)/fail 0; MoeProjectForeignDaemonTest 12/0/0; MoeSnapshotProjectCheckTest 5/0/0; exit 0.\nDoD1: isSameProjectPath (DaemonIdentity.kt:103-105) reaches sameDirectoryOnDisk only when both spellings pass isLocalHostAbsolute (no leading [\\\\/]{2}; drive path on Windows, leading / elsewhere). Else comparableProjectPath equality alone, as VS Code. Signature unchanged, pure string guard, runCatching kept; MoeDaemonSupervisor.isSameProject and MoeMessageDispatcher:96 unedited and inherit the guard; WSL-share spellings still fold first.\nDoD2: new test uses a recording seam stub that answers true, covers \\\\host\\share\\x, //host/share/x, \\\\?\\UNC\\host\\share\\x, \\\\.\\C:\\x, \\\\?\\C:\\x via classify (Foreign), isSameProject and isSameProjectPath, and asserts the seam was never asked. Positive control, relative-spelling and isLocalHostAbsolute rows (both host branches) added; seam restored first in tearDown. Relative-case decision recorded and sound: MoeDaemonSupervisorTest:101 now assertFalse with reason (File(\".\") is the IDE cwd; VS Code refuses it; 9f6857ee records an absolute path).\nDoD3: gate green; mem:decision-daemon-identity-probe has the CLOSED bullet (read back).\nScope matches plan; no tests deleted or weakened. Residual (accepted): mapped-drive vs UNC spelling of one folder now reads Foreign, as in VS Code. I ran no mutant of my own; relied on the worker's recorded RED run (3 failures pre-guard).",
+  "requiredCheckAtDone": null
 }
