@@ -5,7 +5,8 @@
 // with the post-run workspace 'intact'; retries reuse their ids (CQ-V03b). No isolation is claimed; verified-local stays off.
 // Dependencies come only from lockfiles named in the approved definition's configs. An uncovered owed gate stops every
 // check before a VM with RUNNER_DEPENDENCIES_UNDECLARED: it has no approved dependency choice.
-// Stopping: SIGINT/SIGTERM abort the run, and runCheckJob deletes its VM before the CLI exits. Windows cannot send SIGTERM to
+// Stopping: the first SIGINT/SIGTERM aborts the run, and runCheckJob deletes its VM before the CLI exits. Later ones are ignored
+// (the listeners stay on), so a second Ctrl+C or TERM cannot end the CLI mid-delete. Windows cannot send SIGTERM to
 // this one process, and a console Ctrl+C reaches every process on the console, so moe-agent.ps1 passes `--stop-file <path>`:
 // a path that does not exist yet. The file existing means stop, through the same abort. It is polled (unref'd, so it never
 // keeps the process alive) and latched: removing it later changes nothing. moe-agent.sh never passes it; it signals.
@@ -275,11 +276,16 @@ export async function runDispatchCli(argv, { open = openRunnerChannel, exportSna
 function invokedDirectly() {
   try { return pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url; } catch { return false; }
 }
-if (invokedDirectly()) {
-  const controller = new AbortController(); // an interrupt still lets runCheckJob delete its VM before the process ends
-  for (const name of ['SIGINT', 'SIGTERM']) process.once(name, () => controller.abort());
-  runDispatchCli(process.argv.slice(2), { signal: controller.signal }).then(code => { process.exitCode = code; }, () => {
+/** The CLI entry. The first SIGINT or SIGTERM aborts the run, and runCheckJob deletes its VM before the CLI exits. Both listeners
+ * stay on for the process's life: a later signal (a second Ctrl+C or TERM) is then a no-op abort(), never Node's default action,
+ * which would end the CLI mid-delete and leak the VM. Node unrefs signal listeners, so they never keep the process alive. `deps`
+ * are runDispatchCli's seams, for the S5 row's driver; the entry passes none, and its own signal always wins. */
+export function runDispatchEntry(argv, deps = {}) {
+  const controller = new AbortController();
+  for (const name of ['SIGINT', 'SIGTERM']) process.on(name, () => controller.abort());
+  return runDispatchCli(argv, { ...deps, signal: controller.signal }).then(code => { process.exitCode = code; }, () => {
     process.stderr.write('Check dispatch could not emit its report.\n');
     process.exitCode = 2;
   });
 }
+if (invokedDirectly()) runDispatchEntry(process.argv.slice(2));

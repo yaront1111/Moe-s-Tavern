@@ -1,6 +1,6 @@
 // CQ-V04b check-dispatch.mjs, against scripted fakes: the /runner `call`, and a `runCheck` logging VM create/delete around onReady.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -586,4 +586,61 @@ test('S4: the real entry, its stop file never created, exits by itself with one 
     '--task', TASK, '--commit', TREE, '--stop-file', path.join(root, 'never.stop')], { encoding: 'utf8', timeout: 20_000, env });
   assert.deepEqual([entry.error, entry.signal, entry.status, entry.stderr], [undefined, null, 2, '']);
   assert.match(entry.stdout, /^\{"code":"[A-Z][A-Z0-9_]*"\}\n$/);
+});
+
+// task-2acbdbdd: the entry keeps both signal listeners, so a later SIGINT or SIGTERM during the VM delete is ignored, never Node's
+// default exit. The child runs the exported entry over fakes. Its VM holds the process from create to removed (signal listeners
+// never do), and its delete lasts until the test closes the child's stdin, which happens only after the later signals are sent.
+const ENTRY_DRIVER = `import { runDispatchEntry } from ${JSON.stringify(new URL('../local-runner/check-dispatch.mjs', import.meta.url).href)};
+const say = line => process.stderr.write(line + '\\n');
+const call = async tool => (tool === 'moe.get_context' ? ${JSON.stringify(context())} : { success: true });
+const runCheck = async ({ onReady, onCleanup, signal }) => {
+  say('create');
+  const vm = setInterval(() => {}, 1_000);
+  try {
+    await onReady(${JSON.stringify(ENV)});
+    say('session');
+    await new Promise(resolve => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })));
+    return { outcome: 'infra-failure', exitCode: null, outputTail: '', workspace: 'unverified' };
+  } finally {
+    say('remove');
+    await new Promise(resolve => process.stdin.on('end', resolve).resume());
+    clearInterval(vm);
+    onCleanup({ vm: 'deleted', failure: null });
+    say('removed');
+  }
+};
+runDispatchEntry(${JSON.stringify(['--project', '/srv/project', '--task', TASK, '--commit', TREE])},
+  { open: async () => ({ call, close() {} }), exportSnapshot: async () => ({ tree: ${JSON.stringify(TREE)} }), loadRunCheck: async () => runCheck });`;
+// signals[0] once the session runs, the rest once the delete started; then stdin closes, which ends the delete.
+function interruptedEntry(t, signals) {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', ENTRY_DRIVER], { env: { PATH: process.env.PATH } });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  child.stdin.on('error', () => {}); // a child the repeated signal killed never reads it
+  const end = { stdout: '', stderr: '', sent: [] };
+  child.stdout.on('data', chunk => { end.stdout += chunk; });
+  child.stderr.on('data', chunk => {
+    const before = end.stderr;
+    end.stderr += chunk;
+    const reached = line => !before.includes(`${line}\n`) && end.stderr.includes(`${line}\n`);
+    if (reached('session')) end.sent.push(child.kill(signals[0]));
+    if (reached('remove')) { for (const name of signals.slice(1)) end.sent.push(child.kill(name)); child.stdin.end(); }
+  });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`no exit within 15 s: ${JSON.stringify(end)}`)); }, 15_000);
+    child.on('close', (code, signal) => { clearTimeout(timer); resolve({ ...end, code, signal }); });
+  });
+}
+
+test('S5: a second SIGINT or SIGTERM during the VM delete is ignored: the delete completes and the entry exits 2 with its one report line',
+  { skip: process.platform === 'win32' && 'POSIX signals: on Windows child.kill() terminates the child, and node cannot send one console Ctrl+C' }, async t => {
+  for (const signals of [['SIGINT', 'SIGINT'], ['SIGTERM', 'SIGTERM'], ['SIGTERM', 'SIGINT', 'SIGTERM']]) {
+    const end = await interruptedEntry(t, signals);
+    assert.deepEqual([end.code, end.signal, end.stderr, end.sent, end.stdout.split('\n').length],
+      [2, null, 'create\nsession\nremove\nremoved\n', signals.map(() => true), 2], signals.join());
+    const report = JSON.parse(end.stdout);
+    assert.deepEqual({ ...report, results: report.results.map(({ dispatchId, ...rest }) => ({ dispatchId: typeof dispatchId, ...rest })) },
+      { taskId: TASK, candidateId: 'cand-1', stopped: { code: 'RUNNER_ABORTED' },
+        results: [{ dispatchId: 'string', checkId: 'unit', command: 'npm test', outcome: 'infra-failure', vm: 'deleted', failure: null }] }, signals.join());
+  }
 });
