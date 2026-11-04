@@ -13,27 +13,40 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (DoD 1 and 2). Load test-driven-development. Create moe-vscode/tests/daemon-symlink-project.test.cjs with the session's own editing tool (Write/Edit on a Claude seat, apply_patch on a codex exec seat; never a shell write, cp, or a subagent). A validated prototype of this exact file is at /mnt/d/moe-scratch/plan-e07e695c/prototype-daemon-symlink-project.test.cjs: read it and author the file yourself with your editor.\n\nHarness (copy the pattern of tests/daemon-identity.test.cjs; read mem:gotcha-vscode-vm-test-harness):\n- ts.transpileModule of ../src/services/MoeDaemonClient.ts, run with vm.runInNewContext and the REAL process object;\n- a vscode stub that records output-channel lines, warnings and errors; getConfiguration answers 'daemon.port' 0 and 'autoConnect' false, so no reconnect timer outlives a row;\n- a child_process.spawn stub that records argv and emits 'spawn' in a microtask;\n- client.resolveBundledDaemonPath = () => 'bundled-daemon.js' and client.waitForDaemonInfo = async () => {}.\n- layout(t, withLink): root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'moe-symlink-'))) so macOS /var->/private/var and a Windows 8.3 TEMP do not skew; real = <root>/real/proj (with .moe/), other = <root>/other, and <root>/link -> <root>/real via fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir') (a junction needs no privilege). Error handling: on EPERM or EACCES call t.skip('symlink refused: <code>') and return; rethrow any other error. t.after removes root.\n- daemon(t, healthPath, rootPath = healthPath): an http server answering /health {projectPath: healthPath} plus a ws server that sends STATE_SNAPSHOT {project:{rootPath}} on each connection and counts connections; t.after terminates clients and closes both.\n\nRows. Each top-level test name MUST start with exactly these ids plus a space, because the step-3 checkRef counts them:\n- H1 pathsMatch(viaLink, real) === false, and isSameProject is true in BOTH directions (kills a one-sided realpath).\n- H2 two distinct existing folders: isSameProject(real, other) === false.\n- H3 unresolvable paths fall back to spelling: isSameProject(<root>/link/missing, <root>/real/missing) === false; isSameProject('D:\\\\x\\\\y', '/mnt/d/x/y') === true.\n- H4 rel = path.relative(process.cwd(), viaLink); if path.isAbsolute(rel) (different Windows drives) t.skip; else isSameProject(rel, real) === false.\n- H5 doubled = win32 ? '\\\\\\\\?\\\\' + real : '/' + real; isSameProject(doubled, real) === false.\n- L1 workspace = viaLink; daemon.json {port, pid: process.pid, startedAt, projectPath: real}, /health and STATE_SNAPSHOT name real. outcome = await connect().then(() => 'connected', e => e.message); assert outcome === 'connected' (a regression must be an assertion, not a thrown rejection); await client.waitForState(2000) === true; spawns length 0; daemon.json byte-identical (compare `fs.existsSync(file) && fs.readFileSync(file, 'utf8')` with the written text); the live server saw exactly 1 /ws; connectionState === 'connected'; no log line matching /Stale daemon\\.json|project mismatch/.\n- L2 the same, reversed: workspace = real, and daemon.json, /health and STATE_SNAPSHOT name viaLink.\n- L3 workspace = viaLink; daemon.json names real with bindHost '::1', pid process.pid and a CLOSED 127.0.0.1 port (listen on 0, then close): connect() rejects with a message containing 'listens on ::1', spawns 0, daemon.json byte-identical.\n- M1 (ensureDaemonRunning) daemon.json names other: connect() rejects /Daemon not running/; spawns are exactly [['bundled-daemon.js','start','--project', real]]; daemon.json is gone; a log line contains `Stale daemon.json: expected project ${real}, found ${other}`.\n- M2 (getDaemonInfo) daemon.json names other: getDaemonInfo(false) is undefined and the file is byte-identical; getDaemonInfo() is undefined and the file is gone.\n- M3 (/health) daemon.json names real, /health names other: connect() rejects; the foreign server saw 0 /ws; a warning contains `serves ${other}, not this workspace (${real}). Starting this project's daemon`; one start spawn.\n- M4 (STATE_SNAPSHOT) /health names real, snapshot rootPath other: after connect(), poll up to 2 s for the log `STATE_SNAPSHOT project mismatch: expected ${real}, got ${other}`; daemon.json gone; isStateReady false; connectionState 'disconnected'.\n- M5 offLoopbackBindRefusal({bindHost:'::1', pid: process.pid, projectPath: other}, real, win32) === null, and with projectPath real it returns a string.\n\nRED before step 2, from the worktree's moe-vscode: `NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/daemon-symlink-project.test.cjs`. It must show H1-H5 and L1-L3 not ok, with M1-M5 ok. For DoD 1's named commit, copy `git show 3cd256eb:moe-vscode/src/services/MoeDaemonClient.ts` and this test into a mktemp layout (src/services/, tests/) outside the repo and run it with `--test-name-pattern='^L[12] '`: L1 and L2 must be not ok. Keep both outputs for complete_task, then rm -rf the literal temp path.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/daemon-symlink-project.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/daemon-symlink-project.test.cjs"
+      ],
+      "note": "Authored moe-vscode/tests/daemon-symlink-project.test.cjs (13 rows H1-H5, L1-L3, M1-M5) with the Write tool. RED in the worktree against unchanged source: 13 tests, 5 pass, 8 fail. H1-H5 and L1-L3 not ok, M1-M5 ok. H1-H5 fail with 'isSameProject is not a function'. L3 fails on the assertion (outcome was 'Daemon not running. Start daemon first.', expected 'listens on ::1'). Against git show 3cd256eb's MoeDaemonClient.ts in a mktemp layout, with --test-name-pattern='^L[12] ': L1 and L2 both not ok (2 tests, 0 pass, 2 fail). Temp layout removed.",
+      "startedAt": "2026-11-04T08:21:54.931Z",
+      "completedAt": "2026-11-04T08:22:36.180Z"
     },
     {
       "stepId": "step-2",
       "description": "IMPLEMENT (DoD 1 and 2) in moe-vscode/src/services/MoeDaemonClient.ts with the session's own editing tool. The 9-line reference diff is /mnt/d/moe-scratch/plan-e07e695c/prototype-helper.diff (made at 3747c474).\n\n1. Directly after pathsMatch (:152-154) and before isAbsoluteAnyOs (:156), add `export function isSameProject(a: string, b: string): boolean`. It mirrors JetBrains MoeDaemonSupervisor.isSameProject (:1029: comparable spelling OR equal canonical path):\n   - `if (pathsMatch(a, b)) { return true; }` comes first. A non-string projectPath then still throws pathsMatch's TypeError into each caller's existing catch, so behaviour is unchanged.\n   - Only spellings that are host-absolute and not doubled-separator reach the file system: `isFullyQualified(p)` (:659, host semantics: drive letter or UNC on Windows, a leading / elsewhere) AND `!/^[\\\\/]{2}/.test(p)`. Otherwise return false. Why, in a one-line comment: daemon.json is repository content and /health is any local listener, so a UNC or device spelling must never open a network path (Windows would start an SMB session), and a relative spelling names the daemon's cwd, not the extension host's.\n   - Then `const real = realPathOrNull(a); return real !== null && real === realPathOrNull(b);`. Reuse realPathOrNull (:314, fs.realpathSync.native, null on any error).\n   - Error handling: every realpath failure (missing path, dangling link, EACCES, a Windows trailing-dot spelling, see mem:gotcha-windows-node-namespaced-realpath) falls back to the spelling verdict (false). Nothing here throws except pathsMatch's existing TypeError on a non-string.\n2. Replace pathsMatch with isSameProject at exactly these five project-identity sites, nothing else:\n   - classifyIdentity :184 (the /health verdict; protected admission still needs the spawn-proof HMAC);\n   - offLoopbackBindRefusal :268. task-c203c09a (e62cd216) added it after this row was filed. JetBrains decides same-project with isSameProject before its bindHost refusal (MoeDaemonSupervisor.kt:155 and :166), and without this change a linked workspace skips the refusal and spawns a start;\n   - getDaemonInfo :1638;\n   - ensureDaemonRunning :1718;\n   - the STATE_SNAPSHOT case :1923.\n3. Do NOT change pathsMatch, comparableProjectPath or isAbsoluteAnyOs: tests/daemon-identity.test.cjs pins them. Add NO import: several harnesses run this file under closed vm require maps (mem:gotcha-vscode-vm-test-harness). fs and both helpers are already in the module, and function declarations hoist.\n\nThen, from the worktree's moe-vscode, run `NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test tests/daemon-symlink-project.test.cjs tests/daemon-identity.test.cjs tests/daemon-bindhost.test.cjs tests/daemon-start.test.cjs`. All must pass, with only the three existing files unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Added export isSameProject(a, b) directly after pathsMatch in MoeDaemonClient.ts: pathsMatch first, then only host-absolute non-doubled-separator spellings (isFullyQualified && !/^[\\\\/]{2}/) reach realPathOrNull, equal canonical paths count as same, and any realpath failure falls back to false. Swapped it in at exactly five sites: classifyIdentity, offLoopbackBindRefusal, getDaemonInfo, ensureDaemonRunning and the STATE_SNAPSHOT case. grep shows pathsMatch( is now called only in its own definition and isSameProject. pathsMatch, comparableProjectPath and isAbsoluteAnyOs are untouched and no import was added. Test run (tap): daemon-symlink-project + daemon-identity + daemon-bindhost + daemon-start gave 89 tests, 89 pass, 0 fail, 0 skipped, exit 0; H1-H5, L1-L3 and M1-M5 all ok. The three existing test files are unchanged (git status shows only MoeDaemonClient.ts modified plus the new test file).",
+      "startedAt": "2026-11-04T08:22:38.222Z",
+      "completedAt": "2026-11-04T08:23:17.329Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY (DoD 3), once. From the task worktree root, run the plan's checkRef verbatim (text also at /mnt/d/moe-scratch/plan-e07e695c/checkref-gate.txt). Its fresh output is the complete_task verification evidence. What it does:\n- `git archive HEAD` of the WHOLE repo into /tmp/me07.XXXX (mem:gotcha-vscode-tests-need-full-repo-snapshot), then overlays this row's two files from the worktree, since uncommitted bytes are not in HEAD;\n- Linux-native `npm ci`, so `npm run compile` resolves TS7 (mem:gotcha-vscode-gate-from-wsl);\n- `npx eslint src/services/MoeDaemonClient.ts`, `npm test`, `npm run compile`;\n- RED: the merge-base MoeDaemonClient.ts against the new test. Exactly H1-H5 and L1-L3 fail, and M1-M5 pass.\nIt never runs npm in the shared checkout.\n\nWhole-tree `npm run lint` is NOT part of the gate. It already fails at the base on src/panels/SettingsPanel.ts:73 (no-useless-escape, from a000b817), which is outside this row, so the gate lints only the touched file.\n\nThe architect's dry run of this exact command at 3747c474 plus the prototype exited 0: 798 tests, 788 pass, 0 fail, 10 skipped. Expect about that. The run leaves /tmp/me07.XXXX behind: list /tmp/me07.* before and after, then rm -rf the literal new path. If it fails, it prints the snapshot path and the log tail; fix the cause and re-run it in full.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:23:19.323Z"
     },
     {
       "stepId": "step-4",
@@ -66,11 +79,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:57:42.392Z",
-  "updatedAt": "2026-11-04T08:21:04.292Z",
+  "updatedAt": "2026-11-04T08:23:19.323Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T07:57:48.048Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -80,7 +94,10 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:18:27.518Z",
   "executionContract": {
@@ -151,5 +168,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-67c762f6@2026-11-04T07:57:46Z",
     "at": "2026-11-04T08:19:26.358Z"
-  }
+  },
+  "workStartedAt": "2026-11-04T08:21:54.931Z"
 }

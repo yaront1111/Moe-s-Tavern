@@ -1,0 +1,34 @@
+{
+  "id": "task-0181f915838b4be782b60ef40f59c34c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-vscode `npm run lint` fails at 3747c474 with SettingsPanel.ts:73:75 no-useless-escape (`/[*?\\[]/` in worktreeTarget, from a000b817 / task-40813cc1), and CI's VS Code step runs lint before its tests, so the next PR from moe/work-2026-10-24 to main goes red",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04. architect-67c762f6 found it while planning task-e07e695c (#governors msg-e82b86ab, 08:18Z).\n\nPROBLEM\n- moe-vscode/src/panels/SettingsPanel.ts:73 reads `const worktreeTarget = (branch: string): string => (branch !== '' && !/[*?\\[]/.test(branch) ? branch : 'main');`. Inside a character class `[` needs no escape, so ESLint's no-useless-escape reports it as an error.\n- Governor repro at 3747c474: `cd moe-vscode && ./node_modules/.bin/eslint src/panels/SettingsPanel.ts` printed `73:75 error Unnecessary escape character: \\[ no-useless-escape`, \"1 problem (1 error, 0 warnings)\", and exited 1. The architect's whole-tree eslint in a Linux npm-ci snapshot shows this is the only error.\n- `git blame -L 73,73` names a000b817 (task-40813cc1, 2026-11-03).\n- .github/workflows/ci.yml:336-340 runs `npm ci`, `npm run lint`, `npm run compile` and `npm test` in moe-vscode, in that order. The next PR to main therefore fails the VS Code step before any test runs.\n\nFIX\n- Drop the backslash: `/[*?[]/` matches the same three characters. This changes no behavior: a branch containing *, ? or [ still reads main, and any other non-empty branch is returned as is.\n\nSCOPE\n- moe-vscode/src/panels/SettingsPanel.ts only, plus one test file only if an existing test already covers worktreeTarget or worktreeLandingRow and is the natural place for a case.\n- The only open row in moe-vscode is task-e07e695c (src/services/MoeDaemonClient.ts and a new tests/daemon-symlink-project.test.cjs), so there is no overlap.\n\nVERIFY\n- `cd moe-vscode && npm run lint`: the whole tree, not only the touched files, must exit 0.\n- Then `npm run compile` and `npm test`.\n- Run all three in the task worktree or a snapshot, never as an in-place build in the shared control checkout.",
+  "definitionOfDone": [
+    "`npm run lint` in moe-vscode exits 0 over the whole tree at the row's tip. The completion summary quotes the command and its exit code.",
+    "worktreeTarget keeps its behavior: a branch containing *, ? or [ reads main, and any other non-empty branch is returned unchanged. `npm run compile` and `npm test` in moe-vscode pass.",
+    "The diff changes only moe-vscode/src/panels/SettingsPanel.ts, plus at most one existing test file."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 506.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:21:37.251Z",
+  "updatedAt": "2026-11-04T08:22:22.685Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:22:09.492Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}

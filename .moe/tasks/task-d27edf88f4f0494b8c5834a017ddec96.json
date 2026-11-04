@@ -29,29 +29,42 @@
     {
       "stepId": "step-2",
       "description": "Mod: mark claim_next_task as a switch-capable call, and read its accountSwitch. Read mem:gotcha-account-switch-plugin-test-stubs and mem:decision-account-switch-end-session first.\n\nscripts/mods/moe-account-switch/hooks/register.ts:\n- Add 'claim_next_task' to MARKED (:43) and SIGNALS (:45).\n- Update the doc comments: the header at :7-8 ('marks submit_plan and chat_wait') and :42.\n- Keep claim_next_task in HELD (:47): after a pending switch, a later claim is still refused.\n- No other logic changes. switchInstruction (:70-81) already reads the top-level accountSwitch.instruction for SIGNALS tools only, and the tool.call hook (:271-288) already applies MARKED only when MOE_ACCOUNT_ID is set (a leased seat).\n\nTEST FIRST in scripts/mods/moe-account-switch/hooks/register.test.ts, modelled on 'after a switch reply new work is refused and the turn is ended' (:118-132) and the unleased case (:149-159):\n- (a) A leased seat's claim_next_task reaches the engine with acceptsAccountSwitch: true. With a reply `switchReply('Claim nothing more and end your turn now: Moe restarts this seat on Two, and the new session claims the next task.', { hasNext: false })`, $.turn.complete then clock.advance(EXIT_DELAY_MS - 1) gives commands [], and advance(1) gives ['exit'].\n- (b) A second claim_next_task in that turn is denied with the instruction and never reaches the engine.\n- (c) Without MOE_ACCOUNT_ID, claim_next_task carries no acceptsAccountSwitch.\nSpell the new strings as literals: the red run against HEAD must not import a new export. grep the file's existing claim_next_task cases (:125, :395-508) for exact `seen.calls` equality that the added flag would break, and update only those assertions.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/mods/moe-account-switch/hooks/register.ts",
         "scripts/mods/moe-account-switch/hooks/register.test.ts"
       ],
-      "startedAt": "2026-11-04T08:19:57.582Z"
+      "modifiedFiles": [
+        "scripts/mods/moe-account-switch/hooks/register.ts",
+        "scripts/mods/moe-account-switch/hooks/register.test.ts"
+      ],
+      "note": "register.ts: 'claim_next_task' added to MARKED (:48) and SIGNALS (:50); kept in HELD; header comment and the MARKED doc comment updated. No logic change. register.test.ts: CLAIM_SWITCH (literal 'Claim nothing more and end your turn now: Moe restarts this seat on Two, and the new session claims the next task.', hasNext:false), and two tests after the unleased chat_wait case. (a+b) A leased architect's claim reaches the engine with {statuses:['PLANNING'], acceptsAccountSwitch:true}; a second claim in the turn is denied with the instruction, aborts t1, never reaches the engine (calls length 1); turn.complete → account toast, advance(EXIT_DELAY_MS-1) → [], advance(1) → ['exit']. (c) Unleased: no acceptsAccountSwitch, no exit, no toast. No existing claim_next_task case compares call args exactly, so none needed updating. RED against HEAD's register.ts (env -i ... claude plugin test): 93 pass, 1 fail (toMatchObject: acceptsAccountSwitch missing). GREEN: 94 pass, 0 fail. Optional tsc check is not runnable in this worktree (the engine-written .claude-plugin/types/tsconfig.json is absent → TS5083 plus cascading TS2307/TS7006); environmental, not from this diff.",
+      "startedAt": "2026-11-04T08:19:57.582Z",
+      "completedAt": "2026-11-04T08:22:15.709Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs: sync docs/MCP_SERVER.md, two places in this file only. Edit them with the seat's own editor (Edit on Claude, apply_patch on codex exec), never Serena or a shell write.\n\n(1) `### moe.claim_next_task` (:1440):\n- Add `acceptsAccountSwitch?: boolean // set only by the moe-account-switch session mod; never by an agent` to the Parameters block.\n- Add an **Account switch** paragraph modelled on chat_wait's (:2732). With acceptsAccountSwitch: true, a seat holding no task whose Claude account must switch gets `{ hasNext: false, accountSwitch }` (the shape of moe.complete_step's) instead of a claim. That answer comes after the governor, alreadyAssigned and finalizing answers and before any ranking or assignment write. It claims nothing, has no nextAction, and the seat ends its turn. Calls without the flag are unchanged.\n\n(2) `## Claude Account Rotation` (:3265), the sentence 'adds acceptsAccountSwitch to its moe.submit_plan and moe.chat_wait calls. That seat moves between tasks: the architect after moe.submit_plan, the governor at moe.chat_wait'. Name moe.claim_next_task too: the architect also moves at its next in-session moe.claim_next_task, for example after a row it ended with archive_task.\n\nOut of scope:\n- scripts/CLAUDE.md:42, which also says the mod marks submit_plan/chat_wait. It is held by open task-3416b309 at planning time; the architect leaves a follow-up comment. Do not edit it.\n- docs/roles/*.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md, edited with Claude Edit only. (1) ### moe.claim_next_task: the Parameters block gains `acceptsAccountSwitch?: boolean // set only by the moe-account-switch session mod; never by an agent` (:1459). A new **Account switch** paragraph (:1471) sits right after the caller-scoped **Finalizing hold**, matching the code order: after the governor redirect, alreadyAssigned/resume and the own ATTEMPT_FINALIZING refusal; before any ranking, eligibility check or write. It covers ranked and taskId claims, writes nothing, carries no nextAction, gives the instruction text, and says unflagged, unleased and no-other-account calls are unchanged. The Returns block gains an `accountSwitch?` line, and nextAction's 'absent on' comment adds the account switch (both inside this section). (2) ## Claude Account Rotation (:3269): the mod adds the flag to submit_plan, chat_wait and claim_next_task; the architect also moves at its next in-session claim_next_task (e.g. after archive_task). Left alone as planned: scripts/CLAUDE.md:42 and docs/roles/*. Also stale but out of this plan's file scope: packages/moe-daemon/CLAUDE.md's 'Claude account rotation' bullet (lists only submit_plan/chat_wait as idle signals) and accountStore.ts idleSwitchFor's doc comment. Both are follow-ups for the governor.",
+      "startedAt": "2026-11-04T08:22:17.827Z",
+      "completedAt": "2026-11-04T08:23:11.056Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, once, in a git-archive snapshot of your worktree HEAD outside the shared checkout (never npm install, build or test in place; use Linux node_modules for packages/moe-daemon). Run this exact command from the snapshot root and submit its fresh output as complete_task evidence:\n\n`(cd packages/moe-daemon && npx vitest run src/tools/accountTools.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts src/tools/workerType.test.ts src/tools/chatWait.test.ts src/tools/submitPlan.test.ts) && env -i PATH=\"$PATH\" HOME=\"$HOME\" CLAUDE_CONFIG_DIR=\"$(mktemp -d)\" claude plugin test scripts/mods/moe-account-switch`\n\n- All must pass. The new daemon cases (a)-(e) and the mod cases must have been red before the implementation: record the red runs in your step notes.\n- env -i keeps this seat's live MOE_* variables out of the mod tests.\n- Optional type check: `node moe-vscode/node_modules/typescript/lib/tsc.js -p scripts/mods/moe-account-switch/tsconfig.json`. Its only known baseline errors are TS5097 and TS2769 in register.test.ts.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "scripts/mods/moe-account-switch/hooks/register.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:23:20.442Z"
     },
     {
       "stepId": "step-5",
@@ -84,12 +97,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:30.209Z",
-  "updatedAt": "2026-11-04T08:19:57.582Z",
+  "updatedAt": "2026-11-04T08:23:20.442Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:06:23.667Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -100,7 +113,9 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:11:09.562Z",

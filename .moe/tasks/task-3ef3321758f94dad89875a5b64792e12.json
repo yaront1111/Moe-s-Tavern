@@ -67,16 +67,21 @@
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a user whose project.local.yml or project.yml is unusual:\n- Can the written file ever hold two ignored_memory_patterns keys? Check a user key that is quoted, indented, in a flow mapping, or after a BOM.\n- Does an unreadable project.yml memory list ever drop the user's own entries? It must emit no key.\n- Does the block still go away on the documented opt-outs (MOE_SERENA_IGNORE_OVERRIDE=0, a user ignore_all_files_in_gitignore or ignored_paths), and only then?\n- Is a regex such as `^task-.*` or `a|b` rendered quoted and escaped, never as a bare scalar YAML could misread?\n- With no memory change, is the output byte-identical to before apart from the WHY lines? A seat with an up-to-date block rewrites it once, then reports 'up to date'.\n- Are docs/MEMORY.md:86 and moe-planning SKILL.md untouched? task-c1162cba owns them.\nIf anything changes, re-run the step-4 command and use that fresh output for complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-serena-ignore.mjs"
       ],
-      "startedAt": "2026-11-04T08:20:44.729Z"
+      "modifiedFiles": [
+        "scripts/moe-serena-ignore.mjs"
+      ],
+      "note": "Adversarial review done, one fix. FIXED: the header comment said project.yml never carries the entry, which is false for a hand-edited one; it now says only a hand-edited project.yml does. CHECKED, no change needed: (1) Two memory keys: the user check is anchored at column 0 and accepts a plain, double- or single-quoted key, spaces or tabs before the colon, a leading BOM and CRLF. An indented key is nested, not top-level; a flow-mapping or '?' complex-key user part already fails checkUser and the block is removed, so no key is written. A real ruamel.yaml parse (Serena's own venv) of the written file raised no DuplicateKeyError for a BOM-led quoted user key with CRLF, and the merged list was the user's. (2) Unreadable project.yml list: no key emitted. With a valid-YAML anchored list the written file had no memory key and the ruamel merge kept project.yml's ['x']. (3) Opt-outs: OWN_KEY is untouched, and the F9 row confirms a user ignored_paths still removes the block, with or without a memory key. (4) Regexes: ^task-.*, a|b, \\d+ and q\"\\ come out JSON double-quoted and round-trip identically under ruamel; a project.yml list already holding _archive/.* gets it once. (5) A block with no memory change differs from before only by the two WHY lines; the second run reports 'up to date'. (6) Scope: git diff vs base touches only docs/MEMORY.md (hunks :80, :139, :143), scripts/moe-serena-ignore.mjs and scripts/tests/serena-ignore.test.mjs; MEMORY.md:86, docs/skills/ and generated skillFiles.ts are untouched. THEORETICAL, left alone: renderBlock(patterns, []) would render a null `ignored_memory_patterns:` key, but main() never passes an empty list (it always appends _archive/.*) and only the tests import renderBlock; a user line led by U+2028/U+0085 is not seen as a key (OWN_KEY has the same limit, and Serena's YAML 1.2 reader does not treat them as breaks). Re-ran after the edit: the plan's step-4 command exited 0 (51/51), plus the project quality gate commands `bash scripts/tests/parity-check.sh` (PASS) and `npm run lint` (OK), both exit 0.",
+      "startedAt": "2026-11-04T08:20:44.729Z",
+      "completedAt": "2026-11-04T08:22:03.709Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,12 +93,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:58:35.668Z",
-  "updatedAt": "2026-11-04T08:20:44.729Z",
+  "updatedAt": "2026-11-04T08:23:23.077Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:09:10.293Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -107,7 +112,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:11:27.651Z",
@@ -188,16 +194,43 @@
       "treeId": "0530b8d8d47117784ce2dce12cc3cb6c3ab42b5d",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "e575ececc50342caa784c40efad959ac1a487f66",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T08:17:40Z",
+      "paths": [
+        "docs/MEMORY.md",
+        "scripts/moe-serena-ignore.mjs",
+        "scripts/tests/serena-ignore.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T08:23:23.077Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "scripts/tests/serena-ignore.test.mjs"
+    "scripts/tests/serena-ignore.test.mjs",
+    "scripts/moe-serena-ignore.mjs",
+    "docs/MEMORY.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-593560ee@2026-11-04T08:13:59Z",
-    "at": "2026-11-04T08:17:05.182Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T08:17:40Z",
+    "at": "2026-11-04T08:23:23.077Z"
+  },
+  "reviewStartedAt": "2026-11-04T08:22:27.205Z",
+  "verification": {
+    "command": "node --test scripts/tests/serena-ignore.test.mjs && ! grep -q 'read_file` still reads' docs/MEMORY.md",
+    "exitCode": 0,
+    "outputTail": "✔ F9: a project.yml memory list that cannot be read safely gives a block with no memory key (398.108473ms)\n✔ F7 (DoD 4): both IDE bundles ship the script, which imports only node: builtins (5.223557ms)\nℹ tests 51\nℹ suites 0\nℹ pass 51\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 4357.990279\nEXIT=0",
+    "reportedAt": "2026-11-04T08:22:27.205Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "The managed block that scripts/moe-serena-ignore.mjs keeps in .serena/project.local.yml now also carries ignored_memory_patterns: project.yml's own list plus _archive/.*, deduped, so QA-archived memories stay hidden in every Moe project, not only in this checkout's hand-edited project.yml. Serena replaces a whole key from project.local.yml, so the block merges the two lists. A user's own ignored_memory_patterns outside the block (plain, quoted or BOM-led) is left byte-identical and the block then omits that key but stays (no duplicate YAML key). An unreadable project.yml list also emits no key; ignored_paths is still written. OWN_KEY is unchanged, so only MOE_SERENA_IGNORE_OVERRIDE=0, a user ignore_all_files_in_gitignore or a user ignored_paths remove the block. Code: exported parseStringSequence(text, key) (parseIgnoredPaths delegates, U3 rows unchanged), renderBlock(patterns, memoryPatterns = null) over one renderList, memoryPatterns(yml, user) in main(), updated WHY and header comments; still node: builtins only. Tests: new U5, U6, F8, F9 rows and an updated EXPECTED literal. docs/MEMORY.md hunks :80 (the launcher block is the source of the hiding, read archived files with Read or cat, the phrase read_file still reads is gone), :139 and :143 (the new key and its opt-out); :86 and docs/skills untouched. Beyond the plan's tests, the written project.local.yml was parsed with Serena's own ruamel.yaml: no duplicate key, regexes round-trip, and the merged list was correct for the empty, user-key, anchored-list and BOM+CRLF cases. One test fix: a bare y is a YAML 1.1 boolean the parser refuses by design, so the U5 row uses [w] and a new row pins [y] to null. Quality gate commands (parity-check.sh, npm run lint) pass."
 }
