@@ -7,8 +7,9 @@ and `certified: false`. The architecture it exercises is in [ARCHITECTURE.md](AR
 
 ## What it never claims
 
-Certification is not activation. Every report carries `executionReady: false`, and `verified-local` stays refused with
-`EXECUTION_PROFILE_NOT_READY` ([CONFIGURATION.md](CONFIGURATION.md)) until the client gates in the other epics pass too.
+A report switches nothing on by itself, and every report carries `executionReady: false`. A certified report filed in
+the host certification store is one input of `verified-local` readiness, which only the daemon's own evaluation decides
+(the `executionProfile` row of [CONFIGURATION.md](CONFIGURATION.md)); the operator flow is **Activation** below.
 Satisfied `prerequisites` and a passed `native-smoke` (provider support evidence) are never certification.
 
 ## What it checks
@@ -131,7 +132,80 @@ CQ-R13 records a platform and arch as certified only when its own report meets b
 CQ-R13 required a passing report for `win32` x64 and for `linux` x64. No macOS host was available, so both `darwin`
 arches ship with no report and no support claim (CQ-R13's task rail, approved as prop-29ce59fa). Like any host
 without a recorded report, they stay unsupported: the daemon's certification store accepts only a report for the
-host's own platform and arch (`readCertificationStore`), and `verified-local` stays refused, as above.
+host's own platform and arch (`readCertificationStore`). Without one, the host's readiness keeps
+`isolated-agent-and-qa-vms` and `isolated-check-vm` missing, so `verified-local` cannot be switched on there.
+
+## Activation
+
+`verified-local` is refused until the daemon's own readiness evaluation passes (`EXECUTION_PROFILE_NOT_READY`; the five
+capabilities and ten evidence ids are in the `executionProfile` row of [CONFIGURATION.md](CONFIGURATION.md)). Nothing
+an operator sets grants it: each step below supplies evidence the daemon checks, at start and every five minutes.
+`<plugin>` is the folder the IDE installed the Moe JetBrains plugin into, holding `daemon/`, `proxy/` and `scripts/`;
+`<project>` is the project's absolute path.
+
+1. **Certify each host** (Windows x64, Linux x64) with the install the daemon runs, so the report matches that install's
+   image and supervisor pins. Follow **How to run it** above, with `<plugin>` in place of `<repo>`:
+
+   ```bash
+   node <plugin>/scripts/local-runner/cli.mjs prerequisites --cache-dir "$HOME/moe-certify/images"
+   node <plugin>/scripts/local-runner/cli.mjs certify --work-dir "$HOME/moe-certify"
+   ```
+
+   On Windows:
+
+   ```powershell
+   node <plugin>\scripts\local-runner\cli.mjs prerequisites --cache-dir C:\moe-certify\images
+   node <plugin>\scripts\local-runner\cli.mjs certify --work-dir C:\moe-certify
+   ```
+
+   A native, certified run files its report in `<OS account home>/.moe/certification` (see the host certification store in
+   [CONFIGURATION.md](CONFIGURATION.md)). A plugin update that moves a pin, or a Multipass upgrade, needs a re-certify
+   (`certification-report-mismatch`, `provider-version-mismatch`).
+2. **Mint a VM token for each rotation account**: `node <plugin>/daemon/index.js accounts vm-token <id>` (on Windows
+   `node <plugin>\daemon\index.js accounts vm-token <id>`), or **Set VM token...** on the JetBrains **Accounts** tab. It
+   runs `claude setup-token` for that account and stores the pasted token outside every project. A claude seat VM gets
+   only the leased account's token. A codex seat instead needs `OPENAI_API_KEY` or `CODEX_API_KEY` in the environment
+   the IDE launches seats with.
+3. **Run the plugin's installed daemon** (`protected-host-control-plane`: the daemon's install tree must lie outside the
+   project). Opening the project in JetBrains starts the bundled daemon when `MOE_DAEMON_COMMAND` is unset and no
+   `packages/moe-daemon/dist/index.js` or `moe-daemon/dist/index.js` sits in the project or a parent folder. Once the
+   project declares `verified-local` (step 6), the plugin's protected profile starts only the installed daemon and asks
+   to replace a running daemon it cannot verify. A daemon run from the project's own checkout never passes; in a
+   checkout of Moe's own source, do step 6 first and accept that replacement. The daemon files the project's runner
+   key outside the project at start (`authenticated-runner-evidence`).
+4. **Project settings.** Set the **Quality gate** in the JetBrains settings dialog: a non-blank `qualityGate`, which
+   also resolves an unset `worktreeMode` to `on` (or set `"worktreeMode": "on"` in `<project>/.moe/project.json`).
+   Shared mode is refused below. **Quality gate scope** `everyTask` makes every task owe the gate; under `epicFinal`
+   every other task needs its own `executionContract.requiredChecks` (see `docs/roles/architect.reference.md`,
+   **Verified-local plans**). Write `"deliveryPolicy": "local-branch"` in `<project>/.moe/project.json`
+   (`revision-bound-local-delivery`); no dialog or `UPDATE_SETTINGS` message sets it.
+5. **Confirm readiness** with `moe.get_execution_readiness`, a wrapper tool that `scripts/moe-call.sh` can call. It must
+   answer `"ready": true` with an empty `missingCapabilities`, else each missing id names the step to redo:
+
+   ```bash
+   MOE_PROXY_PATH="<plugin>/proxy/index.js" bash "<plugin>/scripts/moe-call.sh" get_execution_readiness '{"refresh":true}' --project "<project>"
+   ```
+
+   On Windows run the same line from Git Bash, with `<plugin>` and `<project>` written as `C:/…` paths.
+6. **Set the profile**: write `"executionProfile": "verified-local"` in `<project>/.moe/project.json` (no settings dialog
+   edits it). Every gate checks the held readiness again, so a host that stops being ready refuses the strong tasks
+   instead of running them unprotected.
+7. **Start worker and QA seats** with JetBrains **Start Agent**, running claude or codex. A verified-local worker or QA
+   seat runs the native PowerShell wrapper and one seat VM, even with "Run Agents in WSL" on (see the **Seat VM route**
+   in [ARCHITECTURE.md](ARCHITECTURE.md#local-runner-isolation)); Start Agent refuses it while readiness is not ready.
+8. **Approve the check environment.** The first owed check stops before any check runs, and the completion's wrapper
+   prints `[WARN] MOE_CHECK_DISPATCH_REFUSED: RUNNER_ENVIRONMENT_NOT_APPROVED environment=moe-local-vm-v1:<sha256>`.
+   Add that id to `"checkEnvironments"` in `<project>/.moe/project.json` (the only place it can be set); the task's
+   next completion landing runs its checks. A changed image, supervisor, VM size, toolchain or dependency tree yields a new
+   id (`checkEnvironment` in `scripts/local-runner/check-evidence.mjs`).
+
+Still unsupported:
+- macOS: no certified report is recorded (**Certified platforms**), so the host has no support claim and its
+  readiness keeps the isolation capabilities missing.
+- gemini and grok seats: only claude and codex run in a seat VM (`MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED`).
+- shared mode (`worktreeMode` `off`): worker and QA seats refuse it (`MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED`).
+- `check-architecture` as a required check: until the check guest resolves `moe-daemon` only to a trusted install built
+  at the base revision, such a check never delivers (`required-check-untrusted-checker`).
 
 ## Certified platforms
 
