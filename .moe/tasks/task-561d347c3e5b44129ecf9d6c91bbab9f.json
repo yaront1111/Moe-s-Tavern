@@ -13,19 +13,25 @@
     {
       "stepId": "step-1",
       "description": "Tests first (DoD 1-3), in scripts/tests/postflight-worktree.cjs. Read mem:gotcha-postflight-worktree-git-stub. The stub knobs WT_GIT_PUSH_REMOTE_REJECTED and WT_GIT_FETCH_FAIL_AFTER_PUSH (task-bc6ba91b, stub :125-216) already exist, so the stub itself does not change. Line numbers are at d1062cb0.\n\nShared strings. Steps 2 and 3 print them byte-identically in both wrappers, and this step's regexes match them:\n- journal pushResult prefix: `push remote-rejected-unverified: ` (a journal one wrapper writes, the other may replay);\n- push detail suffix: `; the re-check could not read origin's <T> (<detail>)`;\n- replay, origin holds C: `[receipt] origin's <T> holds <C>, the [remote rejected] push of task <id>; <file> kept until that task lands again, which records its row and finalizes landed.`;\n- replay, origin lacks C: `[receipt] origin's <T> does not hold <C>, the [remote rejected] push of task <id>; dropped <file>.`;\n- replay, re-check fetch failed again: `[WARN] receipt journal <file> kept: the [remote rejected] push of <C> is still unverified (<detail>).`\n\n(a) wtRemoteRejected (:1246), arm 'fetch-fails'. Keep its existing assertions, then add:\n- The journal is KEPT. Parse readOr(journal(p)), stripping a leading BOM as wtReplayRemote does. Its targetAfter is c, and its pushResult starts with the prefix and contains \"the re-check could not read origin's main\".\n- The retry: fs.rmSync(marker), then landRun(p,'wt-remote-rejected-fetch-fails-retry',{},{...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0'}). It sets no stub knob, so it runs real git.\n- Assert on the retry:\n  - exit 0, and the log has the holds-C line;\n  - finals(p) is [['landed',c]], and done(p) maps to [['committed',null,c,true]];\n  - the journal is gone, retryOf(p) is null, mainOf(p) is c, and origin's main is still c (the pushes log still has one line);\n  - no MOE_COMMIT_NOTHING_TO_COMMIT and no MOE_PUSH_FAILED in the log.\n\n(b) A new arm 'absent', after the loop, with its own repo, bare remote and marker. Write wtUnlanded's 'rejected' pre-receive hook (exit 1) into the bare remote and set both knobs, so the real push is refused, the stub still answers [remote rejected], and the re-check fetch fails.\n- Run 1 (REVIEW):\n  - origin's main is still main;\n  - the journal is kept with the unverified prefix; save C1 = its targetAfter;\n  - done(p) maps to [['failed','MOE_PUSH_FAILED',false]], and unlanded(p) is [['unlanded','remote',main,null]].\n- Remove the hook and the marker, then run the retry as in (a):\n  - the log has the does-not-hold line for C1, and the journal is gone;\n  - origin's main is a new C2, not C1, with parents [main] and src/a.txt 'done\\n';\n  - finals(p) is [['landed',C2]], done(p) maps to [['committed',null,C2,true]], and retryOf(p) is null.\n\n(c) wtUnlanded's 'rejected' arm (:1216): a pre-receive refusal with a working re-check fetch. After its landing run, add `if(n==='rejected')` assert that journal(p) is absent: a re-check that proves C absent still removes the journal.\n\nRED at HEAD: (a)'s journal assertion and (b)'s run-1 journal assertion fail, because wt_publish deletes the journal. (c) passes both before and after.\n\nError handling in the harness: each arm gets its own repo, bare remote, hook and marker, all removed before its retry, so no knob leaks into another arm or case. Edit with your TOOL-witnessed editor; never use a shell write.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-04T06:04:26.392Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Harness changes:\n- wtRemoteRejected 'fetch-fails' now asserts the journal is kept with the `push remote-rejected-unverified: ` prefix and the re-check detail. Its retry (fetch restored, no stub) asserts:\n  - the replay's holds-C keep line;\n  - finalize [['landed',C]] and the row ['committed',null,C,true];\n  - the journal is gone, landingRetry is null, the mirror and origin are at C, and there is still exactly one push;\n  - no NOTHING_TO_COMMIT and no PUSH_FAILED line.\n- New 'absent' arm: a pre-receive hook plus both stub knobs. The journal is kept unverified, with the failed row and an unlanded remote finalize. The retry logs the replay's does-not-hold drop line, and a fresh C2 lands with parent main, pushed:true and a landed finalize.\n- wtUnlanded 'rejected' now also asserts that the journal is absent.\n\nRED at HEAD (sh, MOE_WORKTREE_ONLY=wt-remote-rejected): \"fetch-fails: the receipt journal is gone, or not marked unverified: null\"; 0 ok, 1 failed.",
+      "startedAt": "2026-11-04T06:04:26.392Z",
+      "completedAt": "2026-11-04T06:06:44.769Z"
     },
     {
       "stepId": "step-2",
       "description": "The sh wrapper, scripts/moe-agent.sh (line numbers at d1062cb0). Touch only these functions; the VM-route blocks belong to open rows cc4213c0 (sh), 62ec51f1 and d861f3de (ps1). Edit in place with a TOOL-witnessed editor, never temp+mv, then run `bash -n scripts/moe-agent.sh`.\n\n1. wt_remote_holds (:7487) becomes tri-state:\n   - 0: origin's TARGET holds C;\n   - 1: the fetch worked and origin lacks C (merge-base exit 1);\n   - 2: unverifiable.\n   For 2, set LAND_RECHECK_DETAIL: \"git fetch failed: $LAND_FETCH_ERR\" when land_fetch fails, or \"git merge-base --is-ancestor exited $rc\" for any other exit. It still never pushes.\n\n2. wt_push_target (:7500):\n   - Set LAND_PUSH_UNVERIFIED=\"\" on entry.\n   - In the rc-2 branch, a 0 keeps today's APPLIED line and rc=0.\n   - A 2 sets LAND_PUSH_UNVERIFIED=true and appends \"; the re-check could not read origin's $1 ($LAND_RECHECK_DETAIL)\" to LAND_PUSH_DETAIL.\n   - rc stays 2 for both 1 and 2, so run_migration_landing's `2)` arm is unchanged; it has no journal and only prints the richer detail.\n\n3. A new helper `wt_journal_unverified JOURNAL`: 0 when the journal's pushResult starts with the prefix (one python read; 1 on any failure).\n\n4. wt_publish (:7520), the rc-2 arm:\n   - When LAND_PUSH_UNVERIFIED=true, keep the journal and set its pushResult with `wt_journal_push_result \"$1\" \"push remote-rejected-unverified: $LAND_PUSH_DETAIL\"`;\n   - else `rm -f \"$1\"` as today.\n   - LAND_CODE=MOE_PUSH_FAILED and LAND_MESSAGE are unchanged, so the unlanded remote route, the rescue ref and the failed row are as today (DoD 1).\n\n5. wt_land_rounds' journal check (:7571-7581). For jw=remote with an unverified journal, run wt_remote_holds \"${jt#refs/heads/}\" \"$ja\":\n   - 0: jc=\"$ja\" plus wt_journal_push_result \"$journal\" \"pushed $ja to origin/${jt#refs/heads/}\". L5 then takes the existing $jc path: LAND_WT_RECOVERED, then wt_land_published sends the row (pushed:true, from the 'pushed ' prefix) and finalizes landed (DoD 2).\n   - 1: rm -f the journal, which the fresh round supersedes.\n   - 2: refuse with LAND_OUTCOME=refused, MOE_COMMIT_REFUSED_UNRECONCILED_INTENT and \"receipt journal $journal holds a [remote rejected] push of $ja that no re-check could verify ($LAND_RECHECK_DETAIL)\".\n   Every other journal takes the existing receipt_landed_as logic, unchanged; put it in an else.\n\n6. receipt_replay (:6550): add a block BEFORE the existing `[ \"$wt\" = remote ]` reconcile_push block, for wt=remote with an unverified journal. A [remote rejected] C is never re-pushed; a fetch decides.\n   - rc 2: the still-unverified WARN, then continue.\n   - Compute phase=moe_pinned_attempt_phase \"$aid\" \"$tid\" \"$gen\" \"$owner\".\n   - rc 0 with phase not finalizing: the holds-C line, then continue. The journal stays for step 5.\n   - Before any drop or overwrite, re-read and compare (`[ \"$(receipt_journal_fields \"$f\")\" != \"$fields\" ]`, then the existing 'rewritten or removed meanwhile' line), per mem:gotcha-worktree-receipt-replay-race: a worktree journal has no live marker.\n   - rc 1: with phase finalizing, first replay_unlanded ... remote MOE_PUSH_FAILED \"origin's <T> does not hold the [remote rejected] landing $after\"; if that fails, keep the journal. Then rm, print the does-not-hold line, and continue.\n   - rc 0 with phase finalizing: wt_journal_push_result \"$f\" \"pushed $after to origin/<T>\", then fall through. The existing block reconciles (its fetch finds C, so there is no push), records the row pushed:true, finalizes landed and drops the journal.\n\n7. Fix the header comments of wt_remote_holds, wt_push_target, wt_publish, wt_land_rounds and receipt_replay.\n\nError handling: only ENOENT-free proof moves anything. A failed fetch never drops, marks or settles a journal, and no path re-pushes after [remote rejected].",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "startedAt": "2026-11-04T06:06:45.737Z"
     },
     {
       "stepId": "step-3",
@@ -82,7 +88,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:38:02.611Z",
-  "updatedAt": "2026-11-04T06:04:26.393Z",
+  "updatedAt": "2026-11-04T06:06:45.737Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:44:41.089Z",
@@ -91,7 +97,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-04T05:45:19.172Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -101,7 +108,9 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:00:21.505Z",
   "executionContract": {

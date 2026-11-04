@@ -1,0 +1,28 @@
+{
+  "id": "task-cb272f68e7a545ec806c75b98c08521a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a failed LogRotator compression can leave activity.log.rotating.tmp behind, because compressFile rejects right after destination.destroy() without waiting for the write stream to close, so rotate()'s cleanup rmSync can run before the stream's async open creates the file; LogRotator.rotateFailure.test.ts (f2) flakes under full-suite load",
+  "description": "Reported by qa-25f21f0a (msg-a7f361af, 06:05Z on 2026-11-04) while gating task-77e54ebb on tip 3500ae19 in a git-archive snapshot:\n- src/util/LogRotator.rotateFailure.test.ts case f2 (\"five failing rotations keep everything…\") failed once in the full daemon run.\n- The failure was an extra `activity.log.rotating.tmp` in the directory listing (expectSeededState, :65).\n- f2 passed 3/3 alone, and an immediate full re-run was green (286 files, 7475 tests).\nThe test came with task-1f84f4e4 (d4a387ef, DONE). Any checkRef that runs the whole daemon suite can hit it.\n\nCAUSE, read at tip 2a1c5a36 (packages/moe-daemon/src/util/LogRotator.ts):\n- rotate() (:106-137) awaits compressFile(this.logPath, pendingPath). On a rejection its catch calls fs.rmSync(pendingPath, { force: true }) and rethrows.\n- compressFile (:141+) creates the destination with fs.createWriteStream(destPath), whose open() is asynchronous. rejectOnce (:166-184) calls destination.destroy() and then reject() at once, without waiting for the destination's 'close'.\n- When the failing gzip errors on its first chunk before the destination's open has completed, rotate()'s rmSync finds nothing to delete. The late open then creates activity.log.rotating.tmp, and the file outlives the failed rotation.\n- In production this only leaves a stray tmp until the next rotation's step 1 removes it. In the test it breaks the exact listing assertion whenever the suite is busy.\n\nFIX DIRECTION: in rejectOnce, settle only after the destroyed destination has emitted 'close' (or after its open finished), so rotate()'s cleanup always runs after the file can exist. Keep the timeout and the error passthrough. Do not just loosen the test: the f1/f2 listing assertions are the contract task-1f84f4e4 added. Follow gotcha-activity-log-rotated-generations in Serena memory.",
+  "definitionOfDone": [
+    "A deterministic test fails on today's code. It makes the destination's open complete only after the gzip error, for example by delaying the open or by awaiting destination close in a spy, and shows activity.log.rotating.tmp left behind after a failed rotate(). It passes after the fix, which settles compressFile's rejection only once the destination stream has closed.",
+    "LogRotator.rotateFailure.test.ts passes 20 consecutive runs (`npx vitest run src/util/LogRotator.rotateFailure.test.ts --repeat 20` or an equivalent loop), and its f1/f2 directory-listing assertions are unchanged.",
+    "npm test and npx tsc --noEmit pass in packages/moe-daemon, run in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 485.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:06:30.489Z",
+  "updatedAt": "2026-11-04T06:06:30.489Z"
+}
