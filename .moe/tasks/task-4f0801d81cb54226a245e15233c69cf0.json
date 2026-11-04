@@ -55,8 +55,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -68,12 +68,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:33:53.283Z",
-  "updatedAt": "2026-11-04T00:00:21.920Z",
+  "updatedAt": "2026-11-04T00:01:52.697Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:50:37.459Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T00:01:26.319Z",
+    "wallClockMs": 648860
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -185,9 +187,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-03T23:54:25Z",
-    "at": "2026-11-03T23:58:09.174Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-04T00:00:04Z",
+    "at": "2026-11-04T00:01:52.697Z"
+  },
+  "completedAt": "2026-11-04T00:01:26.319Z",
+  "reviewCompletedAt": "2026-11-04T00:01:26.319Z",
+  "reviewSummary": "Reviewed completion 4fdfdd15 (on moe/work-2026-10-24) via git show: 2 files, +123/-2 (net 121, under the 400 cap), matching approvedScope. workerStore.ts updateWorkerCursors: DEAD keeps lastActivityAt, emits no WORKER_UPDATED, still persists the merged cursor, all inside the existing mutex; missing-worker silent skip and live path unchanged.\n\nRe-ran task.verification (checkRef) in a /tmp git-archive snapshot, env -i, Node v24.21.0: exit 0, 6 files / 205 tests passed, 'cursors ok'. Both files were clean against HEAD.\n\nRED re-proof: pre-fix workerStore.ts (4fdfdd15^) in the snapshot fails case 1 (DEAD chat_read) and case 2 (DEAD chat_wait backlog); cases 3 (live) and 4 (missing worker) pass. Snapshot removed.\n\nDoD: (1) cases 1 and 2 drive both callers against a deregistered worker with exact asserts: lastActivityAt === 2 h-old seed, zero WORKER_UPDATED, cursor persisted in memory and on disk. (2) case 3: cursor merged, lastActivityAt strictly later, exactly one WORKER_UPDATED with merged cursors. (3) checkBlockedTimeouts past staleWorkerTimeoutMs removes the DEAD record. No tests deleted or weakened; cleanup hygiene fine.\n\nDocs: none owed. No MCP_SERVER.md section states the old behaviour; `### moe.join_team` already promises a revived DEAD record keeps its cursors, which this honours. No contract change. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
