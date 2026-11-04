@@ -355,8 +355,9 @@ describe('dependencyUnblock', () => {
       expect(depRow.assignedWorkerId).toBeNull();
       // Dep-less hold: parked to BACKLOG for human triage (unchanged behavior).
       expect(h.state.getTask('task-n0dep1')!.status).toBe('BACKLOG');
-      // The timed-out worker itself is still released to IDLE.
-      expect(h.state.getWorker('worker-t1meout')!.status).toBe('IDLE');
+      // The timed-out seat owns nothing now and keeps its real lastActivityAt
+      // (2 h old), so the same pass's Layer-3 prune removes it.
+      expect(h.state.getWorker('worker-t1meout')).toBeNull();
 
       // The dep lands → the row returns WORKING-unassigned and another worker
       // can claim it (the starvation the old skip produced).

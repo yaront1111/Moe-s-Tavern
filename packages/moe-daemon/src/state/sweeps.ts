@@ -482,10 +482,14 @@ export async function runBlockedTimeoutSweep(state: StateManager): Promise<void>
         }, 'WORKER_TIMEOUT');
       }
 
+      // Keep the corpse's real lastActivityAt, as the REVIEW self-heal and the
+      // reconcile-window sweep do: a fresh stamp would make it read alive for
+      // the presence window and defer the Layer-3 prune below.
       await state.updateWorker(worker.id, {
         status: 'IDLE',
         lastError: null,
         currentTaskId: null,
+        lastActivityAt: worker.lastActivityAt,
       }, 'WORKER_TIMEOUT');
     }
   }
