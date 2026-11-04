@@ -56,17 +56,23 @@
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then check:\n- Is the diff exactly the one-character regex change plus C6? There must be no eslint-disable, no other src file, no corpus JSON and no validators.ts.\n- Does the class still match exactly *, ? and [ and nothing else (not ] and not \\)? Does an empty branch still read main?\n- Is C6 mutation-resistant? In the gate snapshot $S, never in the worktree, swap the snapshot copy's literal for each of `/[*?]/`, `/[*[]/` and `/[*?[\\]]/` in turn. After each swap run `node --test tests/settings-policy-corpus.test.cjs` under the same env -i PATH. Each must fail C6, then restore the copy. The architect's planning run got this result: the original and the fix pass, those three fail only C6, and `/[?[]/` fails C1 and C6.\n- Did lint run over the whole tree (`eslint src --ext ts`), not only the touched file?\nDelete $S afterwards.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/panels/SettingsPanel.ts",
         "moe-vscode/tests/settings-policy-corpus.test.cjs"
       ],
-      "startedAt": "2026-11-04T08:30:34.051Z"
+      "modifiedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/tests/settings-policy-corpus.test.cjs"
+      ],
+      "note": "Diff is the one-char regex change plus C6, nothing else. Mutants /[*?]/, /[*[]/, /[*?[\\]]/ fail only C6; /[?[]/ fails C1+C6. Lint ran over whole src (eslint src --ext ts). Snapshot deleted.",
+      "startedAt": "2026-11-04T08:30:34.051Z",
+      "completedAt": "2026-11-04T08:30:53.636Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -78,12 +84,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:21:37.251Z",
-  "updatedAt": "2026-11-04T08:30:34.052Z",
+  "updatedAt": "2026-11-04T08:31:03.730Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:22:09.492Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -96,7 +102,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:27:48.131Z",
@@ -160,5 +167,18 @@
   },
   "planApprovedAt": "2026-11-04T08:27:48.169Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T08:29:54.685Z"
+  "workStartedAt": "2026-11-04T08:29:54.685Z",
+  "reviewStartedAt": "2026-11-04T08:31:03.728Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/moe-0181-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp moe-vscode/src/panels/SettingsPanel.ts \"$S/moe-vscode/src/panels/SettingsPanel.ts\" && cp moe-vscode/tests/settings-policy-corpus.test.cjs \"$S/moe-vscode/tests/settings-policy-corpus.test.cjs\" && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund >/dev/null && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "✔ files.exclude is not contributed, so the Explorer still lists .worktrees (1.327974ms)\nℹ tests 786\nℹ suites 0\nℹ pass 776\nℹ fail 0\nℹ cancelled 0\nℹ skipped 10\nℹ todo 0\nexit=0 (lint: eslint src --ext ts, exit 0)",
+    "reportedAt": "2026-11-04T08:31:03.728Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/settings-policy-corpus.test.cjs",
+    "moe-vscode/src/panels/SettingsPanel.ts"
+  ],
+  "completionSummary": "Dropped the useless backslash in SettingsPanel.ts:73 worktreeTarget: /[*?\\[]/ -> /[*?[]/. The class still matches exactly *, ? and [; no behavior or rendered-text change. Added test C6 to moe-vscode/tests/settings-policy-corpus.test.cjs (reuses rowsOf): in worktree mode a consolidationBranch with *, ? or [ reads main with the glob detail; ]-containing and plain branches show as written. Mutation-checked: /[*?]/, /[*[]/, /[*?[\\]]/ fail only C6; /[?[]/ fails C1+C6. Gate in a Linux git-archive snapshot with the two files overlaid, run in CI order: npm ci && npm run lint && npm run compile && npm test, exit 0 (so whole-tree `eslint src --ext ts` exited 0); 786 tests, 776 pass, 0 fail, 10 skipped. `git status --porcelain` in the worktree lists only moe-vscode/src/panels/SettingsPanel.ts and moe-vscode/tests/settings-policy-corpus.test.cjs."
 }
