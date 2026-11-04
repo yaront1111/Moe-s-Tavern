@@ -48,8 +48,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -61,12 +61,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:03:00.433Z",
-  "updatedAt": "2026-11-04T06:19:40.439Z",
+  "updatedAt": "2026-11-04T06:20:53.796Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:13:52.211Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T06:20:33.576Z",
+    "wallClockMs": 401365
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -170,9 +172,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T06:16:37Z",
-    "at": "2026-11-04T06:19:08.764Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T06:19:23Z",
+    "at": "2026-11-04T06:20:53.796Z"
+  },
+  "completedAt": "2026-11-04T06:20:33.576Z",
+  "reviewCompletedAt": "2026-11-04T06:20:33.576Z",
+  "reviewSummary": "Reviewed completion b93a43e1 (on moe/work-2026-10-24): docs-only, 1 file, +4/-0 (docs/MCP_SERVER.md). Read `git diff b93a43e1^ b93a43e1`: attemptId?/generation? Parameters lines inserted between workerId? and force? (force line untouched) plus one \"Attempt fence.\" paragraph before Returns:. Hunks at 2089-2102, all inside `### moe.release_task` (2076-2138).\nRe-ran verification: r0.sh -> \"R0 OK: section 2076-2138\" (exit 0); r1.sh -> npm run lint passes and, in a mktemp clone outside the shared checkout, releaseTask.test.ts = 59 passed (exit 0). Scratch script SHA256SUMS OK. Cited tests exist at releaseTask.test.ts:1185 (ATTEMPT_SUPERSEDED) and :1228 (malformed identity); test file and releaseTask.ts unmodified.\nCross-checked doc claims vs code: releaseTask.ts:116-126 (maxLength 128, integer>=1), :168-170 (over-long attemptId -> INVALID_INPUT), :219-224 (assertAttemptCurrent inside lock, before any write); enforcement.ts validateAttemptIdentity (blank/non-string attemptId, non-positive generation -> INVALID_INPUT) and assertAttemptCurrent (no attempt record skipped; equality vs current attempt, superseded/closed/future -> STATE_CONFLICT ATTEMPT_SUPERSEDED; omitted = unfenced); errors.ts STATE_CONFLICT -32002, INVALID_INPUT -32602 match; launch_outage_release (moe-agent.sh:9077) and Invoke-MoeLaunchOutageRelease (moe-agent.ps1) exist and send MOE_ATTEMPT_ID/GENERATION.\nDoD 1-3 met; no code/schema/wire change; other sections unchanged. Non-blocking: doc says generation must be a positive integer; code also bounds by MAX_ATTEMPT_GENERATION, immaterial for docs.",
+  "requiredCheckAtDone": null
 }

@@ -27,11 +27,17 @@
       "author": "architect-2a219562",
       "content": "Hunk ownership: the sibling stale-block row filed in the same hunt is task-590b98bd. It owns the Stale-block visibility bullet of `### moe.report_blocked` (docs/MCP_SERVER.md:1237 at b9205914). This row owns only the Ping routing bullets (:1241-1242). The hunks are distinct and merge cleanly in worktree mode, so there is no dependsOn.",
       "timestamp": "2026-11-04T06:01:44.544Z"
+    },
+    {
+      "id": "comment-60169cca74f248519fce5007c0b3cd82",
+      "author": "architect-c33f294e",
+      "content": "Planning ruling (architect-c33f294e, 2026-11-04). The FIX DIRECTION also asks for the id-prefix fallback when a worker has no team or its team is missing, which is full resolveWorkerRole parity. That conflicts with DoD 2, which says the existing tests pass unchanged. Measured on a snapshot of 3500ae19, full parity fails exactly 2 existing cases in workerLiveness.test.ts: 'skips workers with no teamId or a teamId pointing at a missing team' and 'returns null when no team carries the requested role'. The DoD is human-owned, so the plan applies the fallback only to a seat whose team exists and has no role. That is the launcher shape DoD 1 names, and both cases stay byte-identical. A seat with no team, or whose team is missing, stays unpaged as it is today. That leftover gap has no production impact right now: every live architect, worker and QA seat sits on the role-less moes team (team-a94dc136). Full parity would be a separate row that rewrites those 2 cases on purpose. Also, the hunt repro's slice(0, 60) literals are mis-sized: 🚧 is two UTF-16 code units. They fail even with the fix, whose routing is correct, so the new case asserts anchored strings instead. Verified dry run: /mnt/d/moe-scratch/plan-31a2aa2f/prototype.diff (+98/-6, all gates green, 4 new cases fail without the fix).",
+      "timestamp": "2026-11-04T06:20:22.994Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:01:20.354Z",
-  "updatedAt": "2026-11-04T06:01:58.203Z",
+  "updatedAt": "2026-11-04T06:20:22.994Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:01:39.606Z"
   },
