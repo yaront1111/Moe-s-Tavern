@@ -1,0 +1,34 @@
+{
+  "id": "task-797fa04791144286be0ff958021f5b35",
+  "epicId": "epic-be924fb8",
+  "title": "docs: the role references' rail-proposal escape hatch prescribes calls the runtime refuses or ignores: governor.reference.md's MODIFY_RAIL at TASK scope for a global rail is refused NOT_FOUND, a TASK or EPIC proposal can never lift a submit_plan rail refusal (GLOBAL-only since task-dd1e00f8), and its \"wait via moe.check_approval\" reads plan approval, never the proposal",
+  "description": "Filed by defect hunt task-3488566e (11-04 #17, lane 1: role-doc drift against daemon behaviour landed since hunt #8). HEAD bb0bc17e.\n\nPROBLEM\n1. docs/roles/governor.reference.md:60-81 (\"Rail proposal patterns\") teaches moe.propose_rail with targetScope \"GLOBAL\" | \"EPIC\" | \"TASK\", and :76 prescribes \"MODIFY_RAIL at TASK scope when a global rail is right in general but wrong for this task\". Its :129 example applies that to a forbiddenPatterns conflict. docs/roles/worker.reference.md:30-46 (example: \"a forbiddenPatterns false positive\", then \"once approved, retry the step\") and docs/roles/architect.reference.md:55-71 show the same three-scope template.\n2. Since 3441d183 (task-dd1e00f8) and 6ded0c93 (task-34e42a0a), the runtime says only a GLOBAL MODIFY_RAIL or REMOVE_RAIL of the quoted forbiddenPatterns/requiredPatterns entry can lift a rail refusal: packages/moe-daemon/src/util/rails.ts:84-101 (the refusal text itself), and docs/MCP_SERVER.md:389 (### moe.submit_plan, Rail refusal: \"EPIC and TASK proposals edit epicRails and taskRails, which the plan check never reads\"). For a non-GLOBAL MODIFY/REMOVE, propose_rail looks the currentValue up only in that scope's own list (tools/proposeRail.ts:61-62, state/railChange.ts:22-24), so the governor's TASK-scope MODIFY of a global rail is refused at propose time.\n3. governor.reference.md:81 says \"propose once, then wait for human decision via moe.check_approval\". check_approval reports plan approval only (tools/checkApproval.ts:23-24: approved = status WORKING) and never reads a proposal. The decision is visible only as the PROPOSAL_APPROVED / PROPOSAL_REJECTED activity events (state/StateManager.ts:1387 and :1469; types/schema.ts:1771-1773), readable with moe.get_activity_log { taskId, eventTypes }. Real exposure: the governor memory notes \"waiver approvals post nothing to chat ... 3 approvals sat unseen\" (11-03). The live board has 68 proposals.\n\nEVIDENCE (vitest in a git-archive snapshot of bb0bc17e): /mnt/d/moe-scratch/hunt-3488566e/mine/zzHunt3488RoleDocRails.test.ts, output in roledoc-rails.out (3/3 cases pass, asserting today's behaviour):\n- r1, the TASK-scope MODIFY_RAIL with currentValue \"console.log\" (a globalRails.forbiddenPatterns entry): `NOT_FOUND | [NOT_FOUND] Rail not found for proposal prop-48f19df3...`\n- r2, approved TASK and EPIC ADD_RAIL (\"console.log is fine in this task\"): taskRails and epicRails both hold it, and the same plan is still refused `[CONSTRAINT_VIOLATION] Rail violation: \"Forbidden pattern: console.log\"`.\n- r3, check_approval on the WORKING row: byte-identical before and after the human REJECTS the proposal: `{\"approved\":true,\"status\":\"WORKING\",\"rejected\":false,\"nextAction\":{\"tool\":\"moe.wait_for_task\",\"args\":{\"statuses\":[\"PLANNING\"],...}}}`. A governor reads \"approved\", and the hint sends it to wait for PLANNING work.\n\nFIX DIRECTION\n- In governor.reference.md \"Rail proposal patterns\": a rail that refuses a plan is lifted only by a GLOBAL MODIFY_RAIL or REMOVE_RAIL whose currentValue is the exact forbiddenPatterns or requiredPatterns entry. EPIC and TASK proposals add or edit guidance rails (epicRails, taskRails: QA and seats read them, submit_plan does not). Drop the TASK-scope MODIFY bullet for a global rail and fix the :129 example to match.\n- Replace the check_approval wait with moe.get_activity_log { taskId, eventTypes: [\"PROPOSAL_APPROVED\", \"PROPOSAL_REJECTED\"] }.\n- Mirror the scope rule in worker.reference.md and architect.reference.md \"Rail Proposals (escape hatch)\".\n- Regenerate packages/moe-daemon/src/generated/initFiles.ts and apply its hunks with Edit (mem:convention-role-doc-edits-regenerate-initfiles, mem:convention-docs-vendored-regen-gate, mem:gotcha-moe-doc-generated-artifacts).\n- Out of scope: docs/MCP_SERVER.md (already correct), every daemon source file, .moe/roles.\n\nFILES: docs/roles/governor.reference.md, docs/roles/worker.reference.md, docs/roles/architect.reference.md, packages/moe-daemon/src/generated/initFiles.ts. No open row holds any of them (lanes.js at 06:38Z).",
+  "definitionOfDone": [
+    "`grep -nE 'MODIFY_RAIL at TASK scope|moe\\.check_approval' docs/roles/governor.reference.md` prints nothing, and governor.reference.md names moe.get_activity_log with PROPOSAL_APPROVED and PROPOSAL_REJECTED as the way to learn a proposal's decision.",
+    "The rail-proposal sections of docs/roles/governor.reference.md, worker.reference.md and architect.reference.md each say that only a GLOBAL MODIFY_RAIL or REMOVE_RAIL of the exact forbiddenPatterns/requiredPatterns entry lifts a submit_plan rail refusal, and that EPIC/TASK proposals change guidance rails only (grep shows GLOBAL and guidance in each of the three sections).",
+    "packages/moe-daemon/src/generated/initFiles.ts is generator-fresh for the edited docs (shared clone at the base, generate-init-files, then sha1sum -c or cmp against the candidate passes, per mem:convention-docs-vendored-regen-gate), `npm run lint` is green, and `npx vitest run src/util/initFiles.test.ts` passes in that clone."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 487.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:38:05.198Z",
+  "updatedAt": "2026-11-04T06:38:36.876Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:38:18.706Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}

@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,16 +82,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:06:30.489Z",
-  "updatedAt": "2026-11-04T06:36:48.502Z",
+  "updatedAt": "2026-11-04T06:39:30.960Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:22:34.441Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T06:39:06.774Z",
+    "wallClockMs": 992333
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-a408f113"
+    "worker-a408f113",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -198,9 +201,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T06:31:11Z",
-    "at": "2026-11-04T06:36:48.502Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T06:36:51Z",
+    "at": "2026-11-04T06:39:30.960Z"
+  },
+  "completedAt": "2026-11-04T06:39:06.774Z",
+  "reviewCompletedAt": "2026-11-04T06:39:06.774Z",
+  "reviewSummary": "Approved. Reviewed completion a0b30e9b (kind=completion, pushed; in moe/work-2026-10-24). Own diff +87/-3 in the 3 approved files; no scope creep, no forbidden patterns. Re-ran task.verification verbatim in a git-archive snapshot outside the repo (Node 24.21.0): tsc --noEmit and tsc -p tt.json clean; rotateFailure --repeats 20 'Tests 5 passed (5)'; full daemon npm test 289 files, 7513 passed | 24 skipped; 'rotator pin ok'; EXIT=0. DoD 1: confirmed RED independently by putting the base LogRotator.ts in the snapshot: 2 failed | 7 passed. (f5) fails 'expected true to be false' (tmp left behind by the late open) and the bound case fails (settled early). With the fix: 9/9 pass. DoD 2: f1-f4, seed, expectSeededState, failingGzip are byte-unchanged (f5 is a pure insertion); 20 repeats green. DoD 3: tsc and full suite green in the snapshot. Code read: rejectOnce sets settled before destroy, so late close/finish/error are no-ops. It rejects at once if destination.closed, else on 'close', bounded by an unref'd 5 s timer cleared on close, so appendActivity cannot hang. All paths (source, gzip, destination error, 30 s timeout) use it. The success path, rotate() and rotateIfNeeded are untouched. The bound test uses fake timers: not settled at 4999 ms, rejected at 5000 ms. Not verified: the real load-dependent flake cannot be forced, so (f5) gates the stream open deterministically. The DoD's --repeat is --repeats in vitest (worker disclosed). Complexity pass: nothing to cut. Scratch snapshot removed.",
+  "requiredCheckAtDone": null
 }

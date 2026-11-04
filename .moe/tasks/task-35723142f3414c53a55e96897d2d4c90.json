@@ -9,10 +9,48 @@
     "npm test and npx tsc --noEmit pass in packages/moe-daemon."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2a219562",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first. Extend packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts (fefce964's file, mem:decision-qa-verdict-handoff-seat) inside its existing describe, after the three it.each blocks, reusing setupMoe/writeTask/createWorker/seat/verdict. The proven prototype is /mnt/d/moe-scratch/35723142-plan/green/qaVerdictHandoff.test.ts (sha256 in green/SHA256SUMS): reproduce it with the Edit tool, never cp or any shell write (global rail). Add: a Reply type (Record<string, unknown> & { sessionHandoff?: { action; taskId; workerId; reason } }) and reply(tool, workerId?) casting verdict()'s promise; REPLY_KEYS per verdict, sorted: qa_approve ['commitEvidence','message','status','success','summary','taskId','warning','warnings'], qa_reject ['exceededReopenCap','failedDodItems','maxReopens','message','needsHumanReview','parkedForHuman','reason','rejectionDetails','rejectionHistory','reopenCount','repeatedFailedDodItem','status','success','taskId']; MESSAGES: qa_approve 'Task task-1 approved and moved to DONE (WARNING: no completion commit recorded — see warnings)', qa_reject 'Task task-1 rejected and moved to WORKING. Worker should address: DoD-A fails'; ended(id) = { action: 'END_SESSION', taskId: 'task-1', workerId: id }. Six cases over VERDICTS (12 tests):\n(a) the assignee: row assigned to qa-a with contextFetchedBy ['qa-a'], seat qa-a CODING on task-1. const { sessionHandoff, ...rest } = reply; rest has no nextAction; Object.keys(rest).sort() equals REPLY_KEYS[tool]; rest matches { success: true, taskId: 'task-1', status: landed, message: MESSAGES[tool] }; sessionHandoff matches ended('qa-a') and its reason contains 'Do not call moe.claim_next_task or moe.wait_for_task'; seat qa-a is { IDLE, null }.\n(b) no workerId on that same assigned row: no nextAction, sessionHandoff matches ended('qa-a').\n(c) unassigned row, caller qa-d IDLE holding nothing: sessionHandoff matches ended('qa-d'), no nextAction.\n(d) unassigned row, caller qa-b CODING on task-2 (task-2 assigned to qa-b): neither sessionHandoff nor nextAction.\n(e, f) governors on the unassigned row, both GOVERNING with a null pointer, via it.each(VERDICTS.flatMap(([tool]) => [[tool, 'ops-1', true], [tool, 'governor-1', false]] as const)): 'ops-1' joins a createTeam({ name: 'governors', role: 'governor' }) team via addTeamMember (no id prefix), 'governor-1' has no team (prefix only). Neither key; seat stays { status: 'GOVERNING', currentTaskId: null }. Both are needed: the team case kills a prefix-only role check, the prefix case a team-only one.\nProve RED before step 2 from your checkout, with only this file overlaid on a git archive of HEAD in a mktemp snapshot (= /mnt/d/moe-scratch/35723142-plan/r0.sh):\n( T=$(git rev-parse --show-toplevel) && L=$(mktemp -d) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cp \"$T/packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts\" \"$L/packages/moe-daemon/src/tools/\" && cd \"$L/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit >/dev/null 2>&1 && npx vitest run src/tools/qaVerdictHandoff.test.ts' 2>&1 | grep -aE '^ +Tests ' )\nExpected exactly: Tests  12 failed | 6 passed (18) (architect dry run at db7a8bfd). Run vitest only in such env -i snapshots, never in the shared checkout (global rail; mem:gotcha-agent-session-env-leaks-into-tests).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN. In packages/moe-daemon/src/tools/qaApprove.ts and packages/moe-daemon/src/tools/qaReject.ts (lines at db7a8bfd; prototypes green/qaApprove.ts and green/qaReject.ts, full diff /mnt/d/moe-scratch/35723142-plan/proto.diff), with the Edit tool:\n(1) Add `import { resolveWorkerRole } from '../util/workerRole.js';` right after the '../util/enforcement.js' import.\n(2) Append to the tool's top-level description string: ' A verdict frees the QA seat: the reply carries sessionHandoff END_SESSION for it and no nextAction, so end the session; do not claim or wait inside it.'\n(3) Immediately before the final `return {` (qaApprove.ts:280, after the #governors warning post; qaReject.ts:440, after the `message` const) add a block that is byte-identical in both files except the reason's first sentence: a comment naming it the twin of requestReplan.ts's sessionHandoff (task-55a5a9f9) and saying why (the verdict frees the QA seat; the wrapper pinned the session to its claim's attempt identity, so a claim/wait hint starts a second review whose verdict is refused ATTEMPT_SUPERSEDED; a governor's verdict must not end the governance TUI; a seat whose pointer names another task is not ended), then:\nconst callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor' ? params.workerId : undefined;\nconst seatWorker = handoffWorkerId || callerSeat;\nconst seatTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;\nconst sessionHandoff = seatWorker && !seatTaskId ? { action: 'END_SESSION', taskId: task.id, workerId: seatWorker, reason: LEAD + TAIL } : undefined;\nLEAD (qa_approve): 'Task approved. If the review surfaced a reusable pattern, record it with Serena write_memory (pattern-<area>), then end this session. '\nLEAD (qa_reject): 'Rejection recorded on the task. Capture the failure pattern with Serena write_memory (gotcha-<area>), then end this session. '\nTAIL (both, as string literals; escape the apostrophe in review's): 'Do not call moe.claim_next_task or moe.wait_for_task inside this session: the wrapper pinned it to this review's attempt identity, so a second review claimed here would have its verdict refused ATTEMPT_SUPERSEDED. The wrapper claims the next REVIEW task in a fresh session. If this is an interactive TUI, return control to its operator so the CLI can exit normally.'\n(4) Replace the reply's `nextAction: { tool: 'moe.wait_for_task', ... }` property (qaApprove.ts:298-305, qaReject.ts:458-465) with `...(sessionHandoff ? { sessionHandoff } : {}),`.\nThe block must run after touchWorker(handoffWorkerId, ...) (qaApprove.ts:265, qaReject.ts:408) so seatTaskId reads the idled pointer. Change nothing else: handoffWorkerId, touchWorker, gate and refusal order, message and every other reply field stay byte-identical (step 1's key and message pins check it). Do not touch requestReplan.ts or reportBlocked.ts: the reason text is per tool, not a shared helper (mem:decision-account-switch-end-session).\nError handling: the block does no I/O and cannot throw. getWorker on a missing record yields undefined (the hand-off is then still addressed, as in request_replan), and resolveWorkerRole returns null for an unknown seat (treated as non-governor). It adds no failure path after the DONE/WORKING write, and every existing refusal and the never-block chat try/catch stay unchanged. After this step the step-1 file passes 18/18 in the same snapshot with all three files overlaid.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs: docs/MCP_SERVER.md, four hunks, all inside ### moe.qa_approve (:2272 at db7a8bfd) and ### moe.qa_reject (:2346). Apply them with the Edit tool from /mnt/d/moe-scratch/35723142-plan/proto.diff. Never copy green/MCP_SERVER.md over the file: other open rows edit other sections (task-590b98bd owns the report_blocked stale-block bullet near :1237).\n(a) qa_approve **Returns:** commitEvidence's closing `  }` (:2305) becomes `  },`, followed by the new line `  sessionHandoff?: { action: \"END_SESSION\", taskId, workerId, reason }   // no nextAction: see \"Session hand-off\" below`.\n(b) qa_approve **Notes:** a new last bullet after '- QA policy: treat the warning as a reject…' (:2328), exactly: - **Session hand-off (no `nextAction`).** The verdict frees the QA seat, and the wrapper pinned that seat's session to its claim's attempt identity, so the reply carries no `nextAction`: no `moe.wait_for_task` or `moe.claim_next_task` hint, because a second review claimed inside that session would have its verdict refused `ATTEMPT_SUPERSEDED`. It carries `sessionHandoff` `END_SESSION` instead, the rule `moe.request_replan` and a seat-freeing `moe.report_blocked` follow. The hand-off is addressed to the seat the verdict idles (the row's assignee, or the caller when its own `currentTaskId` is this row), else to a non-governor caller. It is omitted for a governor (team role or id prefix), for a workerId-less verdict on an unassigned row, and when the addressed seat's worker record still names another `currentTaskId` after the verdict (a caller busy on another task keeps its session). The wrapper claims the next REVIEW task in a fresh session.\n(c) qa_reject **Returns:** the line `  nextAction` (:2378) becomes `  sessionHandoff?: { action: \"END_SESSION\", taskId, workerId, reason }   // no nextAction: as in qa_approve's \"Session hand-off\"`.\n(d) qa_reject **Notes:** a new last bullet after '- **Closes the QA seat's attempt:** …' (:2394), exactly: - **Session hand-off — identical to `qa_approve`'s.** No `nextAction`; `sessionHandoff` `END_SESSION` is addressed, and omitted, by the same rule, the hard-cap park included.\nNo role doc changes (DoD 2's role-doc clause is vacuous): docs/roles/qa.md, qa.reference.md and the moe-qa-loop skill never tell QA to keep claiming in-session (grep at db7a8bfd), and the wrapper's QA prompt already says not to call moe.wait_for_task (scripts/moe-agent.sh:10948, :10982). So initFiles.ts is not regenerated and npm run lint is not owed; it still runs in the landing qualityGate.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once. From your checkout (worktree or control), run the executionContract checkRef exactly (= /mnt/d/moe-scratch/35723142-plan/r1.sh, 999 chars). It overlays the three code files onto a git archive of HEAD in a mktemp snapshot and runs npm ci, npx tsc --noEmit, a tt.json typecheck of the test file and the FULL daemon suite (npx vitest run = npm test) under env -i. Then it checks the 18-test pin and the docs: two `sessionHandoff?:` lines and no bare `  nextAction` line between ### moe.qa_approve and ### moe.create_team. Pass = exit 0, the 'Test Files' and 'Tests' summary lines, and 'handoff ok'. Architect dry run at db7a8bfd: 289 files, 7520 passed | 24 skipped; later landings may raise those counts, but the 18-test pin is fixed. It covers DoD 3 (tsc plus the whole suite) and pins DoD 1-2. Submit its fresh output as moe.complete_task verification. If an unrelated test fails (a LogRotator.rotateFailure flake was seen 11-04), re-run once and report both runs (mem:convention-daemon-full-suite-gate-checkref).",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of your diff (adversarial-self-review skill), expected about +133/-20 over the four files:\n(1) A governor's verdict, by team role or by id prefix, never carries sessionHandoff. The moe-account-switch mod ends any TUI that receives a top-level END_SESSION addressed to its MOE_WORKER_ID (scripts/mods/moe-account-switch/hooks/register.ts endSessionInstruction).\n(2) A caller busy on another task gets no hand-off and keeps its claim (fefce964's case d).\n(3) The block sits after touchWorker, so the hand-off seat's pointer is already null when it is read.\n(4) Hard-cap park: qa_reject parks with handoffWorkerId = the assignee, so the parking seat gets END_SESSION; a supplied workerId on an already-parked row is still refused before any write.\n(5) Neither reply carries any nextAction; no other reply key or message changed (step-1 pins).\n(6) Error handling: no new throw or I/O was added after the status write.\n(7) The diff touches only the four files, and only the two docs sections; TOOL_AUDIENCE is unchanged ('moe.wait_for_task' stays ALL).\n(8) No change to requestReplan.ts, reportBlocked.ts, the mod or the wrappers.\nFix anything found, then re-run step 4's command.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -28,16 +66,91 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:03:59.905Z",
-  "updatedAt": "2026-11-04T06:16:20.685Z",
+  "updatedAt": "2026-11-04T06:39:10.320Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T06:09:32.324Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-04T06:16:16.384Z"
+    "firstClaimAt": "2026-11-04T06:16:16.384Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
     "architect-2a219562"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T06:39:10.288Z",
+  "executionContract": {
+    "intendedBehavior": "After a QA verdict (moe.qa_approve or moe.qa_reject) the reply no longer hints an in-session claim. It carries no nextAction. Like moe.request_replan since task-55a5a9f9, it carries a top-level sessionHandoff { action: 'END_SESSION', taskId, workerId, reason }, addressed to the seat the verdict idled, else to a non-governor caller holding no task. A QA CLI therefore ends its session, and the wrapper's next pre-flight claims and pins the next REVIEW row. Governors, and callers busy on another task, get no hand-off. Every other reply field and the message are unchanged.",
+    "acceptanceCriteria": [
+      "DoD 1: qaVerdictHandoff.test.ts gains 12 tests that fail on db7a8bfd's tools (12 failed | 6 passed) and pass after the fix. For both verdicts: no nextAction; END_SESSION addressed as request_replan does; the other reply keys and the message are pinned unchanged.",
+      "DoD 2: docs/MCP_SERVER.md ### moe.qa_approve and ### moe.qa_reject describe the hand-off: Returns lines plus one Notes bullet each. No role doc owes a change, so lint is not owed.",
+      "DoD 3: npx tsc --noEmit and the full daemon vitest suite (npm test) pass, run by the checkRef in an env -i snapshot."
+    ],
+    "invariants": [
+      "A governor caller (team role or id prefix, via resolveWorkerRole) never receives sessionHandoff.",
+      "A caller whose worker record still names another task after the verdict receives no sessionHandoff and keeps its claim.",
+      "Neither verdict reply carries a nextAction.",
+      "The verdicts' state effects stay byte-identical to db7a8bfd: status, history, the handoffWorkerId idle write, chat posts, and gate and refusal order. Error handling is unchanged: the new block adds no throw or I/O."
+    ],
+    "compatibility": [
+      "Reply shape: both verdict replies lose the nextAction key and gain an optional top-level sessionHandoff. Every other key and the message are unchanged. No client reads a verdict's nextAction: moe-jetbrains, moe-vscode, moe-proxy and moe-claude-plugin never do, and the wrappers read nextAction only from get_context (scripts/moe-agent.sh:10414-10430).",
+      "The moe-account-switch mod already honours this END_SESSION shape (report_blocked, request_replan); no mod or wrapper change.",
+      "No schema, state-file or migration change."
+    ],
+    "approvedScope": [
+      "qaApproveTool and qaRejectTool: the resolveWorkerRole import, one description sentence, the sessionHandoff block before the final return, and the reply spread that replaces nextAction.",
+      "docs/MCP_SERVER.md: the Returns blocks and the last Notes bullets of ### moe.qa_approve and ### moe.qa_reject only.",
+      "qaVerdictHandoff.test.ts: 6 new it.each cases (12 tests) inside the existing describe."
+    ],
+    "reuse": [
+      "resolveWorkerRole (util/workerRole.ts) for the governor exemption, as requestReplan.ts:114 does.",
+      "requestReplan.ts:109-134's END_SESSION shape and addressing rule (task-55a5a9f9). The reason text is per tool, as in request_replan and report_blocked.",
+      "qaVerdictHandoff.test.ts's fixtures: setupMoe, writeTask, createWorker, seat, verdict."
+    ],
+    "sourceAssumptions": [
+      "qaApprove.ts at db7a8bfd: handoffWorkerId :131-132, touchWorker :265, final return :280, nextAction wait_for_task REVIEW :298-305.",
+      "qaReject.ts at db7a8bfd: handoffWorkerId :155-156, touchWorker :408, message const :435-439, final return :440, nextAction :458-465.",
+      "assertReviewBinding (delivery/reviewBinding.ts) fences a presented attempt through util/enforcement.ts assertAttemptCurrent (:183-223), which refuses a mismatched or closed attempt with ATTEMPT_SUPERSEDED. getContext.ts does not fence it.",
+      "scripts/moe-agent.sh pin_attempt_identity (:2613, called :10357) pins MOE_ATTEMPT_ID/GENERATION for the session's claim; moe-proxy stamps them onto qa_approve and qa_reject.",
+      "scripts/mods/moe-account-switch/hooks/register.ts endSessionInstruction (:85-93) honours only a top-level sessionHandoff with action END_SESSION and workerId equal to MOE_WORKER_ID.",
+      "docs/MCP_SERVER.md at db7a8bfd: ### moe.qa_approve :2272 (commitEvidence close :2305, last Notes bullet :2328); ### moe.qa_reject :2346 (`  nextAction` :2378, last Notes bullet :2394)."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src/tools && L=$(mktemp -d) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon\" && for f in qaApprove.ts qaReject.ts qaVerdictHandoff.test.ts; do cp \"$R/$f\" src/tools/ || exit 1; done && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/qaVerdictHandoff.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run' > ../v.log 2>&1 || { echo \"FAIL $L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aq 'qaVerdictHandoff.test.ts (18 tests)' ../v.log && Q=$(awk '/^### moe.qa_approve/,/^### moe.create_team/' \"$T/docs/MCP_SERVER.md\") && [ \"$(grep -c 'sessionHandoff?:' <<< \"$Q\")\" = 2 ] && ! grep -qx '  nextAction' <<< \"$Q\" && echo \"handoff ok\" )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A shared helper for both tools: rejected. requestReplan.ts and reportBlocked.ts each inline the block (mem:decision-account-switch-end-session), and fefce964 kept qa_approve/qa_reject byte-identical inline. (2) Address the hand-off only to the caller, so a workerId-less human verdict gets none: rejected, to mirror request_replan's rule exactly as the DoD asks; the mod ignores a hand-off addressed to another seat anyway. (3) Keep a non-claim nextAction for the write_memory hint: folded into the hand-off reason instead, so neither reply has an executable nextAction, as in request_replan. (4) Role-doc edits: none owed. No QA doc line says to keep claiming in-session, and the wrapper QA prompt already forbids wait_for_task.",
+    "codebaseInsights": "A second in-session review is wasted at the verdict. get_context does not fence a presented attempt, but assertReviewBinding does: assertAttemptCurrent refuses a stale or closed attempt ATTEMPT_SUPERSEDED (mem:gotcha-attempt-fence-ignores-closed). The wrapper pins the claim's attempt for every role; moe-proxy stamps it onto qa_approve and qa_reject. Prototype, RED/GREEN runs and mutants M1-M6 (governor exemption, other-task check, callerSeat, handoffWorkerId, prefix-only role, team-only role), each killed by exactly its 2 tests, are in /mnt/d/moe-scratch/35723142-plan (README).",
+    "risks": "Place the block after touchWorker; before it, seatTaskId still names the reviewed row and the hand-off silently disappears for the assignee. Non-governor fixtures must not use a governor- id prefix. Run vitest only in env -i snapshots: the seat's MOE_WORKER_ID leaks into tests otherwise (mem:gotcha-agent-session-env-leaks-into-tests). Full-suite counts rise as rows land; only the 18-test pin is fixed. Apply the docs as hunks, never a whole-file copy.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts",
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/tools/requestReplan.ts",
+      "scripts/mods/moe-account-switch/hooks/register.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "a0b30e9bb38eaf2ea6c2eac309d2b55747fd264b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T06:39:10.320Z",
+  "approvedPlanRevision": 1
 }
