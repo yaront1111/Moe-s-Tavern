@@ -1,0 +1,34 @@
+{
+  "id": "task-443e8eacf5c04c77a9896de122cf9197",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #19): file 2-4 evidence-backed bug rows from the VS Code extension's daemon lifecycle (the twin of today's JetBrains and daemon findings fe811130, 8383080c, 78fa7110 and d7b24cab), the Serena integration and the memory conventions the role docs prescribe, and the executionContract/checkRefs path from submit_plan to QA",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04. It runs in parallel with hunt #18 (task-1c736204), whose lanes it must not touch: the daemon swap's startup path, the wrapper side of account rotation, and the metrics surfaces.\n\nWHY. At filing time 2 architects and 3 workers are idle, and 0 WORKING rows are claimable. One hunt at a time yields about 6-8 rows an hour, below what 4 coders, 4 architects and 3 QA seats consume.\n\nLANE. Search in this order of preference:\n1. The VS Code extension's daemon lifecycle (moe-vscode/src/services/MoeDaemonClient.ts and extension.ts). Today the JetBrains plugin and the daemon were found to:\n   - judge liveness by a 127.0.0.1-only probe and ignore daemon.json bindHost (fe811130);\n   - read MOE_DAEMON_COMMAND only when no bundled script resolves, and never append `start` to `npx moe-daemon` (8383080c);\n   - record a relative --project verbatim, so the live daemon is judged foreign (78fa7110);\n   - call a live Windows daemon \"stale\" from WSL (d7b24cab).\n   Check each shape in VS Code. MoeDaemonClient.ts deletes daemon.json at about :1580, :1660 and :1866, and dials `daemon.host` (default 127.0.0.1) at :1563, :1664 and :1811. Look for a path that deletes a live daemon's daemon.json or starts a second daemon on the same .moe/.\n   - Evidence: a node repro of the extension's decision function, or a file:line pair against the daemon's /health and bindHost contract.\n   - Gate for a filed row: `cd moe-vscode && npm test && npm run compile`. VS Code is secondary, so a row there must name the JetBrains twin it mirrors.\n2. The Serena integration and the memory conventions:\n   - scripts/moe-serena-ignore.mjs (the launchers' ignore override) and docs/MEMORY.md;\n   - the conventions that role docs and skills prescribe for .serena/memories: task-<id>-handoff memories, the _archive move, and the gotcha-/decision-/pattern- names;\n   - the fact that Serena refuses docs/** in this checkout (the global rail approved at 07:21Z, prop-c8364fbc).\n   Look for an instruction the Serena config or the ignore override refuses, a convention two docs state differently, or an override that leaves a stale block behind.\n3. The executionContract and checkRefs path: submit_plan's executionContract (intendedBehavior, checkRefs) → get_context's packetManifest and servedContext → the worker's complete_task verification → QA's re-run. Look for a field the daemon accepts but never serves, a checkRef no seat can run as written, or a manifest that reports a mandatory section present when it is empty. Hunts #10, #15 and #16 covered the delivery records, the plan-intake size and routing gates, and the served context generally, so cite which of their rows you are not duplicating.\n\nSKIP.\n- Hunt #18's lanes, hunts #1-#17's lanes (read the archived hunt-row titles), and every row filed on 11-03 or 11-04 (grep .moe/tasks first).\n- Every file an open row holds. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start. At filing time those are:\n  - scripts/moe-agent.{sh,ps1}, scripts/CLAUDE.md and docs/plans/2026-10-30-per-task-worktrees.md;\n  - scripts/tests/{postflight-fake-proxy.js, postflight-owner-scope.test.mjs, postflight-worktree.cjs, postflight-vm-route.ps1, parity-check.sh, parity-check.ps1};\n  - the JetBrains files of fe811130 and 8383080c (MoeDaemonSupervisor.kt, Models.kt, MoeProjectService.kt and their tests) and docs/CONFIGURATION.md;\n  - once its plan lands, d7b24cab's doctor.ts, doctor.test.ts and docs/TROUBLESHOOTING.md.\n  - docs/MCP_SERVER.md is shared by section (ruling msg-71db57ac).\n- The verified-local profile is refused by design, so a gap there counts only if it affects the legacy profile.\n\nEVIDENCE BAR. Same as hunts #2-#18. One of:\n- a repro on HEAD 3cd256eb or later, run in a snapshot outside the shared checkout (never build or test in place; the shared checkout's packages/moe-daemon/dist is the live runtime);\n- a failure line from today's logs;\n- a doc/code file:line pair with a call or test that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code, status PLANNING. Add no dependsOn unless a real logic edge exists; a shared file gets a placement note instead. Give each row a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. Post the ids, or \"nothing real\", in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way, the outcome is posted in #governors with a mention of governor-e6142a94.",
+    "Every filed row cites its evidence: a repro on HEAD 3cd256eb or later run outside the shared checkout, a failure line from today's logs, or a doc/code file:line pair with a call or test that shows the difference. A VS Code row names the JetBrains or daemon twin it mirrors.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a row filed on 11-03 or 11-04, including hunt #18's. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 494.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:27:40.608Z",
+  "updatedAt": "2026-11-04T07:28:31.135Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T07:28:19.081Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}

@@ -64,8 +64,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -84,12 +84,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:50:51.601Z",
-  "updatedAt": "2026-11-04T07:25:51.081Z",
+  "updatedAt": "2026-11-04T07:32:05.963Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:51:37.106Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T07:31:37.739Z",
+    "wallClockMs": 2400633
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -175,10 +177,11 @@
   "planApprovedAt": "2026-11-04T07:09:55.723Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T07:10:10Z",
-    "at": "2026-11-04T07:25:32.552Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T07:25:33Z",
+    "at": "2026-11-04T07:32:05.963Z"
   },
   "workStartedAt": "2026-11-04T07:12:57.147Z",
   "reviewStartedAt": "2026-11-04T07:24:38.544Z",
@@ -217,5 +220,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T07:31:37.739Z",
+  "reviewCompletedAt": "2026-11-04T07:31:37.739Z",
+  "reviewSummary": "Reviewed completion f9395bf5: on moe/work-2026-10-24 and on origin, pushed. 5 declared files, +156/-1 (net 155). Test files are additions only. HEAD had moved to 3cd256eb, which also touches moe-jetbrains, so I ran everything on a git-archive snapshot of f9395bf5. The rail allows a snapshot of the exact commit.\n\nGATE: the task.verification command verbatim, Windows route (cmd.exe gradlew.bat test --rerun) under the jetbrains-gradle lease, 07:29-07:30Z.\n- BUILD SUCCESSFUL; 671 tests, 6 skipped, 0 failures, 0 errors.\n- Supervisor class: 94 tests, 0 failures, BH=3. Foreign class: 12 tests, 0 failures, BH=2.\n- Models.kt:296 shows the nullable bindHost; EXIT=0.\n\nRED re-proved: with both guard files reverted to f9395bf5^, BH1, BH4 and BH5 failed on assertions and BH2/BH3 passed. I restored the files (sha-checked) and released the lease.\n\nDoD:\n- (1) BH1, for 4 hosts: returns false, 0 starts, bytes identical, and 1 status naming the host and 127.0.0.1.\n- (2) BH4: connect() keeps the json and starts nothing, with no reconnect and no WS. BH5 isolates connect()'s own branch. BH2's 8 rows and the unchanged suites show the as-today behavior.\n- (3) Gate green.\n\nInvariants: bindHost is only compared and shown, never dialed. The order is pid<=0, then other-side, then isProcessAlive (BH3: no probe). The guard runs before the spawn counters, for same-project records only. The status starts with fixed words.\n\nResidual (out of scope): a ::1 daemon whose 127.0.0.1 port another project's daemon holds still reaches handleForeignDaemon's delete. VS Code has no twin. Complexity: lean.",
+  "requiredCheckAtDone": null
 }
