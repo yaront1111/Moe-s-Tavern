@@ -870,7 +870,7 @@ export interface LandingRetry {
   reason: UnlandedReason;
   /** Normalized project-relative conflict paths, when reported. */
   paths: string[];
-  /** Task-scoped rescue ref holding the unpublished bytes. */
+  /** Ref holding the unpublished bytes: a task-scoped rescue ref, or the task branch refs/heads/moe/task/<taskId> when a finalizing close set the retry. */
   rescueRef: string;
   /** The attempted 40-hex target tip B, or null when not reported. */
   targetTip: string | null;
@@ -1060,7 +1060,7 @@ export interface Task {
   hasPendingQuestion?: boolean;
   contextFetchedBy?: string[];
   stepsCompleted?: string[];
-  /** finalize_attempt alone sets unlanded worktree retries; landed/nothing-to-commit null it. Absent until first retry. */
+  /** Unlanded worktree retries: set by finalize_attempt 'unlanded', or by the finalizing close (deregister, DEAD-record removal) of a worktree attempt whose REVIEW task has no completion recorded for its round; landed/nothing-to-commit null it. Absent until first retry. */
   landingRetry?: LandingRetry | null;
   /**
    * Handoff notes accumulated when workers release the task. Newest-first.

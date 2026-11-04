@@ -7,8 +7,10 @@
 // =============================================================================
 
 import type { StateManager } from './StateManager.js';
-import type { ProjectSettings, Task, TaskStatus, Worker } from '../types/schema.js';
+import type { ExecutionAttempt, LandingRetry, ProjectSettings, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
+import { generateId } from '../util/ids.js';
+import { completionCommitsForReview } from '../delivery/policy.js';
 import { announceAttemptClosed, closeOpenAttempts, listAttempts, setAttemptPhase } from './attemptStore.js';
 import { releaseDeregisteredClaims } from './resourceStore.js';
 
@@ -231,7 +233,10 @@ async function beginReloadHold(state: StateManager, worker: Worker, reason: stri
  * qa_approve's hold without an acknowledged landing — exactly what a QA claim's
  * supersede did before the task-scoped hold existed. Under the legacy delivery
  * policy the soft NO-COMPLETION-COMMIT warning is then the only guard; strict
- * policies still refuse the approval.
+ * policies still refuse the approval. So a worktree attempt whose unassigned
+ * REVIEW row has no completion recorded for its round is routed back for a
+ * landing retry after its close (retryUnrecordedLanding), as an unlanded
+ * finalize routes it, instead of being left for QA's landed gate to park.
  *
  * ALSO THE DEAD-RECORD BACKSTOP. deleteWorker (the stale-record prune) and the
  * startup purge call it for a DEAD record, and only for one. deregister marks
@@ -258,7 +263,76 @@ export async function closeOwnFinalizingAttempts(state: StateManager, workerId: 
       continue;
     }
     announceAttemptClosed(state, attempt.taskId);
+    await retryUnrecordedLanding(state, attempt);
   }
+}
+
+/**
+ * The close above ended a landing the daemon has no completion for. On a
+ * worktree attempt whose task is in REVIEW, held by no seat, with no completion
+ * entry for its current round (completionCommitsForReview, the rule QA's
+ * commit gate uses), nothing is known to have published, and QA's landed gate
+ * would park the row BLOCKED. Route it as an unlanded finalize would, with
+ * reason contention (a reason both launchers' worktree_resume accept), no paths
+ * and the task branch as the ref that holds the bytes. Any other row keeps the
+ * plain close. Never reads git: a commit the dead runner published unrecorded
+ * is settled by the next pre-flight's receipt replay. Never throws: a failed
+ * write is logged and leaves the row in REVIEW, and the close stands.
+ */
+async function retryUnrecordedLanding(state: StateManager, attempt: ExecutionAttempt): Promise<void> {
+  try {
+    const task = state.getTask(attempt.taskId);
+    if (attempt.workspaceMode !== 'worktree' || !task || task.status !== 'REVIEW' || task.assignedWorkerId
+      || completionCommitsForReview(task).length > 0) return;
+    await routeUnlandedLanding(state, task, attempt,
+      { reason: 'contention', paths: [], rescueRef: `refs/heads/moe/task/${task.id}`, targetTip: null },
+      attempt.workerId,
+      `The runner of ${attempt.workerId} ended mid-landing: attempt ${attempt.id} was closed with no completion recorded for this round.`);
+  } catch (error) {
+    logger.warn(
+      { workerId: attempt.workerId, attemptId: attempt.id, taskId: attempt.taskId, error },
+      'closeOwnFinalizingAttempts: failed to route an unrecorded worktree landing for a retry; the row stays in REVIEW'
+    );
+  }
+}
+
+/**
+ * Route a worktree landing that published nothing back for a retry: the one
+ * definition behind moe.finalize_attempt's 'unlanded' outcome and the
+ * finalizing close's routing (closeOwnFinalizingAttempts). One write sets
+ * task.landingRetry (count = the prior count + 1) and appends one moe-daemon
+ * comment (`note`, when given, opens it). A REVIEW row goes to WORKING,
+ * unassigned, keeping reopenCount and its completed steps, or to BLOCKED
+ * (unblocking to WORKING) for 'diverged' or the 3rd unlanded landing in a row.
+ * A row not in REVIEW keeps its status and assignment. Caller must hold
+ * state.mutex.
+ */
+export async function routeUnlandedLanding(
+  state: StateManager,
+  task: Task,
+  attempt: Pick<ExecutionAttempt, 'id' | 'generation'>,
+  unlanded: Omit<LandingRetry, 'count' | 'at'>,
+  actor: string,
+  note?: string
+): Promise<Task> {
+  const prior = task.landingRetry?.count;
+  const count = (typeof prior === 'number' && Number.isSafeInteger(prior) && prior > 0 ? prior : 0) + 1;
+  const at = new Date().toISOString();
+  const landingRetry = { ...unlanded, count, at };
+  const { reason, paths, rescueRef, targetTip } = landingRetry;
+  const status = task.status !== 'REVIEW' ? task.status : reason === 'diverged' || count >= 3 ? 'BLOCKED' : 'WORKING';
+  const preview = paths.slice(0, 20).join(', ') || '(none reported)';
+  const comment = { id: generateId('comment'), author: 'moe-daemon', timestamp: at,
+    content: `${note ? `${note} ` : ''}Landing unlanded (${reason}) ${count} time(s) in a row; attempt ${attempt.id} ` +
+      `(generation ${attempt.generation}); paths: ${preview}${paths.length > 20 ? ` (+${paths.length - 20} more)` : ''}; ` +
+      `rescue ref: ${rescueRef}; target tip: ${targetTip ?? 'unknown'}; task ${status}.` };
+  const routing: Partial<Task> = task.status !== 'REVIEW' ? {} : { status, assignedWorkerId: null,
+    ...(status === 'BLOCKED' ? {
+      blockedReason: `Landing unlanded (${reason}) ${count} time(s) in a row; ${rescueRef}; reconcile, then move the task to WORKING`,
+      blockedResourceId: null, blockedOnTaskIds: null, blockedFromStatus: 'WORKING' as const, blockedAt: at,
+    } : {}) };
+  return state.updateTask(task.id, { ...routing, landingRetry, comments: [...task.comments, comment] },
+    routing.status === 'BLOCKED' ? 'TASK_BLOCKED' : undefined, actor);
 }
 
 /**

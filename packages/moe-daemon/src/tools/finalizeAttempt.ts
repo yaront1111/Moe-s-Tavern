@@ -6,7 +6,7 @@ import { announceAttemptClosed, getAttempt, setAttemptPhase } from '../state/att
 import { REVISION_RE } from '../state/candidateStore.js';
 import { assertAttemptCurrent } from '../util/enforcement.js';
 import { PathSet } from '../util/attributionTiers.js';
-import { generateId } from '../util/ids.js';
+import { routeUnlandedLanding } from '../state/workerLifecycle.js';
 
 // =============================================================================
 // moe.finalize_attempt — the runner closes the artifact boundary
@@ -150,26 +150,7 @@ function conflict(message: string, context: Record<string, unknown>, codeName: s
 async function applyTaskOutcome(state: StateManager, attempt: ExecutionAttempt, params: FinalizeParams): Promise<Task> {
   const task = state.getTask(params.taskId)!;
   const actor = params.workerId ?? attempt.workerId;
-  if (params.unlanded) {
-    const prior = task.landingRetry?.count;
-    const count = (typeof prior === 'number' && Number.isSafeInteger(prior) && prior > 0 ? prior : 0) + 1;
-    const at = new Date().toISOString();
-    const landingRetry = { ...params.unlanded, count, at };
-    const { reason, paths, rescueRef, targetTip } = landingRetry;
-    const status = task.status !== 'REVIEW' ? task.status : reason === 'diverged' || count >= 3 ? 'BLOCKED' : 'WORKING';
-    const preview = paths.slice(0, 20).join(', ') || '(none reported)';
-    const comment = { id: generateId('comment'), author: 'moe-daemon', timestamp: at,
-      content: `Landing unlanded (${reason}) ${count} time(s) in a row; attempt ${attempt.id} ` +
-        `(generation ${attempt.generation}); paths: ${preview}${paths.length > 20 ? ` (+${paths.length - 20} more)` : ''}; ` +
-        `rescue ref: ${rescueRef}; target tip: ${targetTip ?? 'unknown'}; task ${status}.` };
-    const routing: Partial<Task> = task.status !== 'REVIEW' ? {} : { status, assignedWorkerId: null,
-      ...(status === 'BLOCKED' ? {
-        blockedReason: `Landing unlanded (${reason}) ${count} time(s) in a row; ${rescueRef}; reconcile, then move the task to WORKING`,
-        blockedResourceId: null, blockedOnTaskIds: null, blockedFromStatus: 'WORKING' as const, blockedAt: at,
-      } : {}) };
-    return state.updateTask(task.id, { ...routing, landingRetry, comments: [...task.comments, comment] },
-      routing.status === 'BLOCKED' ? 'TASK_BLOCKED' : undefined, actor);
-  }
+  if (params.unlanded) return routeUnlandedLanding(state, task, attempt, params.unlanded, actor);
   if ((params.outcome === 'landed' || params.outcome === 'nothing-to-commit') && task.landingRetry != null) {
     return state.updateTask(task.id, { landingRetry: null }, undefined, actor);
   }

@@ -498,7 +498,7 @@ interface Task {
   codexModel?: string;                            // Planner's codex model (provider 'codex'); qa_reject resets to the codex default
   priorAttempt?: PriorAttempt;                  // Snapshot from moe.request_replan
   priorHandoffs?: HandoffNote[];                // Newest-first; capped at 20
-  landingRetry?: LandingRetry | null;           // finalize_attempt alone sets it (outcome 'unlanded'); landed/nothing-to-commit null it. Absent until first retry. See `landingRetry` below
+  landingRetry?: LandingRetry | null;           // Set by finalize_attempt 'unlanded', or by the finalizing close of a worktree landing with no completion recorded; landed/nothing-to-commit null it. Absent until first retry. See `landingRetry` below
 
   // Plan-size warnings from the latest submit_plan (warn-zone only; cleared
   // when a compliant plan lands) — lets boards/governors see size pressure.
@@ -844,7 +844,7 @@ Readers must use `readRequiredCheckSnapshot` (`delivery/requiredChecks.ts`), whi
 
 ### `landingRetry` (WT-03)
 
-`Task.landingRetry` records the last worktree landing that published nothing. It is optional and absent until the first retry, so older rows load unchanged with no migration and no `schemaVersion` bump. Only `moe.finalize_attempt` writes it: outcome `'unlanded'` sets it, and `'landed'` or `'nothing-to-commit'` set it to `null`. Board `UPDATE_TASK` echoes cannot restore, clear or forge it. How each field is fed, and the routing that goes with it, is under `moe.finalize_attempt` in [`docs/MCP_SERVER.md`](MCP_SERVER.md).
+`Task.landingRetry` records the last worktree landing that published nothing. It is optional and absent until the first retry, so older rows load unchanged with no migration and no `schemaVersion` bump. Two paths set it: `moe.finalize_attempt`'s outcome `'unlanded'`, and the close of a worktree attempt whose unassigned `REVIEW` task has no completion recorded for its round (`moe.deregister_worker`, or removing a `DEAD` worker record), which sets reason `'contention'` with the task branch as `rescueRef`. `moe.finalize_attempt`'s `'landed'` and `'nothing-to-commit'` set it to `null`. Board `UPDATE_TASK` echoes cannot restore, clear or forge it. How each field is fed, and the routing that goes with it, is under `moe.finalize_attempt` in [`docs/MCP_SERVER.md`](MCP_SERVER.md).
 
 ```typescript
 type UnlandedReason = 'conflict' | 'contention' | 'gate' | 'diverged' | 'remote';  // UNLANDED_REASONS
@@ -852,7 +852,7 @@ type UnlandedReason = 'conflict' | 'contention' | 'gate' | 'diverged' | 'remote'
 interface LandingRetry {
   reason: UnlandedReason;     // Why the worktree landing published nothing
   paths: string[];            // Normalized project-relative conflict paths, when reported (finalize_attempt's `conflictPaths` parameter)
-  rescueRef: string;          // Task-scoped rescue ref holding the unpublished bytes
+  rescueRef: string;          // Ref holding the unpublished bytes: a refs/moe/rescue/<taskId>/... ref, or the task branch refs/heads/moe/task/<taskId> when a finalizing close set the retry
   targetTip: string | null;   // The attempted 40-hex target tip, or null when not reported
   count: number;              // Consecutive unlanded finalizes since landed/nothing-to-commit, starting at 1
   at: string;                 // ISO timestamp of this unlanded finalize
