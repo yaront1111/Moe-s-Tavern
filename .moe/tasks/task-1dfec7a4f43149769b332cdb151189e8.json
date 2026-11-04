@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "Write the tests first, in scripts/tests/postflight-vm-route.ps1: the ps1 twins of 3586957f's postflight-vm-route.sh rows (read `git show 3586957f -- scripts/tests/postflight-vm-route.sh`, and today's sh rows at postflight-vm-route.sh:497-552). Line numbers below are from base 500e3f29; re-anchor if task-62ec51f1's QA rework moved them.\n\n(a) Helper. Directly after `function Stop-Vmr` (:86), add `function Assert-VmrOneReason($R, [string]$Reason)`, the twin of sh vmr_one_reason, with this comment: a skipped taskless iteration prints exactly ONE MOE_TASKLESS_NO_LAUNCH line, and it names REASON.\n- `$lines = @($R.Text -split '\\r?\\n' | Where-Object { $_.Contains('MOE_TASKLESS_NO_LAUNCH reason=') })`.\n- Stop-Vmr $R \"expected exactly one MOE_TASKLESS_NO_LAUNCH reason=$Reason line, saw $($lines.Count)\" unless Count is 1 and `$lines[0].Contains(\"MOE_TASKLESS_NO_LAUNCH reason=$Reason role=\")`.\n- Use Contains, not StartsWith or an anchored regex. The idle, teamless and claim-failed lines are `Write-Host -ForegroundColor`, and postflight.ps1 matches them with Contains too.\n- bbd7ad2d (now dependsOn this task) will reuse this exact name and signature for its VR-outage row. Keep both.\n\n(b) Invoke-VmjSections, VR-taskless block (:439-443). FAKE_CLAIM_MODE=idle and FAKE_MENTION=1 are already set there.\n- Keep `Assert-VmjRows $r taskless`. Replace the bare `.Contains('MOE_TASKLESS_NO_LAUNCH reason=vm-route')` check with an exit-0 check plus `Assert-VmrOneReason $r vm-route`.\n- Add VR-taskless-teamless: `$env:FAKE_JOIN_FULL = '1'`, mention still set. Require exit 1 and exactly one `[regex]::Matches($r.Text, 'MOE_SEAT_UNREGISTERED')`; the startup join and the forced re-join refuse with the same text, so only the post-loop exit line prints it. Then `Assert-VmrOneReason $r teamless` and `Assert-VmjRows $r taskless`. Carry the sh comment: a seat whose join failed reads no chat, so it has no routed mention; the legacy teamless rule skipped first and its reason stands, once.\n- Remove FAKE_JOIN_FULL and FAKE_MENTION, then add VR-taskless-idle: exit 0, `Assert-VmrOneReason $r idle`, `Assert-VmjRows $r taskless`.\n- Extend the '[vm seat] PASS ...' line with ', taskless-teamless, taskless-idle'.\n- Remove each env var exactly once, or with -ErrorAction SilentlyContinue. Under $ErrorActionPreference='Stop', a second Remove-Item of an absent Env: item throws, which is a harness fault (exit 2). FAKE_CLAIM_MODE must be gone before Invoke-VmeRows, whose rows claim tasks.\n\n(c) Invoke-VmeRows, VR-reload (:345-353).\n- Set `$env:FAKE_MENTION = '1'` next to `$env:FAKE_CLAIM_MODE = 'idle'`, as the sh VR-reload does. The VM route, not the legacy nothing-to-answer rule, then stops each looping taskless iteration.\n- Remove both in the existing finally.\n- Keep the seat-start/seat-stop/wrapper_restart assertions byte for byte.\n- Then add `$reasons = @([regex]::Matches($r.Text, 'MOE_TASKLESS_NO_LAUNCH reason=(\\S+)') | ForEach-Object { $_.Groups[1].Value })`. If it is empty, or any value is -cne 'vm-route', call Stop-Vmr $r ('a taskless iteration printed a reason other than vm-route: ' + ($reasons -join ',')).\n- Extend its '[seat reload] ok' line with '; taskless mentions print only vm-route'.\n\n(d) [vm route] today path, in the main try block. After the `foreach ($t in $tRows)` loop (:812-821) and before its Write-Host (:822), add the sh's legacy rows inside one try/finally that removes FAKE_CLAIM_MODE and FAKE_MENTION with -ErrorAction SilentlyContinue. The C/S/N refusal rows and A1/G1 that follow must not inherit FAKE_CLAIM_MODE=idle: A1/G1 assert the CLI ran.\n- T-taskless-idle: `$env:FAKE_CLAIM_MODE = 'idle'`, `$r = Invoke-VmrRow T-taskless-idle worker claude $legacy '-'`. Require exit 0 and -not $r.Ran, then `Assert-VmrOneReason $r idle`.\n- T-taskless-mention: add `$env:FAKE_MENTION = '1'`, then `Assert-VmrLaunched $r`, and Stop-Vmr if $r.Text contains 'MOE_TASKLESS_NO_LAUNCH'.\n- Append ', taskless idle and mention' to the today-path line.\n- Leave the existing T rows and their baseline comparison as they are: legacy rows unchanged.\n\nFixture facts:\n- postflight-fake-proxy.js FAKE_MENTION=1 returns the mention on EVERY chat_read; there is no cursor, and $seenMentionIds is per pre-flight. So every loop iteration has a routed mention.\n- FAKE_JOIN_FULL=1 refuses every join_team.\n\n(e) RED proof, before step 2, with moe-agent.ps1 still unfixed in W:\n- Run this harness once on pwsh.exe from W, detached and polled, with step 3's env scrub, MOE_POSTFLIGHT_TIMEOUT_SEC=360 and WSLENV.\n- It must exit 1 at 'VM ROUTE FAILED (VR-taskless): expected exactly one MOE_TASKLESS_NO_LAUNCH reason=vm-route line, saw 2'. Every earlier section passes on the base. Quote that line in the completion summary.\n- Error handling: an exit 2 (harness fault) or a failure at any other row is not RED. Fix the row and rerun.\n\nmem:gotcha-qa-ps1-postflight-from-wsl, mem:gotcha-launcher-ps1-rows-from-wsl",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T11:44:21.052Z"
     },
     {
       "stepId": "step-2",
@@ -81,7 +82,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:53:45.785Z",
-  "updatedAt": "2026-11-04T11:43:19.388Z",
+  "updatedAt": "2026-11-04T11:44:21.052Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:54.562Z",
@@ -174,5 +175,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-c33f294e@2026-11-04T10:57:10Z",
     "at": "2026-11-04T11:19:35.213Z"
-  }
+  },
+  "workStartedAt": "2026-11-04T11:44:21.052Z"
 }

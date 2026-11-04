@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "moe-agent.sh: keep the usage receipt pair out of every exported environment and hand it only to the wrapper's own usage helper calls (lines at 500e3f29; re-anchor by text if bbd7ad2d/1dfec7a4/6b3ab9d8 or 62ec51f1's rework moved them).\n(a) start_moe_usage_receipt() (:869-895) exports nothing. Its first line becomes `unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON USAGE_RECEIPT_FILE USAGE_RECEIPT_CONTEXT` (this also drops an inherited export). Add `supplied=\"\"` to the existing `local` list and build the python context with `if ! supplied=$(...)`, so the test still sees the substitution's status. usage-session.mjs gets it as a one-command prefix: `prepared=$(MOE_USAGE_CONTEXT_JSON=\"$supplied\" \"$NODE_CMD\" \"$SCRIPT_DIR/usage-session.mjs\" \"$PROJECT\" 2>/dev/null) || prepared=\"\"`. Delete `export MOE_USAGE_CONTEXT_JSON` and the two `unset MOE_USAGE_CONTEXT_JSON` in the failure branches. Error handling stays fail-open: both failure branches still print `[usage] MOE_USAGE_REPORT_UNAVAILABLE` and `return 0`. On success, set the UNEXPORTED shell variables `USAGE_RECEIPT_FILE=\"$receipt_file\" USAGE_RECEIPT_CONTEXT=\"$receipt_context\"`, then run `MOE_USAGE_RECEIPT_FILE=\"$USAGE_RECEIPT_FILE\" MOE_USAGE_CONTEXT_JSON=\"$USAGE_RECEIPT_CONTEXT\" \"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\" usage-start \"$provider\" >/dev/null || true`.\n(b) Each stream helper gets the same pair as an inline per-command prefix, `MOE_USAGE_RECEIPT_FILE=\"${USAGE_RECEIPT_FILE:-}\" MOE_USAGE_CONTEXT_JSON=\"${USAGE_RECEIPT_CONTEXT:-}\"`, placed directly before `\"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\"` in: the codex exec pipeline (:11408, after the existing MOE_TOOL_WRITES_FILE..MOE_SERENA_PROJECT_ROOT prefixes); and both claude print pipelines (:12044 and :12057, the `| \"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\" claude-stream |` element). Do NOT add a shell function for this: prompt-cache-launcher.test.mjs runs the codex pipeline line alone (`            agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\` -> `            set -e`), so a new function would be undefined there. An empty value acts like today's unset for the writer (usage-receipt.mjs:79 `if (!file) return`; readContext('') -> {}), so the rows stay byte-identical.\n(c) The main-loop top (:9921-9922) keeps its comment; its unset line also names USAGE_RECEIPT_FILE USAGE_RECEIPT_CONTEXT.\n(d) A comment above start_moe_usage_receipt() says why. task-03418dc2 found fixture usage from processes the CLI starts in 48 live receipts. So no agent CLI, nothing the CLI starts, and no other wrapper child (the post-flight quality gate included) may see the pair. Name the twin, Invoke-MoeUsageHelper in moe-agent.ps1. Extend the codex block's 'The helper alone gets the TOOL-witness env' comment so it also names the receipt pair.\nKeep these test anchors byte-identical: `start_moe_usage_receipt() {`, `# End usage receipt helpers.`, `        LAUNCH_SKIPPED=false`, `            start_moe_usage_receipt codex headless`, `            agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\`, `            set -e`. Keep the main-loop `{ ... exit }` group, and `bash -n` must pass. Edit only with the Edit tool, in W (mem:gotcha-wrapper-slice-tests-execute-text).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "startedAt": "2026-11-04T11:44:17.913Z"
     },
     {
       "stepId": "step-2",
@@ -74,7 +75,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:06:21.135Z",
-  "updatedAt": "2026-11-04T11:43:04.892Z",
+  "updatedAt": "2026-11-04T11:44:17.913Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:57.567Z",
@@ -182,5 +183,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-cd0ac706@2026-11-04T10:57:08Z",
     "at": "2026-11-04T11:24:51.366Z"
-  }
+  },
+  "workStartedAt": "2026-11-04T11:44:17.913Z"
 }
