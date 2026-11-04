@@ -26,22 +26,30 @@
     {
       "stepId": "step-2",
       "description": "Gate (DoD 1 and DoD 2): run the two legs below from the ROOT of your task worktree, concurrently. Each must exit 0.\nLeg A, WSL bash:\ncd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && T=scripts/tests && F=$(mktemp -d /tmp/e45d-a.XXXXXX) && cp $T/postflight-fake-proxy.js $F/fp.js && env $E MOE_WORKTREE_ONLY=serena-ignore,serena-ignore-off,serena-ignore-wt node $T/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" $F/fp.js $F \"$BASH\" && { env $E bash $T/postflight.sh > $F/postflight.sh.log 2>&1; echo \"postflight.sh exit=$? log=$F/postflight.sh.log\"; } && grep -E '^\\[worktree\\] [0-9]+ ok, 0 failed$' $F/postflight.sh.log && ! grep -E '^\\[worktree\\] .* FAILED' $F/postflight.sh.log\nLeg B, Windows PowerShell 5.1:\ncd \"$(git rev-parse --show-toplevel)\" && N=\"/mnt/c/Program Files/nodejs/node.exe\" && P=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe && T=scripts/tests && S=$(mktemp -d /mnt/d/moe-scratch/e45d-b.XXXXXX) && w(){ wslpath -w \"$1\"; } && cp $T/postflight-fake-proxy.js $S/fp.js && MOE_WORKTREE_ONLY=serena-ignore,serena-ignore-off,serena-ignore-wt WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(w $T/postflight-worktree.cjs)\" ps1 \"$(w scripts/moe-agent.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell && { WSLENV= \"$P\" -NoProfile -ExecutionPolicy Bypass -File \"$(w $T/postflight.ps1)\" > $S/postflight.ps1.log 2>&1; echo \"postflight.ps1 exit=$? log=$S/postflight.ps1.log\"; } && grep -aE '^\\[worktree\\] [0-9]+ ok, 0 failed' $S/postflight.ps1.log && ! grep -aE '^\\[worktree\\] .* FAILED' $S/postflight.ps1.log\nWhat each leg does: it runs the 3 targeted cases (DoD 1), then the FULL harness with its output in a log. It greps the worktree suite's summary for `0 failed` and checks there is no FAILED line (DoD 2).\nError handling:\n- A leg fails closed when the targeted run or either grep fails.\n- The harness's own exit code is printed, not used as the leg's status. DoD 2 asks only that the run gets past the worktree suite.\nHow to run:\n- The fixtures for sh go under /tmp (mkfifo fails on /mnt/d). The ps1 fixtures go under /mnt/d/moe-scratch, because Windows cannot reach /tmp.\n- Launch each leg DETACHED: a runner file in scratch whose FIRST line is `echo $$ > pid`, then the leg, then `echo EXIT=$?`. Poll with `timeout 570 bash -c 'until grep -q ^EXIT= <log>; do sleep 15; done'`, repeated (mem:convention-postflight-scratch-harness: `set -m; setsid … & echo $!` records the wrong PID).\n- Expect leg A to take about 30-45 min and leg B (PS 5.1) about 45-55 min.\nWhat to expect:\n- At bc4793cf the full postflight.sh suite read `[worktree] 75 ok, 2 failed` (serena-ignore and serena-ignore-wt), after `PASS frozen candidate scenarios: 106`, `PASS owner guard scenarios: 16` and `PASS migration landing scenarios: 12`. Expect `77 ok, 0 failed` on sh.\n- If a harness exits non-zero AFTER the worktree suite, that is not this change: those sections have not run in any gate since e575ecec landed (2026-11-04 08:23Z). Name the section and its first failing line in complete_task's summary and post it in #general for a new row. Do not fix it here.\n- Under heavy load, set MOE_POSTFLIGHT_TIMEOUT_SEC=180 on the run, and say so.\nReporting:\n- Use both legs joined with ' && ' as verification.command, exitCode 0 only when both legs exited 0, and each leg's last lines as outputTail.\n- Kill only the PIDs you recorded. Never pattern-kill (shared-host rail). Delete your scratch dirs by literal path afterwards.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T09:44:35.202Z"
+      "note": "Leg A (sh): 3 ok; full postflight.sh exit 0, [worktree] 77 ok, 0 failed, PASS postflight.sh. Leg B (PS 5.1): 3 ok; full postflight.ps1 exit 0, [worktree] 77 ok, 0 failed. Used MOE_POSTFLIGHT_TIMEOUT_SEC=180 on sh leg.",
+      "startedAt": "2026-11-04T09:44:35.202Z",
+      "completedAt": "2026-11-04T10:38:56.281Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review, then complete_task with step 2's evidence.\n1. `git status --porcelain` and `git diff --stat` name only scripts/tests/postflight-worktree.cjs. The diff is the two WHY lines, the ignored_memory_patterns pair and the one comment line.\n2. Cross-check the literal against the script in a scratch dir, never in the harness. Run a node one-off there that imports renderBlock from scripts/moe-serena-ignore.mjs and asserts that renderBlock([...SERENA_PATS,'src/**/*.tmp'], ['_archive/.*']) equals the edited serenaBlock for the same pats.\n3. Mutant, in a scratch copy: drop the `'ignored_memory_patterns:','  - \"_archive/.*\"',` pair and re-run the targeted sh command. serena-ignore and serena-ignore-wt must FAIL again, which proves the expectation is load-bearing.\n4. Think it through:\n   - serena-ignore-off still asserts the file is untouched (SERENA_USER).\n   - The block is LF on every engine, because node writes it.\n   - A project.yml that carries its own memory list is covered by serena-ignore.test.mjs, not by this suite.\n5. If anything changed, re-run both legs of step 2 and use the fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Diff only postflight-worktree.cjs (+5/-2). Literal equals renderBlock(pats,['_archive/.*']) (MATCH); mutant without the pair differs. Nothing changed after step 2 gate.",
+      "startedAt": "2026-11-04T10:38:57.050Z",
+      "completedAt": "2026-11-04T10:39:11.851Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -53,7 +61,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:43.052Z",
-  "updatedAt": "2026-11-04T09:44:35.202Z",
+  "updatedAt": "2026-11-04T10:39:16.998Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T09:33:09.500Z",
@@ -63,7 +71,7 @@
     "firstClaimAt": "2026-11-04T09:34:51.074Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -75,7 +83,9 @@
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T09:42:37.174Z",
@@ -140,5 +150,17 @@
   },
   "planApprovedAt": "2026-11-04T09:42:37.206Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T09:43:44.526Z"
+  "workStartedAt": "2026-11-04T09:43:44.526Z",
+  "reviewStartedAt": "2026-11-04T10:39:16.996Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/e45d-run/legA.sh && bash /mnt/d/moe-scratch/e45d-run/legB.sh (the plan's step-2 Leg A and Leg B, from the task worktree root)",
+    "exitCode": 0,
+    "outputTail": "Leg A: [worktree] 3 ok, 0 failed / postflight.sh exit=0 / [worktree] 77 ok, 0 failed / EXIT=0\nLeg B: [worktree] 3 ok, 0 failed / postflight.ps1 exit=0 / [worktree] 77 ok, 0 failed / EXIT=0",
+    "reportedAt": "2026-11-04T10:39:16.996Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "completionSummary": "serenaBlock() in scripts/tests/postflight-worktree.cjs now expects the two WHY lines and the ignored_memory_patterns [\"_archive/.*\"] block that moe-serena-ignore.mjs writes since e575ecec. Plus one comment line. Only that file changed (+5/-2). Literal equals renderBlock(pats,['_archive/.*']); the mutant without the pair differs. sh: 3 targeted ok; full postflight.sh exit 0, [worktree] 77 ok, 0 failed, PASS postflight.sh (MOE_POSTFLIGHT_TIMEOUT_SEC=180 set). PS 5.1: 3 targeted ok; full postflight.ps1 exit 0, [worktree] 77 ok, 0 failed. No later-section failures."
 }

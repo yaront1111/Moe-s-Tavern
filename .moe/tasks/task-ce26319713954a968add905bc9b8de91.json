@@ -1,0 +1,34 @@
+{
+  "id": "task-ce26319713954a968add905bc9b8de91",
+  "epicId": "epic-be924fb8",
+  "title": "bug: importee-guard-bash.test.mjs \"Bash stream parser refuses a tool path holding a control character\" (added by 96c4ee19, task-414eae5a) compares the parser's witness file and stdout as LF-only, but Windows Python writes text-mode CRLF, so the case fails under Windows node and CI's Windows \"Test Bash landing and postflight runner\" step has been red since 11-02",
+  "description": "Filed by hunt #22 (task-7a3640da), from a dry run of CI's windows-latest leg at fec9a842 on the Windows host.\n\nPROBLEM\n- The case at scripts/tests/importee-guard-bash.test.mjs:298-326 runs STREAM_JSON_PARSER with `python`, which is the win32 choice at :12. It makes two assertions:\n  - :321 `readFileSync(tools, 'utf8').split('\\n').filter(Boolean)` deep-equals ['plain.txt'];\n  - :323 `run.stdout.includes(\\`  [WARN] tool write outside the repo not harvested: ${raw}\\n\\`)`, once for each refused raw path.\n- The parser writes the witness file in text mode (`open(harvest_path, 'a', encoding='utf-8')`, moe-agent.sh:11925) and writes stdout in text mode too. On Windows, Python then turns every '\\n' into '\\r\\n', including the '\\n' inside the refused raw paths.\n- Production is not affected. resolve_attribution reads the file with `line.rstrip('\\n').rstrip('\\r')` (moe-agent.sh:4516), and the WARN lines are display only. This is a test-only defect.\n- 96c4ee19's verification ran the file under Linux node only. ubuntu-latest passes; windows-latest's \"Test Bash landing and postflight runner\" step (ci.yml:289-290) fails.\n\nEVIDENCE (Windows node 24.16.0 and Python 3.14, outside the shared checkout)\n- CI emulation of the windows-latest leg at fec9a842: a Windows-git clone at D:\\moe-scratch\\h22\\w with a runner-like environment. The step exited 1 with tests 64, pass 63, fail 1. Log: /mnt/d/moe-scratch/hunt-7a3640da/logs/w-15-Test-Bash-landing-and-postflight-runner.log\n- First error lines:\n  ✖ Bash stream parser refuses a tool path holding a control character, forging no second witness line\n    AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n    + actual - expected\n      [\n    +   'plain.txt\\r'\n    -   'plain.txt'\n      ]\n        at TestContext.<anonymous> (file:///D:/moe-scratch/h22/w/scripts/tests/importee-guard-bash.test.mjs:321:12)\n- Bisect, single file under Windows node on a git-archive of scripts and docs:\n  - 617c5658 (96c4ee19^): 40/40 pass;\n  - 96c4ee19: 41 tests, 1 fail (this case).\n  TAPs: /mnt/d/moe-scratch/hunt-7a3640da/bisect2/{pre,at}.tap\n- Fixing only :321 exposes :323. The real stdout holds `...harvested: ok.txt\\r\\nforged.txt\\r\\n`, which does not include `ok.txt\\nforged.txt\\n`.\n- Fix check: with `.split(/\\r?\\n/)` at :321 and `run.stdout.replaceAll('\\r\\n', '\\n').includes(...)` at :323, the file passes 41/41 under Windows node and 41/41 under Linux node (/mnt/d/moe-scratch/hunt-7a3640da/fixcheck/).\n\nFIX DIRECTION\n- Test-only: turn CRLF into LF before both assertions. Replacing only '\\r\\n' pairs keeps the lone '\\r' in the Write case's raw path, so that check still bites. A one-line comment should say why: Windows Python writes text-mode CRLF.\n- Do not change STREAM_JSON_PARSER or moe-agent.sh; their reader already accepts CRLF.\n- Leave the ps1 twin alone. scripts/tests/importee-guard.ps1, also from 96c4ee19, passed on PowerShell 5.1 and 7 (53/53) in the same run.\n\nFILES: scripts/tests/importee-guard-bash.test.mjs only.",
+  "definitionOfDone": [
+    "Run from a git-archive snapshot of scripts and docs outside the shared checkout, `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/importee-guard-bash.test.mjs` reports at least 41 tests with fail 0.",
+    "Under Linux node the same file reports fail 0.",
+    "`git diff --stat` for the task names only scripts/tests/importee-guard-bash.test.mjs. The case still asserts that the witness file holds exactly ['plain.txt'] and that each of the 3 refused raw paths has its WARN line."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 522.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T10:28:38.657Z",
+  "updatedAt": "2026-11-04T10:28:54.239Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T10:28:40.271Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}

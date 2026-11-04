@@ -1,0 +1,34 @@
+{
+  "id": "task-99a26cf251124d2da19849213d264157",
+  "epicId": "epic-be924fb8",
+  "title": "bug: taskless-handoff.test.mjs runs the ps1 QA worktree-mode check that 072dd78c (WT-13) put into its prompt slice, but never stubs Test-MoeControlWorktreeMode, so its 6 PowerShell 5.1 and 7 claimed-qa cases fail under Windows node and CI's Windows \"Test agent runtime discovery\" step has been red since 11-02 (twin of task-5d517571)",
+  "description": "Filed by hunt #22 (task-7a3640da), from a dry run of CI's windows-latest leg at fec9a842 on the Windows host.\n\nPROBLEM\n- scripts/tests/taskless-handoff.test.mjs renders the real ps1 prompt blocks. psContext is the part of scripts/moe-agent.ps1 from `    $dynamicContext = \"\"` to `    # -------- Pre-flight baseline`, which is lines 10221-10368 at fec9a842. psBody is the part from `    $claimPromptBody = $null` to `    $script:CliLaunchedAt = Get-Date`.\n- The PowerShell engines run only on win32. The test's `engines` (:27-30) is `windows ? [bash, powershell.exe, pwsh.exe] : [['bash', '/bin/bash']]`, so the ubuntu leg runs bash alone and stays green.\n- 072dd78c (task-fbe8e388, WT-13, 2026-11-02 17:19Z) added this line inside psContext, at moe-agent.ps1:10361:\n  `if ($AutoClaim -and $preflightOk -and $preflightTaskId -and $Role -eq 'qa' -and (Test-MoeControlWorktreeMode)) {`\n  Test-MoeControlWorktreeMode is defined at :6435, outside the slice. The fixture setup stubs only Initialize-MoeWorktree (test :67-69).\n- The setup sets `$ErrorActionPreference = 'Stop'`, so every claimed-qa render throws CommandNotFoundException and exits 1. A worker render short-circuits on `$Role -eq 'qa'` and passes.\n- This is the same class as task-5d517571 (DONE 10-31), where the unstubbed helper was Initialize-MoeWorktree and 14 claimed-worker cases failed.\n\nEVIDENCE (Windows node 24.16.0, powershell 5.1.26100, pwsh 7.6.9, all outside the shared checkout)\n- CI emulation of the windows-latest leg at fec9a842: a Windows-git clone at D:\\moe-scratch\\h22\\w, no MOE_* variables, CI=true, a fresh USERPROFILE and HOME, and Git Bash first on PATH. Step \"Test agent runtime discovery\" (ci.yml:266-267) exited 1 with tests 485, pass 477, fail 6. Log: /mnt/d/moe-scratch/hunt-7a3640da/logs/w-10-Test-agent-runtime-discovery.log\n- First error lines:\n  ✖ powershell: claimed qa verification obeys project rails\n    AssertionError [ERR_ASSERTION]: Test-MoeControlWorktreeMode : The term 'Test-MoeControlWorktreeMode' is not recognized as the name of a cmdlet, function, script file, or operable program. ...\n    At ...\\moe-prompt-jesn4N\\prompt.ps1:156 char:86\n    + ... lightTaskId -and $Role -eq 'qa' -and (Test-MoeControlWorktreeMode)) {\n    1 !== 0\n        at render (file:///D:/moe-scratch/h22/w/scripts/tests/taskless-handoff.test.mjs:89:10)\n- The 6 failing cases are powershell and pwsh, each with \"claimed qa verification obeys project rails\", \"claimed headless qa ends after one task\" and \"claimed interactive qa ends after one task\".\n- Bisect, single file, `node.exe --test scripts/tests/taskless-handoff.test.mjs` on a git-archive of scripts and docs:\n  - 51ba4f6a (072dd78c^): 106/106 pass;\n  - 072dd78c: 100 pass, 6 fail;\n  - fec9a842: 100 pass, 6 fail.\n  TAPs: /mnt/d/moe-scratch/hunt-7a3640da/bisect/{pre,at,tip}.tap\n- Fix check: adding `function Test-MoeControlWorktreeMode { $false }` next to the Initialize-MoeWorktree stand-in gives 106/106 at fec9a842 (/mnt/d/moe-scratch/hunt-7a3640da/fixcheck/taskless-handoff.tap).\n- The slices also call three other Moe helpers they do not define:\n  - Stop-MoeVerifiedLocalSeat (:10356) runs only when $script:MoeVmRoute is set, and the fixture leaves it unset;\n  - Invoke-MoeQaControlPreflight and Assert-MoeQaLandedCommit (:10362-10363) run only when Test-MoeControlWorktreeMode returns true.\n\nFIX DIRECTION\n- Test-only. In render()'s ps setup, add a side-effect-free stand-in `function Test-MoeControlWorktreeMode { $false }` beside the Initialize-MoeWorktree one, with a matching comment: the fixture renders a shared-mode checkout.\n- Add a guard that fails on every OS, so the ubuntu leg catches the next unstubbed helper. List each `<Verb>-Moe<Name>` command that the psContext and psBody slices call. Assert that each is defined in the slice, stubbed in the setup, or on a short allowlist of calls the fixture cannot reach. Name each allowlisted call's guard in a comment: Stop-MoeVerifiedLocalSeat, Invoke-MoeQaControlPreflight, Assert-MoeQaLandedCommit.\n- Do not edit scripts/moe-agent.ps1: 62ec51f1 and 6b3ab9d8 hold it. Do not edit moe-agent.sh.\n\nFILES: scripts/tests/taskless-handoff.test.mjs only.",
+  "definitionOfDone": [
+    "Run from a git-archive snapshot of scripts and docs outside the shared checkout, `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-handoff.test.mjs` reports fail 0 and skipped 0, with the 6 powershell and pwsh claimed-qa cases passing.",
+    "Under Linux node the same file reports fail 0. Its new guard case fails, naming Test-MoeControlWorktreeMode, when it runs against a copy of the test with the new stand-in removed.",
+    "`git diff --stat` for the task names only scripts/tests/taskless-handoff.test.mjs; scripts/moe-agent.ps1 and scripts/moe-agent.sh are unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 521.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T10:28:23.030Z",
+  "updatedAt": "2026-11-04T10:28:41.788Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T10:28:26.924Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}
