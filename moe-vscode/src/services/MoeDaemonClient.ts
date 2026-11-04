@@ -153,6 +153,17 @@ export function pathsMatch(a: string, b: string): boolean {
     return comparableProjectPath(a) === comparableProjectPath(b);
 }
 
+/** JetBrains isSameProject: the spelling rule, or two absolute non-UNC paths that resolve to one real folder. */
+export function isSameProject(a: string, b: string): boolean {
+    if (pathsMatch(a, b)) { return true; }
+    // daemon.json is repository content and /health is any local listener: a UNC or device spelling must never open a
+    // network path (Windows would start an SMB session), and a relative spelling names the daemon's cwd, not ours.
+    const local = (p: string): boolean => isFullyQualified(p) && !/^[\\/]{2}/.test(p);
+    if (!local(a) || !local(b)) { return false; }
+    const real = realPathOrNull(a);
+    return real !== null && real === realPathOrNull(b);
+}
+
 export function isAbsoluteAnyOs(value: string): boolean {
     return /^(?:[a-zA-Z]:[\\/]|\\{2}[^\\/]|\/)/.test(value);
 }
@@ -181,7 +192,7 @@ function classifyIdentity(status: number | undefined, body: string, projectPath:
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'unknown' };
         const served = (parsed as Record<string, unknown>).projectPath;
         if (typeof served !== 'string' || !isAbsoluteAnyOs(served)) return { kind: 'unknown' };
-        const identity: DaemonIdentity = pathsMatch(served, projectPath) ? { kind: 'same' } : { kind: 'foreign', projectPath: served };
+        const identity: DaemonIdentity = isSameProject(served, projectPath) ? { kind: 'same' } : { kind: 'foreign', projectPath: served };
         const proof = (parsed as Record<string, unknown>).spawnProof;
         if (withProof && typeof proof === 'string') { identity.spawnProof = proof; }
         return identity;
@@ -265,7 +276,7 @@ export function offLoopbackBindRefusal(record: unknown, workspace: string, windo
         if (typeof bindHost !== 'string' || bindHost.trim() === '' || LOOPBACK_SERVING_BIND_HOSTS.has(bindHost)) { return null; }
         // An absent or empty projectPath is this workspace's own .moe/, as ensureDaemonRunning already reads it.
         if (typeof projectPath === 'string') {
-            if (projectPath !== '' && (isOtherSideOfWsl(projectPath, windows) || !pathsMatch(projectPath, workspace))) { return null; }
+            if (projectPath !== '' && (isOtherSideOfWsl(projectPath, windows) || !isSameProject(projectPath, workspace))) { return null; }
         } else if (projectPath !== undefined && projectPath !== null) { return null; }
         if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid > MAX_PID) { return null; }
         try { process.kill(pid, 0); } catch (err) { if (errorCode(err) === 'ESRCH') { return null; } }
@@ -1635,7 +1646,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         try {
             const content = readDaemonJsonText(daemonJsonPath);
             const daemonInfo = JSON.parse(content);
-            if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
+            if (daemonInfo.projectPath && !isSameProject(daemonInfo.projectPath, projectPath)) {
                 log(
                     `Stale daemon.json: expected project ${projectPath}, found ${daemonInfo.projectPath}`
                 );
@@ -1715,7 +1726,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         try {
             const content = readDaemonJsonText(daemonInfoPath);
             const daemonInfo = JSON.parse(content);
-            if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
+            if (daemonInfo.projectPath && !isSameProject(daemonInfo.projectPath, projectPath)) {
                 log(
                     `Stale daemon.json: expected project ${projectPath}, found ${daemonInfo.projectPath}`
                 );
@@ -1920,7 +1931,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                 case 'STATE_SNAPSHOT': {
                     const expectedPath = this.getWorkspacePath();
                     if (expectedPath && payload?.project?.rootPath &&
-                        !pathsMatch(payload.project.rootPath, expectedPath)) {
+                        !isSameProject(payload.project.rootPath, expectedPath)) {
                         log(
                             `STATE_SNAPSHOT project mismatch: expected ${expectedPath}, got ${payload.project.rootPath}. Disconnecting.`
                         );
