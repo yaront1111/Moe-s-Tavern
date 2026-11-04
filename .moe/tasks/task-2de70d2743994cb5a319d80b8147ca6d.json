@@ -30,17 +30,23 @@
     {
       "stepId": "step-2",
       "description": "Add the guard as one node:test case at the end of scripts/tests/release-version.mjs. CI already runs that file on ubuntu, windows and macos (.github/workflows/ci.yml:238, the 'Test release version guard' step), so ci.yml needs no change.\n\nThe case is named 'both npm packages ship the root LICENSE byte for byte' and reuses the file's existing imports (assert, fs, path, fileURLToPath, test). Resolve the repo root from import.meta.url (`fileURLToPath(new URL('../../', import.meta.url))`), never from cwd. For each of packages/moe-daemon and packages/moe-proxy it asserts three things:\n1. the copy exists, with a message naming the path and saying npm packs only the package directory;\n2. `fs.readFileSync(copy).equals(rootLicense)`, comparing Buffers byte for byte, not strings, so an EOL change is caught;\n3. the package.json `files` is an array that still includes 'LICENSE', which blocks the wrong 'fix' of dropping LICENSE from files (DoD 3).\n\nA 12-line version was dry-run at planning; with both copies present it passes and the file reports 7 pass, 0 fail.\n\nError handling: check existsSync before readFileSync, so a missing copy fails with an assertion that names the path instead of a bare ENOENT. checkRef 3 proves the case turns RED both when a copy is missing and when one differs by one byte.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/release-version.mjs"
       ],
-      "startedAt": "2026-11-04T12:45:17.110Z"
+      "modifiedFiles": [
+        "scripts/tests/release-version.mjs"
+      ],
+      "note": "Added the LICENSE guard case; the file reports 7 pass, 0 fail.",
+      "startedAt": "2026-11-04T12:45:17.110Z",
+      "completedAt": "2026-11-04T12:45:31.565Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification. Run executionContract.checkRefs 0-3 fresh, from the task worktree, joined with ' && ' in order. Submit that exact command and its output tail as moe.complete_task verification.\n- [0] Static checks: both package.json files are unchanged against B, both copies cmp-equal the root LICENSE, ci.yml still runs release-version.mjs, and only the 3 planned paths differ.\n- [1] DoD 1: in a clone snapshot at B with the 3 files overlaid, `npm pack --dry-run --json` lists LICENSE for both packages, and a real `npm pack` tarball's package/LICENSE cmp-equals the root. npm 12 prints an object keyed by the package name, not an array; the parse handles both.\n- [2] DoD 3: the same snapshot form runs release-version.mjs, then npm ci, build and npm test for the daemon and the proxy. It is a clone, not a tar snapshot, because the daemon build's generate-init-files needs git history, or it rewrites initFiles.ts.\n- [3] DoD 2: a mutation proof. The guard passes, turns RED with the proxy copy removed, passes again, then turns RED with one byte appended to the daemon copy.\n\nPlanning dry-run, on a simulated edit:\n- [0] was RED at HEAD (rc 2, no copy) and GREEN on the simulation.\n- [1] printed moe-daemon 3 and moe-proxy 3 (unbuilt pack file counts) and PACK-OK.\n- [2] gave 7 pass / 0 fail, daemon 293 files / 7610 passed / 24 skipped, and proxy 9 files / 335 passed.\n- [3] printed MUTANTS-RED.\n\nError handling: fix a red check in the files, never by editing the check. npm runs only inside the /tmp snapshots, never in the checkout.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T12:45:31.939Z"
     },
     {
       "stepId": "step-4",
@@ -63,12 +69,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:13:15.066Z",
-  "updatedAt": "2026-11-04T12:45:17.110Z",
+  "updatedAt": "2026-11-04T12:45:31.939Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:36:03.111Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -79,7 +85,8 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:43:49.681Z",
