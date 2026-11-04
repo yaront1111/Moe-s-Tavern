@@ -1803,6 +1803,7 @@ async function wtQaPark(){
 // task-e3e81c45: each Serena launch runs scripts/moe-serena-ignore.mjs on Serena's root, which hands
 // Serena git's own ignore sources with its startup .gitignore walk off. UnAI's shape: big/ (many nested
 // .gitignore files) and .serena/ are excluded only in .git/info/exclude, which Serena's walk never reads.
+// The block also carries ignored_memory_patterns (`_archive/.*`, task-3ef33217).
 const SERENA_USER="# my own local settings\nread_only: false\n";
 // '/.git', project.yml's own ignored_paths, info/exclude, the root .gitignore; then each tree's, breadth-first.
 const SERENA_PATS=['/.git','keep-me/','big/','.serena/','.worktrees/','.mcp.json','logs/'];
@@ -1810,8 +1811,10 @@ const serenaBlock=pats=>["# >>> moe serena-ignore (managed by Moe's scripts/moe-
   "# Serena's own .gitignore walk ignores .git/info/exclude and core.excludesFile, and walks every",
   "# directory they exclude. Moe turns that walk off and lists the same patterns, plus git's, below.",
   '# To opt out, set MOE_SERENA_IGNORE_OVERRIDE=0, or set ignore_all_files_in_gitignore or ignored_paths',
-  '# yourself outside this block; Moe then removes this block.','ignore_all_files_in_gitignore: false','ignored_paths:',
-  ...pats.map(x=>`  - "${x}"`),'# <<< moe serena-ignore <<<',''].join('\n');
+  '# yourself outside this block; Moe then removes this block.',
+  '# Moe also hides QA-archived memories (_archive/.*); set ignored_memory_patterns yourself outside',
+  '# this block to keep your own list instead.','ignore_all_files_in_gitignore: false','ignored_paths:',
+  ...pats.map(x=>`  - "${x}"`),'ignored_memory_patterns:','  - "_archive/.*"','# <<< moe serena-ignore <<<',''].join('\n');
 // No real ~/.config/git/ignore or global config reaches the fixture's git (HOME is already the fixture's).
 const SERENA_KNOBS={XDG_CONFIG_HOME:path.join(root,'xdg'),GIT_CONFIG_GLOBAL:null};
 // Returns the control's .serena/project.local.yml. src/.gitignore is tracked on main and moe/control.
