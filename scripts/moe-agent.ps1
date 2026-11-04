@@ -10657,7 +10657,7 @@ $mentionsJson
     # launch with nothing to answer: the probe (its prompt is $notificationPrompt
     # above) shows whether the CLI starts again, and the outer loop's
     # launch-failure backoff paces the probes.
-    $moeSkipLaunch = $false
+    $moeSkipLaunch = $false; $moeVmTasklessSkip = $false
     if ($AutoClaim -and ($preflightNoTask -or $preflightClaimFailed) -and -not $preflightOk -and $Role -ne 'governor') {
         if ($script:LaunchOutage) {
             $moeLaunchProbe = $true
@@ -10667,8 +10667,7 @@ $mentionsJson
         }
     }
     if ($script:MoeVmRoute -and -not $moeSkipLaunch -and (-not $preflightOk -or -not $preflightTaskId)) {
-        $moeSkipLaunch = $true; $moeLaunchProbe = $false
-        Write-Host "MOE_TASKLESS_NO_LAUNCH reason=vm-route role=$Role worker=$WorkerId - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job."
+        $moeSkipLaunch = $true; $moeLaunchProbe = $false; $moeVmTasklessSkip = $true
     }
     if (-not $moeSkipLaunch -and $cliType -in @('claude', 'codex')) {
         # Settings can change between tasks in a long-lived wrapper.
@@ -10690,7 +10689,13 @@ $mentionsJson
     }
     if (-not $moeSkipLaunch) { Initialize-MoeAgentGitGuard }
     if ($moeSkipLaunch) {
-        if ($preflightClaimFailed) {
+        # One reason per skipped iteration. vm-route comes first because only the
+        # route stopped a launch the legacy rules allow (a routed mention, a
+        # claim-failed or teamless seat with mentions, an unparseable claim);
+        # when a legacy rule skipped first, its reason stands.
+        if ($moeVmTasklessSkip) {
+            Write-Host "MOE_TASKLESS_NO_LAUNCH reason=vm-route role=$Role worker=$WorkerId - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job."
+        } elseif ($preflightClaimFailed) {
             Write-Host "MOE_TASKLESS_NO_LAUNCH reason=claim-failed role=$Role worker=$WorkerId - the claim RPC is unreachable; no CLI is launched without a task bound." -ForegroundColor Yellow
         } elseif (Test-MoeSeatTeamless) {
             Write-Host "MOE_TASKLESS_NO_LAUNCH reason=teamless role=$Role worker=$WorkerId - no task claimed and this seat has NO team (moe.join_team: $teamJoinLastError), so claims skip every epic+status a live worker already holds; the join is retried before the next claim." -ForegroundColor Yellow

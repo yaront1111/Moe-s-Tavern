@@ -84,6 +84,15 @@ function Invoke-VmrRow([string]$Row, [string]$Role, [string]$Cli, [string]$Readi
     [pscustomobject]@{ Row = $Row; Code = $code; Text = [IO.File]::ReadAllText($out); Tools = $tools; Ran = (Test-Path -LiteralPath $rec) }
 }
 function Stop-Vmr($R, [string]$Why) { Write-Host $R.Text; throw "VM ROUTE FAILED ($($R.Row)): $Why" }
+# Assert-VmrOneReason R REASON: a skipped taskless iteration prints exactly ONE
+# MOE_TASKLESS_NO_LAUNCH line, and it names REASON. Contains, not an anchored
+# match: the idle, teamless and claim-failed lines are Write-Host -ForegroundColor.
+function Assert-VmrOneReason($R, [string]$Reason) {
+    $lines = @($R.Text -split '\r?\n' | Where-Object { $_.Contains('MOE_TASKLESS_NO_LAUNCH reason=') })
+    if ($lines.Count -ne 1 -or -not $lines[0].Contains("MOE_TASKLESS_NO_LAUNCH reason=$Reason role=")) {
+        Stop-Vmr $R "expected exactly one MOE_TASKLESS_NO_LAUNCH reason=$Reason line, saw $($lines.Count)"
+    }
+}
 function Assert-VmrLaunched($R) {
     if ($R.Code -ne 0 -or -not $R.Ran) { Stop-Vmr $R "exit $($R.Code), CLI ran=$($R.Ran)" }
     if ($R.Text.Contains('MOE_VERIFIED_LOCAL_') -or $R.Text.Contains('[moe_rpc error:')) { Stop-Vmr $R 'today path printed a readiness error' }
@@ -342,15 +351,20 @@ function Invoke-VmeRows {
         for ($i = 0; $i -lt 3000 -and -not (Select-String -LiteralPath $e -SimpleMatch '"cmd":"seat-start"' -Quiet -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 100 }
         [IO.File]::AppendAllText("$c\moe-agent.ps1", "# committed reload test`r`n"); & git -C $c commit -qam reload 2>&1 | Out-Null
     }
-    $wrapper = "$copy\moe-agent.ps1"; $env:FAKE_CLAIM_MODE = 'idle'; $script:VmrLoop = @('-Loop', '-PollInterval', '1')
-    try { $r = Invoke-VmeSignalRow VR-reload seat-start 2 '' } finally { Stop-Job $job; Remove-Job $job -Force; Remove-Item Env:\FAKE_CLAIM_MODE }
+    # A routed mention on every iteration: the VM route, not the legacy nothing-to-answer rule, stops each one.
+    $wrapper = "$copy\moe-agent.ps1"; $env:FAKE_CLAIM_MODE = 'idle'; $env:FAKE_MENTION = '1'; $script:VmrLoop = @('-Loop', '-PollInterval', '1')
+    try { $r = Invoke-VmeSignalRow VR-reload seat-start 2 '' } finally { Stop-Job $job; Remove-Job $job -Force; Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_MENTION -ErrorAction SilentlyContinue }
     $rows = Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl"; $s = @($rows | Where-Object { $_.tool -ceq 'agent-seat' })
     $dereg = @($rows | Where-Object { $_.tool -ceq 'deregister_worker' })
     $runners = @($s | ForEach-Object { $_.args.argv[[Array]::IndexOf($_.args.argv, '--runner') + 1] } | Sort-Object -Unique)
     if (($s.args.cmd -join ',') -cne 'seat-start,seat-stop,seat-start,seat-stop' -or $dereg.Count -lt 2 -or $dereg[0].args.reason -cne 'wrapper_restart' -or
         [Array]::IndexOf($rows, $s[1]) -gt [Array]::IndexOf($rows, $dereg[0]) -or [Array]::IndexOf($rows, $s[3]) -gt [Array]::IndexOf($rows, $dereg[1]) -or
         $s[0].args.instance -ceq $s[2].args.instance -or $runners.Count -ne 1) { Stop-Vmr $r ('reload: ' + ($s.args.cmd -join ',')) }
-    Write-Host '[seat reload] ok seat-stop before the wrapper_restart deregister; fresh VM after the reload'
+    $reasons = @([regex]::Matches($r.Text, 'MOE_TASKLESS_NO_LAUNCH reason=(\S+)') | ForEach-Object { $_.Groups[1].Value })
+    if ($reasons.Count -eq 0 -or @($reasons | Where-Object { $_ -cne 'vm-route' }).Count) {
+        Stop-Vmr $r ('a taskless iteration printed a reason other than vm-route: ' + ($reasons -join ','))
+    }
+    Write-Host '[seat reload] ok seat-stop before the wrapper_restart deregister; fresh VM after the reload; taskless mentions print only vm-route'
 }
 function Invoke-VmjSections {
     $saved = @{}; Get-ChildItem Env: | ForEach-Object { $saved[$_.Name] = $_.Value }
@@ -438,9 +452,22 @@ try {
         Remove-Item Env:\FAKE_SEAT_JOB_SLEEP; $script:VmjInterrupt = $false
         $env:FAKE_CLAIM_MODE = 'idle'; $env:FAKE_MENTION = '1'
         $r = Invoke-VmrRow VR-taskless worker claude $ready on; Assert-VmjRows $r taskless
-        if (-not $r.Text.Contains('MOE_TASKLESS_NO_LAUNCH reason=vm-route')) { Stop-Vmr $r 'taskless VM route launched' }
-        Write-Host '[vm seat] PASS happy, nonzero, codex, noclaim, qa-shared, protected, shared, qa, sigint, taskless'
-        Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_MENTION
+        if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }
+        Assert-VmrOneReason $r vm-route
+        # A seat whose join failed reads no chat, so it has no routed mention: the legacy
+        # teamless rule skipped first and its reason stands, once. The startup join and the
+        # forced re-join refuse with the same text, so only the post-loop exit line prints
+        # MOE_SEAT_UNREGISTERED.
+        $env:FAKE_JOIN_FULL = '1'
+        $r = Invoke-VmrRow VR-taskless-teamless worker claude $ready on
+        if ($r.Code -ne 1 -or [regex]::Matches($r.Text, 'MOE_SEAT_UNREGISTERED').Count -ne 1) { Stop-Vmr $r "exit $($r.Code), expected the one-shot teamless exit 1" }
+        Assert-VmrOneReason $r teamless; Assert-VmjRows $r taskless
+        Remove-Item Env:\FAKE_JOIN_FULL, Env:\FAKE_MENTION
+        $r = Invoke-VmrRow VR-taskless-idle worker claude $ready on
+        if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }
+        Assert-VmrOneReason $r idle; Assert-VmjRows $r taskless
+        Write-Host '[vm seat] PASS happy, nonzero, codex, noclaim, qa-shared, protected, shared, qa, sigint, taskless, taskless-teamless, taskless-idle'
+        Remove-Item Env:\FAKE_CLAIM_MODE
         Invoke-VmeRows
     } finally {
         $script:VmrSetup = $null; $script:VmjInterrupt = $false; $script:VmjExtraArgs = @(); $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
@@ -819,7 +846,19 @@ if (cli !== 'normalize') {
             Stop-Vmr $r "CLI launch differs from legacy; records in $tempRoot"
         }
     }
-    Write-Host '[vm route] ok today path (legacy x2, observe, unreadable, refuse, unknown, fail, malformed, case trap)'
+    # Legacy taskless lines: nothing to answer prints one reason=idle and no CLI; a routed
+    # mention launches the notification-only CLI and prints no no-launch line. The knobs
+    # come off on every path: the refusal rows and A1/G1 below must not inherit them.
+    try {
+        $env:FAKE_CLAIM_MODE = 'idle'
+        $r = Invoke-VmrRow T-taskless-idle worker claude $legacy '-'
+        if ($r.Code -ne 0 -or $r.Ran) { Stop-Vmr $r "exit $($r.Code) or the CLI ran" }
+        Assert-VmrOneReason $r idle
+        $env:FAKE_MENTION = '1'
+        $r = Invoke-VmrRow T-taskless-mention worker claude $legacy '-'; Assert-VmrLaunched $r
+        if ($r.Text.Contains('MOE_TASKLESS_NO_LAUNCH')) { Stop-Vmr $r 'a launching iteration printed a no-launch line' }
+    } finally { Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_MENTION -ErrorAction SilentlyContinue }
+    Write-Host '[vm route] ok today path (legacy x2, observe, unreadable, refuse, unknown, fail, malformed, case trap, taskless idle and mention)'
     $vl = 'this project runs verified-local'
     $vlFalse = '{"profile":"verified-local","ready":false,"missingCapabilities":["isolated-check-vm"],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
     $vlTrue = '{"profile":"verified-local","ready":true,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
