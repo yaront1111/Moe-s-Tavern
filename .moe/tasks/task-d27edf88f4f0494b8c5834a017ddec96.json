@@ -85,7 +85,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -117,14 +117,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:30.209Z",
-  "updatedAt": "2026-11-04T08:52:50.389Z",
+  "updatedAt": "2026-11-04T08:59:54.866Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:06:23.667Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-04T08:58:43.066Z",
+    "wallClockMs": 3139399
   },
   "contextFetchedBy": [
     "qa-25f21f0a",
@@ -255,10 +257,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T08:32:35Z",
-    "at": "2026-11-04T08:52:50.389Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T08:53:04Z",
+    "at": "2026-11-04T08:59:54.866Z"
   },
   "reviewStartedAt": "2026-11-04T08:41:55.581Z",
   "verification": {
@@ -269,7 +272,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "QA rework (reopen 1): deleted the two tsc-emitted files that completion 5265909c landed by mistake, scripts/mods/moe-account-switch/hooks/register.js (+300) and register.test.js (+818). Nothing else changed: the claim_next_task account switch, its tests, the mod's MARKED/SIGNALS and the MCP_SERVER.md hunks are byte-identical to what QA passed.\n- Nothing loads or references either file: hooks.json loads ./register.ts.\n- Worktree `git status --porcelain`: only ` D` on those 2 paths, no generated file.\n- Task diff vs base e575ecec: now 5 files +188/-16 (net 172).\n- The would-land tree is target tip 58e54180 minus the 2 paths, byte-unchanged on the target since 5265909c, so there is no modify/delete conflict: -1118 lines.\nVerification: snapshot = git archive of HEAD 59e97131 minus the 2 files, native npm ci, run under env -i.\n- vitest: 6 files, 348/348.\n- claude plugin test: 94 pass, 0 fail.\n- Quality gate: exit 0 there and on the would-land tree.\n- Optional mod type check, snapshot only, with the copied types base and --noEmit: only the TS5097/TS2769 baseline, and 0 .js emitted.\nSide effect: bundle-manifest copies scripts/mods excluding only **/*.test.ts. At the tip, bundle-mode onboarding.mjs therefore fails its scan on register.test.js (mem:gotcha-packaged-bundle-test-artifacts). After this lands it flags nothing. A **/*.test.js exclude would only be defense in depth; not added (out of scope).\nROLLOUT, for the governor (unchanged): the mod part is hot through moe/control. The daemon part is live only after a daemon restage, so please restage the daemon; until then the old daemon ignores the flag. FOLLOW-UP: task-a160251a still covers the CLAUDE.md and idleSwitchFor wording.",
-  "reviewCompletedAt": "2026-11-04T08:30:11.735Z",
+  "reviewCompletedAt": "2026-11-04T08:58:43.066Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -310,5 +313,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-04T08:58:43.066Z",
+  "reviewSummary": "Round 2 APPROVED. Reviewed completion 3cd127c0 on moe/work-2026-10-24: it is the local and origin tip, and cand-9fb50ef7 treeSha c2efee6c = 3cd127c0^{tree}.\n- 3cd127c0 only deletes hooks/register.js (-300) and register.test.js (-818), the round-1 reject. scripts/mods now holds no .js, and hooks.json loads ./register.ts.\n- The 5 authored files are byte-identical to 5265909c (empty diff).\n- Task net vs base e575ecec: +188/-16 = 172 LOC.\n\nFresh git-archive snapshot of 3cd127c0 (native npm ci, env -i). The exact task.verification command exits 0:\n- vitest: 6 files, 348/348;\n- claude plugin test moe-account-switch: 94 pass, 0 fail, including both claim_next_task cases.\n\nDoD:\n- 1 PASS. accountTools describe('claim_next_task'): a ranked or explicit-taskId claim gets toEqual {hasNext:false, accountSwitch acct-1→acct-2, instruction 'ACCOUNT-SWITCH:…'}, with no nextAction, task-3 unassigned, no attempt, and the seat IDLE. No flag, under threshold, or never leased: claims. A held seat gets the unchanged alreadyAssigned. A governor still gets enter_governance.\n- 2 PASS. register.ts:48 MARKED and :50 SIGNALS include claim_next_task. The test gives exit only after EXIT_DELAY_MS.\n- 3 PASS. MCP_SERVER.md :1459, :1471 and :1533 sit inside ### moe.claim_next_task (:1440-1573), and the vitest run was in a snapshot.\n\nExtra:\n- Governor ask b75dd232: built daemon+proxy and ran bundle-assets.mjs, which bundles register.ts only. `onboarding.mjs moe-vscode/bundled` exits 0 (PASS), so the register.test.js scan failure is gone.\n- Quality gate parity-check + lint: exit 0.\n- No forbidden patterns. The launchers never send the flag.\n- Complexity: nothing to cut.\n- The two .js files stay in declaredPaths as deletions per amend-1, which is not a defect.\n\nFollow-ups: task-a160251a covers the docs. The governor should restage the daemon so the switch goes live.",
+  "requiredCheckAtDone": null
 }

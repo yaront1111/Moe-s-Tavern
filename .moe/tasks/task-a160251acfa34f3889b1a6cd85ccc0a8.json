@@ -12,31 +12,45 @@
     {
       "stepId": "step-1",
       "description": "Name claim_next_task as the third idle account-switch signal in the DoD's three places. These are text and comment edits only: no code, no test and no build.\n- First confirm the behavior these words describe is still the one landed for task-d27edf88. Look at MARKED in scripts/mods/moe-account-switch/hooks/register.ts, the acceptsAccountSwitch check in packages/moe-daemon/src/tools/claimNextTask.ts, and the **Account switch** paragraph of docs/MCP_SERVER.md `### moe.claim_next_task`. If its final landing changed the reply, word the edits to match and say so in the completion summary.\n- Make every change with your Edit tool, never sed, a heredoc or cp (global rail: a shell write leaves no TOOL witness). Each OLD below occurs exactly once (checked 11-04 on e575ecec+5265909c). Copy it exactly: ASCII quotes, LF.\n\n(a) scripts/CLAUDE.md:42, the **Claude account rotation** bullet. It is one 8.5k-char line, and it stays one line. Replace only this sentence:\nOLD: It adds `acceptsAccountSwitch` to `submit_plan`/`chat_wait`, so the daemon can move the seat between tasks.\nNEW: It adds `acceptsAccountSwitch` to `submit_plan`/`chat_wait`/`claim_next_task`, so the daemon can move the seat between tasks: `claim_next_task` covers a row that ended without `submit_plan` (`archive_task`), whose next in-session claim answers `hasNext:false` with `accountSwitch` and claims nothing.\nLeave the later 'the mod refuses `claim_next_task`/`wait_for_task`/`chat_wait`/`start_step`' as is. That is the HELD set, and it is still true.\n\n(b) packages/moe-daemon/CLAUDE.md, the **Claude account rotation** bullet.\nLine 14 OLD: `submit_plan.accountSwitch`, or an early `chat_wait` return.\nLine 14 NEW: `submit_plan.accountSwitch`, a `claim_next_task` `hasNext:false` with `accountSwitch` in place of a claim (after the governor redirect, `alreadyAssigned` and the caller's own `ATTEMPT_FINALIZING` refusal, before any ranking or write; no `nextAction`), or an early `chat_wait` return.\nLine 16 OLD: Both idle signals need\nLine 16 NEW: All three idle signals need\n\n(c) packages/moe-daemon/src/state/accountStore.ts. JSDoc text only: keep the ` * ` prefixes and the /** */ delimiters, and change no code line.\nidleSwitchFor's comment (DoD 1). OLD (2 lines):\n * The switch for a seat between tasks: an architect after submit_plan, a\n * governor in chat_wait. A seat holding a task waits for its step boundary.\nNEW (3 lines):\n * The switch for a seat between tasks: an architect after submit_plan or at\n * its next claim_next_task (a row it ended without one, e.g. archive_task), a\n * governor in chat_wait. A seat holding a task waits for its step boundary.\nACCEPTS_ACCOUNT_SWITCH's comment, about 10 lines up, makes the same stale claim, so fix it too. OLD (4 lines):\n * The input the moe-account-switch mod adds to submit_plan and chat_wait. Only\n * a session that ends itself and is relaunched by its wrapper's loop can act\n * on a switch between tasks; every other seat keeps its account until its\n * next launch, as before.\nNEW (4 lines):\n * The input the moe-account-switch mod adds to submit_plan, chat_wait and\n * claim_next_task. Only a session that ends itself and is relaunched by its\n * wrapper's loop can act on a switch between tasks; every other seat keeps its\n * account until its next launch, as before.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/CLAUDE.md",
         "packages/moe-daemon/CLAUDE.md",
         "packages/moe-daemon/src/state/accountStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "packages/moe-daemon/CLAUDE.md",
+        "packages/moe-daemon/src/state/accountStore.ts"
+      ],
+      "note": "Behavior verified against register.ts MARKED and claimNextTask.ts; wording matches.",
+      "startedAt": "2026-11-04T08:59:32.168Z",
+      "completedAt": "2026-11-04T08:59:45.770Z"
     },
     {
       "stepId": "step-2",
       "description": "docs/TROUBLESHOOTING.md, section `### An architect or governor session ends and restarts on its own` (about lines 997-1016). It lists only submit_plan and chat_wait as the switch points, in two bullets. This is beyond the DoD's three places, but it is the same stale claim. The file is not vendored (mem:gotcha-moe-doc-generated-artifacts: the generators read only docs/roles, docs/agents and docs/skills), so nothing needs regenerating. Use Edit. The new lines keep the file's ~120-column hard wrap (widths 120/56 and 118/24), and each step-3 grep phrase stays on one line.\n\n(a) The 'It happens:' list. OLD (1 line):\n- for an architect, right after a `submit_plan`;\nNEW (2 lines):\n- for an architect, right after a `submit_plan`, or at its next in-session `claim_next_task` (for example after a row it\n  ended with `archive_task`), which then claims nothing;\n\n(b) The **Cause:** list. OLD (2 lines):\n- the daemon put `accountSwitch` in a `submit_plan` or `chat_wait` reply, for the same reasons as a worker's switch\n  above;\nNEW (2 lines):\n- the daemon put `accountSwitch` in a `submit_plan`, `claim_next_task` or `chat_wait` reply, for the same reasons as a\n  worker's switch above;\n\nLeave the rest of the section as is:\n- 'The architect's plan is recorded first' still holds for submit_plan.\n- 'A call the model makes after the switch (a claim, another `chat_wait`) is refused' is the mod's HELD set.\n\nOut of scope:\n- The architect role docs (docs/roles/architect.md:34 and architect.reference.md **Claude account switch**). They are vendored into initFiles.ts, and task-7e9ba059 owns them.\n- docs/plans/2026-10-20-claude-account-rotation.md, a dated design record.\n- docs/MCP_SERVER.md, which d27edf88 already synced.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "startedAt": "2026-11-04T08:59:48.330Z",
+      "completedAt": "2026-11-04T08:59:53.535Z"
     },
     {
       "stepId": "step-3",
       "description": "Verify once, then self-review once. This step changes no file.\n\n1. From the worktree root, run this exact command and submit its fresh output as the complete_task verification. It is also the plan's checkRef:\ngrep -c 'acceptsAccountSwitch` to `submit_plan`/`chat_wait`/`claim_next_task`' scripts/CLAUDE.md && grep -n 'idleSwitchFor`): `submit_plan.accountSwitch`, a `claim_next_task`' packages/moe-daemon/CLAUDE.md && grep -n 'All three idle signals need' packages/moe-daemon/CLAUDE.md && grep -n -B5 '^export function idleSwitchFor' packages/moe-daemon/src/state/accountStore.ts | grep claim_next_task && grep -n 'mod adds to submit_plan, chat_wait and' packages/moe-daemon/src/state/accountStore.ts && grep -n '`submit_plan`, `claim_next_task` or `chat_wait` reply' docs/TROUBLESHOOTING.md && grep -n 'next in-session `claim_next_task`' docs/TROUBLESHOOTING.md && ! grep -n 'Both idle signals' packages/moe-daemon/CLAUDE.md && bash scripts/tests/parity-check.sh && npm run lint\n\nAbout that command:\n- Every grep phrase fails on the unedited text (checked on e575ecec+5265909c) and passes on the step 1-2 text (dry-run on scratch copies).\n- scripts/CLAUDE.md uses grep -c because its line 42 is 8.5k chars.\n- The trailing `bash scripts/tests/parity-check.sh && npm run lint` is DoD 2 and the project qualityGate. It was green on the same tree.\n- There is no vitest run: docs and comments only change no behavior.\n- isEpicFinal on this row is only the highest-order fallback on the rolling Stability & Hardening bucket epic, not a designated hardening task.\n- Error handling: no code path or error path changes, because only docs and comments are edited. The command is an `&&` chain, so the first missing phrase or failing gate exits non-zero. A non-zero exit means fix the edit and re-run, never complete with it.\n\n2. Self-review `git diff` and `git status --short`:\n- In accountStore.ts every changed line starts with ` * `, no `*/` was added, and the delimiters are untouched. That is why no tsc run is needed. Do NOT run tsc in the worktree: a tsc emit run left the stray register.js/register.test.js that got task-d27edf88 reopened.\n- `git diff --word-diff scripts/CLAUDE.md` shows one sentence changed, on a line that is still one line.\n- The status lists exactly the four planned files: no generated, scratch or .moe/ file.\n- The wording matches what register.ts MARKED and claimNextTask.ts do as landed.\n\nCovers DoD 1 and DoD 2.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T08:59:54.521Z"
     }
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-5772dacf",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -51,20 +65,25 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:24:48.690Z",
-  "updatedAt": "2026-11-04T08:52:38.233Z",
+  "updatedAt": "2026-11-04T08:59:54.521Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:25:08.544Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-2a219562"
+    "architect-2a219562",
+    "worker-5772dacf"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:37:54.161Z",
   "executionContract": {
@@ -133,5 +152,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-2a219562@2026-11-04T08:25:06Z",
     "at": "2026-11-04T08:52:38.233Z"
-  }
+  },
+  "workStartedAt": "2026-11-04T08:59:32.168Z"
 }

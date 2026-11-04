@@ -107,6 +107,23 @@
     {
       "stepId": "step-6",
       "description": "Verification gate, run ONCE (DoD 5), plus the DoD audit across the M07n chain.\n\n1. **Parity and BOM.**\n   - `bash scripts/tests/parity-check.sh`\n   - `pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\parity-check.ps1`\n   - `head -c3 scripts/moe-agent.ps1 | od -An -tx1` must print `ef bb bf`.\n2. **The full harness on BOTH engines, in place.** The global rail allows launcher harnesses in place. Run from cwd /mnt/d/projexts/moes (a Windows drive), with every MOE_* and CLAUDE* variable of this seat unset (mem:gotcha-qa-ps1-postflight-from-wsl), and MOE_POSTFLIGHT_TIMEOUT_SEC=360 and WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC exported:\n   - `powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight.ps1'`\n   - `pwsh.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\projexts\\moes\\scripts\\tests\\postflight.ps1'`\n\n   How to run each leg (mem:gotcha-pwsh7-reachable-from-wsl):\n   - A leg takes 12-25 min, past the Bash tool's 10-minute cap. Launch it in the background with nohup, log to /mnt/d/moe-scratch, append `EXIT=$?`, then poll.\n   - Never trust EXIT=0 alone. The log must print `PASS postflight.ps1` and the postflight-vm-route.ps1 section with its full `ok` count. Read 5.1 logs through `tr -d '\\0'`.\n   - A row that also fails on HEAD's bytes is pre-existing. Rerun HEAD's scripts to prove it, report it, and don't fix it here.\n3. **DoD audit.** The completion summary maps each DoD item to row names:\n   - DoD 1: CQ-M07n1's byte-identity row, plus every existing postflight.ps1 row (this run).\n   - DoD 2: CQ-M07n3's order row, and CQ-M07n1's not-ready and gemini/grok rows.\n   - DoD 3: CQ-M07n3's claude canary row and step 2's codex canary row, both in a file that both legs ran.\n   - DoD 4: CQ-M07n3's normal-exit and Ctrl+C rows, step 3's failed-job rows and step 4's relaunch row.\n   - DoD 5: this run, parity and the BOM.\n4. **Size.** Run `git diff --numstat HEAD -- scripts/` for the four files. QA counts additions plus deletions against 400.\n   - If over, merge rows that share setup.\n   - If still over, file an EPIC ADD_RAIL size exception (moe.propose_rail, using the CQ-M05 rail template) with the exact per-file numstat BEFORE complete_task.\n\nThe complete_task verification evidence is the pwsh 7 full-harness command above, with its fresh log tail. Cite the 5.1 leg's log and both parity runs in the summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "The gate ran once, fresh, on the final bytes.\n\nParity and BOM: `bash scripts/tests/parity-check.sh` prints PASS (exit 0); `pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\parity-check.ps1` prints PASS (exit 0); the BOM reads ef bb bf.\n\nFull harness on both engines. I ran THIS worktree's harness, `D:\\projexts\\moes\\.worktrees\\task-62ec51f179494706a39045154d07e544\\scripts\\tests\\postflight.ps1`. That is a deviation from the plan, which named the shared checkout's path; the shared copy would test the shared wrapper, not this task's bytes. Each leg ran with cwd the worktree (a D: drive), all 62 seat MOE_*/CLAUDE* variables removed (env -u), MOE_POSTFLIGHT_TIMEOUT_SEC=360 and WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC.\n- powershell.exe 5.1: log /mnt/d/moe-scratch/m07n/full51.log ends `PASS postflight-vm-route.ps1`, `PASS postflight.ps1`, EXIT=0, with 0 FAIL lines.\n- pwsh.exe 7: log /mnt/d/moe-scratch/m07n/full7.log has the same three lines and 0 FAIL lines.\nBoth legs print every vm-route section ok: [vm candidate] R1-R9; [strong intent] G1-G8; [vm seat] PASS happy, nonzero, codex, noclaim, qa-shared, protected, shared, qa, sigint, taskless; [seat errors]; [seat credentials]; [seat failures]; [seat waits]; [seat reload]; [vm route] today path, refusals, and architect and governor.\n\nDoD audit:\n- DoD 1: [vm route] today path (legacy x2, observe, unreadable, refuse, unknown, fail, malformed, case trap = the byte-identity row), plus every postflight.ps1 row in both legs.\n- DoD 2: [vm seat] happy (order row), plus [vm route] refusals C1/C2, S1-S6 and N1-N4 (not-ready, gemini/grok).\n- DoD 3: the claude canary in [vm seat] happy; the OPENAI_API_KEY and CODEX_API_KEY canaries in [seat credentials]. Both legs ran this file.\n- DoD 4: [vm seat] happy (normal exit) and sigint (Ctrl+C); [seat failures] failed, missing, false, stop-failed and streak (failed job); [seat reload] (relaunch).\n- DoD 5: this run, both parity checks and the BOM.\n\nSize: `git diff --numstat HEAD -- scripts/` is 84/12 moe-agent.ps1, 15/3 parity-check.ps1, 16/3 parity-check.sh and 142/7 postflight-vm-route.ps1, so 282 changed lines (≤400). No waiver is needed. The only file modified in this step was the earlier FAKE_CTX_WORKSPACE fixture line.",
+      "startedAt": "2026-11-04T08:01:11.651Z",
+      "completedAt": "2026-11-04T08:55:19.856Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this row's diff, as the final step (load adversarial-self-review). Check:\n1. Can any path under verified-local run the host agent CLI? Cover the capacity wait, a missing credential, a failed job, a terminating error, a resume, the reload, and a taskless notification-only session or launch probe (confirm what M07m landed and that ps1 matches).\n2. Can a credential value reach any of these?\n   - an argv;\n   - an env, including on the in-process supervisor's next pass (every scrub restored in a finally);\n   - a file, a Write-Host, an ErrorRecord, a chat line or a transcript.\n   Check codex and claude, including the escalation text and ConvertTo-Json output.\n3. Does every failed job run seat-stop and forget the instance? Does a later iteration always re-provision before claiming? Does the reload stop the VM before the deregister?\n4. Can the capacity wait claim anything? Does Ctrl+C in each wait (capacity and credential) still reach the finally's seat-stop, with TreatControlCAsInput left as it was found?\n5. Do the launch-failure and resume budgets still bound a seat whose jobs keep failing? There must be no tight loop (PollInterval 0 included) and exactly one escalation at the cap.\n6. Are legacy, observe and unreadable iterations, and architect and governor seats, byte-identical, with every pre-existing postflight.ps1 row unchanged?\n7. Check the PowerShell 5.1 vs 7 differences:\n   - native stderr ErrorRecords under $ErrorActionPreference Stop;\n   - $OutputEncoding on the stdin pipe;\n   - quoting of the runner-token argument;\n   - `exit` inside try.\n   Is moe-agent.ps1 still UTF-8 with a BOM, and does parity pass with whole literals?\n\nIf any byte changes, re-run step 6's harness legs and submit that fresh output.",
       "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
@@ -114,18 +131,7 @@
       "newFiles": [
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-04T08:01:11.651Z"
-    },
-    {
-      "stepId": "step-7",
-      "description": "Adversarial self-review of this row's diff, as the final step (load adversarial-self-review). Check:\n1. Can any path under verified-local run the host agent CLI? Cover the capacity wait, a missing credential, a failed job, a terminating error, a resume, the reload, and a taskless notification-only session or launch probe (confirm what M07m landed and that ps1 matches).\n2. Can a credential value reach any of these?\n   - an argv;\n   - an env, including on the in-process supervisor's next pass (every scrub restored in a finally);\n   - a file, a Write-Host, an ErrorRecord, a chat line or a transcript.\n   Check codex and claude, including the escalation text and ConvertTo-Json output.\n3. Does every failed job run seat-stop and forget the instance? Does a later iteration always re-provision before claiming? Does the reload stop the VM before the deregister?\n4. Can the capacity wait claim anything? Does Ctrl+C in each wait (capacity and credential) still reach the finally's seat-stop, with TreatControlCAsInput left as it was found?\n5. Do the launch-failure and resume budgets still bound a seat whose jobs keep failing? There must be no tight loop (PollInterval 0 included) and exactly one escalation at the cap.\n6. Are legacy, observe and unreadable iterations, and architect and governor seats, byte-identical, with every pre-existing postflight.ps1 row unchanged?\n7. Check the PowerShell 5.1 vs 7 differences:\n   - native stderr ErrorRecords under $ErrorActionPreference Stop;\n   - $OutputEncoding on the stdin pipe;\n   - quoting of the runner-token argument;\n   - `exit` inside try.\n   Is moe-agent.ps1 still UTF-8 with a BOM, and does parity pass with whole literals?\n\nIf any byte changes, re-run step 6's harness legs and submit that fresh output.",
-      "status": "PENDING",
-      "affectedFiles": [
-        "scripts/moe-agent.ps1"
-      ],
-      "newFiles": [
-        "scripts/tests/postflight-vm-route.ps1"
-      ]
+      "startedAt": "2026-11-04T08:57:59.207Z"
     }
   ],
   "planRevision": 1,
@@ -179,7 +185,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:11:06.834Z",
-  "updatedAt": "2026-11-04T08:01:11.651Z",
+  "updatedAt": "2026-11-04T08:57:59.207Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:08.057Z",
@@ -189,7 +195,7 @@
     "firstClaimAt": "2026-11-01T14:15:13.146Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-30d804be",
@@ -204,7 +210,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T14:38:56.041Z",
@@ -266,5 +273,38 @@
   },
   "planApprovedAt": "2026-11-01T14:38:56.064Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T07:41:56.459Z"
+  "workStartedAt": "2026-11-04T07:41:56.459Z",
+  "commits": [
+    {
+      "sha": "80879746aa25a7376a83c4d6fa676fd03a858a1a",
+      "ref": "refs/heads/moe/task/task-62ec51f179494706a39045154d07e544",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T07:31:29Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T08:56:05.663Z",
+      "treeId": "09fcb589feb19822401b6481f4db55416502eda9",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.ps1",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-a408f113@2026-11-04T07:31:29Z",
+    "at": "2026-11-04T08:56:05.663Z"
+  }
 }
