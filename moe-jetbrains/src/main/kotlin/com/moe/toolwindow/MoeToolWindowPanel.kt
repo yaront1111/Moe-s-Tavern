@@ -70,6 +70,9 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private var searchQuery: String = ""
     private var epicSortByDate: Boolean = false
     private var lastStateFingerprint: String = ""
+    /** boardTaskFingerprint of [fingerprintedTasks]: a board-unchanged snapshot reuses the same list instance. */
+    private var fingerprintedTasks: List<Task>? = null
+    private var cachedTaskFingerprint = ""
     private val columnOrder = listOf("BACKLOG", "PLANNING", "WORKING", "REVIEW", "DONE")
     private val columnPanels = mutableMapOf<String, TaskColumn>()
     private val columnContainers = mutableMapOf<String, JBPanel<JBPanel<*>>>()
@@ -466,7 +469,14 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             val boardFingerprint = runCatching {
                 // Includes planRevision/step text: this early-return otherwise hides a
                 // revision-only plan edit and leaves approvals on the old rendered snapshot.
-                val taskFingerprint = boardTaskFingerprint(state.tasks)
+                val taskFingerprint = if (state.tasks === fingerprintedTasks) {
+                    cachedTaskFingerprint
+                } else {
+                    boardTaskFingerprint(state.tasks).also {
+                        fingerprintedTasks = state.tasks
+                        cachedTaskFingerprint = it
+                    }
+                }
                 val epicFingerprint = state.epics.joinToString(",") {
                     "${it.id}:${it.title}:${it.status}:${it.order}"
                 }

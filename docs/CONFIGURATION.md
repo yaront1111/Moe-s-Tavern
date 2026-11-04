@@ -98,6 +98,8 @@ This document covers all configuration options for Moe's Tavern.
 | `CLAUDE_CONFIG_DIR` / `MOE_ACCOUNT_ID` / `MOE_ACCOUNT_SAMPLE_FILE` | **Set by the wrapper** (not read) for the claude child only, when it leased a rotation account: the account's folder (`~/.moe/claude-accounts/<id>`), its id, and the file the wrapper's stream parser (or, in an interactive seat, the statusline) writes usage samples to. For that child the wrapper also removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and the `CLAUDE_CODE_USE_*` provider switches, so the account's claude.ai login is what claude uses | Wrapper-set | — |
 | `MOE_FALLBACK_CLI` | Inject `moe-call.sh` fallback instructions into the agent prompt (rare edge case) | Unset | `1` |
 | `MOE_DISABLE_TOOL_HOOK` | Claude plugin: disable the PostToolUse hook that forwards `moe.*` tool events to the daemon | Unset | `1` |
+| `MOE_BOARD_DEBUG` | VS Code extension: trace the board webview's lifecycle to its "Moe Board Debug" output channel. Off by default because every daemon event reaches the board, so the channel grows for the whole IDE session | Unset | `1` |
+| `MOE_USAGE_RECEIPT_RETENTION_DAYS` | Read by `scripts/usage-session.mjs` at every CLI launch: usage receipts in `logs/moe-usage/` older than this many days are deleted (best effort, never a launch failure); `0` keeps every receipt | `30` | `0` |
 
 ---
 

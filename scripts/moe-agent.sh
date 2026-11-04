@@ -2628,7 +2628,10 @@ moe_attempt_read() {
 import glob,json,os,re,sys
 project,worker,task,aid,generation=sys.argv[1:]
 try:
-    records=[json.load(open(p,encoding='utf-8-sig')) for p in glob.glob(os.path.join(project,'.moe','attempts','*.json'))]
+    # Raw-text pre-filter, a superset of the taskId match below: a record whose taskId is task
+    # carries that string, so a file without it is never parsed (identical results).
+    texts=[t for t in (open(p,encoding='utf-8-sig').read() for p in glob.glob(os.path.join(project,'.moe','attempts','*.json'))) if task in t]
+    records=[json.loads(t) for t in texts]
     records=[a for a in records if a.get('taskId')==task]
     opened=[a for a in records if a.get('phase')!='closed']
     if len(opened)!=1: raise ValueError('ambiguous or missing open attempt')
@@ -2838,7 +2841,9 @@ project,task,worker=sys.argv[1:]
 ids=[]
 for p in sorted(glob.glob(os.path.join(project,'.moe','attempts','*.json'))):
     try:
-        a=json.load(open(p,encoding='utf-8-sig'))
+        t=open(p,encoding='utf-8-sig').read()
+        if task not in t or worker not in t: continue   # raw-text pre-filter, a superset of the match below
+        a=json.loads(t)
     except Exception:
         continue
     if isinstance(a,dict) and a.get('taskId')==task and a.get('workerId')==worker and a.get('phase')=='finalizing':
@@ -2896,7 +2901,9 @@ safe=lambda v: isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',v)
 attempts=os.path.join(project,'.moe','attempts')
 for p in [os.path.join(attempts,only+'.json')] if safe(only) else sorted(glob.glob(os.path.join(attempts,'*.json'))):
     try:
-        a=json.load(open(p,encoding='utf-8-sig'))
+        t=open(p,encoding='utf-8-sig').read()
+        if worker not in t: continue   # raw-text pre-filter, a superset of the workerId match below
+        a=json.loads(t)
         g=a.get('generation')
         if a.get('workerId')==worker and a.get('phase')=='reconciling' and type(g)==int and 0<g<=9007199254740991 and safe(a.get('id')) and safe(a.get('taskId')):
             print(a['taskId'],a['id'],g)
@@ -4380,7 +4387,10 @@ def verdict():
     for f in sorted(glob.glob(os.path.join(project, '.moe', 'attempts', '*.json'))):
         try:
             with open(f, encoding='utf-8-sig') as fh:
-                a = json.load(fh)
+                t = fh.read()
+            if tid not in t:   # raw-text pre-filter, a superset of the taskId match below
+                continue
+            a = json.loads(t)
         except Exception:
             continue
         if not isinstance(a, dict) or a.get('phase') != 'finalizing' or a.get('taskId') != tid:
@@ -4427,10 +4437,18 @@ def load(p):
         d=json.load(open(p,encoding='utf-8-sig'))
         return d if isinstance(d,dict) else None
     except Exception: return None
+def load_attempt(p):
+    # Raw-text pre-filter, a superset of the taskId match below: a file whose text lacks task is never parsed.
+    try:
+        t=open(p,encoding='utf-8-sig').read()
+        if task not in t: return None
+        d=json.loads(t)
+        return d if isinstance(d,dict) else None
+    except Exception: return None
 def strong(d):
     s=d.get('executionPolicySnapshot')
     return isinstance(s,dict) and s.get('profile')=='verified-local'
-records=[a for a in map(load,glob.glob(os.path.join(project,'.moe','attempts','*.json')))
+records=[a for a in map(load_attempt,glob.glob(os.path.join(project,'.moe','attempts','*.json')))
          if a is not None and a.get('taskId')==task and type(a.get('generation')) is int]
 # A generation tie counts as strong: fail closed.
 newest=max(((a['generation'],strong(a)) for a in records),default=(0,False))
@@ -8617,12 +8635,19 @@ except Exception:
 # a record cannot be listed, read or parsed: a pass that cannot see every
 # attempt removes nothing.
 wt_open_attempts() {
-    $PYTHON_CMD -c 'import json, os, sys
+    $PYTHON_CMD -c 'import json, os, re, sys
 root, out = sys.argv[1], set()
 for n in (os.listdir(root) if os.path.lexists(root) else []):
     if n.endswith(".json"):
         with open(os.path.join(root, n), encoding="utf-8-sig") as fh:
-            d = json.load(fh)
+            t = fh.read()
+        # Raw-text pre-filter, a superset of the phase test below: the daemon writes records
+        # with JSON.stringify(record, null, 2), so a top-level key sits at exactly two spaces
+        # of indent; this line is a closed record'"'"'s own phase, never a nested key, and the
+        # file is not parsed.
+        if re.search(r"^  \"phase\": \"closed\"", t, re.M):
+            continue
+        d = json.loads(t)
         if not isinstance(d, dict):
             sys.exit(1)
         if d.get("phase") != "closed":

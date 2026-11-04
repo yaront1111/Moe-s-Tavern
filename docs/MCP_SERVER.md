@@ -3361,6 +3361,10 @@ Wrapper-only. Records one report for a leased account.
 
 The JetBrains/VS Code plugin talks to the daemon over `/ws` using typed JSON envelopes (`{ type, payload? }`). The full list lives in `packages/moe-daemon/src/server/WebSocketServer.ts`; the entries below cover this session's additions.
 
+### Board version (GET_STATE etag)
+
+Every `STATE_SNAPSHOT` frame, and every pushed `TASK_*` / `EPIC_*` frame, carries a top-level `boardVersion` (a number, seeded per daemon process, bumped on every task/epic/delivery-evidence write or event and on every reload). A client that applied the frame may remember that version. A polling client sends it back: `{ type: 'GET_STATE', payload: { ifBoardVersion } }`. While the board is unchanged the reply's payload omits `tasks` and `epics` (the client keeps its last lists; everything else is present as usual); any other version, or no `ifBoardVersion`, is answered in full. A reload (external `.moe/` edit) broadcasts the same filtered snapshot to every plugin client.
+
 ### Optional client capability negotiation (v1)
 
 The first frame and `GET_STATE` reply remain the existing `STATE_SNAPSHOT`; no capabilities frame is unsolicited. A client may send:

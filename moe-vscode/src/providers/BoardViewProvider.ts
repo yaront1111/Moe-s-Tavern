@@ -5,9 +5,11 @@ import { TaskCreatePanel } from '../panels/TaskCreatePanel';
 import { PlanReviewPanel, showApprovalRefusal } from '../panels/PlanReviewPanel';
 import { TaskDetailPanel } from '../panels/TaskDetailPanel';
 
-// Debug output channel for tracing webview lifecycle
+// Debug output channel for tracing webview lifecycle. Off unless MOE_BOARD_DEBUG is set: every
+// daemon event reaches updateBoard, so an always-on channel grows for the whole IDE session.
 let debugChannel: vscode.OutputChannel | undefined;
 function dbg(msg: string): void {
+    if (!process.env.MOE_BOARD_DEBUG) { return; }
     if (!debugChannel) {
         debugChannel = vscode.window.createOutputChannel('Moe Board Debug');
     }

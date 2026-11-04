@@ -1159,13 +1159,14 @@ describe('moe.get_commit_scope', () => {
       const named = { attemptId: a.id, workerId: 'worker-done', generation: a.generation };
       expect((await scope()).finalizingAttempt).toStrictEqual(named);
 
-      h.state.attempts.set(a.id, { ...a, workerId: '  ' });
+      // A direct map edit skips the write path's version bump; without one the finalizing-index memo serves the old record.
+      h.state.attempts.set(a.id, { ...a, workerId: '  ' }); h.state.stateVersion++;
       expect((await scope()).finalizingAttempt).toBeNull();
-      h.state.attempts.set(a.id, { ...a, generation: 0 });
+      h.state.attempts.set(a.id, { ...a, generation: 0 }); h.state.stateVersion++;
       expect((await scope()).finalizingAttempt).toBeNull();
-      h.state.attempts.set(a.id, { ...a, generation: 1.5 });
+      h.state.attempts.set(a.id, { ...a, generation: 1.5 }); h.state.stateVersion++;
       expect((await scope()).finalizingAttempt).toBeNull();
-      h.state.attempts.set(a.id, { ...a, id: '' });
+      h.state.attempts.set(a.id, { ...a, id: '' }); h.state.stateVersion++;
       expect((await scope()).finalizingAttempt).toBeNull();
     });
 

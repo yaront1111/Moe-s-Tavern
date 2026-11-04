@@ -348,7 +348,14 @@ export async function writeEntity(state: StateManager, kind: string, id: string,
   // bridge and other I/O keep progressing while this entity persists. writeEntity
   // is the hot path for every task/epic/worker/team write under the state mutex.
   await atomicWriteJsonAsync(filePath, entity);
+  // After the bytes, never before: a poll that reads a bumped version with the old
+  // record would keep the stale board until the next write.
+  state.stateVersion++;
+  if (BOARD_KINDS.has(kind)) state.boardVersion++;
 }
+
+/** Entity kinds the plugins' board snapshot (tasks, epics, delivery projection) is built from. */
+const BOARD_KINDS: ReadonlySet<string> = new Set(['tasks', 'epics', 'attempts', 'candidates', 'checks', 'receipts']);
 
 /**
  * Fallback: try loading a worker directly from disk when not found in memory.

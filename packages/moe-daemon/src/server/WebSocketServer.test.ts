@@ -348,6 +348,35 @@ describe('MoeWebSocketServer Integration', () => {
         expect(await request(client, { type: 'PING' })).toEqual({ type: 'PONG' });
       }
 
+      it('GET_STATE with the current boardVersion omits tasks and epics until the board changes', async () => {
+        type Versioned = Frame & { boardVersion?: number };
+        const snapshotAfter = async (client: Client, frame: unknown): Promise<Versioned> => {
+          client.ws.send(JSON.stringify(frame));
+          let reply = await next(client);
+          while (reply.type !== 'STATE_SNAPSHOT') reply = await next(client); // skip broadcasts in flight
+          return reply as Versioned;
+        };
+        const client = await connect();
+        const full = await snapshotAfter(client, { type: 'GET_STATE' });
+        expect(typeof full.boardVersion).toBe('number');
+        expect(Array.isArray(full.payload.tasks)).toBe(true);
+        expect(Array.isArray(full.payload.epics)).toBe(true);
+
+        const same = await snapshotAfter(client, { type: 'GET_STATE', payload: { ifBoardVersion: full.boardVersion } });
+        expect(same.boardVersion).toBe(full.boardVersion);
+        expect(same.payload).not.toHaveProperty('tasks');
+        expect(same.payload).not.toHaveProperty('epics');
+        expect(same.payload).toHaveProperty('workers');
+
+        await state.updateTask('task-1', { title: 'renamed by the etag test' });
+        const changed = await snapshotAfter(client, { type: 'GET_STATE', payload: { ifBoardVersion: full.boardVersion } });
+        expect(changed.boardVersion).not.toBe(full.boardVersion);
+        expect((changed.payload.tasks as Array<{ title: string }>).map(t => t.title)).toContain('renamed by the etag test');
+
+        const stale = await snapshotAfter(client, { type: 'GET_STATE', payload: { ifBoardVersion: 12345 } });
+        expect(Array.isArray(stale.payload.tasks)).toBe(true); // an unknown version is always answered in full
+      });
+
       it('replies only on demand with exact maps, ignoring unknown optional keys', async () => {
         const client = await connect();
         const peer = await connect();

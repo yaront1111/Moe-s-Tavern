@@ -248,8 +248,7 @@ function safeSend(ws: WebSocket, data: string): boolean {
     try {
       const parsed = JSON.parse(data);
       if (parsed.id !== undefined && parsed.id !== null) {
-        pendingRequestIds.delete(parsed.id);
-        pendingRequestTimes.delete(parsed.id);
+        forgetRequest(parsed.id);
 
         const errorResponse = JSON.stringify({
           jsonrpc: '2.0',
@@ -334,8 +333,7 @@ function checkMessageTimeouts(): void {
 
   for (const id of timedOut) {
     const entry = pendingRequestTimes.get(id);
-    pendingRequestIds.delete(id);
-    pendingRequestTimes.delete(id);
+    forgetRequest(id);
     const timeoutMs = entry?.timeoutMs ?? MESSAGE_TIMEOUT_MS;
     const errorResponse = JSON.stringify({
       jsonrpc: '2.0',
@@ -634,6 +632,8 @@ function openDaemonSocket(projectPath: string, port: number): void {
     // on the next successful open.
     if (pendingRequestIds.size > 0) {
       for (const reqId of pendingRequestIds) {
+        // Only a sent tools/list is forgotten: a queued one keeps its id for the flush on the next open.
+        pendingToolsListIds.delete(reqId);
         const errorResponse = JSON.stringify({
           jsonrpc: '2.0',
           id: reqId,
@@ -750,6 +750,7 @@ function openDaemonSocket(projectPath: string, port: number): void {
             // messages.
             if (pendingMessages.length >= 100) {
               const droppedId = (parsed.id !== undefined && parsed.id !== null) ? parsed.id : null;
+              if (droppedId !== null) pendingToolsListIds.delete(droppedId);
               const errorResponse = JSON.stringify({
                 jsonrpc: '2.0',
                 id: droppedId,

@@ -49,6 +49,11 @@ class MoeProjectService @JvmOverloads constructor(
     @Volatile private var clientDaemonInfo: DaemonInfo? = null
     @Volatile private var connected = false
     @Volatile private var state: MoeState? = null
+    /**
+     * The daemon's board version behind [state]; null until a snapshot names one and
+     * again whenever the socket changes, so the first poll of every connection is full.
+     */
+    @Volatile private var boardVersion: Long? = null
     @Volatile private var connecting = false
     private val disposed = AtomicBoolean(false)
     private val messageDispatcher = MoeMessageDispatcher(
@@ -75,7 +80,8 @@ class MoeProjectService @JvmOverloads constructor(
             stopAutoRefresh()
         },
         onWorkerDeregistered = { workerId -> agentSeats.acked(workerId) },
-        onExecutionReadiness = { reply -> completeReadiness(reply) }
+        onExecutionReadiness = { reply -> completeReadiness(reply) },
+        onBoardVersion = { boardVersion = it }
     )
     // Readiness requests awaiting the daemon's answer. The reply carries no
     // correlation id, so one fresh answer completes every waiter.
@@ -335,6 +341,7 @@ class MoeProjectService @JvmOverloads constructor(
         wsLock.withLock {
             val oldClient = wsClient
             wsClient = null
+            boardVersion = null
             closeQuietly(oldClient)
 
             val uri = URI("ws://127.0.0.1:${daemonInfo.port}/ws")
@@ -394,6 +401,7 @@ class MoeProjectService @JvmOverloads constructor(
                             connecting = false
                             connected = false
                             wsClient = null
+                            boardVersion = null
                             stopAutoRefresh()
                         } else {
                             log.debug("Ignoring onClose from stale WebSocket client")
@@ -411,6 +419,7 @@ class MoeProjectService @JvmOverloads constructor(
                             connecting = false
                             connected = false
                             wsClient = null
+                            boardVersion = null
                             stopAutoRefresh()
                         } else {
                             log.debug("Ignoring onError from stale WebSocket client")
@@ -436,6 +445,7 @@ class MoeProjectService @JvmOverloads constructor(
                 connected = false
                 closeQuietly(wsClient)
                 wsClient = null
+                boardVersion = null
             }
             publishStatus(false, ex.message ?: "Failed to connect")
             scheduleReconnect()
@@ -454,6 +464,7 @@ class MoeProjectService @JvmOverloads constructor(
             cancelConnectionTimers()
             val client = wsClient
             wsClient = null
+            boardVersion = null
             connected = false
             connecting = false
             client
@@ -699,7 +710,10 @@ class MoeProjectService @JvmOverloads constructor(
         refreshFuture = scheduler.scheduleAtFixedRate({
             if (disposed.get() || !connected) return@scheduleAtFixedRate
             try {
-                sendMessage("GET_STATE", JsonObject())
+                // ifBoardVersion: the daemon answers a current board without tasks/epics.
+                sendMessage("GET_STATE", JsonObject().apply {
+                    if (state != null) boardVersion?.let { addProperty("ifBoardVersion", it) }
+                })
             } catch (ex: Exception) {
                 log.debug("Auto-refresh failed: ${ex.message}")
             }

@@ -143,7 +143,9 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
 export type PluginMessage =
   | { type: 'PING' }
   | { type: 'CLIENT_HELLO'; payload?: unknown }
-  | { type: 'GET_STATE' }
+  // ifBoardVersion: the boardVersion of the plugin's last STATE_SNAPSHOT; an unchanged
+  // board answers without tasks and epics (the bulk of the payload).
+  | { type: 'GET_STATE'; payload?: { ifBoardVersion?: number } }
   | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number; offset?: number; maxPayloadChars?: number } }
   | { type: 'CREATE_TASK'; payload: Record<string, unknown> }
   // expectedPlanRevision is the optional plan-approval compare-and-swap token.
@@ -214,6 +216,8 @@ const ALLOWED_WS_ORIGINS: readonly string[] = Object.freeze([]);
 /** ws reads Origin for a version-13 handshake and Sec-WebSocket-Origin for version 8; check both. */
 const ORIGIN_HEADERS = ['origin', 'sec-websocket-origin'] as const;
 const LOGGED_ORIGIN_MAX_CHARS = 120;
+/** Bytes a client may leave unread in this process before it is cut off (a few full board snapshots). */
+const WS_SEND_BACKLOG_LIMIT_BYTES = 64 * 1024 * 1024;
 
 /** True for an absent Origin (undefined) or an allowed one. A present 'null' or '' is refused. */
 export function isAllowedUpgradeOrigin(origin: string | undefined): boolean {
@@ -302,6 +306,13 @@ export class MoeWebSocketServer {
     if (ws.readyState !== WebSocket.OPEN) {
       return false;
     }
+    // A client that stopped reading (a frozen IDE, a paused debugger) would otherwise
+    // keep every further frame queued in this process without bound.
+    if (ws.bufferedAmount > WS_SEND_BACKLOG_LIMIT_BYTES) {
+      logger.warn({ bufferedAmount: ws.bufferedAmount }, 'WebSocket client is not draining; terminating it');
+      try { ws.terminate(); } catch { /* already gone */ }
+      return false;
+    }
     try {
       ws.send(message);
       return true;
@@ -384,7 +395,11 @@ export class MoeWebSocketServer {
     }
     const served = event.type === 'TASK_UPDATED'
       ? { ...event, payload: this.servedTask(event.payload) } : event;
-    const message = JSON.stringify(served);
+    // A board push names the version it brings the client to, so the client's next
+    // GET_STATE { ifBoardVersion } is answered without the task list it already holds.
+    const versioned = event.type.startsWith('TASK_') || event.type.startsWith('EPIC_')
+      ? { ...served, boardVersion: this.state.boardVersion } : served;
+    const message = JSON.stringify(versioned);
     // Iterate over a copy to avoid issues if Set is modified during iteration
     const clients = Array.from(this.pluginClients);
     for (const client of clients) {
@@ -392,14 +407,32 @@ export class MoeWebSocketServer {
     }
   }
 
-  sendStateSnapshot(ws: WebSocket): void {
+  sendStateSnapshot(ws: WebSocket, ifBoardVersion?: number): void {
+    this.safeSend(ws, this.snapshotFrame(ifBoardVersion));
+  }
+
+  /** The same filtered snapshot to every plugin client (a reload); never the raw, ARCHIVED-inclusive one. */
+  broadcastStateSnapshot(): void {
+    if (this.isClosed) return;
+    const message = this.snapshotFrame();
+    for (const client of Array.from(this.pluginClients)) this.safeSend(client, message);
+  }
+
+  /**
+   * Every frame carries the board's version. A client that passes the version of its
+   * last snapshot gets the payload without tasks and epics when the board has not
+   * changed: with a large DONE backlog those are ~99% of the bytes, and the IDE polls.
+   */
+  private snapshotFrame(ifBoardVersion?: number): string {
+    const boardVersion = this.state.boardVersion;
     const snapshot = this.state.getSnapshot();
-    const filtered = {
+    const { tasks, epics, ...rest } = snapshot;
+    const payload = ifBoardVersion !== undefined && ifBoardVersion === boardVersion ? rest : {
       ...snapshot,
-      tasks: snapshot.tasks.filter(t => t.status !== 'ARCHIVED').map(task => this.servedTask(task)),
-      epics: snapshot.epics.filter(e => e.status !== 'ARCHIVED'),
+      tasks: tasks.filter(t => t.status !== 'ARCHIVED').map(task => this.servedTask(task)),
+      epics: epics.filter(e => e.status !== 'ARCHIVED'),
     };
-    this.safeSend(ws, JSON.stringify({ type: 'STATE_SNAPSHOT', payload: filtered }));
+    return JSON.stringify({ type: 'STATE_SNAPSHOT', payload, boardVersion });
   }
 
   /** Direct mutation replies must match broadcasts or the sender briefly loses its evidence. */
@@ -431,9 +464,11 @@ export class MoeWebSocketServer {
         case 'PING':
           this.safeSend(ws, JSON.stringify({ type: 'PONG' }));
           return;
-        case 'GET_STATE':
-          this.sendStateSnapshot(ws);
+        case 'GET_STATE': {
+          const want = message.payload?.ifBoardVersion;
+          this.sendStateSnapshot(ws, typeof want === 'number' ? want : undefined);
           return;
+        }
         case 'GET_ACTIVITY_LOG': {
           const params = normalizeActivityLogParams(message.payload || {});
           // Plugin clients must always get a bounded payload; keep maxPayloadChars=0 as

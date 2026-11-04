@@ -2046,8 +2046,10 @@ function Test-MoeGeneration($Value) {
 }
 function Read-MoeAttempt([string]$TaskId, [string]$AttemptId = '', $Generation = $null) {
     try {
+        # Raw-text pre-filter, a superset of the taskId match below: a record whose taskId is
+        # $TaskId carries that string, so a file without it is never parsed (identical results).
         $all = @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction Stop |
-            ForEach-Object { [IO.File]::ReadAllText($_.FullName) | ConvertFrom-Json -ErrorAction Stop } |
+            ForEach-Object { $t = [IO.File]::ReadAllText($_.FullName); if ($t.IndexOf($TaskId, [StringComparison]::Ordinal) -ge 0) { $t | ConvertFrom-Json -ErrorAction Stop } } |
             Where-Object { $_.taskId -ceq $TaskId })
         $open = @($all | Where-Object { $_.phase -ne 'closed' })
         if ($open.Count -ne 1) { throw 'ambiguous or missing open attempt' }
@@ -2124,7 +2126,9 @@ $script:MoeReattachRefused = [Collections.Generic.HashSet[string]]::new()
 function Invoke-MoeReattachOwnAttempts {
     if (-not $script:MoeProcessStartedAt) { return }
     foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction SilentlyContinue | Sort-Object Name)) {
-        try { $a = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        try { $t = [IO.File]::ReadAllText($f.FullName) } catch { continue }
+        if ($t.IndexOf($WorkerId, [StringComparison]::Ordinal) -lt 0) { continue }   # raw-text pre-filter, a superset of the workerId match below
+        try { $a = $t | ConvertFrom-Json -ErrorAction Stop } catch { continue }
         $id = [string](Get-MoeProp $a 'id'); $tid = [string](Get-MoeProp $a 'taskId'); $g = Get-MoeProp $a 'generation'
         if ((Get-MoeProp $a 'workerId') -cne $WorkerId -or (Get-MoeProp $a 'phase') -cne 'reconciling' -or -not (Test-MoeGeneration $g) -or
             $id -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or $tid -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or $script:MoeReattachRefused.Contains($id)) { continue }
@@ -2247,7 +2251,10 @@ function Find-MoeSeatFinalizingAttempts {
     $ids = New-Object 'System.Collections.Generic.List[string]'
     try { $files = @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction Stop | Sort-Object Name) } catch { return @() }
     foreach ($f in $files) {
-        try { $a = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        try { $t = [IO.File]::ReadAllText($f.FullName) } catch { continue }
+        # Raw-text pre-filter, a superset of the taskId + workerId match below.
+        if ($t.IndexOf([string]$preflightTaskId, [StringComparison]::Ordinal) -lt 0 -or $t.IndexOf($WorkerId, [StringComparison]::Ordinal) -lt 0) { continue }
+        try { $a = $t | ConvertFrom-Json -ErrorAction Stop } catch { continue }
         if ($a.taskId -ceq $preflightTaskId -and $a.workerId -ceq $WorkerId -and $a.phase -ceq 'finalizing') { $ids.Add([string]$a.id) }
     }
     return @($ids)
@@ -4391,7 +4398,9 @@ function Get-MoeOwnerGuard([string]$TaskId, [string]$Sid) {
         $files = @()
         try { $files = @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction Stop | Sort-Object Name) } catch { }
         foreach ($f in $files) {
-            try { $a = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+            try { $t = [IO.File]::ReadAllText($f.FullName) } catch { continue }
+            if ($t.IndexOf($TaskId, [StringComparison]::Ordinal) -lt 0) { continue }   # raw-text pre-filter, a superset of the taskId match below
+            try { $a = $t | ConvertFrom-Json -ErrorAction Stop } catch { continue }
             if ($a -isnot [System.Management.Automation.PSCustomObject] -or $a.phase -isnot [string] -or $a.phase -cne 'finalizing' -or
                 $a.taskId -isnot [string] -or $a.taskId -cne $TaskId) { continue }
             $aid = $a.id; $w = $a.workerId
@@ -4423,7 +4432,9 @@ function Test-MoeStrongLandingTask([string]$TaskId, [string]$GitDir) {
     $newest = $null; $strong = $false; $files = @()
     try { $files = @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction Stop) } catch { }
     foreach ($f in $files) {
-        try { $a = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        try { $t = [IO.File]::ReadAllText($f.FullName) } catch { continue }
+        if ($t.IndexOf($TaskId, [StringComparison]::Ordinal) -lt 0) { continue }   # raw-text pre-filter, a superset of the taskId match below
+        try { $a = $t | ConvertFrom-Json -ErrorAction Stop } catch { continue }
         $g = Get-MoeProp $a 'generation'
         if ((Get-MoeProp $a 'taskId') -cne $TaskId -or -not ($g -is [int] -or $g -is [long])) { continue }
         $s = (Get-MoeProp (Get-MoeProp $a 'executionPolicySnapshot') 'profile') -ceq 'verified-local'
@@ -8294,7 +8305,12 @@ function Get-MoeOpenAttemptTaskIds {
         if (-not $ri) { return ,$ids }
         if (-not $ri.PSIsContainer) { return $null }
         foreach ($f in @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop | Where-Object { $_.Name.EndsWith('.json', [StringComparison]::Ordinal) })) {
-            $d = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop
+            $t = [IO.File]::ReadAllText($f.FullName)
+            # Raw-text pre-filter, a superset of the phase test below: the daemon writes records with
+            # JSON.stringify(record, null, 2), so a top-level key sits at exactly two spaces of indent;
+            # this line is a closed record's own phase, never a nested key, and the file is not parsed.
+            if ($t -cmatch '(?m)^  "phase": "closed"') { continue }
+            $d = $t | ConvertFrom-Json -ErrorAction Stop
             if ($d -isnot [Management.Automation.PSCustomObject]) { return $null }
             if ([string]$d.phase -cne 'closed') { [void]$ids.Add([string]$d.taskId) }
         }

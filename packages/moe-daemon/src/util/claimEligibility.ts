@@ -182,13 +182,28 @@ function isNonBlankString(value: unknown): boolean {
  * O(tasks × attempts). Records arrive in generation order, so a task that somehow
  * holds two keeps the highest.
  */
-export function finalizingAttemptsByTask(state: StateManager): Map<string, ExecutionAttempt> {
+export function finalizingAttemptsByTask(state: StateManager): ReadonlyMap<string, ExecutionAttempt> {
+  // One build per state change, not one per waiter: emit() runs every wait_for_task
+  // matcher synchronously, and at fleet scale (190 waiters, 2.6k attempts) that was a
+  // 1 s event-loop stall per task event. A stale index is bounded to one event and
+  // only costs a spurious wake, which claim_next_task re-validates.
+  // Keyed on stateVersion: every production edit of state.attempts follows an awaited writeEntity
+  // (its bump) in the same microtask chain; a test that edits the map directly bumps stateVersion itself.
+  const memo = finalizingIndexMemo.get(state);
+  if (memo && memo.version === state.stateVersion && memo.attempts === state.attempts && memo.size === state.attempts.size) {
+    return memo.index;
+  }
   const index = new Map<string, ExecutionAttempt>();
   for (const attempt of listAttempts(state)) {
     if (isHoldingFinalizingAttempt(attempt)) index.set(attempt.taskId, attempt);
   }
+  finalizingIndexMemo.set(state, { version: state.stateVersion, attempts: state.attempts, size: state.attempts.size, index });
   return index;
 }
+
+const finalizingIndexMemo = new WeakMap<StateManager, {
+  version: number; attempts: Map<string, ExecutionAttempt>; size: number; index: Map<string, ExecutionAttempt>;
+}>();
 
 /**
  * The task's finalizing attempt when it belongs to a worker other than the

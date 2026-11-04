@@ -380,6 +380,10 @@ export class StateManager {
   readonly moePath: string;
 
   project: Project | null = null;
+  /** Bumped after every persisted write, event and load (the per-event memo key); seeded per process so a restart never repeats a value. */
+  stateVersion = Date.now();
+  /** Bumped only when the plugins' board (tasks, epics, their delivery evidence) changes: the GET_STATE etag. */
+  boardVersion = Date.now();
   epics = new Map<string, Epic>();
   tasks = new Map<string, Task>();
   workers = new Map<string, Worker>();
@@ -987,6 +991,8 @@ export class StateManager {
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emit(event: StateChangeEvent) {
+    this.stateVersion++;
+    if (event.type.startsWith('TASK_') || event.type.startsWith('EPIC_')) this.boardVersion++;
     if (this.emitter) {
       try {
         this.emitter(event);
@@ -1138,6 +1144,8 @@ export class StateManager {
 
       // Keep the one router: a new one here cleared every pause and hop count.
       this.mentionRouter.setMaxHops(this.project?.settings?.chatMaxAgentHops);
+      this.stateVersion++;
+      this.boardVersion++;
 
     });
 

@@ -816,7 +816,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       // A wiped store (git clean / sparse-checkout / rm -rf) must not replace the in-memory board.
       if ((await healMassDeletion(state)) > 0) return;
       await state.load();
-      wsServer.broadcast({ type: 'STATE_SNAPSHOT', payload: state.getSnapshot() });
+      wsServer.broadcastStateSnapshot();
     } catch (error) {
       logger.error({ error }, 'Failed to reload state from file watcher');
     }

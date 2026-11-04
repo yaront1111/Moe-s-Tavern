@@ -331,6 +331,19 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 
 const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
 
+/** The Worker fields a daemon heartbeat (touchWorker) rewrites; nothing the board renders. */
+const WORKER_HEARTBEAT_FIELDS: ReadonlyArray<keyof Worker> = ['lastActivityAt'];
+
+/** True when two records of one worker differ only in heartbeat fields, so no listener needs the whole board again. */
+function sameWorkerIgnoringHeartbeat(a: Worker, b: Worker): boolean {
+    const strip = (worker: Worker): string => {
+        const copy: Partial<Worker> = { ...worker };
+        for (const field of WORKER_HEARTBEAT_FIELDS) { delete copy[field]; }
+        return JSON.stringify(copy);
+    };
+    return strip(a) === strip(b);
+}
+
 /** `\` becomes `/`, a `//?/` or `//./` device prefix goes (`//?/UNC/x` becomes `//x`), trailing `/` goes except on a root. */
 export function comparablePath(p: string, foldCase: boolean): string {
     let value = p.replace(/\\/g, '/').replace(DEVICE_PREFIX, (_match, unc: string | undefined) => (unc ? '//' : ''));
@@ -2008,7 +2021,11 @@ export class MoeDaemonClient implements vscode.Disposable {
                     if (this.state) {
                         const idx = this.state.workers.findIndex(w => w.id === payload.id);
                         if (idx >= 0) {
+                            // A heartbeat only bumps lastActivityAt: keep the cache current, but do not
+                            // hand the whole board to every listener (board webview, trees, open panels).
+                            const heartbeatOnly = sameWorkerIgnoringHeartbeat(this.state.workers[idx], payload);
                             this.state.workers[idx] = payload;
+                            if (heartbeatOnly) { break; }
                         } else {
                             this.state.workers.push(payload);
                         }

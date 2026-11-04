@@ -124,7 +124,7 @@ Server → Plugin events:
 - `METRICS`, `ACTIVITY_LOG`
 
 Plugin → Server commands:
-- `PING`, `GET_STATE`
+- `PING`, `GET_STATE` (optionally `{ ifBoardVersion }`: every `STATE_SNAPSHOT` frame carries a top-level `boardVersion`; a poll that sends it back gets the payload without `tasks`/`epics` while the board is unchanged)
 - `CREATE_TASK` / `UPDATE_TASK` / `DELETE_TASK` / `REORDER_TASK`
 - `CREATE_EPIC` / `UPDATE_EPIC` / `DELETE_EPIC`
 - `APPROVE_TASK` / `REJECT_TASK` / `REOPEN_TASK`
