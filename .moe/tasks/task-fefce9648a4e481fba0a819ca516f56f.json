@@ -84,7 +84,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:30.681Z",
-  "updatedAt": "2026-11-04T05:38:05.430Z",
+  "updatedAt": "2026-11-04T05:39:06.115Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T00:27:56.803Z",
@@ -193,5 +193,30 @@
     "packages/moe-daemon/src/tools/qaApprove.ts",
     "packages/moe-daemon/src/tools/qaReject.ts"
   ],
-  "completionSummary": "qa_approve and qa_reject now idle only the seat that held the reviewed row. handoffWorkerId = task.assignedWorkerId || (caller only when its own currentTaskId is the reviewed task, else null), byte-identical in both tools, same position, plus a 4-line comment. A caller holding another task on an unassigned REVIEW row keeps its status and currentTaskId; a caller whose pointer is on the row is still idled; assigned-row and workerId-less human paths are unchanged. touchWorker and its payload, the needsHumanReview fence, gate order and all refusals untouched. New qaVerdictHandoff.test.ts (6 tests, 3 cases x 2 tools). RED before the fix: 2 failed / 235 passed (the two repro cases). GREEN: checkRef 8 files, 237 passed, handoff ok. No docs change owed: the qa_approve and qa_reject sections in MCP_SERVER.md do not describe which seat a verdict idles (ruling msg-71db57ac)."
+  "completionSummary": "qa_approve and qa_reject now idle only the seat that held the reviewed row. handoffWorkerId = task.assignedWorkerId || (caller only when its own currentTaskId is the reviewed task, else null), byte-identical in both tools, same position, plus a 4-line comment. A caller holding another task on an unassigned REVIEW row keeps its status and currentTaskId; a caller whose pointer is on the row is still idled; assigned-row and workerId-less human paths are unchanged. touchWorker and its payload, the needsHumanReview fence, gate order and all refusals untouched. New qaVerdictHandoff.test.ts (6 tests, 3 cases x 2 tools). RED before the fix: 2 failed / 235 passed (the two repro cases). GREEN: checkRef 8 files, 237 passed, handoff ok. No docs change owed: the qa_approve and qa_reject sections in MCP_SERVER.md do not describe which seat a verdict idles (ruling msg-71db57ac).",
+  "commits": [
+    {
+      "sha": "b9205914adbb59c2730fb143d55986a3996474ce",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T05:36:10Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T05:39:06.115Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T05:36:10Z",
+    "at": "2026-11-04T05:39:06.115Z"
+  }
 }
