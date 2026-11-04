@@ -68,8 +68,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -81,12 +81,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:57:06.036Z",
-  "updatedAt": "2026-11-04T12:30:38.155Z",
+  "updatedAt": "2026-11-04T12:32:34.823Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:13:28.005Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T12:32:16.144Z",
+    "wallClockMs": 1128139
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -202,9 +204,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T12:27:09Z",
-    "at": "2026-11-04T12:30:13.885Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T12:30:20Z",
+    "at": "2026-11-04T12:32:34.823Z"
+  },
+  "completedAt": "2026-11-04T12:32:16.144Z",
+  "reviewCompletedAt": "2026-11-04T12:32:16.144Z",
+  "reviewSummary": "Reviewed completion 7f83a3cd (in control HEAD). Diff: 2 test files, +29/-0; runtime files (vm-control.mjs, lifecycle.mjs, certify.mjs, certificationEvidence.ts) zero diff; no test deleted/weakened.\n\nRe-ran checkRefs:\n[0] node --test local-runner-vm-control.test.mjs: tests 20, pass 20, fail 0, ✔ VC-P2. Snapshot (git archive HEAD + test file, npm ci, env -i node 24) vitest certificationEvidence.test.ts: 99 passed (99).\n[1] M28, M29, M30 in snapshot copy: each rc=1, ℹ fail 1, only ✖ VC-P2; file restored (cmp) -> VM-MUTANTS-KILLED.\n[2] === to == swaps in snapshot copy: t3 kind 2 failed; t1 version 4 failed; t6 transport native 2; t5 transport injected 2; t7 provider.name 2; t4 executionReady 2; t8 check id 2 (of 99), each incl. its own (tN) row; restored -> CERT-MUTANTS-KILLED.\n\nDoD: (1) VC-P2: runner `${process.pid}@x` on localRunnerHost(), daemon says gone, lease free, no runnerAlive injected into cleanupReport/reconcileReport/runVmControl; asserts 'runner-alive' preserved/held, zero provider calls, 4 liveness calls, phase 'owned'. (2) M28-M30 killed. (3) CONFUSED t1-t8 are refused VARIANTS rows (drift vs certify.mjs) and toStrictEqual-checked with the fixed code (SCHEMA x7, CHECKS for check id). (4) diff names only the two files. (5) both suites pass.\n\nEquivalent-mutant claim verified: certificationEvidence.ts:78 already requires transport strictly 'native'||'injected', so the :82 `transport === 'native'` only sees strings where == and === agree; no row possible.\n\nNo blocking issues. VC-P2 signals only its own pid, so platform-neutral.",
+  "requiredCheckAtDone": null
 }

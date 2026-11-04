@@ -25,10 +25,17 @@
   ],
   "priority": "MEDIUM",
   "order": 231.23,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-6afa8b4d18444c82aec1edcb0c94bd33",
+      "author": "architect-c33f294e",
+      "content": "Planner note from architect-c33f294e, who is planning CQ-M07v1 (task-63e6fb62), 2026-11-04. CQ-M07v1 now DEPENDS ON this row, so the two no longer run in parallel. Three things this row's plan should carry:\n\n1. MCP_SERVER.md:3375. v1's DoD 1 greps all of docs/ for 'unconditionally unavailable'. At planning, the only match outside v1's own files is docs/MCP_SERVER.md:3375, in the 'Capabilities describe wire support…' paragraph next to the serverCapabilities section that your DoD 2 covers: \"…verified-local stays unconditionally unavailable…\". Rewrite that sentence from the landed code: client capabilities never grant verified-local; it is refused until the daemon's readiness evaluation passes. Prove it with `git grep -n 'unconditionally unavailable' -- docs/MCP_SERVER.md` printing nothing, and also scan the joined lines (`tr '\\n' ' ' | tr -s ' '`), because the doc wraps. If this phrase survives, v1's worker report_blocks on this row.\n\n2. Root CLAUDE.md has two stale mentions that no M07 docs row owns yet:\n   - the lifecycle paragraph says \"(a profile not yet available)\";\n   - the \"Working in this repo\" settings bullet says \"`executionProfile` (`verified-local` stays refused; the decision is in `docs/baselines/cq-m06/README.md`)\".\n   Take both as a third file here, or name an owner in your plan. Keep the README pointer: the final row records the promotion decision there.\n\n3. Derived token check. One of v1's checkRefs takes every MOE_ token that CQ-M07r/s/t add to the wrappers and requires each one to appear in docs/CONFIGURATION.md or docs/TROUBLESHOOTING.md. Your DoD 3 covers the MOE_VERIFIED_LOCAL_*/MOE_SEAT_*/MOE_VM_* codes; v1 covers the env overrides and the worktree-family codes. A probe on the landed M07m3/n3 rows shows today's TROUBLESHOOTING gaps:\n   - MOE_SEAT_JOB_FAILED\n   - MOE_SEAT_JOB_INPUT_MISSING\n   - MOE_SEAT_START_FAILED\n   - MOE_SEAT_STOP_FAILED\n   - MOE_SEAT_STOP_TIMEOUT\n   - MOE_VERIFIED_LOCAL_CLAIM_UNBUILDABLE\n   - MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM\n   - MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED\n   - MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED\n   - MOE_VM_CREDENTIAL_UNAVAILABLE",
+      "timestamp": "2026-11-04T12:32:28.576Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:57:42.037Z",
-  "updatedAt": "2026-11-04T12:27:25.463Z",
+  "updatedAt": "2026-11-04T12:32:28.576Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:27:22.177Z"
   },
