@@ -19,7 +19,7 @@ import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { ensureRunnerKey } from './server/runnerChannel.js';
 import { productionReadinessInputs, startReadinessEvaluation } from './delivery/readinessHolder.js';
 import { WSL_BIND_HOST, resolveBindHosts, listenOnHosts } from './server/bindHosts.js';
-import { DEFAULT_BIND_HOST, probeHostFor, recordedProbeHost, isLocalAddress, healthProbeAddress } from './server/probeHost.js';
+import { DEFAULT_BIND_HOST, probeHostFor, recordedProbeHost, isLocalAddress, healthProbeAddress, isForeignDaemonInfo, foreignProbeHosts } from './server/probeHost.js';
 import { isAllowedHealthHost } from './server/healthHost.js';
 import { healthProofFields, parseHealthRequest, takeSpawnProofKey } from './server/spawnProof.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
@@ -84,21 +84,6 @@ function lockFilePath(projectPath: string): string {
   return path.join(projectPath, '.moe', 'daemon.lock');
 }
 
-/**
- * True when daemon.json was written on the other side of the WSL/Windows
- * boundary: a drive or UNC projectPath read outside Windows, or a POSIX one read
- * on Windows. The writer's pid lives in another pid namespace, so
- * `process.kill(pid, 0)` proves nothing either way and only /health may judge
- * it. Mirrors moe-agent.sh's pre-flight, which detects a Windows-owned
- * daemon.json by its drive-letter projectPath. A relative projectPath (only a
- * daemon before task-78fa7110 recorded one) names no side, so it stays local.
- */
-function isForeignDaemonInfo(info: Pick<DaemonInfo, 'projectPath'>, platform: NodeJS.Platform = process.platform): boolean {
-  return platform === 'win32'
-    ? /^\/(?![\\/])/.test(info.projectPath)
-    : /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(info.projectPath);
-}
-
 // path.resolve is lexical; native paths may also name our directory on disk.
 // realpathSync.native resolves symlinks, junctions and 8.3 names (plain realpathSync leaves 8.3).
 // Foreign paths stay as written: resolving /home/u/p on Windows reads C:\home\u\p,
@@ -111,23 +96,6 @@ function namesOwnProject(recorded: string, own: string): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * The WSL default gateway (the Windows host in NAT mode), read from
- * /proc/net/route without spawning anything; null on any error. Node twin of
- * moe-agent.sh wsl_gateway_host (`ip route show default`).
- */
-function wslGatewayHost(): string | null {
-  try {
-    for (const line of fs.readFileSync('/proc/net/route', 'utf-8').split('\n').slice(1)) {
-      const [, destination, gateway] = line.trim().split(/\s+/);
-      if (destination !== '00000000' || !/^[0-9A-Fa-f]{8}$/.test(gateway ?? '') || /^0{8}$/.test(gateway)) continue;
-      // Little-endian hex: 01D01AAC is 172.26.208.1.
-      return gateway.match(/../g)!.reverse().map((byte) => parseInt(byte, 16)).join('.');
-    }
-  } catch { /* not Linux, or no procfs */ }
-  return null;
 }
 
 function isValidPort(port: unknown): port is number {
@@ -366,13 +334,8 @@ async function validateDaemonInfoForProject(
     return { valid: false, reason: 'projectPath mismatch', ...(foreign ? { foreign } : {}) };
   }
   if (foreign) {
-    // daemon.json's bindHost when it names this machine (loopback under mirrored networking), then the WSL gateway
-    // (NAT mode), which the routing table names rather than the repository.
-    const recorded = await healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS);
-    const hosts = recorded !== null && isLocalAddress(recorded) ? [recorded] : [];
-    const gateway = process.platform === 'linux' ? wslGatewayHost() : null;
-    if (gateway && !hosts.includes(gateway)) hosts.push(gateway);
-    for (const host of hosts) {
+    // daemon.json's bindHost when it names this machine, then the WSL gateway (server/probeHost.ts, shared with doctor).
+    for (const host of await foreignProbeHosts(info, SOCKET_TIMEOUT_MS)) {
       if (await probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, host)) {
         return { valid: true, info, foreign: true };
       }

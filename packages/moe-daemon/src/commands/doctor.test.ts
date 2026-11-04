@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -207,6 +207,162 @@ describe('runDoctor — daemon health reachability', () => {
     const result = await runDoctor(testDir);
 
     expect(line(result.output, 'daemon.json:')).toContain('[OK]');
+    expect(result.exitCode).toBe(0);
+  });
+});
+
+// task-d7b24cab: a daemon.json written on the other side of the WSL boundary names a pid in another pid namespace,
+// so doctor judges it by /health alone, at the hosts the daemon lifecycle asks (server/probeHost.ts foreignProbeHosts):
+// the recorded bindHost when it is this machine, then the WSL gateway from /proc/net/route, stubbed here.
+// Imports only runDoctor, so this block runs unchanged against a tree that predates the fix (the RED run).
+describe('runDoctor — daemon.json from the other side of the WSL boundary', () => {
+  // Off Windows the bug's drive-letter projectPath is foreign; on Windows a POSIX one is. doctor compares only the
+  // /health reply's projectPath with --project, and a temp dir is never a drive path here, so the stubs name testDir.
+  const FOREIGN_PROJECT = process.platform === 'win32' ? '/home/moe/project' : 'D:/projexts/moes';
+  const DEAD_PID = 2147483646; // never a live pid here
+  const ROUTE_HEADER = 'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n';
+  const OTHER_PROJECT = path.join(os.tmpdir(), 'moe-doctor-another-project');
+  let testDir: string;
+  let moePath: string;
+  let route: string;
+  const servers: net.Server[] = [];
+  const sockets = new Set<net.Socket>();
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-doctor-foreign-'));
+    moePath = scaffoldMoe(testDir);
+    route = ROUTE_HEADER; // no default route, so no WSL gateway unless a row adds one
+    const realReadFileSync = fs.readFileSync;
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) =>
+      file === '/proc/net/route' ? route : realReadFileSync(file, options as never)) as typeof fs.readFileSync);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const sock of sockets) sock.destroy();
+    sockets.clear();
+    await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  async function healthServer(host: string, projectPath: string, pid: number, port = 0, statusCode = 200): Promise<number> {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: statusCode === 200 ? 'healthy' : 'unhealthy', projectPath, pid }));
+    });
+    servers.push(server);
+    server.on('connection', (sock: net.Socket) => {
+      sockets.add(sock);
+      sock.on('close', () => sockets.delete(sock));
+    });
+    await new Promise<void>((resolve) => server.listen(port, host, resolve));
+    return (server.address() as net.AddressInfo).port;
+  }
+
+  async function unusedPort(): Promise<number> {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as net.AddressInfo;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    return port;
+  }
+
+  const writeForeignDaemonJson = (port: number, pid: number) => fs.writeFileSync(path.join(moePath, 'daemon.json'),
+    JSON.stringify({ port, pid, projectPath: FOREIGN_PROJECT, startedAt: new Date().toISOString(), bindHost: 'wsl' }));
+
+  it('F1: a daemon answering /health for this project on loopback is reported live, naming that host, though its pid is not alive here', async () => {
+    const port = await healthServer('127.0.0.1', testDir, DEAD_PID);
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[OK\\] daemon\\.json: .*127\\.0\\.0\\.1:${port}`));
+    expect(line(result.output, 'daemon.json:')).not.toMatch(/not running|stale/);
+    expect(line(result.output, 'daemon health reachability')).toMatch(new RegExp(`^\\[OK\\] .*127\\.0\\.0\\.1:${port}`));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it.skipIf(process.platform !== 'linux')('F2: the WSL gateway is asked after loopback, and its answer for this project beats loopback\'s answer for another', async () => {
+    const port = await healthServer('127.0.0.2', testDir, DEAD_PID);
+    await healthServer('127.0.0.1', OTHER_PROJECT, DEAD_PID, port);
+    route += 'eth0\t00000000\t0200007F\t0003\t0\t0\t0\t00000000\t0\t0\t0\n'; // little-endian 127.0.0.2
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[OK\\] daemon\\.json: .*127\\.0\\.0\\.2:${port}`));
+    expect(line(result.output, 'daemon health reachability')).toMatch(new RegExp(`^\\[OK\\] .*127\\.0\\.0\\.2:${port}`));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it.each([['a pid not alive here', DEAD_PID], ['a pid that happens to be alive here', process.pid]])(
+    'F3: with %s and no /health answering, it warns stale naming what it asked, adds no reachability line and exits 0', async (_kind, pid) => {
+      const port = await unusedPort();
+      writeForeignDaemonJson(port, pid);
+
+      const result = await runDoctor(testDir);
+
+      expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[WARN\\] daemon\\.json: .*127\\.0\\.0\\.1:${port}.*\\(stale\\)`));
+      expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+      expect(result.exitCode).toBe(0);
+    });
+
+  it('F4: a /health that answers only for another project is never green and exits 1', async () => {
+    const port = await healthServer('127.0.0.1', OTHER_PROJECT, DEAD_PID);
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(/^\[WARN\] daemon\.json: /);
+    expect(line(result.output, 'daemon health reachability'))
+      .toMatch(new RegExp(`^\\[FAIL\\] .*127\\.0\\.0\\.1:${port} reports a different project`));
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('F5: a live but unhealthy daemon answering /health 503 is never called stale', async () => {
+    const port = await healthServer('127.0.0.1', testDir, DEAD_PID, 0, 503);
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(/^\[WARN\] daemon\.json: /);
+    expect(line(result.output, 'daemon.json:')).not.toMatch(/stale/);
+    expect(line(result.output, 'daemon health reachability')).toMatch(new RegExp(`^\\[WARN\\] .*127\\.0\\.0\\.1:${port}.*HTTP 503`));
+    expect(result.exitCode).toBe(0);
+  });
+
+  // daemon.json is repository content: a hostile record must neither crash doctor nor steer its dial.
+  it.each([99999, 1.5, -1, 0])('F6: a recorded port of %s is reported as not a TCP port, not dialed, and never throws', async (port) => {
+    writeForeignDaemonJson(port, DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[FAIL\\] daemon\\.json: .*${String(port).replace('.', '\\.')}.*not a valid TCP port`));
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('F7: a non-string projectPath is never foreign (RegExp.test would coerce it), so its dead pid is stale and nothing is dialed', async () => {
+    const port = await healthServer('127.0.0.1', testDir, DEAD_PID);
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+      port, pid: DEAD_PID, projectPath: [FOREIGN_PROJECT], startedAt: new Date().toISOString(), bindHost: 'wsl' }));
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(`[WARN] daemon.json: daemon.json present but pid ${DEAD_PID} not running (stale)`);
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+  });
+
+  it('F8: a recorded bindHost that is not this machine is never dialed or named, and with no gateway nothing is asked', async () => {
+    const port = await healthServer('127.0.0.1', testDir, DEAD_PID);
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+      port, pid: DEAD_PID, projectPath: FOREIGN_PROJECT, startedAt: new Date().toISOString(), bindHost: '192.0.2.10' }));
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(/^\[WARN\] daemon\.json: .*no address.*\(stale\)/);
+    expect(line(result.output, 'daemon.json:')).not.toContain('192.0.2.10');
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
     expect(result.exitCode).toBe(0);
   });
 });

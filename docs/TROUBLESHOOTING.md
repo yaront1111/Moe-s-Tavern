@@ -73,12 +73,26 @@ node --version  # Use v22.22+ on the 22.x line, v24.x (recommended), or v26.x
 
 #### daemon.json is stale
 
-**Symptom:** Daemon reports "already running" but isn't.
+**Symptom:** Daemon reports "already running" but isn't, or `moe-daemon doctor` warns `daemon.json ... (stale)`.
 
-**Solution:** Remove stale lock file:
+**Solution:** `.moe/daemon.json` is how proxies, launchers and the IDE plugins find the running daemon, so first
+confirm that no daemon answers `/health` on the `port` it records. Ask `127.0.0.1`, or its `bindHost` when that is a
+specific address of this machine. In WSL, when its `projectPath` is a Windows path (`D:/…`), ask the WSL gateway too,
+as the launchers do:
+```bash
+curl -s -m 3 http://127.0.0.1:<port>/health                                             # PowerShell: curl.exe
+curl -s -m 3 "http://$(ip route show default | awk '{print $3; exit}'):<port>/health"   # WSL: the gateway
+```
+Never remove `.moe/daemon.json` while `/health` answers for this project (its `projectPath` names this project, and
+`D:/x` and `/mnt/d/x` are the same one), whatever its status: that daemon is running, and without the file new
+proxies cannot find its port and a later start may launch a second daemon on the same `.moe/`. A reply naming another
+project means another project's daemon holds that port, so this file is stale too. Only when no `/health` answers for
+this project, remove it:
 ```bash
 rm .moe/daemon.json
 ```
+`moe-daemon doctor` asks the same addresses for a daemon.json written on the other side of the WSL boundary. It
+reports that daemon live with the address that answered, and warns `(stale)` only when no address answers.
 
 ---
 
