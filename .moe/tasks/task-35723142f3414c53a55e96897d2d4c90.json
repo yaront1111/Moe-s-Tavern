@@ -80,7 +80,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:03:59.905Z",
-  "updatedAt": "2026-11-04T06:44:03.316Z",
+  "updatedAt": "2026-11-04T06:46:19.304Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T06:09:32.324Z",
@@ -107,11 +107,14 @@
     "firstClaimAt": "2026-11-04T06:16:16.384Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:45:57.434Z",
+    "wallClockMs": 1781050
   },
   "contextFetchedBy": [
     "architect-2a219562",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-1cd86a39"
   ],
   "tier": "standard",
   "effort": "high",
@@ -229,9 +232,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T06:39:45Z",
-    "at": "2026-11-04T06:44:03.316Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T06:44:10Z",
+    "at": "2026-11-04T06:46:19.304Z"
+  },
+  "completedAt": "2026-11-04T06:45:57.434Z",
+  "reviewCompletedAt": "2026-11-04T06:45:57.434Z",
+  "reviewSummary": "Approved. Reviewed completion 59e95024 (on moe/control, moe/work-2026-10-24; 4 files, +133/-20, well under 400 LOC, no size rail needed).\n\nVerified:\n- Diff: qaApprove.ts/qaReject.ts drop the nextAction moe.wait_for_task block and spread an optional top-level sessionHandoff END_SESSION. It is byte-for-byte the requestReplan.ts (task-55a5a9f9) addressing rule: handoffWorkerId || non-governor caller via resolveWorkerRole, omitted when the seat's currentTaskId is still set. The block sits after touchWorker, does no I/O and cannot throw. Gate/refusal order, state writes, message and all other reply keys are unchanged. Only description sentences, one import and the reply spread changed.\n- DoD 1: re-ran against base code (parent versions of qaApprove.ts/qaReject.ts + new test file) in an env -i snapshot: 12 failed | 6 passed (18). With the fix, 18/18 pass. Tests pin: no nextAction, END_SESSION addressing (assignee, workerId-less, idle unassigned caller), busy-caller exemption, governor exemption by team role (ops-1) and by id prefix (governor-1), exact reply key sets (sorted) and exact messages. No existing tests deleted or weakened.\n- DoD 2: docs/MCP_SERVER.md has 4 hunks, all inside ### moe.qa_approve / ### moe.qa_reject: Returns lines plus one Notes bullet each. Grep confirms no role doc, skill, wrapper, proxy, plugin or IDE client reads a QA verdict's nextAction, so no role-doc change is owed and lint is not owed.\n- DoD 3: re-ran the task.verification checkRef exactly (git archive HEAD snapshot, env -i, npm ci, npx tsc --noEmit, tsc -p tt.json on the test file, full npx vitest run): exit 0, Test Files 289 passed (289), Tests 7525 passed | 24 skipped (7549), the 18-test pin matched, docs checks printed 'handoff ok'. Snapshot only; nothing was run in the shared checkout.\n- Commit evidence: one completion entry, 59e95024, pushed, reachable from HEAD. Working tree has no non-.moe changes to these paths.",
+  "requiredCheckAtDone": null
 }

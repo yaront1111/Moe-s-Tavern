@@ -84,12 +84,13 @@
     {
       "stepId": "step-6",
       "description": "Last: an adversarial self-review of the 5-file diff. Check that:\n- A pre-receive refusal with a working re-check still makes ONE push, ends MOE_PUSH_FAILED and deletes the journal (worktree-landing remoteRejected, and wtUnlanded 'rejected' (c)).\n- No path re-pushes after [remote rejected]. The replay's unverified block never calls reconcile_push before proof. Its held-and-finalizing fall-through reaches reconcile_push only once origin holds C, which returns before any push.\n- A failed fetch never drops, marks or settles a journal.\n- Every replay drop and mark re-reads and compares the journal first.\n- A C held below a peer's later commit still counts: ancestry, not equality.\n- The shared strings and the pushResult prefix are byte-identical in sh and ps1.\n- The ps1 replay updates the in-memory $j.pushResult before Send-MoeOwedLedgerRow.\n- The 'push unknown' journals and the [rejected], applied and reconcile paths are byte-identical in behavior (wt-replay-remote green).\n- Migration still ends MOE_PUSH_FAILED with a journal-free run.\n- No VM-route block or other function was touched, and the ps1 BOM is intact.\n\nMutant check in a scratch clone, never the worktree: make wt_publish's rc-2 arm rm the journal unconditionally again. (a) and (b) must fail.\n\nIf the review changes any byte, re-run step 5 and submit that fresh output.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T06:46:13.979Z"
     }
   ],
   "planRevision": 1,
@@ -109,7 +110,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:38:02.611Z",
-  "updatedAt": "2026-11-04T06:43:53.346Z",
+  "updatedAt": "2026-11-04T06:46:13.979Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:44:41.089Z",
@@ -214,5 +215,40 @@
   },
   "planApprovedAt": "2026-11-04T06:00:21.533Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T06:04:26.393Z"
+  "workStartedAt": "2026-11-04T06:04:26.393Z",
+  "commits": [
+    {
+      "sha": "aacb953ad480eb042a58c770ffcb71d2adb66014",
+      "ref": "refs/heads/moe/task/task-561d347c3e5b44129ecf9d6c91bbab9f",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T06:00:39Z",
+      "paths": [
+        "docs/plans/2026-10-30-per-task-worktrees.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T06:44:38.227Z",
+      "treeId": "b8c464c12f2df57ad302c35b6f9c80a947125bdd",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/plans/2026-10-30-per-task-worktrees.md",
+    "scripts/CLAUDE.md",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-593560ee@2026-11-04T06:00:39Z",
+    "at": "2026-11-04T06:44:38.227Z"
+  }
 }
