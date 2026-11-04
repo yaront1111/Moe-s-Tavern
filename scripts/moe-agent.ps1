@@ -9417,7 +9417,7 @@ function Invoke-MoeSeatCli {
         }
         $ErrorActionPreference = 'Continue'
         if ($BackgroundOut) {
-            return (Start-Process -FilePath $(if ($script:MoeNode) { $script:MoeNode } else { 'node' }) -ArgumentList (ConvertTo-MoeArgumentLine (@($script:AgentSeatCli) + $SeatArgs)) -RedirectStandardOutput $BackgroundOut -NoNewWindow -PassThru -ErrorAction Stop)
+            return (Start-Process -FilePath $(if ($script:MoeNode) { $script:MoeNode } else { 'node' }) -ArgumentList (ConvertTo-MoeArgumentLine (@($script:AgentSeatCli) + $SeatArgs)) -RedirectStandardOutput $BackgroundOut -NoNewWindow -PassThru -ErrorAction Stop -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath)))
         }
         if ($PSBoundParameters.ContainsKey('InputText')) { $InputText | & node $script:AgentSeatCli @SeatArgs }
         else { & node $script:AgentSeatCli @SeatArgs }
