@@ -47,17 +47,23 @@
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of the 2-file diff (about +4/-1 in StateManager.ts, plus the new test). Check:\n(a) Twice concurrently: the FileWatcher can re-run load() while a reopen is in flight. The default is idempotent and keeps a valid count, so a reload cannot reset a count that a reopen just wrote.\n(b) Hostile inputs: missing, null, negative, fractional, string, NaN and Infinity all become 0.\n(c) Assumptions: readers that already treat a missing value as 0 (getCommitScope.ts:288, metrics.ts:99, contextNextAction.ts:31) see no change. No test expects reopenCount to be undefined after load; step 2's full suite proves it.\n(d) load() makes no writes: test 1 pins the bytes.\n(e) No docs change: docs/MCP_SERVER.md:1649 (ARCHIVED -> BACKLOG/WORKING un-archives) and docs/SCHEMA.md:488 (reopenCount: number) already describe the restored behavior.\nConfirm that the diff names exactly the two planned files and that both are declared (complete_step modifiedFiles).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/StateManager.ts",
         "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
       ],
-      "startedAt": "2026-11-04T05:27:05.060Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "note": "Self-review of diff (+4/-1 StateManager.ts, new test): Number.isInteger rejects missing/null/string/NaN/Infinity/fraction, <0 catches negatives; valid counts kept so a concurrent FileWatcher reload is idempotent; no IO added, load bytes pinned by test; only the two planned files changed; no docs change needed.",
+      "startedAt": "2026-11-04T05:27:05.060Z",
+      "completedAt": "2026-11-04T05:27:08.392Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -69,12 +75,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:00:00.696Z",
-  "updatedAt": "2026-11-04T05:27:05.060Z",
+  "updatedAt": "2026-11-04T05:28:12.694Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:19:35.281Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -87,7 +93,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:28:41.897Z",
@@ -150,5 +157,42 @@
   },
   "planApprovedAt": "2026-11-04T00:28:41.938Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T00:29:58.081Z"
+  "workStartedAt": "2026-11-04T00:29:58.081Z",
+  "reviewStartedAt": "2026-11-04T05:27:11.573Z",
+  "verification": {
+    "command": "checkRef: git archive snapshot outside repo + overlay owned files; npm ci; tsc --noEmit; tsc -p tt.json; vitest run legacyTaskBackfill/StateManager/setTaskStatus tests; then npm test (full daemon suite)",
+    "exitCode": 0,
+    "outputTail": "Test Files  3 passed (3)\n      Tests  164 passed (164)\n Test Files  281 passed (281)\n      Tests  7437 passed | 24 skipped (7461)\nEXIT=0",
+    "reportedAt": "2026-11-04T05:27:11.573Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+  ],
+  "completionSummary": "StateManager.load() now backfills reopenCount to 0 in memory for any task whose value is not a non-negative integer (missing, null, negative, fractional, string), beside the priority/comments backfills. Legacy ARCHIVED rows can be un-archived again via set_task_status (stores reopenCount 1). load() writes no files. New test legacyTaskBackfill.test.ts covers the load values, byte-unchanged files and the un-archive path.",
+  "commits": [
+    {
+      "sha": "d7e17aa399fdde89ddfe1d13ed8615de3c0d15d1",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T05:24:16Z",
+      "paths": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T05:28:12.694Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T05:24:16Z",
+    "at": "2026-11-04T05:28:12.694Z"
+  }
 }

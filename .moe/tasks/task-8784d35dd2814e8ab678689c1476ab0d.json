@@ -44,14 +44,16 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of THIS task's diff: load adversarial-self-review. The epic is a rolling bucket and isEpicFinal comes from the highest-order fallback, so the review covers this task. Step 3's full plugin suite is the regression gate. Only one test file changes, and no production code.\n\nRun the mutants under the jetbrains-gradle lease in a copy outside the checkout, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, worker variant): `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/m-8784`, then cp --parents your changed file. Run `--tests com.moe.services.MoeProjectConnectionTest --rerun` once per mutant, restore the file, and cmp it at the end.\n- M1: drop `server.onWriteDemand(conn)` from flush. Both new tests must fail: flush returns false, and the wiring test's get(5, SECONDS) times out.\n- M2: drop the `flush(socket)` call from onMessage. 'a reply the loopback server strands still answers the request' must fail.\n- M3: make strand call `conn.send(text)`. The control assertion 'A stranded frame must not leave on its own' must fail.\n\nAlso check by reading:\n- flush runs on the server's single worker thread, so a 1 ms sleep only delays the next frame's processing.\n- flush's duplicate onWriteDemand calls are harmless: they re-set the same interest and wake the selector.\n- `server.connections.single()` holds because each fixture opens one connection per test.\n- No other assertion in the class changed.\n\nOut of scope, so do not touch it: MoeSnapshotProjectCheckTest also sends from its loopback server's onOpen, but 3,000 such greetings stranded none (OpenStress), so it gets no change here. Record the mutant results and the harness numbers in complete_task's summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T00:28:28.820Z"
+      "note": "Mutants in archive copy /mnt/d/moe-scratch/m-8784 under lease, each --rerun on focused class (16 tests): M1 (no onWriteDemand in flush) -> both new tests fail ('flush must drain' assertion + wiring TimeoutException); M2 (no flush in onMessage) -> wiring test fails (TimeoutException); M3 (strand uses conn.send) -> control fails ('A stranded frame must not leave on its own'). Restored copy is byte-identical to worktree (cmp) and green. Read-checks: flush runs on the single server worker thread (1 ms sleep only delays next frame); duplicate onWriteDemand is idempotent; connections.single() holds (one connection per fixture); no existing assertion changed (diff +71/-1, only the import, hook, onMessage lines changed). Concurrency/inputs/exit paths reviewed: flush bounded 2 s, returns false not hang. No worktree mutation.",
+      "startedAt": "2026-11-04T00:28:28.820Z",
+      "completedAt": "2026-11-04T05:27:19.368Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a408f113",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -63,7 +65,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:51:26.254Z",
-  "updatedAt": "2026-11-04T05:25:19.163Z",
+  "updatedAt": "2026-11-04T05:27:27.272Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T23:52:32.338Z",
@@ -73,7 +75,7 @@
     "firstClaimAt": "2026-11-03T23:55:23.261Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -87,7 +89,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:22:14.283Z",
@@ -176,5 +179,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-a408f113@2026-11-04T05:24:14Z",
     "at": "2026-11-04T05:25:19.163Z"
-  }
+  },
+  "reviewStartedAt": "2026-11-04T05:27:27.269Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\\\gradlew.bat -p moe-jetbrains test --tests com.moe.services.MoeProjectConnectionTest --rerun && moe-jetbrains\\\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; X=$R/TEST-com.moe.services.MoeProjectConnectionTest.xml; grep -q 'tests=\"16\" skipped=\"0\" failures=\"0\" errors=\"0\"' $X || r=1; exit $r",
+    "exitCode": 0,
+    "outputTail": "BUILD SUCCESSFUL in 37s\nBUILD SUCCESSFUL in 31s\nxml tests=666 skipped=6 failures=0 errors=0\nservices.MoeProjectConnectionTest: tests=\"16\" skipped=\"0\" failures=\"0\" errors=\"0\"\nexit=0",
+    "reportedAt": "2026-11-04T05:27:27.269Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Root cause: the test's loopback WebSocketServer (Java-WebSocket 1.6.0) can strand a sent frame: send() queues the frame and sets OP_READ|OP_WRITE, the selector's doWrite then resets interest to OP_READ after draining, and nothing orders the two, so the answer waits for the next write demand and get(5s) times out. Production unaffected (plugin talks to Node daemon). Harness (/mnt/d/moe-scratch/plan-8784d35d/harness): no rearm 3x13,500 rounds -> 5 stalls/40,500 (each received=sent=expected, outQueue=1, interestOps=1; one extra demand delivered all 5); with rearm 0/40,500; StrandCheck 200: 0 leaks, 0 undelivered. Fix (test only, MoeProjectConnectionTest.kt, +71/-1): ConnectionFixture.onMessage now enqueue()s then flush()es (re-arms onWriteDemand, 1 ms sleeps, bounded 2 s); KDoc records root cause; strand() reproduces the state; 2 new deterministic tests (pids 41019 control+flush, 41020 wiring). No existing assertion changed. Mutants (archive copy, under lease): M1 no onWriteDemand -> both new tests fail; M2 no flush in onMessage -> wiring test fails; M3 strand=send -> control fails. Windows Gradle: focused class tests=16 failures=0; full suite tests=666 skipped=6 failures=0 errors=0."
 }

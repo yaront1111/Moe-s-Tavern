@@ -74,8 +74,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:59:48.386Z",
-  "updatedAt": "2026-11-04T05:27:03.126Z",
+  "updatedAt": "2026-11-04T05:27:30.916Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:19:13.055Z",
     "plannedStepCount": 5,
@@ -198,9 +198,9 @@
     }
   ],
   "filesModified": [
-    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/util/LogRotator.ts",
     "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
-    "packages/moe-daemon/src/util/LogRotator.ts"
+    "docs/MCP_SERVER.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -208,5 +208,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-a0305b0b@2026-11-04T05:23:55Z",
     "at": "2026-11-04T05:24:36.296Z"
-  }
+  },
+  "reviewStartedAt": "2026-11-04T05:27:30.914Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/m1f8.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && for f in src/util/LogRotator.ts src/util/LogRotator.rotateFailure.test.ts; do cp \"$R/packages/moe-daemon/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/util/LogRotator.rotateFailure.test.ts src/util/LogRotator.test.ts src/state/activityLog.rotation.test.ts' > ../v.log 2>&1 || { echo \"$S\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) | ✓ src/' ../v.log; echo \"($S)\"; grep -aqE ' ✓ src/util/LogRotator\\.rotateFailure\\.test\\.ts \\(4 tests\\)' ../v.log )",
+    "exitCode": 0,
+    "outputTail": " ✓ src/util/LogRotator.test.ts (3 tests) 13ms\n ✓ src/util/LogRotator.rotateFailure.test.ts (4 tests) 27ms\n ✓ src/state/activityLog.rotation.test.ts (8 tests) 201ms\n Test Files  3 passed (3)\n      Tests  15 passed (15)\n(/tmp/m1f8.FoiA)",
+    "reportedAt": "2026-11-04T05:27:30.914Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "LogRotator.rotate() now compresses the live log to activity.log.rotating.tmp first, and only then shifts the generations (rename-replace, so the first rename drops the oldest), renames tmp to .1.gz and truncates the live log. Any failure removes the tmp (warn-only cleanup) and rethrows the original error, so a failed or timed-out compression leaves every generation and the live log untouched. rotateIfNeeded still swallows the error and returns false; after a failure it skips attempts for ROTATION_RETRY_DELAY_MS (60 s, exported). compressFile, getRotatedLogs and util/LogRotator.test.ts are unchanged. New LogRotator.rotateFailure.test.ts has 4 rows: f1 one failing rotation, f2 five failing then a success, f3 retry delay, f4 partial write then reject. docs/MCP_SERVER.md: one Notes bullet in ### moe.get_activity_log. Gate (snapshot, fresh): tsc clean; LogRotator.test.ts 3, LogRotator.rotateFailure.test.ts 4, activityLog.rotation.test.ts 8; 3 files / 15 tests passed. RED proof at merge-base with the new test file: \"Test Files 1 failed (1) / Tests 4 failed (4)\". With only the missing ROTATION_RETRY_DELAY_MS export added to the old file it is still 4 failed, for the real reasons (0-byte .1.gz, createGzip 2x, dest named .1.gz). Out of scope, pre-existing: a rename failing mid-shift, a truncate failure."
 }
