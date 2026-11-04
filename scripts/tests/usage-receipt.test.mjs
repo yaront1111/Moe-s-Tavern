@@ -322,7 +322,7 @@ test('canonical snapshots fail open to unknown for mismatched, malformed, traver
   }
 });
 
-// G1 needs the built daemon and proxy because onboarding.mjs does; CI's build-all-platforms job builds both (ci.yml:222-231) before the step that runs this file (ci.yml:267).
+// G1 needs the built daemon and proxy because onboarding.mjs does; CI's build-all-platforms job builds both (its Build daemon and Build proxy steps) before the step that runs this file (Test agent runtime discovery).
 test('G1: the prompt-cache tests and the onboarding smoke never append to an inherited live usage receipt', t => {
   const dir = mkdtempSync(path.join(tmpdir(), 'moe usage guard '));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

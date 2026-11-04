@@ -1,0 +1,48 @@
+name: Nightly
+
+# The full CI set once a night: everything ci.yml runs on a pull request, plus the
+# long suites it skips there (the bash, Windows PowerShell 5.1 and PowerShell 7
+# wrapper postflights). It calls ci.yml with full: true instead of copying its
+# steps, so ci.yml stays the one definition of every job.
+#
+# Default-branch rule: GitHub fires `schedule` only from the default branch's
+# (main's) copy of this file, and the Actions tab offers "Run workflow" only for a
+# file on main too. So the nightly starts once this file reaches main (PR #230).
+# Until then, run a branch's own full set with:
+#   gh workflow run ci.yml --ref <branch> -f full=true
+# The step definitions come from the commit that started the run (main's for the
+# schedule, the chosen branch's for a dispatch), never from the ref under test:
+# a step added on another branch joins the nightly once it reaches main.
+#
+# Refs: the schedule tests each ref in the repository variable NIGHTLY_REFS, a
+# JSON array such as ["main","moe/work-2026-10-24"] (unset: ["main"]). A value
+# that is not a JSON array fails the run when the matrix is expanded. A dispatch
+# with a ref tests only that ref:
+#   gh workflow run nightly.yml -f ref=moe/work-2026-10-24
+on:
+  schedule:
+    # 03:17 UTC daily, off the top of the hour, when GitHub delays scheduled runs most.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The branch, tag or SHA to test; empty tests each ref in vars.NIGHTLY_REFS (default main).
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  full:
+    name: Full CI (${{ matrix.ref }})
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(inputs.ref && format('["{0}"]', inputs.ref) || vars.NIGHTLY_REFS || '["main"]') }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      full: true
+      ref: ${{ matrix.ref }}
+      # Artifact names must be unique within a run, and each ref's call uploads the same set.
+      artifact-suffix: -${{ strategy.job-index }}

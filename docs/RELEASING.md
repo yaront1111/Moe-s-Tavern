@@ -26,6 +26,8 @@ node scripts/verify-release-version.mjs vX.Y.Z   # must print "PASS release vers
 
 The workflow runs the same check first and stops on a mismatch. Commit the bump to `main` before tagging.
 
+Pull request CI skips the long launcher suites; only the nightly (`.github/workflows/nightly.yml`) runs everything. Before tagging, check that the latest Nightly run that tested `main` is green (`gh run list --workflow nightly.yml --limit 3`), or start one with `gh workflow run nightly.yml -f ref=main` and wait for it to pass.
+
 ## 3. Tag and push
 
 ```bash

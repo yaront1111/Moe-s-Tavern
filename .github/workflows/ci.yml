@@ -1,17 +1,45 @@
 name: CI
 
+# Pull requests and pushes to main run the fast set: every step below except the
+# ones guarded by `inputs.full`. The nightly (.github/workflows/nightly.yml) calls
+# this file with full: true, which adds the long suites: the bash, Windows
+# PowerShell 5.1 and PowerShell 7 wrapper postflights (about 45, 85-100 and
+# 90-110 min on hosted runners, too long for a per-push run).
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
+    inputs:
+      full:
+        description: Also run the long suites (the three wrapper postflights).
+        type: boolean
+        default: false
+      ref:
+        description: The branch, tag or SHA to check out; empty checks out the triggering event's ref.
+        type: string
+        default: ''
+      artifact-suffix:
+        description: Appended to every artifact name, so a run that calls this file more than once keeps the names unique.
+        type: string
+        default: ''
+  # A full run of a branch's own definitions, before nightly.yml is on main:
+  #   gh workflow run ci.yml --ref <branch> -f full=true
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Also run the long suites (the three wrapper postflights).
+        type: boolean
+        default: true
 
 # One run per PR (per branch for pushes) at a time: a newer push replaces the
 # queued run instead of stacking another full matrix behind it, and the run in
 # progress still finishes. The agent fleet lands a commit every few minutes,
 # faster than the Windows build completes, so without this the queue only grows.
+# A nightly call appends the ref it tests, so its refs never queue behind each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.ref }}
 
 jobs:
   fresh-linux-install:
@@ -20,6 +48,8 @@ jobs:
     container: ubuntu:24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       # Deliberately omit setup-node: the public installer must supply its dependencies.
       - name: Install dependencies and build Moe
@@ -39,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Lint role documentation
         run: bash scripts/lint-role-docs.sh
@@ -51,6 +83,9 @@ jobs:
           cache-dependency-path: |
             packages/moe-daemon/package-lock.json
             packages/moe-proxy/package-lock.json
+
+      - name: Test the PR and nightly workflow split
+        run: node --test scripts/tests/ci-workflows.test.mjs
 
       - name: Install and build daemon
         run: |
@@ -67,13 +102,13 @@ jobs:
       - name: Upload daemon build
         uses: actions/upload-artifact@v7
         with:
-          name: daemon-dist
+          name: daemon-dist${{ inputs.artifact-suffix }}
           path: packages/moe-daemon/dist/
 
       - name: Upload proxy build
         uses: actions/upload-artifact@v7
         with:
-          name: proxy-dist
+          name: proxy-dist${{ inputs.artifact-suffix }}
           path: packages/moe-proxy/dist/
 
   test-typescript:
@@ -81,6 +116,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -114,7 +151,7 @@ jobs:
       - name: Upload daemon coverage
         uses: actions/upload-artifact@v7
         with:
-          name: daemon-coverage
+          name: daemon-coverage${{ inputs.artifact-suffix }}
           path: packages/moe-daemon/coverage/
 
       - name: Install and build proxy
@@ -134,7 +171,7 @@ jobs:
       - name: Upload proxy coverage
         uses: actions/upload-artifact@v7
         with:
-          name: proxy-coverage
+          name: proxy-coverage${{ inputs.artifact-suffix }}
           path: packages/moe-proxy/coverage/
 
   build-plugin:
@@ -142,6 +179,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -192,7 +231,7 @@ jobs:
       - name: Upload plugin zip
         uses: actions/upload-artifact@v7
         with:
-          name: jetbrains-plugin
+          name: jetbrains-plugin${{ inputs.artifact-suffix }}
           path: moe-jetbrains/build/distributions/*.zip
 
   # Cross-platform build verification
@@ -205,6 +244,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Parse the Bash launcher with the stock macOS bash
         # macOS /bin/bash is 3.2, and JetBrains launches Mac seats through it. Linux and Windows run bash 5,
@@ -307,28 +348,38 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File scripts/tests/landing-ledger.ps1
 
-      - name: Test Bash wrapper postflight and parity
+      - name: Test Bash worktree landing and parity
         if: runner.os == 'Linux'
         run: |
           bash scripts/tests/worktree-landing.sh
-          node scripts/tests/postflight-safe.mjs bash
           bash scripts/tests/parity-check.sh
 
-      - name: Test Windows PowerShell wrapper postflight
-        if: runner.os == 'Windows'
-        run: |
-          powershell -NoProfile -File scripts/tests/worktree-landing.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/tests/postflight-safe.mjs powershell
+      - name: Test Bash wrapper postflight (nightly)
+        # About 45 min on ubuntu-latest: only the nightly runs it.
+        if: inputs.full && runner.os == 'Linux'
+        run: node scripts/tests/postflight-safe.mjs bash
 
-      - name: Test PowerShell 7 wrapper postflight and parity
+      - name: Test Windows PowerShell worktree landing
+        # About 4 min. PowerShell 7's run of the same file is nightly-only, to keep this job near 20 min.
         if: runner.os == 'Windows'
+        run: powershell -NoProfile -File scripts/tests/worktree-landing.ps1
+
+      - name: Test Windows PowerShell wrapper postflight (nightly)
+        # 85-100 min on windows-latest: only the nightly runs it.
+        if: inputs.full && runner.os == 'Windows'
+        run: node scripts/tests/postflight-safe.mjs powershell
+
+      - name: Test PowerShell 7 parity
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -File scripts/tests/parity-check.ps1
+
+      - name: Test PowerShell 7 worktree landing and wrapper postflight (nightly)
+        # 90-110 min on windows-latest: only the nightly runs it.
+        if: inputs.full && runner.os == 'Windows'
         run: |
           pwsh -NoProfile -File scripts/tests/worktree-landing.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/tests/postflight-safe.mjs pwsh
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pwsh -NoProfile -File scripts/tests/parity-check.ps1
 
       - name: Test VS Code daemon startup
         # bash on every OS: Windows' default pwsh only fails on the last command, so a failing lint or compile passed.
