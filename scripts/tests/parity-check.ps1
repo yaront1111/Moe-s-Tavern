@@ -37,8 +37,16 @@ $dynamicPatterns = @(
     'MOE_CONTROL_[A-Z_]+',
     'MOE_BOARD_[A-Z_]+',
     'MOE_PUSH_[A-Z_]+',
-    'MOE_MIGRATION_[A-Z_]+'
+    'MOE_MIGRATION_[A-Z_]+',
+    # The verified-local VM route's families (CQ-M07m/M07n).
+    'MOE_VERIFIED_LOCAL_[A-Z_]+',
+    'MOE_SEAT_[A-Z_]+',
+    'MOE_VM_[A-Z_]+'
 )
+# $shOnly names a printed code whose condition only moe-agent.sh can meet: the
+# verified-local WSL refusal (a ps1 seat never runs inside WSL). Keep it in BOTH
+# scripts (parity-check.sh's SH_ONLY), and never exempt a whole family.
+$shOnly = @('MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED')
 # NOTE: moe-agent.sh bridges its attribution policy to an inline python snippet
 # through process-env names it never prints. They are MOE_PY_* names, which is
 # not a compared family, so nothing needs an exemption today. $internalPlumbing
@@ -48,8 +56,8 @@ $dynamicPatterns = @(
 # Everything the operator can grep for is compared.
 $internalPlumbing = @()
 foreach ($pat in $dynamicPatterns) {
-    $inPs1 = @([regex]::Matches($ps1, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { $internalPlumbing -notcontains $_ })
-    $inSh = @([regex]::Matches($sh, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { $internalPlumbing -notcontains $_ })
+    $inPs1 = @([regex]::Matches($ps1, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { ($internalPlumbing + $shOnly) -notcontains $_ })
+    $inSh = @([regex]::Matches($sh, $pat) | ForEach-Object { $_.Value } | Sort-Object -Unique | Where-Object { ($internalPlumbing + $shOnly) -notcontains $_ })
     # An empty family compares nothing (a renamed prefix would pass silently).
     if ($inPs1.Count -eq 0 -and $inSh.Count -eq 0) { $failures.Add("no '$pat' tokens found in either wrapper") }
     foreach ($t in $inPs1) { if ($inSh -notcontains $t) { $failures.Add("token '$t' is in moe-agent.ps1 but not in moe-agent.sh") } }
@@ -102,6 +110,10 @@ $required = [ordered]@{
         '), so this seat did no work in those launches; earlier progress on the task ', '(completed steps, commits, handoff notes) is untouched.',
         'Everything the task had left before those launches: continue from its context, completed steps and earlier handoffs.', 'NO_ANSWER')
     'resume-budget prose' = @('resume budget re-armed')
+    # Verified-local VM route (CQ-M07m/M07n): the readiness read, the claim
+    # marker, the seat CLI and account helper verbs, the job outcome marker and
+    # the capacity wait.
+    'vm route' = @('get_execution_readiness', 'executionRoute', 'seat-start', 'seat-job', 'seat-stop', 'vm-credential', 'seatJob', 'MOE_AGENT_SEAT_PATH', 'retry-sec', 'no task is claimed; retrying in')
     # Claude account rotation: the helper both wrappers call and the lease, wait
     # and relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are
     # compared above).

@@ -22,7 +22,7 @@ $calls = Join-Path $tempRoot 'calls.jsonl'
 $out = Join-Path $tempRoot 'wrapper.out'
 $fakeProxy = Join-Path $tempRoot 'fake-proxy.js'
 $wrapperTimeoutSec = 60
-$script:VmjExtraArgs = @()
+$script:VmjExtraArgs = @(); $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
 if ($env:MOE_POSTFLIGHT_TIMEOUT_SEC -match '^\d+$') { $wrapperTimeoutSec = [int]$env:MOE_POSTFLIGHT_TIMEOUT_SEC }
 
 # Same timeout/owned-PID cleanup and 5.1 exit-code handling as postflight.ps1.
@@ -78,7 +78,7 @@ function Invoke-VmrRow([string]$Row, [string]$Role, [string]$Cli, [string]$Readi
     Push-Location $project
     try {
         $command = if ($env:MOE_RUNTIME_PROTECTED -eq '1') { $Cli } else { Join-Path $tempRoot "$Cli.cmd" }
-        $code = Invoke-WrapperProcess (@('-Project', $project, '-WorkerId', "$Role-vmr", '-Role', $Role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $command, '-NoLoop', '-PollInterval', '0') + $script:VmjExtraArgs) $out
+        $code = Invoke-WrapperProcess (@('-Project', $project, '-WorkerId', "$Role-vmr", '-Role', $Role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $command) + $script:VmrLoop + $script:VmjExtraArgs) $out
     } finally { Pop-Location }
     $tools = @(if (Test-Path -LiteralPath $calls) { Get-Content -LiteralPath $calls | ForEach-Object { ($_ | ConvertFrom-Json).tool } })
     [pscustomobject]@{ Row = $Row; Code = $code; Text = [IO.File]::ReadAllText($out); Tools = $tools; Ran = (Test-Path -LiteralPath $rec) }
@@ -130,6 +130,7 @@ function Initialize-VmjFixture {
     $p.settings | Add-Member -NotePropertyName commitBoardState -NotePropertyValue $false
     [IO.File]::WriteAllText("$project\.moe\project.json", ($p | ConvertTo-Json -Depth 8))
     $env:FAKE_CLAIM_WORKSPACE = @{ mode = $script:VmjWorkspace; target = 'main' } | ConvertTo-Json -Compress
+    $env:FAKE_CTX_WORKSPACE = $env:FAKE_CLAIM_WORKSPACE # alreadyAssigned resumes recover this from get_context.
     $env:FAKE_CTX_LANDING = @{ lastCompletion = @{ sha = $script:VmjBase } } | ConvertTo-Json -Compress
 }
 function Assert-VmjRows($R, [string]$Mode) {
@@ -224,6 +225,133 @@ function Test-VmjEnvironment {
         }
     } finally { $global:OutputEncoding = $encoding; [Console]::InputEncoding = $inputEncoding; $script:AgentSeatCli = $cli }
 }
+# --- [seat errors|credentials|failures|waits|reload] CQ-M07n: twins of CQ-M07m's
+# VE-* rows, plus the ps1-only reload stop. Runs in Invoke-VmjSections' scope
+# ($ready, $vmjToken, $vmjHash, $vmjCredentials); its finally restores the env.
+function Read-VmeJsonl([string]$Path) { @(if (Test-Path -LiteralPath $Path) { Get-Content -LiteralPath $Path | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json } }) }
+function Get-VmeCount($Rows, [string]$Tool, [string]$Text = '') { @($Rows | Where-Object { $_.tool -ceq $Tool -and (-not $Text -or "$($_.args.content)".Contains($Text)) }).Count }
+# Ctrl+C (signal.ps1) once COUNT seat CMD rows exist and the output holds TEXT.
+function Invoke-VmeSignalRow([string]$Row, [string]$Cmd, [int]$Count, [string]$Text) {
+    [IO.File]::WriteAllText("$tempRoot\signal-until.json", (@{ cmd = $Cmd; count = $Count; text = $Text } | ConvertTo-Json -Compress))
+    $script:VmjInterrupt = $true
+    try { $r = Invoke-VmrRow $Row worker claude $ready on } finally { $script:VmjInterrupt = $false }
+    if ($r.Code -notin @(0, 130) -or $r.Ran) { Stop-Vmr $r "interrupt exit $($r.Code), CLI ran=$($r.Ran)" }
+    return $r
+}
+# A background poller that writes the token once FILE holds N MOE_VM_CREDENTIAL_UNAVAILABLE lines.
+function Start-VmeTokenRestore([int]$N) {
+    Remove-Item -LiteralPath $out -ErrorAction SilentlyContinue
+    Start-Job -ArgumentList $out, "$tempRoot\accounts\claude-vm-tokens\acct-1.token", $vmjToken, $N -ScriptBlock {
+        param($o, $f, $t, $n)
+        for ($i = 0; $i -lt 3000; $i++) {
+            $text = ''; try { $s = [IO.File]::Open($o, 'Open', 'Read', 'ReadWrite'); try { $text = (New-Object IO.StreamReader($s)).ReadToEnd() } finally { $s.Dispose() } } catch {}
+            if ([regex]::Matches($text, 'MOE_VM_CREDENTIAL_UNAVAILABLE').Count -ge $n) { [IO.File]::WriteAllText($f, $t); return }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+}
+function Invoke-VmeRows {
+    $noToken = { Initialize-VmjFixture; Remove-Item "$tempRoot\accounts\claude-vm-tokens\acct-1.token" }
+    $script:VmrLoop = @('-NoLoop', '-PollInterval', '1')
+    foreach ($c in @('capacity|[{"exit":75,"code":"SEAT_CAPACITY_FULL"},{"exit":75,"code":"SEAT_CAPACITY_LOCK_BUSY"}]|', 'failure|[{"exit":1,"code":"SEAT_PROVISION_FAILED"}]|SEAT_PROVISION_FAILED',
+        'usage|[{"exit":2,"code":"SEAT_USAGE"}]|SEAT_USAGE', 'unreadable|[{"exit":1,"code":"never echo arbitrary text"}]|exit 1')) {
+        $a = $c -split '\|'; $env:FAKE_SEAT_STARTS = $a[1]
+        $r = Invoke-VmrRow "VE-$($a[0])" worker claude $ready on
+        $rows = Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl"; $s = @($rows | Where-Object { $_.tool -ceq 'agent-seat' })
+        $claim = @($rows | Where-Object { $_.tool -ceq 'claim_next_task' }); $cmds = $s.args.cmd -join ','
+        if ($r.Ran -or $r.Text.Contains('never echo')) { Stop-Vmr $r 'host CLI ran or child text echoed' }
+        if ($a[0] -eq 'capacity') {
+            if ($r.Code -ne 0 -or $cmds -cne 'seat-start,seat-start,seat-start,seat-job,seat-stop' -or [Array]::IndexOf($rows, $claim[0]) -lt [Array]::IndexOf($rows, $s[2]) -or
+                -not $r.Text.Contains('[seat] MOE_SEAT_CAPACITY_WAIT: SEAT_CAPACITY_FULL; no task is claimed; retrying in 1s (Ctrl+C to stop)') -or
+                -not $r.Text.Contains('MOE_SEAT_CAPACITY_WAIT: SEAT_CAPACITY_LOCK_BUSY')) { Stop-Vmr $r "capacity wait: $cmds" }
+        } elseif ($r.Code -ne 1 -or $cmds -cne 'seat-start' -or $claim.Count -or -not $r.Text.Contains("[ERROR] MOE_SEAT_START_FAILED: $($a[2])")) { Stop-Vmr $r "start failure: $cmds" }
+    }
+    Remove-Item Env:\FAKE_SEAT_STARTS; $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+    Write-Host '[seat errors] ok capacity, failure, usage, unreadable'
+    foreach ($key in @('OPENAI_API_KEY', 'CODEX_API_KEY')) {
+        Remove-Item Env:\OPENAI_API_KEY, Env:\CODEX_API_KEY -ErrorAction SilentlyContinue; Set-Item "Env:\$key" $vmjToken
+        $r = Invoke-VmrRow "VE-$key" worker codex $ready on
+        $raw = [IO.File]::ReadAllText("$project\.moe\evidence-rpcs.jsonl"); $s = @(Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl" | Where-Object { $_.tool -ceq 'agent-seat' })
+        $leaked = @($s | Where-Object { $e = $_.args.env.PSObject.Properties.Name; @($vmjCredentials | Where-Object { $e -ccontains $_ }).Count })
+        if ($r.Code -ne 0 -or $r.Ran -or $raw.Contains($vmjToken) -or $r.Text.Contains($vmjToken) -or ($s.args.cmd -join ',') -cne 'seat-start,seat-job,seat-stop' -or $leaked.Count -or
+            $s[1].args.stdinName -cne $key -or $s[1].args.stdinSha256 -cne $vmjHash -or $s[1].args.argv[-1] -cne 'codex') { Stop-Vmr $r "codex $key pipe" }
+    }
+    Remove-Item Env:\OPENAI_API_KEY, Env:\CODEX_API_KEY -ErrorAction SilentlyContinue
+    $r = Invoke-VmrRow VE-no-key worker codex $ready on; Assert-VmjRows $r none
+    if ($r.Code -ne 1 -or (Get-VmeCount (Read-VmeJsonl $calls) chat_send) -ne 1 -or
+        -not $r.Text.Contains("[ERROR] MOE_VM_CREDENTIAL_UNAVAILABLE: codex needs OPENAI_API_KEY or CODEX_API_KEY in the wrapper's environment")) { Stop-Vmr $r 'codex no-key refusal' }
+    $env:OPENAI_API_KEY = 'outer-OPENAI_API_KEY'; $env:CODEX_API_KEY = 'outer-CODEX_API_KEY'
+    $script:VmrSetup = $noToken; $env:MOE_ACCOUNT_RETRY_SEC = '1'; $job = Start-VmeTokenRestore 2
+    try { $r = Invoke-VmrRow VE-missing worker claude $ready on } finally { Stop-Job $job; Remove-Job $job -Force; $script:VmrSetup = { Initialize-VmjFixture } }
+    if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r happy; $c = Read-VmeJsonl $calls
+    if ((Get-VmeCount $c chat_send 'MOE_VM_CREDENTIAL_UNAVAILABLE') -ne 1 -or (Get-VmeCount $c claim_next_task) -ne 1 -or (Get-VmeCount $c lease_account) -lt 3 -or
+        [regex]::Matches($r.Text, [regex]::Escape('[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1; retrying in 1s (Ctrl+C to stop)')).Count -lt 2) { Stop-Vmr $r 'missing-token wait' }
+    Remove-Item Env:\MOE_ACCOUNT_RETRY_SEC
+    Write-Host '[seat credentials] ok OPENAI_API_KEY and CODEX_API_KEY canaries, no-key, missing token'
+    $script:VmrLoop = @('-Loop', '-PollInterval', '1'); $env:MOE_LAUNCH_BACKOFF_BASE_SEC = '1'; $env:MOE_LAUNCH_BACKOFF_MAX_SEC = '1'
+    $fail = '{"exit":1,"outcome":{"seatJob":1,"ok":false,"code":"SEAT_JOB_SESSION_FAILED","vm":"kept"}}'
+    foreach ($c in @("failed|[$fail]", 'missing|[{"exit":0}]', ('false|[' + $fail.Replace('"exit":1', '"exit":0') + ']'), "stop-failed|[$fail]", 'streak|[{"exit":1},{"exit":1},{"exit":1}]')) {
+        $a = $c -split '\|', 2; $n = if ($a[0] -eq 'streak') { 4 } else { 2 }
+        $env:FAKE_SEAT_JOBS = $a[1]; $env:FAKE_CLAIM_LIMIT = "$n"; if ($a[0] -eq 'stop-failed') { $env:FAKE_SEAT_STOP_FAIL = '1' }
+        try { $r = Invoke-VmeSignalRow "VE-$($a[0])" seat-job $n 'MOE_VM_CANDIDATE_COMMITTED' } finally { Remove-Item Env:\FAKE_SEAT_STOP_FAIL -ErrorAction SilentlyContinue }
+        $rows = Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl"; $s = @($rows | Where-Object { $_.tool -ceq 'agent-seat' }); $c2 = Read-VmeJsonl $calls
+        $claims = @($rows | Where-Object { $_.tool -ceq 'claim_next_task' }); $starts = @($s | Where-Object { $_.args.cmd -ceq 'seat-start' })
+        $why = if (($s.args.cmd -join ',') -cne ((@('seat-start,seat-job,seat-stop') * $n) -join ',')) { 'seat order: ' + ($s.args.cmd -join ',') }
+        elseif (@($starts.args.instance | Sort-Object -Unique).Count -ne $n) { 'instances not fresh' }
+        elseif (@(0..($n - 1) | Where-Object { [Array]::IndexOf($rows, $claims[$_]) -lt [Array]::IndexOf($rows, $s[3 * $_]) }).Count) { 'claim before seat-start' }
+        elseif ([regex]::Matches($r.Text, 'MOE_SEAT_JOB_FAILED:').Count -ne $n - 1 -or -not $r.Text.Contains('[resume]')) { 'failure/resume lines' }
+        elseif (@($rows | Where-Object { $_.tool -ceq 'record_commit' -and $_.args.outcome -ceq 'committed' }).Count -ne 1 -or (Get-VmeCount $c2 release_task)) { 'ledger or release' }
+        elseif ($a[0] -eq 'streak' -and (Get-VmeCount $c2 chat_send 'CLI exits within') -ne 1) { 'streak escalation' }
+        elseif ($a[0] -eq 'stop-failed' -and -not $r.Text.Contains('[WARN] MOE_SEAT_STOP_FAILED: SEAT_DELETE_FAILED instance=')) { 'stop failure line' }
+        elseif ((Invoke-VmcGit $project @('rev-parse', 'moe/task/task-postflight^')) -cne $script:VmjBase) { 'candidate parent' }
+        if ($why) { Stop-Vmr $r $why }
+    }
+    Remove-Item Env:\FAKE_SEAT_JOBS, Env:\FAKE_CLAIM_LIMIT; $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+    $env:FAKE_SEAT_DIRTY = '1'; $r = Invoke-VmrRow VE-rescue worker claude $ready on; Remove-Item Env:\FAKE_SEAT_DIRTY
+    $rows = Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl"; $job = $rows | Where-Object { $_.tool -ceq 'agent-seat' -and $_.args.cmd -ceq 'seat-job' }
+    $ref = Invoke-VmcGit $project @('for-each-ref', '--format=%(refname)', 'refs/moe/rescue/task-postflight/')
+    if ($r.Code -ne 1 -or -not $ref -or $ref.Contains("`n") -or (Invoke-VmcGit $project @('rev-parse', "$ref^")) -cne $script:VmjBase -or
+        (Invoke-VmcGit $project @('rev-parse', "$ref^{tree}")) -cne $job.args.tree -or (Invoke-VmcGit $project @('rev-parse', 'moe/task/task-postflight')) -cne $script:VmjBase -or
+        [IO.File]::ReadAllText("$project\.worktrees\task-postflight\untracked.txt") -cne "preserve me`n" -or
+        @($rows | Where-Object { $_.tool -ceq 'record_commit' -and $_.args.kind -ceq 'rescue' }).Count -ne 1) { Stop-Vmr $r 'helper refusal not retained on one rescue ref' }
+    Write-Host '[seat failures] ok failed, missing, false, stop-failed, streak, rescue'
+    foreach ($c in @('capacity|MOE_SEAT_CAPACITY_WAIT|0/0', 'credential|MOE_VM_CREDENTIAL_UNAVAILABLE|0/1', 'cap|Auto-resume cap reached|2/3')) {
+        $a = $c -split '\|'; $script:VmrLoop = @('-Loop', '-PollInterval', '1')
+        switch ($a[0]) {
+            'capacity' { $env:FAKE_SEAT_STARTS = '[{"exit":75,"code":"SEAT_CAPACITY_LOCK_BUSY"}]'; $script:VmrLoop = @('-Loop', '-PollInterval', '20') }
+            'credential' { $script:VmrSetup = $noToken; $env:MOE_ACCOUNT_RETRY_SEC = '20' }
+            'cap' { $env:FAKE_SEAT_JOBS = '[{"exit":1},{"exit":1},{"exit":1}]'; $env:MOE_LAUNCH_FAIL_SEC = '0'; $env:MOE_RESUME_MAX_ATTEMPTS = '1' }
+        }
+        try { $r = Invoke-VmeSignalRow "VE-wait-$($a[0])" seat-start 1 $a[1] } finally {
+            Remove-Item Env:\FAKE_SEAT_STARTS, Env:\MOE_ACCOUNT_RETRY_SEC, Env:\FAKE_SEAT_JOBS, Env:\MOE_LAUNCH_FAIL_SEC, Env:\MOE_RESUME_MAX_ATTEMPTS -ErrorAction SilentlyContinue
+            $script:VmrSetup = { Initialize-VmjFixture }
+        }
+        $s = @(Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl" | Where-Object { $_.tool -ceq 'agent-seat' }); $c2 = Read-VmeJsonl $calls
+        $got = "$(@($s | Where-Object { $_.args.cmd -ceq 'seat-job' }).Count)/$(@($s | Where-Object { $_.args.cmd -ceq 'seat-stop' }).Count)"
+        if ($got -cne $a[2] -or (Get-VmeCount $c2 release_task) -or ($a[0] -eq 'capacity' -and (Get-VmeCount $c2 claim_next_task)) -or
+            ($a[0] -eq 'cap' -and (Get-VmeCount $c2 chat_send 'pausing auto-resume') -ne 1)) { Stop-Vmr $r "Ctrl+C during the $($a[0]) wait: seat-job/seat-stop $got" }
+    }
+    Write-Host '[seat waits] ok Ctrl+C during capacity and credential waits; resume cap bounded'
+    # ps1 only: the in-process hot reload stops the VM before its wrapper_restart deregister.
+    $copy = "$tempRoot\reload"; New-Item -ItemType Directory -Force $copy | Out-Null
+    Copy-Item -Path "$root\scripts\moe-agent.ps1", "$root\scripts\*.mjs" -Destination $copy
+    foreach ($g in @(@('init', '-q'), @('add', '-A'), @('commit', '-qm', 'base'))) { Invoke-VmcGit $copy $g | Out-Null }
+    Remove-Item -LiteralPath "$project\.moe\evidence-rpcs.jsonl" -ErrorAction SilentlyContinue
+    $job = Start-Job -ArgumentList "$project\.moe\evidence-rpcs.jsonl", $copy -ScriptBlock {
+        param($e, $c)
+        for ($i = 0; $i -lt 3000 -and -not (Select-String -LiteralPath $e -SimpleMatch '"cmd":"seat-start"' -Quiet -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 100 }
+        [IO.File]::AppendAllText("$c\moe-agent.ps1", "# committed reload test`r`n"); & git -C $c commit -qam reload 2>&1 | Out-Null
+    }
+    $wrapper = "$copy\moe-agent.ps1"; $env:FAKE_CLAIM_MODE = 'idle'; $script:VmrLoop = @('-Loop', '-PollInterval', '1')
+    try { $r = Invoke-VmeSignalRow VR-reload seat-start 2 '' } finally { Stop-Job $job; Remove-Job $job -Force; Remove-Item Env:\FAKE_CLAIM_MODE }
+    $rows = Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl"; $s = @($rows | Where-Object { $_.tool -ceq 'agent-seat' })
+    $dereg = @($rows | Where-Object { $_.tool -ceq 'deregister_worker' })
+    $runners = @($s | ForEach-Object { $_.args.argv[[Array]::IndexOf($_.args.argv, '--runner') + 1] } | Sort-Object -Unique)
+    if (($s.args.cmd -join ',') -cne 'seat-start,seat-stop,seat-start,seat-stop' -or $dereg.Count -lt 2 -or $dereg[0].args.reason -cne 'wrapper_restart' -or
+        [Array]::IndexOf($rows, $s[1]) -gt [Array]::IndexOf($rows, $dereg[0]) -or [Array]::IndexOf($rows, $s[3]) -gt [Array]::IndexOf($rows, $dereg[1]) -or
+        $s[0].args.instance -ceq $s[2].args.instance -or $runners.Count -ne 1) { Stop-Vmr $r ('reload: ' + ($s.args.cmd -join ',')) }
+    Write-Host '[seat reload] ok seat-stop before the wrapper_restart deregister; fresh VM after the reload'
+}
 function Invoke-VmjSections {
     $saved = @{}; Get-ChildItem Env: | ForEach-Object { $saved[$_.Name] = $_.Value }
     $vmjCredentials = @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY')
@@ -247,9 +375,10 @@ function Invoke-VmjSections {
             if ($mode -eq 'happy' -and $r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r $mode
             if ($mode -eq 'happy') { Test-VmjEnvironment }
         }
-        Remove-Item Env:\FAKE_SEAT_EXIT_CODE
+        Remove-Item Env:\FAKE_SEAT_EXIT_CODE, Env:\OPENAI_API_KEY, Env:\CODEX_API_KEY
         $r = Invoke-VmrRow R2 qa codex $ready on; Assert-VmjRows $r none
         if ($r.Code -ne 1 -or -not $r.Text.Contains('MOE_VM_CREDENTIAL_UNAVAILABLE')) { Stop-Vmr $r 'codex not refused' }
+        $env:OPENAI_API_KEY = 'outer-OPENAI_API_KEY'; $env:CODEX_API_KEY = 'outer-CODEX_API_KEY'
         $script:VmjExtraArgs = @('-AutoClaim:$false')
         $r = Invoke-VmrRow VR-noclaim worker claude $ready on; Assert-VmjRows $r none
         if ($r.Code -ne 1 -or -not $r.Text.Contains('MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM')) { Stop-Vmr $r 'no-auto-claim not refused' }
@@ -277,10 +406,13 @@ $argsList=Get-Content -Raw "$Root\signal-args.json" | ConvertFrom-Json
 $log="$Root\signal.log"; $p=Start-Process $Engine -ArgumentList $argsList -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
 $null=$p.Handle
 try {
-    $until=[DateTime]::UtcNow.AddSeconds(120); $ready=$false
+    # signal-until.json: Ctrl+C once COUNT seat CMD rows exist and the output holds TEXT.
+    $u=if(Test-Path "$Root\signal-until.json"){Get-Content -Raw "$Root\signal-until.json"|ConvertFrom-Json}else{[pscustomobject]@{cmd='seat-job';count=1;text=''}}
+    $until=[DateTime]::UtcNow.AddSeconds(300); $ready=$false
     while(-not $ready) {
-        $ready=@(Get-Content "$Root\project\.moe\evidence-rpcs.jsonl" -ErrorAction SilentlyContinue | Where-Object { $_ -match '"cmd":"seat-job"' }).Count -gt 0
-        if($p.HasExited -or [DateTime]::UtcNow -gt $until){throw 'seat-job readiness failed'}
+        $ready=@(Get-Content "$Root\project\.moe\evidence-rpcs.jsonl" -ErrorAction SilentlyContinue | Where-Object { $_ -match ('"cmd":"'+$u.cmd+'"') }).Count -ge $u.count -and
+            (-not $u.text -or "$(Get-Content -Raw $log -ErrorAction SilentlyContinue)".Contains($u.text))
+        if($p.HasExited -or [DateTime]::UtcNow -gt $until){throw "$($u.cmd) x$($u.count) '$($u.text)' readiness failed"}
         if(-not $ready){Start-Sleep -Milliseconds 100}
     }
     Add-Type 'using System; using System.Runtime.InteropServices; public static class SeatSignal {
@@ -308,8 +440,11 @@ try {
         $r = Invoke-VmrRow VR-taskless worker claude $ready on; Assert-VmjRows $r taskless
         if (-not $r.Text.Contains('MOE_TASKLESS_NO_LAUNCH reason=vm-route')) { Stop-Vmr $r 'taskless VM route launched' }
         Write-Host '[vm seat] PASS happy, nonzero, codex, noclaim, qa-shared, protected, shared, qa, sigint, taskless'
+        Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_MENTION
+        Invoke-VmeRows
     } finally {
-        $script:VmrSetup = $null; $script:VmjInterrupt = $false; $script:VmjExtraArgs = @()
+        $script:VmrSetup = $null; $script:VmjInterrupt = $false; $script:VmjExtraArgs = @(); $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+        Remove-Item "$tempRoot\signal-until.json" -ErrorAction SilentlyContinue
         Get-ChildItem Env: | Where-Object { -not $saved.ContainsKey($_.Name) } | Remove-Item
         foreach ($n in $saved.Keys) { Set-Item "Env:\$n" $saved[$n] }
     }

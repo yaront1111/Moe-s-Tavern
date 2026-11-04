@@ -3230,13 +3230,25 @@ function Invoke-MoeVerifiedLocalGate {
         Stop-MoeVerifiedLocalSeat MOE_VERIFIED_LOCAL_NOT_READY "this project runs verified-local, which is not ready; missing: $ids; refusing to start this seat."
     }
     if (-not $AutoClaim) { Stop-MoeVerifiedLocalSeat MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM "a --no-auto-claim seat cannot run under verified-local; the VM route needs the wrapper's marked claim." }
-    if ($cliType -eq 'codex') { Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE 'codex VM credentials are not wired yet; refusing to run codex on the host.' }
+    if ($cliType -eq 'codex' -and -not "$env:OPENAI_API_KEY$env:CODEX_API_KEY") {
+        Send-MoeVmCredentialAnnounce "codex needs OPENAI_API_KEY or CODEX_API_KEY in the wrapper's environment. Nothing was claimed or provisioned."
+        Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE "codex needs OPENAI_API_KEY or CODEX_API_KEY in the wrapper's environment"
+    }
     try {
         $script:iterClaimArgs = $claimRpcArgs.PSObject.Copy()
         $script:iterClaimArgs | Add-Member -NotePropertyName executionRoute -NotePropertyValue 'vm' -ErrorAction Stop
     } catch { Stop-MoeVerifiedLocalSeat MOE_VERIFIED_LOCAL_CLAIM_UNBUILDABLE 'cannot build a marked VM claim.' }
     $script:MoeVmRoute = $true
-    if (-not $script:SeatVmInstance -and -not (Start-MoeSeatVm)) { Stop-MoeVerifiedLocalSeat MOE_SEAT_START_FAILED $script:SeatStartCode }
+    while (-not $script:SeatVmInstance) {
+        if (Start-MoeSeatVm) { break }
+        if ($script:SeatCliExit -ne 75) { Stop-MoeVerifiedLocalSeat MOE_SEAT_START_FAILED $script:SeatStartCode }
+        # Initial capacity waits hold nothing; re-provisioning after a failed job
+        # retains the existing task. A governor can release that held task.
+        # sh sleeps POLL_INTERVAL as is; a 0 interval gets a 1 s floor here.
+        $wait = [Math]::Max(1, $PollInterval)
+        Write-Host "[seat] MOE_SEAT_CAPACITY_WAIT: $($script:SeatStartCode); no task is claimed; retrying in ${wait}s (Ctrl+C to stop)"
+        Start-Sleep -Seconds $wait
+    }
 }
 
 # The seat's workspace from the fresh claim (WT-01), else get_context (WT-02),
@@ -9416,11 +9428,61 @@ function Get-MoeSeatJobOutcome([string]$Line, [string]$Commit) {
     if (($o.exitCode -isnot [int] -and $o.exitCode -isnot [long]) -or $o.exitCode -lt 0 -or $o.exitCode -gt 255) { $o | Add-Member -NotePropertyName exitCode -NotePropertyValue 1 -Force }
     return $o
 }
-# Twin: run_vm_job + seat_credential_json. Token stays in memory and the stdin pipe only.
-function Invoke-MoeVmJob {
-    $token = $null; $json = $null; $last = ''; $commit = ''
+# Twin: seat_credential_announce. Best effort; never a value or a path.
+function Send-MoeVmCredentialAnnounce([string]$Detail) {
+    $channel = if ($generalChannelId) { $generalChannelId } else { 'general' }
+    try { Invoke-MoeRpc -Tool 'chat_send' -Args @{ channel = $channel; workerId = $WorkerId; content = "@governors ${WorkerId}: MOE_VM_CREDENTIAL_UNAVAILABLE - $Detail" } 6>$null | Out-Null } catch {}
+}
+# Twin: seat_wait_credential. Wait outside launch timing. Re-lease and recheck the
+# pinned attempt after each wait, like the account loop: a released task never
+# launches stale. $false: launch nothing; the caller re-runs pre-flight.
+function Wait-MoeVmCredential {
+    $sec = 0
+    if (-not [int]::TryParse("$(Invoke-MoeAccountHelper -HelperArgs @('retry-sec'))", [ref]$sec) -or $sec -lt 1) { $sec = 300 }
+    $escalated = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    while (-not ($script:AccountLeasedId -and (Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId)))) {
+        $account = if ($script:AccountLeasedId) { $script:AccountLeasedId } else { 'none' }
+        Write-Host "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account; retrying in ${sec}s (Ctrl+C to stop)"
+        if ($escalated.Add($account)) { Send-MoeVmCredentialAnnounce "account=$account; mint a token with 'accounts vm-token <id>' and enable account rotation. The task stays held." }
+        Start-Sleep -Seconds $sec
+        $script:AccountLeaseWaited = $true
+        if (-not (Test-MoeAccountWaitAttempt)) { return $false }
+        Clear-MoeAccountLease; Get-MoeAccountLease
+        if (-not (Test-MoeAccountWaitAttempt)) { return $false }
+    }
+    return $true
+}
+# Twin: seat_rescue_candidate. The helper's Rc 1 refusals are read-only. Retain an
+# admitted tree before holding on a moved base or dirty W; never overwrite those unrelated bytes.
+function Save-MoeVmCandidateRescue([string]$Commit, [string]$Tree) {
+    if (@('MOE_VM_CANDIDATE_HEAD_MOVED', 'MOE_VM_CANDIDATE_BASE_MISMATCH', 'MOE_VM_CANDIDATE_DIRTY') -cnotcontains $script:MoeLandingResult.Code) { return }
+    $w = "$script:MoeWtPath"; $msgFile = ''; $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $one = { param([string[]]$A) $o = Invoke-MoeGit -Top $w -GitArgs $A; if ($o.Rc -eq 0) { ($o.Out -join "`n").Trim() } else { '' } }
     try {
-        if ($script:AccountLeasedId) { $token = Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId) }
+        $g = @{ Top = $w; GitDir = (& $one @('rev-parse', '--absolute-git-dir')); Rel = '' }
+        $dt = Invoke-MoeGit -Top $w -GitArgs @('diff-tree', '-r', '-z', '--name-only', '--no-renames', $Commit, $Tree)
+        if ($g.GitDir -and (& $one @('cat-file', '-t', $Commit)) -ceq 'commit' -and (& $one @('cat-file', '-t', $Tree)) -ceq 'tree' -and $dt.Rc -eq 0) {
+            $paths = @(($dt.Out -join "`n").Split([char]0) | Where-Object { $_ })
+            $msg = New-MoeCommitMessage -Kind 'rescue' -TaskId $preflightTaskId -Title $preflightTaskTitle -Status 'WORKING' -ReopenCount 0 -Role $Role -Sid $moeSid -CliExit 0 -Recovered $false -PathCount $paths.Count -InferredCount 0 -Contested @() -Reason 'vm-helper-refused'
+            $msgFile = Write-MoeMessageFile $g.GitDir $preflightTaskId $msg
+            $new = & $one @('commit-tree', $Tree, '-p', $Commit, '-F', $msgFile)
+            $attr = @{ Candidates = @($paths | ForEach-Object { @{ Path = $_; Inferred = $false } }); Skipped = @(); Contested = @() }
+            if ($new -cmatch '^[0-9a-f]{40}([0-9a-f]{24})?\z' -and (Invoke-MoeRescueRef -Git $g -TaskId $preflightTaskId -Reason 'vm-helper-refused' -Title "$preflightTaskTitle" -Status 'WORKING' -Sid $moeSid -Attr $attr -Sha $new)) { return }
+        }
+    } catch {} finally {
+        if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
+        $ErrorActionPreference = $prev
+    }
+    [Console]::Error.WriteLine("[WARN] MOE_VM_CANDIDATE_RESCUE_FAILED: task=$preflightTaskId commit=$Commit tree=$Tree; manual recovery required.")
+}
+# Twin: run_vm_job + seat_credential_stream. The credential stays in memory and the stdin pipe only.
+function Invoke-MoeVmJob {
+    $token = $null; $json = $null; $last = ''; $commit = ''; $name = 'CLAUDE_CODE_OAUTH_TOKEN'
+    try {
+        if ($cliType -eq 'codex') {
+            $name = if ($env:OPENAI_API_KEY) { 'OPENAI_API_KEY' } else { 'CODEX_API_KEY' }
+            $token = [Environment]::GetEnvironmentVariable($name)
+        } elseif ($script:AccountLeasedId) { $token = Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId) }
         if (-not $token) {
             $id = if ($script:AccountLeasedId) { $script:AccountLeasedId } else { 'none' }
             Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE "account $id has no VM token; mint one with 'accounts vm-token <id>' (Accounts tab)."
@@ -9432,7 +9494,7 @@ function Invoke-MoeVmJob {
             if ($r.Rc -eq 0) { $commit = ($r.Out -join "`n").Trim() }
         } else { $checkout = "$projectPath"; $why = 'landed completion commit'; $commit = $preflightContext.task.landing.lastCompletion.sha }
         if ($commit -isnot [string] -or $commit -cnotmatch '^[0-9a-f]{40}([0-9a-f]{24})?\z') { Stop-MoeVerifiedLocalSeat MOE_SEAT_JOB_INPUT_MISSING $why }
-        try { $json = [ordered]@{ name = 'CLAUDE_CODE_OAUTH_TOKEN'; value = $token } | ConvertTo-Json -Compress -ErrorAction Stop }
+        try { $json = [ordered]@{ name = $name; value = $token } | ConvertTo-Json -Compress -ErrorAction Stop }
         catch { Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE 'VM token pipe failed.' }
         Write-Host "[seat] job role=$Role task=$preflightTaskId instance=$script:SeatVmInstance commit=$commit"
         # M07j JSON.parses the full stdin buffer; PowerShell's trailing CRLF is valid whitespace.
@@ -9440,20 +9502,25 @@ function Invoke-MoeVmJob {
             Invoke-MoeSeatCli -InputText $json -SeatArgs @('seat-job', '--project', "$projectPath", '--worker', $WorkerId,
                 '--runner', $script:MoeProcessStartedAt, '--host', $script:MoeHost, '--instance', $script:SeatVmInstance,
                 '--role', $Role, '--task', $preflightTaskId, '--attempt', $script:MoeAttemptId, '--generation', "$script:MoeAttemptGeneration",
-                '--checkout', $checkout, '--commit', $commit, '--cli', 'claude') | ForEach-Object { $last = $_; Write-Host $_ }
-        } catch { Stop-MoeVerifiedLocalSeat MOE_SEAT_JOB_FAILED 'exit 1' }
+                '--checkout', $checkout, '--commit', $commit, '--cli', $cliType) | ForEach-Object { $last = $_; Write-Host $_ }
+        } catch { $last = ''; $script:SeatCliExit = 1 }
     } finally { $token = $null; $json = $null }
     $o = Get-MoeSeatJobOutcome $last $commit
     if ($script:SeatCliExit -ne 0 -or -not $o) {
-        $reply = ConvertFrom-MoeSeatReply $last
-        Stop-MoeVerifiedLocalSeat MOE_SEAT_JOB_FAILED (Get-MoeSeatResultCode $reply $script:SeatCliExit)
+        $script:CliExitCode = if ($script:SeatCliExit -ne 0) { $script:SeatCliExit } else { 1 }
+        [Console]::Error.WriteLine("[WARN] MOE_SEAT_JOB_FAILED: $(Get-MoeSeatResultCode (ConvertFrom-MoeSeatReply $last) $script:CliExitCode)")
+        Stop-MoeSeatVm
+        return # Existing launch-failure/backoff and resume budgets own retries.
     }
     $script:CliExitCode = [int]$o.exitCode
     if ($Role -eq 'worker') {
         $script:MoeLandingResult = Invoke-MoeVmCandidateLanding -Commit $o.commit -BaseTree $o.baseTree -Tree $o.tree -M @{
             TaskId = $preflightTaskId; Title = $preflightTaskTitle; Status = 'WORKING'; ReopenCount = 0; CliExit = $script:CliExitCode; Sid = $moeSid }
         $script:moeLandingDone = $true
-        if ($script:MoeLandingResult.Rc -ne 0) { exit 1 }
+        if ($script:MoeLandingResult.Rc -ne 0) {
+            if ($script:MoeLandingResult.Rc -eq 1) { Save-MoeVmCandidateRescue $o.commit $o.tree }
+            exit 1
+        }
     }
 }
 
@@ -9655,6 +9722,8 @@ do {
                     Write-Host '[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle.' -ForegroundColor Yellow
                     continue
                 }
+                # A deregistered seat must not own a VM; the next pass provisions afresh.
+                Stop-MoeSeatVm
                 Invoke-MoeDeregister -Reason 'wrapper_restart'
                 $script:MoeWrapperRelaunchRequested = $true
                 break
@@ -10552,6 +10621,7 @@ $mentionsJson
     if (-not $moeSkipLaunch -and $cliType -eq 'claude') {
         Get-MoeAccountLease
         if (-not (Test-MoeAccountWaitAttempt)) { continue }
+        if ($script:MoeVmRoute -and -not (Wait-MoeVmCredential)) { continue }
         # A wait for a free or trusted account is not launch time.
         $script:CliLaunchedAt = Get-Date
     }
@@ -11428,7 +11498,9 @@ $mentionsJson
         Write-Host "[launch-failure] CLI exited $cliExitForLaunch after ${cliElapsedSec}s, before doing any work (streak $($script:LaunchFailStreak)): provider usage limit, credential, a crash at launch, or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand). Not counted against the resume budget; next relaunch in $($script:LaunchFailBackoffSec)s." -ForegroundColor Yellow
         if ($script:LaunchFailStreak -eq 3) {
             $script:LaunchFailHead = "@governors ${WorkerId}: CLI exits within ${launchFailSec}s of launch (exit $cliExitForLaunch, $($script:LaunchFailStreak) in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem."
-            if ($AutoClaim -and $Role -ne 'governor') {
+            # VM seats cannot run a taskless recovery probe. Keep their task and use
+            # the same bounded backoff plus one escalation below.
+            if ($AutoClaim -and $Role -ne 'governor' -and -not $script:MoeVmRoute) {
                 # Launch outage mode (declared above the loop). The release and
                 # its @governors line wait for this iteration's post-flight
                 # (Invoke-MoeLaunchOutagePostflight), so the landing and finalize

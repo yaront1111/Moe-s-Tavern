@@ -30,14 +30,20 @@ fail() { echo "PARITY FAIL: $*" >&2; failures=$((failures + 1)); }
 # sh wrapper's bash -> inline-python bridge uses MOE_PY_* names, which is not a
 # compared family, so '^$' (no extracted code is empty) exempts nothing.
 INTERNAL_PLUMBING='^$'
+# SH_ONLY names a printed code whose condition only moe-agent.sh can meet: the
+# verified-local WSL refusal (a ps1 seat never runs inside WSL). Keep it in
+# BOTH scripts (parity-check.ps1's $shOnly), and never exempt a whole family.
+SH_ONLY='^MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED$'
 extract_codes() { # $1 = file, $2 = prefix regex
-  grep -oE "\b$2[A-Z0-9_]*\b" "$1" 2>/dev/null | grep -vE "$INTERNAL_PLUMBING" | sort -u || true
+  grep -oE "\b$2[A-Z0-9_]*\b" "$1" 2>/dev/null | grep -vE "$INTERNAL_PLUMBING" | grep -vE "$SH_ONLY" | sort -u || true
 }
-# The worktree-mode families follow the land-on-every-exit ones. MOE_WRAPPER_
+# The worktree-mode families follow the land-on-every-exit ones, then the
+# verified-local VM route's (CQ-M07m/M07n). MOE_WRAPPER_
 # is not a family: moe-agent.sh carries sh-only internal MOE_WRAPPER_* names
 # (its hot-reload plumbing), so section 2 requires its codes by name.
 for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_' \
-  'MOE_WORKTREE_' 'MOE_LAND_' 'MOE_CONTROL_' 'MOE_BOARD_' 'MOE_PUSH_' 'MOE_MIGRATION_'; do
+  'MOE_WORKTREE_' 'MOE_LAND_' 'MOE_CONTROL_' 'MOE_BOARD_' 'MOE_PUSH_' 'MOE_MIGRATION_' \
+  'MOE_VERIFIED_LOCAL_' 'MOE_SEAT_' 'MOE_VM_'; do
   sh_set="$(extract_codes "$SH" "$prefix")"
   ps_set="$(extract_codes "$PS1" "$prefix")"
   only_sh="$(comm -23 <(printf '%s\n' "$sh_set") <(printf '%s\n' "$ps_set") | sed '/^$/d' || true)"
@@ -147,6 +153,13 @@ done
 
 # Resume-budget prose: a session that completed a plan step re-arms the budget.
 require_both "resume-budget prose" 'resume budget re-armed'
+
+# Verified-local VM route (CQ-M07m/M07n): the readiness read, the claim marker,
+# the seat CLI and account helper verbs, the job outcome marker and the capacity wait.
+for lit in get_execution_readiness executionRoute seat-start seat-job seat-stop vm-credential seatJob \
+  MOE_AGENT_SEAT_PATH retry-sec 'no task is claimed; retrying in'; do
+  require_both "vm route" "$lit"
+done
 
 # Claude account rotation: the helper both wrappers call and the lease, wait and
 # relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are compared above).
