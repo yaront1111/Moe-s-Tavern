@@ -69,20 +69,25 @@
     {
       "stepId": "step-5",
       "description": "Verification, once, from the task worktree root: run checkRefs[0] exactly.\n- It runs postflight-vm-route.ps1 on two background legs: pwsh -> node -> Windows PowerShell 5.1 (CI's shape), and pwsh 7.\n- In the foreground it runs local-runner-dispatch.test.mjs under WSL node and under Windows node.exe (CI runs that file on all three OSes), then postflight-vm-route.sh (the fake's sh rows).\n- Then parity-check.sh, parity-check.ps1 and npm run lint.\n- Logs go to /mnt/d/moe-scratch/te444.*, never into the worktree.\n\nUnder load it takes about 10-20 min. Start it detached and record $!, poll with bounded until-loops, and kill only that PID.\n\nError handling for a red run:\n- A UtilAcceptVsock WSL error with no harness output is an interop flake: rerun that leg.\n- Any other red row: rerun the same leg on the target's bytes (a git archive of the landing target) before blaming this change.\n- Fix only in this row's files.\n\nSize: measure the squash numstat. If the net changed lines exceed 400, file the EPIC ADD_RAIL size exception before complete_task (mem:gotcha-cq-plan-size-vs-qa-cap).\n\ncomplete_task's verification is this command. The summary names each leg's result and every new or changed test row: S1-S4, U5, U7, U8, U9, SG-timeout.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T21:14:54.746Z"
+      "note": "checkRefs[0] was run verbatim from the worktree root, detached (PID 3886691, 23:24:26 to 23:32:00, about 7.5 min). Logs are in /mnt/d/moe-scratch/te444.7my1. Result EXIT=0:\n- ps5 (pwsh -> node -> PS 5.1) and ps7 both print 'PASS postflight-vm-route.ps1', with '[strong gate] ok SGV, SGU U1-U9, SG8 and SG-interrupt' and the E2E ok line including timeout.\n- local-runner-dispatch.test.mjs: 27/27 on WSL node, 27/27 on node.exe.\n- postflight-vm-route.sh: PASS, unedited.\n- parity-check.sh PASS, parity-check.ps1 PASS, npm run lint OK. This covers the qualityGate.\nSize: unstaged numstat is +207/-53 (net 154) over 5 files, under 400, so no size-exception rail is needed. Mutant evidence came from scratch copies outside the checkout, PS 7 only: clear-the-record-first was killed by U9 ('the dispatch outlived its stop'); kill-at-once on timeout and wait-out-the-grace were each killed by U8. No file changed in this step.",
+      "startedAt": "2026-11-04T21:14:54.746Z",
+      "completedAt": "2026-11-04T21:32:14.737Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this diff, the final step. Use the adversarial-self-review skill.\n(1) The stop file never exists before the stop. No GetTempFileName is used for its path. S3 and stopAtStart pin both sides.\n(2) Every stop path delivers the seam before its grace: the timeout branch, the invoker's finally and the outer finally. A hand-spawned process with no stop file still gets the grace and the kill.\n(3) The record is cleared last. Walk a pipeline stop through every statement of Stop-MoeCheckDispatch; U9 covers the grace wait.\n(4) Legacy: without --stop-file the CLI behaves exactly as before (K, D and CD unedited and green, postflight-vm-route.sh green), and the sh wrapper's argv is unchanged.\n(5) Inputs: a stop path with spaces, a missing temp dir, a file created twice or deleted after the stop (the abort is latched), and a huge or odd --stop-file value at the CLI (refused).\n(6) Concurrency: two seats' dispatches use distinct GUID paths. The CLI's interval is unref'd and cleared in finally. The fake's interval is unref'd, so its 300 s self-limit still ends it.\n\nFix any finding in this row's files and re-run only the affected legs. A deeper defect gets its own bug row, for example a second console Ctrl+C killing node mid-deletion (process.once).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of the 5-file diff:\n(1) Holds. The stop path is GetTempPath()+GUID+'.stop', named and never created; the 3 GetTempFileName calls cover only stdin, stdout and stderr. S3 pins a pre-existing file (no VM, RUNNER_ABORTED). Every ps1 row pins stopAtStart=[bool]$false.\n(2) Holds. The timeout branch, the invoker's finally and the outer finally all go through Stop-MoeCheckDispatch, which writes the file before WaitForExit(grace). A record with no stop file (SG-interrupt's hand-spawn) gets only the grace and the kill, and no stop row is written.\n(3) I walked a pipeline stop through every statement. Any throw before the final line leaves the record, so the next caller finishes the stop. A stop after Dispose makes HasExited throw ObjectDisposedException; the general catch takes it, then the next caller removes and clears (Dispose is idempotent). U9 covers the grace wait. A clear-the-record-first mutant is killed by U9.\n(4) Holds. Without --stop-file: watch null and signal passed through unchanged. K, D, CL and CD are unedited and green, postflight-vm-route.sh is green, and moe-agent.sh is untouched.\n(5) Holds:\n- Spaces: ConvertTo-MoeArgumentLine quotes each token, the same as --project.\n- Missing TEMP: GetTempFileName fails first, so NO_REPORT and no spawn.\n- Created twice: the rewrite is harmless.\n- Deleted later: the abort is latched (clearInterval plus a one-way AbortController).\n- Relative, empty, control-char, missing, misspelt, extra and misplaced values are refused (S1).\n- Theoretical: a huge absolute path is not refused, because the step-1 contract has no length cap. existsSync answers false, so it only loses the graceful stop; the wrapper never passes one.\n(6) Holds. Paths are per-dispatch GUIDs. The CLI interval is unref'd and closed in finally (S4: the real entry exits by itself). The fake's interval is unref'd.\nTheoretical window, not fixed: a non-console pipeline stop landing exactly between the Start-Process statement and `$script:CheckDispatchStopFile = $stop` gets grace plus kill without the seam. A console Ctrl+C there still SIGINTs node directly.\nDeeper defect filed as task-2acbdbdd53d141b7b95fdcf2dc592117: process.once at check-dispatch.mjs:280 lets a second Ctrl+C kill node mid-VM-deletion. It predates this task and depends on it. No code change in this step.",
+      "startedAt": "2026-11-04T21:32:19.351Z",
+      "completedAt": "2026-11-04T21:32:51.248Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -105,7 +110,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:38:55.700Z",
-  "updatedAt": "2026-11-04T21:14:54.746Z",
+  "updatedAt": "2026-11-04T21:34:49.079Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T16:04:04.872Z",
@@ -115,7 +120,7 @@
     "firstClaimAt": "2026-11-04T16:04:17.535Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -129,7 +134,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T16:27:54.911Z",
@@ -209,11 +216,47 @@
   "planApprovedAt": "2026-11-04T16:27:54.943Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-cd0ac706@2026-11-04T16:04:15Z",
-    "at": "2026-11-04T16:29:06.498Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T20:47:43Z",
+    "at": "2026-11-04T21:34:49.079Z"
   },
-  "workStartedAt": "2026-11-04T20:49:15.909Z"
+  "workStartedAt": "2026-11-04T20:49:15.909Z",
+  "reviewStartedAt": "2026-11-04T21:33:20.480Z",
+  "verification": {
+    "command": "T=scripts/tests && F=$T/postflight-vm-route.ps1 && L=$(mktemp -d /mnt/d/moe-scratch/te444.XXXX) && U=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /') && r=0 && export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC && E=\"env $U\"; $E pwsh.exe -NoProfile -Command \"node -e \\\"process.exitCode=require('child_process').spawnSync('powershell',['-NoProfile','-ExecutionPolicy','Bypass','-File','$F'],{stdio:'inherit'}).status\\\"\" >$L/ps5 2>&1 & a=$!; $E pwsh.exe -NoProfile -File $F >$L/ps7 2>&1 & b=$!; for n in node node.exe; do $E $n --test $T/local-runner-dispatch.test.mjs >$L/$n 2>&1 || r=1; done; $E bash $T/postflight-vm-route.sh >$L/sh 2>&1 || r=1; wait $a || r=1; wait $b || r=1; for f in ps5 ps7; do tr -d '\\r\\0' <$L/$f | grep -qx 'PASS postflight-vm-route.ps1' || r=1; done; bash $T/parity-check.sh && pwsh.exe -NoProfile -File $T/parity-check.ps1 && npm run lint || r=1; for f in $L/*; do echo \"== $f\"; tr -d '\\r\\0' <$f | tail -n2; done; echo EXIT=$r; [ $r = 0 ]",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nPASS parity-check.ps1\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n== /mnt/d/moe-scratch/te444.7my1/node\nℹ todo 0\nℹ duration_ms 1741.109502\n== /mnt/d/moe-scratch/te444.7my1/node.exe\nℹ todo 0\nℹ duration_ms 1031.1911\n== /mnt/d/moe-scratch/te444.7my1/ps5\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\n== /mnt/d/moe-scratch/te444.7my1/ps7\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\n== /mnt/d/moe-scratch/te444.7my1/sh\n[strong receipt] ok T1, T2, T2-replay, T3, T4\nPASS postflight-vm-route.sh\nEXIT=0",
+    "reportedAt": "2026-11-04T21:33:20.480Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/check-dispatch.mjs",
+    "scripts/tests/local-runner-dispatch.test.mjs",
+    "scripts/tests/postflight-fake-check-dispatch.js",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "completionSummary": "On Windows, moe-agent.ps1 now stops check-dispatch.mjs through a --stop-file seam before any kill.\n- CLI: an optional last pair `--stop-file <absolute path>`. The file existing aborts the run through the same path as SIGINT/SIGTERM, so runCheckJob deletes the VM first. The watch polls at pollMs 250, is unref'd and latched, and is closed in finally.\n- Wrapper: names a GUID path under TEMP without creating it. Stop-MoeCheckDispatch writes the file, waits the grace, then runs taskkill /T /F by PID. The record is cleared last, outside any finally, and PipelineStoppedException is rethrown. The timeout branch now waits the grace instead of 0. moe-agent.sh is untouched.\n- Fake: additive --stop-file support (a stopAtStart field and a check-dispatch-stop row).\n\ncheckRefs[0] gave EXIT=0 in about 7.5 min:\n- ps5 (PS 5.1 via node) and ps7 both PASS postflight-vm-route.ps1, with '[strong gate] ok SGV, SGU U1-U9, SG8 and SG-interrupt'.\n- local-runner-dispatch.test.mjs: 27/27 on WSL node and 27/27 on node.exe.\n- postflight-vm-route.sh PASS, unedited.\n- parity-check.sh and parity-check.ps1 PASS; npm run lint OK.\n\nNew or changed rows:\n- S1: argv shape and 9 refusals.\n- S2: a stop mid-run by file, by signal, or both; the VM is deleted and RUNNER_ABORTED.\n- S3: a stop file present at start launches no VM.\n- S4: the real entry exits by itself.\n- U5 (hang-hard): one stop row, no TERM.\n- U7: interrupt plus one stop row.\n- U8, new (hang, grace 30): exits by itself in under 15 s.\n- U9, new: a Stop() during the timeout grace leaves the fake dead and record=False.\n- SG-timeout: exactly one stop row, under 60 s.\n- SG-interrupt: no stop row.\n- Argv checks now want 8 tokens, a rooted path that is gone afterwards, and stopAtStart false.\n\nMutants, run on scratch copies: clear-record-first was killed by U9; kill-at-once and wait-out-grace were each killed by U8. Size is +207/-53 (net 154), under 400.\n\nFiled: task-2acbdbdd. process.once at check-dispatch.mjs:280 lets a second Ctrl+C kill node mid-VM",
+  "commits": [
+    {
+      "sha": "e729d25b6f51fe891051202fca01085f8ab5be5b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T20:47:43Z",
+      "paths": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/local-runner-dispatch.test.mjs",
+        "scripts/tests/postflight-fake-check-dispatch.js",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T21:34:49.079Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

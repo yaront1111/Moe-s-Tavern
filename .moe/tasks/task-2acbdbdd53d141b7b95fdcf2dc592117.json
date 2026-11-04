@@ -1,0 +1,29 @@
+{
+  "id": "task-2acbdbdd53d141b7b95fdcf2dc592117",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: check-dispatch.mjs registers its SIGINT/SIGTERM aborts with process.once, so a second Ctrl+C (or a second TERM) gets Node's default handler and kills the CLI mid-VM-deletion, leaking the check VM",
+  "description": "scripts/local-runner/check-dispatch.mjs:280 `for (const name of ['SIGINT','SIGTERM']) process.once(name, () => controller.abort())`: after the first signal the listener is gone, so an operator's second console Ctrl+C (which on Windows reaches node directly, and on POSIX reaches the process group) terminates node by default while runCheckJob is still deleting the VM. Repro: start a dispatch whose VM delete is slow, send SIGINT twice; the process exits 130 before the delete completes. Fix idea: keep a persistent listener (process.on) that aborts once and ignores later signals, plus a node --test row. Found in task-e444f6ae's adversarial review; it predates that task.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-e444f6ae2fc94efda2899ba723cf5c4b"
+  ],
+  "priority": "MEDIUM",
+  "order": 535.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T21:25:55.066Z",
+  "updatedAt": "2026-11-04T21:25:55.066Z"
+}
