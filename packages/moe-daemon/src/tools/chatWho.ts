@@ -2,8 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { activeChatWaiters } from './chatWait.js';
 import { invalidInput, notFound } from '../util/errors.js';
-
-const PRESENCE_TIMEOUT_MS = 120_000;
+import { isWorkerAlive } from '../util/workerLiveness.js';
 
 export function chatWhoTool(_state: StateManager): ToolDefinition {
   return {
@@ -49,8 +48,7 @@ export function chatWhoTool(_state: StateManager): ToolDefinition {
 
       // Pass 1: workers with chatCursors for the channel (existing logic)
       for (const worker of state.workers.values()) {
-        const lastActivity = worker.lastActivityAt ? new Date(worker.lastActivityAt).getTime() : 0;
-        if (isNaN(lastActivity) || (now - lastActivity > PRESENCE_TIMEOUT_MS)) continue;
+        if (!isWorkerAlive(worker, now)) continue;
 
         if (channelId) {
           const hasCursor = worker.chatCursors && worker.chatCursors[channelId];
@@ -93,9 +91,10 @@ export function chatWhoTool(_state: StateManager): ToolDefinition {
             const entry = online.find((o) => o.workerId === workerId);
             if (entry) entry.source = 'both';
           } else {
-            // Not yet in results — add from worker data if available
+            // Not yet in results — a parked wait does not refresh activity, so a
+            // waiter counts as present past the window, but never a DEAD record.
             const worker = state.workers.get(workerId);
-            if (worker) {
+            if (worker && worker.status !== 'DEAD') {
               seen.set(workerId, { source: 'waiting' });
               online.push({
                 workerId: worker.id,

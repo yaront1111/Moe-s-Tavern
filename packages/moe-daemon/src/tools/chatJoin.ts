@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { invalidInput, missingRequired, notFound } from '../util/errors.js';
+import { isWorkerAlive } from '../util/workerLiveness.js';
 
 export function chatJoinTool(_state: StateManager): ToolDefinition {
   return {
@@ -59,13 +60,12 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
         });
       }
 
-      // Get online workers (active status or recent activity)
+      // Online workers: the shared isWorkerAlive predicate (not DEAD, active
+      // within the liveness window), the same one list_workers reports as isAlive.
       const now = Date.now();
-      const PRESENCE_TIMEOUT_MS = 120_000;
       const onlineWorkers: Array<{ id: string; status: string }> = [];
       for (const worker of state.workers.values()) {
-        const lastActivity = worker.lastActivityAt ? new Date(worker.lastActivityAt).getTime() : 0;
-        if (worker.status !== 'IDLE' && (now - lastActivity < PRESENCE_TIMEOUT_MS)) {
+        if (isWorkerAlive(worker, now)) {
           onlineWorkers.push({ id: worker.id, status: worker.status });
         }
       }

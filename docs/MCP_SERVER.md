@@ -2665,7 +2665,7 @@ Join a chat channel. Posts a system message and returns online workers.
 
 **Notes:**
 - Posts a system message: `{workerId} joined #{channelName}`
-- Online workers are those with activity within the last 120 seconds
+- Online workers are those `moe.list_workers` reports `isAlive`: not `DEAD` and active within the last 120 seconds, whatever their status, so an `IDLE` seat between tasks is listed
 
 ---
 
@@ -2726,8 +2726,8 @@ List online workers, optionally filtered by channel participation.
 
 **Notes:**
 - `type` is the record's `WorkerType` (`CLAUDE` | `CODEX` | `GEMINI` | `GROK`), present on every entry whatever its `source`; it is an additive change, and presence, filtering and ordering are unchanged
-- Online = activity within the last 120 seconds (same presence window as `moe.chat_join`)
-- With `channel`: includes workers with a chat cursor for the channel **and** workers currently blocked in `moe.chat_wait` watching it; `source` is `cursor`, `waiting`, or `both`
+- Online = not `DEAD` and active within the last 120 seconds, the same rule as `moe.chat_join` and `moe.list_workers`' `isAlive`; an `IDLE` seat counts
+- With `channel`: includes workers with a chat cursor for the channel **and** workers currently blocked in `moe.chat_wait` watching it; `source` is `cursor`, `waiting`, or `both`. A parked waiter counts even past the 120-second window, because a parked wait does not refresh activity, but never a `DEAD` record
 - Without `channel`: returns all online workers
 
 ---
