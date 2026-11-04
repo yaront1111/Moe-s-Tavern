@@ -189,7 +189,7 @@ Rules that keep this safe:
 - **It is not part of your task's diff.** This work lands in the Moe repo, never in the product repo's task commit, and never counts against the task's owned paths or file caps.
 
 Then say what you did: post the defect, the commit sha, and what it unblocks to \`#architects\` and \`#governors\`, and carry on with the plan you were writing.`,
-  'governor.md': `<!-- moe-generated: sha=6cedbe83add8 -->
+  'governor.md': `<!-- moe-generated: sha=c9d4b13ad50b -->
 
 # Governor
 
@@ -268,7 +268,7 @@ Unassigned BLOCKED tasks are normal, not an anomaly: a non-resource \`report_blo
 
 When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` also cross-posts a \`📋 Plan ready for critique\` banner to \`#governors\` listing the task title, step count, and DoD. Read the plan via \`moe.get_context\`; if you see a structural problem the architect missed, call \`moe.submit_plan_critique { taskId, verdict: 'block', concerns: [...] }\`. A \`block\` verdict flips the task back to \`PLANNING\` (so the architect re-plans before the human ever sees it); a \`pass\` verdict is informational and does NOT auto-approve — humans still own approval. Use \`pass\` sparingly; if you don't have a concern, stay silent and let the human approve.
 
-**Size rubric.** Verdict \`block\` when the plan has >12 steps or >10 distinct \`affectedFiles\` — the daemon rejects these at \`submit_plan\`, so one that slipped past (custom \`taskSizing\` thresholds, older daemon) is an automatic block. Scrutinize 9–12 steps or 6–10 distinct files hard: the daemon has already warned, and a plan in that band usually hides two tasks. For an oversized task the concern is always "split via SPIDR — load \`moe-epic-breakdown\`", never line edits to the plan; splitting is the architect's job, not yours. A project or epic rail that forbids size-driven splits wins over this rubric: then never block a plan for size (the daemon's own \`taskSizing\` limits still apply).
+**Size rubric.** Verdict \`block\` when the plan has >12 steps or >10 distinct files (the union of every step's \`affectedFiles\` and \`newFiles\`) — the daemon rejects these at \`submit_plan\`, so one that slipped past (custom \`taskSizing\` thresholds, older daemon) is an automatic block. Scrutinize 9–12 steps or 6–10 distinct files hard: the daemon has already warned, and a plan in that band usually hides two tasks. For an oversized task the concern is always "split via SPIDR — load \`moe-epic-breakdown\`", never line edits to the plan; splitting is the architect's job, not yours. A project or epic rail that forbids size-driven splits wins over this rubric: then never block a plan for size (the daemon's own \`taskSizing\` limits still apply).
 
 ## Mention Response Protocol
 
@@ -744,7 +744,7 @@ only you can.
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '5095739efdb8', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b0c0bbe4188c', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
   'architect.reference.md': ['08b07943437a', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c016fd59a81e', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
-  'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
+  'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'c9d4b13ad50b', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '3d85e1e8146a', '5267e2ff5337', '52ffd8f5e35c', '546f3f3da3d2', '6cf327f722c6', '7a4154466321', '7f0344ccc9be', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', '953f8694c26d', 'a3d65d5877c5', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b', 'e9cd45cbf530'],
