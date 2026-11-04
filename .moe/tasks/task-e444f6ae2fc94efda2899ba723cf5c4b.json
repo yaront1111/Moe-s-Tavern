@@ -1,0 +1,29 @@
+{
+  "id": "task-e444f6ae2fc94efda2899ba723cf5c4b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: moe-agent.ps1 cannot stop check-dispatch.mjs gracefully on Windows, so a timed-out dispatch is force-killed and can leak its check VM",
+  "description": "check-dispatch.mjs deletes its VM only on SIGINT/SIGTERM (process.once). On Windows the wrapper has no way to deliver either to that one child: Node never raises SIGTERM there, and a CTRL_C_EVENT goes to the whole console. So CQ-M07s's Stop-MoeCheckDispatch (task-74fe4c99) never signals the child. At MOE_CHECK_DISPATCH_TIMEOUT_SEC it runs taskkill /T /F /PID on the recorded pid, and the running check VM is left behind. sh TERMs the process group and gives it a 120 s grace instead. Repro: run a ps1 strong completion against a dispatch that outlives the bound. Fix idea: add a Windows stop seam to check-dispatch.mjs (for example a stdin-close or named-event watcher that runs the same abort), and have the ps1 use it before the kill.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23"
+  ],
+  "priority": "MEDIUM",
+  "order": 245.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T15:38:55.700Z",
+  "updatedAt": "2026-11-04T15:38:55.700Z"
+}

@@ -37,19 +37,25 @@
     {
       "stepId": "step-2",
       "description": "moe-agent.ps1 runtime: the check-VM gate at L6 under the strong profile. Keep the file UTF-8 with a BOM, and edit it in place in the task worktree with the editing tool (scripts/CLAUDE.md: never a shell write).\n\n(a) RESOLVER, next to $script:AgentSeatCli (about line 9398):\n- `$script:CheckDispatchCli = Join-Path $script:MoeScriptRoot 'local-runner\\check-dispatch.mjs'`;\n- MOE_CHECK_DISPATCH_PATH is honored only when -not $script:MoeRuntimeProtected. Under it, write R's exact warning to stderr.\n\n(b) INVOKER, modeled on Invoke-MoeSeatCli (about line 9405):\n- the same credential scrub before node runs (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, CODEX_API_KEY), restored in finally;\n- the same UTF-8 pipe and console encodings for PS 5.1;\n- only stdout captured, $LASTEXITCODE kept;\n- the time bound from the port contract. Stop a child that outlives it by its recorded process id only, never by name.\n\n(c) L6 in Invoke-MoeWorktreeRounds (about lines 7381-7399):\n- When Test-MoeStrongLandingTask $preflightTaskId $Git.GitDir is true: keep `New-MoeFrozenCandidate $Git $m $b` and Send-MoeCandidate as today. Then `git commit-tree $m -p $b` with R's identity and message choice. Then the dispatch: `--project <control top> --task $preflightTaskId --commit <that commit>`.\n- ConvertFrom-Json reads the one line for fixed codes only.\n- Exit 0 with every owed check passed: continue to Test-MoeWorktreeStrongIntent with that frozen candidate.\n- Any other result: $Res.Code = 'MOE_COMMIT_FAILED_GATE', with R's exact $L.Msg. Append environment=<id> only when the stop's environment matches ^moe-local-vm-v1:[0-9a-f]{64}$ exactly (-cmatch). Return $false.\n- Error handling: a missing CLI, a spawn failure, a timeout, a non-JSON or multi-line reply and a commit-tree failure each fail the round the same way, with nothing published and no credential in the child.\n- An interrupt during the dispatch fails the round. The existing Ctrl+C deferral and the finally block must not record a host-gate CheckRun for a gate that never ran.\n\n(d) LEGACY. Every non-strong path (legacy, observe, task-less) keeps today's Invoke-MoeFrozenGate -WorktreeMode branch byte for byte. Under the strong branch the host Invoke-MoeFrozenGate is never called.\n\n(e) PS 5.1 SYNTAX: no `??`, ternary `? :` or `&&`/`||` pipeline-chain operators; ParseFile must parse cleanly on 5.1 and 7.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-04T15:28:45.587Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "moe-agent.ps1 runtime, edited in place with Edit; BOM ef bb bf kept. ParseFile reports 0 errors on pwsh 7.6.9 and PS 5.1.26100.\n(a) A new section after Stop-MoeSeatVm, 'Verified-local check dispatch (CQ-M07s)'. It sets $script:CheckDispatchGraceSec=120, CheckDispatchProcess, CheckDispatchCode, and adds:\n- Resolve-MoeCheckDispatchCli. Default <root>\\local-runner\\check-dispatch.mjs. MOE_CHECK_DISPATCH_PATH is honored only when unprotected; when protected, R's PATH_IGNORED warning goes to stderr verbatim.\n- Find-MoeReplyKey (a case-sensitive key lookup) and Get-MoeCheckDispatchVerdict, an exact port of check_dispatch_verdict:\n  - read at most 1048577 bytes; strict UTF-8;\n  - drop one trailing \\n; any \\n or \\r left, or text not starting with '{', is refused;\n  - stopped.code or code must match [A-Z][A-Z0-9_]{0,63}\\z; environment= is added only for moe-local-vm-v1:[0-9a-f]{64}\\z;\n  - taskId and candidateId must be -ceq and results an array, then rc!=0 gives NOT_PASSED, and empty results give REPLY_INVALID;\n  - FileNotFound gives NO_REPORT; any other read error throws, and the caller maps it to REPLY_INVALID.\n- Stop-MoeCheckDispatch [GraceSec]. It waits the grace, then runs taskkill /T /F /PID <recorded pid> (by pid only, never by name), waits 5 s, disposes, and clears the record last.\n- Invoke-MoeCheckDispatchChild:\n  - removes the 5 credentials plus GIT_INDEX_FILE, GIT_DIR, GIT_WORK_TREE and GIT_COMMON_DIR, and restores them in finally;\n  - prints the cyan 'Post-flight: owed checks in check VMs: task <id> candidate <cand>' line;\n  - runs Start-Process node <cli> --project $projectPath --task $preflightTaskId --commit $Frozen.Commit with stdin an empty file, stdout to a file and stderr to a discarded file, -NoNewWindow;\n  - polls WaitForExit(1000) up to the bound; a timeout gives Stop 0 and TIMEOUT. rc is $p.ExitCode, and a non-int rc counts as 1;\n  - its finally calls Stop with the 120 s grace (only an interrupted wait still holds the record), then removes the temp files.\n- Invoke-MoeCheckDispatch. Rel prints the existing NOT_TOP line and sets code MOE_WORKTREE_PROJECT_NOT_TOP. A bound that Get-MoeLandLeaseBudget refuses gives TIMEOUT_INVALID; no node or no CLI leaf gives UNAVAILABLE. PASS prints green '[OK] check VMs passed every owed check of candidate <cand>.'. Anything else sets CheckDispatchCode and writes one stderr '[WARN] MOE_CHECK_DISPATCH_REFUSED: <verdict>' line.\n(c) L6 in Invoke-MoeWorktreeRounds. A new branch runs when configuredGate, a task id and Test-MoeStrongLandingTask all hold: New-MoeFrozenCandidate (commit-tree M -p B, so the dispatched commit is the frozen one; no second commit-tree, per the G8 text ban), then Send-MoeCandidate, then Invoke-MoeCheckDispatch. Any failure gives MOE_COMMIT_FAILED_GATE with R's exact Msg '... was not frozen, recorded and passed by the check VMs (<code or no dispatch>)'.\n(d) The legacy 'if ($Settings.configuredGate) {' became '} elseif ($Settings.configuredGate) {' with its body byte for byte unchanged.\n(e) The outer finally adds 'try { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec } catch {}' right after Stop-MoeGateChild (round-2 G).\nDEVIATION from the step text: Start-Process plus $p.ExitCode replace '& node' plus $LASTEXITCODE and the pipe encodings. A time bound and a recorded pid need a process object. Stdout goes straight to a file, so no pipe encoding is involved.\nSMOKE, in process on both engines with the real fake: pass gives PASS; crash gives NO_REPORT; garbage and two-lines give REPLY_INVALID; not-passed gives NOT_PASSED; code gives RUNNER_NOTHING_OWED; TIMEOUT_SEC=0 gives TIMEOUT_INVALID; a missing CLI gives UNAVAILABLE. On a timeout, hang gives TIMEOUT in 2.2 s with the fake dead. In 8 dispatches no credential reached the child, and the env was restored. A runspace Stop() mid hang-hard waited the 3 s grace, then the fake was dead and the record cleared.\nThe verdict table matches Python on both engines, D and E included. Known engine leniency: ConvertFrom-Json accepts single quotes, /* */ comments (pwsh 7) and a trailing U+00A0, which Python refuses. JSON.stringify never produces any of them.\nOut-of-scope bug filed: task-e444f6ae2fc94efda2899ba723cf5c4b (no Windows-deliverable graceful stop in check-dispatch.mjs, so a timed-out ps1 dispatch is force-killed and can leak its VM).",
+      "startedAt": "2026-11-04T15:28:45.587Z",
+      "completedAt": "2026-11-04T15:39:16.309Z"
     },
     {
       "stepId": "step-3",
       "description": "postflight-vm-route.ps1 rows, 1:1 with CQ-M07r's postflight-vm-route.sh rows (the port contract from step 1). Reuse R's scripts/tests/postflight-fake-check-dispatch.js through node; never add a second fake.\n\nAdd a new section (for example `[strong gate]`) after the landed [strong intent] G-rows, so a peer's appended rows merge cleanly:\n- canary: the host qualityGate is a command that would write a witness file. Under strong, the witness is absent, and the target moves only after the fake passes;\n- one row per non-pass case (non-zero exit, a stopped report, RUNNER_NOTHING_OWED, RUNNER_DEPENDENCIES_UNDECLARED, a missing CLI, a crashing CLI, an unparsable reply): each is MOE_COMMIT_FAILED_GATE with nothing published, and the line byte-identical to the sh row's expected line;\n- an environment id is printed; a malformed one is not;\n- MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1, with the warning;\n- the legacy control: a non-strong completion still runs the host gate.\n\nKeep the landed [vm candidate] R1-R9 and [strong intent] G1-G8 rows unedited.\n\nFollow mem:decision-ps1-harness-pin-inline-wrapper-block and mem:gotcha-wrapper-slice-tests-execute-text. Mind PS 5.1 encodings in fake output (mem:gotcha-windows-python-text-mode-crlf-in-node-tests): compare decoded strings, never raw bytes.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T15:39:19.738Z"
     },
     {
       "stepId": "step-4",
@@ -93,16 +99,22 @@
       "author": "architect-c33f294e",
       "content": "Scope note from this row's author (architect-c33f294e, 2026-11-04). It is the twin of comment on CQ-M07r (task-ba7a8c84).\n\nThe gate line also names the check environment id, but only when check-dispatch's stop carries one that matches /^moe-local-vm-v1:[0-9a-f]{64}$/ exactly (CQ-M07w, task-0bcc0b33). Any other value is never printed.\n\nKeep it byte-identical to the sh line, and add the same two postflight-vm-route.ps1 rows as sh:\n- the id is printed;\n- a malformed value prints the code alone.",
       "timestamp": "2026-11-04T12:00:57.241Z"
+    },
+    {
+      "id": "comment-00e8fcd16378473aaa84fea65aaf7765",
+      "author": "governor-e6142a94",
+      "content": "@worker-5772dacf Re-sync data for step-1 amend-1, from the governor: CQ-M07r's round-2 pins now have names. They are +23/-0, all in scripts/tests/postflight-vm-route.sh, with runtime and fakes unchanged (from its size prop, prop-b13705c2):\n- SG-interrupt: a real wrapper TERMed mid-dispatch. It kills mutant G (the cleanup_temp stop line deleted, \"the dispatch outlived the wrapper\") and a reorder mutant (the stop moved after finalize_postflight).\n- V-results-object: results as an object, not a list, at rc 0 gives REPLY_INVALID. It kills mutant E.\n- V-two-newlines: a pass line plus \"\\n\\n\" gives REPLY_INVALID, because exactly ONE trailing newline is dropped. It kills mutant D.\nPort these as ps1 rows under the same names. r's round-2 bytes land on the target at its next complete_task, after its fresh gate. If they have landed by your step 3, diff against them.",
+      "timestamp": "2026-11-04T15:37:16.825Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:19.711Z",
-  "updatedAt": "2026-11-04T15:28:45.587Z",
+  "updatedAt": "2026-11-04T15:39:19.738Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:08:35.564Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -113,7 +125,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:10:48.551Z",
