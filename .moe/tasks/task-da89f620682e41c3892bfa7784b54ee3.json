@@ -57,21 +57,28 @@
     {
       "stepId": "step-4",
       "description": "Add the vitest tests. Their names are fixed, because the gate counts them.\n\npackages/moe-daemon/src/index.test.ts: add a new describe 'daemon.json from another pid namespace (task-da89f620)' inside 'daemon lifecycle validation', beside the WSL block.\n- Hoist DEAD_PID, writeDaemonFiles and killSpyWithoutSignals from the WSL describe (:230-260) to the enclosing describe, unchanged, so both blocks share them.\n- Records use pidNamespace 'pid:[1]'. No real namespace inode is 1, so it differs from every reader's on every CI OS.\n- Stub `vi.spyOn(fs, 'readlinkSync')` when a case needs a known own namespace; probeHost.ts reads through the same default fs object.\n- Import ownPidNamespace, isOtherPidNamespace and buildDaemonInfo dynamically inside N1/N2 (`await import(...)`), so the rest of the file still runs against 2037e856 for the RED check.\n- Cases:\n  - N1: truth table for isOtherPidNamespace and ownPidNamespace.\n    - isOtherPidNamespace is true for a different value and for an undefined own.\n    - It is false for an equal value, absent, 7, 'pid:[x]', 'pid:[1', 21 digits and 'net:[1]'.\n    - ownPidNamespace returns 'pid:[7]' when readlink is stubbed to 'pid:[7]', and undefined when the stub throws or returns 'garbage'.\n  - N2: buildDaemonInfo adds the stubbed pidNamespace and omits the key when readlink throws; its bindHost rule is unchanged.\n  - N3: validateDaemonInfoForProject.\n    - A healthy namespaced record (healthServer(testDir, DEAD_PID)) gives {valid:true, info, namespaced:true}.\n    - An unreachable one (unusedPort()) gives {valid:false, reason:'pid namespace daemon unreachable', namespaced:true}.\n    - The same record without the field gives reason 'pid not alive'.\n  - N4: statusDaemon keeps a healthy namespaced daemon.json byte-identical, exits 0 and never logs 'not running'.\n  - N5: statusDaemon removes an unreachable namespaced daemon.json.\n  - N6: stopDaemon on a healthy namespaced record sends no non-zero signal, keeps daemon.json byte-identical, writes no daemon.stop and sets exitCode 1.\n  - N7: stopDaemon on an unreachable namespaced record sends no signal and removes daemon.json.\n  - N8: existingDaemonBlocksStart returns true and keeps the file for a healthy namespaced record. It returns false and removes the file for an unreachable one (a restarted container starts).\n  - N9: a record carrying the reader's own namespace (readlink stubbed to 'pid:[7]', record 'pid:[7]') with a dead pid keeps today's results: validate gives 'pid not alive', and statusDaemon removes it.\n\npackages/moe-daemon/src/commands/doctor.test.ts: add a new describe 'runDoctor — daemon.json from another pid namespace (task-da89f620)'. Import only runDoctor, as the F block does. Copy or hoist the F-series' healthServer, unusedPort and DEAD_PID. Cases:\n  - D1: a namespaced record with a dead pid whose /health answers for this project on 127.0.0.1. The daemon.json line is [OK], naming 'another pid namespace' and 127.0.0.1:<port>, with no 'not running' or 'stale'. The reachability line is [OK], and exitCode is 0.\n  - D2: a namespaced record whose port answers nothing. The daemon.json line is [WARN], naming 'another pid namespace' and ending '(stale)'.\n  - D3: a record without the field and with a dead pid keeps '[WARN] daemon.json: daemon.json present but pid <DEAD_PID> not running (stale)'.\n\nRED check (DoD 1), in the same snapshot:\n- Restore `git show 2037e856:<path>` for types/schema.ts, server/probeHost.ts, index.ts and commands/doctor.ts.\n- Run `npx vitest run src/index.test.ts src/commands/doctor.test.ts -t 'pid namespace'`.\n- Expect N1-N8 and D1-D2 to fail and N9 and D3 to pass. Put the counts in complete_step's note.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.test.ts",
         "packages/moe-daemon/src/commands/doctor.test.ts"
       ],
-      "startedAt": "2026-11-04T12:30:55.865Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "note": "index.test.ts: hoisted DEAD_PID, jsonPath/lockPath/stopPath (writeDaemonFiles needs them), writeDaemonFiles, killSpyWithoutSignals to 'daemon lifecycle validation'; new describe 'daemon.json from another pid namespace (task-da89f620)' N1-N9 (one it per id, so the gate count is exact). Deviation to make DoD1's RED hold for the stale cases: N5 uses a live host pid (process.pid) with no /health (old code kept the file), N7 writes no lock and asserts the record pid is never probed even with signal 0 (old code probed it). doctor.test.ts: new describe D1-D3 (records with bindHost 0.0.0.0 as the Docker image writes). GREEN in /tmp snapshot: index+doctor 185 passed / 1 skipped, tsc on src + both tests clean. RED (2037e856's schema.ts, probeHost.ts, index.ts, doctor.ts restored, -t 'pid namespace'): 10 failed (N1-N8, D1, D2), 2 passed (N9, D3) — exactly as planned.",
+      "startedAt": "2026-11-04T12:30:55.865Z",
+      "completedAt": "2026-11-04T12:34:01.176Z"
     },
     {
       "stepId": "step-5",
       "description": "Docs.\n- docs/SCHEMA.md: add a '## daemon.json (runtime)' section before '## Activity Event'.\n  - The shape: port, pid, startedAt, projectPath, bindHost? and pidNamespace?, with when each is present.\n  - The liveness rule. A record from the other side of the WSL boundary (path form) is judged by /health at foreignProbeHosts' addresses. A record whose pidNamespace is not the reader's own (a container, another WSL distro) is judged by /health at the local probe address. Its pid is never signalled; an answer for this project means running, and no answer means stale (removed, so a restarted container starts). Any other record keeps the pid rules.\n- docs/ARCHITECTURE.md: in the 'The daemon CLI's `stop` and `status`' bullet (:621-635), add one sentence with the same namespaced rule. It covers status running versus removed, stop exiting 1 with no signal, start refusing, and doctor [OK] versus stale.\n- Mention no other doc. The client rows that read the field are task-6796a0f9 (JetBrains) and task-a7f8d8d6 (moe-agent.sh); they depend on this exact name and format.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/SCHEMA.md",
         "docs/ARCHITECTURE.md"
-      ]
+      ],
+      "startedAt": "2026-11-04T12:34:04.120Z"
     },
     {
       "stepId": "step-6",
@@ -107,12 +114,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:00.640Z",
-  "updatedAt": "2026-11-04T12:30:55.865Z",
+  "updatedAt": "2026-11-04T12:34:04.120Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:14:58.170Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -128,7 +135,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:25:10.917Z",

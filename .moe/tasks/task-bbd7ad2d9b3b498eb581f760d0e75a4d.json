@@ -63,17 +63,23 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (skill adversarial-self-review), then moe.complete_task with step 3's evidence. If this step changes any byte, re-run step 3 first.\n\n1. Scope:\n   - `git diff --stat` shows exactly these 2 files.\n   - `git diff -U0 -- scripts/moe-agent.ps1` is ONE hunk of added lines only (none removed or reflowed), right after the Invoke-MoeVerifiedLocalGate call.\n   - `git diff -U0 -- scripts/tests/postflight-vm-route.ps1` is the init line, the two Invoke-VmrRow lines and the [seat outage] section. The VR-taskless row, [seat reload] and every existing ok/PASS line are unchanged.\n2. Strings: the ps1 line and the #general text equal the sh twin's in scripts/moe-agent.sh (grep 'never the host CLI'), apart from interpolation syntax.\n3. Encoding:\n   - moe-agent.ps1 starts with ef bb bf.\n   - `LC_ALL=C grep -nP '[^\\x00-\\x7F]' scripts/tests/postflight-vm-route.ps1` prints nothing.\n   - Neither file gained a CR (`grep -c $'\\r'` is 0 for both).\n4. Attack the fix:\n   - A gate refusal exits before the block.\n   - A capacity wait ends before the block, so it runs only once the seat VM exists.\n   - A task held through the outage: HeldTaskId is cleared, so the marked claim resumes it (alreadyAssigned) on the VM route, as in sh.\n   - A hot reload re-runs the script's initializers, so nothing carries over.\n   - A later VM job that fast-fails three times: the streak counts from 0, with one escalation and no outage (62ec51f1's design).\n   - A legacy seat: MoeVmRoute stays false, so the block is inert.\n   - Concurrency: the wrapper is single-threaded, and the block runs once per iteration at most.\n5. Attack the test:\n   - The step 1 RED log stopped at 'printed MOE_LAUNCH_PROBE'.\n   - Mentally delete each of the six resets, and the `if ($generalChannelId)` guard, and confirm the in-process check throws for each.\n   - The finally restores every env var, VmrLoop, VmrCommand and VmrTimeoutSec, so [seat waits], [seat reload] and the T-legacy rows ran unchanged in step 3.\n6. No role doc changed, so the landing qualityGate's lint part is unaffected, and parity passed in step 3.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-04T12:31:51.770Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Self-review, no repo byte changed after the step-3 gate. Scope: exactly 2 files; moe-agent.ps1 is ONE hunk of 20 added lines, 0 removed, after the Invoke-MoeVerifiedLocalGate call; the harness diff is the init line, the two Invoke-VmrRow lines and the [seat outage] section (VR-taskless row, [seat reload], existing ok/PASS lines untouched). Strings: the [launch-outage] line and the #general text diff-equal sh moe-agent.sh lines 10096/10098 apart from color/interpolation syntax. Encoding: moe-agent.ps1 ef bb bf, 0 CR; harness ASCII, 0 CR, no BOM. Mutants: the extracted in-process check passes on the real wrapper and throws 'VM ROUTE FAILED (VR-outage block ...)' for each of 7 mutants (each of the six resets commented out, and the generalChannelId guard replaced by $true). RED log stopped at 'printed MOE_LAUNCH_PROBE'. Attacks: a gate refusal exits inside Invoke-MoeVerifiedLocalGate before the block; the capacity/credential waits end inside the gate so the block runs only once the seat VM exists; HeldTaskId is cleared so the marked claim resumes a held task on the VM route; a hot reload re-runs the initializers; VM job fast-fails restart the streak from 0 with no outage; legacy/observe/unreadable seats never set MoeVmRoute so the block is inert; wrapper is single-threaded and the block runs at most once per iteration; no Set-StrictMode in the wrapper, and LaunchOutage true implies a prior iteration set generalChannelId. Disclosed: a harness stub param named $Args reads as the automatic array, so the stub uses [Alias('Args')]$RpcArgs.",
+      "startedAt": "2026-11-04T12:31:51.770Z",
+      "completedAt": "2026-11-04T12:32:53.967Z"
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -108,7 +114,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:53:40.368Z",
-  "updatedAt": "2026-11-04T12:31:51.770Z",
+  "updatedAt": "2026-11-04T12:34:18.045Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:51.016Z",
@@ -118,7 +124,7 @@
     "firstClaimAt": "2026-11-04T10:57:08.677Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -131,7 +137,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T11:18:23.472Z",
@@ -201,11 +208,41 @@
   "planApprovedAt": "2026-11-04T11:18:23.508Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-2a219562@2026-11-04T10:57:05Z",
-    "at": "2026-11-04T11:19:28.163Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T12:10:21Z",
+    "at": "2026-11-04T12:34:18.044Z"
   },
-  "workStartedAt": "2026-11-04T12:11:32.920Z"
+  "workStartedAt": "2026-11-04T12:11:32.920Z",
+  "reviewStartedAt": "2026-11-04T12:33:28.789Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-bbd7ad2d9b3b498eb581f760d0e75a4d && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'set -e; F=\"D:\\projexts\\moes\\.worktrees\\task-bbd7ad2d9b3b498eb581f760d0e75a4d\\scripts\\tests\\postflight-vm-route.ps1\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\"; pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\"; bash scripts/tests/parity-check.sh; test \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d \" \\n\")\" = efbbbf; echo BBD7_GATE_OK'",
+    "exitCode": 0,
+    "outputTail": "[seat outage] ok VR-outage: a carried-over legacy launch outage ends on the first VM-route iteration, which claims again with no host CLI; the block resets all six launch-success variables (sent, refused, no-channel)\n[seat waits] ok Ctrl+C during capacity and credential waits; resume cap bounded\n[seat reload] ok seat-stop before the wrapper_restart deregister; fresh VM after the reload; taskless mentions print only vm-route\n[vm route] ok today path (legacy x2, observe, unreadable, refuse, unknown, fail, malformed, case trap, taskless idle and mention)\n[vm route] ok refusals (C1/C2, S1-S6, N1-N4; R1/R2 in vm seat)\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\nPASS parity-check.sh\nBBD7_GATE_OK\nEXIT=0",
+    "reportedAt": "2026-11-04T12:33:28.789Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-vm-route.ps1",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "ps1 twin of sh 8ca6a40b (task-cc4213c0): a launch outage carried into a verified-local iteration now ends on the first VM-route iteration of moe-agent.ps1.\n- moe-agent.ps1: ONE hunk, +20/-0, right after the Invoke-MoeVerifiedLocalGate call. When $script:MoeVmRoute -and $script:LaunchOutage, it prints the sh twin's [launch-outage] line, posts one best-effort #general line (only with a channel id; a refused post never skips a reset), and resets LaunchFailStreak, LaunchFailBackoffSec, LaunchOutage, LaunchOutageHeldTaskId, LaunchOutageReleaseTried and LaunchOutageAnnounce. Both strings diff-equal sh lines 10096/10098. BOM and LF kept.\n- postflight-vm-route.ps1: $script:VmrCommand/$script:VmrTimeoutSec one-row overrides (1 init line, 2 Invoke-VmrRow lines) and a [seat outage] section. The end-to-end VR-outage row (legacy outage, then verified-local ready) proves exactly 3 host CLI launches all before the 4th readiness read, no MOE_LAUNCH_PROBE, VM-marked claims after the flip and unmarked ones before, one outage-over line, one exact #general post, seat rows seat-start,seat-stop, exit 0, and exactly one taskless reason via task-1dfec7a4's Assert-VmrOneReason. An in-process AST check runs the block itself in 3 cases (sent, refused, no-channel) and pins all six resets.\nEvidence: RED on the unfixed wrapper stopped at 'printed MOE_LAUNCH_PROBE' (pwsh.exe, red-7.log). Gate checkRefs[0] fresh: EXIT=0, PASS postflight-vm-route.ps1 on powershell.exe 5.1 and pwsh.exe 7 and PASS parity-check.sh, BOM ef bb bf. 7 mutants of the block (each reset, the channel guard) all make the in-process check throw.\nNotes: the first gate attempt failed on a harness stub bug (a stub param named $Args reads as the automatic array); fixed with [Alias('Args')]$RpcArgs. Not covered by a row: VM claim-failed with a mention, an unparseable claim, and a held task through the outage (reasoned).",
+  "commits": [
+    {
+      "sha": "060d7b8c44afcaf121e195a3d06ae135e82497ca",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T12:10:21Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T12:34:18.044Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
