@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// The launcher exports the seat's live usage receipt to every child; this file's fixture provider streams must never append to it (task-03418dc2).
+delete process.env.MOE_USAGE_RECEIPT_FILE;
+delete process.env.MOE_USAGE_CONTEXT_JSON;
+
 const root = new URL('../../', import.meta.url);
 const read = ext => readFileSync(new URL(`scripts/moe-agent.${ext}`, root), 'utf8').replaceAll('\r\n', '\n');
 function between(source, start, end) {

@@ -6,6 +6,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+// The launcher exports the seat's live usage receipt to every child; this file's fixture provider streams must never append to it (task-03418dc2).
+delete process.env.MOE_USAGE_RECEIPT_FILE;
+delete process.env.MOE_USAGE_CONTEXT_JSON;
+
 const helper = new URL('../prompt-cache.mjs', import.meta.url);
 test('shared prompt cache helper is shipped', () => assert.ok(existsSync(helper)));
 test('provider usage semantics and missing counters', async () => {

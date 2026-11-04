@@ -12,7 +12,11 @@ import { createInterface } from 'node:readline';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../../', import.meta.url));
+// The launcher exports the seat's live usage receipt to every child; this file's fixture provider streams must never append to it (task-03418dc2).
+delete process.env.MOE_USAGE_RECEIPT_FILE;
+delete process.env.MOE_USAGE_CONTEXT_JSON;
+
+const root =fileURLToPath(new URL('../../', import.meta.url));
 const bundle = process.argv[2] && path.resolve(process.argv[2]);
 const daemonEntry = bundle ? path.join(bundle, 'daemon/index.js') : path.join(root, 'packages/moe-daemon/dist/index.js');
 const proxyEntry = bundle ? path.join(bundle, 'proxy/index.js') : path.join(root, 'packages/moe-proxy/dist/index.js');
