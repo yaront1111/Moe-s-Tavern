@@ -13,19 +13,25 @@
     {
       "stepId": "step-1",
       "description": "moe-agent.sh: keep the usage receipt pair out of every exported environment and hand it only to the wrapper's own usage helper calls (lines at 500e3f29; re-anchor by text if bbd7ad2d/1dfec7a4/6b3ab9d8 or 62ec51f1's rework moved them).\n(a) start_moe_usage_receipt() (:869-895) exports nothing. Its first line becomes `unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON USAGE_RECEIPT_FILE USAGE_RECEIPT_CONTEXT` (this also drops an inherited export). Add `supplied=\"\"` to the existing `local` list and build the python context with `if ! supplied=$(...)`, so the test still sees the substitution's status. usage-session.mjs gets it as a one-command prefix: `prepared=$(MOE_USAGE_CONTEXT_JSON=\"$supplied\" \"$NODE_CMD\" \"$SCRIPT_DIR/usage-session.mjs\" \"$PROJECT\" 2>/dev/null) || prepared=\"\"`. Delete `export MOE_USAGE_CONTEXT_JSON` and the two `unset MOE_USAGE_CONTEXT_JSON` in the failure branches. Error handling stays fail-open: both failure branches still print `[usage] MOE_USAGE_REPORT_UNAVAILABLE` and `return 0`. On success, set the UNEXPORTED shell variables `USAGE_RECEIPT_FILE=\"$receipt_file\" USAGE_RECEIPT_CONTEXT=\"$receipt_context\"`, then run `MOE_USAGE_RECEIPT_FILE=\"$USAGE_RECEIPT_FILE\" MOE_USAGE_CONTEXT_JSON=\"$USAGE_RECEIPT_CONTEXT\" \"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\" usage-start \"$provider\" >/dev/null || true`.\n(b) Each stream helper gets the same pair as an inline per-command prefix, `MOE_USAGE_RECEIPT_FILE=\"${USAGE_RECEIPT_FILE:-}\" MOE_USAGE_CONTEXT_JSON=\"${USAGE_RECEIPT_CONTEXT:-}\"`, placed directly before `\"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\"` in: the codex exec pipeline (:11408, after the existing MOE_TOOL_WRITES_FILE..MOE_SERENA_PROJECT_ROOT prefixes); and both claude print pipelines (:12044 and :12057, the `| \"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\" claude-stream |` element). Do NOT add a shell function for this: prompt-cache-launcher.test.mjs runs the codex pipeline line alone (`            agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\` -> `            set -e`), so a new function would be undefined there. An empty value acts like today's unset for the writer (usage-receipt.mjs:79 `if (!file) return`; readContext('') -> {}), so the rows stay byte-identical.\n(c) The main-loop top (:9921-9922) keeps its comment; its unset line also names USAGE_RECEIPT_FILE USAGE_RECEIPT_CONTEXT.\n(d) A comment above start_moe_usage_receipt() says why. task-03418dc2 found fixture usage from processes the CLI starts in 48 live receipts. So no agent CLI, nothing the CLI starts, and no other wrapper child (the post-flight quality gate included) may see the pair. Name the twin, Invoke-MoeUsageHelper in moe-agent.ps1. Extend the codex block's 'The helper alone gets the TOOL-witness env' comment so it also names the receipt pair.\nKeep these test anchors byte-identical: `start_moe_usage_receipt() {`, `# End usage receipt helpers.`, `        LAUNCH_SKIPPED=false`, `            start_moe_usage_receipt codex headless`, `            agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\`, `            set -e`. Keep the main-loop `{ ... exit }` group, and `bash -n` must pass. Edit only with the Edit tool, in W (mem:gotcha-wrapper-slice-tests-execute-text).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-04T11:44:17.913Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "moe-agent.sh (+20/-14): start_moe_usage_receipt no longer exports anything. It unsets the MOE_ pair plus USAGE_RECEIPT_FILE/USAGE_RECEIPT_CONTEXT, builds the context into a local `supplied`, hands it to usage-session.mjs as a one-command prefix, stores the result in unexported shell vars, and gives usage-start the pair as a prefix. The codex-stream and both claude-stream pipelines get the inline MOE_USAGE_* prefixes (no new function). The loop-top unset also names the shell vars, the why-comment sits above the function, and the codex TOOL-witness comment is extended. All anchors are unchanged. bash -n OK; usage-launcher + prompt-cache-launcher on WSL node: 40/38 pass/0 fail/2 skip (= baseline).",
+      "startedAt": "2026-11-04T11:44:17.913Z",
+      "completedAt": "2026-11-04T11:48:05.042Z"
     },
     {
       "stepId": "step-2",
       "description": "moe-agent.ps1 twin: keep the pair in script scope, and set it in `$env:` only around the wrapper's own helper calls. A native process copies the environment when it starts, so the CLI, the heartbeat job and every later child never see it (lines at 500e3f29; re-anchor by text).\n(a) Start-MoeUsageReceipt (:1235-1261). On entry, clear `$env:MOE_USAGE_RECEIPT_FILE`, `$env:MOE_USAGE_CONTEXT_JSON`, `$script:MoeUsageReceiptFile` and `$script:MoeUsageContextJson`. `$env:MOE_USAGE_CONTEXT_JSON` holds the supplied @{...} JSON only for the usage-session.mjs call. On success, set `$script:MoeUsageReceiptFile = [string]$usageSession.file` and `$script:MoeUsageContextJson = $usageSession.context | ConvertTo-Json -Compress` (exactly today's values), then run usage-start through Invoke-MoeUsageHelper. The catch clears both script variables and keeps `Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE'`, so error handling stays fail-open. The finally clears both `$env:` names, then restores `$global:LASTEXITCODE` as today.\n(b) Add `function Invoke-MoeUsageHelper([scriptblock]$Call)` after Start-MoeUsageReceipt and before `# End usage receipt helpers.` (usage-launcher.test.mjs runs that block as its preamble). It sets both `$env:` names from the script variables, runs `& $Call`, and clears both in `finally`. Add a comment giving the why and the twin (the sh helper calls' MOE_USAGE_* prefixes).\n(c) In the `$parseStreamJson` \"result\" branch (:11449), wrap the existing `$line | & node $promptCacheHelper claude-stream | Select-Object -Skip 1 | ForEach-Object { Write-Host $_ }` in `Invoke-MoeUsageHelper { ... }`. The scriptblock reads `$line` and `$promptCacheHelper` through dynamic scope.\n(d) In the claude launch `finally` (:11493), test `$script:MoeUsageReceiptFile` instead of `$env:MOE_USAGE_RECEIPT_FILE`. Run the `'' | & node $promptCacheHelper claude-stream | Out-Null` fallback through Invoke-MoeUsageHelper, inside the existing try/catch.\n(e) In the codex exec `ForEach-Object -Begin` (:10885-10901), after the TOOL-witness lines, add `if ($script:MoeUsageReceiptFile) { $psi.EnvironmentVariables['MOE_USAGE_RECEIPT_FILE'] = $script:MoeUsageReceiptFile; $psi.EnvironmentVariables['MOE_USAGE_CONTEXT_JSON'] = $script:MoeUsageContextJson }`. Put no `else` anywhere in this block: two tests cut it at the first `            } else {` after the codex exec line, and a deeper-indented one matches too.\n(f) At the main-loop top (:9699-9701), also reset both script variables to `$null`.\nKeep byte-identical: `function Start-MoeUsageReceipt`, `# End usage receipt helpers.`, `            $parseStreamJson = {`, `            # Usage receipt launch boundary.`, `                Start-MoeUsageReceipt 'codex' 'headless'`, the codex `                & {` line and its `Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$script:cliRoot\" @codexSandboxArgs \"$shortPrompt\"` line, and the `Remove-MoeAgentGitGuard` tail. Add no new MOE_* code or env name (parity). Keep the UTF-8 BOM, and ParseFile must report 0 errors.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T11:48:09.514Z"
     },
     {
       "stepId": "step-3",
@@ -75,7 +81,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:06:21.135Z",
-  "updatedAt": "2026-11-04T11:44:17.913Z",
+  "updatedAt": "2026-11-04T11:48:09.514Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:57.567Z",
@@ -84,7 +90,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-04T10:57:11.313Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -94,7 +101,9 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T11:23:55.643Z",
   "executionContract": {

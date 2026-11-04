@@ -49,7 +49,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -65,16 +65,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:38:17.145Z",
-  "updatedAt": "2026-11-04T11:46:08.652Z",
+  "updatedAt": "2026-11-04T11:48:44.903Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:42:51.205Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T11:48:04.344Z",
+    "wallClockMs": 7513139
   },
   "contextFetchedBy": [
     "architect-67c762f6",
-    "worker-a408f113"
+    "worker-a408f113",
+    "qa-1cd86a39"
   ],
   "tier": "light",
   "effort": "high",
@@ -174,9 +177,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T11:42:41Z",
-    "at": "2026-11-04T11:46:08.652Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T11:46:30Z",
+    "at": "2026-11-04T11:48:44.903Z"
+  },
+  "completedAt": "2026-11-04T11:48:04.344Z",
+  "reviewCompletedAt": "2026-11-04T11:48:04.344Z",
+  "reviewSummary": "Reviewed completion 2037e856 (on moe/work-2026-10-24, contained in control HEAD). Diff is 1 line (+1/-1) in scripts/moe-agent.ps1 only: Invoke-MoeSeatCli's `if ($BackgroundOut)` Start-Process gains the escaped -WorkingDirectory form from :1029. git diff --check clean; BOM ef bb bf kept; no other file touched. Grep shows only 2 real Start-Process calls (:1029, :9420), both escaped (DoD 2). Re-ran task.verification verbatim from a fresh snapshot: WSL node 8 tests, 3 pass, 0 fail, 5 skip (G1/G2 ok for moe-agent.ps1 and moe-team.ps1); Windows node.exe 8/8 pass incl. 5 launch-and-completion cases (powershell.exe x4, pwsh.exe x1); parity-check.sh PASS; PS 5.1 ParseFile 0 errors, exit 0 (DoD 1, 3). Mutant: pre-fix moe-agent.ps1 from 2037e856^ in the snapshot fails G2 naming moe-agent.ps1:9420, so the static test discriminates. Size well under 400. Scratch snapshot deleted.",
+  "requiredCheckAtDone": null
 }
