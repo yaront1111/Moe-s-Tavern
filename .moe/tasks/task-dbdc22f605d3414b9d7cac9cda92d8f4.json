@@ -13,32 +13,47 @@
     {
       "stepId": "step-1",
       "description": "Listener guard and its test (DoD 1, DoD 2).\n\nCHANGE. In MoeProjectOpenListener.projectOpened (moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt:11-16), make the first statement `if (LightEdit.owns(project)) return`, with the import com.intellij.ide.lightEdit.LightEdit. Add a one-line comment: the IDE's LightEdit pseudo-project (basePath = <IDE config>/light-edit) is not a Moe project, so it gets no registry entry, no .moe/ scaffold and no daemon.\n- Error handling: the guard is a pure instanceof check that cannot throw, and it adds no new failure path.\n- A non-LightEdit project keeps the existing `basePath ?: return` early exit and everything after it.\n\nAPI FACTS (verified with javap on the gradle-cached SDK idea-2026.2.3-win):\n- `public static boolean owns(Project)` in lib/intellij.platform.editor.ui.jar is exactly `aload_0; instanceof com.intellij.ide.lightEdit.LightEditCompatible; ireturn`.\n- LightEditCompatible (lib/intellij.platform.core.jar) is an empty marker interface.\n- LightEdit has only a private constructor plus owns: no static initializer and no @ApiStatus annotation.\n- So no predicate seam is needed. A test Proxy that implements both Project and LightEditCompatible makes the REAL LightEdit.owns return true, headless.\n\nTEST. New file moe-jetbrains/src/test/kotlin/com/moe/listeners/MoeProjectOpenListenerTest.kt, JUnit 4 like the rest of src/test.\n- Build the Proxy projects the way MoeProjectServiceTest.kt:49-80 does (fakeProject + defaultReturn), parameterised by basePath, the extra LightEditCompatible interface, and what getService(Class) returns.\n- Isolate the registry. MoeProjectRegistry reads System.getProperty(\"user.home\") on every call (MoeProjectRegistry.kt:30). Point user.home at a temp dir for each test, and as error handling for a failing assertion restore the previous value in a finally block (or @After). Then delete the temp dirs. Without this, a RED run on the gate host writes the developer's real ~/.moe/projects.json.\n- Case A (LightEdit). The Proxy implements Project + LightEditCompatible, basePath = a temp dir, and getService records any call. `MoeProjectOpenListener().projectOpened(project)` must throw nothing and never call getService, and must leave <tempHome>/.moe/projects.json and <tempBase>/.moe absent.\n  - Without the guard, registerProject writes the registry first, then the `project.service<MoeProjectService>()` lookup gets null and throws. The case therefore fails before any connect could scaffold or spawn.\n- Case B (normal project, the control). The Proxy implements Project only, basePath = a temp dir, and getService(MoeProjectService::class.java) returns `MoeProjectService(<a Proxy project with basePath null>) { it() }`.\n  - projectOpened must create <tempHome>/.moe/projects.json containing the temp basePath; read it back. This proves normal projects still register.\n  - That service's connect() stops at ensureMoeInitialized (blank basePath → false, MoeDaemonSupervisor.kt:655), so nothing is scaffolded or spawned. Dispose the service at the end.\n\nOUT OF SCOPE. Do not touch WorktreeExclusionListener (util/WorktreeExclusion.kt:175): it only edits module roots, and a LightEdit project has none.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt"
       ],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/listeners/MoeProjectOpenListenerTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/listeners/MoeProjectOpenListenerTest.kt"
+      ],
+      "note": "Added LightEdit.owns guard as first statement of projectOpened; new test with cases A (LightEdit) and B (normal). Guard cannot throw, no new failure path.",
+      "startedAt": "2026-11-04T09:55:17.409Z",
+      "completedAt": "2026-11-04T09:55:35.714Z"
     },
     {
       "stepId": "step-2",
       "description": "connect() guard and its tests (DoD 1, DoD 2).\n\nCHANGE. In MoeProjectService.connect() (moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt:140), change the first line to `if (disposed.get() || LightEdit.owns(project)) return`, importing com.intellij.ide.lightEdit.LightEdit.\n- The check runs BEFORE the wsLock check-and-set. A LightEdit project therefore never sets `connecting`, publishes no status, and never reaches daemonSupervisor.ensureMoeInitialized() or ensureDaemonRunning().\n- ensureMoeInitialized() is the .moe/ scaffold: MoeDaemonSupervisor.kt:654-665 calls MoeProjectInitializer.initializeProject, which also calls registerProject at MoeProjectInitializer.kt:95.\n- Error handling is unchanged for every other project: ensureMoeInitialized's catch and \"Project not initialized\" status, the stale daemon.json clean-up and the reconnect scheduling all stay as they are.\n- Every automatic path funnels through connect(): the open listener, the tool window panel's init (MoeToolWindowPanel.kt:362) and the reconnect/retry paths.\n- InitMoeAction and the panel's Init (MoeToolWindowPanel.kt:822-828) are explicit user actions on a chosen folder. Leave them.\n\nTESTS. In moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt, beside the existing cases. Use the same synchronous invokeLaterForTests lambda and MoeStateListener status collector as `manual disconnect publishes disconnected status immediately`.\n- Add a lightEditProject() helper: the existing fakeProject() Proxy with LightEditCompatible added to its interfaces. basePath stays null.\n- Case C: `MoeProjectService(lightEditProject()) { it() }`, then connect(). statuses must equal emptyList() and isConnected() must be false. Without the guard it publishes `false to \"Project not initialized\"`, so the case fails.\n- Case D (control): `MoeProjectService(fakeProject()) { it() }`, then connect(). statuses must equal listOf(false to \"Project not initialized\").\n- basePath stays null in both cases on purpose. A blank basePath makes ensureMoeInitialized() return false before any scaffold or spawn (MoeDaemonSupervisor.kt:655). So neither a GREEN run nor a RED run with the guard removed can create .moe/, write ~/.moe/projects.json or start a daemon on the gate host.\n- Dispose each service in a finally block.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
+      ],
+      "note": "connect() guard before wsLock; cases C and D added. Error handling of non-LightEdit path unchanged.",
+      "startedAt": "2026-11-04T09:55:36.520Z",
+      "completedAt": "2026-11-04T09:55:51.967Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification gate, run ONCE (DoD 1, DoD 3). JetBrains gradle from WSL, per mem:gotcha-jetbrains-gradle-from-wsl.\n\n1. Take the lease with moe.acquire_resource { resourceId: \"jetbrains-gradle\" }. Release it with moe.release_resource when done, whether the run passes or fails.\n2. Run from this task's worktree (worktree mode: D:\\projexts\\moes\\.worktrees\\<taskId>). From bash, single-quote the whole cmd string and leave the --tests filters unquoted.\n   - RED/GREEN: temporarily remove the two guards and run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d <worktree>\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.listeners.MoeProjectOpenListenerTest --tests com.moe.services.MoeProjectServiceTest --rerun'`. Cases A and C must fail and B and D pass. Restore the guards and rerun: everything passes.\n   - Full: `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d <worktree>\\moe-jetbrains && .\\gradlew.bat test --rerun'` must end with BUILD SUCCESSFUL.\n   - Confirm that :test executed rather than reporting UP-TO-DATE: the fresh build/test-results/test/TEST-com.moe.listeners.MoeProjectOpenListenerTest.xml and TEST-com.moe.services.MoeProjectServiceTest.xml carry the new cases with 0 failures.\n3. complete_task evidence: the full Windows command exactly as run, its exit code and the output tail (BUILD SUCCESSFUL plus the test count). Label it as the Windows equivalent of `cd moe-jetbrains && ./gradlew test`, not as the POSIX command. Also report the RED run's failing cases.\n4. In the summary, name the manual one-off cleanup this row does not do:\n   - the existing <IDE config>/light-edit/.moe/ folder (here C:/Users/<u>/AppData/Roaming/JetBrains/PyCharm2026.1/light-edit/.moe);\n   - the LightEditProject entry in ~/.moe/projects.json.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
-      ]
+      ],
+      "startedAt": "2026-11-04T09:55:52.716Z"
     },
     {
       "stepId": "step-4",
@@ -65,11 +80,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:34:09.187Z",
-  "updatedAt": "2026-11-04T09:54:06.185Z",
+  "updatedAt": "2026-11-04T09:55:52.716Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:38:11.589Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -79,7 +95,10 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T09:44:56.501Z",
   "executionContract": {
@@ -126,5 +145,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T09:44:56.550Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T09:55:17.409Z"
 }
