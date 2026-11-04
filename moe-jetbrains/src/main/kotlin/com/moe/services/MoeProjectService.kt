@@ -1,6 +1,7 @@
 package com.moe.services
 
 import com.google.gson.JsonObject
+import com.intellij.ide.lightEdit.LightEdit
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -138,7 +139,8 @@ class MoeProjectService @JvmOverloads constructor(
     }
 
     fun connect() {
-        if (disposed.get()) return
+        // LightEdit pseudo-project: never scaffold .moe/ or spawn a daemon for it.
+        if (disposed.get() || LightEdit.owns(project)) return
         // Atomic check-and-set: the open-listener and a pooled panel init can both
         // race here, so guard the connecting/connected flags under wsLock instead of
         // a non-atomic check-then-set on the @Volatile flags.
