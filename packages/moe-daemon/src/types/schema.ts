@@ -1869,6 +1869,12 @@ export interface DaemonInfo {
   projectPath: string;
   /** Present only when the bind host is not '127.0.0.1' (e.g. 'wsl' for WSL agents: loopback plus the WSL adapter). */
   bindHost?: string;
+  /**
+   * Linux only: the writer's pid namespace, `readlink /proc/self/ns/pid` (for example `pid:[4026531836]`); absent
+   * elsewhere. A reader in another pid namespace (a container, another WSL distro) cannot judge `pid`, so /health
+   * alone decides; see isOtherPidNamespace (server/probeHost.ts).
+   */
+  pidNamespace?: string;
 }
 
 export interface PlanningNotes {

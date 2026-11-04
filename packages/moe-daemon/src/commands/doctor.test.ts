@@ -367,6 +367,82 @@ describe('runDoctor — daemon.json from the other side of the WSL boundary', ()
   });
 });
 
+// task-da89f620: a daemon in a container writes a pid from its own pid namespace (pid 15) to the mounted daemon.json,
+// so kill -0 on the host proves nothing. Its record carries pidNamespace, and doctor judges a record from another
+// namespace by /health at the local probe address alone. 'pid:[1]' is no reader's own namespace on any CI OS.
+describe('runDoctor — daemon.json from another pid namespace (task-da89f620)', () => {
+  const DEAD_PID = 2147483646; // never a live pid here
+  let testDir: string;
+  let moePath: string;
+  const servers: http.Server[] = [];
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-doctor-pidns-'));
+    moePath = scaffoldMoe(testDir);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  async function healthServer(projectPath: string, pid: number): Promise<number> {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' });
+      res.end(JSON.stringify({ status: 'healthy', projectPath, pid }));
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return (server.address() as net.AddressInfo).port;
+  }
+
+  async function unusedPort(): Promise<number> {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as net.AddressInfo;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    return port;
+  }
+
+  // As the Docker image writes it: bindHost 0.0.0.0, which a local probe dials at 127.0.0.1.
+  const writeDaemonJson = (port: number, extra: Record<string, unknown> = { pidNamespace: 'pid:[1]' }) =>
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+      port, pid: DEAD_PID, projectPath: testDir, startedAt: new Date().toISOString(), bindHost: '0.0.0.0', ...extra }));
+
+  it('D1 a namespaced record whose /health answers for this project is valid though its pid is not alive here', async () => {
+    const port = await healthServer(testDir, DEAD_PID);
+    writeDaemonJson(port);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[OK\\] daemon\\.json: .*another pid namespace.*127\\.0\\.0\\.1:${port}`));
+    expect(line(result.output, 'daemon.json:')).not.toMatch(/not running|stale/);
+    expect(line(result.output, 'daemon health reachability')).toMatch(new RegExp(`^\\[OK\\] .*127\\.0\\.0\\.1:${port}`));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('D2 a namespaced record whose port answers nothing is stale, naming the address asked', async () => {
+    const port = await unusedPort();
+    writeDaemonJson(port);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toMatch(new RegExp(`^\\[WARN\\] daemon\\.json: .*another pid namespace.*127\\.0\\.0\\.1:${port}.*\\(stale\\)$`));
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('D3 a record without pidNamespace keeps the pid rule', async () => {
+    writeDaemonJson(await healthServer(testDir, DEAD_PID), {});
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(`[WARN] daemon.json: daemon.json present but pid ${DEAD_PID} not running (stale)`);
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+  });
+});
+
 // daemon.json is unchecked JSON (gitignored runtime state a hand edit or a broken writer can corrupt). http.request and
 // Socket#connect throw ERR_SOCKET_BAD_PORT synchronously on a port outside 1-65535 or a fraction, which rejected
 // runDoctor for a LOCAL record with a live pid (port 0 dials port 80; the string '8080' is dialed). doctor judges the

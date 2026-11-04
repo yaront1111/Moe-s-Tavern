@@ -19,7 +19,7 @@ import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { ensureRunnerKey } from './server/runnerChannel.js';
 import { productionReadinessInputs, startReadinessEvaluation } from './delivery/readinessHolder.js';
 import { WSL_BIND_HOST, resolveBindHosts, listenOnHosts } from './server/bindHosts.js';
-import { DEFAULT_BIND_HOST, probeHostFor, recordedProbeHost, isLocalAddress, healthProbeAddress, isForeignDaemonInfo, foreignProbeHosts, isValidPort } from './server/probeHost.js';
+import { DEFAULT_BIND_HOST, probeHostFor, recordedProbeHost, isLocalAddress, healthProbeAddress, isForeignDaemonInfo, foreignProbeHosts, isValidPort, ownPidNamespace, isOtherPidNamespace } from './server/probeHost.js';
 import { isAllowedHealthHost } from './server/healthHost.js';
 import { healthProofFields, parseHealthRequest, takeSpawnProofKey } from './server/spawnProof.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
@@ -76,6 +76,9 @@ const LOOPBACK_PROBE_TIMEOUT_MS = 500;
 /** validateDaemonInfoForProject's reason when daemon.json's bindHost resolves to an address that is not this machine. */
 const BIND_HOST_NOT_LOCAL = 'bindHost not local';
 
+/** validateDaemonInfoForProject's reason when a daemon.json from another pid namespace gets no confirming /health answer. */
+const PID_NAMESPACE_UNREACHABLE = 'pid namespace daemon unreachable';
+
 function daemonInfoPath(projectPath: string): string {
   return path.join(projectPath, '.moe', 'daemon.json');
 }
@@ -118,6 +121,8 @@ type DaemonValidationResult = {
   info?: DaemonInfo;
   /** daemon.json belongs to the other side of the WSL boundary (isForeignDaemonInfo). */
   foreign?: boolean;
+  /** The record's pidNamespace is not this reader's (isOtherPidNamespace); /health alone judged it. */
+  namespaced?: boolean;
 };
 
 type LockInfo = {
@@ -337,6 +342,14 @@ async function validateDaemonInfoForProject(
       }
     }
     return { valid: false, reason: 'foreign daemon unreachable', foreign: true };
+  }
+  if (isOtherPidNamespace(info.pidNamespace)) {
+    // A container's (or another distro's) pid means nothing here: never signal it; /health at the local address decides.
+    const address = await healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS);
+    if (address === null || !isLocalAddress(address)) return { valid: false, reason: BIND_HOST_NOT_LOCAL, namespaced: true };
+    return await probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, address)
+      ? { valid: true, info, namespaced: true }
+      : { valid: false, reason: PID_NAMESPACE_UNREACHABLE, namespaced: true };
   }
   if (!isProcessAlive(info.pid)) return { valid: false, reason: 'pid not alive' };
   // Resolved once, so the literal judged here is the one dialed.
@@ -572,7 +585,9 @@ function missingMoeDirBlocksStart(projectPath: string): boolean {
  * existing daemon.json must stop this start. A live daemon, native or on the
  * other side of the WSL boundary, blocks it; so does a foreign daemon.json that
  * does not answer /health, which is reported (exit 1) and never removed. A
- * native stale daemon.json is cleaned up and the start proceeds.
+ * native stale daemon.json is cleaned up and the start proceeds, and so is one
+ * from another pid namespace that /health no longer confirms (a restarted
+ * container reads its predecessor's record from a new namespace).
  */
 async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> {
   const existing = readDaemonInfo(projectPath);
@@ -590,12 +605,32 @@ async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> 
   }
   if (existing) {
     const existingPid = isDaemonInfoShape(existing) ? existing.pid : null;
-    if (existingPid && !isProcessAlive(existingPid)) {
+    if (validation.namespaced) {
+      // Its pid is another namespace's: report what /health showed, never probe the pid here.
+      logger.info({ pid: existingPid, reason: validation.reason }, '[lock] cleaned stale daemon.json from another pid namespace');
+    } else if (existingPid && !isProcessAlive(existingPid)) {
       logger.info({ pid: existingPid }, '[lock] cleaned stale daemon.json (pid not running)');
     }
     cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
   }
   return false;
+}
+
+/**
+ * The record this daemon writes to .moe/daemon.json. bindHost only when it is not the loopback default; pidNamespace
+ * only where this process has one (Linux), so a reader in another pid namespace (the host, for a daemon in a
+ * container) knows its pid cannot be judged there.
+ */
+function buildDaemonInfo(port: number, projectPath: string, host: string): DaemonInfo {
+  const pidNamespace = ownPidNamespace();
+  return {
+    port,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    projectPath,
+    ...(host !== DEFAULT_BIND_HOST ? { bindHost: host } : {}),
+    ...(pidNamespace !== undefined ? { pidNamespace } : {}),
+  };
 }
 
 async function startDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
@@ -799,16 +834,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   // Re-arm them once from persisted state now that the emitter + WS are wired.
   rearmSpeedModeApprovals(state);
 
-  const info: DaemonInfo = {
-    port,
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-    projectPath,
-    ...(host !== DEFAULT_BIND_HOST ? { bindHost: host } : {})
-  };
-
   // Write daemon.json only after port is confirmed listening
-  writeDaemonInfo(projectPath, info);
+  writeDaemonInfo(projectPath, buildDaemonInfo(port, projectPath, host));
 
   // Write global install config so other projects can find this installation
   writeGlobalConfig();
@@ -1056,9 +1083,16 @@ async function stopDaemon(projectPath: string): Promise<void> {
       + '(no signal sent, nothing removed)');
     return;
   }
+  if (validation.namespaced && validation.valid) {
+    logger.error({ port: info.port, pid: info.pid },
+      'daemon.json belongs to a live daemon in another pid namespace (for example a container): stop it there, '
+      + 'for example with docker stop (no signal sent, nothing removed)');
+    process.exitCode = 1;
+    return;
+  }
   if (!validation.valid || !validation.info) {
     if (validation.reason === BIND_HOST_NOT_LOCAL) {
-      // Its pid is alive (checked before the bindHost), and nothing here can verify what that process is.
+      // Its pid is alive (checked before the bindHost) or another pid namespace's, and nothing here can verify it.
       logger.error({ pid: info.pid, bindHost: info.bindHost },
         'daemon.json names a bindHost that is not an address of this machine, so its pid cannot be verified here: '
         + 'no signal sent and nothing removed. Check what that process is and stop it yourself if it is a Moe daemon');
@@ -1066,7 +1100,9 @@ async function stopDaemon(projectPath: string): Promise<void> {
       return;
     }
     const pid = isDaemonInfoShape(info) ? info.pid : null;
-    if (pid && !isProcessAlive(pid)) {
+    if (validation.namespaced) {
+      logger.info({ pid }, '[stop] daemon.json from another pid namespace got no /health answer; removing stale file');
+    } else if (pid && !isProcessAlive(pid)) {
       logger.info({ pid }, '[stop] daemon.json found but pid not running; removing stale file');
     }
     // Same backoff race: the supervisor may still be alive and waiting to
@@ -1092,15 +1128,21 @@ async function statusDaemon(projectPath: string): Promise<void> {
 
   const validation = await validateDaemonInfoForProject(projectPath, info);
   const shaped = isDaemonInfoShape(info);
-  // A query only deletes what is proven gone here: a local daemon.json whose pid is dead.
-  if (shaped && !validation.foreign && !isProcessAlive(info.pid)) {
+  // A query only deletes what is proven gone here: a local daemon.json whose pid is dead, or one from another pid
+  // namespace (a removed container) whose /health no longer answers. That namespace's pid is never probed.
+  if (validation.namespaced && validation.reason === PID_NAMESPACE_UNREACHABLE) {
+    logger.info({ pid: info.pid }, 'Daemon not running (stale daemon.json removed: no /health answer from its pid namespace)');
+    cleanupStaleDaemonFiles(projectPath, validation.reason);
+    return;
+  }
+  if (shaped && !validation.foreign && !validation.namespaced && !isProcessAlive(info.pid)) {
     logger.info({ pid: info.pid }, 'Daemon not running (stale daemon.json removed: pid dead)');
     cleanupStaleDaemonFiles(projectPath, validation.reason || 'pid not alive');
     return;
   }
   logger.info({
     status: validation.valid ? 'running' : validation.foreign ? 'unknown' : 'stopped',
-    owner: validation.foreign ? 'other side of the WSL boundary' : 'local',
+    owner: validation.foreign ? 'other side of the WSL boundary' : validation.namespaced ? 'another pid namespace' : 'local',
     reason: validation.reason,
     port: shaped ? info.port : undefined,
     pid: shaped ? info.pid : undefined,
@@ -1277,6 +1319,7 @@ export {
   isSameProjectPath,
   isForeignDaemonInfo,
   isDaemonInfoShape,
+  buildDaemonInfo,
   probeDaemonHealth,
   validateDaemonInfoForProject,
   readDaemonInfo,

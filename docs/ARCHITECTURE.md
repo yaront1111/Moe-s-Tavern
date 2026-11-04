@@ -630,7 +630,11 @@ and `verified-local` stays refused until certification and the client gates pass
   pid's daemon.json is still removed, and `start` replaces the file as it does any daemon.json it cannot verify.
   Loopback, `0.0.0.0`, `::`, `--host wsl`, and a name or address of a local interface stop as before. For a
   daemon.json from the other side of the WSL boundary, the gateway from the routing table is still probed, and such a
-  file is never signalled or removed.
+  file is never signalled or removed. A daemon.json whose `pidNamespace` is not the reader's own (a daemon in a
+  container, task-da89f620; see `docs/SCHEMA.md`) is judged by `/health` at the local probe address alone, and its pid
+  is never signalled: while that answer confirms this project, `status` reports it running, `stop` sends no signal,
+  removes nothing and exits 1, `start` refuses a second daemon and `doctor` reports `[OK]`; with no answer it is stale,
+  so `status` and `stop` remove it, `start` replaces it and `doctor` warns `(stale)`.
 - **VS Code parity** (CQ-RF06, `services/MoeDaemonClient.ts`). Selection takes only `<extensionPath>/bundled` and an
   absolute node outside the project, and fails closed. Windows bases that are not plain local paths are refused with
   the JetBrains words. The state, pin and daemon provenance below are VS Code's own, smaller counterparts of the

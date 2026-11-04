@@ -70,6 +70,27 @@ describe('daemon lifecycle validation', () => {
     };
   }
 
+  // Shared by the WSL-boundary and pid-namespace blocks below.
+  const DEAD_PID = 2147483646;
+  const jsonPath = () => path.join(testDir, '.moe', 'daemon.json');
+  const lockPath = () => path.join(testDir, '.moe', 'daemon.lock');
+  const stopPath = () => path.join(testDir, '.moe', 'daemon.stop');
+
+  function writeDaemonFiles(port: number, pid = DEAD_PID, projectPath = testDir, extra: Partial<DaemonInfo> = {}): string {
+    const raw = JSON.stringify(daemonInfo({ port, pid, projectPath, ...extra }));
+    fs.writeFileSync(jsonPath(), raw);
+    fs.writeFileSync(lockPath(), JSON.stringify({
+      pid, projectPath, createdAt: new Date().toISOString(),
+    }));
+    return raw;
+  }
+
+  function killSpyWithoutSignals() {
+    const realKill = process.kill.bind(process);
+    return vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) =>
+      signal === 0 || signal === undefined ? realKill(pid, 0) : true) as typeof process.kill);
+  }
+
   it('accepts valid daemon info only when health matches the requested project', async () => {
     const port = await healthServer(testDir);
     const result = await validateDaemonInfoForProject(testDir, daemonInfo({ port }));
@@ -228,11 +249,7 @@ describe('daemon lifecycle validation', () => {
   // pid from another pid namespace. Flipping process.platform makes testDir's
   // own path form look like the other side's, so this runs on every CI OS.
   describe('daemon.json across the WSL boundary', () => {
-    const DEAD_PID = 2147483646;
     let savedExitCode: typeof process.exitCode;
-    const jsonPath = () => path.join(testDir, '.moe', 'daemon.json');
-    const lockPath = () => path.join(testDir, '.moe', 'daemon.lock');
-    const stopPath = () => path.join(testDir, '.moe', 'daemon.stop');
 
     beforeEach(() => {
       savedExitCode = process.exitCode;
@@ -252,21 +269,6 @@ describe('daemon lifecycle validation', () => {
       } finally {
         Object.defineProperty(process, 'platform', saved);
       }
-    }
-
-    function writeDaemonFiles(port: number, pid = DEAD_PID, projectPath = testDir, extra: Partial<DaemonInfo> = {}): string {
-      const raw = JSON.stringify(daemonInfo({ port, pid, projectPath, ...extra }));
-      fs.writeFileSync(jsonPath(), raw);
-      fs.writeFileSync(lockPath(), JSON.stringify({
-        pid, projectPath, createdAt: new Date().toISOString(),
-      }));
-      return raw;
-    }
-
-    function killSpyWithoutSignals() {
-      const realKill = process.kill.bind(process);
-      return vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) =>
-        signal === 0 || signal === undefined ? realKill(pid, 0) : true) as typeof process.kill);
     }
 
     it('DEAD_PID is not a live pid here', () => {
@@ -819,6 +821,168 @@ setInterval(() => {}, 60000);`;
           .toEqual({ valid: false, reason: 'foreign daemon unreachable', foreign: true });
         expect(dialed).toEqual([OFF]);
       });
+    });
+  });
+
+  // A daemon in a container (or another WSL distro) writes a pid from its own pid namespace to the mounted
+  // daemon.json: pid 15 means nothing on the host. Its record carries pidNamespace, and a reader in another namespace
+  // judges it by /health alone, never by its pid. 'pid:[1]' differs from every reader's own namespace on every CI OS
+  // (no real namespace inode is 1; Windows and macOS have none). The new exports are imported inside N1/N2, so the rest
+  // of this file still loads against code without them.
+  describe('daemon.json from another pid namespace (task-da89f620)', () => {
+    const OTHER_NS = 'pid:[1]';
+    const realReadlinkSync = fs.readlinkSync;
+    let savedExitCode: typeof process.exitCode;
+
+    beforeEach(() => {
+      savedExitCode = process.exitCode;
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      process.exitCode = savedExitCode;
+    });
+
+    // probeHost.ts reads /proc/self/ns/pid through the same default fs object.
+    function stubOwnPidNamespace(value: string | Error): void {
+      vi.spyOn(fs, 'readlinkSync').mockImplementation(((file: fs.PathLike, options?: unknown) => {
+        if (file !== '/proc/self/ns/pid') return realReadlinkSync(file, options as never);
+        if (value instanceof Error) throw value;
+        return value;
+      }) as typeof fs.readlinkSync);
+    }
+
+    const noProc = () => Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+    const nonZeroSignals = (spy: ReturnType<typeof killSpyWithoutSignals>) =>
+      spy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined);
+    type Calls = { mock: { calls: unknown[][] } };
+    const statusLines = (spy: Calls) => spy.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields);
+    const messages = (spy: Calls) => spy.mock.calls.map((args) => String(args.at(-1)));
+
+    it('N1 isOtherPidNamespace counts only a well-formed other namespace, and ownPidNamespace reads only that form', async () => {
+      const { isOtherPidNamespace, ownPidNamespace } = await import('./server/probeHost.js');
+      const twenty = `pid:[${'9'.repeat(20)}]`;
+      const tooLong = `pid:[${'1'.repeat(21)}]`;
+      expect([isOtherPidNamespace('pid:[1]', 'pid:[7]'), isOtherPidNamespace(twenty, 'pid:[7]')]).toEqual([true, true]);
+      for (const recorded of ['pid:[7]', undefined, 7, 'pid:[x]', 'pid:[1', tooLong, 'net:[1]', ['pid:[1]'], null]) {
+        expect([recorded, isOtherPidNamespace(recorded, 'pid:[7]')]).toEqual([recorded, false]);
+      }
+
+      stubOwnPidNamespace('pid:[7]');
+      expect([ownPidNamespace(), isOtherPidNamespace('pid:[7]'), isOtherPidNamespace('pid:[1]')]).toEqual(['pid:[7]', false, true]);
+      stubOwnPidNamespace('garbage');
+      expect(ownPidNamespace()).toBeUndefined();
+      // No namespace of its own (Windows, macOS): any well-formed value is another's; a malformed one still is not.
+      stubOwnPidNamespace(noProc());
+      expect([ownPidNamespace(), isOtherPidNamespace('pid:[7]'), isOtherPidNamespace('pid:[7]', undefined), isOtherPidNamespace('pid:[x]')])
+        .toEqual([undefined, true, true, false]);
+    });
+
+    it('N2 buildDaemonInfo records the writer\'s pid namespace only where it has one, and keeps the bindHost rule', async () => {
+      const { buildDaemonInfo } = await import('./index.js');
+      stubOwnPidNamespace('pid:[7]');
+      expect(buildDaemonInfo(4321, testDir, '127.0.0.1'))
+        .toEqual({ port: 4321, pid: process.pid, startedAt: expect.any(String), projectPath: testDir, pidNamespace: 'pid:[7]' });
+      expect(buildDaemonInfo(4321, testDir, 'wsl')).toMatchObject({ bindHost: 'wsl', pidNamespace: 'pid:[7]' });
+
+      stubOwnPidNamespace(noProc());
+      const bare = buildDaemonInfo(4321, testDir, '0.0.0.0');
+      expect(bare).toEqual({ port: 4321, pid: process.pid, startedAt: expect.any(String), projectPath: testDir, bindHost: '0.0.0.0' });
+      expect('pidNamespace' in bare).toBe(false);
+    });
+
+    it('N3 validateDaemonInfoForProject judges a namespaced record by /health alone and never probes its pid', async () => {
+      const killSpy = killSpyWithoutSignals();
+      const port = await healthServer(testDir, DEAD_PID);
+      const info = daemonInfo({ port, pid: DEAD_PID, pidNamespace: OTHER_NS });
+      expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info, namespaced: true });
+
+      const unreachable = daemonInfo({ port: await unusedPort(), pid: DEAD_PID, pidNamespace: OTHER_NS });
+      expect(await validateDaemonInfoForProject(testDir, unreachable))
+        .toEqual({ valid: false, reason: 'pid namespace daemon unreachable', namespaced: true });
+      expect(killSpy.mock.calls.filter(([pid]) => pid === DEAD_PID)).toEqual([]);
+
+      expect(await validateDaemonInfoForProject(testDir, daemonInfo({ port, pid: DEAD_PID })))
+        .toMatchObject({ valid: false, reason: 'pid not alive' });
+    });
+
+    it('N4 statusDaemon keeps a namespaced daemon.json that /health confirms and reports it running', async () => {
+      const raw = writeDaemonFiles(await healthServer(testDir, DEAD_PID), DEAD_PID, testDir, { pidNamespace: OTHER_NS });
+      const logged = vi.spyOn(logger, 'info');
+
+      await statusDaemon(testDir);
+
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(process.exitCode ?? 0).toBe(0);
+      expect(messages(logged).filter((msg) => msg.includes('not running'))).toEqual([]);
+      expect(statusLines(logged)).toMatchObject([{ status: 'running', owner: 'another pid namespace', pid: DEAD_PID }]);
+    });
+
+    // process.pid stands in for an unrelated host process that happens to hold the container's pid number.
+    it('N5 statusDaemon removes a namespaced daemon.json whose /health no longer answers, even when its pid number is alive here', async () => {
+      writeDaemonFiles(await unusedPort(), process.pid, testDir, { pidNamespace: OTHER_NS });
+      const killSpy = killSpyWithoutSignals();
+
+      await statusDaemon(testDir);
+
+      expect(fs.existsSync(jsonPath())).toBe(false);
+      expect(nonZeroSignals(killSpy)).toEqual([]);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('N6 stopDaemon never signals, removes or sentinels a live namespaced daemon, and exits 1', async () => {
+      const raw = writeDaemonFiles(await healthServer(testDir, DEAD_PID), DEAD_PID, testDir, { pidNamespace: OTHER_NS });
+      const killSpy = killSpyWithoutSignals();
+      const errors = vi.spyOn(logger, 'error');
+
+      await stopDaemon(testDir);
+
+      expect(nonZeroSignals(killSpy)).toEqual([]);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(fs.existsSync(stopPath())).toBe(false);
+      expect(process.exitCode).toBe(1);
+      expect(messages(errors).join('\n')).toMatch(/another pid namespace.*no signal sent, nothing removed/);
+    });
+
+    // No daemon.lock, so the only pid stop could probe is the record's own, which it must never touch (not even signal 0).
+    it('N7 stopDaemon cleans up an unreachable namespaced daemon.json as stale and never signals or probes its pid', async () => {
+      fs.writeFileSync(jsonPath(), JSON.stringify(daemonInfo({ port: await unusedPort(), pid: DEAD_PID, pidNamespace: OTHER_NS })));
+      const killSpy = killSpyWithoutSignals();
+
+      await stopDaemon(testDir);
+
+      expect(killSpy.mock.calls.filter(([pid]) => pid === DEAD_PID)).toEqual([]);
+      expect(nonZeroSignals(killSpy)).toEqual([]);
+      expect(fs.existsSync(jsonPath())).toBe(false);
+      expect(fs.existsSync(stopPath())).toBe(true);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('N8 existingDaemonBlocksStart refuses a second daemon over a live namespaced one, and a restarted container still starts', async () => {
+      const raw = writeDaemonFiles(await healthServer(testDir, DEAD_PID), DEAD_PID, testDir, { pidNamespace: OTHER_NS });
+      expect(await existingDaemonBlocksStart(testDir)).toBe(true);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(process.exitCode ?? 0).toBe(0);
+
+      // Its predecessor's record, read from a new namespace with nothing answering yet: stale, so the start proceeds.
+      writeDaemonFiles(await unusedPort(), DEAD_PID, testDir, { pidNamespace: OTHER_NS });
+      expect(await existingDaemonBlocksStart(testDir)).toBe(false);
+      expect(fs.existsSync(jsonPath())).toBe(false);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('N9 a record from the reader\'s own pid namespace keeps the pid rules', async () => {
+      stubOwnPidNamespace('pid:[7]');
+      const port = await healthServer(testDir, DEAD_PID);
+      writeDaemonFiles(port, DEAD_PID, testDir, { pidNamespace: 'pid:[7]' });
+      expect(await validateDaemonInfoForProject(testDir, readDaemonInfo(testDir)))
+        .toMatchObject({ valid: false, reason: 'pid not alive' });
+
+      await statusDaemon(testDir);
+
+      expect(fs.existsSync(jsonPath())).toBe(false);
     });
   });
 });

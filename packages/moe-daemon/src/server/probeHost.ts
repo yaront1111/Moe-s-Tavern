@@ -99,6 +99,34 @@ export function isForeignDaemonInfo(info: Pick<DaemonInfo, 'projectPath'>, platf
     : /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(info.projectPath);
 }
 
+/** The one accepted daemon.json `pidNamespace` form, as Linux's `readlink /proc/self/ns/pid` prints it. */
+const PID_NAMESPACE = /^pid:\[[0-9]{1,20}\]$/;
+
+/**
+ * This process's pid namespace (`readlink /proc/self/ns/pid`, for example `pid:[4026531836]`), or undefined where there
+ * is none to read (Windows, macOS, no procfs) or the link is not in that form. Read fresh on every call, through the
+ * default fs import, so tests can stub fs.readlinkSync. Never throws.
+ */
+export function ownPidNamespace(): string | undefined {
+  try {
+    const link = fs.readlinkSync('/proc/self/ns/pid');
+    return typeof link === 'string' && PID_NAMESPACE.test(link) ? link : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when daemon.json's `pidNamespace` names a pid namespace other than this reader's: the writer ran in a
+ * container (or another WSL distro), so its pid means nothing here and only /health may judge the record. A reader with
+ * no namespace of its own (Windows, macOS) counts any well-formed value as other. Anything not in the exact
+ * `pid:[<digits>]` form (absent, non-string, malformed) is false, so legacy and hand-written records keep the pid rules.
+ * isForeignDaemonInfo (the WSL path form) is checked before this and wins. Never throws.
+ */
+export function isOtherPidNamespace(recorded: unknown, own: string | undefined = ownPidNamespace()): boolean {
+  return typeof recorded === 'string' && PID_NAMESPACE.test(recorded) && recorded !== own;
+}
+
 /**
  * The WSL default gateway (the Windows host in NAT mode), read from
  * /proc/net/route without spawning anything; null on any error. Node twin of

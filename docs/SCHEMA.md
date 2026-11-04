@@ -1971,6 +1971,36 @@ interface AccountRotationView {
 
 ---
 
+## daemon.json (runtime)
+
+**File:** `.moe/daemon.json` (gitignored; written only by the daemon, once its port is listening, and removed on shutdown)
+
+```typescript
+interface DaemonInfo {
+  port: number;                       // 1-65535
+  pid: number;                        // the daemon (`_run`) process, in the writer's own pid namespace
+  startedAt: string;                  // ISO 8601
+  projectPath: string;                // absolute, as the writer spells it (a drive path on Windows)
+  bindHost?: string;                  // present only when not '127.0.0.1' (e.g. 'wsl', '0.0.0.0' in the Docker image)
+  pidNamespace?: string;              // Linux only: `readlink /proc/self/ns/pid`, e.g. "pid:[4026531836]"; absent elsewhere
+}
+```
+
+**Liveness rule** (the daemon CLI's `status`, `stop` and `start`/`init` gate, and `doctor`; `server/probeHost.ts`):
+
+- A record from the other side of the WSL boundary (its `projectPath` form: a drive or UNC path read outside Windows,
+  a POSIX path read on Windows) is judged by `/health` alone, at `foreignProbeHosts`' addresses. It is never signalled
+  or removed. This rule is checked first.
+- A record whose `pidNamespace` is not the reader's own (a container, another WSL distro) is judged by `/health`
+  alone, at the local probe address of its `bindHost`. Its pid means nothing to the reader and is never signalled. An
+  answer confirming this project and the recorded pid means running. No answer means stale: the record is removed, as
+  a dead pid's is, so a restarted container starts. A reader with no namespace of its own (Windows, macOS) counts any
+  well-formed value as another's. Only the exact form `pid:[<1-20 digits>]` counts; any other value is ignored.
+- Any other record (no `pidNamespace`, or the reader's own) keeps the pid rules: a dead pid means stale, and a live
+  one must also answer `/health` for this project with that pid.
+
+---
+
 ## Activity Event
 
 **File:** `.moe/activity.log` (append-only, one JSON per line)
