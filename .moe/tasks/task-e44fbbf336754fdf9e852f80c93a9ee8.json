@@ -106,7 +106,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -119,16 +119,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:59:17.189Z",
-  "updatedAt": "2026-11-04T00:21:19.654Z",
+  "updatedAt": "2026-11-04T00:28:08.361Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:01:43.742Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T00:27:29.072Z",
+    "wallClockMs": 1545330
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
-    "worker-ed0f6a9e"
+    "worker-ed0f6a9e",
+    "qa-af7be174"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -258,9 +261,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ed0f6a9e@2026-11-04T00:10:02Z",
-    "at": "2026-11-04T00:21:19.653Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-04T00:23:59Z",
+    "at": "2026-11-04T00:28:08.361Z"
+  },
+  "completedAt": "2026-11-04T00:27:29.072Z",
+  "reviewCompletedAt": "2026-11-04T00:27:29.072Z",
+  "reviewSummary": "Reviewed landed completion a5157059 (pushed, on moe/work-2026-10-24 + origin; owned files unchanged since). Diff: 6 files +191/-8 (net 183), exactly the approvedScope.\n\nRe-ran:\n- checkRef verbatim: exit 0, 7 files, 262 tests passed, 'parked ok'.\n- Same snapshot: tsc --noEmit clean; full daemon vitest 280 files, 7434 passed / 24 skipped.\n- RED: with the 4 sources restored from a5157059^, the new test gives 4 failed / 2 passed (the 2 human/unparked controls pass).\n- qualityGate: parity-check PASS, lint OK.\n\nDoD:\n1. qa_approve/qa_reject refuse a supplied workerId NOT_ALLOWED right after the REVIEW check, before the finalizing/ownership/context/candidate gates and every write. The test pins the byte-identical file, the fields and an untouched caller. A workerId-less approve lands DONE.\n2. The release_task guard is inside runExclusive, before repairUpdates and the handoff write; the file stays byte-identical. releaseTask.test.ts is unmodified and passes; /ws RELEASE_TASK sends no workerId.\n3. get_context gives no hint on a parked row; an unparked unassigned REVIEW row still gets qa_approve. Docs: release_task Ownership + Side-effects; a qa_approve Errors bullet; qa_reject Returns (REVIEW, parkedForHuman, needsHumanReview) + a Hard-cap note + Errors. All hunks stay inside the 3 sections.\n4. The checkRef suite passes in a snapshot.\n\nInvariants: the enforcement no-ops are unchanged; the first park still parks.\n\nTaste (non-blocking): the get_context test could use toBeUndefined(); the park message is duplicated across the two qa tools.",
+  "requiredCheckAtDone": null
 }

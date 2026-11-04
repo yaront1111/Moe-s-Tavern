@@ -12,22 +12,32 @@
     {
       "stepId": "step-1",
       "description": "DoD 1: reproduce the flake and record its root cause. There is no repo change in this step and no Gradle run, so no lease is needed. The architect already reproduced it outside the plugin with a standalone Java harness against the same Java-WebSocket 1.6.0 jar: /mnt/d/moe-scratch/plan-8784d35d/harness/ (README.md holds the exact commands; SHA256SUMS sits one level up). Re-run it with the Windows JDK 17 from WSL. Compile, then run:\n- `ReadinessStress 9 1500 5000` (9 round trips per fresh connection, like the malformed test) at least 3 times;\n- `ReadinessStress 9 1500 5000 rearm` at least 3 times;\n- `StrandCheck 200` once.\n\nExpected, from the architect's runs:\n- Without rearm, about 1 timeout per 6,600 round trips (11 in 72,900). Every TIMEOUT line shows serverReceived == serverSent == expected, serverOutQueue=1 and serverInterestOps=1 (OP_READ only), and one extra onWriteDemand delivers the stranded reply within 1 s.\n- With rearm, 0 timeouts (0 in 81,000).\n- StrandCheck: 0 leaked and 0 undelivered of 200.\n\nThe root cause to record (it also goes into the fixture KDoc in step 2): the loopback daemon in MoeProjectConnectionTest is Java-WebSocket's WebSocketServer, which can leave a sent frame queued while the connection's selection key is back on OP_READ. Here is how, verified with javap on the 1.6.0 jar:\n- WebSocketImpl.write does outQueue.put, then WebSocketServer.onWriteDemand sets interestOps(5) and calls wakeup.\n- The selector's doWrite runs SocketChannelIOHelper.batch, and when that drains the queue it sets interestOps(1).\n- Nothing orders the two, so the frame waits for the next write demand on that connection.\n\nThe fixture writes nothing but its answers, so a stranded answer never left, and `requestExecutionReadiness().get(5, SECONDS)` at MoeProjectConnectionTest.kt:217 threw TimeoutException. The malformed test is the one that hit it because it makes 9 round trips (about 1% per run). Production is not exposed: the plugin's server is the Node daemon, and its Java-WebSocket client writes from a dedicated thread off a blocking queue. Write these numbers into complete_task's summary. If your runs disagree with the architect's, stop and record that with moe.add_comment before step 2.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Recompiled checksum-verified standalone harness with Windows JDK 17. Baseline 3x13,500: 3/0/2 timeouts (5/40,500); each stalled with received=sent=expected, outQueue=1, interestOps=1; extra demand delivered all five. Rearm 3x13,500: 0/40,500 timeouts. StrandCheck 200: zero leaks, zero undelivered. Confirms selector doWrite OP_READ reset races send's OP_READ|OP_WRITE update; plugin future registration/parser correct. Quality gate parity + lint also freshly passed. No repository changes.",
+      "startedAt": "2026-11-04T00:23:58.789Z",
+      "completedAt": "2026-11-04T00:26:49.111Z"
     },
     {
       "stepId": "step-2",
       "description": "DoD 2: the fixture fix plus two deterministic regression tests, all in moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt, and no other file. Make the file byte-identical to /mnt/d/moe-scratch/plan-8784d35d/ref/MoeProjectConnectionTest.expected.kt (sha256 ad611f518693450f283f29ca9ecb3f09c0d42047a731778a05077a5326b11978). It is uncompiled, because an architect seat cannot hold the jetbrains-gradle lease (mem:gotcha-architect-cannot-take-gradle-lease). Apply it with your own editor tool only (Edit on Claude, apply_patch on codex exec), never a shell copy (project rail). The file is LF.\n\nThe diff:\n(a) Add `import org.java_websocket.WebSocketImpl`.\n(b) In ConnectionFixture:\n- a `@Volatile var enqueue: (WebSocket, String) -> Unit = { conn, text -> conn.send(text) }`;\n- the server's onMessage still records every frame, and on an answer runs `this@ConnectionFixture.enqueue(socket, answer)` and then `this@ConnectionFixture.flush(socket)`;\n- `serverConnection()` returns `server.connections.single()`;\n- `flush(conn): Boolean` calls server.onWriteDemand(conn) and Thread.sleep(1) until `(conn as WebSocketImpl).outQueue` is empty, for at most 2 s, and returns whether it drained. Its KDoc is the root-cause record;\n- `strand(conn, text)` puts `impl.draft.createFrames(text, false)` through `impl.draft.createBinaryFrame` onto `impl.outQueue` with no write demand. That is exactly the stuck state the flake leaves.\nEvery library member used here is public in 1.6.0 (javap): WebSocketImpl.outQueue, getDraft(), Draft.createFrames(String, boolean), createBinaryFrame(Framedata) and WebSocketServer.onWriteDemand(WebSocket).\n(c) Two new tests after the malformed one, on new pids 41019 and 41020:\n- 'a frame queued without a write demand stays unsent until flush re-arms it' requests readiness with no automatic answer and waits for the GET_EXECUTION_READINESS frame. It strands a valid EXECUTION_READINESS and asserts the future is NOT done after 300 ms. That control proves the stuck state is real. It then asserts flush(conn) returns true and the future is Answered(ExecutionReadiness(\"verified-local\", true, [], null)).\n- 'a reply the loopback server strands still answers the request' sets `fixture.enqueue = fixture::strand`, answers readiness, and asserts the same Answered value from get(5, SECONDS). That proves onMessage's flush wiring.\nThe architect checked both premises with StrandCheck: 200 of 200. They are deterministic, because nothing else writes on that connection and the libraries' 60 s ping timers never fire inside a test.\n\nThe malformed test and every other assertion stay untouched; do not weaken them (task rule). Error handling: flush is bounded at 2 s and returns false rather than hanging, so the waiting request then fails at its own timeout with a clear message, under the class's 30 s Timeout rule. An InterruptedException from Thread.sleep can only happen during server.stop teardown, where the library routes it to the fixture's empty onError.\n\nRun the focused test class under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease; acquire it, and release it after every run, even a failed one). WSL has no JDK (mem:gotcha-jetbrains-gradle-from-wsl). From the worktree root: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$(git rev-parse --show-toplevel)\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.services.MoeProjectConnectionTest --rerun\"`. Expected: tests=16 failures=0. On a compile error, read the FIRST e: line.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "note": "Applied approved reference with apply_patch; exact SHA ad611f518693450f283f29ca9ecb3f09c0d42047a731778a05077a5326b11978. Focused Windows Gradle test --tests com.moe.services.MoeProjectConnectionTest --rerun: BUILD SUCCESSFUL, tests=16 skipped=0 failures=0 errors=0; lease released. All original assertions unchanged. Deterministic red/mutation checks follow in approved step 4, isolated from checkout.",
+      "startedAt": "2026-11-04T00:26:49.142Z",
+      "completedAt": "2026-11-04T00:27:42.470Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification gate, run ONCE after steps 1-2, from the task worktree root, holding the jetbrains-gradle lease. Release it afterwards, even on failure. If a peer holds it briefly, moe.wait_for_resource in-session beats report_blocked.\n\nRun the checkRef exactly (copy in /mnt/d/moe-scratch/plan-8784d35d/checkref.txt, sha256 760ea08b142b72395eb1dcb8c5179e103787b5bd7f237d021d5962b49a674a94). It runs the Windows equivalents of the DoD's focused connection class and the full JetBrains suite, each with --rerun. gradlew.bat lives in moe-jetbrains/ (mem:gotcha-gradle-jetbrains-shared-box, section 2c). The command prints both BUILD lines, the module XML totals and MoeProjectConnectionTest's counts. It exits non-zero unless that class shows exactly tests=16 skipped=0 failures=0 errors=0.\n\nExpected: two BUILD SUCCESSFUL lines. The module total is the base plus 2: task-048bfae2's run gave 664, so about 666, plus any JetBrains landings since. Report it in complete_task as Windows evidence.\n\nError handling for a red run:\n- Read the log the command names; the first `e:` line is the compile error.\n- `> Task :test UP-TO-DATE` means nothing ran.\n- An exit 1 with green XML can be the Gradle daemon MessageIOException IPC flake: rerun once.\n- An unexplained compile error in an untouched file is a stale Kotlin IC: run `compileKotlin --rerun` once (mem:gotcha-jetbrains-stale-kotlin-ic).\n- A hang past 10 minutes follows mem:gotcha-jetbrains-connection-test-close-hang.\n- Never run cleanTest or --rerun-tasks, and never kill Gradle or java processes by name. Kill only PIDs you started, by recorded PID (project rail).\n\nThis run's fresh output is the complete_task verification evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T00:27:42.499Z"
     },
     {
       "stepId": "step-4",
@@ -50,7 +60,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:51:26.254Z",
-  "updatedAt": "2026-11-04T00:23:04.156Z",
+  "updatedAt": "2026-11-04T00:27:42.499Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T23:52:32.338Z",
@@ -59,7 +69,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T23:55:23.261Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -69,7 +80,10 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:22:14.283Z",
   "executionContract": {
@@ -129,5 +143,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T00:22:14.311Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T00:23:58.789Z"
 }

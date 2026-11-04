@@ -43,32 +43,47 @@
     {
       "stepId": "step-3",
       "description": "Panel reply handling (DoD 1): never claim success before the daemon answers. /ws has no correlation id, but ERROR is only ever a direct reply and carries operation plus context.epicId (step 1), so match replies by epic id. In moe-vscode/src/panels/EpicDetailPanel.ts keep one private pendingSave record {epicId, title, stage: 'save' | 'fields' | 'archive'}: 'save' is a one-frame save, 'fields' the archive's field frame, 'archive' the status frame. Set it only after updateEpic returned true. title is that save's trimmed typed title. In the constructor subscribe to client.onEpicUpdated, client.onError and client.onConnectionChanged, and push the disposables into this.disposables. Rules:\n(a) An EPIC_UPDATED payload whose id equals pendingSave.epicId (read it with optional chaining: the client fires payloads unvalidated). At 'fields': send {status:'ARCHIVED'} through updateEpic and move to 'archive'. At 'archive': only a payload with status 'ARCHIVED' settles the save: showInformationMessage('Epic \"<title>\" archived.'), then dispose. The field frame's own broadcast and reply echoes are ignored. At 'save': showInformationMessage('Epic \"<title>\" updated.'), then dispose. Never compare echoed field values: validateEpicUpdates truncates long fields.\n(b) onError with operation 'UPDATE_EPIC' and context?.epicId === pendingSave.epicId: clear pendingSave and showErrorMessage('Epic \"<title>\" was saved but not archived: ' + event.message) at 'archive', else ('Epic \"<title>\" was not saved: ' + event.message). The panel stays open, so Save can be retried. Show event.message, never a raw frame. Ignore every other error (another epic, another operation, no context).\n(c) onConnectionChanged to anything but 'connected' while a save is pending: clear it and showWarningMessage('Lost the connection to the Moe daemon before it confirmed the save of epic \"<title>\". Your edits are still in this panel.').\n(d) A Save while pendingSave is set sends nothing, opens no modal and shows showInformationMessage('Still waiting for the Moe daemon to answer the last save of epic \"<title>\".'). One save is in flight at a time.\n(e) updateEpic false on the first frame: showWarningMessage('Not connected to Moe daemon — epic was not saved.') and nothing is pending. updateEpic false for the status frame: if that save is still pending, clear it and showWarningMessage('Not connected to Moe daemon — epic was saved but not archived.'). A throwing socket has already fired onConnectionChanged and warned through (c), so check first that the save is still pending, to show one message, not two.\nError handling: every refusal, send failure and connection loss ends in exactly one message and leaves the panel open with the edits; only a matching echo disposes it. Add a short comment naming the accepted limit: on the one-frame path, a foreign update of the same epic that reaches the daemon in the few ms before this frame would count as the echo.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/panels/EpicDetailPanel.ts"
       ],
-      "startedAt": "2026-11-04T00:22:22.203Z"
+      "modifiedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ],
+      "note": "Reply handling is in EpicDetailPanel (written alongside step 2, same file): pendingSave {epicId,title,stage}, constructor subscriptions to onEpicUpdated/onError/onConnectionChanged pushed into this.disposables; onEpicEcho (fields -> status frame, archive only on ARCHIVED, save -> updated toast), onSaveRefused (UPDATE_EPIC + context.epicId, daemon message shown), onConnection (lost-connection warning once), still-waiting guard (pending or open modal), updateEpic-false handling for both frames with the throwing-socket single-message check. Accepted-limit comment added on onEpicEcho.",
+      "startedAt": "2026-11-04T00:22:22.203Z",
+      "completedAt": "2026-11-04T00:23:18.191Z"
     },
     {
       "stepId": "step-4",
       "description": "Tests: create moe-vscode/tests/epic-archive.test.cjs with the Write tool. Use production sources only: the real MoeDaemonClient and EpicDetailPanel, transpiled with ts.transpileModule (CommonJS, ES2020, esModuleInterop) and run under node:vm with strict require maps (client: vscode, ws, fs, path, net, child_process; panel: vscode only). Model it on openLive() in tests/task-release.test.cjs: RecordingEventEmitter, a fake ws that records sent frame strings, `_connectionState = 'connected'`, STATE_SNAPSHOT seeding through client['handleMessage'], recorded showWarningMessage/showInformationMessage/showErrorMessage with scripted modal answers, a panel stub that counts dispose(), a fresh module per open, and client.dispose() in finally. Also model it on /mnt/d/moe-scratch/hunt-d5d58972/B/zzHuntB_vscodeRefusals.test.cjs: reuse its DAEMON_EPIC_REFUSAL frame, the daemon's verbatim in-flight refusal. Read the three texts from moe-jetbrains/src/main/resources/messages/MoeBundle.properties as UTF-8 (turn `\\n` into newlines). Build expected strings by splitting on {0}/{1}, independently of the production substitution. Pin frames as exact JSON strings. Each row's name starts exactly `EA<n> <word>: ` as listed, and each row must fail on today's panel:\nEA1 refusal: (DoD 1) the cache shows only BACKLOG and DONE tasks (stale: the daemon has a WORKING one). Save with Archived and a typed title, description, notes and rails, then confirm: exactly the fields-only frame is sent, and no toast is shown. An EPIC_UPDATED echo sends exactly one more frame, {status:'ARCHIVED'}. The daemon's NOT_ALLOWED frame (context {epicId}) then gives errors == [['Epic \"<typed title>\" was saved but not archived: ' + its message]], no info toast, and no dispose. A second Save afterwards asks again: the panel is still usable.\nEA2 in-flight: PLANNING, AWAITING_APPROVAL and WORKING rows of this epic, plus a BACKLOG row and another epic's WORKING row. One modal warning appears with the bundle text listing exactly this epic's three titles in cache order. It has two arguments (no button). Nothing is sent, no toast, no dispose. Each of the three statuses alone also blocks. The decision follows the newest cache: a TASK_UPDATED after the panel opened that moves a row into WORKING blocks, and one that moves the only WORKING row to BACKLOG lets the confirm through.\nEA3 confirm: the count covers only this epic's tasks that are not ARCHIVED (BACKLOG, REVIEW, BLOCKED and DONE give 4; its ARCHIVED row and another epic's rows are left out). An epic with no tasks still asks, with 0. A cached title containing {1} and $& is inserted verbatim. Dismissing sends nothing, shows no toast and does not dispose.\nEA4 archive: confirm sends the fields frame; the echo sends the status frame. A further EPIC_UPDATED that is not ARCHIVED, and TASK_UPDATED rows, change nothing. An EPIC_UPDATED with status ARCHIVED gives infos == [['Epic \"<title>\" archived.']] and exactly one dispose. Later frames change nothing.\nEA5 fields-refused: the daemon refuses the fields frame (ERROR UPDATE_EPIC, context {epicId}). errors == [['Epic \"<title>\" was not saved: ' + message]]. The status frame is never sent, not even after a later EPIC_UPDATED. No dispose.\nEA6 plain: PLANNED, ACTIVE and COMPLETED picks (with in-flight rows present), and Archived on an already-ARCHIVED epic, each send exactly today's single frame (all four fields plus the chosen status). No modal, and no toast before the reply. The echo gives 'Epic \"<title>\" updated.' and one dispose. A correlated ERROR instead gives '... was not saved: ...', no info and no dispose.\nEA7 one-save: a Save while one is pending sends nothing, opens no modal and shows the still-waiting info. Errors for another epic, for another operation or with no context, and an EPIC_UPDATED for another epic, are all ignored.\nEA8 connection: Save while disconnected gives 'Not connected to Moe daemon — epic was not saved.', no frame and no dispose. A disconnect while a save is pending gives the lost-connection warning once, and a later echo neither sends nor disposes. A send failure at the status frame (set client['_connectionState'] = 'disconnected' before delivering the fields echo) gives 'Not connected to Moe daemon — epic was saved but not archived.'.\nCompare vm-realm objects by JSON, for example JSON.stringify(warnings[0][1]) === '{\"modal\":true}'. Assert an array's length before indexing it, so a missing modal fails an assertion rather than throwing a TypeError (mem:convention-vscode-renderer-tests). Clear every timer the client arms in finally. Keep the file compact, about 250 lines, so the whole task diff stays under QA's 400 net-changed-line oversize rule.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/epic-archive.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/epic-archive.test.cjs"
+      ],
+      "note": "Created moe-vscode/tests/epic-archive.test.cjs: rows EA1-EA8 over the real MoeDaemonClient + EpicDetailPanel under node:vm (strict require maps), texts read from MoeBundle.properties, frames pinned as exact JSON strings, fresh module and client.dispose per open. 8/8 pass locally (NODE_PATH to the shared typescript, no npm run); the RED proof against base sources is step 6.",
+      "startedAt": "2026-11-04T00:23:19.747Z",
+      "completedAt": "2026-11-04T00:25:02.569Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification, run once. From the task worktree root, run exactly the command in executionContract.checkRefs. It is the complete_task evidence, and QA re-runs it:\n( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/mb4a.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in src/panels/EpicDetailPanel.ts src/services/MoeDaemonClient.ts tests/{epic-archive,plan-approval-client}.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log; C=$(grep -acE '^✔ E[AC][1-9] [a-z-]+: ' ../v.log); echo \"EA1-EA8+EC1 rows passed: $C ($L)\"; [ \"$C\" = 9 ] )\nThe command archives HEAD of the whole repo (the new test reads moe-jetbrains' MoeBundle.properties). It overlays the four task files, because your edits may still be uncommitted. Then it runs npm ci, npm test and npm run compile under nvm Node v24.21.0 in that snapshot. Never run npm in the shared checkout (project rail). The architect dry-ran it at 0f56d3a7 with placeholder rows: 772 tests, 0 failures, compile OK, 9 rows counted. Green means exit 0, 'ℹ fail 0' and 'EA1-EA8+EC1 rows passed: 9 (<dir>)'. Error handling for a red run: the command prints the snapshot dir and the last 40 log lines. Read <dir>/v.log, fix the cause in the worktree, and re-run the whole command; never edit the snapshot. A count other than 9 means a row is misnamed (each must start exactly 'EA<n> <word>: ' or 'EC1 allowlist: ') or failing. When done, remove the /tmp/mb4a.* dir the command printed, by its literal path.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs command run fresh from the task worktree in a git-archive snapshot (env -i, nvm v24.21.0, npm ci + npm test + npm run compile): exit 0, ℹ tests 772, pass 762, fail 0, skipped 10, tsc compile clean, 'EA1-EA8+EC1 rows passed: 9'. Snapshot dir removed.",
+      "startedAt": "2026-11-04T00:27:29.915Z",
+      "completedAt": "2026-11-04T00:27:48.376Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this task's own diff, as the last step (load the adversarial-self-review skill).\n(1) RED proof: each new row must fail on today's code. Run this command and paste its output into the completion summary:\n( R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && M=$(mktemp -d /tmp/rb4a.XXXX) && cd \"$M\" && mkdir -p moe-vscode/src/panels moe-vscode/src/services moe-vscode/tests moe-jetbrains/src/main/resources/messages && cp \"$R/moe-jetbrains/src/main/resources/messages/MoeBundle.properties\" moe-jetbrains/src/main/resources/messages/ && cp \"$R\"/moe-vscode/tests/{epic-archive,plan-approval-client}.test.cjs moe-vscode/tests/ && for f in src/panels/EpicDetailPanel.ts src/services/MoeDaemonClient.ts; do git -C \"$R\" show \"$B:moe-vscode/$f\" > \"moe-vscode/$f\" && ! cmp -s \"moe-vscode/$f\" \"$R/moe-vscode/$f\" || exit 1; done && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap moe-vscode/tests/*.test.cjs > red.log 2>&1; grep '^not ok' red.log; echo \"not ok: $(grep -c '^not ok' red.log), ok: $(grep -c '^ok' red.log) ($M)\" )\nExpect exactly 11 'not ok' lines: EA1 to EA8, EC1, and the two plan-approval-client tests updated in step 1 ('a modern top-level ERROR frame reaches the error event fully correlated' and 'unrelated daemon context keys are never promoted into the public payload'). Every other row must pass. A row that passes on the base proves nothing: tighten it. Remove the /tmp/rb4a.* dir the command prints.\n(2) Size: run `git diff --numstat \"$(git merge-base HEAD moe/work-2026-10-24)\" -- moe-vscode` plus `wc -l moe-vscode/tests/epic-archive.test.cjs`. The net total must stay under 400 changed lines, or QA rejects the diff as oversized.\n(3) Check each case: two Saves at once (the guard), an echo from another epic or another client, the panel closed while a save is pending, a refused fields frame (no status frame), a stale cache (the daemon's message is shown), an epic missing from both caches, a title containing {0}, {1} or $&, a throwing socket (one message, not two), and a non-string epicId.\n(4) Confirm that no added line contains a project.json globalRails.forbiddenPatterns string, and that EpicDetailPanel.ts gained no value import.\nIf anything changes, re-run step 5 and use that fresh output as the complete_task evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T00:27:50.980Z"
     }
   ],
   "planRevision": 1,
@@ -88,7 +103,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:34:21.111Z",
-  "updatedAt": "2026-11-04T00:22:22.203Z",
+  "updatedAt": "2026-11-04T00:27:50.980Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T23:59:30.368Z",
@@ -98,7 +113,7 @@
     "firstClaimAt": "2026-11-03T23:59:54.131Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -110,7 +125,10 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:18:49.564Z",
