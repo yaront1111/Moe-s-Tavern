@@ -27,27 +27,39 @@
     {
       "stepId": "step-2",
       "description": "Teach R's fake the seam, additively. Never write a second fake.\n- `stopFile = flag('stop-file')`.\n- The check-dispatch row gains `stopAtStart`: null without --stop-file, else fs.existsSync(stopFile) at start.\n- hang, when stopFile is set:\n  - Poll the file every 100 ms from an unref()'d setInterval, so the 300 s self-limit still ends the process.\n  - On the first sight, stop polling and wait 1 s (a stand-in for VM deletion). Then append {tool:'check-dispatch-stop', args:{pid}} and exit 143.\n  - A wrapper that kills without waiting therefore leaves no stop row.\n- hang-hard, when stopFile is set: append the same row once on the first sight and keep waiting. It ignores the stop, as it ignores SIGTERM.\n- Without --stop-file both modes behave exactly as today, so postflight-vm-route.sh's rows stay green unedited.\n- Update the header comment for the new row, the field and both modes.\n\nError handling: a failed existsSync counts as absent, and record() keeps its current behaviour. Edit with the session's editing tool only.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-fake-check-dispatch.js"
       ],
-      "startedAt": "2026-11-04T20:55:48.347Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-check-dispatch.js"
+      ],
+      "note": "Fake gains stopFile = flag('stop-file'); the check-dispatch row gains stopAtStart (null without the flag, else existsSync at start); watchStop(onStop) polls every 100 ms from an unref'd interval and fires once. hang: at first sight waits 1 s, appends {tool:'check-dispatch-stop',args:{pid}}, exits 143. hang-hard: appends the stop row once, keeps waiting. Without --stop-file both modes are unchanged. Header comment updated. Smoke (scratch script /tmp/te444-smoke.sh): hang rc=143 after ~1 s with one stop row; hang-hard alive after the stop with one stop row; stopAtStart true for a pre-existing file, false for absent, null without the flag. sh rows grep specific fields only (no key-set assertions), so the additive field leaves postflight-vm-route.sh unedited; its full run is in progress.",
+      "startedAt": "2026-11-04T20:55:48.347Z",
+      "completedAt": "2026-11-04T20:59:24.602Z"
     },
     {
       "stepId": "step-3",
       "description": "moe-agent.ps1 runtime: the wrapper uses the seam before any kill.\n\nFirst read the landed Stop-MoeCheckDispatch, Invoke-MoeCheckDispatchChild and the outer-finally line `try { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec } catch {}`. This plan was written against CQ-M07s's in-flight bytes, and CQ-M07t may move lines. Edit in place with the editing tool, keep the UTF-8 BOM, and use PS 5.1 syntax only: no `??`, no ternary, no pipeline-chain operators.\n\n(a) Invoke-MoeCheckDispatchChild:\n- Before the spawn, pick a stop path in [IO.Path]::GetTempPath() named `moe-check-dispatch-<[guid]::NewGuid().ToString('N')>.stop`.\n- Never create it in advance. Do not use GetTempFileName: it creates its file, which would stop the dispatch at once.\n- Append '--stop-file', <path> after --commit in the ConvertTo-MoeArgumentLine list. That helper quotes paths with spaces; never hand-build the argument line.\n- Set $script:CheckDispatchStopFile only once Start-Process has returned a process.\n- The finally removes the stop path along with the other temp files, after its Stop call.\n\n(b) The timeout branch becomes `Stop-MoeCheckDispatch $script:CheckDispatchGraceSec` (it was 0, because nothing could be delivered), then returns MOE_CHECK_DISPATCH_TIMEOUT as today. This matches the sh twin's TERM-plus-grace and the lease arithmetic its comment already assumes.\n\n(c) Stop-MoeCheckDispatch, while the recorded process still runs:\n1. Write the recorded stop file as an empty file. Rewriting it is harmless, so no once-flag is needed, unlike sh's TERM.\n2. WaitForExit(grace).\n3. Only if it is still running: taskkill /T /F /PID <recorded pid>, then WaitForExit(5000).\n4. Then Dispose, and clear $script:CheckDispatchProcess and $script:CheckDispatchStopFile LAST, outside any finally.\n- A pipeline stop mid-wait must leave the record in place, so the invoker's finally and the outer finally can finish the stop. This is sh's pid-cleared-last rule (mem:gotcha-check-dispatch-stop-term-once).\n- Error handling:\n  - a failed stop-file write is caught and skipped; the grace and the kill still follow;\n  - a .NET error from the wait or the kill is caught, so the record still clears;\n  - a PipelineStoppedException is rethrown (`catch [System.Management.Automation.PipelineStoppedException] { throw }` before a general catch), so it skips the clear;\n  - a stop with no recorded stop file (a hand-spawned process) goes straight to the grace and the kill.\n\n(d) Rewrite the 'Windows deviation' comment above Stop-MoeCheckDispatch to describe the seam.\n\n(e) Add no function (the harness extracts a fixed $names list), no printed line and no MOE_ code (parity compares the MOE_CHECK_DISPATCH_ family). Run ParseFile on pwsh 7 and PS 5.1.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "moe-agent.ps1: new $script:CheckDispatchStopFile record (init $null beside CheckDispatchProcess). Invoke-MoeCheckDispatchChild names `%TEMP%\\moe-check-dispatch-<guid N>.stop` (never created, not GetTempFileName), appends it to $files (so the finally removes it after its Stop call), appends '--stop-file', $stop to the ConvertTo-MoeArgumentLine list, and sets $script:CheckDispatchStopFile right after Start-Process returns. Timeout branch now `Stop-MoeCheckDispatch $script:CheckDispatchGraceSec`. Stop-MoeCheckDispatch: while running, writes the stop file ([IO.File]::WriteAllText, failure caught, PipelineStoppedException rethrown), WaitForExit(grace), taskkill /T /F /PID only if still running, WaitForExit(5000); outer try has the typed PipelineStoppedException rethrow before a general catch; then (outside any finally) removes the stop file, Disposes and clears both records LAST. No stop file recorded: grace and kill only. Comment above Stop rewritten to describe the seam. No new function, printed line or MOE_ code. BOM kept; ParseFile 0 errors on powershell.exe (5.1) and pwsh.exe (7). One small addition beyond the plan text: Stop also removes the stop file just before clearing, so a stop finished by the outer finally (after the invoker's finally threw) still leaves no file behind.",
+      "startedAt": "2026-11-04T20:59:25.647Z",
+      "completedAt": "2026-11-04T21:00:17.927Z"
     },
     {
       "stepId": "step-4",
       "description": "postflight-vm-route.ps1 [strong gate] rows for the seam.\n\nFirst read the landed section from CQ-M07s, and any CQ-M07t change to Assert-SgRow. Change only the stop rows and the dispatch-argv checks. SGV, SG8, the outer-finally order pin and the E2E pass/refused/host expectations stay otherwise unedited.\n\n- Assert-SguDispatch, and Assert-SgRow's dispatch check:\n  - argv is the 6 tokens, then '--stop-file' and a rooted path;\n  - that path no longer exists after the row;\n  - stopAtStart is $false as a [bool], never $null;\n  - stop rows are exactly @(dispatch pid) for MOE_CHECK_DISPATCH_TIMEOUT, and none otherwise;\n  - check-dispatch-term rows stay none.\n- U5 (hang-hard, bound 1 s, grace 1 s): one stop row, no TERM row, the fake dead, at most 15 s.\n- U8, new (hang, bound 1 s, grace 30 s): `rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT` and one stop row. The fake writes that row after its 1 s stand-in, so it exited by itself. The fake is dead, and the row takes under 15 s, so the wrapper did not wait out the grace.\n- U7 (runspace Stop() mid-dispatch, hang-hard, grace 3 s): as today, plus exactly one stop row, delivered by the invoker's finally.\n- U9, new: a runspace Stop() during the TIMEOUT grace (bound 1 s, hang-hard, grace 5 s; call Stop() once the stop row exists). The fake must still end dead, and the done file must read record=False. Both hold only when the record is cleared last.\n- SG-timeout (E2E, hang, bound 2 s, default grace): exactly one stop row. Keep the 60 s bound; a wrapper that waits out the 120 s grace fails it.\n- SG-interrupt's hand-spawned fake has no stop file: expect no stop row.\n- Update the section's header comment (the deviation text) and its ok line (U1-U9).\n\nAny row that can leave a fake running must first probe it and kill it by its recorded pid (Assert-SgDead), never by name. To run these rows from WSL, read mem:gotcha-launcher-ps1-rows-from-wsl and mem:gotcha-qa-ps1-postflight-from-wsl. This test file is edited with the session's editing tool only.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T21:00:18.954Z"
     },
     {
       "stepId": "step-5",
@@ -87,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:38:55.700Z",
-  "updatedAt": "2026-11-04T20:55:48.347Z",
+  "updatedAt": "2026-11-04T21:00:18.954Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T16:04:04.872Z",
@@ -97,7 +109,7 @@
     "firstClaimAt": "2026-11-04T16:04:17.535Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -108,7 +120,9 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T16:27:54.911Z",
