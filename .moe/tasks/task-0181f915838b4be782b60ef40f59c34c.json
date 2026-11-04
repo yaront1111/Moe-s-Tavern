@@ -71,7 +71,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -84,16 +84,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:21:37.251Z",
-  "updatedAt": "2026-11-04T08:31:50.118Z",
+  "updatedAt": "2026-11-04T08:33:25.700Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:22:09.492Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:33:03.476Z",
+    "wallClockMs": 653984
   },
   "contextFetchedBy": [
     "architect-67c762f6",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-1cd86a39"
   ],
   "tier": "standard",
   "effort": "high",
@@ -200,9 +203,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T08:29:03Z",
-    "at": "2026-11-04T08:31:50.117Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T08:31:51Z",
+    "at": "2026-11-04T08:33:25.700Z"
+  },
+  "completedAt": "2026-11-04T08:33:03.476Z",
+  "reviewCompletedAt": "2026-11-04T08:33:03.476Z",
+  "reviewSummary": "Reviewed completion 68356e66 (contained in moe/work-2026-10-24, moe/control HEAD == that sha; recorded in task.commits as completion, pushed). Diff is 2 files, +13/-1 LOC (no .moe paths): SettingsPanel.ts:73 `/[*?\\[]/` -> `/[*?[]/` (one char), and new test C6 in tests/settings-policy-corpus.test.cjs reusing rowsOf(). Scope matches DoD 3 / approvedScope exactly; no eslint-disable, no validators.ts, no corpus JSON change. Re-ran task.verification command-equivalent myself in a fresh `git archive HEAD` snapshot (no overlay) under `env -i` PATH node v24.21.0: `npm ci && npm run lint && npm run compile && npm test` -> exit 0 (lint = `eslint src --ext ts` over the whole tree, clean); 786 tests, 776 pass, 0 fail, 10 skipped; C6 ran and passed. Mutation sweep in the snapshot copy of SettingsPanel.ts: `/[*?]/` and `/[*[]/` fail only C6; `/[*?[\\\\]]/` and `/[?[]/` fail C1+C6, so the class is pinned to exactly *, ? and [ and ] stays literal. DoD 1 (lint exit 0), DoD 2 (behavior unchanged, compile+test pass), DoD 3 (only SettingsPanel.ts + one existing test file) all verified. Size 13 net LOC, well under the 400 cap. Note (not a defect): packages/moe-daemon/src/state/validators.ts:357 still holds the same escaped `/[*?\\[]/` but is out of scope and not linted by this rule.",
+  "requiredCheckAtDone": null
 }

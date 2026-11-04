@@ -43,20 +43,23 @@
     {
       "stepId": "step-3",
       "description": "Verification, once, on the whole JetBrains suite, fresh, under the jetbrains-gradle lease: acquire right before, release right after, even on failure. Run this exact command from the worktree and submit its output as complete_task evidence, labelled as the Windows gradlew.bat route:\n\n`cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; for c in DaemonIdentityTest MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X | head -1)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; grep -q 'skipped=\"0\"' $R/TEST-com.moe.services.DaemonIdentityTest.xml || r=1; exit $r`\n\n- It must exit 0, and DaemonIdentityTest must show skipped=\"0\": the link cases really ran, through the junction on this host.\n- Quote the class totals together with the step-1 RED lines.\n- The existing DaemonIdentityTest, MoeDaemonSupervisorTest and MoeProjectForeignDaemonTest cases must pass with no edits (DoD 2).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
       ],
-      "startedAt": "2026-11-04T08:31:54.196Z"
+      "note": "GREEN: the full JetBrains suite ran fresh under the jetbrains-gradle lease (acquired 08:31:55Z, released after), through the Windows gradlew.bat route with the plan's exact step-3 command, exit 0:\nBUILD SUCCESSFUL in 38s\nxml tests=679 skipped=6 failures=0 errors=0\nDaemonIdentityTest: tests=\"22\" skipped=\"0\" failures=\"0\" errors=\"0\"\nMoeDaemonSupervisorTest: tests=\"94\" skipped=\"2\" failures=\"0\" errors=\"0\"\nMoeProjectForeignDaemonTest: tests=\"12\" skipped=\"0\" failures=\"0\" errors=\"0\"\n`> Task :test` executed (not UP-TO-DATE). There are 44 XML files, with timestamps from 08:32:16Z to 08:32:48Z. The 6 skips are pre-existing Assumes in MoeDaemonSupervisorTest, RuntimeSelectionPolicyTest and TerminalAgentLauncherTest, all untouched. DaemonIdentityTest skipped=0, so the junction link cases really ran. Step-1 RED, for contrast: \"a project opened through a directory link to the served directory is Same FAILED … expected:<Same> but was:<Foreign(projectPath=C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-id-real12041055452963526061)>\". No existing test was edited (git diff shows only additions in DaemonIdentityTest.kt). No moe-id-* leftovers remain in %TEMP%.",
+      "startedAt": "2026-11-04T08:31:54.196Z",
+      "completedAt": "2026-11-04T08:33:06.386Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of the diff, the final step. Check:\n- Cleanup never deletes through a link: the link is deleted before the dirs, and a junction left behind by a failed test cannot reach outside the temp root.\n- isSameFile on Windows compares file keys, so case and short-name spellings of the same directory count as Same, which is intended.\n- The disk check runs only after comparable spellings differ. For a UNC or \\\\wsl$ path it does no more I/O than today's File.canonicalPath already did on that path.\n- classify's Unknown guards are unchanged: a non-200/503 status, a non-object body, a missing or relative projectPath, a relative own path.\n- A different real project is still Foreign, so handleForeignDaemon still protects a genuinely foreign daemon.\n- MoeMessageDispatcher's snapshot check now accepts a junction-opened project instead of disconnecting.\n- No forbidden pattern; error handling is present on every filesystem call; every DoD item maps to a test run in step 3.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:33:07.385Z"
     }
   ],
   "planRevision": 1,
@@ -80,12 +83,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:00:17.961Z",
-  "updatedAt": "2026-11-04T08:31:54.196Z",
+  "updatedAt": "2026-11-04T08:33:07.385Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:11:28.945Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -97,7 +100,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:16:03.104Z",
