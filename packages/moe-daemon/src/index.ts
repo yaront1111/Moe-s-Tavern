@@ -19,7 +19,7 @@ import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { ensureRunnerKey } from './server/runnerChannel.js';
 import { productionReadinessInputs, startReadinessEvaluation } from './delivery/readinessHolder.js';
 import { WSL_BIND_HOST, resolveBindHosts, listenOnHosts } from './server/bindHosts.js';
-import { DEFAULT_BIND_HOST, probeHostFor, recordedProbeHost, isLocalAddress, healthProbeAddress, isForeignDaemonInfo, foreignProbeHosts } from './server/probeHost.js';
+import { DEFAULT_BIND_HOST, probeHostFor, recordedProbeHost, isLocalAddress, healthProbeAddress, isForeignDaemonInfo, foreignProbeHosts, isValidPort } from './server/probeHost.js';
 import { isAllowedHealthHost } from './server/healthHost.js';
 import { healthProofFields, parseHealthRequest, takeSpawnProofKey } from './server/spawnProof.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
@@ -96,10 +96,6 @@ function namesOwnProject(recorded: string, own: string): boolean {
   } catch {
     return false;
   }
-}
-
-function isValidPort(port: unknown): port is number {
-  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
 function isValidPid(pid: unknown): pid is number {

@@ -75,6 +75,16 @@ export async function healthProbeAddress(target: string, timeoutMs: number): Pro
 }
 
 /**
+ * The one rule for a daemon.json `port`, shared by the lifecycle's isDaemonInfoShape (index.ts) and doctor's
+ * probeDaemonJson: an integer 1-65535. daemon.json is unchecked JSON that a hand edit or a broken writer can corrupt, and
+ * http.request and Socket#connect throw ERR_SOCKET_BAD_PORT synchronously outside 0-65535 or on a fraction, while
+ * http.request dials port 0 as port 80, so a port that fails this is never dialed.
+ */
+export function isValidPort(port: unknown): port is number {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+/**
  * True when daemon.json was written on the other side of the WSL/Windows
  * boundary: a drive or UNC projectPath read outside Windows, or a POSIX one read
  * on Windows. The writer's pid lives in another pid namespace, so

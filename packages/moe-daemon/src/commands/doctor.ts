@@ -10,7 +10,7 @@ import net from 'net';
 import path from 'path';
 import { DaemonJsonTooLargeError, readDaemonJsonText } from '../util/daemonJsonFile.js';
 import { canonicalProjectPath, isSameProjectPath } from '../util/projectPath.js';
-import { foreignProbeHosts, healthProbeAddress, isForeignDaemonInfo, isLocalAddress, recordedProbeHost } from '../server/probeHost.js';
+import { foreignProbeHosts, healthProbeAddress, isForeignDaemonInfo, isLocalAddress, isValidPort, recordedProbeHost } from '../server/probeHost.js';
 import { probeWorktreeReadiness, type WorktreeProbeOptions } from './doctorWorktree.js';
 
 export interface ProbeResult {
@@ -83,7 +83,7 @@ async function probeDaemonJson(moePath: string, expectedProjectPath: string): Pr
   if (!fs.existsSync(daemonJson)) {
     return { result: { symbol: 'pass', message: 'daemon.json absent (daemon not running)' }, alive: false };
   }
-  let parsed: { port?: number; pid?: number; projectPath?: string; bindHost?: string };
+  let parsed: { port?: unknown; pid?: number; projectPath?: string; bindHost?: string };
   try {
     parsed = JSON.parse(readDaemonJsonText(daemonJson));
   } catch (err) {
@@ -95,25 +95,35 @@ async function probeDaemonJson(moePath: string, expectedProjectPath: string): Pr
       alive: false,
     };
   }
-  if (typeof parsed.port !== 'number') {
+  // JSON.parse also returns null (a file holding just `null`), which has no port to read: it reads as missing.
+  const port = parsed?.port;
+  if (port === undefined) {
     return { result: { symbol: 'fail', message: 'daemon.json missing port' }, alive: false };
+  }
+  // The port is unchecked JSON and http.request and Socket#connect throw on one outside 1-65535 (or a fraction), so it
+  // is judged once, with the lifecycle's own rule, before the pid check, the local/foreign split and any dial. A
+  // number is shown through String (JSON.stringify prints Infinity as null); any other value through JSON.stringify,
+  // which escapes control characters, capped as probeDaemonReachability shows a hostile bindHost.
+  if (!isValidPort(port)) {
+    const shown = typeof port === 'number' ? String(port) : String(JSON.stringify(port)).slice(0, 120);
+    return { result: { symbol: 'fail', message: `daemon.json port ${shown} is not a valid TCP port (1-65535); not dialed` }, alive: false };
   }
   if (typeof parsed.pid === 'number') {
     if (typeof parsed.projectPath === 'string' && isForeignDaemonInfo({ projectPath: parsed.projectPath })) {
-      return probeForeignDaemonJson(parsed.port, parsed.pid, parsed.bindHost, expectedProjectPath);
+      return probeForeignDaemonJson(port, parsed.pid, parsed.bindHost, expectedProjectPath);
     }
     const alive = isProcessAlive(parsed.pid);
     if (!alive) {
       return {
         result: { symbol: 'warn', message: `daemon.json present but pid ${parsed.pid} not running (stale)` },
-        port: parsed.port,
+        port,
         pid: parsed.pid,
         alive: false,
       };
     }
     return {
-      result: { symbol: 'pass', message: `daemon.json valid (pid ${parsed.pid}, port ${parsed.port})` },
-      port: parsed.port,
+      result: { symbol: 'pass', message: `daemon.json valid (pid ${parsed.pid}, port ${port})` },
+      port,
       pid: parsed.pid,
       bindHost: parsed.bindHost,
       alive: true,
@@ -121,7 +131,7 @@ async function probeDaemonJson(moePath: string, expectedProjectPath: string): Pr
   }
   return {
     result: { symbol: 'warn', message: 'daemon.json missing pid' },
-    port: parsed.port,
+    port,
     alive: false,
   };
 }
@@ -201,12 +211,9 @@ function judgeHealthBody(body: NonNullable<HealthProbeOutcome['body']>, where: s
 // sent the probe to loopback alone. As the daemon lifecycle does (index.ts validateDaemonInfoForProject), only /health
 // judges it, at foreignProbeHosts' addresses in order. The first answer confirming this daemon wins, else the first
 // HTTP answer of any status is reported as the local probe would judge it (a live but unhealthy daemon answers 503);
-// it is stale only when no address gives an HTTP answer at all. The port is unchecked JSON and http.request throws on
-// one outside 1-65535 (or a fraction), so it is refused before any dial, as a corrupt record rather than a stale one.
+// it is stale only when no address gives an HTTP answer at all. The port arrives validated by probeDaemonJson, which
+// refuses a corrupt one (outside 1-65535, or a fraction) before any dial, for local and foreign records alike.
 async function probeForeignDaemonJson(port: number, pid: number, bindHost: string | undefined, expectedProjectPath: string): Promise<DaemonJsonProbe> {
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return { result: { symbol: 'fail', message: `daemon.json port ${port} is not a valid TCP port (1-65535); not dialed` }, alive: false };
-  }
   const side = `written on the other side of the WSL boundary (pid ${pid}, port ${port})`;
   const hosts = await foreignProbeHosts({ bindHost }, HEALTH_PROBE_TIMEOUT_MS);
   let answered: { where: string; verdict: ProbeResult } | undefined;

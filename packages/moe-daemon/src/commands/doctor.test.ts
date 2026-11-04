@@ -367,6 +367,111 @@ describe('runDoctor — daemon.json from the other side of the WSL boundary', ()
   });
 });
 
+// daemon.json is unchecked JSON (gitignored runtime state a hand edit or a broken writer can corrupt). http.request and
+// Socket#connect throw ERR_SOCKET_BAD_PORT synchronously on a port outside 1-65535 or a fraction, which rejected
+// runDoctor for a LOCAL record with a live pid (port 0 dials port 80; the string '8080' is dialed). doctor judges the
+// recorded port once, before the pid check, the local/foreign split and any dial, with the lifecycle's own isValidPort.
+describe('runDoctor — a local daemon.json whose port is not a TCP port', () => {
+  const DEAD_PID = 2147483646; // never a live pid here
+  let testDir: string;
+  let moePath: string;
+  let requestSpy: ReturnType<typeof vi.spyOn>;
+  let connectSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-doctor-port-'));
+    moePath = scaffoldMoe(testDir);
+    requestSpy = vi.spyOn(http, 'request'); // call-through: a dial that is not refused still happens
+    connectSpy = vi.spyOn(net.Socket.prototype, 'connect');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  // Raw JSON text, so '1e999' reaches doctor as Infinity (JSON.stringify cannot write it). testDir is a local path.
+  function writeRawDaemonJson(portMember: string, pid: number = process.pid): void {
+    fs.writeFileSync(path.join(moePath, 'daemon.json'),
+      `{${portMember}"pid":${pid},"projectPath":${JSON.stringify(testDir)},"startedAt":"${new Date().toISOString()}"}`);
+  }
+
+  const refusal = (shown: string) => `[FAIL] daemon.json: daemon.json port ${shown} is not a valid TCP port (1-65535); not dialed`;
+
+  function expectNothingDialed(): void {
+    expect(requestSpy).not.toHaveBeenCalled();
+    expect(connectSpy).not.toHaveBeenCalled();
+  }
+
+  it.each([
+    ['99999', '99999'], ['65536', '65536'], ['0', '0'], ['-1', '-1'], ['1.5', '1.5'], ['1e999', 'Infinity'], ['"8080"', '"8080"'],
+  ])('P1: a live local pid with the raw port %s resolves with the one named [FAIL], nothing dialed, exit 1', async (raw, shown) => {
+    writeRawDaemonJson(`"port":${raw},`);
+
+    const result = await runDoctor(testDir);
+
+    expect(result.output.filter((l) => l.startsWith('[FAIL]'))).toEqual([refusal(shown)]);
+    expect(line(result.output, 'daemon health reachability')).toBeUndefined();
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('P2: a hostile string port is shown as JSON.stringify(value) capped at 120 chars, with no raw control character', async () => {
+    const hostile = `\u001b[2J${'9'.repeat(300)}`;
+    writeRawDaemonJson(`"port":${JSON.stringify(hostile)},`);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(refusal(JSON.stringify(hostile).slice(0, 120)));
+    expect(result.output.join('\n')).not.toContain('\u001b');
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('P3: a dead local pid with port 99999 gets the same [FAIL], never "(stale)": the port is judged before liveness', async () => {
+    writeRawDaemonJson('"port":99999,', DEAD_PID);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(refusal('99999'));
+    expect(result.output.some((l) => l.includes('(stale)'))).toBe(false);
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('P4: a record with no port key still reads "daemon.json missing port" and dials nothing', async () => {
+    writeRawDaemonJson('');
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe('[FAIL] daemon.json: daemon.json missing port');
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('P4: a daemon.json holding only the JSON literal null has no port to read: it resolves with "missing port"', async () => {
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), 'null');
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe('[FAIL] daemon.json: daemon.json missing port');
+    expectNothingDialed();
+    expect(result.exitCode).toBe(1);
+  });
+
+  // A refused loopback dial takes about 2 s per probe on Windows. Whatever listens on the port decides the
+  // reachability outcome, so only the daemon.json line and the dial are asserted.
+  it.each([1, 65535])('P5: the boundary port %i is a valid port, judged as at 90c499e1 and dialed', async (port) => {
+    writeRawDaemonJson(`"port":${port},`);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toBe(`[OK] daemon.json: daemon.json valid (pid ${process.pid}, port ${port})`);
+    expect(line(result.output, 'daemon health reachability')).toBeDefined();
+    expect(requestSpy).toHaveBeenCalledWith(expect.objectContaining({ port }), expect.anything());
+  }, 15_000);
+});
+
 // Worktree readiness probes (epic-dce3a64f §7.3): a stubbed read-only Git runner drives each
 // condition; a real throwaway repository covers the listing and proves doctor writes nothing.
 type GitCall = 'version' | 'toplevel' | 'head' | 'target' | 'list' | 'remote' | 'originTarget' | 'controlAncestor' | 'targetAncestor';
