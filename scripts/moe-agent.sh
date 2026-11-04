@@ -6545,7 +6545,11 @@ PY
 # the ref never moved, drop the journal (the baseline recovery owns those
 # bytes). Reads git, never moves a ref, never re-freezes or re-gates. Each step
 # is safe to repeat. Best-effort: a failure logs and keeps that journal. The git
-# globals are local, so the pre-flight's own probe is untouched.
+# globals are local, so the pre-flight's own probe is untouched. A 'push
+# remote-rejected-unverified' journal (wt_publish) is never re-pushed: a fetch
+# drops it when origin lacks its C, and keeps it while origin holds C (for the
+# task's next landing; settled at once while its attempt is still finalizing) or
+# cannot be read.
 # Twin: Invoke-MoeReceiptReplay.
 receipt_replay() {
     [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
@@ -6560,6 +6564,25 @@ receipt_replay() {
         fi
         IFS=$'\x1f' read -r tid target after aid gen owner before owed strong tree wt <<< "$fields" || true
         if live_marker_foreign_live "$tid"; then continue; fi
+        if [ "$wt" = remote ] && wt_journal_unverified "$f"; then
+            # A [remote rejected] C no re-check could verify is never re-pushed: one fetch decides. Held, it
+            # stays for the task's next landing (L5 records its row, finalizes landed), or is settled below
+            # while its attempt is still finalizing; absent, it goes; unreadable, it stays.
+            rc=0; wt_remote_holds "${target#refs/heads/}" "$after" || rc=$?
+            if [ "$rc" = 2 ]; then echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: the [remote rejected] push of $after is still unverified ($LAND_RECHECK_DETAIL)."; continue; fi
+            phase=$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")
+            if [ "$rc" = 0 ] && [ "$phase" != finalizing ]; then
+                echo -e "${BLUE}[receipt]${NC} origin's ${target#refs/heads/} holds $after, the [remote rejected] push of task $tid; $f kept until that task lands again, which records its row and finalizes landed."; continue
+            fi
+            if [ "$(receipt_journal_fields "$f")" != "$fields" ]; then echo -e "${BLUE}[receipt]${NC} $f was rewritten or removed meanwhile; left to its lander."; continue; fi
+            if [ "$rc" = 1 ]; then
+                [ "$phase" != finalizing ] \
+                    || replay_unlanded "$tid" "$aid" "$gen" "$owner" "$target" "$before" remote MOE_PUSH_FAILED "origin's ${target#refs/heads/} does not hold the [remote rejected] landing $after" \
+                    || { echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: the unlanded route of attempt $aid failed."; continue; }
+                rm -f "$f"; echo -e "${BLUE}[receipt]${NC} origin's ${target#refs/heads/} does not hold $after, the [remote rejected] push of task $tid; dropped $f."; continue
+            fi
+            wt_journal_push_result "$f" "pushed $after to origin/${target#refs/heads/}"   # held and finalizing: reconciled below, no push
+        fi
         if [ "$wt" = remote ]; then
             # WT-09 (§2.6): origin settles the journaled C; nothing is merged, gated or built.
             rc=0; reconcile_push "${target#refs/heads/}" "$before" "$after" || rc=$?
@@ -7480,13 +7503,23 @@ wt_journal_push_result() {
     receipt_journal_write "$1" "$($PYTHON_CMD -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); d["pushResult"]=sys.argv[2]; print(json.dumps(d))' "$1" "$2" 2>/dev/null)"
 }
 
-# wt_remote_holds TARGET C -- the ONE re-check after a [remote rejected] answer (a remote
-# can refuse after it applied the update): 0 only when a fresh fetch (land_fetch, its 3
-# tries) shows origin's TARGET holding C; a failed fetch or any other answer is 1. It
-# never pushes. Twin: Test-MoeRemoteHolds.
+# wt_journal_unverified JOURNAL -- 0 when the journal's pushResult says a [remote
+# rejected] push no re-check could verify (wt_publish); 1 otherwise or unreadable.
+wt_journal_unverified() {
+    $PYTHON_CMD -c 'import json,sys; sys.exit(0 if str(json.load(open(sys.argv[1],encoding="utf-8")).get("pushResult")).startswith("push remote-rejected-unverified: ") else 1)' "$1" 2>/dev/null
+}
+
+# wt_remote_holds TARGET C -- the ONE proof of a [remote rejected] push (a remote can
+# refuse after it applied the update), by a fresh fetch (land_fetch, its 3 tries): 0
+# origin's TARGET holds C; 1 the fetch worked and origin lacks C; 2 unverifiable (a
+# failed fetch, or merge-base could not answer), with LAND_RECHECK_DETAIL. It never
+# pushes. Twin: Test-MoeRemoteHolds.
 wt_remote_holds() {
-    land_fetch "$1" || return 1
-    git -C "$MOE_TOP" merge-base --is-ancestor "$2" "refs/remotes/origin/$1^{commit}" >/dev/null 2>&1 || return 1
+    local rc=0
+    land_fetch "$1" || { LAND_RECHECK_DETAIL="git fetch failed: $LAND_FETCH_ERR"; return 2; }
+    git -C "$MOE_TOP" merge-base --is-ancestor "$2" "refs/remotes/origin/$1^{commit}" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -gt 1 ] || return "$rc"
+    LAND_RECHECK_DETAIL="git merge-base --is-ancestor exited $rc"; return 2
 }
 
 # wt_push_target TARGET B C -- L9 (design §2.2): ONE non-forced push of C, never via
@@ -7494,19 +7527,24 @@ wt_remote_holds() {
 # whatever git's exit code; no definite answer goes to reconcile_push. 0 published,
 # or [remote rejected] while wt_remote_holds proves origin's TARGET holds C
 # (MOE_PUSH_REMOTE_REJECTED_APPLIED); 1 [rejected]; 2 [remote rejected] with no such
-# proof (C absent, or the re-check fetch failed); 3 reconciled as never applying;
-# 4 unknown (§2.6). 2 and 4 set LAND_PUSH_DETAIL. It moves no local ref (the re-check
-# only fetches). Twin: Send-MoeLandPush.
+# proof (C absent, or, with LAND_PUSH_UNVERIFIED=true and the reason appended to
+# LAND_PUSH_DETAIL, a re-check that could not read origin); 3 reconciled as never
+# applying; 4 unknown (§2.6). 2 and 4 set LAND_PUSH_DETAIL. It moves no local ref (the
+# re-check only fetches). Twin: Send-MoeLandPush.
 wt_push_target() {
-    local out flag dst sum rc=5 ref="refs/heads/$1"
+    local out flag dst sum rc=5 hold=0 ref="refs/heads/$1"
+    LAND_PUSH_UNVERIFIED=""
     out=$(git -C "$MOE_TOP" push --porcelain origin "$3:$ref" 2>/dev/null) || true
     while IFS=$'\t' read -r flag dst sum; do
         [ "${dst##*:}" = "$ref" ] || continue
         case "$flag$sum" in ' '*|'*'*|'='*) rc=0 ;; '![rejected]'*) rc=1 ;; '![remote rejected]'*) rc=2; LAND_PUSH_DETAIL="origin refused $3: $sum" ;; esac
         break
     done <<< "$out"
-    if [ "$rc" = 2 ] && wt_remote_holds "$1" "$3"; then
+    [ "$rc" != 2 ] || wt_remote_holds "$1" "$3" || hold=$?
+    if [ "$rc" = 2 ] && [ "$hold" = 0 ]; then
         rc=0; echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_REMOTE_REJECTED_APPLIED: origin answered [remote rejected] for $3, but origin's $1 holds it; the push counts as published."
+    elif [ "$hold" = 2 ]; then
+        LAND_PUSH_UNVERIFIED=true; LAND_PUSH_DETAIL="$LAND_PUSH_DETAIL; the re-check could not read origin's $1 ($LAND_RECHECK_DETAIL)"
     fi
     [ "$rc" = 5 ] || return "$rc"
     rc=0; reconcile_push "$1" "$2" "$3" || rc=$?
@@ -7515,8 +7553,10 @@ wt_push_target() {
 # wt_publish JOURNAL B C -- L9 through wt_push_target. 0 published (the journal says
 # 'pushed …', L10 mirrored C; a [remote rejected] origin proved to hold C included);
 # 1 the round ends; 2 final: [remote rejected] with no proof origin holds C
-# (MOE_PUSH_FAILED), or unknown (§2.6): the journal kept as 'push unknown: …', C on a
-# push-unknown rescue ref, and no row or finalize.
+# (MOE_PUSH_FAILED: the journal dropped once origin is shown lacking C, else kept as
+# 'push remote-rejected-unverified: …' for the task's next landing or a replay to
+# prove by a fetch, never a re-push), or unknown (§2.6): the journal kept as 'push
+# unknown: …', C on a push-unknown rescue ref, and no row or finalize.
 wt_publish() {
     local rc=0
     wt_push_target "$LAND_BRANCH" "$2" "$3" || rc=$?
@@ -7527,7 +7567,9 @@ wt_publish() {
         wt_journal_push_result "$1" "push unknown: $LAND_PUSH_DETAIL"; rescue_ref_from_commit "$3" push-unknown || true
         MOE_FINALIZE_DONE=true; MOE_FINALIZE_RC=0; LAND_CODE=MOE_PUSH_OUTCOME_UNKNOWN; LAND_MESSAGE="$LAND_PUSH_DETAIL"
     elif [ "$rc" = 2 ]; then
-        rm -f "$1"; LAND_CODE=MOE_PUSH_FAILED; LAND_MESSAGE="$LAND_PUSH_DETAIL"
+        [ "$LAND_PUSH_UNVERIFIED" != true ] || wt_journal_push_result "$1" "push remote-rejected-unverified: $LAND_PUSH_DETAIL"
+        wt_journal_unverified "$1" || rm -f "$1"   # unmarked (C absent, or the best-effort mark failed): dropped, never left for a replay to re-push
+        LAND_CODE=MOE_PUSH_FAILED; LAND_MESSAGE="$LAND_PUSH_DETAIL"
     fi
     [ "$rc" = 0 ] || return "$rc"
     wt_journal_push_result "$1" "pushed $3 to origin/$LAND_BRANCH"
@@ -7565,19 +7607,32 @@ wt_strong_intent() {
 # the strong intent rule, C, the strict journal, the S1 test hook, ONE CAS.
 # 0 with LAND_OUTCOME committed (this C, or a journaled C the target holds while
 # T adds nothing, §2.9; signals stay deferred) or nothing; 1 with LAND_CODE and
-# LAND_MESSAGE set and no ref moved by this session.
+# LAND_MESSAGE set and no ref moved by this session. A journal kept as 'push
+# remote-rejected-unverified' is proven by a fetch of origin instead (wt_remote_holds):
+# held is that journaled C, absent drops the journal, unverifiable refuses.
 wt_land_rounds() {
     local journal="$1" work="$2" ref="refs/heads/$LAND_BRANCH" round rounds=3 b bt m c rc tip hook names p jf jt ja jb jw jc=""
     [ -z "${QUALITY_GATE:-}" ] || rounds=2
     if [ -e "$journal" ]; then
         jf=$(receipt_journal_fields "$journal") || { LAND_MESSAGE="receipt journal $journal is malformed; kept"; return 1; }
         IFS=$'\x1f' read -r p jt ja p p p jb p p p jw <<< "$jf" || true
-        if [ -z "$jw" ] || ! jc=$(receipt_landed_as "$jt" "$ja" "$jb") || { [ -n "$jc" ] && [ "$jc" != "$ja" ]; }; then
-            LAND_MESSAGE="receipt journal $journal kept: its landing cannot be confirmed"; return 1
+        if [ "$jw" = remote ] && wt_journal_unverified "$journal"; then
+            # A [remote rejected] push no re-check could verify (L9): a fetch proves it, never a re-push.
+            # Held: C is this landing's (§2.9); absent: this fresh round supersedes it.
+            rc=0; wt_remote_holds "${jt#refs/heads/}" "$ja" || rc=$?
+            if [ "$rc" = 0 ]; then jc="$ja"; wt_journal_push_result "$journal" "pushed $ja to origin/${jt#refs/heads/}"
+            elif [ "$rc" = 1 ]; then rm -f "$journal"
+            else LAND_OUTCOME=refused; LAND_CODE=MOE_COMMIT_REFUSED_UNRECONCILED_INTENT
+                LAND_MESSAGE="receipt journal $journal holds a [remote rejected] push of $ja that no re-check could verify ($LAND_RECHECK_DETAIL)"; return 1
+            fi
+        else
+            if [ -z "$jw" ] || ! jc=$(receipt_landed_as "$jt" "$ja" "$jb") || { [ -n "$jc" ] && [ "$jc" != "$ja" ]; }; then
+                LAND_MESSAGE="receipt journal $journal kept: its landing cannot be confirmed"; return 1
+            fi
+            [ -n "$jc" ] || [ "$jw" != remote ] || { LAND_OUTCOME=refused; LAND_CODE=MOE_COMMIT_REFUSED_UNRECONCILED_INTENT   # a replay settles it (§2.6)
+                LAND_MESSAGE="receipt journal $journal holds an unsettled push of $ja"; return 1; }
+            [ -n "$jc" ] || rm -f "$journal"   # its C never reached the target: this fresh round supersedes it
         fi
-        [ -n "$jc" ] || [ "$jw" != remote ] || { LAND_OUTCOME=refused; LAND_CODE=MOE_COMMIT_REFUSED_UNRECONCILED_INTENT   # a replay settles it (§2.6)
-            LAND_MESSAGE="receipt journal $journal holds an unsettled push of $ja"; return 1; }
-        [ -n "$jc" ] || rm -f "$journal"   # its C never reached the target: this fresh round supersedes it
     fi
     for ((round = 1; round <= rounds; round++)); do
         LAND_OUTCOME=failed; LAND_CODE=MOE_COMMIT_FAILED; LAND_MESSAGE=""; names=""; m=""

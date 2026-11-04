@@ -2377,7 +2377,11 @@ function Invoke-MoeReplayUnlanded([hashtable]$Git, $J, [string]$Why, [string]$Co
 # fenced by attempt id + generation); git shows neither -> the ref never
 # moved, drop the journal (the baseline recovery owns those bytes). Reads git,
 # never moves a ref, never re-freezes or re-gates. Each step is safe to
-# repeat. Best-effort: a failure logs and keeps that journal. Twin: receipt_replay.
+# repeat. Best-effort: a failure logs and keeps that journal. A 'push
+# remote-rejected-unverified' journal (Publish-MoeWorktreeLanding) is never
+# re-pushed: a fetch drops it when origin lacks its C, and keeps it while origin
+# holds C (for the task's next landing; settled at once while its attempt is still
+# finalizing) or cannot be read. Twin: receipt_replay.
 function Invoke-MoeReceiptReplay {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -2397,6 +2401,29 @@ function Invoke-MoeReceiptReplay {
                 }
                 $wt = Test-MoeWorktreeJournal $j
                 if (Test-MoeLiveMarkerForeignLive $git.GitDir $j.taskId) { continue }
+                if ($wt -and $j.publicationMode -ceq 'remote' -and (Test-MoeJournalUnverified $j)) {
+                    # A [remote rejected] C no re-check could verify is never re-pushed: one fetch decides. Held, it
+                    # stays for the task's next landing (L5 records its row, finalizes landed), or is settled below
+                    # while its attempt is still finalizing; absent, it goes; unreadable, it stays.
+                    $t = ([string]$j.target) -creplace '^refs/heads/', ''; $after = [string]$j.targetAfter
+                    $hold = Test-MoeRemoteHolds $git.Top $t $after
+                    if ($hold -eq 2) { Write-Host "[WARN] receipt journal $($f.FullName) kept: the [remote rejected] push of $after is still unverified ($($script:MoeRecheckDetail))." -ForegroundColor Yellow; continue }
+                    $phase = Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId
+                    if ($hold -eq 0 -and $phase -cne 'finalizing') {
+                        Write-Host "[receipt] origin's $t holds $after, the [remote rejected] push of task $($j.taskId); $($f.FullName) kept until that task lands again, which records its row and finalizes landed." -ForegroundColor Cyan; continue
+                    }
+                    $now = $null; try { $now = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { }
+                    if ($null -eq $now -or [string]$now.targetAfter -cne $after -or [string]$now.targetBefore -cne [string]$j.targetBefore) { Write-Host "[receipt] $($f.FullName) was rewritten or removed meanwhile; left to its lander." -ForegroundColor Cyan; continue }
+                    if ($hold -eq 1) {
+                        if ($phase -ceq 'finalizing' -and -not (Invoke-MoeReplayUnlanded $git $j 'remote' 'MOE_PUSH_FAILED' "origin's $t does not hold the [remote rejected] landing $after")) {
+                            Write-Host "[WARN] receipt journal $($f.FullName) kept: the unlanded route of attempt $($j.attemptId) failed." -ForegroundColor Yellow; continue
+                        }
+                        Remove-Item -LiteralPath $f.FullName -Force
+                        Write-Host "[receipt] origin's $t does not hold $after, the [remote rejected] push of task $($j.taskId); dropped $($f.FullName)." -ForegroundColor Cyan; continue
+                    }
+                    # Held and finalizing: reconciled below, no push. Send-MoeOwedLedgerRow reads the in-memory journal.
+                    $j.pushResult = "pushed $after to origin/$t"; Set-MoeJournalPushResult $f.FullName $j.pushResult
+                }
                 if ($wt -and $j.publicationMode -ceq 'remote') {
                     # WT-09 (§2.6): origin settles the journaled C; nothing is merged, gated or built.
                     $t = ([string]$j.target) -creplace '^refs/heads/', ''; $after = [string]$j.targetAfter
@@ -7092,13 +7119,20 @@ function Set-MoeJournalPushResult([string]$Path, [string]$Result) {
     } catch {}
 }
 
-# The ONE re-check after a [remote rejected] answer (a remote can refuse after it
-# applied the update): $true only when a fresh fetch (Invoke-MoeLandFetch, its 3
-# tries) shows origin's $T holding $C; a failed fetch or any other answer is $false.
-# It never pushes. Twin: wt_remote_holds.
+# Does a journal's pushResult say a [remote rejected] push no re-check could verify
+# (Publish-MoeWorktreeLanding)? Twin: wt_journal_unverified.
+function Test-MoeJournalUnverified($J) { return [bool]($null -ne $J -and "$($J.pushResult)" -clike 'push remote-rejected-unverified: *') }
+
+# The ONE proof of a [remote rejected] push (a remote can refuse after it applied the
+# update), by a fresh fetch (Invoke-MoeLandFetch, its 3 tries): 0 origin's $T holds
+# $C; 1 the fetch worked and origin lacks $C; 2 unverifiable (a failed fetch, or
+# merge-base could not answer), with $script:MoeRecheckDetail. It never pushes.
+# Twin: wt_remote_holds.
 function Test-MoeRemoteHolds([string]$Top, [string]$T, [string]$C) {
-    if (-not (Invoke-MoeLandFetch $Top $T)) { return $false }
-    return (Invoke-MoeGit -Top $Top -GitArgs @('merge-base', '--is-ancestor', $C, "refs/remotes/origin/$T^{commit}")).Rc -eq 0
+    if (-not (Invoke-MoeLandFetch $Top $T)) { $script:MoeRecheckDetail = "git fetch failed: $($script:MoeLandFetchErr)"; return 2 }
+    $rc = (Invoke-MoeGit -Top $Top -GitArgs @('merge-base', '--is-ancestor', $C, "refs/remotes/origin/$T^{commit}")).Rc
+    if ($rc -eq 0 -or $rc -eq 1) { return [int]$rc }
+    $script:MoeRecheckDetail = "git merge-base --is-ancestor exited $rc"; return 2
 }
 
 # L9 (design §2.2): ONE non-forced push of $C, never via Push-MoeBranch (so no
@@ -7106,11 +7140,12 @@ function Test-MoeRemoteHolds([string]$Top, [string]$T, [string]$C) {
 # code; no definite answer goes to Resolve-MoePushOutcome. 0 published, or [remote
 # rejected] while Test-MoeRemoteHolds proves origin's $T holds $C
 # (MOE_PUSH_REMOTE_REJECTED_APPLIED); 1 [rejected]; 2 [remote rejected] with no such
-# proof ($C absent, or the re-check fetch failed); 3 reconciled as never applying;
-# 4 unknown (§2.6). 2 and 4 set $script:MoePushDetail. It moves no local ref (the
-# re-check only fetches). Twin: wt_push_target.
+# proof ($C absent, or, with $script:MoePushUnverified and the reason appended to
+# $script:MoePushDetail, a re-check that could not read origin); 3 reconciled as
+# never applying; 4 unknown (§2.6). 2 and 4 set $script:MoePushDetail. It moves no
+# local ref (the re-check only fetches). Twin: wt_push_target.
 function Send-MoeLandPush([string]$Top, [string]$T, [string]$B, [string]$C) {
-    $ref = "refs/heads/$T"
+    $ref = "refs/heads/$T"; $script:MoePushUnverified = $false
     foreach ($line in @((Invoke-MoeGit -Top $Top -GitArgs @('push', '--porcelain', 'origin', "${C}:$ref")).Out)) {
         $f = @("$line" -split "`t", 3)
         if ($f.Count -lt 2 -or $f[1].Substring($f[1].LastIndexOf([char]':') + 1) -cne $ref) { continue }
@@ -7118,10 +7153,12 @@ function Send-MoeLandPush([string]$Top, [string]$T, [string]$B, [string]$C) {
         if ($k -cmatch '^[ *=]') { return 0 } elseif ($k -cmatch '^!\[rejected\]') { return 1 }
         elseif ($k -cmatch '^!\[remote rejected\]') {
             $script:MoePushDetail = "origin refused ${C}: $sum"
-            if (Test-MoeRemoteHolds $Top $T $C) {
+            $hold = Test-MoeRemoteHolds $Top $T $C
+            if ($hold -eq 0) {
                 Write-Host "[WARN] MOE_PUSH_REMOTE_REJECTED_APPLIED: origin answered [remote rejected] for $C, but origin's $T holds it; the push counts as published." -ForegroundColor Yellow
                 return 0
             }
+            if ($hold -eq 2) { $script:MoePushUnverified = $true; $script:MoePushDetail += "; the re-check could not read origin's $T ($($script:MoeRecheckDetail))" }
             return 2
         }
         break
@@ -7132,9 +7169,11 @@ function Send-MoeLandPush([string]$Top, [string]$T, [string]$B, [string]$C) {
 }
 # L9 through Send-MoeLandPush. 0 published (the journal says 'pushed …', L10
 # mirrored $C; a [remote rejected] origin proved to hold $C included); 1 the round
-# ends; 2 final: [remote rejected] with no proof origin holds $C (MOE_PUSH_FAILED), or
-# unknown (§2.6): the journal kept as 'push unknown: …', $C on a push-unknown
-# rescue ref, and no row or finalize. Twin: wt_publish.
+# ends; 2 final: [remote rejected] with no proof origin holds $C (MOE_PUSH_FAILED:
+# the journal dropped once origin is shown lacking $C, else kept as 'push
+# remote-rejected-unverified: …' for the task's next landing or a replay to prove by
+# a fetch, never a re-push), or unknown (§2.6): the journal kept as 'push unknown:
+# …', $C on a push-unknown rescue ref, and no row or finalize. Twin: wt_publish.
 function Publish-MoeWorktreeLanding([hashtable]$Git, [string]$Journal, [hashtable]$Res, [hashtable]$L, [hashtable]$M, [string]$B, [string]$C) {
     $t = $Res.Branch; $rc = Send-MoeLandPush $Git.Top $t $B $C
     if ($rc -eq 3) {
@@ -7147,7 +7186,11 @@ function Publish-MoeWorktreeLanding([hashtable]$Git, [string]$Journal, [hashtabl
         if ($r) { $Res.Ref = $r.Ref; $Res.Sha = $r.Sha }
         $script:MoeFinalizeDone = $true; $script:MoeFinalizeRc = $true; $Res.Code = 'MOE_PUSH_OUTCOME_UNKNOWN'; $L.Msg = $script:MoePushDetail
     } elseif ($rc -eq 2) {
-        Remove-Item -LiteralPath $Journal -Force -ErrorAction SilentlyContinue; $Res.Code = 'MOE_PUSH_FAILED'; $L.Msg = $script:MoePushDetail
+        if ($script:MoePushUnverified) { Set-MoeJournalPushResult $Journal "push remote-rejected-unverified: $($script:MoePushDetail)" }
+        # Unmarked ($C absent, or the best-effort mark failed): dropped, never left for a replay to re-push.
+        $kept = $null; try { $kept = [IO.File]::ReadAllText($Journal) | ConvertFrom-Json -ErrorAction Stop } catch {}
+        if (-not (Test-MoeJournalUnverified $kept)) { Remove-Item -LiteralPath $Journal -Force -ErrorAction SilentlyContinue }
+        $Res.Code = 'MOE_PUSH_FAILED'; $L.Msg = $script:MoePushDetail
     }
     if ($rc -ne 0) { return $rc }
     Set-MoeJournalPushResult $Journal "pushed $C to origin/$t"
@@ -7208,21 +7251,36 @@ function Test-MoeWorktreeStrongIntent([string]$M, [string]$B, [hashtable]$Frozen
 # journal, the S1 test hook, ONE CAS. $true with $Res.Outcome committed (this C, or a journaled
 # C the target holds while T adds nothing, §2.9; Ctrl+C stays deferred) or
 # nothing; $false with $Res.Code and $L.Msg set and no ref moved by this
-# session. Twin: wt_land_rounds.
+# session. A journal kept as 'push remote-rejected-unverified' is proven by a
+# fetch of origin instead (Test-MoeRemoteHolds): held is that journaled C, absent
+# drops the journal, unverifiable refuses. Twin: wt_land_rounds.
 function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res, [hashtable]$L, [hashtable]$Settings, [hashtable]$Meta) {
     $top = $Git.Top; $journal = $L.Journal; $jc = ''; $rev = '^[0-9a-f]{40}$'
     if (Test-Path -LiteralPath $journal) {
         $j = $null
         try { $j = [IO.File]::ReadAllText($journal) | ConvertFrom-Json -ErrorAction Stop } catch {}
         if (-not (Test-MoeReceiptJournal $Git.GitDir (Split-Path -Leaf $journal) $j)) { $L.Msg = "receipt journal $journal is malformed; kept"; return $false }
-        try { $jc = Find-MoeJournaledLanding $top $j } catch { $jc = $null }
-        if (-not (Test-MoeWorktreeJournal $j) -or $null -eq $jc -or ($jc -and $jc -cne [string]$j.targetAfter)) {
-            $L.Msg = "receipt journal $journal kept: its landing cannot be confirmed"; return $false
+        if ((Test-MoeWorktreeJournal $j) -and $j.publicationMode -ceq 'remote' -and (Test-MoeJournalUnverified $j)) {
+            # A [remote rejected] push no re-check could verify (L9): a fetch proves it, never a re-push.
+            # Held: C is this landing's (§2.9); absent: this fresh round supersedes it.
+            $jt = ([string]$j.target) -creplace '^refs/heads/', ''; $ja = [string]$j.targetAfter
+            $hold = Test-MoeRemoteHolds $top $jt $ja
+            if ($hold -eq 0) { $jc = $ja; Set-MoeJournalPushResult $journal "pushed $ja to origin/$jt" }
+            elseif ($hold -eq 1) { Remove-Item -LiteralPath $journal -Force }
+            else {
+                $Res.Outcome = 'refused'; $Res.Code = 'MOE_COMMIT_REFUSED_UNRECONCILED_INTENT'
+                $L.Msg = "receipt journal $journal holds a [remote rejected] push of $ja that no re-check could verify ($($script:MoeRecheckDetail))"; return $false
+            }
+        } else {
+            try { $jc = Find-MoeJournaledLanding $top $j } catch { $jc = $null }
+            if (-not (Test-MoeWorktreeJournal $j) -or $null -eq $jc -or ($jc -and $jc -cne [string]$j.targetAfter)) {
+                $L.Msg = "receipt journal $journal kept: its landing cannot be confirmed"; return $false
+            }
+            if (-not $jc -and $j.publicationMode -ceq 'remote') {   # a replay settles it (§2.6)
+                $Res.Outcome = 'refused'; $Res.Code = 'MOE_COMMIT_REFUSED_UNRECONCILED_INTENT'; $L.Msg = "receipt journal $journal holds an unsettled push of $($j.targetAfter)"; return $false
+            }
+            if (-not $jc) { Remove-Item -LiteralPath $journal -Force }   # its C never reached the target: this fresh round supersedes it
         }
-        if (-not $jc -and $j.publicationMode -ceq 'remote') {   # a replay settles it (§2.6)
-            $Res.Outcome = 'refused'; $Res.Code = 'MOE_COMMIT_REFUSED_UNRECONCILED_INTENT'; $L.Msg = "receipt journal $journal holds an unsettled push of $($j.targetAfter)"; return $false
-        }
-        if (-not $jc) { Remove-Item -LiteralPath $journal -Force }   # its C never reached the target: this fresh round supersedes it
     }
     $rounds = if ($Settings.configuredGate) { 2 } else { 3 }
     for ($round = 1; $round -le $rounds; $round++) {
