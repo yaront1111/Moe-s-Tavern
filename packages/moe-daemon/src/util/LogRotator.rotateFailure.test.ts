@@ -127,6 +127,44 @@ describe('LogRotator failed rotation keeps the chain and the live log', () => {
     expectSeededState(dir, logPath, listing);
   });
 
+  it('(f5) a failed rotation removes the temporary file even when the destination opens after the gzip error', async () => {
+    const { dir, logPath, rotator, listing } = seed();
+    // The order a busy libuv threadpool produces: the write stream's open
+    // completes only after the gzip error has been handled.
+    let releaseOpen!: () => void;
+    const openGate = new Promise<void>((resolve) => { releaseOpen = resolve; });
+    const realCreateWriteStream = fs.createWriteStream;
+    const destinations: fs.WriteStream[] = [];
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(((file: fs.PathLike) => {
+      const gatedFs = {
+        open: (p: fs.PathLike, flags: fs.OpenMode, mode: fs.Mode, cb: (err: NodeJS.ErrnoException | null, fd: number) => void) => {
+          void openGate.then(() => fs.open(p, flags, mode, cb));
+        },
+        write: fs.write,
+        writev: fs.writev,
+        close: fs.close,
+      };
+      const stream = realCreateWriteStream(file, { fs: gatedFs } as unknown as Parameters<typeof fs.createWriteStream>[1]);
+      destinations.push(stream);
+      return stream;
+    }) as typeof fs.createWriteStream);
+    vi.spyOn(zlib, 'createGzip').mockImplementation(() => {
+      const gzip = failingGzip();
+      gzip.once('error', () => setImmediate(releaseOpen));
+      return gzip;
+    });
+
+    expect(await rotator.rotateIfNeeded()).toBe(false);
+
+    expect(destinations).toHaveLength(1);
+    const [destination] = destinations;
+    if (!destination.closed) {
+      await new Promise((resolve) => destination.once('close', resolve)); // the late open has landed and closed
+    }
+    expect(fs.existsSync(`${logPath}.rotating.tmp`)).toBe(false);
+    expectSeededState(dir, logPath, listing);
+  });
+
   it('(f4) a compression that rejects after a partial write targets only a temporary file and removes it', async () => {
     const { dir, logPath, rotator, listing } = seed();
     const destinations: string[] = [];

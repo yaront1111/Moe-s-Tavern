@@ -23,6 +23,9 @@ const COMPRESSION_TIMEOUT_MS =
 /** After a failed rotation, rotateIfNeeded skips further attempts for this long. */
 export const ROTATION_RETRY_DELAY_MS = 60_000;
 
+/** How long a failed compression waits for its destination to close before rejecting anyway. */
+export const DESTINATION_CLOSE_WAIT_MS = 5_000;
+
 export interface LogRotatorOptions {
   maxSizeMB?: number;
   retentionCount?: number;
@@ -180,7 +183,22 @@ export class LogRotator {
         if (cleanup.destroyDestination) {
           destination.destroy();
         }
-        reject(error instanceof Error ? error : new Error(String(error)));
+        const failure = error instanceof Error ? error : new Error(String(error));
+        // fs.createWriteStream opens its file asynchronously, and destroy()
+        // lets a pending open finish before it closes the fd. Rejecting now
+        // would let rotate() remove the temporary file before that late open
+        // recreates it, so settle once the destination has closed, bounded
+        // in case its open never returns.
+        if (destination.closed) {
+          reject(failure);
+          return;
+        }
+        const closeWait = setTimeout(() => reject(failure), DESTINATION_CLOSE_WAIT_MS);
+        closeWait.unref?.();
+        destination.once('close', () => {
+          clearTimeout(closeWait);
+          reject(failure);
+        });
       };
 
       const timeout = setTimeout(() => {
