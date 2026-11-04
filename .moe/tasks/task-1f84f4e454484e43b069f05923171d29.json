@@ -66,14 +66,16 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's own diff, as the last step (load the adversarial-self-review skill).\n(1) RED proof. Run this command, which tests the merge-base's LogRotator.ts with your new test file:\n( R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && S=$(mktemp -d /tmp/r1f8.XXXX) && git -C \"$R\" archive \"$B\" packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && cp \"$R/packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts\" src/util/ && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1; npx vitest run src/util/LogRotator.rotateFailure.test.ts' > ../red.log 2>&1; grep -aE '^ +(Test Files|Tests) ' ../red.log; echo \"($S)\" )\nIt must print 'Tests  4 failed (4)'. A row that passes on the old rotator proves nothing: tighten it. Paste that output into the completion summary, then remove the /tmp/r1f8.* dir it printed.\n(2) Walk each failure path:\n- a compression error, and a timeout;\n- a rename failure mid-shift: the chain is shifted, the live log is kept and the temp is removed. This is a pre-existing class and out of scope; say so;\n- a truncate failure: duplicates until the next rotation, also pre-existing;\n- a leftover temp from a crash: removed at the next attempt;\n- Windows: renameSync replaces its target; rmSync on the file of a stream that was just destroyed;\n- retentionCount 1, and a gap in the chain.\n(3) Confirm that compressFile and util/LogRotator.test.ts are unchanged, that rotateIfNeeded can never throw, that no added line contains a project.json globalRails.forbiddenPatterns string, and that the docs hunk is the only change in docs/MCP_SERVER.md.\nIf anything changes, re-run step 4 and use that fresh output as the complete_task evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T00:29:41.998Z"
+      "note": "Review only, no file changed. RED proof (merge-base LogRotator.ts + new test file): \"Test Files 1 failed (1) / Tests 4 failed (4)\". Rows f2/f3 failed there partly because the old file lacks ROTATION_RETRY_DELAY_MS (NaN clock), so I re-ran in the scratch snapshot with only that constant added to the old file: still 4 failed for the real reasons (f1/f2 \"unexpected end of file\" = 0-byte .1.gz, f3 createGzip 2x, f4 dest is activity.log.1.gz). Walked: compression error/timeout (f1/f4); rename failure mid-shift and truncate failure are pre-existing classes, out of scope (temp removed, original error rethrown, live log kept; a mid-shift failure leaves .1 missing until the next attempt, truncate failure duplicates once); crash leftover temp removed by rmSync at the start of rotate(); Windows renameSync replaces target, a failing rmSync is caught, warned, and the original error rethrown; retentionCount 1: shift loop skipped, temp renamed over .1.gz; chain gap unchanged. Theoretical: system clock jumping back delays the next rotation (log grows, no data loss); destination open racing a destroyed stream could leave an empty temp, removed next attempt, gitignored. rotateIfNeeded cannot throw (Date.now, existsSync outside try cannot throw; stat+rotate inside); only caller is appendActivity under the activity mutex. compressFile, getRotatedLogs, util/LogRotator.test.ts unchanged; no forbidden pattern in added lines; docs diff is one hunk in ### moe.get_activity_log.",
+      "startedAt": "2026-11-04T00:29:41.998Z",
+      "completedAt": "2026-11-04T05:27:03.126Z"
     }
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "assignedWorkerId": "worker-a0305b0b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -85,16 +87,17 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:59:48.386Z",
-  "updatedAt": "2026-11-04T00:29:41.999Z",
+  "updatedAt": "2026-11-04T05:27:03.126Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:19:13.055Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "worker-a0305b0b"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -104,7 +107,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:26:56.799Z",
@@ -173,5 +177,36 @@
   },
   "planApprovedAt": "2026-11-04T00:26:56.847Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T00:28:13.907Z"
+  "workStartedAt": "2026-11-04T00:28:13.907Z",
+  "commits": [
+    {
+      "sha": "0bbf0e405dd2328e80e27a17089c78287059e1ae",
+      "ref": "refs/heads/moe/task/task-1f84f4e454484e43b069f05923171d29",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T05:23:55Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T05:24:36.296Z",
+      "treeId": "a46975b764ca7d2c25da72ebd73574225ceba2de",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+    "packages/moe-daemon/src/util/LogRotator.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-a0305b0b@2026-11-04T05:23:55Z",
+    "at": "2026-11-04T05:24:36.296Z"
+  }
 }
