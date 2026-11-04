@@ -71,13 +71,15 @@
     {
       "stepId": "step-5",
       "description": "Verify once, from the task worktree root, after the last edit. The run's fresh output is the complete_task evidence. Run the executionContract checkRef exactly as written; it is task-bc6ba91b's DONE gate with wt-replay added to MOE_WORKTREE_ONLY.\n\nWhat it runs:\n- bash -n;\n- parity-check.sh and parity-check.ps1;\n- postflight-worktree.cjs on sh and ps1, for wt-remote-rejected, wt-unlanded, wt-push, wt-completion, wt-replay, wt-replay-remote and codes;\n- postflight-migration.cjs (migration shares wt_push_target);\n- the held-out worktree-landing.sh and worktree-landing.ps1, which must pass unchanged. Never edit them.\n\nRun conditions:\n- The scratch dir sits on /mnt/d: a /tmp cwd breaks the Windows legs (mem:gotcha-qa-ps1-postflight-from-wsl).\n- bc6ba91b's run of this gate took about 17 min, which is past the 10-min Bash cap. Launch it detached into a log and poll for its end (mem:gotcha-qa-session-env-and-signals-leak-into-harness). Kill only PIDs your session recorded.\n- Never edit the wrappers mid-run (mem:gotcha-editing-wrapper-while-harness-runs).\n\nExpected: exit 0, and `[worktree] … 0 failed` for both engines.\n\nError handling for a red run:\n- If a Windows leg fails, re-run that leg on HEAD's scripts before blaming the change.\n- Fix the cause in step 1, 2 or 3's file, never by weakening an assertion.\n- Then re-run the whole command.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-04T06:21:19.778Z"
+      "note": "The executionContract checkRef ran verbatim from the worktree root, detached into /mnt/d/moe-scratch/561d-step5.log, from 06:22:59Z to about 06:43:40Z. EXIT=0.\n\nResults:\n- bash -n: OK.\n- parity-check.sh: PASS. parity-check.ps1: PASS.\n- postflight-worktree.cjs: sh \"7 ok, 0 failed\", ps1 \"7 ok, 0 failed\". The suites were wt-push, wt-completion, wt-replay, wt-replay-remote, wt-unlanded, wt-remote-rejected and codes.\n- postflight-migration.cjs: every case ok on both engines.\n- worktree-landing.sh: \"18 passed, 0 failed, 0 errors\". worktree-landing.ps1: \"18 passed, 0 failed, 0 errors\".\n\nNo file changed during the run. The held-out worktree-landing files are untouched.",
+      "startedAt": "2026-11-04T06:21:19.778Z",
+      "completedAt": "2026-11-04T06:43:53.346Z"
     },
     {
       "stepId": "step-6",
@@ -107,7 +109,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:38:02.611Z",
-  "updatedAt": "2026-11-04T06:21:19.778Z",
+  "updatedAt": "2026-11-04T06:43:53.346Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:44:41.089Z",
@@ -117,7 +119,7 @@
     "firstClaimAt": "2026-11-04T05:45:19.172Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -131,7 +133,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:00:21.505Z",
