@@ -1883,6 +1883,22 @@ if [ "$NO_START_DAEMON" = false ]; then
             FOREIGN_DAEMON=true
         fi
 
+        # daemon.json written in another pid namespace (a Docker container, another
+        # WSL distro): its pid means nothing here, so kill -0 would misread a live
+        # daemon as stale, delete its discovery file and start a duplicate daemon
+        # onto the same .moe/. The daemon records pidNamespace (task-da89f620);
+        # only the exact pid:[<digits>] form counts, as in its isOtherPidNamespace,
+        # and a host with no readable namespace (macOS, Git Bash) counts any such
+        # value as another. /health decides: an answer for this project is
+        # running, no answer is stale. The drive-letter rule above wins.
+        NAMESPACED_DAEMON=false
+        DAEMON_PID_NS=$(daemon_json_field "$DAEMON_INFO" pidNamespace 2>/dev/null || echo "")
+        PID_NS_FORM='^pid:\[[0-9]{1,20}]$'
+        if [ "$FOREIGN_DAEMON" = false ] && [[ "$DAEMON_PID_NS" =~ $PID_NS_FORM ]] \
+            && [ "$DAEMON_PID_NS" != "$(readlink /proc/self/ns/pid 2>/dev/null || true)" ]; then
+            NAMESPACED_DAEMON=true
+        fi
+
         if [ "$FOREIGN_DAEMON" = true ]; then
             if [ -z "$DAEMON_PORT" ]; then
                 echo -e "${RED}[ERROR]${NC} daemon.json (Windows daemon) has no port; cannot probe it from this environment"
@@ -1920,6 +1936,23 @@ if [ "$NO_START_DAEMON" = false ]; then
                 echo "Refusing to touch daemon.json or start a second daemon over the same .moe/."
                 echo "If the Windows daemon is genuinely gone, delete $DAEMON_INFO manually and re-run."
                 exit 1
+            fi
+        elif [ "$NAMESPACED_DAEMON" = true ]; then
+            PROBE_HOST="${MOE_DAEMON_HOST:-127.0.0.1}"
+            PROBE_RC=1
+            if [[ "$DAEMON_PORT" =~ ^[0-9]+$ ]]; then
+                PROBE_RC=0
+                SERVED=$(probe_daemon_health "$PROBE_HOST" "$DAEMON_PORT" "$(daemon_identity_project)") || PROBE_RC=$?
+            fi
+            if [ "$PROBE_RC" -eq 3 ]; then
+                refuse_foreign_daemon "$PROBE_HOST" "$DAEMON_PORT" "$SERVED"
+            elif [ "$PROBE_RC" -eq 0 ]; then
+                echo -e "${GREEN}[OK]${NC} Daemon reachable at $PROBE_HOST:$DAEMON_PORT (daemon.json from another pid namespace)"
+                RUNNING=true
+            else
+                echo -e "${YELLOW}[INFO]${NC} Stale daemon.json detected (no /health answer at $PROBE_HOST:$DAEMON_PORT from its pid namespace)"
+                echo -e "${YELLOW}[INFO]${NC} Cleaning up stale daemon.json..."
+                rm -f "$DAEMON_INFO"
             fi
         elif [ -n "$PID" ]; then
             # Validate PID is numeric

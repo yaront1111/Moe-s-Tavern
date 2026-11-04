@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { lookup } from 'node:dns/promises';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { hostname, tmpdir } from 'node:os';
@@ -391,6 +391,57 @@ for (const engine of ENGINES) {
       assert.equal(r.status, 0, r.out);
       assert.ok(r.lines.includes(running(port)), r.out);
     });
+
+    // daemon.json from another pid namespace (a Docker container; the daemon records
+    // pidNamespace, task-da89f620): its pid means nothing here, so /health decides
+    // (task-a7f8d8d6). Without an exact other namespace the kill -0 rule stays.
+    const OWN_NS = (() => { try { return readlinkSync('/proc/self/ns/pid'); } catch { return null; } })();
+    const DEAD_PID = 2147483646; // no process on any host: Linux pid_max is at most 2^22
+    const nsInfo = (port, pidNamespace) => JSON.stringify({ pid: DEAD_PID, port, startedAt: 'x', projectPath: '/mnt/c/moe-id/proj', ...(pidNamespace === undefined ? {} : { pidNamespace }) });
+    t('pid namespace: another namespace whose /health answers for this project is adopted, untouched', () =>
+      withHealth(200, healthy('C:/moe-id/proj'), async (port, requests) => {
+        const content = nsInfo(port, 'pid:[1]');
+        const r = await runCheck(engine, content);
+        assert.equal(r.status, 0, r.out);
+        assert.ok(r.lines.includes(`[OK] Daemon reachable at 127.0.0.1:${port} (daemon.json from another pid namespace)`), r.out);
+        assert.ok(r.lines.includes(running(port)), r.out);
+        assert.ok(!r.out.includes('Stale daemon.json'), r.out);
+        assert.equal(r.after, content);
+        assert.deepEqual(requests, ['GET /health']);
+      }));
+    t('pid namespace: another namespace with no /health answer is removed as stale', async () => {
+      const port = await closedPort();
+      const r = await runCheck(engine, nsInfo(port, 'pid:[1]'));
+      assert.equal(r.status, 0, r.out);
+      assert.ok(r.lines.includes(`[INFO] Stale daemon.json detected (no /health answer at 127.0.0.1:${port} from its pid namespace)`), r.out);
+      assert.ok(r.lines.includes(`@@ port=[${port}] project=[/mnt/c/moe-id/proj] running=false`), r.out);
+      assert.equal(r.after, null);
+    });
+    t('pid namespace: another namespace whose daemon serves another project is refused, untouched', () =>
+      withHealth(200, healthy(OTHER), async (port, requests) => {
+        const content = nsInfo(port, 'pid:[1]');
+        const r = await runCheck(engine, content);
+        assertRefused(r, port, OTHER, PROJECT.sh);
+        assert.equal(r.after, content);
+        assert.deepEqual(requests, ['GET /health']);
+      }));
+    for (const [label, pidNamespace, skip] of [
+      ['no pidNamespace', undefined],
+      ["this host's own pidNamespace", OWN_NS, OWN_NS === null && 'no /proc/self/ns/pid on this host'],
+      ["pidNamespace 'pid:[x]'", 'pid:[x]'],
+      ["pidNamespace 'net:[1]'", 'net:[1]'],
+      ['a 21-digit pidNamespace', `pid:[${'1'.repeat(21)}]`],
+      ['a numeric pidNamespace', 1],
+    ]) {
+      t(`pid namespace: a dead pid with ${label} keeps the kill -0 rule (removed, no /health)`, () =>
+        withHealth(200, healthy('C:/moe-id/proj'), async (port, requests) => {
+          const r = await runCheck(engine, nsInfo(port, pidNamespace));
+          assert.equal(r.status, 0, r.out);
+          assert.ok(r.lines.includes(`[INFO] Stale daemon.json detected (PID ${DEAD_PID} is not running)`), r.out);
+          assert.equal(r.after, null);
+          assert.deepEqual(requests, []);
+        }), engine.skip || skip);
+    }
     continue;
   }
   t('moe-agent.ps1 parses', () => {
