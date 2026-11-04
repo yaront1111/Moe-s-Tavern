@@ -56,25 +56,35 @@
     {
       "stepId": "step-4",
       "description": "VERIFY (DoD 1-3), once, from the task worktree root. Run the two checkRefs as one line, `<A> && <B>`, exactly as written (mem:gotcha-daemon-linux-snapshot-gate).\n\n- A is the DoD-2 grep plus the check that nothing under moe-jetbrains/ or moe-vscode/ changed since the merge-base with moe/work-2026-10-24.\n- B archives the worktree HEAD of the whole repo into a mktemp dir and overlays the three owned files. Then it runs, in order:\n  - npm ci;\n  - tsc --noEmit;\n  - a tt.json type-check of the new test (mem:gotcha-daemon-tests-not-type-checked);\n  - one vitest run over the new file plus DoD 3's four files (verbose; at least 10 reopen rows);\n  - the full daemon suite.\n- The architect's dry run of A && B with the sketch at 3747c474 exited 0 in 54 s: 5 files / 74 tests, then the full suite at 291 files, 7575 passed | 24 skipped. The base is 290 / 7565 | 24.\n- That fresh output is moe.complete_task's verification evidence.\n- Known load flakes on this shared host: index.version.test.ts, server/bindHosts.test.ts (D-fail) and benchmarks/baselineRun.test.ts (E2). If one fails, check uptime, re-run that file alone in the snapshot, then re-run the line.\n- Never weaken an assertion. Never run npm in the shared checkout (project rail).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/metrics.ts"
       ],
-      "startedAt": "2026-11-04T08:39:16.859Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/reopen.ts",
+        "packages/moe-daemon/src/util/metrics.ts",
+        "packages/moe-daemon/src/tools/listMetrics.reopen.test.ts"
+      ],
+      "note": "Ran checkRef A && B once from the worktree root (uptime load 3.75): A ok (grep clean, nothing under moe-jetbrains/ or moe-vscode/ changed). B in /tmp/moe-fc10-KJrQ1v: npm ci, tsc --noEmit, tt.json type-check all exit 0; d.log 5 files / 74 tests passed; full suite 291 files, 7581 passed | 24 skipped; rows=10/10; E=0; FINAL=0. No flakes hit.",
+      "startedAt": "2026-11-04T08:39:16.859Z",
+      "completedAt": "2026-11-04T08:40:27.102Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\nMutants run in a snapshot. Pin each restore to `git show HEAD:<path>`, take one backup per mutant, and cmp the files before citing the gate. Expected kills:\n- m1, the helper writes restMetrics without the mirror: R1 R2 R3 H1 H2 die.\n- m2, :99 goes back to mirror-first: L1 dies.\n- m3, toPerTaskMetric returns task.metrics ?? {}: L1 dies.\n- m4, the overlay assigns into the stored object: L1's stored-mirror check dies.\n- m5, the Number.isInteger guard is dropped: H3 dies.\nPut killed or survived for each in the completion summary, with the step-1 RED list.\n\nAlso check:\n- Two racing reopens: every writer runs under the state mutex and derives both counters from the same task.reopenCount.\n- Grep the `reopenCount:` writers: does any caller of the helper bump by something other than 1?\n- qa_reject's own mirror write is unchanged.\n- The list_metrics and GET_METRICS response shapes are unchanged.\n- No moe-jetbrains/ or moe-vscode/ file is touched.\n\nIf any byte changed, re-run step 4's line and use that output for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/reopen.ts",
         "packages/moe-daemon/src/util/metrics.ts"
-      ]
+      ],
+      "note": "Adversarial self-review, no worktree byte changed (mutants ran only in snapshot /tmp/moe-fc10-snap, restored from the worktree files and cmp-checked: restored-ok x3). m1 helper without mirror: KILLED (R1 R2 R3 H1 H2). m2 :99 back to mirror-first: KILLED (L1). m3 toPerTaskMetric raw: KILLED (L1). m4 overlay assigns into stored object: KILLED (L1). m5 Number.isInteger guard dropped: KILLED (H3). Checks: all three helper callers (setTaskStatus.ts:248, taskStore.ts:816, WebSocketServer.ts:622) set reopenCount to exactly +1 from the same task read the helper gets, so even a lost-update race moves both counters together; WS handlers and MCP tools run under the state mutex. qaReject.ts untouched. list_metrics/GET_METRICS key shapes unchanged (only values). git status shows only reopen.ts, metrics.ts and the new test; nothing under moe-jetbrains/ or moe-vscode/. Theoretical only: a row whose metrics has no mirror gains one at its first reopen (usage-report metricsReopenCount reads equal to reopenCount); the two legacy rows keep their stale stored mirror (cosmetic, out of scope).",
+      "startedAt": "2026-11-04T08:40:28.140Z",
+      "completedAt": "2026-11-04T08:41:14.897Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,12 +96,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:04:57.380Z",
-  "updatedAt": "2026-11-04T08:39:16.859Z",
+  "updatedAt": "2026-11-04T08:41:42.168Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:14:36.064Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -104,7 +114,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:30:12.330Z",
@@ -174,5 +186,19 @@
   },
   "planApprovedAt": "2026-11-04T08:30:12.370Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T08:37:52.779Z"
+  "workStartedAt": "2026-11-04T08:37:52.779Z",
+  "reviewStartedAt": "2026-11-04T08:41:42.166Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-fc10f071434443ecad20b9afb6bc0bac && { ! grep -n \"m.reopenCount ?? task.reopenCount\" packages/moe-daemon/src/util/metrics.ts && test -z \"$(git diff --name-only $(git merge-base HEAD moe/work-2026-10-24) -- moe-jetbrains moe-vscode; git status --porcelain -- moe-jetbrains moe-vscode)\"; } && echo A-ok && ( S=$(mktemp -d /tmp/moe-fc10-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cd packages/moe-daemon && cp --parents src/util/reopen.ts src/util/metrics.ts src/tools/listMetrics.reopen.test.ts \"$S/packages/moe-daemon\" && cd \"$S/packages/moe-daemon\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/listMetrics.reopen.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/listMetrics src/util/metrics.test src/tools/qaReject.test src/tools/setTaskStatus.test --reporter=verbose > d.log 2>&1 && npx vitest run > full.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' d.log full.log; N=$(grep -acE '✓ .*listMetrics\\.reopen' d.log); echo \"E=$E rows=$N/10 $S\"; [ $E = 0 ] && [ \"$N\" -ge 10 ] )",
+    "exitCode": 0,
+    "outputTail": "A-ok\nd.log: Test Files  5 passed (5)\nd.log:      Tests  74 passed (74)\nfull.log: Test Files  291 passed (291)\nfull.log:      Tests  7581 passed | 24 skipped (7605)\nE=0 rows=10/10 /tmp/moe-fc10-KJrQ1v\nFINAL=0",
+    "reportedAt": "2026-11-04T08:41:42.166Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/listMetrics.reopen.test.ts",
+    "packages/moe-daemon/src/util/reopen.ts",
+    "packages/moe-daemon/src/util/metrics.ts"
+  ],
+  "completionSummary": "Every non-QA reopen now keeps metrics.reopenCount in step, and list_metrics reads the canonical count. Writer: util/reopen.ts buildReopenClearingUpdates sets metrics.reopenCount = task.reopenCount + 1 when metrics is a plain object and reopenCount a non-negative integer (else today's strip-only result; never creates metrics, never throws, never mutates input); one write covers set_task_status, StateManager.reopenTask and the /ws board drag. Reader: util/metrics.ts reopenCountOf feeds the aggregate (`m.reopenCount ?? task.reopenCount` is gone) and reportedMetrics overlays reopenCount on a COPY only when a stored mirror exists, so the 2 legacy rows (mirror 1, task 2) read 2 with no write. New listMetrics.reopen.test.ts: 10 rows. Step-1 RED at base: R1 R2 R3 L1 H1 H2 failed, E1 E2 H3 H4 passed. Verification: tsc + tt.json clean, 5 DoD files / 74 tests, full daemon suite 291 files 7581 passed | 24 skipped, rows 10/10, no moe-jetbrains/ or moe-vscode/ file touched. Mutants: m1 (helper writes no mirror) KILLED R1 R2 R3 H1 H2; m2 (aggregate mirror-first) KILLED L1; m3 (toPerTaskMetric raw) KILLED L1; m4 (overlay mutates stored object) KILLED L1; m5 (Number.isInteger guard dropped) KILLED H3. All three helper callers bump reopenCount by exactly +1 from the same task read; qaReject.ts untouched; response shapes unchanged. No byte changed after the step-4 run."
 }

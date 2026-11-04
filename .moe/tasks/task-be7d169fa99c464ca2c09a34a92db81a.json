@@ -70,8 +70,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -90,12 +90,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:00:17.961Z",
-  "updatedAt": "2026-11-04T08:36:33.327Z",
+  "updatedAt": "2026-11-04T08:42:03.279Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:11:28.945Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:40:34.131Z",
+    "wallClockMs": 1745186
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -194,9 +196,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T08:27:11Z",
-    "at": "2026-11-04T08:36:10.617Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T08:36:14Z",
+    "at": "2026-11-04T08:42:03.279Z"
+  },
+  "completedAt": "2026-11-04T08:40:34.131Z",
+  "reviewCompletedAt": "2026-11-04T08:40:34.131Z",
+  "reviewSummary": "Reviewed completion b96465c5 (on moe/work-2026-10-24 and origin). 3 files, +89/-11, net 78, matching the declared paths and the plan.\n\nRe-ran task.verification verbatim under the jetbrains-gradle lease, in the control checkout. Its moe-jetbrains is clean and has no jetbrains change between b96465c5 and HEAD 58e54180, so the run tested the landed bytes.\n- BUILD SUCCESSFUL in 39s; :test executed (XML stamped 08:39Z).\n- xml tests=679 skipped=6 failures=0 errors=0.\n- DaemonIdentityTest 22/0 skipped/0/0; MoeDaemonSupervisorTest 94/2/0/0; MoeProjectForeignDaemonTest 12/0/0/0; exit=0.\n- The 3 link cases ran (junction). %TEMP% has 0 moe-id-* leftovers.\n\nRe-ran the quality gate (parity-check plus lint): exit 0.\n\nDoD 1: the quoted pre-fix RED is consistent with the code. The old classify compared spellings only, and the probe output shows File(junction).canonicalPath stays the junction path. I did not re-run RED myself, because it needs a pre-fix snapshot build.\n\nDoD 2:\n- The Unknown guards are unchanged.\n- comparableProjectPath and its regexes are untouched.\n- Foreign (another real directory) and Unknown (relative served path) are both pinned by the new tests; the Foreign case also kills an always-true mutant.\n- The DaemonIdentityTest hunks only add lines; the other two classes are not in the diff.\n\nDoD 3: full suite green, above.\n\nInvariants hold:\n- isSameProject keeps its name and signature and now delegates.\n- No filesystem exception can escape (runCatching → false).\n- The probe runs off the EDT.\n\nAccepted note: MoeMessageDispatcher.kt:96's catch(IOException) is now dead. Only a path invalid on the OS and spelled differently is affected.\n\nComplexity pass is clean. Rails OK.",
+  "requiredCheckAtDone": null
 }
