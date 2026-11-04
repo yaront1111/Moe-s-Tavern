@@ -9,10 +9,40 @@
     "After `npm install -g --prefix <tmp> --offline <snapshot>/packages/moe-daemon`, `<tmp>/bin/moe-daemon version` prints the version. Re-running /mnt/d/moe-scratch/hunt-e5d38de9/mine/repro-npm-global-bin.sh on the fixed snapshot shows cases B, D and E with output (B prints the version, D exits 1 with the violation line, E writes daemon.json), not exit=0 with stdout_bytes=0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2a219562",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD, tests first (mem:gotcha-daemon-linux-snapshot-gate). Create packages/moe-daemon/src/index.bin.test.ts with your own Write tool. A reference prototype was validated on acea850b and lives at /mnt/d/moe-scratch/hunt-e5d38de9/proto-d63e3dba/index.bin.test.ts. You may follow it, but never cp it into the tree (global rail).\n\nImports: spawnSync and execFileSync (node:child_process), fs, createRequire (node:module), os, path, fileURLToPath and pathToFileURL (node:url), vitest, `isEntryModule` from './index.js' (added in step 2), VERSION from './util/version.js'.\n\nConstants:\n- entrypoint = fileURLToPath(new URL('./index.ts', import.meta.url)).\n- tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href. Do not use a bare `--import tsx`: the B2 child runs with its cwd in a fixture repo.\n- RULES/FORBIDDEN: the state-no-tools rule and the `import { t } from '../tools/t.js'` line, as in src/commands/checkArchitecture.test.ts:14-16.\n\nHelpers:\n- cleanEnv(): process.env without MOE_* and GIT_* keys.\n- git()/commit(): copy them from checkArchitecture.test.ts:19-40, where they are module-local. GIT_CONFIG_GLOBAL is /dev/null here because these rows are POSIX-only.\n- cli(entry, args, cwd, env = cleanEnv()) = spawnSync(process.execPath, ['--import', tsx, entry, ...args], { cwd, env, encoding: 'utf8', timeout: 60_000 }).\n\nTop-level beforeEach/afterEach: tmp = fs.realpathSync(fs.mkdtempSync(<os.tmpdir()>/moe-bin-)). macOS's tmpdir is a symlink, hence the realpath. link = <tmp>/prefix/bin/moe-daemon. Remove tmp afterwards.\n\nRow titles must start with 'B1: ', 'B2: ', 'B3a: ' and so on, because the gate counts '✓ .*> B[1-3][a-e]?: '.\n\n(1) describe.skipIf(process.platform === 'win32')('installed bin: an npm bin symlink to the entry'). Symlinks need privileges on Windows. Its beforeEach does mkdirSync(dirname(link)) and fs.symlinkSync(entrypoint, link).\n- B1: run `version` through the link, with cwd tmp and env MOE_PROJECT_PATH set to an empty <tmp>/project, as src/index.version.test.ts does.\n  - Expect result.error undefined, and {status, stdout, stderr} toEqual {0, `${VERSION}\\n`, ''}.\n  - The project dir stays empty.\n- B2: build a fixture repo <tmp>/repo:\n  - git init;\n  - base commit: arch.json=RULES, src/state/s.ts, src/tools/t.ts;\n  - candidate commit: src/state/s.ts=FORBIDDEN.\n  Run ['check-architecture','--rules','arch.json'] with cwd repo through BOTH the entrypoint (the control: it proves the fixture fails) and the link. For each: {status, lines} toEqual {1, 1}, and the parsed line's {outcome, violations[0].ruleId} toEqual {'failed', 'state-no-tools'}. Then the link's stdout toBe the entrypoint's stdout.\n- Give each of these two rows a 60_000 test timeout. Every tsx spawn takes 1-5 s, and index.version.test.ts is a known load flake at the 5 s default.\n\n(2) describe('isEntryModule') with moduleUrl = pathToFileURL(fs.realpathSync(entrypoint)).href:\n- B3a: undefined and '' are both false.\n- B3b: the entry's real path is true.\n- B3c: it.skipIf(win32). A symlink to the entry, created at `link`, is true.\n- B3d: the test file's own path, fileURLToPath(import.meta.url), is false.\n- B3e: path.join(tmp, 'no-such-moe-entry.js') is false and does not throw. This row pins the error handling.\n\nRED proof: in a snapshot of HEAD with only this file overlaid (step 3's recipe without the index.ts change), `npx vitest run src/index.bin.test.ts` must show 7 failed. Expected failures: B1 got stdout ''; B2 got status 0 and 0 lines; B3 rows got 'isEntryModule is not a function'. Note the RED count for the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/index.bin.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix (DoD 1 and 2). In packages/moe-daemon/src/index.ts, edit ONLY the entry guard block at the end of the file: today's `if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {` at :1288. The reference diff is /mnt/d/moe-scratch/hunt-e5d38de9/proto-d63e3dba/index.ts.patch (+18/-1); apply it with your own Edit tool.\n\nDirectly above the guard, add `export function isEntryModule(argv1: string | undefined, moduleUrl: string): boolean`:\n- `if (!argv1) return false;`\n- then `if (moduleUrl === pathToFileURL(argv1).href) return true;` This is today's comparison and it runs first, so every run that works today takes the same branch: the IDE's `node <abs>/dist/index.js start`, the launchers, the supervisor's `_run` child.\n- then `try { return moduleUrl === pathToFileURL(fs.realpathSync(argv1)).href; } catch { return false; }`\n- Error handling: a realpath failure (ENOENT, EACCES, ELOOP) returns false, never throws. A throw here would crash every import of index.ts.\n- Use fs.realpathSync, NOT .native: Node's own main-entry resolution (toRealPath) uses the JS realpathSync, so this reproduces import.meta.url's exact casing and 8.3 form on Windows. `fs` (:7) and `pathToFileURL` (:13) are already imported.\n- Doc comment, 4-6 lines, the why only: npm's bin is a symlink off Windows (npm install -g, npm link, npx), and Node loads the main module by its real path, so argv[1] as written can name a link while import.meta.url names its target. Any error means \"not the entry\", so importing this module never starts the daemon.\n\nThen change the guard line to `if (isEntryModule(process.argv[1], import.meta.url)) {`. Keep the main().catch(...) body byte-identical.\n\nHunk ownership:\n- Do not touch parseArgs, main(), its switch or the `export { ... }` block. Sibling task-1d9a9651 owns main()'s dispatch, :1206-1253.\n- Touch no other file. README, install-mac.sh, moe-agent.sh and docs need no change. superviseDaemon (:930/:945) re-spawns `_run` with process.argv[1], the link path, which the fixed guard accepts.\n\nRe-run src/index.bin.test.ts in the snapshot: 7/7 green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, once (DoD 2 and 3). From the task worktree, run the checkRefs command exactly as written. Its fresh output (the 'Test Files'/'Tests' lines, 'B: 7/7 exit: 0', exit code 0) is moe.complete_task's verification evidence.\n\nWhat it does:\n- It archives HEAD's packages/moe-daemon into a mktemp dir and overlays the two owned files (index.ts, index.bin.test.ts).\n- It runs npm ci, tsc --noEmit and a type-check of index.bin.test.ts.\n- It runs vitest on src/index (the four index*.test.ts files: bin, version, test, relativeProject) and src/commands/checkArchitecture.\n- It builds dist (`npx tsc -p .`), does a real `npm i -g --prefix ../g --offline` of the package, and asserts that `../g/bin/moe-daemon version` prints package.json's version. That last check is DoD 3: the real npm bin symlink.\n\nReference at acea850b plus the prototype: 5 files, 109 passed, 1 skipped, B: 7/7, about 11 s.\n\nRules:\n- Never run npm ci, a build or a test in the shared checkout (project rail).\n- On failure the command prints the snapshot path and v.log's tail. Fix the code; never weaken an assertion.\n- Load flake: index.version.test.ts rows can time out under host load (mem:gotcha-daemon-linux-snapshot-gate). Check `uptime` and re-run the same command once before calling it a regression.\n- Optional cross-check for DoD 3's repro: in a snapshot that has the fixed dist built, `bash /mnt/d/moe-scratch/hunt-e5d38de9/mine/repro-npm-global-bin.sh <snapshot root>` shows case B printing the version, D exiting 1 with the violation line, and E printing 'Daemon not running'.\n- Never run `moe-daemon start` against a real project.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff. Load the adversarial-self-review skill.\n\nCheck:\n- Every direct run behaves exactly as at acea850b (the as-written branch comes first): the IDE (MoeDaemonSupervisor spawns `node <abs>/dist/index.js`), moe-agent.{sh,ps1} (`$NODE_CMD $DAEMON_SCRIPT start`), the Docker CMD, and superviseDaemon's `_run` child.\n- Importing index.ts never runs main() (index.test.ts imports it under vitest, where argv[1] is vitest's own entry).\n- The error handling holds: isEntryModule never throws for undefined, '', a missing file, or an unreadable ancestor.\n- A Windows .cmd shim runs node on `<prefix>\\node_modules\\moe-daemon\\dist\\index.js`, which is true as written, or true through realpath when the prefix is a symlink or junction (nvm-windows).\n- The diff stays inside the guard block; parseArgs and main() are untouched (sibling task-1d9a9651).\n\nKill mutants in a snapshot. Back up index.ts once; restore with `git show HEAD:packages/moe-daemon/src/index.ts` plus your fix, or keep a copy of the fixed file; `cmp` it before the final gate; run only src/index.bin.test.ts per mutant. Measured on the prototype:\n- (a) restore today's guard condition: B1 and B2 die.\n- (b) `catch { return true; }`: B3e dies. Anchor the replacement on the realpath line, because `} catch {\\n    return false;` occurs twice in index.ts.\n- (c) drop the empty-argv1 check: B3a dies.\n- (d) compare `pathToFileURL(argv1)` inside the try instead of the realpath: B1, B2 and B3c die.\n- (e) drop the as-written comparison: EXPECTED SURVIVOR. The realpath branch also covers every direct run; it is kept as the zero-regression fast path. `--preserve-symlinks-main` cannot run this entry at all, because its relative imports resolve beside the link, so no row can pin it.\n\nPut step 1's RED count and each mutant's result in the completion summary. If any byte changed during the review, re-run step 3's command before moe.complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -37,11 +67,83 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:14.596Z",
-  "updatedAt": "2026-11-04T09:34:02.577Z",
+  "updatedAt": "2026-11-04T09:43:42.277Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T09:33:59.551Z"
+    "firstClaimAt": "2026-11-04T09:33:59.551Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
     "architect-2a219562"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T09:43:42.245Z",
+  "executionContract": {
+    "intendedBehavior": "The daemon CLI runs main() whenever its entry module is the process entry, whether reached by its own path (unchanged) or through a symlink such as the npm bin that `npm install -g`, `npm link` and `npx` create off Windows, or a symlinked global prefix. Through such a link, `moe-daemon version` prints the version, `moe-daemon check-architecture` prints its one JSON line with the real exit code (1 for a forbidden import), and start/status/doctor/accounts run. Importing index.ts as a module (tests, tooling) never starts main(). Error handling: any realpath failure means 'not the entry', never a throw.",
+    "acceptanceCriteria": [
+      "B1 (POSIX): `node --import <tsx> <tmp>/prefix/bin/moe-daemon version`, where the link points to src/index.ts, exits 0 with stdout exactly `<VERSION>\\n` and empty stderr, and leaves MOE_PROJECT_PATH's empty dir empty.",
+      "B2 (POSIX): in a fixture repo whose HEAD adds a forbidden src/state -> src/tools import, check-architecture through the link and through the entrypoint each exit 1 with exactly one stdout line whose outcome is 'failed' and violations[0].ruleId is 'state-no-tools'. The two stdouts are identical.",
+      "B3a-e: isEntryModule(undefined or '') is false; the entry's real path is true; a symlink to it is true (POSIX); another existing file is false; a missing path is false without throwing.",
+      "After `npx tsc -p .` and `npm i -g --prefix <tmp> --offline --ignore-scripts <package dir>`, `<tmp>/bin/moe-daemon version` prints package.json's version (the checkRefs gate asserts this)."
+    ],
+    "invariants": [
+      "The as-written comparison `moduleUrl === pathToFileURL(argv1).href` runs first, so every invocation the old guard accepted is still accepted by the same branch.",
+      "isEntryModule never throws. Any realpath error, an empty argv[1] or an undefined argv[1] means 'not the entry'.",
+      "The main().catch(...) body (logger.fatal + process.exit(1)) is byte-identical to acea850b.",
+      "Only the guard block at the end of index.ts changes. parseArgs, main(), its dispatch and the export block are untouched (sibling task-1d9a9651 owns :1206-1253)."
+    ],
+    "compatibility": [
+      "Direct spawns are unchanged: MoeDaemonSupervisor (JetBrains), moe-vscode, moe-agent.{sh,ps1}, Docker CMD and superviseDaemon's `_run` child all pass the real file as argv[1].",
+      "Windows npm .cmd/.ps1 shims keep working (as-written true), and also work behind a symlinked prefix (realpath true).",
+      "index.ts's exported surface only gains isEntryModule. No MCP contract, /ws message or .moe/ state shape changes."
+    ],
+    "approvedScope": [
+      "export function isEntryModule(argv1: string | undefined, moduleUrl: string): boolean in packages/moe-daemon/src/index.ts",
+      "The entry guard `if (isEntryModule(process.argv[1], import.meta.url)) { main().catch(...) }`",
+      "packages/moe-daemon/src/index.bin.test.ts rows B1, B2 and B3a-e"
+    ],
+    "reuse": [
+      "fs.realpathSync, which Node's own toRealPath uses for the main entry, plus url.pathToFileURL. Both are already imported in index.ts (:7, :13).",
+      "The spawn pattern from src/index.version.test.ts:23 (process.execPath --import tsx <entry> <args>), with tsx's loader URL from createRequire(import.meta.url).resolve('tsx') so the child can run in a fixture repo.",
+      "The git()/commit() fixture helpers and the state-no-tools rule from src/commands/checkArchitecture.test.ts:14-40, copied because they are module-local."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts:1288-1293 holds the guard `if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) { main().catch(...) }`.",
+      "packages/moe-daemon/package.json:50-51: \"bin\": { \"moe-daemon\": \"./dist/index.js\" }.",
+      "index.ts:930 and :945: superviseDaemon spawns `_run` with scriptPath = process.argv[1].",
+      "Verified on 2026-11-04: at acea850b an npm-installed bin prints nothing and exits 0, and with the prototype fix B prints 0.8.0, D exits 1 with the violation line, and E prints 'Daemon not running' (/mnt/d/moe-scratch/hunt-e5d38de9/proto-d63e3dba/README.txt)."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon && git archive HEAD $P | tar -x -C \"$S\" && (cd $P/src && cp --parents index.ts index.bin.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/index.bin.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/index src/commands/checkArchitecture --reporter=verbose > ../v.log 2>&1 && npx tsc -p . && npm i -g --prefix ../g --offline --ignore-scripts . >/dev/null 2>&1 && [ \"$(../g/bin/moe-daemon version)\" = \"$(node -p \"require(\\\"./package.json\\\").version\")\" ]'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; G=$(grep -acE '✓ .*> B[1-3][a-e]?: ' ../v.log); echo \"B: $G/7 exit: $E\"; [ $E = 0 ] && [ \"$G\" = 7 ] || { echo \"FAIL $S\"; tail -30 ../v.log; exit 1; } )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Realpath-only comparison: rejected as the sole check. Keeping today's as-written equality as the first branch makes regression impossible by construction; the realpath branch only adds runs the old guard refused. (2) A dedicated bin file (dist/bin.js that imports and runs main): rejected. It needs main() exported or moved, changes package.json bin and the bundles, and the direct `node dist/index.js` spawns (IDE, launchers, Docker) would still need a guard. (3) Path heuristics such as argv[1] ending in index.js or moe-daemon: rejected, because they give false positives when another entry imports this module. (4) fs.realpathSync.native: rejected. Node resolves the main entry with the JS realpathSync, and .native can differ in case or 8.3 form on Windows, which would break the equality. (5) Also fixing accounts/cli.ts invokedDirectly (:308-313) and benchmarks/baselineRun.ts:419: out of scope. Neither is the package bin; the IDE runs cli.js by the real path the daemon reports, and baselineRun is a repo script.",
+    "codebaseInsights": "- index.ts default-imports fs (:7) and imports pathToFileURL (:13).\n- The tsx spawn pattern is index.version.test.ts:23.\n- Fixture git helpers are module-local in checkArchitecture.test.ts:19-40; copy them.\n- vitest path filters: `src/index` matches exactly index.bin/.version/.relativeProject/.test.ts. That keeps the checkRefs line at 999 chars, under the 1000 cap.\n- A validated prototype (diff, test file, gate, mutant table) is in /mnt/d/moe-scratch/hunt-e5d38de9/proto-d63e3dba/. Write the tracked files with your own Edit/Write tool; never cp them in.",
+    "risks": "- index.version.test.ts rows are a known load flake at vitest's 5 s default. Re-run once after checking uptime.\n- macOS os.tmpdir() is a symlink, so realpath the tmp dir and the entry before building expected URLs.\n- The Windows CI leg skips the symlink rows (B1, B2, B3c); B3a/b/d/e run there.\n- Never run `moe-daemon start` against a real project while verifying: it starts a supervised daemon.\n- Sibling task-1d9a9651 edits main()'s dispatch in the same file. Stay inside the guard block so merge-tree lands both.\n- The as-written-removal mutant is an expected survivor (defense in depth); say so in the summary rather than adding a contrived row.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/index.version.test.ts",
+      "packages/moe-daemon/src/commands/checkArchitecture.test.ts",
+      "packages/moe-daemon/package.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "95d91dc2107433a2f1b95a2b7882427d4d7c898d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T09:43:42.277Z",
+  "approvedPlanRevision": 1
 }

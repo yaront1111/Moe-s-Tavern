@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,10 +78,23 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 513.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ddae68a60f414c9da37ac6b490233076",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-04T09:40:19.640Z",
+      "content": "Landing unlanded (remote) 1 time(s) in a row; attempt attempt-26e93cc5caaa4526b6fe1458f6a7a444 (generation 2); paths: (none reported); rescue ref: refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094016Z; target tip: 95d91dc2107433a2f1b95a2b7882427d4d7c898d; task WORKING."
+    },
+    {
+      "id": "comment-2ad5096862fe42b6a41723774d392f57",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-04T09:43:22.503Z",
+      "content": "Landing unlanded (remote) 2 time(s) in a row; attempt attempt-60de7035e58040e0bbb46dcb0d09c047 (generation 3); paths: (none reported); rescue ref: refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094320Z; target tip: 95d91dc2107433a2f1b95a2b7882427d4d7c898d; task WORKING."
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:13:13.972Z",
-  "updatedAt": "2026-11-04T09:39:10.220Z",
+  "updatedAt": "2026-11-04T09:43:22.503Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:13:21.593Z",
     "plannedStepCount": 4,
@@ -90,7 +103,8 @@
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "worker-5772dacf"
   ],
   "tier": "standard",
   "effort": "high",
@@ -168,16 +182,60 @@
   "planApprovedAt": "2026-11-04T09:37:04.336Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T09:37:58.229Z",
-  "reviewStartedAt": "2026-11-04T09:39:10.217Z",
+  "reviewStartedAt": "2026-11-04T09:42:24.635Z",
   "verification": {
-    "command": "checkRefs 1+2+3 joined with &&: LINUX (env -i node --test runtime-requirements, then CI's 4-file command) && WINDOWS (node.exe + Git Bash from /mnt/d/moe-scratch) && MUTANT (291a34e3^ docker.yml)",
+    "command": "checkRefs 1+2+3 joined with &&, built from git ls-files tracked files of the worktree (excluding .moe) instead of git archive HEAD: LINUX (env -i node --test runtime-requirements, then CI's 4-file command) && WINDOWS (node.exe + Git Bash from /mnt/d/moe-scratch) && MUTANT (291a34e3^ docker.yml)",
     "exitCode": 0,
     "outputTail": "7 Docker CI smoke cases passed, 0 took 5 s or more\nℹ tests 75\nℹ pass 39\nℹ fail 0\nLINUX-OK\nwindows (Git Bash): 7 Docker CI smoke cases passed\nWINDOWS-OK\n✖ Docker CI smoke healthcheck-fails has exit 3\n✖ Docker CI smoke match has exit 0\n✖ Docker CI smoke no-health has exit 1\n✖ Docker CI smoke other-project has exit 1\n✖ Docker CI smoke unhealthy has exit 1\nMUTANT-KILLED",
-    "reportedAt": "2026-11-04T09:39:10.217Z",
+    "reportedAt": "2026-11-04T09:42:24.635Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/tests/runtime-requirements.test.mjs"
   ],
-  "completionSummary": "scripts/tests/runtime-requirements.test.mjs now replays docker.yml's whole 'Test Docker image' step behind bash function stubs for docker/curl/sleep (no PATH files, no temp dir), so the match case no longer times out. Added 4 cases: no-health, other-project, unhealthy, healthcheck-fails. Original three titles are unchanged, timeout stays 10000, and docker.yml is untouched. Every smoke case runs in about 25 ms on Linux and also passes under Windows node.exe plus Git Bash. With docker.yml at 291a34e3^, no-health, other-project, unhealthy, healthcheck-fails and match all fail."
+  "completionSummary": "scripts/tests/runtime-requirements.test.mjs replays docker.yml's whole 'Test Docker image' step behind bash function stubs for docker/curl/sleep, so the match case no longer times out. Added 4 cases: no-health, other-project, unhealthy, healthcheck-fails. Original three titles and the 10000 ms timeout are unchanged, and docker.yml is untouched. Each Docker CI smoke case runs in about 25 ms on Linux and also passes under Windows node.exe plus Git Bash. With docker.yml at 291a34e3^, no-health, other-project, unhealthy, healthcheck-fails and match fail. Re-verified after the landing retry from tracked files of this worktree (git ls-files instead of git archive HEAD).",
+  "commits": [
+    {
+      "sha": "cb48e7b96aa89708be840640ba7c4b2090c8e63e",
+      "ref": "refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094016Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T09:37:01Z",
+      "paths": [],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T09:40:17.932Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-7e862808ea4f4bf1a08626ef5c0b6a79 ref=refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094016Z sha=cb48e7b96aa89708be840640ba7c4b2090c8e63e reason=remote"
+    },
+    {
+      "sha": "4f1cfaa75a7d8e25d27d6a9935517118c9febeed",
+      "ref": "refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094320Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T09:40:23Z",
+      "paths": [],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T09:43:21.306Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-7e862808ea4f4bf1a08626ef5c0b6a79 ref=refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094320Z sha=4f1cfaa75a7d8e25d27d6a9935517118c9febeed reason=remote"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "failed",
+    "kind": "completion",
+    "code": "MOE_PUSH_FAILED",
+    "sessionId": "worker-5772dacf@2026-11-04T09:40:23Z",
+    "at": "2026-11-04T09:43:21.888Z"
+  },
+  "landingRetry": {
+    "reason": "remote",
+    "rescueRef": "refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094320Z",
+    "targetTip": "95d91dc2107433a2f1b95a2b7882427d4d7c898d",
+    "paths": [],
+    "count": 2,
+    "at": "2026-11-04T09:43:22.503Z"
+  }
 }
