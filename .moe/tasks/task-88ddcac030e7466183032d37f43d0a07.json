@@ -1,0 +1,210 @@
+{
+  "id": "task-88ddcac030e7466183032d37f43d0a07",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md's Parameters blocks for six tools drift from their registered inputSchemas: release_resource omits the ifHolderWorkerId/ifAcquiredAt preconditions, set_task_status omits workerId (its NOT_ALLOWED role gate) and its status enum, check_approval omits workerId, get_pending_questions omits includeArchived, create_task types status as a bare string though createTask.ts refuses all but six values, and create_team's role union drops 'governor'",
+  "description": "Filed by hunt #24 (task-53801f5d, architect-cd0ac706) on 2026-11-04. It comes from a scripted diff of every registered tool's inputSchema against its `### moe.<tool>` Parameters block in docs/MCP_SERVER.md. The schemas come from getTools(), built in a git-archive snapshot of 1fef1b76, the moe/work-2026-10-24 tip after acb1c766.\n\nPROBLEM. Six sections document fewer parameters, or fewer enum values, than the tool accepts. A reader of the contract cannot find the guard, the role gate or the allowed values: the tools/list schema says one thing, and MCP_SERVER.md, which CLAUDE.md names as the contract, says another.\n\nEVIDENCE: schema or handler file:line (under packages/moe-daemon/src/tools/), then the doc line, at 1fef1b76.\n1. moe.release_resource:\n   - releaseResource.ts:24 declares ifHolderWorkerId, and :25 declares ifAcquiredAt.\n   - :67-108 enforce them as compare-and-swap preconditions. On a mismatch nothing is released, and INVALID_STATE names the current holder (invalidState, util/errors.ts:139).\n   - docs/MCP_SERVER.md:3066-3075 lists only resourceId, workerId, taskId and force, and its Notes (:3089-3094) never name the two preconditions.\n   - No file in docs/, .moe/roles/ or .moe/skills/ mentions either name.\n2. moe.set_task_status:\n   - setTaskStatus.ts:76 types status as an enum of the 8 VALID_STATUSES, and :81 declares workerId.\n   - :105-113 refuse NOT_ALLOWED (\"architect or governor role required … ask a governor in #governors\") when the workerId resolves to neither role. An absent workerId key is the human path.\n   - docs/MCP_SERVER.md:1651 reads `{ taskId: string, status: string, reason?: string }`, and the section never states the gate.\n3. moe.check_approval: checkApproval.ts:13 declares workerId (touchWorker at :22, nextAction args at :28-33). docs/MCP_SERVER.md:417 reads `{ taskId: string }`.\n4. moe.get_pending_questions: getPendingQuestions.ts:45-48 declares includeArchived (default false), which :122-123 honour. docs/MCP_SERVER.md:2516-2523 lists only epicId, limit, maxQuestionsPerTask and maxContentChars.\n5. moe.create_task:\n   - createTask.ts:38 enumerates BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING, REVIEW and DONE.\n   - :76-78 refuse any other value with INVALID_INPUT, so a BLOCKED or ARCHIVED task cannot be created. :174 defaults to BACKLOG.\n   - docs/MCP_SERVER.md:1850 reads `status?: string`, with no values and no default.\n6. moe.create_team: createTeam.ts:7 VALID_ROLES is architect, worker, qa and governor (schema :17, validated :40-41). docs/MCP_SERVER.md:2426 reads `role?: 'architect' | 'worker' | 'qa'`.\n\nSCRIPTED DIFF, re-run at 1fef1b76. Scripts, outputs and a README are in /mnt/d/moe-scratch/hunt24/.\nnode /mnt/d/moe-scratch/hunt24/parity-mcp.mjs /mnt/d/moe-scratch/hunt24/tools-1fef1b76.json docs/MCP_SERVER.md --check moe.release_resource,moe.set_task_status,moe.check_approval,moe.get_pending_questions,moe.create_task,moe.create_team\nIt prints the following and exits 1:\nmoe.release_resource: schema-key-undocumented ifHolderWorkerId; schema-key-undocumented ifAcquiredAt\nmoe.set_task_status: enum-schema-only status; schema-key-undocumented workerId\nmoe.check_approval: schema-key-undocumented workerId\nmoe.get_pending_questions: schema-key-undocumented includeArchived\nmoe.create_task: enum-schema-only status\nmoe.create_team: enum-mismatch role\nPARITY-FAIL 8\n\nFIX DIRECTION. Docs, plus two test cases.\n- In each of the six sections, list every inputSchema property in the Parameters block, with its literal union and its `?`. Write them from the source, not from this text.\n- For each enforced behaviour, add one sentence or Notes bullet:\n  - release_resource: the two preconditions, and their INVALID_STATE refusal with nothing released;\n  - set_task_status: the NOT_ALLOWED role gate, and its workerId-less human path;\n  - create_task: the six creatable statuses, the default BACKLOG, and INVALID_INPUT for any other status;\n  - create_team: governor teams.\n- No test pins two of these behaviours, so add one case each:\n  - getPendingQuestions.test.ts: an ARCHIVED task's unanswered human comment is left out by default and returned with includeArchived: true;\n  - createTask.test.ts: status 'BLOCKED' is refused with INVALID_INPUT and writes no task, and an omitted status creates a BACKLOG task.\n\nNOT IN SCOPE.\n- Every other MCP_SERVER.md section, including those CQ-M07v2 (task-63674531) holds: get_context, start_step, claim_next_task, wait_for_task, report_blocked, release_task, complete_task's Strict completion, the new tool sections after heartbeat, and Plugin WebSocket Messages.\n- docs/SCHEMA.md, which has its own hunt #24 row.\n- Any change to tool code or schemas.\n\nVERIFICATION.\n- From the worktree root, run `npm run lint` and the --check command above. Both run in place and are read-only.\n- Then run the six tools' tests in a git-archive snapshot outside the shared checkout, under env -i with Linux node 24: npm ci, then `npx vitest run src/tools/releaseResource.generation.test.ts src/tools/setTaskStatus.roleGate.test.ts src/tools/checkApproval.test.ts src/tools/getPendingQuestions.test.ts src/tools/createTask.test.ts src/tools/createTeam.test.ts`.",
+  "definitionOfDone": [
+    "From the worktree root, `node /mnt/d/moe-scratch/hunt24/parity-mcp.mjs /mnt/d/moe-scratch/hunt24/tools-1fef1b76.json docs/MCP_SERVER.md --check moe.release_resource,moe.set_task_status,moe.check_approval,moe.get_pending_questions,moe.create_task,moe.create_team` prints PARITY-OK and exits 0. At 1fef1b76 it prints PARITY-FAIL 8.",
+    "The six sections state each enforced behaviour as the code implements it: release_resource's INVALID_STATE precondition refusal, with nothing released (releaseResource.ts:67-108); set_task_status's NOT_ALLOWED role gate and its workerId-less human path (setTaskStatus.ts:105-113); create_task's six creatable statuses and its BACKLOG default (createTask.ts:76-78, :174); and create_team's governor role (createTeam.ts:7).",
+    "getPendingQuestions.test.ts gains one includeArchived case (left out by default, returned with true). createTask.test.ts gains one status case: 'BLOCKED' is refused with INVALID_INPUT and writes no task, and an omitted status gives BACKLOG. The six named test files pass in a git-archive snapshot outside the shared checkout.",
+    "The diff touches docs/MCP_SERVER.md only inside those six `### moe.<tool>` sections, plus the two test files, and `npm run lint` passes at the repo root."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Docs: sync `### moe.release_resource`, `### moe.set_task_status` and `### moe.check_approval` in docs/MCP_SERVER.md with their registered inputSchemas and with the behaviour the handlers enforce (DoD 1, 2, 4). No tool code or schema change.\n\nRules for every docs edit in this plan (steps 1-3):\n- Edit with your own Edit tool only (global rail). CQ-M07v2 (task-63674531, WORKING) also declares docs/MCP_SERVER.md, but it edits other sections (new sections after moe.heartbeat, get_context, complete_task, report_blocked, claim_next_task, release_task, line 1), so the worktree merge-tree lands both; a shell write here would be HELD at landing.\n- Change bytes only inside the six `### moe.<tool>` sections. Leave headings, Returns blocks, every other section and the `---` separators alone (checkRef 0 diffs the file with the six sections stripped against your fork point).\n- Write each claim from the source at your HEAD; re-check every cited line with `grep -n` first. At 80078651 they match 1fef1b76 (no commit since touches the six tool files). The suggested wording below was checked against that code in a planning dry run (step 4). You may reword, but keep each marker phrase named here on the same line as its partner token: checkRef 1 matches them per line.\n- Keep each new paragraph or Notes bullet on ONE line.\n\n(a) moe.release_resource. Source: releaseResource.ts:24-25 (schema), :54-60 (the check runs inside the same runExclusive dispatch as the release), :67-108 (the compare-and-swap block), util/errors.ts:139 (invalidState = -32002 INVALID_STATE).\n- Parameters block: give `force?: boolean` its comma (keep its three comment lines), then add:\n  `  ifHolderWorkerId?: string, // Precondition: every lease this call would release is held by this worker`\n  `  ifAcquiredAt?: string      // Precondition: every such lease was acquired at exactly this ISO time (list_resources acquiredAt)`\n- Notes: insert ONE bullet right before `- Activity events: ...`, starting with the exact lead-in `- **Compare-and-swap preconditions**` and naming `INVALID_STATE` on that line. Suggested:\n  - **Compare-and-swap preconditions** (`ifHolderWorkerId`, `ifAcquiredAt`): with either one set, the call first collects the leases it would release, the same set the release strips: under `force`, the `taskId` lease, or every holder when `taskId` is omitted; otherwise the caller's own leases (matched by `workerId` or as the task's current assignee), narrowed to `taskId` when given. It is refused `-32002` / `INVALID_STATE`, and nothing is released or dequeued, when that set is empty, when any lease in it is held by a worker other than `ifHolderWorkerId`, or when any was acquired at a time other than `ifAcquiredAt`; the error names the current holder. With a precondition, releasing a lease you no longer hold is a refusal, not the idempotent no-op. The preconditions guard leases, not queue entries, and the check runs in the same exclusive dispatch as the release. Pass one whenever time passed between reading `moe.list_resources` and this call: `taskId` scopes a task, not a lease generation, and that task's lease may have changed hands since.\n\n(b) moe.set_task_status. Source: setTaskStatus.ts:13-22 (VALID_STATUSES), :76 (status enum), :81 (workerId), :105-113 (role gate: runs before the task lookup and any write; an absent key is the human path; '' or null is judged and refused), util/workerRole.ts resolveWorkerRole (team role, else id prefix).\n- First line `Set task status (optionally with a reopen reason).` becomes `Architect/governor/human: set task status (optionally with a reopen reason).` (the tool description's wording).\n- Replace the one-line Parameters block `{ taskId: string, status: string, reason?: string }` with:\n  {\n    taskId: string,\n    status: \"BACKLOG\" | \"PLANNING\" | \"AWAITING_APPROVAL\" | \"WORKING\" | \"REVIEW\" | \"BLOCKED\" | \"DONE\" | \"ARCHIVED\",  // must be a legal transition from the current status (below)\n    reason?: string,   // recorded as reopenReason, and as blockedReason when status is BLOCKED\n    workerId?: string  // caller (auto-injected by proxy), recorded as the actor; its role must resolve to architect or governor. Omitted only on the human path\n  }\n- After the Returns block, ONE paragraph with the exact lead-in `**Role gate:**` and `NOT_ALLOWED` on that line. Suggested:\n  **Role gate:** a call that carries `workerId` must act as an architect or governor (team role, else the `architect-`/`governor-` id prefix; see `moe.amend_plan_step`). Any other caller, such as a worker or QA seat, is refused `NOT_ALLOWED` before the task lookup and any write, and the message tells it to ask a governor in `#governors` to move the row. Only an omitted `workerId` key is the human path: a seat's proxy injects `MOE_WORKER_ID` whenever the key is missing, and a `workerId` of `\"\"` or `null` skips that injection, so it is judged like any other id and refused.\n\n(c) moe.check_approval. Source: checkApproval.ts:13 (workerId), :22 (touchWorker refreshes lastActivityAt), :33 (only the approved branch's moe.wait_for_task args carry it). `{ taskId: string }` occurs twice in the file, so anchor the Edit on the `Check if a plan was approved.` line plus the block. New block:\n  {\n    taskId: string,\n    workerId?: string  // caller (auto-injected by proxy); refreshes the seat's lastActivityAt, and an approved plan's nextAction (moe.wait_for_task) carries it in its args\n  }\n  Leave its Returns block as it is (out of scope).\n\nNo new test in this step. The three behaviours are already pinned by releaseResource.generation.test.ts (6 cases, including the empty-set refusal at :102 and the peer-lease case at :120), setTaskStatus.roleGate.test.ts and checkApproval.test.ts (:47 lastActivityAt), and step 4 runs all three. Error handling in the doc text: state each refusal exactly as the code takes it (code name and number, and what is not written). Drop any claim you cannot point at in the source; do not soften it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Synced release_resource (ifHolderWorkerId/ifAcquiredAt + CAS bullet), set_task_status (status enum, workerId, Role gate paragraph), check_approval (workerId) with source.",
+      "startedAt": "2026-11-04T13:43:14.124Z",
+      "completedAt": "2026-11-04T13:43:44.898Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs + test: `### moe.create_task` and one createTask.test.ts case (DoD 1-4). Same docs rules as step 1.\n\n(a) docs/MCP_SERVER.md, create_task. Source: createTask.ts:38 (schema enum of six), :76-78 (any other truthy status is INVALID_INPUT `Invalid status: must be one of: ...`, before any write), :174 and state/taskStore.ts:334 (an omitted status is BACKLOG).\n- Parameters: replace `  status?: string,` (unique; anchor it together with the `  taskRails?: string[],` line above it) with\n  `  status?: \"BACKLOG\" | \"PLANNING\" | \"AWAITING_APPROVAL\" | \"WORKING\" | \"REVIEW\" | \"DONE\",  // omitted = BACKLOG; BLOCKED and ARCHIVED are refused`\n  The comment must contain the exact text `omitted = BACKLOG` (checkRef 1).\n- Input refusals: replace the bullet `- an unknown \\`status\\` or \\`priority\\`;` with one that states the rule and contains the backticked token `BLOCKED` (checkRef 1). Suggested:\n  `- a \\`status\\` outside the six listed above (a task cannot be created \\`BLOCKED\\` or \\`ARCHIVED\\`), or an unknown \\`priority\\`;`\n  The sentence after the list already says each refusal is `INVALID_INPUT` naming the field; keep it.\n\n(b) packages/moe-daemon/src/tools/createTask.test.ts. Add `import fs from 'fs';` and `import path from 'path';` at the top (as createTask.shape.test.ts does), and ONE `it` at the end of the first describe (`moe.create_task`, whose beforeEach loads epic-1 and no tasks). Capture the refusal the way createTask.shape.test.ts expectRefused does. Suggested:\n  it('refuses a status it cannot create and writes no task; an omitted status gives BACKLOG', async () => {\n    const tool = createTaskTool(h.state);\n    for (const status of ['BLOCKED', 'ARCHIVED']) {\n      const err = await tool.handler({ epicId: 'epic-1', title: `parked ${status}`, status }, h.state).then(\n        () => null,\n        (e: unknown) => e as { codeName?: string; message: string },\n      );\n      expect(err?.codeName).toBe('INVALID_INPUT');\n      expect(err?.message).toContain('Invalid status');\n    }\n    expect(h.state.tasks.size).toBe(0);\n    expect(fs.readdirSync(path.join(h.moePath, 'tasks'))).toEqual([]);\n\n    const result = await tool.handler({ epicId: 'epic-1', title: 'No status given' }, h.state) as { task: Task };\n    expect(result.task.status).toBe('BACKLOG');\n    expect(h.state.getTask(result.task.id)?.status).toBe('BACKLOG');\n  });\nPlanning dry run in a snapshot of 80078651: the case passes. It fails with the :76-78 check removed (`expected undefined to be 'INVALID_INPUT'`: that check is the only guard, so a BLOCKED row would be written), and with taskStore's default changed to PLANNING (`expected 'PLANNING' to be 'BACKLOG'`). Error handling: the test asserts the refusal's codeName and that no row reaches memory or disk, so a write-then-throw regression fails it too.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/createTask.test.ts"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/createTask.test.ts"
+      ],
+      "note": "create_task status enum/default/refusal docs + one test case (test run deferred to step 4 snapshot).",
+      "startedAt": "2026-11-04T13:43:45.882Z",
+      "completedAt": "2026-11-04T13:44:06.124Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs + test: `### moe.create_team`, `### moe.get_pending_questions` and one getPendingQuestions.test.ts case (DoD 1-4). Same docs rules as step 1.\n\n(a) create_team. Source: createTeam.ts:7 (VALID_ROLES includes governor), :17 (schema), :40-41 (INVALID_INPUT for any other role), the idempotency lookup after validateTeamName: getTeamByNameAndRole(name, role) in state/teamStore.ts:32-37 matches name AND role (null === null). Also claimNextTask.ts:482-493 (a seat that resolves to governor gets hasNext:false and a moe.enter_governance nextAction) and util/workerRole.ts resolveWorkerRole (team role first).\n- role line: `  role?: 'architect' | 'worker' | 'qa' | 'governor', // Optional: team role (omit for project team)`.\n- Intro: its second sentence ('If `role` is omitted, idempotency is name-only and the team is project-wide.') is wrong, and createTeam.test.ts (t2) pins the opposite: a role-less 'Gov' create next to a 'Gov' governor team makes a second team. Suggested replacement of the whole intro:\n  Create a team or return an existing team with the same name and role (idempotent; the name is trimmed first). If `role` is omitted, the team is project-wide, and only a role-less team of that name is returned: a role-less create never adopts a role-bound team that shares its name.\n- After the Returns block, ONE paragraph with the exact lead-in `**Governor teams:**` and `enter_governance` on that line. Suggested:\n  **Governor teams:** `role: 'governor'` creates a governor team. Its members act as governors, because a seat's team role wins over its id prefix (`util/workerRole.ts`), so `moe.claim_next_task` answers them `hasNext: false` with a `moe.enter_governance` nextAction instead of a claim.\n\n(b) get_pending_questions. Source: getPendingQuestions.ts:45-48 (includeArchived, default false), :119-123 (archiving does not clear hasPendingQuestion; ARCHIVED is skipped unless includeArchived === true).\n- Parameters: after the epicId line add `  includeArchived?: boolean,   // default: false — ARCHIVED tasks are left out unless true`.\n- Notes: after the maxContentChars bullet add one bullet containing `includeArchived: true` (checkRef 1). Suggested:\n  - `ARCHIVED` tasks are left out by default, because archiving does not clear `hasPendingQuestion`; pass `includeArchived: true` to include them.\n\n(c) packages/moe-daemon/src/tools/getPendingQuestions.test.ts: ONE `it` at the end of the describe. It needs two tasks, each with hasPendingQuestion and one unanswered human comment with a fixed timestamp: task-live (harness default BACKLOG, order 1) and task-shelved (status 'ARCHIVED', order 2). Suggested:\n  it('leaves an ARCHIVED task out by default and returns it with includeArchived: true', async () => {\n    h.setupMoeFolder();\n    h.createEpic();\n    const question = (id: string) => [{ id, author: 'human', content: `Still open? ${id}`, timestamp: '2024-01-01T00:00:00Z' }];\n    h.createTask({ id: 'task-live', order: 1, hasPendingQuestion: true, comments: question('c-live') });\n    h.createTask({ id: 'task-shelved', order: 2, status: 'ARCHIVED', hasPendingQuestion: true, comments: question('c-shelved') });\n    await h.state.load();\n\n    type Res = { totalMatches: number; tasks: Array<{ taskId: string; questions: Array<{ commentId: string }> }> };\n    const tool = getPendingQuestionsTool(h.state);\n    const byDefault = await tool.handler({}, h.state) as Res;\n    expect(byDefault.tasks.map((t) => t.taskId)).toEqual(['task-live']);\n    expect(byDefault.totalMatches).toBe(1);\n\n    const withArchived = await tool.handler({ includeArchived: true }, h.state) as Res;\n    expect(withArchived.tasks.map((t) => t.taskId)).toEqual(['task-live', 'task-shelved']);\n    expect(withArchived.tasks[1].questions.map((q) => q.commentId)).toEqual(['c-shelved']);\n  });\nPlanning dry run: the case passes at 80078651. It fails when :123 is deleted (the default then returns both rows) and when it skips ARCHIVED unconditionally (includeArchived: true then returns only task-live). The live control row stops the default assertion passing on an empty result. Error handling: the case asserts exact row sets, not truthiness, so a filter that drops everything fails too.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/getPendingQuestions.test.ts"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/getPendingQuestions.test.ts"
+      ],
+      "note": "create_team governor + intro fix, get_pending_questions includeArchived docs + test.",
+      "startedAt": "2026-11-04T13:44:06.902Z",
+      "completedAt": "2026-11-04T13:44:32.840Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, run ONCE (DoD 1-4); see mem:decision-doc-row-checkrefs-worktree-mode. From your task worktree root, run the three executionContract checkRefs joined with ' && ' exactly (checkRefs[0] && checkRefs[1] && checkRefs[2]). Submit that joined string verbatim as complete_task verification.command, with its exit code and output tail. The wrapper exports MOE_LAND_TARGET to your CLI. If `echo \"$MOE_LAND_TARGET\"` prints nothing, prefix the command with `export MOE_LAND_TARGET=moe/work-2026-10-24 &&` (the project's consolidationBranch) and say so in the summary; checkRef 0 needs it to find your fork point after a checkpoint.\n- [0] scope and strip-diff: B = merge-base of HEAD and $MOE_LAND_TARGET. The changed set against B must be exactly docs/MCP_SERVER.md plus the two test files, and MCP_SERVER.md with the six sections stripped must equal B's copy. It prints SCOPE-OK.\n- [1] in place: one marker per enforced behaviour (MARKERS-OK), then the DoD 1 command (PARITY-OK, exit 0), then `npm run lint` at the root.\n- [2] a git-archive snapshot of HEAD minus .moe in a fresh /tmp/moe-88ddcac0-* dir, with your three files copied in. Under env -i with Linux node 24.21.0 it runs npm ci, then vitest on the six named tool test files plus the two MCP_SERVER.md doc guards (src/util/executionContractDocs.test.ts, src/util/taskTimeBudgetDocs.test.ts). Then `npx tsc -p .` (compile only, no prebuild generators, about 0.5 s) and the parity check again, against schemas dumped from that build, so a schema change since the frozen 1fef1b76 dump cannot pass unseen.\nPlanning dry run on a scratch clone of 80078651 with the planned edits: all three green (8 files, 87 tests, about 10 s; npm ci about 1 s from the cache). RED on the unedited tree: SCOPE-FAIL, MARKERS-FAIL 0 0 0 0 0 0, PARITY-FAIL 8. Each doc mutant tried (a byte changed in moe.list_resources, a stray README edit, the includeArchived line dropped, 'governor' dropped, the Role gate paragraph dropped) turned the check red.\nThe snapshot dir stays in /tmp on purpose. The command has no `rm -rf \"$S\"`, because Claude Code's safety check refused that removal of a variable path in the planning dry run. Do not add one.\nRed-run error handling: SCOPE-FAIL lists the changed paths, so revert anything outside the three. SECTION-FAIL prints the diff of the bytes changed outside the six sections; move or revert them. MARKERS-FAIL prints six 0/1 flags in the order release_resource, set_task_status, create_task default, create_task BLOCKED bullet, create_team, get_pending_questions; restore the named lead-in or token on the same line. PARITY-FAIL prints one line per tool; fix that Parameters block (name, `?`, literal union). Fix a vitest failure in the test or the doc, never in tool code (out of scope). If npm ci fails (no cache, no network), post the npm error with moe.add_comment and retry; never skip or replace the snapshot run. npm ci, build and test run only in the snapshot (global rail); `npm run lint` at the worktree root is the one in-place npm call.\nFor QA after landing: run the same three pieces in a `git clone --shared` detached at the completion sha with `MOE_LAND_TARGET=<sha>^` exported. On the control checkout, piece 0 is vacuous or red from other seats' dirty files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Joined checkRefs green: exit 0, 8 files/87 tests, PARITY-OK both frozen and rebuilt schemas.",
+      "startedAt": "2026-11-04T13:44:33.713Z",
+      "completedAt": "2026-11-04T13:44:59.961Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, the final step (load the adversarial-self-review skill). Read your whole diff (`git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")`) as a reviewer would:\n- Re-trace every new doc claim to its source line at your HEAD: releaseResource.ts :54-60 and :67-108; setTaskStatus.ts :13-22 and :105-113; checkApproval.ts :22 and :33; createTask.ts :38, :76-78 and :174 with taskStore.ts:334; createTeam.ts :7 and :40-41 with teamStore.ts:32-37, claimNextTask.ts:482-493 and workerRole.ts resolveWorkerRole; getPendingQuestions.ts :45-48 and :119-123. Remove a claim you cannot point at; do not soften it.\n- The parity check reads names, `?` and literal unions, never the comments, so read every new comment and sentence yourself. Make sure nothing outside the six sections moved: no Returns block, heading or `---` separator.\n- Tests: per-test temp dirs (ToolTestHarness), fixed timestamps, no reliance on test order, and assertions that fail when the behaviour is removed (the planning mutants are recorded in steps 2 and 3).\n- No added line may contain a project.json globalRails.forbiddenPatterns string.\nIf the review changes anything, re-run the step-4 command and submit that fresh result, not the earlier one.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/createTask.test.ts",
+        "packages/moe-daemon/src/tools/getPendingQuestions.test.ts"
+      ],
+      "note": "Self-review: claims re-traced to source, diff limited to the 3 files, no forbidden patterns; no changes, step-4 result stands.",
+      "startedAt": "2026-11-04T13:45:00.892Z",
+      "completedAt": "2026-11-04T13:45:13.133Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 531.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T13:20:16.231Z",
+  "updatedAt": "2026-11-04T13:45:17.239Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T13:20:20.961Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e",
+    "worker-593560ee"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T13:41:58.333Z",
+  "executionContract": {
+    "intendedBehavior": "docs/MCP_SERVER.md's `### moe.release_resource`, `### moe.set_task_status`, `### moe.check_approval`, `### moe.get_pending_questions`, `### moe.create_task` and `### moe.create_team` sections list every property of the tool's registered inputSchema in their Parameters blocks, with the schema's `?` and literal unions. They also state the enforced behaviour as the handlers implement it: release_resource's ifHolderWorkerId/ifAcquiredAt compare-and-swap refusal (-32002 INVALID_STATE, nothing released); set_task_status's architect/governor NOT_ALLOWED gate and its workerId-less human path; create_task's six creatable statuses, its BACKLOG default and INVALID_INPUT for any other status; create_team's governor teams and its name-and-role idempotency; get_pending_questions' default that leaves ARCHIVED tasks out. Two new vitest cases pin get_pending_questions' includeArchived and create_task's status refusal and default. Tool code, schemas and every other doc section stay byte-identical.",
+    "acceptanceCriteria": [
+      "Hunt #24's parity check (`node /mnt/d/moe-scratch/hunt24/parity-mcp.mjs /mnt/d/moe-scratch/hunt24/tools-1fef1b76.json docs/MCP_SERVER.md --check` with the six tools) prints PARITY-OK and exits 0. So does the same check against schemas dumped from a tsc build of HEAD.",
+      "Each of the six sections states its behaviour on one line carrying the marker checkRef 1 matches: `- **Compare-and-swap preconditions**` with INVALID_STATE; `**Role gate:**` with NOT_ALLOWED; `omitted = BACKLOG`; a refusal bullet naming `BLOCKED`; `**Governor teams:**` with enter_governance; a Notes bullet naming `includeArchived: true`.",
+      "createTask.test.ts: BLOCKED and ARCHIVED are refused INVALID_INPUT, with no task in memory or on disk, and an omitted status creates a BACKLOG task. getPendingQuestions.test.ts: an ARCHIVED task's unanswered human comment is left out by default and returned with includeArchived: true.",
+      "The six named tool test files and the two MCP_SERVER.md doc guards pass in a git-archive snapshot under env -i with Linux node 24.21.0, and `npm run lint` passes at the worktree root."
+    ],
+    "invariants": [
+      "No file under packages/*/src changes except the two test files: no tool code and no schema change.",
+      "docs/MCP_SERVER.md outside the six sections stays byte-identical to the fork point (checkRef 0)."
+    ],
+    "compatibility": [
+      "No MCP contract change. The inputSchemas, handlers, error codes and messages are untouched; the docs describe existing behaviour.",
+      "Existing test cases are not edited."
+    ],
+    "approvedScope": [
+      "docs/MCP_SERVER.md: only the six `### moe.<tool>` sections named above. That covers their Parameters blocks, the lead sentences of set_task_status and create_team, and one Notes bullet or paragraph each where the plan names one.",
+      "packages/moe-daemon/src/tools/createTask.test.ts: fs/path imports plus one `it` in describe('moe.create_task').",
+      "packages/moe-daemon/src/tools/getPendingQuestions.test.ts: one `it` in describe('moe.get_pending_questions')."
+    ],
+    "reuse": [
+      "ToolTestHarness, plus createTask.shape.test.ts's refusal-capture pattern: `.then(() => null, (e) => e)`, a codeName assertion and a tasks-dir listing.",
+      "Hunt #24's read-only scripts in /mnt/d/moe-scratch/hunt24 (parity-mcp.mjs, dump-tools.mjs, tools-1fef1b76.json) serve as the parity gate. The role-gate wording follows the sibling sections moe.set_task_dependencies and moe.set_task_priority, including their `see moe.amend_plan_step` reference."
+    ],
+    "sourceAssumptions": [
+      "releaseResource.ts:24-25 declare ifHolderWorkerId and ifAcquiredAt. :67-108 collect the leases the release would strip (with force: the taskId lease, or all holders; otherwise callerOwns by workerId or task assignee, narrowed to taskId). It throws invalidState (util/errors.ts:139, -32002 INVALID_STATE) on an empty set, a holder mismatch or an acquiredAt mismatch, before state.releaseResource runs.",
+      "setTaskStatus.ts:13-22 VALID_STATUSES (8 values), :76 enum, :81 workerId. :105-113 refuse NOT_ALLOWED unless workerHasRole(architect, governor) whenever the workerId key is present, before the task lookup.",
+      "checkApproval.ts:13 workerId; :22 touchWorker; :33 the approved branch copies workerId into the moe.wait_for_task args.",
+      "getPendingQuestions.ts:45-48 includeArchived, default false; :123 skips ARCHIVED unless includeArchived === true.",
+      "createTask.ts:38 and :76-78: six creatable statuses, INVALID_INPUT otherwise. It is the only guard: with it removed, a BLOCKED row is written. :174 and state/taskStore.ts:334 default to BACKLOG.",
+      "createTeam.ts:7 VALID_ROLES includes governor. teamStore.ts:32-37 getTeamByNameAndRole matches name and role exactly (null === null). claimNextTask.ts:482-493 redirects a governor-resolving seat to moe.enter_governance. util/workerRole.ts resolveWorkerRole reads the team role before the id prefix.",
+      "At 80078651 the six tool files are unchanged since 1fef1b76, and their dumped inputSchemas equal tools-1fef1b76.json (73 tools)."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && f=docs/MCP_SERVER.md && t=packages/moe-daemon/src/tools && c=$(git diff --name-only \"$B\" | tr '\\n' ' ') && { [ \"$c\" = \"$f $t/createTask.test.ts $t/getPendingQuestions.test.ts \" ] || { echo \"SCOPE-FAIL: $c\"; exit 1; }; } && x(){ awk '/^(#|##|###) /{s=($0~/^### moe\\.(release_resource|set_task_status|check_approval|get_pending_questions|create_task|create_team)$/)} !s'; } && { diff <(git show \"$B:$f\" | x) <(x < \"$f\") || { echo \"SECTION-FAIL: $f changed outside the six sections\"; exit 1; }; } && echo SCOPE-OK )",
+      "( cd \"$(git rev-parse --show-toplevel)\" && f=docs/MCP_SERVER.md && awk '/^(#|##|###) /{s=$2} s==\"moe.release_resource\"&&/Compare-and-swap preconditions/&&/INVALID_STATE/{a=1} s==\"moe.set_task_status\"&&/^\\*\\*Role gate:\\*\\*/&&/NOT_ALLOWED/{b=1} s==\"moe.create_task\"&&/omitted = BACKLOG/{c=1} s==\"moe.create_task\"&&/`BLOCKED`/{d=1} s==\"moe.create_team\"&&/^\\*\\*Governor teams:\\*\\*/&&/enter_governance/{e=1} s==\"moe.get_pending_questions\"&&/includeArchived: true/{g=1} END{if(a&&b&&c&&d&&e&&g)print \"MARKERS-OK\";else{print \"MARKERS-FAIL\",a+0,b+0,c+0,d+0,e+0,g+0;exit 1}}' \"$f\" && node /mnt/d/moe-scratch/hunt24/parity-mcp.mjs /mnt/d/moe-scratch/hunt24/tools-1fef1b76.json \"$f\" --check moe.release_resource,moe.set_task_status,moe.check_approval,moe.get_pending_questions,moe.create_task,moe.create_team && npm run lint )",
+      "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d /tmp/moe-88ddcac0-XXXXXX) && git archive HEAD -- . ':!.moe' | tar -x -C \"$S\" && cp docs/MCP_SERVER.md \"$S/docs/\" && cp packages/moe-daemon/src/tools/{createTask,getPendingQuestions}.test.ts \"$S/packages/moe-daemon/src/tools/\" && cd \"$S/packages/moe-daemon\" && e(){ env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" \"$@\"; } && e npm ci --prefer-offline --no-audit --no-fund --loglevel=error && e npx vitest run src/tools/{releaseResource.generation,setTaskStatus.roleGate,checkApproval,getPendingQuestions,createTask,createTeam}.test.ts src/util/{executionContractDocs,taskTimeBudgetDocs}.test.ts && e npx tsc -p . && h=/mnt/d/moe-scratch/hunt24 && e node $h/dump-tools.mjs \"$S\" > \"$S/t.json\" && e node $h/parity-mcp.mjs \"$S/t.json\" \"$S/docs/MCP_SERVER.md\" --check moe.release_resource,moe.set_task_status,moe.check_approval,moe.get_pending_questions,moe.create_task,moe.create_team )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Parameters-only edits: rejected, because DoD 2 also needs the enforced behaviour stated. (2) A daemon test that diffs every tool schema against MCP_SERVER.md: out of scope. The row asks for docs plus two tests, and such a test would fail on the other ~30 drifts hunt #24 triaged. (3) Guarding the frozen tools-1fef1b76.json with `git diff --quiet 1fef1b76 HEAD` on the six tool files: rejected, since it trips on any unrelated edit. checkRef 2 instead rebuilds the schemas with `npx tsc -p .` in the snapshot (no prebuild, about 0.5 s) and re-runs parity against that dump. (4) Deleting the snapshot dir in the checkRef: dropped, because Claude Code's safety check refused `rm -rf \"$S\"` in the dry run. The `e(){ env -i ... \"$@\"; }` wrapper also avoids an `env -i bash -c '...'` nesting.",
+    "codebaseInsights": "Role-gated tools resolve the caller through util/workerRole.ts resolveWorkerRole: team role first, else the architect-/governor-/worker-/qa- id prefix. Only an omitted workerId key is the human path, because the proxy injects MOE_WORKER_ID into every tools/call that lacks it, so '' or null is judged and refused. The parity script's --check fails only on names, required `?`, enum literals and nested shapes; it never reads comments or defaults. Two doc-guard tests read MCP_SERVER.md: src/util/taskTimeBudgetDocs.test.ts (section headings against getTools()) and src/util/executionContractDocs.test.ts. Neither reads the six sections, and both are in checkRef 2.",
+    "risks": "- isEpicFinal is true only through the max-order fallback. epic-be924fb8 is an open-ended bug bucket with no finalTaskId (mem:decision-defect-hunt-row-method), so this row is not a designated hardening task. Its gate is the row's own VERIFICATION plus the two doc guards, not a whole-epic regression.\n- Lane: CQ-M07v2 (task-63674531, WORKING) declares docs/MCP_SERVER.md but edits other sections, so the merge-tree lands distinct hunks. Use the Edit tool so the path keeps its TOOL witness.\n- `{ taskId: string }` occurs twice in MCP_SERVER.md: anchor the check_approval Edit on its lead sentence. `  status?: string,` is unique.\n- The create_team intro's 'idempotency is name-only' is wrong (teamStore.ts:32-37, createTeam.test.ts t2), so the plan corrects it inside the section.\n- QA: on the control checkout, checkRef 0 is vacuous or red. Run all three in a `git clone --shared` detached at the completion sha with MOE_LAND_TARGET=<sha>^ (dry-run proven: SCOPE-OK, MARKERS-OK, PARITY-OK).\n- npm ci needs the npm cache or the network (`--prefer-offline`). A codex seat must be able to write /tmp.",
+    "keyFiles": [
+      "docs/MCP_SERVER.md (### moe.check_approval :411, set_task_status :1645, create_task :1838, create_team :2418, get_pending_questions :2511, release_resource :3061 at 80078651)",
+      "packages/moe-daemon/src/tools/{releaseResource,setTaskStatus,checkApproval,getPendingQuestions,createTask,createTeam}.ts",
+      "packages/moe-daemon/src/tools/createTask.test.ts, createTask.shape.test.ts (refusal pattern), getPendingQuestions.test.ts, toolTestHarness.ts",
+      "packages/moe-daemon/src/util/workerRole.ts, state/teamStore.ts, state/taskStore.ts:334, tools/claimNextTask.ts:482-493",
+      "/mnt/d/moe-scratch/hunt24/README.md, parity-mcp.mjs, dump-tools.mjs, tools-1fef1b76.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "800786516043e13f0b8c6a503642ca4916a79011",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T13:41:58.366Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-c33f294e@2026-11-04T13:20:18Z",
+    "at": "2026-11-04T13:43:09.487Z"
+  },
+  "workStartedAt": "2026-11-04T13:43:14.124Z",
+  "reviewStartedAt": "2026-11-04T13:45:17.237Z",
+  "verification": {
+    "command": "bash /tmp/moe-88dd-scratch/gate.sh  # = checkRefs[0] && checkRefs[1] && checkRefs[2] joined verbatim: SCOPE-OK strip-diff; MARKERS-OK + hunt24 parity-mcp.mjs (frozen 1fef1b76 dump) + npm run lint; git-archive snapshot under env -i node 24.21.0: npm ci, vitest on 6 tool test files + executionContractDocs + taskTimeBudgetDocs, tsc -p ., parity vs rebuilt schemas",
+    "exitCode": 0,
+    "outputTail": "Test Files  8 passed (8)\n Tests  87 passed (87)\nnpm notice run 'tsc' -p .\nmoe.release_resource: ok\nmoe.set_task_status: ok\nmoe.check_approval: ok\nmoe.get_pending_questions: ok\nmoe.create_task: ok\nmoe.create_team: ok\nPARITY-OK",
+    "reportedAt": "2026-11-04T13:45:17.237Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/createTask.test.ts",
+    "packages/moe-daemon/src/tools/getPendingQuestions.test.ts"
+  ],
+  "completionSummary": "Synced the six MCP_SERVER.md sections with their registered inputSchemas: release_resource (ifHolderWorkerId/ifAcquiredAt + CAS INVALID_STATE bullet), set_task_status (status enum, workerId, Role gate NOT_ALLOWED paragraph), check_approval (workerId), get_pending_questions (includeArchived + note), create_task (six-status union, omitted = BACKLOG, BLOCKED/ARCHIVED refusal), create_team (governor role, corrected idempotency intro, Governor teams paragraph). Added one createTask.test.ts case and one getPendingQuestions.test.ts case. No tool code or schema changed. MOE_LAND_TARGET was set by the wrapper (moe/work-2026-10-24)."
+}
