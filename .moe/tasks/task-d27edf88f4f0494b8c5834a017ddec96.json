@@ -59,26 +59,31 @@
     {
       "stepId": "step-4",
       "description": "Verification, once, in a git-archive snapshot of your worktree HEAD outside the shared checkout (never npm install, build or test in place; use Linux node_modules for packages/moe-daemon). Run this exact command from the snapshot root and submit its fresh output as complete_task evidence:\n\n`(cd packages/moe-daemon && npx vitest run src/tools/accountTools.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts src/tools/workerType.test.ts src/tools/chatWait.test.ts src/tools/submitPlan.test.ts) && env -i PATH=\"$PATH\" HOME=\"$HOME\" CLAUDE_CONFIG_DIR=\"$(mktemp -d)\" claude plugin test scripts/mods/moe-account-switch`\n\n- All must pass. The new daemon cases (a)-(e) and the mod cases must have been red before the implementation: record the red runs in your step notes.\n- env -i keeps this seat's live MOE_* variables out of the mod tests.\n- Optional type check: `node moe-vscode/node_modules/typescript/lib/tsc.js -p scripts/mods/moe-account-switch/tsconfig.json`. Its only known baseline errors are TS5097 and TS2769 in register.test.ts.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "scripts/mods/moe-account-switch/hooks/register.ts"
       ],
-      "startedAt": "2026-11-04T08:23:20.442Z"
+      "note": "Verification only, no file changes. Snapshot /tmp/moe-d27e-verify.aNMJVo = `git archive HEAD` (52550917) of the worktree plus the 3 uncommitted step-2/3 files, cmp-identical to the worktree; Linux node_modules moved in from this task's earlier snapshot. The plan's exact command exits 0: vitest Test Files 6 passed (6), Tests 348 passed (348); claude plugin test 94 pass / 0 fail. Quality gate in the snapshot (`bash scripts/tests/parity-check.sh && npm run lint`): exit 0. Red runs: daemon case (a) failed at HEAD (1 failed | 24 passed, claim handed task-3, recorded in the step-1 note); mod claim case failed at HEAD's register.ts (93 pass / 1 fail, acceptsAccountSwitch missing, step-2 note). Cases (b)-(f) and the unleased mod case assert unchanged behaviour, so they pass at HEAD by design; mutation of the flag gate was killed by (b) (step-1 note).",
+      "startedAt": "2026-11-04T08:23:20.442Z",
+      "completedAt": "2026-11-04T08:23:59.371Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this diff, the final step. Check each point:\n- Concurrency: two in-session claims both run inside runExclusive, and the switch answer writes nothing, so nothing can be half-written.\n- The wrapper pre-flight claim never sends the flag: `grep -n acceptsAccountSwitch scripts/moe-agent.sh scripts/moe-agent.ps1` prints nothing.\n- A governor with the flag still gets enter_governance.\n- A seat with no worker record but a lease is switched; a seat with no lease, or an unreadable registry, claims normally.\n- A resume of the seat's own task (currentTaskId set) is never switched.\n- An explicit-taskId claim with the flag is switched exactly like a ranked one.\n- Rollout order, which must go into the completion summary for the governor:\n  - The mod part goes live as soon as it lands, because scripts/ is hot through moe/control. The daemon part goes live only after the human's daemon swap.\n  - The live daemon ignores unknown arguments (McpAdapter.ts:321 passes params.arguments to the handler with no schema check), so until the swap the flag changes nothing.\n  - If the claude client ever rejected the extra field against the old schema, the in-session claim would fail and the session would end idle. The wrapper's own pre-flight claim (no flag) then claims normally.\n  - So ask the governor to restage the daemon after this lands.\n- Error handling: no new throw path, and the claim refusals' order is unchanged.\n- No forbidden pattern in the diff, and every DoD item maps to a passing test or grep.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "scripts/mods/moe-account-switch/hooks/register.ts"
-      ]
+      ],
+      "note": "Review only, no edits. Checked: (1) Concurrency: the check runs inside the claim's runExclusive and returns before any write, so two in-session claims serialize and the switch answer leaves nothing half-written. (2) `grep -n acceptsAccountSwitch scripts/moe-agent.sh scripts/moe-agent.ps1` prints nothing, so the pre-flight claim never sends the flag. (3) The governor redirect returns before the check (test f). (4) Strict `=== true`: a string 'true' or a missing flag claims as before. A lease with no worker record: getWorker is undefined, so idleSwitchFor reaches accountSwitchFor and the seat is switched. No lease, a missing or unreadable registry (loadRegistry try/catch → registry null), or no other eligible account all return null and the claim proceeds (test e). (5) A resume or a held task: blockingHold returns first, and idleSwitchFor is null while currentTaskId is set (test d). (6) An explicit taskId is switched like a ranked claim (test a asserts both). (7) No new throw path; ATTEMPT_FINALIZING (own) keeps precedence. The task-scoped finalizing/reconciling/profile refusals live in the claim branch after the check, so a seat due to switch never reaches them. That is correct: it claims nothing. (8) No forbidden pattern in the diff. `Record<string, any>` in the test helper matches the file's existing helpers (:161, :250, :253). (9) DoD: 1 → accountTools cases a/b/d (+c/e/f); 2 → grep shows claim_next_task in MARKED :48 and SIGNALS :50, and the mod test reaches /exit after EXIT_DELAY_MS; 3 → grep shows the flag at MCP_SERVER.md :1459/:1471 in the claim_next_task section, and the snapshot vitest passed. Rollout risk (noted for the governor): if the claude client validated hook-added input against the OLD daemon's additionalProperties:false schema, a flagged in-session claim would fail before the swap. The worst case is an idle session end, after which the wrapper's unflagged pre-flight claim works normally.",
+      "startedAt": "2026-11-04T08:24:01.428Z",
+      "completedAt": "2026-11-04T08:24:42.795Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -97,12 +102,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:30.209Z",
-  "updatedAt": "2026-11-04T08:23:20.442Z",
+  "updatedAt": "2026-11-04T08:25:15.274Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:06:23.667Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -115,7 +120,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:11:09.562Z",
@@ -186,8 +193,11 @@
     }
   ],
   "filesModified": [
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
     "packages/moe-daemon/src/tools/accountTools.test.ts",
-    "packages/moe-daemon/src/tools/claimNextTask.ts"
+    "scripts/mods/moe-account-switch/hooks/register.ts",
+    "scripts/mods/moe-account-switch/hooks/register.test.ts",
+    "docs/MCP_SERVER.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -195,5 +205,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-a0305b0b@2026-11-04T08:13:15Z",
     "at": "2026-11-04T08:18:11.830Z"
-  }
+  },
+  "reviewStartedAt": "2026-11-04T08:25:15.272Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npx vitest run src/tools/accountTools.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts src/tools/workerType.test.ts src/tools/chatWait.test.ts src/tools/submitPlan.test.ts) && env -i PATH=\"$PATH\" HOME=\"$HOME\" CLAUDE_CONFIG_DIR=\"$(mktemp -d)\" claude plugin test scripts/mods/moe-account-switch",
+    "exitCode": 0,
+    "outputTail": "vitest (packages/moe-daemon):\n Test Files  6 passed (6)\n      Tests  348 passed (348)\nclaude plugin test scripts/mods/moe-account-switch:\n(pass) a claim answered with a switch claims nothing more and ends the session after the turn\n(pass) without a leased account a claim carries no acceptsAccountSwitch\n...\n(pass) a turn with every window below 100% gets no exit, PID read or termination [16.48ms]\n\n 94 pass\n 0 fail\nRan 94 tests across 1 file. [2.84s]\nexit=0\n(Run from snapshot /tmp/moe-d27e-verify.aNMJVo = git archive of worktree HEAD 52550917 + the 3 uncommitted files, cmp-identical. Quality gate `bash scripts/tests/parity-check.sh && npm run lint` in the same snapshot: exit 0.)",
+    "reportedAt": "2026-11-04T08:25:15.272Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "claim_next_task now answers a due between-task Claude account switch, so an interactive architect whose row ended without submit_plan (e.g. archive_task on a hunt row) no longer claims its next row on the spent account.\n- Daemon (claimNextTask.ts): new optional acceptsAccountSwitch (ACCEPTS_ACCOUNT_SWITCH). A flagged seat holding no task that idleSwitchFor says must switch gets {hasNext:false, accountSwitch} (accountSwitchReply; the instruction starts 'ACCOUNT-SWITCH:' and ends 'Claim nothing more and end your turn now: Moe restarts this seat on <to>, and the new session claims the next task.'). It carries no nextAction and writes nothing: no assignment, attempt or worker change.\n  - The check runs after the governor redirect, alreadyAssigned/resume and the own ATTEMPT_FINALIZING refusal, and before any ranking or write.\n  - Unflagged calls (the wrapper pre-flight, headless seats, IDE) are unchanged.\n  - Tests in accountTools.test.ts: switch with ranked AND explicit taskId, no-flag, under-threshold, a seat holding a task (alreadyAssigned identical to no-flag), no lease, governor.\n- Mod (register.ts): claim_next_task joins MARKED and SIGNALS (it stays HELD). Two register.test.ts cases.\n- docs/MCP_SERVER.md: the claim_next_task section (param, **Account switch** paragraph, Returns line) and the Claude Account Rotation sentence.\n- Red runs recorded in the step 1 and 2 notes.\nROLLOUT, for the governor: the mod part is live once it lands (scripts/ is hot through moe/control). The daemon part goes live only after a daemon swap, so please restage the daemon.\n- Until the swap the old daemon ignores the flag (McpAdapter passes args unvalidated).\n- If claude ever validated the hook-added field against the old schema, an in-session claim would fail and the session would end idle. The wrapper's unflagged pre-flight claim then works.\nFOLLOW-UP: task-a160251a (LOW, dependsOn this task) syncs scripts/CLAUDE.md, packages/moe-daemon/CLAUDE.md and the idleSwitchFor comment, which sti"
 }

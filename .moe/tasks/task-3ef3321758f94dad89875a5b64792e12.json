@@ -80,7 +80,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -93,16 +93,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:58:35.668Z",
-  "updatedAt": "2026-11-04T08:23:23.077Z",
+  "updatedAt": "2026-11-04T08:25:32.440Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:09:10.293Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T08:25:32.437Z",
+    "wallClockMs": 982144
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -232,5 +235,9 @@
     "reportedAt": "2026-11-04T08:22:27.205Z",
     "source": "agent-reported"
   },
-  "completionSummary": "The managed block that scripts/moe-serena-ignore.mjs keeps in .serena/project.local.yml now also carries ignored_memory_patterns: project.yml's own list plus _archive/.*, deduped, so QA-archived memories stay hidden in every Moe project, not only in this checkout's hand-edited project.yml. Serena replaces a whole key from project.local.yml, so the block merges the two lists. A user's own ignored_memory_patterns outside the block (plain, quoted or BOM-led) is left byte-identical and the block then omits that key but stays (no duplicate YAML key). An unreadable project.yml list also emits no key; ignored_paths is still written. OWN_KEY is unchanged, so only MOE_SERENA_IGNORE_OVERRIDE=0, a user ignore_all_files_in_gitignore or a user ignored_paths remove the block. Code: exported parseStringSequence(text, key) (parseIgnoredPaths delegates, U3 rows unchanged), renderBlock(patterns, memoryPatterns = null) over one renderList, memoryPatterns(yml, user) in main(), updated WHY and header comments; still node: builtins only. Tests: new U5, U6, F8, F9 rows and an updated EXPECTED literal. docs/MEMORY.md hunks :80 (the launcher block is the source of the hiding, read archived files with Read or cat, the phrase read_file still reads is gone), :139 and :143 (the new key and its opt-out); :86 and docs/skills untouched. Beyond the plan's tests, the written project.local.yml was parsed with Serena's own ruamel.yaml: no duplicate key, regexes round-trip, and the merged list was correct for the empty, user-key, anchored-list and BOM+CRLF cases. One test fix: a bare y is a YAML 1.1 boolean the parser refuses by design, so the U5 row uses [w] and a new row pins [y] to null. Quality gate commands (parity-check.sh, npm run lint) pass."
+  "completionSummary": "The managed block that scripts/moe-serena-ignore.mjs keeps in .serena/project.local.yml now also carries ignored_memory_patterns: project.yml's own list plus _archive/.*, deduped, so QA-archived memories stay hidden in every Moe project, not only in this checkout's hand-edited project.yml. Serena replaces a whole key from project.local.yml, so the block merges the two lists. A user's own ignored_memory_patterns outside the block (plain, quoted or BOM-led) is left byte-identical and the block then omits that key but stays (no duplicate YAML key). An unreadable project.yml list also emits no key; ignored_paths is still written. OWN_KEY is unchanged, so only MOE_SERENA_IGNORE_OVERRIDE=0, a user ignore_all_files_in_gitignore or a user ignored_paths remove the block. Code: exported parseStringSequence(text, key) (parseIgnoredPaths delegates, U3 rows unchanged), renderBlock(patterns, memoryPatterns = null) over one renderList, memoryPatterns(yml, user) in main(), updated WHY and header comments; still node: builtins only. Tests: new U5, U6, F8, F9 rows and an updated EXPECTED literal. docs/MEMORY.md hunks :80 (the launcher block is the source of the hiding, read archived files with Read or cat, the phrase read_file still reads is gone), :139 and :143 (the new key and its opt-out); :86 and docs/skills untouched. Beyond the plan's tests, the written project.local.yml was parsed with Serena's own ruamel.yaml: no duplicate key, regexes round-trip, and the merged list was correct for the empty, user-key, anchored-list and BOM+CRLF cases. One test fix: a bare y is a YAML 1.1 boolean the parser refuses by design, so the U5 row uses [w] and a new row pins [y] to null. Quality gate commands (parity-check.sh, npm run lint) pass.",
+  "completedAt": "2026-11-04T08:25:32.437Z",
+  "reviewCompletedAt": "2026-11-04T08:25:32.437Z",
+  "reviewSummary": "Reviewed completion e575ececc (kind=completion, pushed, on moe/work-2026-10-24). 3 files, +181/-19 (net 162), within approvedScope: docs/MEMORY.md :80/:139/:143 only (:86 and docs/skills untouched), moe-serena-ignore.mjs, serena-ignore.test.mjs.\n\nRe-ran in a git-archive snapshot outside the repo: `node --test scripts/tests/serena-ignore.test.mjs && ! grep -q 'read_file` still reads' docs/MEMORY.md` -> 51/51, exit 0, grep -c = 0 (DoD 3). qualityGate: parity-check.sh PASS, npm run lint OK.\n\nDoD 1: F8 rows (empty list -> ['_archive/.*'], [x] -> [x,'_archive/.*'], already-present kept once) parse the written file back and assert exactly one memory key; EXPECTED literal pins the block bytes. DoD 2: F9 rows keep a user's plain/quoted/BOM-led/indented ignored_memory_patterns byte-identical, block still written without the key, one key in file; unreadable project.yml list (alias, unquoted regex, bare dash, continuation, duplicate key) emits no key while ignored_paths is written; user ignored_paths still removes the block (OWN_KEY unchanged). U5 asserts parseIgnoredPaths equals parseStringSequence on every U3 input; F7 keeps node: builtins only.\n\nIndependent checks: ran the script on a fresh fixture (project.yml memory list ['^keep-.*']) and parsed project.local.yml with Serena's own ruamel.yaml (duplicates disallowed): no duplicate key, merged ['^keep-.*','_archive/.*'], second run 'up to date'. Mutation-checked on a scratch snapshot: no archive append (9 fail), no user-key opt-out (7), emit key on unreadable list (11), memory key in OWN_KEY (7); all killed, restored 51/51.\n\nComplexity: nothing to cut. Not verified live: Serena MemoryManager list_memories on the written file (covered by the ruamel parse plus the whole-key-replace reading in the plan).",
+  "requiredCheckAtDone": null
 }

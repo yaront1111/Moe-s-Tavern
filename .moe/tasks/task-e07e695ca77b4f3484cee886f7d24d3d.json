@@ -42,25 +42,34 @@
     {
       "stepId": "step-3",
       "description": "VERIFY (DoD 3), once. From the task worktree root, run the plan's checkRef verbatim (text also at /mnt/d/moe-scratch/plan-e07e695c/checkref-gate.txt). Its fresh output is the complete_task verification evidence. What it does:\n- `git archive HEAD` of the WHOLE repo into /tmp/me07.XXXX (mem:gotcha-vscode-tests-need-full-repo-snapshot), then overlays this row's two files from the worktree, since uncommitted bytes are not in HEAD;\n- Linux-native `npm ci`, so `npm run compile` resolves TS7 (mem:gotcha-vscode-gate-from-wsl);\n- `npx eslint src/services/MoeDaemonClient.ts`, `npm test`, `npm run compile`;\n- RED: the merge-base MoeDaemonClient.ts against the new test. Exactly H1-H5 and L1-L3 fail, and M1-M5 pass.\nIt never runs npm in the shared checkout.\n\nWhole-tree `npm run lint` is NOT part of the gate. It already fails at the base on src/panels/SettingsPanel.ts:73 (no-useless-escape, from a000b817), which is outside this row, so the gate lints only the touched file.\n\nThe architect's dry run of this exact command at 3747c474 plus the prototype exited 0: 798 tests, 788 pass, 0 fail, 10 skipped. Expect about that. The run leaves /tmp/me07.XXXX behind: list /tmp/me07.* before and after, then rm -rf the literal new path. If it fails, it prints the snapshot path and the log tail; fix the cause and re-run it in full.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
       ],
-      "startedAt": "2026-11-04T08:23:19.323Z"
+      "note": "Ran the plan's checkRef verbatim from the worktree root: GATE_EXIT=0. In the /tmp/me07.N0wB git-archive snapshot it did npm ci, eslint on src/services/MoeDaemonClient.ts, npm test (tests 798, pass 788, fail 0, skipped 10), npm run compile, then the RED leg with the merge-base MoeDaemonClient.ts: exactly H1, H2, H3, H4, H5, L1, L2, L3 not ok, and M1-M5 ok. Matches the architect's dry run. Whole-tree npm run lint was not part of the gate, per the plan: it already fails at base on SettingsPanel.ts:73. Removed /tmp/me07.N0wB by its literal path (no me07.* was present before the run).",
+      "startedAt": "2026-11-04T08:23:19.323Z",
+      "completedAt": "2026-11-04T08:23:46.066Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an attacker who writes .moe/daemon.json, answers /health on the port, or sends STATE_SNAPSHOT, and as an unlucky user on Windows or macOS:\n- Can any of those three values make the extension host touch a UNC, device or // path, resolve a relative path against its own cwd, or wait on a hung mount for a spelling that already matches? Only isFullyQualified, non-doubled spellings may reach realpath, and only after pathsMatch says no.\n- Does a non-string projectPath or rootPath (42, [], {}) behave exactly as before at every site?\n- Do two distinct folders, a dangling link, a missing path and a Windows trailing-dot spelling all keep the spelling verdict, never a false 'same'?\n- Are all five sites converted (grep `pathsMatch(` in the file: only pathsMatch's own body and isSameProject may call it)? Are pathsMatch and comparableProjectPath byte-identical to the base?\n- Does protected admission (probeSpawnProof -> classifyIdentity) still require the spawn-proof HMAC? projectStateKey is already realpath-keyed, so a linked spelling must not unlock anything the HMAC refuses.\n- Is the cost acceptable? realpath runs only on a spelling mismatch: two syscalls per STATE_SNAPSHOT for a linked workspace.\n- Test hygiene: no listener, socket, timer or temp dir left (t.after); skips only on symlink EPERM/EACCES and H4's cross-drive case; every regression is an assertion failure. For a mutation check, /mnt/d/moe-scratch/plan-e07e695c/mutants.py applies 9 scratch-copy mutants (`python3 -I mutants.py <fixed.ts> <name> <out.ts>`). Run it only on a copy outside the repo, never on the worktree file.\nIf anything changes, re-run the step-3 command and use that fresh output for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/daemon-symlink-project.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-symlink-project.test.cjs"
+      ],
+      "note": "Adversarial self-review done, no code change, so step-3's gate output stands.\n- Hostile spellings: only isFullyQualified (host semantics) and non-doubled-separator spellings reach realpath, and only after pathsMatch says no. UNC, device, // and relative forms return false (H4, H5 pin them; mutants nounc and noabs are killed by H5 and H4).\n- Non-string projectPath/rootPath: pathsMatch runs first and comparableProjectPath calls .trim(), so 42, [] and {} throw the same TypeError into each caller's existing catch before isFullyQualified is reached. classifyIdentity and offLoopbackBindRefusal already typeof-guard.\n- Distinct folders, missing path, dangling link: realpath failure returns null, so the verdict is the spelling verdict (false). Equal canonical paths cannot be two different folders. A Windows trailing-dot spelling fails realpath with ENOENT (namespaced fs), so it falls back to false, per mem:gotcha-windows-node-namespaced-realpath. The M rows pin the distinct-folder verdicts.\n- Sites: grep shows pathsMatch( only in its own body and isSameProject. pathsMatch, comparableProjectPath and isAbsoluteAnyOs are untouched. No new import.\n- Protected admission: a linked spelling only yields identity 'same'. protectedAdmissionRefusal still verifies the spawn-proof HMAC against the realpath-keyed projectKey record, so nothing is unlocked that the HMAC refuses.\n- Accepted theoretical risk: realpath is a synchronous call, so a hostile /health or STATE_SNAPSHOT naming an absolute path on a hung mount could stall the extension host once. It runs only on a spelling mismatch, JetBrains' canonicalPath has the same property, and pathForms/isOutsideProject here already realpath candidate paths. Cost is two syscalls per STATE_SNAPSHOT for a linked workspace.\n- Test hygiene: servers, sockets and temp dirs are released in t.after, skips happen only on symlink EPERM/EACCES and H4's cross-drive case, and every regression is an assertion failure.\n- Mutation check (scratch copies under /tmp, removed after): s184 killed by L1 L2; s1576 L1 L2; s1656 L1 L2; s268 L3; s1861 L1 L2; nounc H5; noabs H4; onesided H1 L1 L3; alwaysreal H2 H3 M1-M5. All 9 died by ERR_ASSERTION.",
+      "startedAt": "2026-11-04T08:23:48.617Z",
+      "completedAt": "2026-11-04T08:25:04.469Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5772dacf",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -79,12 +88,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:57:42.392Z",
-  "updatedAt": "2026-11-04T08:23:19.323Z",
+  "updatedAt": "2026-11-04T08:25:29.330Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T07:57:48.048Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -96,7 +105,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:18:27.518Z",
@@ -169,5 +180,18 @@
     "sessionId": "architect-67c762f6@2026-11-04T07:57:46Z",
     "at": "2026-11-04T08:19:26.358Z"
   },
-  "workStartedAt": "2026-11-04T08:21:54.931Z"
+  "workStartedAt": "2026-11-04T08:21:54.931Z",
+  "reviewStartedAt": "2026-11-04T08:25:29.328Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/me07.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && P=src/services/MoeDaemonClient.ts && Q=tests/daemon-symlink-project.test.cjs && cp \"$R/moe-vscode/$P\" $P && cp \"$R/moe-vscode/$Q\" $Q && git -C \"$R\" show \"$B:moe-vscode/$P\" > ../base.ts && ! cmp -s ../base.ts $P && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" P=$P Q=$Q bash -c 'umask 022; npm ci --no-audit && npx eslint $P && npm test && npm run compile && { cp ../base.ts $P; node --test --test-reporter=tap $Q > ../red.log 2>&1; true; }' > ../v.log 2>&1 || { echo \"$L\"; tail -30 ../v.log; exit 1; }; grep -a '^ℹ [tpfs]' ../v.log && N=$(grep '^not ok' ../red.log) && echo \"RED: $N\" && [ $(grep -c ' - L[1-3] ' <<<\"$N\") = 3 ] && ! grep -v ' - [HL][1-5] ' <<<\"$N\" && [ $(grep -c '^ok [0-9]* - M[1-5] ' ../red.log) = 5 ] )",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 798\nℹ suites 0\nℹ pass 788\nℹ fail 0\nℹ skipped 10\nℹ todo 0\nRED: not ok 1 - H1 link and real spellings are one project in both directions\nnot ok 2 - H2 distinct existing folders stay apart\nnot ok 3 - H3 unresolvable paths fall back to the spelling rule\nnot ok 4 - H4 a relative spelling is never resolved\nnot ok 5 - H5 a doubled-separator spelling is never resolved\nnot ok 6 - L1 a workspace opened through a link keeps and connects to its live daemon\nnot ok 7 - L2 a daemon started through a link keeps and connects to its live daemon\nnot ok 12 - L3 a link to a live off-loopback daemon is refused, not respawned\nGATE_EXIT=0",
+    "reportedAt": "2026-11-04T08:25:29.328Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/daemon-symlink-project.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "completionSummary": "VS Code now treats a workspace opened through a symlink/junction as the same project as its live daemon. New export isSameProject(a, b) in moe-vscode/src/services/MoeDaemonClient.ts sits right after pathsMatch: pathsMatch first, then equal fs.realpathSync.native paths (via realPathOrNull), reached only when both spellings are isFullyQualified and not doubled-separator (no UNC, device, // or relative spelling ever reaches realpath). Any realpath failure falls back to the spelling verdict. It replaces pathsMatch at exactly five sites: classifyIdentity (/health), offLoopbackBindRefusal (added by task-c203c09a after this row was filed), getDaemonInfo, ensureDaemonRunning and the STATE_SNAPSHOT case. pathsMatch, comparableProjectPath and isAbsoluteAnyOs are unchanged and no import was added. New moe-vscode/tests/daemon-symlink-project.test.cjs has 13 rows: H1-H5 (helper), L1-L3 (link rows) and M1-M5 (distinct folders). RED at the merge-base: exactly H1-H5 and L1-L3 fail and M1-M5 pass. L1/L2 also fail against 3cd256eb's source (DoD 1). Gate run in a git-archive snapshot outside the shared checkout: eslint on the touched file, npm test 798 tests / 788 pass / 0 fail / 10 skipped, npm run compile exit 0. 9 scratch mutants (each of the five sites, the UNC clause, the absolute clause, one-sided realpath, always-true) are all killed by assertions. The qualityGate (parity-check.sh && npm run lint) exited 0. Whole-tree moe-vscode lint is not in the gate: it already fails at base on SettingsPanel.ts:73 (a000b817), outside this row. Accepted risk: realpath is synchronous, so a hostile /health could name a path on a hung mount once; it runs only on a spelling mismatch, as in JetBrains' canonicalPath."
 }

@@ -13,20 +13,27 @@
     {
       "stepId": "step-1",
       "description": "TDD: write the guard first (mem:gotcha-node-test-windows-path-glob). Append ONE top-level test to scripts/tests/usage-receipt.test.mjs titled 'G1: the prompt-cache tests and the onboarding smoke never append to an inherited live usage receipt' (the gate greps '^✔ G1: '). Body:\n- dir = mkdtempSync(...) with t.after(rmSync); file = path.join(dir, 'receipt.jsonl'); env = { ...process.env, MOE_USAGE_RECEIPT_FILE: file, MOE_USAGE_CONTEXT_JSON: JSON.stringify({ ...context, taskId: 'task-guard' }) }; then `delete env.NODE_TEST_CONTEXT` (node:test sets it in every file process, and a nested `node --test` that inherits it reports to the parent instead of running: local-runner.test.mjs:3700-3703 does the same).\n- Launch line: spawnSync(process.execPath, [helper, 'usage-start', 'claude'], { env, encoding: 'utf8' }) exits 0; before = readFileSync(file); assert it holds exactly one line.\n- Two children, each spawnSync with { cwd: the repo root (fileURLToPath(new URL('../..', import.meta.url))), env, encoding: 'utf8', timeout: 600_000, windowsHide: true }: [process.execPath, '--test', '--test-reporter=tap', 'scripts/tests/prompt-cache.test.mjs', 'scripts/tests/prompt-cache-launcher.test.mjs'] and [process.execPath, 'scripts/tests/onboarding.mjs']. Pass repo-relative forward-slash paths, never absolute ones: node --test globs its arguments on Windows, where a backslash is a glob escape.\n- Error handling, never a skip: assert.equal(child.status, 0, msg) where msg names the args, child.signal and the last 4000 chars of stdout+stderr, so a failing child, a timeout (status null) or a missing build (onboarding's 'Build moe-daemon first') fails G1 loudly. Also assert the tap run printed '# fail 0' and a '# pass N' line with N >= 1 (a run with no summary did not run), and onboarding printed a line starting 'PASS onboarding:'.\n- After both children: assert.deepEqual(readFileSync(file), before), with the appended text (readFileSync(file, 'utf8').slice(before.length)) in the message.\n- One comment line: G1 needs the built daemon and proxy because onboarding.mjs does; CI's build-all-platforms job builds both (ci.yml:222-231) before the step that runs this file (ci.yml:267).\nLeave every existing test in the file unchanged. Then run the checkRefs command once for RED: it must fail with G1 failing on the receipt assertion (at base the two prompt-cache files append 7 fixture rows) and the hunt repro failing. Record that RED in the completion summary.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/usage-receipt.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/usage-receipt.test.mjs"
+      ],
+      "note": "G1 added. RED at base: G1 fails on 'receipt grew by' (codex fixture row appended), hunt repro fails (added = 4 fixture rows); pass 53 fail 2.",
+      "startedAt": "2026-11-04T08:25:07.181Z",
+      "completedAt": "2026-11-04T08:25:51.342Z"
     },
     {
       "stepId": "step-2",
       "description": "The fix, test side only (governor comment-c35a995f: no scripts/moe-agent.* edit, no logs/ rewrite; the wrapper side is task-cd3887fe). In each of scripts/tests/prompt-cache.test.mjs, scripts/tests/prompt-cache-launcher.test.mjs and scripts/tests/onboarding.mjs, right after the import block and BEFORE any test() registration or child process (mem:gotcha-node-test-top-level-await-ends-root-early: a selected test can start while later module statements still evaluate), add:\n  // The launcher exports the seat's live usage receipt to every child; this file's fixture provider streams must never append to it (task-03418dc2).\n  delete process.env.MOE_USAGE_RECEIPT_FILE;\n  delete process.env.MOE_USAGE_CONTEXT_JSON;\nModule top level runs before node:test starts any registered test and before onboarding.mjs's bundle-mode codex-stream at :52, so every spawn in each file, present or future, inherits a clean environment: prompt-cache.test.mjs :75/:86/:95 pass no env, prompt-cache-launcher.test.mjs :366-368 spreads process.env, onboarding.mjs :52 passes none. Remove only these two keys; onboarding.mjs:65 already strips every MOE_* key for the daemon and proxy and stays as it is. Deleting an absent key is a no-op, so the files behave the same with or without the variables set; no other error handling is needed. Re-run the checkRefs command: G1 and the hunt repro now pass.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/prompt-cache.test.mjs",
         "scripts/tests/prompt-cache-launcher.test.mjs",
         "scripts/tests/onboarding.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:25:52.198Z"
     },
     {
       "stepId": "step-3",
@@ -43,7 +50,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-593560ee",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -62,21 +69,25 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:50.128Z",
-  "updatedAt": "2026-11-04T08:17:47.407Z",
+  "updatedAt": "2026-11-04T08:25:52.198Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:08:47.436Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-2a219562"
+    "architect-2a219562",
+    "worker-593560ee"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:17:47.374Z",
   "executionContract": {
@@ -146,5 +157,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T08:17:47.407Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:25:07.181Z"
 }

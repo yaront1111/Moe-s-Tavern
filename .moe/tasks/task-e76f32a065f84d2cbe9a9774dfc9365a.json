@@ -71,8 +71,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T21:02:55.403Z",
-  "updatedAt": "2026-11-04T06:55:20.445Z",
+  "updatedAt": "2026-11-04T08:25:58.866Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:03:54.168Z",
@@ -97,7 +97,9 @@
     "firstClaimAt": "2026-11-03T21:19:33.768Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:25:23.840Z",
+    "wallClockMs": 39950072
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -178,10 +180,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T22:20:51.791Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T06:52:49Z",
-    "at": "2026-11-04T06:54:59.896Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T06:55:05Z",
+    "at": "2026-11-04T08:25:58.866Z"
   },
   "commits": [
     {
@@ -229,5 +232,9 @@
     "reportedAt": "2026-11-04T06:54:12.623Z",
     "source": "agent-reported"
   },
-  "completionSummary": "The postflight fake's get_commit_scope now applies the finalizing-holder exemption task-7d3428d1 landed in the daemon (getCommitScope.ts:241). A caller joins activePeerIds only when it is neither the assignee nor the holder of this task's well-formed finalizing attempt. The attempts scan is hoisted out of the FAKE_SCOPE_FINALIZING if-block, so the exemption applies in every mode while the served finalizingAttempt field behaves as before. The FAKE_SCOPE_ASSIGNEE doc lines are updated.\n\nTests (f1)-(f4) are appended to postflight-owner-scope.test.mjs:\n- (f1) holder, no assignee: activePeerIds [] and peersActive false, with FAKE_SCOPE_FINALIZING unset and 'computed'.\n- (f2) a non-holder stays an orphan peer.\n- (f3) a hold on another task, or a record isHoldingFinalizingAttempt rejects, exempts nobody.\n- (f4) the exempt holder still counts a real live peer.\n\nRED-AT-BASE (tests against 5592bcc0's fake): tests 17, pass 15, fail 2, failing (f1) and (f4); the gate printed RED-AT-BASE.\nGREEN: unit tests 17/17, parity-check, and the full bash postflight.sh and postflight.ps1 (PS 5.1) both print PASS, EXIT=0. Owner guard rows finalizing-own and sequential pass in both legs.\nMutant: exempting on !named fails (f2).\n\nOut of scope, for the governor: .github/workflows/ci.yml does not run postflight-owner-scope.test.mjs, and has not since 9a9b46d8."
+  "completionSummary": "The postflight fake's get_commit_scope now applies the finalizing-holder exemption task-7d3428d1 landed in the daemon (getCommitScope.ts:241). A caller joins activePeerIds only when it is neither the assignee nor the holder of this task's well-formed finalizing attempt. The attempts scan is hoisted out of the FAKE_SCOPE_FINALIZING if-block, so the exemption applies in every mode while the served finalizingAttempt field behaves as before. The FAKE_SCOPE_ASSIGNEE doc lines are updated.\n\nTests (f1)-(f4) are appended to postflight-owner-scope.test.mjs:\n- (f1) holder, no assignee: activePeerIds [] and peersActive false, with FAKE_SCOPE_FINALIZING unset and 'computed'.\n- (f2) a non-holder stays an orphan peer.\n- (f3) a hold on another task, or a record isHoldingFinalizingAttempt rejects, exempts nobody.\n- (f4) the exempt holder still counts a real live peer.\n\nRED-AT-BASE (tests against 5592bcc0's fake): tests 17, pass 15, fail 2, failing (f1) and (f4); the gate printed RED-AT-BASE.\nGREEN: unit tests 17/17, parity-check, and the full bash postflight.sh and postflight.ps1 (PS 5.1) both print PASS, EXIT=0. Owner guard rows finalizing-own and sequential pass in both legs.\nMutant: exempting on !named fails (f2).\n\nOut of scope, for the governor: .github/workflows/ci.yml does not run postflight-owner-scope.test.mjs, and has not since 9a9b46d8.",
+  "completedAt": "2026-11-04T08:25:23.840Z",
+  "reviewCompletedAt": "2026-11-04T08:25:23.840Z",
+  "reviewSummary": "Reviewed completion 9d5c8924 (on moe/work-2026-10-24, contained in HEAD; +66/-22, 2 files, net 44 LOC, under the cap). Diff read against getCommitScope.ts:241 (395172f0): the fake's orphanCaller now also requires named?.workerId !== args.workerId. The .moe/attempts scan is hoisted out of the FAKE_SCOPE_FINALIZING block, so the exemption holds in every mode while the served finalizingAttempt (unset omits, null, computed, malformed) is unchanged. The scan keeps its try/catch, so it cannot throw. Scope matches approvedScope: only get_commit_scope's doc lines, scan and orphanCaller, plus the appended (f1)-(f4); no existing test line changed.\nRe-ran verification.command verbatim from a fresh git archive HEAD snapshot (files cmp-matched): EXIT=0. Unit file 17/17 pass; parity-check.sh PASS; full postflight.sh PASS (frozen 106, owner guard 16, migration 12, vm-route PASS); full postflight.ps1 under Windows PowerShell 5.1 PASS (frozen 106, owner guard 16, migration 11, vm-route PASS). Owner-guard finalizing-own and sequential ran and passed in both legs.\nRED-AT-BASE re-run against 5592bcc0's fake: tests 17, pass 15, fail 2, exactly (f1) and (f4) fail; gate printed RED-AT-BASE. My own mutant (orphanCaller exempts on !named) is killed by (f2): pass 16, fail 1.\nDoD 1 (holder, no assignee: peersActive false) and DoD 2 (f1)-(f4) plus both harnesses verified. Scratch removed. Not verified: ci.yml does not run postflight-owner-scope.test.mjs (out of scope, already flagged by worker for the governor). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
