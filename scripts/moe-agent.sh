@@ -6510,7 +6510,7 @@ print(d["candidateId"]); print("1" if d.get("profile")=="verified-local" else "-
 
 # receipt_journal_fields JOURNAL -- the replay's fields of a well-formed journal,
 # \x1f-separated (owed is 1 while it owes a ledger row; the last, wt, is a worktree
-# journal's publicationMode, local or remote: no candidate, and its ledger is the
+# journal's publicationMode, local or remote: no candidate unless strong, and its ledger is the
 # exact committed row); 1 when malformed. The optional `ledger` must be {sessionId,
 # role, status?} inside the bounds moe.record_commit takes.
 # Twin: Invoke-MoeReceiptReplay's check + Test-MoeOwedLedger.
@@ -6531,7 +6531,8 @@ ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z
     and (l is None or (isinstance(l,dict) and all(isinstance(l.get(k),str) and l[k].strip() and len(l[k])<=n
         for k,n in (('sessionId',255),('role',64))) and (l.get('status') is None or isinstance(l['status'],str)))))
 strong=d.get('profile')=='verified-local'
-if not ok or (strong and not (isinstance(d.get('treeSha'),str) and rev.fullmatch(d['treeSha']))): sys.exit(1)
+if not ok or (strong and not (isinstance(d.get('treeSha'),str) and rev.fullmatch(d['treeSha'])
+    and isinstance(d.get('candidateId'),str) and ids.fullmatch(d['candidateId']))): sys.exit(1)
 print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['targetBefore'],'' if l is None else '1',
     '1' if strong else '',d['treeSha'].lower() if strong else '',pm if wt else '']))
 PY
@@ -6704,7 +6705,8 @@ receipt_replay() {
             report=$($PYTHON_CMD -c 'import json,sys;d=json.load(open(sys.argv[1],encoding="utf-8"));d.pop("ledger",None);print(json.dumps(d))' "$f" 2>/dev/null) || report=""
             receipt_journal_write "$f" "$report"
         fi
-        [ -n "$wt" ] || receipt_send "$(cat "$f")" "$f" || continue
+        # A worktree journal sends a receipt only under the strong profile (CQ-M07t).
+        [ -n "$wt" ] && [ -z "$strong" ] || receipt_send "$(cat "$f")" "$f" || continue
         phase=$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")
         if [ "$phase" = finalizing ]; then
             args=$(finalize_args "$tid" "$aid" "$gen" "$owner" landed "$landed") || continue
@@ -6716,7 +6718,7 @@ receipt_replay() {
         fi
         # CQ-V08b: a strong journal (kept past its accepted receipt) goes only
         # once its attempt is closed.
-        if [ -n "$strong" ] && [ -z "$wt" ] && [ "$phase" != closed ] && [ -e "$f" ]; then
+        if [ -n "$strong" ] && [ "$phase" != closed ] && [ -e "$f" ]; then
             echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: attempt $aid of task $tid is $phase, not closed; nothing finalized."
             continue
         fi
@@ -7589,15 +7591,19 @@ worktree_sync_branch() {
 
 # wt_journal_write PATH B C -- L8, the strict worktree journal: identity, target,
 # B, C, W, the task branch and the exact completion row it owes (no candidate,
-# no delivery receipt). 1 on any write, rename or read-back failure, and then no
-# journal describes C.
+# no delivery receipt). Under the strong profile (CQ-M07t) it also carries the
+# frozen candidate and CQ-V07's intent fields, for the delivery receipt; any of
+# them missing or malformed writes no journal. 1 on any write, rename or
+# read-back failure, and then no journal describes C.
 wt_journal_write() {
-    local report
+    local report strong=""
+    [ -z "${LAND_TASK_ID:-}" ] || ! strong_landing_task "$LAND_TASK_ID" || strong=1
     report=$($PYTHON_CMD - "$2" "$3" "$LAND_TASK_ID" "$WORKER_ID" "${MOE_ATTEMPT_ID:-}" "${MOE_ATTEMPT_GENERATION:-}" \
         "${MOE_SID:-$WORKER_ID@unknown}" "refs/heads/$LAND_BRANCH" "$MOE_WT_PATH" "refs/heads/$MOE_WT_BRANCH" "$ROLE" \
-        "${LAND_STATUS:-}" "${MOE_REL:-}" "$LAND_STAGED_FILE" "${LAND_WT_PUB:-local}" <<'PY' 2>/dev/null
+        "${LAND_STATUS:-}" "${MOE_REL:-}" "$LAND_STAGED_FILE" "${LAND_WT_PUB:-local}" \
+        "$strong" "${FROZEN_CANDIDATE_ID:-}" "${FROZEN_TREE:-}" "${PINNED_ATTEMPT_PLAN_REVISION:-}" <<'PY' 2>/dev/null
 import json,re,sys
-b,c,t,w,a,g,sid,target,wt,br,role,status,rel,staged,pm=sys.argv[1:]
+b,c,t,w,a,g,sid,target,wt,br,role,status,rel,staged,pm,strong,cand,tree,rev=sys.argv[1:]
 if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',a) or not re.fullmatch(r'[1-9][0-9]{0,15}',g): sys.exit(1)
 paths=[]
 for r in open(staged,'rb').read().decode('utf-8','surrogateescape').split('\0'):
@@ -7606,8 +7612,12 @@ for r in open(staged,'rb').read().decode('utf-8','surrogateescape').split('\0'):
 row=dict(taskId=t,outcome='committed',kind='completion',sha=c,ref=target,role=role,sessionId=sid,workerId=w,
     paths=paths[:500],inferredPaths=[],unattributedPaths=[],**({} if pm=='remote' else {'pushed':False}))
 if status: row['status']=status
-print(json.dumps(dict(taskId=t,workerId=w,attemptId=a,generation=int(g),sessionId=sid,workspaceMode='worktree',publicationMode=pm,
-    target=target,targetBefore=b,targetAfter=c,landedRevision=c,worktree=wt,taskBranch=br,ledger=row)))
+d=dict(taskId=t,workerId=w,attemptId=a,generation=int(g),sessionId=sid,workspaceMode='worktree',publicationMode=pm,
+    target=target,targetBefore=b,targetAfter=c,landedRevision=c,worktree=wt,taskBranch=br,ledger=row)
+if strong:
+    if not (re.fullmatch(r'[A-Za-z0-9_-]{1,128}',cand) and re.fullmatch(r'[0-9a-f]{40}',tree) and re.fullmatch(r'[1-9][0-9]{0,15}',rev)): sys.exit(1)
+    d.update(candidateId=cand,treeSha=tree,baseRevision=b,planRevision=int(rev),profile='verified-local')
+print(json.dumps(d))
 PY
     ) && intent_journal_write "$1" "$report" || return 1
     [ "$(cat "$1" 2>/dev/null)" = "$report" ] && return 0
@@ -7892,13 +7902,26 @@ if [ "$MIGRATION" = true ]; then run_migration_landing; exit 1; fi
 
 # wt_land_published W BRANCH JOURNAL -- L11-L12 once C is on the target (signals
 # deferred): sync BRANCH (best-effort), send the journal's exact completion row
-# and finalize_attempt landed; the journal goes once both answered.
+# and finalize_attempt landed; the journal goes once both answered. A strong
+# journal (its own profile verified-local, CQ-M07t) also sends its delivery
+# receipt between the two.
 wt_land_published() {
     local ok=true
     MOE_WT_COMPLETION=false
     echo -e "${GREEN}[OK]${NC} Landed task $LAND_TASK_ID on $LAND_BRANCH: $LAND_SHA ($LAND_N_PATHS paths)"
     git -C "$1" merge-base --is-ancestor "$LAND_SHA" "refs/heads/$2" 2>/dev/null || worktree_sync_branch "$1" "$2" "$LAND_SHA" || true
     if receipt_ledger_send "$3" "$LAND_SHA"; then LAND_RECORDED=true; else ok=false; fi
+    if $PYTHON_CMD -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1],encoding="utf-8")).get("profile")=="verified-local" else 1)' "$3" 2>/dev/null; then
+        # The receipt follows the row, as in the replay, so a lost row sends none. finalize_postflight
+        # defers while the receipt is unacknowledged (CQ-V08) and drops the journal only once the
+        # attempt is closed (CQ-V08b); otherwise the next pre-flight replays it.
+        RECEIPT_JOURNAL="$3"; RECEIPT_ACKED=""
+        [ "$ok" != true ] || receipt_send "$(cat "$3")" "$3" || true
+        finalize_postflight || true
+        [ ! -e "$3" ] || echo -e "${YELLOW}[WARN]${NC} receipt journal $3 kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it."
+        wt_release_signals
+        return
+    fi
     finalize_postflight || ok=false
     if [ "$ok" = true ]; then
         rm -f "$3"

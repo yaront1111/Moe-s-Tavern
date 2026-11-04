@@ -2307,7 +2307,7 @@ function Test-MoeOwedLedger($Ledger) {
         $Ledger.role -is [string] -and $Ledger.role.Trim() -and $Ledger.role.Length -le 64 -and
         ($null -eq $Ledger.status -or $Ledger.status -is [string]))
 }
-# A worktree landing's journal (WT-08 local, WT-09 remote): no candidate, and its
+# A worktree landing's journal (WT-08 local, WT-09 remote): no candidate unless strong, and its
 # ledger is the exact committed row. Twin: receipt_journal_fields' wt field.
 function Test-MoeWorktreeJournal($J) { return [bool]($null -ne $J -and $J.workspaceMode -ceq 'worktree' -and $J.publicationMode -cin 'local', 'remote') }
 # Is $J, read from the journal file named $Name, well formed? Twin: receipt_journal_fields.
@@ -2317,7 +2317,7 @@ function Test-MoeReceiptJournal([string]$GitDir, [string]$Name, $J) {
         (-not $wt -and [string]$J.candidateId -cnotmatch $id) -or [string]$J.attemptId -cnotmatch $id -or -not (Test-MoeGeneration $J.generation) -or
         -not $J.workerId -or -not $J.target -or [string]$J.targetBefore -notmatch $rev -or
         [string]$J.targetAfter -notmatch $rev -or [string]$J.landedRevision -notmatch $rev -or -not (Test-MoeOwedLedger $l) -or
-        ($J.profile -ceq 'verified-local' -and -not ($J.treeSha -is [string] -and $J.treeSha -match $rev)) -or
+        ($J.profile -ceq 'verified-local' -and -not ($J.treeSha -is [string] -and $J.treeSha -match $rev -and $J.candidateId -is [string] -and $J.candidateId -cmatch $id)) -or
         ($wt -and -not ($(if ($J.publicationMode -ceq 'remote') { $null -eq $l.pushed } else { $l.pushed -is [bool] -and -not $l.pushed }) -and
             [string]$l.sha -ceq [string]$J.targetAfter -and [string]$l.ref -ceq [string]$J.target -and
             [string]$l.taskId -ceq [string]$J.taskId -and $l.outcome -ceq 'committed' -and $l.kind -ceq 'completion' -and
@@ -2517,7 +2517,8 @@ function Invoke-MoeReceiptReplay {
                     }
                     $j.PSObject.Properties.Remove('ledger'); Write-MoeReceiptJournal $f.FullName $j
                 }
-                if (-not $wt -and -not (Send-MoeReceipt $f.FullName $j)) { continue }
+                # A worktree journal sends a receipt only under the strong profile (CQ-M07t).
+                if ((-not $wt -or $j.profile -ceq 'verified-local') -and -not (Send-MoeReceipt $f.FullName $j)) { continue }
                 $phase = Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId
                 if ($phase -ceq 'finalizing') {
                     $closed = Send-MoeEvidence 'finalize_attempt' ((Get-MoeJournalAttempt $j 'landed') + @{ landedRevision=$landedAs }) 3
@@ -2527,7 +2528,7 @@ function Invoke-MoeReceiptReplay {
                 # CQ-V08b: a strong journal (kept past its accepted receipt) goes only
                 # once its attempt is closed. Twin: receipt_replay.
                 $strong = $j.profile -ceq 'verified-local'
-                if ($strong -and -not $wt -and $phase -cne 'closed' -and (Test-Path -LiteralPath $f.FullName)) {
+                if ($strong -and $phase -cne 'closed' -and (Test-Path -LiteralPath $f.FullName)) {
                     Write-Host "[WARN] receipt journal $($f.FullName) kept: attempt $($j.attemptId) of task $($j.taskId) is $phase, not closed; nothing finalized." -ForegroundColor Yellow
                     continue
                 }
@@ -7197,9 +7198,12 @@ function Sync-MoeTaskBranch([string]$W, [string]$Branch, [string]$C, [string]$Ta
 
 # L8, the strict worktree journal: identity, target, B, C, W, the task branch
 # and the exact completion row it owes (no candidate, no delivery receipt).
+# Under the strong profile (CQ-M07t) it also carries the round's frozen
+# candidate $Frozen and CQ-V07's intent fields, for the delivery receipt; any of
+# them missing or malformed writes no journal.
 # $false on any write or read-back failure, and then no journal describes C.
 # Twin: wt_journal_write.
-function Write-MoeWorktreeJournal([string]$Path, [string]$Ref, [string]$B, [string]$C, [array]$Paths, [hashtable]$M, [bool]$Remote) {
+function Write-MoeWorktreeJournal([string]$Path, [string]$Ref, [string]$B, [string]$C, [array]$Paths, [hashtable]$M, [bool]$Remote, [hashtable]$Frozen, [string]$GitDir) {
     $g = $script:MoeAttemptGeneration
     if ([string]$script:MoeAttemptId -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or -not (Test-MoeGeneration $g)) { return $false }
     $row = [ordered]@{ taskId = $preflightTaskId; outcome = 'committed'; kind = 'completion'; sha = $C; ref = $Ref; role = $Role; sessionId = $M.Sid
@@ -7209,6 +7213,12 @@ function Write-MoeWorktreeJournal([string]$Path, [string]$Ref, [string]$B, [stri
     $j = [ordered]@{ taskId = $preflightTaskId; workerId = $WorkerId; attemptId = $script:MoeAttemptId; generation = $g; sessionId = $M.Sid
         workspaceMode = 'worktree'; publicationMode = $(if ($Remote) { 'remote' } else { 'local' }); target = $Ref; targetBefore = $B; targetAfter = $C; landedRevision = $C
         worktree = $script:MoeWtPath; taskBranch = "refs/heads/$($script:MoeWtBranch)"; ledger = $row }
+    if ($preflightTaskId -and (Test-MoeStrongLandingTask $preflightTaskId $GitDir)) {
+        $rev = [string]$script:PinnedAttemptPlanRevision
+        if (-not $Frozen -or [string]$Frozen.CandidateId -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or [string]$Frozen.Tree -cnotmatch '^[0-9a-f]{40}$' -or
+            $rev -cnotmatch '^[1-9][0-9]{0,15}$') { return $false }
+        $j.candidateId = [string]$Frozen.CandidateId; $j.treeSha = [string]$Frozen.Tree; $j.baseRevision = $B; $j.planRevision = [long]$rev; $j.profile = 'verified-local'
+    }
     if (-not (Write-MoeIntentJournal $Path $j)) { return $false }
     try { if ([IO.File]::ReadAllText($Path) -ceq ($j | ConvertTo-Json -Depth 5 -Compress)) { return $true } } catch {}
     Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
@@ -7451,7 +7461,7 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
         } finally { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
         $c = if ($ct.Rc -eq 0 -and $ct.Out.Count -gt 0) { ([string]$ct.Out[-1]).Trim() } else { '' }
         if ($c -cnotmatch $rev) { $L.Msg = "the completion commit was refused: $(@($ct.Out | Select-Object -Last 2) -join ' ')"; return $false }
-        if (-not (Write-MoeWorktreeJournal $journal $Ref $b $c @($paths | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel }) $Meta $L.Remote)) {
+        if (-not (Write-MoeWorktreeJournal $journal $Ref $b $c @($paths | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel }) $Meta $L.Remote $(if ($Settings.configuredGate) { $frozen } else { $null }) $Git.GitDir)) {
             $L.Msg = "the receipt journal $journal could not be written"; return $false
         }
         if ($env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
@@ -7547,9 +7557,11 @@ function Invoke-MoeMigrationLanding([string]$Br) {
 
 # L11-L12 once C is on the target (Ctrl+C deferred): sync the task branch
 # (best-effort), send the journal's exact completion row and finalize_attempt
-# landed; the journal goes once both answered. Twin: wt_land_published.
+# landed; the journal goes once both answered. A strong journal (its own
+# profile verified-local, CQ-M07t) also sends its delivery receipt between the
+# two. Twin: wt_land_published.
 function Complete-MoeWorktreeLanding([hashtable]$Res, [string]$Journal) {
-    $ok = $false
+    $ok = $false; $strong = $false
     try {
         $script:MoeWtCompletion = $false
         Write-Host "[OK] Landed task $preflightTaskId on $($Res.Branch): $($Res.Sha) ($($Res.PathCount) paths)" -ForegroundColor Green
@@ -7557,8 +7569,21 @@ function Complete-MoeWorktreeLanding([hashtable]$Res, [string]$Journal) {
         if ((Invoke-MoeGit -Top $w -GitArgs @('merge-base', '--is-ancestor', $Res.Sha, "refs/heads/$br")).Rc -ne 0) { Sync-MoeTaskBranch $w $br $Res.Sha $preflightTaskId | Out-Null }
         $j = [IO.File]::ReadAllText($Journal) | ConvertFrom-Json -ErrorAction Stop
         $ok = Send-MoeOwedLedgerRow $j $Res.Sha
+        $strong = $j.profile -ceq 'verified-local'
+        if ($strong) {
+            # The receipt follows the row, as in the replay, so a lost row sends none. Complete-MoePostflight
+            # defers while the receipt is unacknowledged (CQ-V08) and drops the journal only once the
+            # attempt is closed (CQ-V08b); otherwise the next pre-flight replays it.
+            $Res.ReceiptJournal = $Journal; $Res.ReceiptAcked = $false
+            if ($ok) { $Res.ReceiptAcked = Send-MoeReceipt $Journal $j }
+        }
         $ok = (Complete-MoePostflight) -and $ok
     } catch { $ok = $false }
+    if ($strong) {
+        if (Test-Path -LiteralPath $Journal) { Write-Host "[WARN] receipt journal $Journal kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it." -ForegroundColor Yellow }
+        Set-MoeCtrlCDeferred $false
+        return
+    }
     if ($ok) { Remove-Item -LiteralPath $Journal -Force -ErrorAction SilentlyContinue }
     else { Write-Host "[WARN] receipt journal $Journal kept: the completion row or finalize_attempt got no answer; the next pre-flight replays it." -ForegroundColor Yellow }
     Set-MoeCtrlCDeferred $false
