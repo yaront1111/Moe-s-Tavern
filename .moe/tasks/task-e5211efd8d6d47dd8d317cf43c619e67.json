@@ -50,7 +50,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -70,17 +70,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T19:31:56.538Z",
-  "updatedAt": "2026-11-04T19:57:19.334Z",
+  "updatedAt": "2026-11-04T19:59:30.296Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T19:31:59.114Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T19:59:00.924Z",
+    "wallClockMs": 1621810
   },
   "contextFetchedBy": [
     "architect-2a219562",
     "architect-cd0ac706",
-    "worker-a408f113"
+    "worker-a408f113",
+    "qa-96811257"
   ],
   "tier": "light",
   "effort": "high",
@@ -162,10 +165,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T19:54:36.377Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T19:53:37Z",
-    "at": "2026-11-04T19:57:19.334Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T19:57:25Z",
+    "at": "2026-11-04T19:59:30.296Z"
   },
   "reviewStartedAt": "2026-11-04T19:56:21.064Z",
   "verification": {
@@ -195,5 +199,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T19:59:00.924Z",
+  "reviewCompletedAt": "2026-11-04T19:59:00.924Z",
+  "reviewSummary": "Approved. Reviewed completion 34fbcbd06 (on moe/work-2026-10-24, in control HEAD) via git show: one file, scripts/tests/daemon-autostart-argv.test.mjs, +39/-5 (net 34).\n\nRe-ran task.verification verbatim from the control checkout: GATE_OK. 6 tests, 6 pass, 0 fail, 0 skipped; three ok rows each for PS 5.1 and PS 7; row-C diagnostics 'autostart removed ... found 0' and 'autostart duplicated ... found 2' on both engines; secs=10 (budget 1200). ps1diff=0 is vacuous here (MOE_LAND_TARGET unset, base=HEAD), so I checked by hand: `git diff --stat e53f5a5c..34fbcbd0 -- scripts/ .github/` lists only the test file, and `git log e53f5a5c..34fbcbd0 -- scripts/moe-agent.ps1 .github/workflows/ci.yml` is empty.\n\nIndependent RED: e53f5a5c's old test against the current moe-agent.ps1 (scratch dir on D:, removed) gives tests 4, pass 2, with both literal-name rows failing 'expected exactly one Start-Process passing --project ..., found 2'. That reproduces the CI failure.\n\nDoD1: both engine rows ran, none skipped. DoD2: selector = Start-Process CommandAst holding $daemonScript plus string constants 'start' and '--project'; -ne 1 check kept via shared AUTOSTART_COUNT; row C mutates copies of the real launcher (autostart removed -> found 0, duplicated -> found 2) and asserts spawnError null, nonzero exit and the exact message after plain(), so it is not vacuous. Worker's planning mutants (old selector, no exactly-one, pwsh skipped, ps1 touched) were red; I re-verified the old-selector one. DoD3: moe-agent.ps1 and ci.yml untouched, so :1029 and the check-dispatch :9617 are as before. DoD4: secs=10.\n\nByte traps: no raw U+FEFF (grep 0), 4 non-ASCII lines as at base; only ${ in DRIVER is ${AUTOSTART_COUNT}; no PS7-only syntax (5.1 rows pass). Ponytail pass: nothing to cut; plain() copied on purpose (importing subagent-mirror.test.mjs would run its tests).",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
