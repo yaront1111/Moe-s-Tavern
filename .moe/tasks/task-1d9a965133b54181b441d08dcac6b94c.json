@@ -28,38 +28,57 @@
     {
       "stepId": "step-2",
       "description": "FIX (DoD 1 and 2). Edit only main() in packages/moe-daemon/src/index.ts, with the session's own editing tool.\n\nRight after the `accounts` branch (:1208-1212) and before `parseArgs()`, add a branch for `process.argv[2] === 'check-architecture'`:\n- Take `process.cwd()` in a try.\n- If it throws, write one line to stdout, `JSON.stringify({ detail, outcome: 'unavailable', reason: 'repository-unavailable' })` (detail is the first line of the error's message, at most 500 chars), set process.exitCode = 2 and return.\n- Otherwise call `const { exitCode, report } = await runCheckArchitecture(process.argv.slice(3), cwd)`, write `JSON.stringify(report)` plus a newline to stdout, set process.exitCode = exitCode and return.\n\nDelete the switch's `case 'check-architecture'` block (:1246-1252); it is now unreachable.\n\nAdd a 3-line comment covering three points: the command prints one JSON line and exits 0, 1 or 2; it answers every bad argument itself, so it runs before parseArgs(), which throws on a trailing --project; a deleted cwd is an unavailable repository, not a crash.\n\nError handling: runCheckArchitecture never throws, because its own envelope maps every failure to exit 2. The only throw left on this path is process.cwd(), handled here. Nothing on this path logs through pino or calls process.exit.\n\nDo NOT touch:\n- parseArgs (:59-71);\n- the import block;\n- the default usage text;\n- the entry guard and main().catch at :1288-1293. task-d63e3dba owns that hunk, and merge-tree lands distinct hunks.\n\nThe plan-time prototype is +18/-7. A vetted copy of the whole file at acea850b plus the fix is at /mnt/d/moe-scratch/arch-1d9a9651/index.ts. Compare against it, never cp it: the target may have moved.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
       ],
-      "startedAt": "2026-11-04T09:50:08.084Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "check-architecture dispatched before parseArgs in main(); switch case removed.",
+      "startedAt": "2026-11-04T09:50:08.084Z",
+      "completedAt": "2026-11-04T09:50:22.158Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY (DoD 1, 2 and 3), once. From the task worktree root, run the checkRefs command exactly as written. Its fresh output, ending in GATE-OK, is moe.complete_task's verification evidence.\n\nThe command:\n- fails if parseArgs, or the entry-guard block from `if (process.argv[1]` through its closing brace, differs from the fork point with moe/work-2026-10-24;\n- archives HEAD (the daemon package, docs, scripts, CLAUDE.md and .gitignore) into /tmp and overlays your two working-tree files;\n- under env -i, so no MOE_* var is set, runs `npm ci`, then `npx tsc -p . --noEmit` (vitest does not typecheck), then `npx vitest run src/commands/ src/index.version.test.ts`. That is DoD 3's exact suite; the new file lives in src/commands/.\n\nAt plan time this printed GATE-OK in about 8 s, with 5 files and 139 tests. With acea850b's index.ts the same command fails exactly cases 1, 2 and 6.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
+      ],
+      "note": "checkRef printed GATE-OK: 5 files, 139 tests pass, tsc clean.",
+      "startedAt": "2026-11-04T09:50:22.194Z",
+      "completedAt": "2026-11-04T09:50:42.793Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review, then check:\n1. `git diff --stat $(git merge-base HEAD moe/work-2026-10-24)` lists only index.ts and the new test. index.ts's hunks sit inside main(): no import, parseArgs, export-list or entry-guard line changed.\n2. A valid check-architecture call prints the engine's report unchanged (case 5). version, doctor, accounts and the usage default are untouched.\n3. Nothing on the new path logs or exits early, so stdout carries exactly one line.\n4. Concurrent runs are safe: each test uses its own temp repo and scratch dir, and the deleted-cwd child removes only its own CHECK_ARCH_GONE dir.\n5. The test strips MOE_*, so a seat's MOE_PROJECT_PATH cannot change the result.\n6. On Windows case 6 is skipped. The other cases use process.execPath and an absolute tsx URL.\nFix anything you find. If a file changed, re-run the checkRef.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
+      ],
+      "note": "Self-review: diff is index.ts main() only (two hunks inside main, +18/-7) plus the new test; parseArgs, imports, entry guard unchanged (checkRef diffs them against the fork point). New path logs nothing and calls no process.exit, so stdout is exactly one line (asserted by every case). Tests use per-test temp dirs, strip MOE_*, case 6 skipped on win32. Known out of scope: in a deleted cwd with NODE_ENV unset/development, the logger's pino-pretty worker dies (logger.ts, not this dispatch).",
+      "startedAt": "2026-11-04T09:50:43.495Z",
+      "completedAt": "2026-11-04T09:50:54.206Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5772dacf",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -71,12 +90,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:51.394Z",
-  "updatedAt": "2026-11-04T09:50:08.084Z",
+  "updatedAt": "2026-11-04T09:52:14.302Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:37:46.339Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -87,7 +106,10 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T09:46:59.222Z",
@@ -155,5 +177,41 @@
   },
   "planApprovedAt": "2026-11-04T09:46:59.258Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T09:49:36.644Z"
+  "workStartedAt": "2026-11-04T09:49:36.644Z",
+  "reviewStartedAt": "2026-11-04T09:51:01.170Z",
+  "verification": {
+    "command": "( set -e; cd \"$(git rev-parse --show-toplevel)\"; D=packages/moe-daemon; F=$D/src/index.ts; T=$D/src/commands/checkArchitecture.cli.test.ts; B=$(git merge-base HEAD moe/work-2026-10-24); for p in '/^function parseArgs/,/^}/p' '/^if (process.argv/,/^}/p'; do diff <(git show \"$B:$F\" | sed -n \"$p\") <(sed -n \"$p\" $F) || { echo 'parseArgs or the entry guard changed'; exit 1; }; done; S=$(mktemp -d /tmp/moe-1d9a-XXXXXX); git archive HEAD $D docs scripts CLAUDE.md .gitignore | tar -x -C \"$S\"; cp $F \"$S/$F\"; cp $T \"$S/$T\"; cd \"$S/$D\"; N=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\"; $N npm ci --no-audit --no-fund > /dev/null; $N npx tsc -p . --noEmit; $N npx vitest run src/commands/ src/index.version.test.ts; echo GATE-OK )",
+    "exitCode": 0,
+    "outputTail": "✓ src/commands/checkArchitecture.test.ts (21 tests) 1522ms\n Test Files  5 passed (5)\n      Tests  139 passed (139)\n   Duration  3.14s\n\nGATE-OK",
+    "reportedAt": "2026-11-04T09:51:01.170Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts",
+    "packages/moe-daemon/src/index.ts"
+  ],
+  "completionSummary": "moe-daemon check-architecture is now dispatched in main() right after the accounts branch, before the daemon-wide parseArgs(). A trailing --project (empty variable) now gets the one-line {\"detail\":\"unexpected argument \\\"--project\\\"\",\"outcome\":\"unavailable\",\"reason\":\"usage\"} report with exit 2 under both NODE_ENV values; a process.cwd() failure (deleted cwd) is reported as unavailable/repository-unavailable with exit 2. The switch's check-architecture case was removed. parseArgs, imports, entry guard and main().catch are untouched. New spawn test src/commands/checkArchitecture.cli.test.ts (6 cases) fails at acea850b on cases 1, 2 and 6 only and passes with the fix; the snapshot gate (tsc --noEmit + vitest src/commands/ src/index.version.test.ts) ran 5 files, 139 tests, all green.",
+  "commits": [
+    {
+      "sha": "2237c226bbb962f884657fa2a25b03a76420ae98",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T09:48:48Z",
+      "paths": [
+        "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "architect-67c762f6",
+      "recordedAt": "2026-11-04T09:52:14.302Z",
+      "status": "REVIEW"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5772dacf@2026-11-04T09:48:48Z",
+    "at": "2026-11-04T09:52:14.302Z"
+  }
 }

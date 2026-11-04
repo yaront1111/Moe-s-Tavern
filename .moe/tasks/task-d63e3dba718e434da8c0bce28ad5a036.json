@@ -63,8 +63,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -95,7 +95,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:14.596Z",
-  "updatedAt": "2026-11-04T09:50:08.555Z",
+  "updatedAt": "2026-11-04T09:51:48.088Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:33:59.551Z",
     "plannedStepCount": 4,
@@ -182,19 +182,19 @@
   "planApprovedAt": "2026-11-04T09:43:42.277Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T09:45:39.944Z",
-  "reviewStartedAt": "2026-11-04T09:48:14.886Z",
+  "reviewStartedAt": "2026-11-04T09:51:48.086Z",
   "verification": {
-    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon && git archive HEAD $P | tar -x -C \"$S\" && (cd $P/src && cp --parents index.ts index.bin.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/index.bin.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/index src/commands/checkArchitecture --reporter=verbose > ../v.log 2>&1 && npx tsc -p . && npm i -g --prefix ../g --offline --ignore-scripts . >/dev/null 2>&1 && [ \"$(../g/bin/moe-daemon version)\" = \"$(node -p \"require(\\\"./package.json\\\").version\")\" ]'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; G=$(grep -acE '✓ .*> B[1-3][a-e]?: ' ../v.log); echo \"B: $G/7 exit: $E\"; [ $E = 0 ] && [ \"$G\" = 7 ] || { echo \"FAIL $S\"; tail -30 ../v.log; exit 1; } )",
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon && git ls-files -z $P | tar --null -T - -cf - | tar -x -C \"$S\" && (cd $P/src && cp --parents index.ts index.bin.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/index.bin.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/index src/commands/checkArchitecture --reporter=verbose > ../v.log 2>&1 && npx tsc -p . && npm i -g --prefix ../g --offline --ignore-scripts . >/dev/null 2>&1 && [ \"$(../g/bin/moe-daemon version)\" = \"$(node -p \"require(\\\"./package.json\\\").version\")\" ]'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; G=$(grep -acE '✓ .*> B[1-3][a-e]?: ' ../v.log); echo \"B: $G/7 exit: $E\"; [ $E = 0 ] && [ \"$G\" = 7 ] || { echo \"FAIL $S\"; tail -30 ../v.log; exit 1; } )",
     "exitCode": 0,
-    "outputTail": " Test Files  5 passed (5)\n      Tests  109 passed | 1 skipped (110)\nB: 7/7 exit: 0\ngate-exit=0",
-    "reportedAt": "2026-11-04T09:48:14.886Z",
+    "outputTail": " Test Files  5 passed (5)\n      Tests  109 passed | 1 skipped (110)\nB: 7/7 exit: 0\ngate-exit=0\n(LANDING-RETRY run: snapshot built from this worktree's tracked files via `git ls-files -z packages/moe-daemon | tar --null -T -` instead of `git archive HEAD`, because the target merge is staged, not in HEAD; every other command unchanged. packages/ in the worktree is identical to HEAD: only scripts/tests/runtime-requirements.test.mjs differs, from the merge.)",
+    "reportedAt": "2026-11-04T09:51:48.086Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "packages/moe-daemon/src/index.bin.test.ts",
     "packages/moe-daemon/src/index.ts"
   ],
-  "completionSummary": "Fixed the inert npm bin symlink. index.ts gains `export function isEntryModule(argv1, moduleUrl)` directly above the entry guard (+18/-1, guard block only; parseArgs, main() and the export block untouched; the main().catch body is byte-identical). Order: falsy argv1 -> false; the as-written `pathToFileURL(argv1).href === moduleUrl` comparison runs first, so every run the old guard accepted takes the same branch; then `pathToFileURL(fs.realpathSync(argv1)).href === moduleUrl` inside try/catch, where any error returns false (JS realpathSync, as Node's own main-entry resolution uses). New src/index.bin.test.ts: B1 (version through an npm-style symlink), B2 (check-architecture through the link and the entry: exit 1, one line, state-no-tools, identical stdout), B3a-e (isEntryModule rows); the symlink rows are skipped on win32. RED at HEAD with only the test overlaid: 7/7 failed. Gate (checkRefs verbatim): 5 files, 109 passed | 1 skipped, B 7/7, real `npm i -g --prefix --offline` bin printed the version. Repro script on the fixed snapshot: B prints 0.8.0, D exits 1 with the violation line, E (status) prints 'Daemon not running'. Mutants: old guard kills B1,B2; catch->true kills B3e; no empty check kills B3a; no realpath kills B1,B2,B3c; dropping the as-written comparison SURVIVES by design (the realpath branch also covers direct runs). Nothing was run in the shared checkout; no daemon was started.",
+  "completionSummary": "LANDING-RETRY (remote push failed earlier; moe/work-2026-10-24 d6e34442 now merged into the worktree, staged; the merge touched only scripts/tests/runtime-requirements.test.mjs, no packages/ bytes). No code change this session. Delivered (unchanged): index.ts gains `export function isEntryModule(argv1, moduleUrl)` directly above the entry guard (+18/-1, guard block only; parseArgs, main() and the export block untouched; main().catch body byte-identical). Order: falsy argv1 -> false; the as-written `pathToFileURL(argv1).href === moduleUrl` comparison runs first, so every run the old guard accepted takes the same branch; then `pathToFileURL(fs.realpathSync(argv1)).href === moduleUrl` in try/catch, any error -> false. New src/index.bin.test.ts: B1 (version through an npm-style symlink), B2 (check-architecture through the link and the entry: exit 1, one line, state-no-tools, identical stdout), B3a-e (isEntryModule rows); symlink rows skipped on win32. RED at HEAD with only the test overlaid: 7/7 failed. Fresh gate this session (checkRefs, snapshot from the worktree's tracked files per the retry rule, everything else verbatim): tsc --noEmit and the test type-check clean; 5 files, 109 passed | 1 skipped; B 7/7; real `npm i -g --prefix --offline` bin printed the package version; exit 0. Mutants (earlier session): old guard kills B1,B2; catch->true kills B3e; no empty check kills B3a; no realpath kills B1,B2,B3c; dropping the as-written comparison SURVIVES by design. Nothing run in the shared checkout; no daemon started.",
   "commits": [
     {
       "sha": "54f71ea0e103c9c20e5b915a17a35703ef1204bc",
