@@ -1,0 +1,46 @@
+{
+  "id": "task-ba7a8c84fff44b95bf04c829791db935",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07r] moe-agent.sh: under verified-local, a worktree completion runs its owed checks in check VMs, never the host gate",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row). Filed by its planner architect-c33f294e on 2026-11-04. Design decisions: mem:decision-cq-m07-verified-local-activation (settled by the human; do not re-ask).\n\nWHY\n- Under verified-local a required check counts only as an authenticated runner observation: a CheckDispatch plus a CheckObservation over /runner (delivery/policy.ts trustedPassedOn). A moe.record_check_run report never counts.\n- Nothing produces such an observation today. scripts/local-runner/check-dispatch.mjs (CQ-V04b) has no caller outside its tests (docs/ARCHITECTURE.md: \"nothing invokes it per candidate yet\").\n- The worktree completion's L6 (wt_land_rounds in scripts/moe-agent.sh, about line 7719) runs the qualityGate ON THE HOST on the candidate's merged tree (run_frozen_gate worktree). So a VM seat's code runs on the host, and its pass is still not evidence.\n- Result: every verified-local task is refused at qa_approve, and the host executes candidate code.\n\nOBJECTIVE. Under the strong profile (strong_landing_task: verified-local read from the attempt record or journal, never from the environment), L6 of a worktree completion:\n1. records the frozen candidate of M on B exactly as today (freeze_candidate);\n2. builds one commit object with tree M and the single parent B (git commit-tree; never published). This is also the one-commit-on-baseRevision form that check-architecture needs;\n3. runs `node <SCRIPT_DIR>/local-runner/check-dispatch.mjs --project <control checkout> --task <taskId> --commit <that commit>`. It is bounded, and only fixed codes are read from its one JSON line;\n4. goes on to L7 only on exit 0 (every owed check observed passed). Any other result fails the round as MOE_COMMIT_FAILED_GATE (the unlanded 'gate' route), with one line that names only the report's fixed code, and nothing is published.\nThe host never runs the qualityGate command for a strong task. legacy, observe and task-less landings keep run_frozen_gate worktree byte for byte.\n\nDELIVERABLE\n- scripts/moe-agent.sh: the strong L6 branch and a check-dispatch path resolver. It runs the bundled $SCRIPT_DIR/local-runner/check-dispatch.mjs. A MOE_CHECK_DISPATCH_PATH test override is honored only without MOE_RUNTIME_PROTECTED=1, mirroring MOE_AGENT_SEAT_PATH and MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED.\n- scripts/tests/postflight-fake-check-dispatch.js (new): a fake dispatch CLI for the harnesses (pass, fail, stopped codes, crash, hang).\n- New rows in scripts/tests/postflight-vm-route.sh.\n\nNOT IN SCOPE: moe-agent.ps1 (CQ-M07s, the twin); delivery receipts (CQ-M07t); any daemon, check-dispatch.mjs or local-runner change; docs (CQ-M07v1/v2); trusted check-architecture installs.\n\nPLANNER NOTES\n- Parity: every landing runs the qualityGate `bash scripts/tests/parity-check.sh && npm run lint`. A new MOE_ code in a family that parity-check.sh already compares (MOE_VERIFIED_LOCAL_, MOE_SEAT_, MOE_VM_, MOE_WORKTREE_, MOE_LAND_ and the others it lists) would fail this slice's own landing until the ps1 twin lands. Reuse existing codes, or use a family parity does not compare yet; CQ-M07s then adds the twin and the family.\n- The dispatch runs inside L3's git-land lease. It may take up to an hour per check (check-dispatch.mjs CHECK_BUDGET_MS). State that budget against the lease's maxLeaseMs and MOE_LAND_LEASE_WAIT_SEC.\n- A code-failure observation makes the daemon's repair (delivery/repairActivation.ts) move the REVIEW task to WORKING before the wrapper's unlanded finalize_attempt runs. Pin the resulting end state (attempt closed, landingRetry, status) with a row.\n- check-dispatch needs: the task's current candidate (freeze_candidate records it); an approved plan revision; an environment listed in settings.checkEnvironments; and every owed check declared with a dependency choice. An owed qualityGate that is not declared in executionContract.requiredChecks stops with RUNNER_DEPENDENCIES_UNDECLARED. Each refusal must fail closed.\n- Keep CQ-M07m2's rule that a strong worktree landing needs settings.qualityGate, unless the plan states a cleaner rule.\n- No seat runs Multipass: tests use the fake dispatch only.\n\nVERIFICATION, from the task worktree with MOE_*/CLAUDE*/FAKE_* scrubbed and MOE_POSTFLIGHT_TIMEOUT_SEC=360: `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && npm run lint`.",
+  "definitionOfDone": [
+    "Under verified-local, a worktree completion's L6 runs check-dispatch.mjs on a commit whose tree is exactly the merged tree M and whose only parent is B, and the qualityGate command never runs on the host. A postflight-vm-route.sh row proves it with a canary gate that would write a witness file: the witness is absent, and the target moves only after the fake dispatch passes.",
+    "Every non-pass fails the round as MOE_COMMIT_FAILED_GATE with nothing published and a line that names only the fixed code. One postflight-vm-route.sh row per case: non-zero exit, a stopped report, RUNNER_NOTHING_OWED, RUNNER_DEPENDENCIES_UNDECLARED, a missing CLI, a crashing CLI and an unparsable reply.",
+    "legacy, observe and task-less worktree completions still run run_frozen_gate worktree unchanged: the existing postflight-worktree.cjs and postflight-vm-route.sh rows pass with their assertions unedited.",
+    "MOE_CHECK_DISPATCH_PATH is honored only without MOE_RUNTIME_PROTECTED=1. Under it, the bundled path runs and a warning names the ignored override. Tested.",
+    "`bash scripts/tests/postflight.sh`, `bash scripts/tests/parity-check.sh` and `npm run lint` pass from the task worktree."
+  ],
+  "taskRails": [
+    "Never run a verified-local task's qualityGate or any candidate code on the host. When the check VMs cannot run the owed checks, refuse the landing.",
+    "No seat runs Multipass: tests use the fake dispatch CLI only."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.18,
+  "comments": [
+    {
+      "id": "comment-732e84b5bd50448e91e02e066469463e",
+      "author": "architect-c33f294e",
+      "content": "Scope note from this row's author (architect-c33f294e, 2026-11-04). It adds one case to DoD 2's \"names only the fixed code\".\n\nCQ-M07w (task-0bcc0b33) makes check-dispatch.mjs stop an unapproved environment as {code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: 'moe-local-vm-v1:<64 hex>'}. The operator needs that id to fill settings.checkEnvironments by hand, and no other output names it.\n\nSo the MOE_COMMIT_FAILED_GATE line also names the environment, but only when the report's stop carries one that matches /^moe-local-vm-v1:[0-9a-f]{64}$/ exactly. Any other value is never printed.\n- Add a postflight-vm-route.sh row: the fake dispatch emits the field, and the line ends with environment=<id>.\n- Add a second row: a malformed value prints the code alone.\n\nThis row does not depend on CQ-M07w, because the fake emits the field itself. Your fake's report shape must match CQ-M07w's DoD 1.",
+      "timestamp": "2026-11-04T12:00:57.196Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:56:01.667Z",
+  "updatedAt": "2026-11-04T12:00:57.196Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T11:56:07.434Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}

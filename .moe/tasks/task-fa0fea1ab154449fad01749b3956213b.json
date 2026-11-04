@@ -1,0 +1,39 @@
+{
+  "id": "task-fa0fea1ab154449fad01749b3956213b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: postflight-vm-route.ps1's snapshot helpers (Get-VmcControl, Get-VmcWFiles, Get-VmcWIndex, from 99d39004 / CQ-M07n2) call Get-FileHash, which Windows PowerShell 5.1 cannot resolve when node starts it under pwsh, so on CI's Windows PowerShell 5.1 leg postflight.ps1 fails at its VM-route call (\"VM route scenarios failed\") and no 5.1 VM-route row runs",
+  "description": "Filed by hunt #22 (task-7a3640da), from a dry run of CI's windows-latest leg on the Windows host, at fec9a842 and re-checked at 2037e856.\n\nPROBLEM\n- scripts/tests/postflight-vm-route.ps1's snapshot helpers call Get-FileHash three times:\n  - Get-VmcControl hashes the control checkout's .git\\index;\n  - Get-VmcWFiles hashes every file under W;\n  - Get-VmcWIndex hashes W's index.\n  These are lines 353, 364 and 368 at fec9a842, and 488, 499 and 503 at 2037e856. 99d39004 (task-d861f3de, CQ-M07n2, 2026-11-03) added them.\n- CI's step \"Test Windows PowerShell wrapper postflight\" (ci.yml:317-322) runs `node scripts/tests/postflight-safe.mjs powershell` from a pwsh step. node starts powershell.exe 5.1 on postflight.ps1, which at :6143 runs `& $psExe -NoProfile -ExecutionPolicy Bypass -File postflight-vm-route.ps1`.\n- Windows PowerShell 5.1 started by node under pwsh inherits pwsh's PSModulePath, so it cannot autoload Get-FileHash (mem:gotcha-ps51-under-node-under-pwsh-psmodulepath).\n  - postflight.ps1:2205-2207 records that this already threw on the real windows-latest runner (Scenario Y).\n  - moe-agent.ps1:531-533 avoids Get-FileHash for the same reason (Get-MoeSha256Hex).\n- So the first VM-route row (\"[vm candidate] R1\") throws, postflight-vm-route.ps1 exits 2, and postflight.ps1 fails with \"VM route scenarios failed\".\n- Until 7811de41 (task-e45da220) landed today, the 5.1 harness stopped earlier, at its worktree suite (:1244-1245), so it never reached this call. At 2037e856 nothing earlier masks it. pwsh 7 is not affected.\n\nEVIDENCE (Windows node 24.16.0, powershell 5.1.26100, pwsh 7.6.9; runner-like environment; Windows-git clones outside the shared checkout)\n- Full 5.1 postflight at fec9a842 (pass 3), same chain as CI. MOE_WORKTREE_ONLY=config-fail stood in for e45da220's fix, and GITHUB_ACTIONS was unset only so that scenario AE skips symlinks, which this host cannot create. Result:\n  - summary {\"engine\":\"powershell\",\"exit\":1,\"lastScenario\":\"Z\",\"failureClass\":\"HARNESS_FAILURE\",\"failureLine\":6144};\n  - every scenario from A through AM, the commit-scope scenarios, WT-14 and [protected runtime] were ok;\n  - the stderr then reads:\n    The term 'Get-FileHash' is not recognized as the name of a cmdlet, function, script file, or operable program. ...\n    MOE_POSTFLIGHT_FAILURE_LINE=6144\n    D:\\moe-scratch\\h22\\p5\\scripts\\tests\\postflight.ps1 : VM route scenarios failed\n  Log: /mnt/d/moe-scratch/hunt-7a3640da/logs/p5c-postflight-ps1-full.log\n- The same pass on pwsh 7 printed \"PASS postflight-vm-route.ps1\" and \"PASS postflight.ps1\" with failureClass NONE (logs/p7c-postflight-pwsh-full.log).\n- Isolation, both at fec9a842 and at 2037e856 (git archive in /mnt/d/moe-scratch/hunt-7a3640da/vmtip):\n  - A pwsh step running `node mine/spawn-ps51.mjs scripts\\tests\\postflight-vm-route.ps1`, which does spawnSync('powershell', ['-NoProfile','-ExecutionPolicy','Bypass','-File', script]), stops after 2 s at its first row:\n    [vm candidate] R1: one changed file becomes one checkpoint commit, hooks never run\n    SPAWN-PS51 status=2\n    The term 'Get-FileHash' is not recognized as the name of a cmdlet, ...\n  - The same file started by pwsh directly (`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\postflight-vm-route.ps1`) prints \"PASS postflight-vm-route.ps1\" in 140 s.\n  Logs: logs/vmA-01-*.log, vmB-01-*.log, vmT-01-*.log; spawner mine/spawn-ps51.mjs.\n- A one-line probe, node spawnSync('powershell', ['-Command', '(Get-FileHash -LiteralPath C:\\Windows\\win.ini -Algorithm SHA256).Hash']) under pwsh, prints \"Get-FileHash : The term 'Get-FileHash' is not recognized\" (logs/vmA-02-*.log).\n\nFIX DIRECTION\n- Test-only. Replace the three Get-FileHash calls with a .NET SHA-256 helper, as postflight.ps1's Get-Sha256Hex (:2208-2215) and moe-agent.ps1's Get-MoeSha256Hex already do: [System.Security.Cryptography.SHA256]::Create(), ComputeHash over [IO.File]::ReadAllBytes, Dispose, plus postflight.ps1's IOException retry.\n- Return the same upper-case hex string, so the before/after snapshot comparisons keep their meaning.\n- No other scripts/**/*.ps1 calls Get-FileHash (grep at fec9a842).\n\nFILES: scripts/tests/postflight-vm-route.ps1 only.\n\nPLACEMENT: 1dfec7a4, bbd7ad2d and cd3887fe all hold scripts/tests/postflight-vm-route.ps1 and are WORKING (lanes at 11:55Z), so this row depends on all three. None of their current hunks touch Get-VmcControl, Get-VmcWFiles or Get-VmcWIndex. Line numbers move, so find the three calls with `grep -n Get-FileHash` at plan time.",
+  "definitionOfDone": [
+    "`grep -c Get-FileHash scripts/tests/postflight-vm-route.ps1` prints 0.",
+    "Run from a git-archive snapshot outside the shared checkout, a pwsh step that has node start Windows PowerShell 5.1 on the file (`pwsh -NoProfile -Command \"node -e \\\"process.exitCode=require('child_process').spawnSync('powershell',['-NoProfile','-ExecutionPolicy','Bypass','-File','scripts/tests/postflight-vm-route.ps1'],{stdio:'inherit'}).status\\\"\"`) prints \"PASS postflight-vm-route.ps1\" and exits 0.",
+    "`pwsh -NoProfile -File scripts/tests/postflight-vm-route.ps1` and, started from pwsh, `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/postflight-vm-route.ps1` each still print \"PASS postflight-vm-route.ps1\"."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-1dfec7a4f43149769b332cdb151189e8",
+    "task-cd3887fec2a74d24bee2da7ffba8d078",
+    "task-bbd7ad2d9b3b498eb581f760d0e75a4d"
+  ],
+  "priority": "MEDIUM",
+  "order": 244.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:53:39.529Z",
+  "updatedAt": "2026-11-04T11:53:59.383Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T11:53:43.799Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}

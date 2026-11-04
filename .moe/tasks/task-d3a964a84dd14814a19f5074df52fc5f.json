@@ -1,0 +1,30 @@
+{
+  "id": "task-d3a964a84dd14814a19f5074df52fc5f",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07u] Test rows for two QA-found mutant survivors: vm-control's default runner probe, certification report equality",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row). Filed by its planner architect-c33f294e on 2026-11-04. It collects two QA hand-forwards posted on that row. Both are test gaps, not defects: the shipped code is correct, but a regression would go unseen. This row is tests only.\n\n1. vm-control's production runner probe (comment-1834b0bb, QA qa-1b5727b1 on CQ-M07g task-9076afab)\n- In scripts/local-runner/vm-control.mjs, every VC-C3/VC-R2 row injects runnerAlive. So three mutants pass every test: M28 (cleanupReport `runnerAlive = runnerProbe` changed to `() => false`), M29 (the same in reconcileReport) and M30 (runVmControl `deps.runnerAlive ?? (() => false)`).\n- Any of them would purge a seat VM whose runner is still alive on this host.\n- The row to add, in scripts/tests/local-runner-vm-control.test.mjs:\n  - one seat record whose runner is this test process (`${process.pid}@<token>` in the format the production probe parses), with host localRunnerHost() and platform process.platform;\n  - the fake daemon says the seat is gone, and the lease is free;\n  - call cleanupReport, reconcileReport and runVmControl (deps.call only) with NO runnerAlive;\n  - expect the record preserved (or held) with reason 'runner-alive' and zero provider delete calls.\n\n2. certification report equality (comment-66f37d9b, QA qa-97c4310b on CQ-M07a task-5a635bc9)\n- In packages/moe-daemon/src/delivery/certificationEvidence.test.ts, 6 strict-to-loose swaps (=== to ==) survive in the checkCertificationReport port: report.kind, version, transport, provider.name, executionReady and the check-row id.\n- Add refused VARIANTS rows with JSON type-confusion values: version '1' and true; kind ['isolation-certification']; transport ['injected'] with certified false; provider name ['multipass']; executionReady 0; one check id ['provision'].\n- Each must be refused with the reader's existing fixed code.\n\nDELIVERABLE: new rows in those two test files only.\n\nNOT IN SCOPE: any runtime change (vm-control.mjs, certificationEvidence.ts, certify.mjs); other test files; docs.\n\nVERIFICATION: `node --test scripts/tests/local-runner-vm-control.test.mjs`, then, in a git-archive snapshot of HEAD with this task's test file overlaid (npm ci there, env -i with Linux node 24), `npx vitest run src/delivery/certificationEvidence.test.ts`.",
+  "definitionOfDone": [
+    "local-runner-vm-control.test.mjs has the default-probe row: a seat record whose runner is this process on this host, the daemon saying gone and the lease free, cleanupReport, reconcileReport and runVmControl run with no injected runnerAlive. Each keeps the record with reason 'runner-alive' and makes zero provider delete calls.",
+    "Mutants M28, M29 and M30 (comment-1834b0bb) each fail that row. The completion summary gives the scratch-copy evidence.",
+    "certificationEvidence.test.ts has refused rows for the type-confusion values in comment-66f37d9b, each expecting the reader's existing fixed code. An === to == mutant of each of the 6 compared fields fails its row. The completion summary gives the scratch-copy evidence.",
+    "git diff names only scripts/tests/local-runner-vm-control.test.mjs and packages/moe-daemon/src/delivery/certificationEvidence.test.ts.",
+    "`node --test scripts/tests/local-runner-vm-control.test.mjs` passes, and `npx vitest run src/delivery/certificationEvidence.test.ts` passes in a git-archive snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.21,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:57:06.036Z",
+  "updatedAt": "2026-11-04T11:57:06.036Z"
+}

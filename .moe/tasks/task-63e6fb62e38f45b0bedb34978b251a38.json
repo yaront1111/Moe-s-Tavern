@@ -1,0 +1,33 @@
+{
+  "id": "task-63e6fb62e38f45b0bedb34978b251a38",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07v1] Docs: how verified-local is switched on (CONFIGURATION, ARCHITECTURE, CERTIFICATION, architect reference)",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row): M07 DoD 7, the reference-doc half. Filed by its planner architect-c33f294e on 2026-11-04. Docs only. It depends on CQ-M07t (task-527735ea; through it CQ-M07s task-74fe4c99 and CQ-M07r task-ba7a8c84), because these docs describe what those rows land: the check-VM gate and the worktree delivery receipt. The tool contracts and troubleshooting codes are CQ-M07v2's.\n\nOBJECTIVE. The docs say, from the landed code, that verified-local can now be switched on, how, and what stays unsupported. Today they still say it is refused unconditionally. Sources: mem:decision-cq-m07-verified-local-activation, the CQ-M07a..t completion summaries, and the handoff list in mem:task-task-1a8f1d0e199046a289e94a5453d758b8-handoff.\n\nDELIVERABLE\n- docs/CONFIGURATION.md:\n  - the executionProfile row: verified-local is refused only until the daemon's own readiness evaluation passes, from evidence. Name the five capabilities and the evidence ids (delivery/executionReadiness.ts READINESS_IDS), the 5-minute re-evaluation, moe.get_execution_readiness, and that no env var, setting, label, argument or project file grants it. Fix the values column \"verified-local (refused)\";\n  - the checkEnvironments row (\"verified-local itself is still refused\" is stale);\n  - any wrapper env override CQ-M07r/s added (MOE_CHECK_DISPATCH_PATH).\n- docs/ARCHITECTURE.md:\n  - \"### The verified-local path\": the opening paragraph (\"unconditionally unavailable today\"), the dispatch bullet (\"nothing invokes it per candidate yet\": the worktree completion's L6 now dispatches, CQ-M07r/s) and Strong local delivery (the worktree arm and its receipt, CQ-M07t);\n  - \"## Local Runner Isolation\" (\"Nothing here is active yet\"): add the seat VM route. One VM per seat with a supervisor reset between jobs, the host-size cap, the WSL rule, per-account VM tokens and codex keys, and gemini/grok refused.\n- docs/CERTIFICATION.md: replace \"Certification is not activation\" with an activation section, the operator flow with exact commands:\n  - certify on each host, which files the report in the host store;\n  - `accounts vm-token <id>` per rotation account;\n  - the project settings: executionProfile verified-local, deliveryPolicy local-branch, worktreeMode on, a qualityGate, and checkEnvironments holding the check environment id;\n  - a plugin-installed daemon (protected-host-control-plane);\n  - JetBrains Start Agent.\n  Then what stays unsupported: macOS (no certified report), gemini and grok, shared mode, and check-architecture as a required check until a trusted install exists (required-check-untrusted-checker).\n- docs/roles/architect.reference.md: a verified-local task's plan must declare executionContract.requiredChecks, including the qualityGate command with its lockfile configs and assertionRoots. Otherwise check-dispatch stops with RUNNER_DEPENDENCIES_UNDECLARED, or qa_approve reports required-checks-undeclared.\n\nNOT IN SCOPE: docs/MCP_SERVER.md and docs/TROUBLESHOOTING.md (CQ-M07v2); any code; docs/baselines/cq-m06/README.md (the final row records the promotion decision after the real-VM runs).\n\nVERIFICATION: `npm run lint && bash scripts/tests/parity-check.sh`, then the daemon suite (it holds the docs guard tests) in a git-archive snapshot of HEAD with this task's docs overlaid: npm ci, then `npm test` under env -i with Linux node 24.",
+  "definitionOfDone": [
+    "`git grep -n -e 'unconditionally unavailable' -e 'Nothing here is active yet' -e 'Certification is not activation' -e 'nothing invokes it per candidate yet' -- docs/` prints nothing.",
+    "The CONFIGURATION.md executionProfile and checkEnvironments rows match the landed code. Every capability id, evidence id, code, tool and file path they name exists at HEAD; the completion summary lists the greps.",
+    "CERTIFICATION.md's activation section gives every operator step with its exact command, and the unsupported list: macOS, gemini/grok, shared mode, and check-architecture without a trusted install.",
+    "architect.reference.md states the requiredChecks rule for verified-local plans, and `npm run lint` passes.",
+    "The daemon suite passes in a git-archive snapshot with the docs overlaid."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-527735eafb9147cf8663ccee9a9e1b4c"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.22,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:57:24.860Z",
+  "updatedAt": "2026-11-04T11:57:24.860Z"
+}

@@ -41,20 +41,26 @@
     {
       "stepId": "step-3",
       "description": "scripts/tests/usage-launcher.test.mjs: pin the scope for each twin. Engines are /bin/bash under Linux node, and powershell.exe, pwsh.exe and Git Bash under Windows node. Write the test first and prove it RED (below).\n(a) Add a fake-provider prelude. It writes `<MOE_TEST_DIR>/cli-env.json` = `{receipt: process.env.MOE_USAGE_RECEIPT_FILE ?? null, context: process.env.MOE_USAGE_CONTEXT_JSON ?? null}`. Then it runs a CHILD, `spawnSync(process.execPath, [path.join(process.env.MOE_TEST_SCRIPTS, 'prompt-cache.mjs'), 'usage-start', '<provider>'], {stdio: 'ignore'})`. That child is the task-03418dc2 path: a fixture usage helper appending to whatever receipt it inherits. Prepend the prelude to the fake sources of 'real Claude launch' and 'real Codex launch' (both withResult arms). Assert cli-env.json is `{receipt: null, context: null}`. The existing `receipts.length === 2` assertion (pending + reported/missing, one launchId) then proves both halves: the child appended nothing, and the wrapper's own writes still landed.\n(b) Add a new per-engine test, 'interactive Claude launch keeps the receipt from the CLI and its child'. It uses the claude cut with no print args (sh `PRINT_ARGS=()`, ps1 `$usePrintMode=$false` and `$printArgs=@()`), the same prelude, and exitCode 23. Assert CHILD_EXIT=23, cli-env.json both null, and exactly one receipt row, with coverage 'pending' and launchMode 'interactive'.\n(c) In 'usage metadata is fresh for each task and resume', after the first start, print what a child of the wrapper would inherit and assert both values are empty. ps1: `$env:MOE_USAGE_RECEIPT_FILE` and `$env:MOE_USAGE_CONTEXT_JSON`. sh: a single-quoted `\"$NODE_CMD\" -e` probe printing both. This pins that the post-flight gate and every other wrapper child inherit nothing.\nKeep run(), between(), guard() and every anchor unchanged. RED proof: a scratch copy holding the base launchers (`git show <base>:scripts/moe-agent.{sh,ps1}`) fails (a)-(c) on every engine, because cli-env.json carries the receipt path and the receipt has 3 rows. Quote that in complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/usage-launcher.test.mjs"
       ],
-      "startedAt": "2026-11-04T11:51:27.080Z"
+      "modifiedFiles": [
+        "scripts/tests/usage-launcher.test.mjs"
+      ],
+      "note": "usage-launcher.test.mjs:\n- (a) cliPrelude(provider) is prepended to the fake claude/codex CLIs. It writes cli-env.json and spawns `prompt-cache.mjs usage-start <provider>` as the CLI's child. Both real-launch arms assert cli-env = {receipt:null, context:null} next to the existing 2-row/one-launchId checks. The claude body/fake moved into claudeLaunch(ext, print) and claudeFake(withResult), with the same anchors.\n- (b) New per-engine test 'interactive Claude launch keeps the receipt from the CLI and its child': CHILD_EXIT=23, cli-env null, 1 pending row, launchMode interactive.\n- (c) The 'fresh' test probes CHILD_ENV after the first start (ps1 $env, sh a node -e child) and asserts it is empty.\nGREEN: WSL node 10/10; Windows node.exe 30/30 (powershell.exe, pwsh.exe, Git Bash).\nRED (scratch /mnt/d/moe-scratch/cd38-red.FCTBqs = this test + 500e3f29 launchers): WSL 6/10 fail; Windows 18/30 fail (6 per engine: fresh, interactive, 2 claude, 2 codex), cli-env carries the receipt path and context. With the env asserts removed, the base gives 3 rows instead of 2 (2 instead of 1 interactive), so the child appended.",
+      "startedAt": "2026-11-04T11:51:27.080Z",
+      "completedAt": "2026-11-04T11:54:57.191Z"
     },
     {
       "stepId": "step-4",
       "description": "Postflight harness twins, scripts/tests/postflight-vm-route.sh and postflight-vm-route.ps1. Add a check right after the T-legacy row: in sh after its task/worker identity check (:125-126), and in ps1 after 'record lacks task and worker identity' (:797). In order:\n1. Print one line, `[vm route] T-legacy usage receipt: <rows>`. <rows> is the JSONL lines of the launch's one receipt file under `<project>/logs/moe-usage/`, each `timestamp` value replaced by `<ts>` and the launchId by `<launch>`, joined by ` | `. Nothing else is masked, so a before/after diff of this line is the DoD's 'receipt unchanged' evidence.\n2. Assert: exactly one `*.jsonl` file; exactly 2 rows; coverage `pending` then `missing`; one shared non-null launchId; provider `claude`, taskId `task-postflight`, workerId `worker-vmr`, role `worker`, launchMode `headless`. Each failure names its mismatch.\n3. Assert the CLI record's env (sh `$REC`, ps1 `$rec`) holds neither key, checking MOE_USAGE_RECEIPT_FILE first. Fail with exactly `the CLI env carries <KEY>` (sh `vmr_fail T-legacy`, ps1 `Stop-Vmr $r`).\nIn sh, write the check as one `\"$NODE\" -e '...' \"$REC\" \"$PROJECT/logs/moe-usage\"` with single-quoted JS, as the file already does. In ps1, use PowerShell (Get-ChildItem, [IO.File]::ReadAllLines, ConvertFrom-Json, -replace) or a .cjs written to $tempRoot like rec.cjs. Never pass a double-quoted multi-line `node -e` from ps1: PS 5.1 mangles it in native argv.\nAlso fix the sh mask comment. Its last bullet (:103) names 'MOE_USAGE_CONTEXT_JSON launchId, the usage receipt file', which no longer reach the CLI. Measure two T-legacy runs with the uuid `.replace` removed (scratch copy). If the records then match, delete that `.replace` and its bullet. If they don't, keep it and name the value that still differs. The ps1 'Per-run masks only' comment stays.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.sh",
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T11:55:00.818Z"
     },
     {
       "stepId": "step-5",
@@ -87,7 +93,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:06:21.135Z",
-  "updatedAt": "2026-11-04T11:51:27.080Z",
+  "updatedAt": "2026-11-04T11:55:00.819Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:57.567Z",
@@ -97,7 +103,7 @@
     "firstClaimAt": "2026-11-04T10:57:11.313Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -109,7 +115,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T11:23:55.643Z",

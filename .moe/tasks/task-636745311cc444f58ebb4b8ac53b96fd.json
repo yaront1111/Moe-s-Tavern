@@ -1,0 +1,32 @@
+{
+  "id": "task-636745311cc444f58ebb4b8ac53b96fd",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07v2] Docs: verified-local tool contracts and troubleshooting codes (MCP_SERVER, TROUBLESHOOTING)",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row): M07 DoD 7, the contracts and troubleshooting half. Filed by its planner architect-c33f294e on 2026-11-04. Docs only. It depends on CQ-M07t (task-527735ea; through it CQ-M07s and CQ-M07r), because the troubleshooting rows include the codes those rows add. It runs in parallel with CQ-M07v1 (task-63e6fb62), which owns CONFIGURATION, ARCHITECTURE, CERTIFICATION and the architect reference.\n\nOBJECTIVE. Pay the doc debts the M07 slices deferred to this sweep, all from landed code.\n\nDELIVERABLE\n- docs/MCP_SERVER.md:\n  - a section for moe.get_execution_readiness and its /ws twin GET_EXECUTION_READINESS -> EXECUTION_READINESS (CQ-M07d, tools/getExecutionReadiness.ts): payload {profile, ready, missingCapabilities, evaluatedAt}, refresh and its rate limit, non-blocking, read-only;\n  - a section for moe.get_seat_liveness (CQ-M07g0): {workerId, registered, status, openAttempts}, wrapper-only. A seat is gone only when (!registered || status === 'DEAD') && openAttempts === 0;\n  - executionRoute 'vm' on claim_next_task and wait_for_task (CQ-M07q), if it is not documented yet;\n  - the serverCapabilities verifiedLocal value. The doc shows false near lines 3210/3215; it has been true since CQ-M07d2;\n  - the strict-consumer DONE/ARCHIVED sentences near lines 1242, 1249, 1274, 1464, 1508 and 1996 (task-7aa6be67's residuals): a verified-local consumer needs retained verified delivery, and a missing prerequisite never satisfies it;\n  - the two advisory points in comment-c16cb64b on the final row. In get_context's Execution policy paragraph, the \"non-strict effectiveProfile\" sentence holds only when the TASK snapshot is not verified-local. In Strict completion (CQ-F08), \"completes as legacy after the rollback\" also covers a rollback to observe.\n- docs/TROUBLESHOOTING.md:\n  - one row per code the wrappers print on the VM route: the MOE_VERIFIED_LOCAL_*, MOE_SEAT_* and MOE_VM_* families, and the check-gate and receipt lines CQ-M07r/s/t add;\n  - one row per readiness id in READINESS_IDS (delivery/executionReadiness.ts) with its operator action. For example: certification-report-missing means run certify; certification-report-mismatch means re-certify after an upgrade; protected-host-control-plane means run the plugin-installed daemon; revision-bound-local-delivery means set deliveryPolicy local-branch.\n\nNOT IN SCOPE: CONFIGURATION, ARCHITECTURE, CERTIFICATION and docs/roles (CQ-M07v1); any code; the cq-m06 README.\n\nVERIFICATION: `npm run lint`, then the daemon suite (docs guard tests, including the one that needs a section per registered tool) in a git-archive snapshot of HEAD with this task's docs overlaid: npm ci, then `npm test` under env -i with Linux node 24.",
+  "definitionOfDone": [
+    "MCP_SERVER.md has sections for moe.get_execution_readiness (with GET_EXECUTION_READINESS) and moe.get_seat_liveness. Their payload fields match tools/getExecutionReadiness.ts and the liveness tool's source, field for field.",
+    "MCP_SERVER.md no longer shows verifiedLocal false for serverCapabilities. The six strict-consumer sentences state the retained-verified-delivery rule, and both comment-c16cb64b points are applied.",
+    "TROUBLESHOOTING.md has one row for each MOE_VERIFIED_LOCAL_*, MOE_SEAT_* and MOE_VM_* code that scripts/moe-agent.sh or moe-agent.ps1 prints, and for each READINESS_IDS id with its operator action. The completion summary shows the grep that proves none is missing.",
+    "`npm run lint` passes, and the daemon suite passes in a git-archive snapshot with the docs overlaid."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-527735eafb9147cf8663ccee9a9e1b4c"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.23,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:57:42.037Z",
+  "updatedAt": "2026-11-04T11:57:42.037Z"
+}

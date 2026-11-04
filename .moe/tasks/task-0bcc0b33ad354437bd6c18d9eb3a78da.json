@@ -1,0 +1,31 @@
+{
+  "id": "task-0bcc0b33ad354437bd6c18d9eb3a78da",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07w] check-dispatch.mjs: the unapproved-environment stop names the check environment id the operator must approve",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row). Filed by its planner architect-c33f294e on 2026-11-04.\n\nWHY. A verified-local required check counts only in an environment that settings.checkEnvironments lists. The human sets that list by hand in .moe/project.json. The id is `moe-local-vm-v1:<sha256>` (scripts/local-runner/check-evidence.mjs checkEnvironment). It hashes the observed image, the supervisor, the VM size, the pinned toolchain and the installed dependency tree, so an operator cannot work it out by hand. Today the only place it shows up is a refusal that hides it: check-dispatch.mjs:111 (runOnce onReady) throws with stop = { code: 'RUNNER_ENVIRONMENT_NOT_APPROVED' }, and the CLI's report line carries only that code. So nobody can approve the first environment, and the CQ-M07 real-board run cannot pass its first check.\n\nOBJECTIVE. When a dispatch stops because the ready check VM's environment is not listed, the stop names that environment:\n`{ code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: 'moe-local-vm-v1:<64 lowercase hex>' }`.\n- The field is present only when the value matches exactly /^moe-local-vm-v1:[0-9a-f]{64}$/. Any other value omits it (fail closed). No other text leaves the module.\n- runDispatchCli's one JSON line therefore carries it, and the exit code stays 2.\n- No VM-cleanup behavior changes: the cleanup merge in withCleanup/cleanupOf keeps the field, and the delete-failed path keeps its own code and causeCode.\nCQ-M07r/s (the wrappers' check-VM gate, task-ba7a8c84 and task-74fe4c99) print the field in their gate line when it is present. Their fakes emit it, so neither row waits on this one.\n\nDELIVERABLE: scripts/local-runner/check-dispatch.mjs (the stop at the onReady refusal) and rows in scripts/tests/local-runner-dispatch.test.mjs. The existing rows near :133 and :422 change only to expect the new field.\n\nNOT IN SCOPE: the daemon (CHECK_ENVIRONMENT_NOT_APPROVED is unchanged); checkEnvironment's formula; any other stop code; guest-supervisor.py, the certified-provider.json pins, readiness. No seat runs Multipass.\n\nVERIFICATION: `node --test scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner.test.mjs`, from the task worktree under env -i with Linux node 24.",
+  "definitionOfDone": [
+    "A dispatch whose ready environment is not listed stops with exactly {code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: <that id>} when the id matches /^moe-local-vm-v1:[0-9a-f]{64}$/, and runDispatchCli prints it in its one JSON line with exit 2. Tested.",
+    "A malformed environment value (wrong prefix, uppercase hex, short, control characters, a non-string) stops with the code alone. One row per kind.",
+    "The cleanup paths keep their codes: a failed delete after the refusal still reports RUNNER_VM_DELETE_FAILED with causeCode RUNNER_ENVIRONMENT_NOT_APPROVED, as the row near :422 asserts today.",
+    "`node --test scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner.test.mjs` passes."
+  ],
+  "taskRails": [
+    "Only the fixed-format environment id may leave the module: never an error message, a path or upstream text."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.215,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:00:43.663Z",
+  "updatedAt": "2026-11-04T12:00:43.663Z"
+}

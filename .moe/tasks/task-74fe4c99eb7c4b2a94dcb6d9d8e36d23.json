@@ -1,0 +1,43 @@
+{
+  "id": "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07s] moe-agent.ps1: under verified-local, a worktree completion runs its owed checks in check VMs (twin of CQ-M07r)",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row). Filed by its planner architect-c33f294e on 2026-11-04. This is the PowerShell twin of CQ-M07r (task-ba7a8c84fff44b95bf04c829791db935). It depends on CQ-M07r because it ports that row's landed behavior, codes and strings, and reuses its fake dispatch CLI scripts/tests/postflight-fake-check-dispatch.js. Design: mem:decision-cq-m07-verified-local-activation. Under verified-local, Windows worker and QA seats run only this wrapper, natively (decision 3), so this half is the one the JetBrains route actually launches.\n\nOBJECTIVE. Port CQ-M07r to scripts/moe-agent.ps1. Under the strong profile, L6 of a worktree completion (Invoke-MoeWorktreeRounds, where Invoke-MoeFrozenGate -WorktreeMode runs today):\n- records the frozen candidate of M on B as today;\n- builds one never-published commit with tree M and the single parent B;\n- runs the bundled local-runner\\check-dispatch.mjs with --project <control checkout> --task <taskId> --commit <that commit>;\n- goes on to L7 only on exit 0.\nEvery other result is MOE_COMMIT_FAILED_GATE with the same line as sh. The host never runs the qualityGate command for a strong task. legacy, observe and task-less landings keep Invoke-MoeFrozenGate -WorktreeMode byte for byte. The MOE_CHECK_DISPATCH_PATH override is ignored under MOE_RUNTIME_PROTECTED=1, as in sh.\n\nDELIVERABLE\n- scripts/moe-agent.ps1, kept UTF-8 with a BOM.\n- New rows in scripts/tests/postflight-vm-route.ps1.\n- scripts/tests/parity-check.sh and scripts/tests/parity-check.ps1 compare any code family CQ-M07r introduced.\n\nNOT IN SCOPE: moe-agent.sh (CQ-M07r); delivery receipts (CQ-M07t); daemon, local-runner and docs changes.\n\nPLANNER NOTES: mem:gotcha-qa-ps1-postflight-from-wsl, mem:decision-ps1-harness-pin-inline-wrapper-block, mem:gotcha-wrapper-slice-tests-execute-text and mem:gotcha-windows-python-text-mode-crlf-in-node-tests. Run every ps1 gate under both Windows PowerShell 5.1 and pwsh 7. No seat runs Multipass.\n\nVERIFICATION, from the task worktree with MOE_*/CLAUDE*/FAKE_* scrubbed and MOE_POSTFLIGHT_TIMEOUT_SEC=360 (WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC): run `pwsh.exe -NoProfile -ExecutionPolicy Bypass -File '<D:\\ worktree path>\\scripts\\tests\\postflight.ps1'`, then the same with powershell.exe, then `bash scripts/tests/parity-check.sh && npm run lint`.",
+  "definitionOfDone": [
+    "Under verified-local, the ps1 worktree completion's L6 runs check-dispatch.mjs on a commit of exactly M with the single parent B, and never runs the qualityGate on the host. The same canary-gate row as CQ-M07r passes on PS 5.1 and pwsh 7.",
+    "CQ-M07r's non-pass cases each fail as MOE_COMMIT_FAILED_GATE, with nothing published and lines byte-identical to sh. One postflight-vm-route.ps1 row per case.",
+    "legacy, observe and task-less ps1 completions run Invoke-MoeFrozenGate -WorktreeMode unchanged: the existing postflight-worktree.cjs and postflight-vm-route.ps1 rows pass with their assertions unedited.",
+    "parity-check.sh and parity-check.ps1 both pass and compare any code family CQ-M07r introduced. A renamed new code fails both. moe-agent.ps1 still starts with the bytes ef bb bf.",
+    "postflight.ps1 passes under PS 5.1 and pwsh 7 from the task worktree, and so does `npm run lint`."
+  ],
+  "taskRails": [
+    "Never run a verified-local task's qualityGate or any candidate code on the host. When the check VMs cannot run the owed checks, refuse the landing.",
+    "No seat runs Multipass: tests use the fake dispatch CLI only."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ba7a8c84fff44b95bf04c829791db935"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.19,
+  "comments": [
+    {
+      "id": "comment-058a3fed0dba4fa6a25ada1607efe597",
+      "author": "architect-c33f294e",
+      "content": "Scope note from this row's author (architect-c33f294e, 2026-11-04). It is the twin of comment on CQ-M07r (task-ba7a8c84).\n\nThe gate line also names the check environment id, but only when check-dispatch's stop carries one that matches /^moe-local-vm-v1:[0-9a-f]{64}$/ exactly (CQ-M07w, task-0bcc0b33). Any other value is never printed.\n\nKeep it byte-identical to the sh line, and add the same two postflight-vm-route.ps1 rows as sh:\n- the id is printed;\n- a malformed value prints the code alone.",
+      "timestamp": "2026-11-04T12:00:57.241Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:56:19.711Z",
+  "updatedAt": "2026-11-04T12:00:57.242Z"
+}

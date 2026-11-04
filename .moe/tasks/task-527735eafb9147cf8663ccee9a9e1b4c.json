@@ -1,0 +1,33 @@
+{
+  "id": "task-527735eafb9147cf8663ccee9a9e1b4c",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07t] Verified-local worktree landings record their delivery receipt (both wrappers)",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row). Filed by its planner architect-c33f294e on 2026-11-04 from comment-7d618d92, CQ-M07m2's planner finding (1), and mem:decision-worktree-strong-intent. It depends on CQ-M07s (task-74fe4c99, and through it CQ-M07r task-ba7a8c84). Those rows change the same strong worktree completion path and its vm-route harnesses in both wrappers, so this row starts from their landed bytes.\n\nWHY\n- The VM route runs only in worktree mode, and the worktree completion never sends moe.record_delivery_receipt. wt_land_published (scripts/moe-agent.sh) sends only the record_commit ledger row and finalize_attempt. receipt_replay skips worktree journals (`[ -n \"$wt\" ] || receipt_send ...`, about line 6649). The worktree journal itself (wt_journal_write, about line 7536) carries no candidateId and none of the CQ-V07 intent fields.\n- A verified-local consumer counts an ARCHIVED prerequisite only with a delivery receipt for its current candidate (delivery-receipt token, state/dependencyUnblock.ts). So a verified-local task delivered through a VM seat, once archived, withholds its verified-local dependents forever, and a strong landing has no receipt at all.\n\nOBJECTIVE. Under the strong profile (strong_landing_task and its ps1 twin; verified-local from the attempt record or journal, never the environment):\n- The worktree journal records the frozen candidate's id and the intent fields: treeSha, baseRevision = B, planRevision and profile.\n- After C is published (L9-L10), the wrapper sends moe.record_delivery_receipt from that journal, before finalize_attempt. The fields are candidateId, target, targetBefore = B, targetAfter = C, landedRevision = C and pushResult.\n- If the receipt gets no answer, finalize waits: the attempt stays finalizing and the journal stays (MOE_FINALIZE_DEFERRED_RECEIPT).\n- The pre-flight replay re-sends a strong worktree journal's receipt verbatim, then finalizes. It drops the journal only once that attempt is closed (CQ-V08b, as shared mode does).\n- DELIVERY_RECEIPT_CONFLICT is handled as in shared mode: logged once, never retried.\n- legacy and observe worktree landings send no receipt, and their journals are unchanged.\n\nDELIVERABLE: scripts/moe-agent.sh and scripts/moe-agent.ps1 (UTF-8 with a BOM), plus rows in scripts/tests/postflight-vm-route.sh and scripts/tests/postflight-vm-route.ps1.\n\nNOT IN SCOPE: the daemon receipt store or its tools; shared-mode receipts (unchanged); the check-VM gate (CQ-M07r/s); docs (CQ-M07v1/v2).\n\nSPLIT CLAUSE: if the plan exceeds the size caps, move the ps1 half into its own row, as CQ-M07m/n did, and keep sh here.\n\nPLANNER NOTES: check what tools/recordDeliveryReceipt.ts validates (candidate, tree and base binding) against a worktree squash commit C, before you write the journal fields. Run every ps1 gate under PS 5.1 and pwsh 7 (mem:gotcha-qa-ps1-postflight-from-wsl).\n\nVERIFICATION, from the task worktree with MOE_*/CLAUDE*/FAKE_* scrubbed and MOE_POSTFLIGHT_TIMEOUT_SEC=360: `bash scripts/tests/postflight.sh`, then postflight.ps1 under pwsh.exe and powershell.exe, then `bash scripts/tests/parity-check.sh && npm run lint`.",
+  "definitionOfDone": [
+    "In both wrappers, a strong worktree landing sends exactly one moe.record_delivery_receipt, after the publish and before finalize_attempt, carrying the frozen candidateId, target, targetBefore = B, targetAfter = C, landedRevision = C and pushResult. postflight-vm-route.sh and .ps1 rows pin the fields and the order.",
+    "When the receipt gets no answer, the attempt stays finalizing and the journal stays on disk (MOE_FINALIZE_DEFERRED_RECEIPT). The next pre-flight replay re-sends the receipt verbatim, finalizes, and drops a strong journal only once its attempt is closed. Tested in both wrappers.",
+    "A DELIVERY_RECEIPT_CONFLICT answer is logged once and never retried, as in shared mode. Tested in both wrappers.",
+    "legacy and observe worktree landings send no receipt and write the journal they write today: the existing postflight-worktree.cjs and vm-route rows pass with their assertions unedited.",
+    "`bash scripts/tests/postflight.sh`, postflight.ps1 under PS 5.1 and pwsh 7, parity-check.sh and parity-check.ps1, and `npm run lint` pass from the task worktree."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:56:50.151Z",
+  "updatedAt": "2026-11-04T11:56:50.151Z"
+}
