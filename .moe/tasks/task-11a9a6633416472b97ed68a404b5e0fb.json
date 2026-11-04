@@ -98,7 +98,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:48:30.637Z",
-  "updatedAt": "2026-11-04T08:13:07.234Z",
+  "updatedAt": "2026-11-04T08:13:58.601Z",
   "dependsOn": [
     "task-d7b24caba2a14229acfbaa2b6e55cb94"
   ],
@@ -217,5 +217,31 @@
     "packages/moe-daemon/src/index.ts",
     "packages/moe-daemon/src/commands/doctor.ts"
   ],
-  "completionSummary": "doctor no longer rejects on a daemon.json whose port is not a TCP port. probeDaemonJson judges the port once, before the pid check, the local/foreign split and any dial, with the lifecycle's own rule: isValidPort (integer 1-65535) moved verbatim from index.ts to server/probeHost.ts (exported; index.ts imports it, isDaemonInfoShape unchanged). A bad port (99999, 65536, 0, -1, 1.5, Infinity/1e999, \"8080\", live or dead pid, foreign record) gives exactly one '[FAIL] daemon.json: daemon.json port <shown> is not a valid TCP port (1-65535); not dialed', exit 1, nothing dialed; shown is String(port) for numbers, else JSON.stringify(port).slice(0,120). An absent key still reads 'daemon.json missing port'. probeForeignDaemonJson's own guard is deleted (F6 passes through the shared check, text identical). Review found one extra crash: a daemon.json holding JSON null (parsed.port TypeError); fixed with parsed?.port plus a P4 row. Tests: new describe in doctor.test.ts, P1 x7, P2, P3, P4 x2, P5 x2 = 13 rows. RED at base: Tests 9 failed | 177 passed. Gate (checkRefs command, snapshot, node v24.21.0): tsc and doctor.test.ts type-check clean, Test Files 4 passed, Tests 187 passed | 1 skipped, P 13/12, F6 4/4, exit 0; parity-check.sh PASS; npm run lint OK. Mutants 8/8 killed (drop guard, >=0, >1, <65535, numbers via JSON.stringify, no slice, null deref, missing-for-non-number); no survivors. Residual: JSON.stringify leaves U+007F/C1/U+2028 raw in the shown value (same display rule as bindHost)."
+  "completionSummary": "doctor no longer rejects on a daemon.json whose port is not a TCP port. probeDaemonJson judges the port once, before the pid check, the local/foreign split and any dial, with the lifecycle's own rule: isValidPort (integer 1-65535) moved verbatim from index.ts to server/probeHost.ts (exported; index.ts imports it, isDaemonInfoShape unchanged). A bad port (99999, 65536, 0, -1, 1.5, Infinity/1e999, \"8080\", live or dead pid, foreign record) gives exactly one '[FAIL] daemon.json: daemon.json port <shown> is not a valid TCP port (1-65535); not dialed', exit 1, nothing dialed; shown is String(port) for numbers, else JSON.stringify(port).slice(0,120). An absent key still reads 'daemon.json missing port'. probeForeignDaemonJson's own guard is deleted (F6 passes through the shared check, text identical). Review found one extra crash: a daemon.json holding JSON null (parsed.port TypeError); fixed with parsed?.port plus a P4 row. Tests: new describe in doctor.test.ts, P1 x7, P2, P3, P4 x2, P5 x2 = 13 rows. RED at base: Tests 9 failed | 177 passed. Gate (checkRefs command, snapshot, node v24.21.0): tsc and doctor.test.ts type-check clean, Test Files 4 passed, Tests 187 passed | 1 skipped, P 13/12, F6 4/4, exit 0; parity-check.sh PASS; npm run lint OK. Mutants 8/8 killed (drop guard, >=0, >1, <65535, numbers via JSON.stringify, no slice, null deref, missing-for-non-number); no survivors. Residual: JSON.stringify leaves U+007F/C1/U+2028 raw in the shown value (same display rule as bindHost).",
+  "commits": [
+    {
+      "sha": "3747c4748a7179c54a237e407914bd4576d78d93",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T08:08:13Z",
+      "paths": [
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/probeHost.ts"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T08:13:58.601Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5772dacf@2026-11-04T08:08:13Z",
+    "at": "2026-11-04T08:13:58.601Z"
+  }
 }
