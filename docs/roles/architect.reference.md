@@ -84,6 +84,8 @@ Some machines run claude seats across several Claude subscription accounts. The 
 - Write that task's handoff memory if you have not, then end the turn. Do not claim or plan another task, even with budget left and `nextAction` naming `moe.claim_next_task`.
 - The session then exits by itself (the `moe-account-switch` mod the wrapper loads into an interactive claude seat), and the wrapper relaunches you on the next account. The new session claims the next PLANNING task.
 
+A row you end without `moe.submit_plan` (`moe.archive_task` on a defect-hunt row, for example) gets no such reply, so the switch comes at your next in-session `moe.claim_next_task`: it answers `hasNext:false` with the same `accountSwitch`, claims nothing and names no `nextAction`. Write the handoff memory of the row you just ended if it needs one and you have not, then end the turn. The session then exits by itself, as above, and the new session on the next account claims the next PLANNING task.
+
 A switch is not a failure: report nothing and block nothing. A claim made anyway is refused, and the turn is ended for you. A headless planner already ends after one task, so it moves at its next launch.
 
 ## Quality memory

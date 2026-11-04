@@ -21,7 +21,7 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * is not a customization: it is a vendored pre-stamp copy and is upgraded.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=5095739efdb8 -->
+  'architect.md': `<!-- moe-generated: sha=2a2e5b1b46d8 -->
 
 # Architect
 
@@ -56,13 +56,13 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 
 ## Idle behavior
 
-Tasks per session: an interactive session plans up to the number its prompt names (default 10, \`MOE_ARCHITECT_TASKS_PER_SESSION\`) — after each \`moe.submit_plan\` and its handoff memory, \`moe.claim_next_task\` \`{statuses:["PLANNING"]}\` then \`moe.get_context\`, until \`hasNext:false\` or the budget is spent; then your last line tells the operator to exit. A \`submit_plan\` reply with \`accountSwitch\` (\`ACCOUNT-SWITCH:\`) outranks the budget and \`nextAction\`: claim nothing more and end the turn — Moe restarts you on the next Claude account (\`architect.reference.md\`, **Claude account switch**). A headless session plans only its claimed task, then ends its turn. Only a manually launched session with no task claimed for it calls \`moe.wait_for_task\`, which blocks until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …").
+Tasks per session: an interactive session plans up to the number its prompt names (default 10, \`MOE_ARCHITECT_TASKS_PER_SESSION\`) — after each \`moe.submit_plan\` and its handoff memory, \`moe.claim_next_task\` \`{statuses:["PLANNING"]}\` then \`moe.get_context\`, until \`hasNext:false\` or the budget is spent; then your last line tells the operator to exit. A \`submit_plan\` reply with \`accountSwitch\` (\`ACCOUNT-SWITCH:\`) outranks the budget and \`nextAction\`, and so does a \`claim_next_task\` reply with \`accountSwitch\`, which claims nothing (\`hasNext:false\`): claim nothing more and end the turn — Moe restarts you on the next Claude account (\`architect.reference.md\`, **Claude account switch**). A headless session plans only its claimed task, then ends its turn. Only a manually launched session with no task claimed for it calls \`moe.wait_for_task\`, which blocks until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …").
 
 You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and the wrapper routes it to your next session. See \`docs/roles/governor.md\` for the full division of labor.
 
 ## Self-improvement: fix Moe itself
 Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.`,
-  'architect.reference.md': `<!-- moe-generated: sha=4e6e159ba84b -->
+  'architect.reference.md': `<!-- moe-generated: sha=168bfad12f83 -->
 
 # Architect — Reference
 
@@ -149,6 +149,8 @@ Some machines run claude seats across several Claude subscription accounts. The 
 - The plan you just submitted is recorded; the switch never interrupts one.
 - Write that task's handoff memory if you have not, then end the turn. Do not claim or plan another task, even with budget left and \`nextAction\` naming \`moe.claim_next_task\`.
 - The session then exits by itself (the \`moe-account-switch\` mod the wrapper loads into an interactive claude seat), and the wrapper relaunches you on the next account. The new session claims the next PLANNING task.
+
+A row you end without \`moe.submit_plan\` (\`moe.archive_task\` on a defect-hunt row, for example) gets no such reply, so the switch comes at your next in-session \`moe.claim_next_task\`: it answers \`hasNext:false\` with the same \`accountSwitch\`, claims nothing and names no \`nextAction\`. Write the handoff memory of the row you just ended if it needs one and you have not, then end the turn. The session then exits by itself, as above, and the new session on the next account claims the next PLANNING task.
 
 A switch is not a failure: report nothing and block nothing. A claim made anyway is refused, and the turn is ended for you. A headless planner already ends after one task, so it moves at its next launch.
 
@@ -746,8 +748,8 @@ only you can.
  * role doc (git history of docs/roles plus the working copy at generation).
  */
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
-  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '5095739efdb8', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b0c0bbe4188c', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
-  'architect.reference.md': ['08b07943437a', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '4e6e159ba84b', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c016fd59a81e', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
+  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '2a2e5b1b46d8', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '5095739efdb8', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b0c0bbe4188c', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
+  'architect.reference.md': ['08b07943437a', '168bfad12f83', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '4e6e159ba84b', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c016fd59a81e', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'c9d4b13ad50b', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c4d8411512a0', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '3d85e1e8146a', '5267e2ff5337', '52ffd8f5e35c', '546f3f3da3d2', '6cf327f722c6', '7a4154466321', '7f0344ccc9be', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'a6f9de8de220', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
