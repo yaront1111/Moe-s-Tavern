@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "Write the regression test first. Create packages/moe-daemon/src/state/finalizingCloseRetry.test.ts with your own editor (Write on Claude, apply_patch on codex exec), never a shell copy or a subagent: the TOOL witness matters at landing (global rail). Start from the architect's dry-run prototype /mnt/d/moe-scratch/plan-efe07ce5/finalizingCloseRetry.test.ts (151 lines, 11 tests, ToolTestHarness).\n\nThe fixture seeds task-1 in REVIEW, unassigned, reopenCount 1, both plan steps COMPLETED and workStartedAt as the round start. worker-1 is registered IDLE. Its attempt on task-1 is opened with openAttempt (workspaceMode 'worktree' unless the case says otherwise), then set finalizing with setAttemptPhase, the same pattern as tools/finalizeAttempt.test.ts:424-429.\n\nCases:\n(a) it.each over the three close paths. Each must leave the attempt [[1,'closed']] and the task WORKING, unassigned, reopenCount 1, implementationPlan and stepsCompleted unchanged. landingRetry must equal { reason: 'contention', paths: [], rescueRef: 'refs/heads/moe/task/task-1', targetTip: null, count: 1, at: any string }, plus one moe-daemon comment naming the attempt id, worker-1, 'no completion recorded', 'Landing unlanded (contention) 1 time(s)' and 'task WORKING'. The paths:\n  - the moe.deregister_worker tool (deregisterWorkerTool handler, reason terminal_closed, result success and releasedTaskIds []);\n  - the DEAD-record prune: updateWorker DEAD, then state.deleteWorker;\n  - the startup purge: updateWorker DEAD, reconcileRunningAttempts, then state.purgeAllWorkers.\n(b) A completion recorded before this round started does not count, so the row still routes.\n(c) it.each, the plain close is kept (attempt closed; status, assignee, comment count unchanged; landingRetry undefined) for:\n  - a completion recorded this round;\n  - a 'shared' attempt;\n  - a mode-less (legacy) attempt;\n  - a row no longer in REVIEW (WORKING);\n  - a REVIEW row another seat holds (assignedWorkerId 'qa-1').\n(d) A prior landingRetry with count 2 becomes count 3, and the row goes BLOCKED with blockedFromStatus 'WORKING', exactly as finalize's unlanded route.\n(e) updateTask rejected once (vi.spyOn mockRejectedValueOnce): deregister still succeeds, the attempt is closed, the row stays REVIEW and landingRetry stays undefined.\n\nRED: run the step-5 checkRef now, before steps 2-3. It must exit 1 at its first stage with exactly 5 failures in this file ((a) x3, (b) and (d)) and 6 passes. The architect's run at d1062cb0 gave 'Tests 5 failed | 110 passed (115)' across the 3 focused files. Put your RED in the step summary.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/finalizingCloseRetry.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T05:52:30.688Z"
     },
     {
       "stepId": "step-2",
@@ -76,7 +77,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:33:38.409Z",
-  "updatedAt": "2026-11-04T05:51:31.307Z",
+  "updatedAt": "2026-11-04T05:52:30.688Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T05:36:24.918Z",
     "plannedStepCount": 6,
@@ -166,5 +167,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T05:50:33.772Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T05:52:30.688Z"
 }

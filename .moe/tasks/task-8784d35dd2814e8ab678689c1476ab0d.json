@@ -52,8 +52,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -65,7 +65,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:51:26.254Z",
-  "updatedAt": "2026-11-04T05:51:35.981Z",
+  "updatedAt": "2026-11-04T05:53:38.019Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T23:52:32.338Z",
@@ -75,7 +75,9 @@
     "firstClaimAt": "2026-11-03T23:55:23.261Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T05:53:18.170Z",
+    "wallClockMs": 21474909
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -190,10 +192,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T05:24:14Z",
-    "at": "2026-11-04T05:38:22.313Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T05:51:15Z",
+    "at": "2026-11-04T05:53:38.019Z"
   },
   "reviewStartedAt": "2026-11-04T05:27:27.269Z",
   "verification": {
@@ -203,5 +206,9 @@
     "reportedAt": "2026-11-04T05:27:27.269Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Root cause: the test's loopback WebSocketServer (Java-WebSocket 1.6.0) can strand a sent frame: send() queues the frame and sets OP_READ|OP_WRITE, the selector's doWrite then resets interest to OP_READ after draining, and nothing orders the two, so the answer waits for the next write demand and get(5s) times out. Production unaffected (plugin talks to Node daemon). Harness (/mnt/d/moe-scratch/plan-8784d35d/harness): no rearm 3x13,500 rounds -> 5 stalls/40,500 (each received=sent=expected, outQueue=1, interestOps=1; one extra demand delivered all 5); with rearm 0/40,500; StrandCheck 200: 0 leaks, 0 undelivered. Fix (test only, MoeProjectConnectionTest.kt, +71/-1): ConnectionFixture.onMessage now enqueue()s then flush()es (re-arms onWriteDemand, 1 ms sleeps, bounded 2 s); KDoc records root cause; strand() reproduces the state; 2 new deterministic tests (pids 41019 control+flush, 41020 wiring). No existing assertion changed. Mutants (archive copy, under lease): M1 no onWriteDemand -> both new tests fail; M2 no flush in onMessage -> wiring test fails; M3 strand=send -> control fails. Windows Gradle: focused class tests=16 failures=0; full suite tests=666 skipped=6 failures=0 errors=0."
+  "completionSummary": "Root cause: the test's loopback WebSocketServer (Java-WebSocket 1.6.0) can strand a sent frame: send() queues the frame and sets OP_READ|OP_WRITE, the selector's doWrite then resets interest to OP_READ after draining, and nothing orders the two, so the answer waits for the next write demand and get(5s) times out. Production unaffected (plugin talks to Node daemon). Harness (/mnt/d/moe-scratch/plan-8784d35d/harness): no rearm 3x13,500 rounds -> 5 stalls/40,500 (each received=sent=expected, outQueue=1, interestOps=1; one extra demand delivered all 5); with rearm 0/40,500; StrandCheck 200: 0 leaks, 0 undelivered. Fix (test only, MoeProjectConnectionTest.kt, +71/-1): ConnectionFixture.onMessage now enqueue()s then flush()es (re-arms onWriteDemand, 1 ms sleeps, bounded 2 s); KDoc records root cause; strand() reproduces the state; 2 new deterministic tests (pids 41019 control+flush, 41020 wiring). No existing assertion changed. Mutants (archive copy, under lease): M1 no onWriteDemand -> both new tests fail; M2 no flush in onMessage -> wiring test fails; M3 strand=send -> control fails. Windows Gradle: focused class tests=16 failures=0; full suite tests=666 skipped=6 failures=0 errors=0.",
+  "completedAt": "2026-11-04T05:53:18.170Z",
+  "reviewCompletedAt": "2026-11-04T05:53:18.170Z",
+  "reviewSummary": "APPROVED. Reviewed completion fbe3342e (on moe/work-2026-10-24, ancestor of control HEAD) via git diff fbe3342e^ fbe3342e: one file, MoeProjectConnectionTest.kt, +71/-1. Its sha256 equals the plan's approved reference (ad611f51…1978). No production, build or dependency change. The only removed line is the old `reply(message)?.let { conn?.send(it) }`; all existing assertions, including the malformed-readiness ones, are untouched.\n\nRe-ran task.verification under the jetbrains-gradle lease (released), Windows gradlew.bat: focused class --rerun BUILD SUCCESSFUL (:test executed), class XML tests=16 skipped=0 failures=0 errors=0, both new tests present. Full suite --rerun BUILD SUCCESSFUL, module XML tests=666 skipped=6 failures=0 errors=0. Exit 0, matches the worker's evidence.\n\nDoD 1: root cause is in the flush KDoc (Java-WebSocket 1.6.0: send sets OP_READ|OP_WRITE, doWrite resets to OP_READ after draining, nothing orders the two, so a reply strands until the next write demand) plus the harness numbers (no rearm 5 stalls/40,500, each outQueue=1 interestOps=1; rearm 0/40,500; StrandCheck 200 with 0 leaked). Production is not exposed. DoD 2: the deterministic control test (stranded frame stays unsent 300 ms, flush delivers it) and the wiring test (every answer stranded, still answered via onMessage's flush) are in; focused class and full suite pass.\n\nRead-checks: flush is bounded at 2 s and returns false rather than hanging, runs on the single server worker thread, duplicate onWriteDemand is idempotent, connections.single() holds with one connection per fixture. The worker's archive-copy mutants M1/M2/M3 (not re-run by me) each fail the intended test. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
