@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -83,16 +83,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:04:04.228Z",
-  "updatedAt": "2026-11-04T08:19:58.587Z",
+  "updatedAt": "2026-11-04T08:21:29.482Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:11:41.156Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:20:56.296Z",
+    "wallClockMs": 555140
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "high",
@@ -206,10 +209,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T08:17:44Z",
-    "at": "2026-11-04T08:19:58.587Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T08:20:01Z",
+    "at": "2026-11-04T08:21:29.482Z"
   },
   "reviewStartedAt": "2026-11-04T08:19:02.167Z",
   "verification": {
@@ -219,5 +223,9 @@
     "reportedAt": "2026-11-04T08:19:02.167Z",
     "source": "agent-reported"
   },
-  "completionSummary": "analyze-task-metrics.mjs now counts a size bucket's done with the daemon's isDelivered rule (DONE, or ARCHIVED with non-blank metrics.doneAt), inlined with a twin comment. JSON key and table column unchanged; malformed metrics counts as not archived-delivered and never throws. Added scripts/tests/analyze-task-metrics.test.mjs (4 cases) and appended it to the ci.yml node --test list. Hunt repro passes against the fixed script."
+  "completionSummary": "analyze-task-metrics.mjs now counts a size bucket's done with the daemon's isDelivered rule (DONE, or ARCHIVED with non-blank metrics.doneAt), inlined with a twin comment. JSON key and table column unchanged; malformed metrics counts as not archived-delivered and never throws. Added scripts/tests/analyze-task-metrics.test.mjs (4 cases) and appended it to the ci.yml node --test list. Hunt repro passes against the fixed script.",
+  "completedAt": "2026-11-04T08:20:56.296Z",
+  "reviewCompletedAt": "2026-11-04T08:20:56.296Z",
+  "reviewSummary": "Reviewed completion 76e261b3 (on moe/work-2026-10-24, contained in control HEAD; 3 files, +96/-2 net 94 LOC, well under 400). Re-ran task.verification myself: `node --test scripts/tests/analyze-task-metrics.test.mjs` 4/4 pass; `grep -n analyze-task-metrics.test.mjs .github/workflows/ci.yml` hits line 267 (diff is a one-path append to the 'Test agent runtime discovery' node --test list, otherwise byte-identical); hunt repro zzHuntB-analyze-task-metrics-done.test.mjs copied unchanged into a scratch tree with the fixed script: 1/1 pass, exit 0, scratch dir removed. Mutation check: new test file against the base (76e261b3^) script fails 3 of 4 (DONE+ARCHIVED-with-doneAt done=1 not 2; all-ARCHIVED buckets; table row), and the negative guard passes at base as expected, so tests discriminate. DoD 1: fixture DONE + ARCHIVED w/ doneAt + ARCHIVED w/o doneAt, plannedStepCount 2 gives buckets[0].tasks===3, done===2 (test 1). DoD 2: all-ARCHIVED w/ doneAt at 2/6/10/14 steps gives done===tasks per bucket (test 2); blank doneAt '  ', missing metrics, string metrics, null metrics, numeric doneAt, stale-doneAt REVIEW row all not delivered, DONE row without metrics delivered, script exits 0 (test 3). DoD 3: ci.yml line present, repro passes. Code review: isDelivered in analyze-task-metrics.mjs inlines packages/moe-daemon/src/util/metrics.ts:60-64 exactly (DONE, or ARCHIVED with non-blank string metrics.doneAt), optional chaining so no record shape throws; twin comment names util/metrics.ts and task-83cf11f5; JSON key `done` and table header unchanged (test 4 asserts header 'done'); --commits mode untouched; script still imports node: builtins only; test uses clean env and cleans its temp dir via t.after. Scope matches approvedScope (3 files). Not run: full CI matrix / role-doc lint (not touched by this diff). No ponytail findings worth a card.",
+  "requiredCheckAtDone": null
 }
