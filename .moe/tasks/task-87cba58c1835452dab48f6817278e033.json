@@ -14,45 +14,67 @@
     {
       "stepId": "step-1",
       "description": "Test first. Create packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts with your own editor (Write on Claude, apply_patch on codex exec), never a shell copy. Start from the architect's prototype at /mnt/d/moe-scratch/plan-87cba58c/submitPlan.effortFloor.test.ts (120 lines). It ports the hunt repro /mnt/d/moe-scratch/hunt-928a468d/B/replanEffortFloor.test.ts and adds controls.\n\nThe setup seeds a PLANNING row at {tier: 'standard', effort: 'high'}. The cases:\n(1) Control: an explicit effort 'high' on a 6-file re-plan is raised to 'xhigh'. It passes before and after the fix.\n(2) An omitted effort on that re-plan, which planSizeFloor makes heavy: the stored effort is 'xhigh' or 'max', and the response launch.effort and resolveLaunch(stored row) both equal it.\n(3) An explicit tier 'heavy' with effort omitted is floored the same way.\n(4) Control: a 1-step, 3-file re-plan stays standard and keeps effort 'high' (the light/standard floor is high).\n(5) resolveLaunch on WORKING rows:\n  - heavy/high → xhigh;\n  - heavy/max → max;\n  - standard/high → high;\n  - light/high → high;\n  - a lowEffortEligible heavy/low row keeps low, because a docs/tests-only row has no tier minimum.\n\nArchitect RED proof at 0f56d3a7: 3 failed (cases 2, 3, 5), 2 passed (1, 4).\n\nError handling in the test: afterEach runs clearAllSpeedModeTimeouts and removes the temp dir. Assert exact effort strings, never truthiness.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts"
       ],
-      "startedAt": "2026-11-04T00:20:29.328Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts"
+      ],
+      "note": "New test file ported from the architect prototype.",
+      "startedAt": "2026-11-04T00:20:29.328Z",
+      "completedAt": "2026-11-04T00:20:44.170Z"
     },
     {
       "stepId": "step-2",
       "description": "The fix: two expressions, both wrapped in the existing helpers maxEffort and effortFloor. Line numbers are from 0f56d3a7.\n\n(1) packages/moe-daemon/src/tools/submitPlan.ts:522-524. In the `if (task.effort)` branch, the stored-effort path, change `effort = clampEffort(effort ? maxEffort(effort, task.effort) : task.effort, project.settings, lowEffortEligible);` to `effort = maxEffort(clampEffort(…same args…), effortFloor(tier, project.settings, lowEffortEligible));`. Add a 2-3 line comment saying why: a kept stored effort still meets the tier minimum when a re-plan lands in a higher tier.\n  - effortFloor is already imported (:16).\n  - It returns undefined for a docs/tests-only plan, and maxEffort(a, undefined) is a, so low efforts are unchanged.\n  - The explicit-effort branch at :516-520 is untouched.\n\n(2) packages/moe-daemon/src/util/routing.ts:261, resolveLaunch's stored-effort branch. `isEffort(task.effort) ? clampEffort(task.effort, settings, low) : tierEffort(task.tier, settings)` becomes `isEffort(task.effort) ? maxEffort(clampEffort(task.effort, settings, low), effortFloor(task.tier, settings, low)) : tierEffort(task.tier, settings)`, with a one-line comment: an older row, or one written outside submit_plan, never launches below its tier minimum.\n  - The qa role's later maxEffort with the qa floor is unchanged.\n\nError handling needs no new branch. An unknown stored effort is already caught by isEffort in resolveLaunch, and in submit_plan clampEffort maps a garbage value up to the lowest allowed level before the floor applies.\n\nDo not change effortRaised: it reports only a raise of a requested effort.\n\nReference: /mnt/d/moe-scratch/plan-87cba58c/prototype.diff (32 lines). Edit with your own editor (Edit on Claude, apply_patch on codex exec).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/util/routing.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/util/routing.ts"
+      ],
+      "note": "Floored kept stored effort in submit_plan and resolveLaunch via maxEffort+effortFloor.",
+      "startedAt": "2026-11-04T00:20:44.860Z",
+      "completedAt": "2026-11-04T00:20:55.558Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs: sync your own section, `### moe.submit_plan` in docs/MCP_SERVER.md (:336 at 0f56d3a7). Use your own editor (Edit on Claude, apply_patch on codex exec), never Serena or a shell write.\n\nIn the 'Launch effort and models' bullet (:388), add one sentence after 'and never below the task's existing effort': an omitted `effort` on a re-plan keeps the stored effort, still raised to the tier minimum, and `moe.claim_next_task`'s `launch` hint applies the same minimum to a stored effort. The docs/tests-only exception, which has no tier minimum, stays as written.\n\nError handling: re-grep the bullet first, in case a peer moved it. Edit nothing outside `### moe.submit_plan`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Extended the Launch effort and models bullet in ### moe.submit_plan only.",
+      "startedAt": "2026-11-04T00:20:56.313Z",
+      "completedAt": "2026-11-04T00:20:59.093Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written. The same text (730 bytes) is at /mnt/d/moe-scratch/plan-87cba58c/checkref-gate.txt.\n- What it does: it overlays submitPlan.ts, the new test and routing.ts onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive, mem:gotcha-daemon-linux-snapshot-gate). Then, under env -i with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci` and vitest on the new file plus submitPlan.test.ts, qaReject.test.ts (the launch-escalation cases) and routing.test.ts.\n- Expected: exit 0, 'Test Files  4 passed (4)', and a last line of 'effortFloor ok (/tmp/m87cb.XXXX)'.\n- Architect dry runs, from a --shared clone at 0f56d3a7 with this plan's prototype uncommitted:\n  - this command: exit 0, 4 files and 131 tests;\n  - the full daemon suite with the prototype: 279 files, 7432 passed, 24 skipped.\n- Then rm -rf the printed literal /tmp/m87cb.XXXX path.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit, read the printed path and the log tail first, then fix the earlier steps' files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef exit 0: 4 files, 131 tests passed, 'effortFloor ok (/tmp/m87cb.de6i)'.",
+      "startedAt": "2026-11-04T00:20:59.859Z",
+      "completedAt": "2026-11-04T00:21:11.828Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- Docs/tests-only: a lowEffortEligible plan or row keeps low/medium, because effortFloor is undefined for it.\n- Unchanged paths:\n  - an explicit effort still gets exactly today's result;\n  - a first plan with no stored effort still stores nothing extra; resolveLaunch falls back to tierEffort as before;\n  - qa_reject's escalation (bumpTier plus bumpEffort) stays as qaReject.test.ts pins it.\n- A light/standard row stored at high still launches at high, since their floor is high.\n- A custom settings.routing.efforts that removes a level: effortFloor clamps the floor into the allowed list, so the result is still an allowed level.\n- Concurrency: none new. submit_plan runs under the state mutex, and resolveLaunch is pure.\n- RED re-proof: in a scratch snapshot outside the repo, restore both sources with `git show $(git merge-base HEAD moe/work-2026-10-24):<path>` and run only the new test file. Cases 2, 3 and 5 must fail and 1 and 4 pass; the architect saw 3 failed / 2 passed. Paste the failing names into the completion summary, then rm -rf the literal scratch path.\n- Scope: exactly the four planned files, and the docs change stays inside `### moe.submit_plan`.\nIf this review changes a file, re-run step 4's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in the earlier steps' files.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/util/routing.ts",
         "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T00:21:13.542Z"
     }
   ],
   "planRevision": 1,
@@ -69,11 +91,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:59:31.684Z",
-  "updatedAt": "2026-11-04T00:20:29.328Z",
+  "updatedAt": "2026-11-04T00:21:13.542Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:15:38.624Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -83,7 +106,12 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:19:24.248Z",
   "executionContract": {

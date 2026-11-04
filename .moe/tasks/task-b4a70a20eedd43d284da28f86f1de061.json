@@ -13,12 +13,18 @@
     {
       "stepId": "step-1",
       "description": "Client (DoD 3): let a string epicId cross the error-context allowlist, and make updateEpic report delivery. In moe-vscode/src/services/MoeDaemonClient.ts: (a) DaemonErrorContext gains `epicId?: string`; its doc comment and allowlistedErrorContext's comment say four keys instead of three. (b) allowlistedErrorContext copies source.epicId only when `typeof source.epicId === 'string'` (the rule taskId already has). Every other key and every non-string epicId still never cross, the received object is still never spread, and a context with nothing left is still omitted. The daemon already sends it (packages/moe-daemon/src/server/WebSocketServer.ts, handlePluginMessage catch: context.epicId from the frame's payload) and src/types/moe.ts already declares it, so nothing else changes on the wire or in the types. (c) updateEpic returns sendMessage's boolean (false = nothing was sent), with one doc line saying a caller that gates UI on delivery must check it; EpicDetailPanel is its only caller. In moe-vscode/tests/plan-approval-client.test.cjs, which pins today's drop and must change with the allowlist (an allowlist extension; no assertion weakened): the 'a modern top-level ERROR frame reaches the error event fully correlated' test now asserts the exact key set ['currentPlanRevision','epicId','expectedPlanRevision','taskId'] and context.epicId === 'epic-1', replacing its 'epicId is deliberately not promoted' assertion. assertMismatchPayload is shared with the legacy nested-frame test, whose context has no epicId, so give it the expected key list and keep an exact key-set check in both. The 'unrelated daemon context keys are never promoted into the public payload' test expects exactly those four keys. Add a test row named exactly `EC1 allowlist: <rest>`: a context of only {epicId:'epic-1'} yields a context with exactly that key and value; each non-string epicId (1, null, true, {}, ['epic-1']) alone yields no context property at all; taskId plus a non-string epicId yields exactly ['taskId']. Event objects are vm-realm objects: compare Object.keys or JSON, never deepStrictEqual against a host literal (mem:gotcha-vscode-panel-strict-require-map). Error handling is unchanged in kind: a malformed context never throws, it is filtered key by key. Edit with your own editor tool (Edit on Claude, apply_patch on codex exec), never a shell write (project rail).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/plan-approval-client.test.cjs"
       ],
-      "startedAt": "2026-11-04T00:20:02.150Z"
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ],
+      "note": "allowlistedErrorContext now passes a string epicId (DaemonErrorContext.epicId added, docs say four keys); updateEpic returns sendMessage's boolean. plan-approval-client.test.cjs: the two epicId-drop tests updated with exact key sets, assertMismatchPayload takes the expected key list, new row EC1. 29/29 pass in that file (run via NODE_PATH, no npm in the shared checkout).",
+      "startedAt": "2026-11-04T00:20:02.150Z",
+      "completedAt": "2026-11-04T00:20:40.472Z"
     },
     {
       "stepId": "step-2",
@@ -75,7 +81,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:34:21.111Z",
-  "updatedAt": "2026-11-04T00:20:02.150Z",
+  "updatedAt": "2026-11-04T00:20:40.472Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T23:59:30.368Z",
@@ -84,7 +90,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-03T23:59:54.131Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -94,7 +101,9 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:18:49.564Z",
   "executionContract": {

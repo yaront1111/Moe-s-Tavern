@@ -64,13 +64,20 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (final step, adversarial-self-review skill), scoped to this task's diff. Check each item below.\n\n(a) `git diff` touches only the 3 planned files. moe-agent.sh gains only the guarded block, so VM_ROUTE=false never enters it, and legacy outage text and order are unchanged.\n\n(b) Mutant proof: VR-outage must FAIL against the pre-fix wrapper.\n- Build a full-tree snapshot (the vm-route drift guard reads packages/moe-daemon/src/state/validators.ts): S=$(mktemp -d); git archive HEAD | tar -x -C \"$S\".\n- Copy this task's harness and fake proxy into it.\n- Overwrite its scripts/moe-agent.sh with `git show \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\":scripts/moe-agent.sh`.\n- Run its postflight-vm-route.sh. Expect a VR-outage failure: MOE_LAUNCH_PROBE printed, or no marked claim after the flip. Name it in the completion summary.\n\n(c) With FAKE_READINESS_AFTER unset, the fake proxy behaves exactly as before and writes no readiness-count.\n\n(d) Edge cases:\n- A held outage task on the route resumes through alreadyAssigned and is never released by launch_outage_postflight.\n- A profile flipping back to legacy restarts the host streak at 0.\n- The first VM iteration still waits out one outage backoff at the loop top (at most MOE_LAUNCH_BACKOFF_MAX_SEC). That is accepted and noted.\n\n(e) parity-check passes, and there is no new MOE_* token and no ps1 edit (twin: CQ-M07n, task-62ec51f1).\n\n(f) Error handling: the chat post can never fail the iteration.\n\nIf anything changes, re-run step 4's command and submit that fresh output as the test evidence. Optionally add FAKE_READINESS_AFTER and VR-outage to the fixture list in mem:convention-verified-local-wrapper-gate (Serena edit_memory).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-04T00:20:27.826Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Self-review, no code change (so no re-run past step 4's gate).\n(a) The diff vs 09529122 touches only the 3 files. The wrapper gains only the block guarded by VM_ROUTE=true && LAUNCH_OUTAGE=true, and the legacy outage sites are byte-identical.\n(b) MUTANT RED: a full git-archive HEAD snapshot in /tmp with 09529122's moe-agent.sh. Its postflight-vm-route.sh fails VR-outage with 'expected one outage-over line (0 !== 1)'. The wrapper output shows the defect after the flip: 'Launch outage (streak 3): ... calls no claim_next_task', then 'MOE_LAUNCH_PROBE ... launching a taskless launch probe', then the probe turned into 'MOE_TASKLESS_NO_LAUNCH reason=vm-route'. EXIT=1 on two independent runs.\n(c) The knob only runs when FAKE_READINESS_AFTER is truthy, and readiness-count is referenced nowhere else. When unset, nothing is written.\n(d) A held outage task (refused release) is cleared from LAUNCH_OUTAGE_HELD_TASK_ID. The marked claim resumes it via alreadyAssigned, and launch_outage_postflight is unreachable (LAUNCH_OUTAGE false). A flip back to legacy restarts the streak at 0. The first VM iteration still waits one outage backoff at the loop top and prints the 'claims none until a probe launches' backoff line before the route engages. That was accepted in the plan (at most MOE_LAUNCH_BACKOFF_MAX_SEC).\n(e) parity PASS. No new MOE_* token in the added lines. moe-agent.ps1 untouched (twin: CQ-M07n).\n(f) The python json build and moe_rpc chat_send are both '|| true' with output to /dev/null. The message goes to python as argv (no injection), and an empty GENERAL_CHANNEL_ID skips the post.",
+      "startedAt": "2026-11-04T00:20:27.826Z",
+      "completedAt": "2026-11-04T00:20:46.131Z"
     }
   ],
   "planRevision": 1,
@@ -90,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:12:21.590Z",
-  "updatedAt": "2026-11-04T00:20:27.827Z",
+  "updatedAt": "2026-11-04T00:20:46.131Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:41:27.476Z",
@@ -100,7 +107,7 @@
     "firstClaimAt": "2026-11-03T22:43:02.962Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -114,7 +121,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:57:38.214Z",
