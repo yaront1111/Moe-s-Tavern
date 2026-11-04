@@ -84,7 +84,7 @@ describe('qa_reject bounded escalation', () => {
   };
 
   it('sends the task back to WORKING below the soft cap', async () => {
-    // maxReopens default 3 → reopenCount 0 -> 1 stays WORKING.
+    // Reopen cap 3 → reopenCount 0 -> 1 stays WORKING.
     setupMoe(); writeEpic(); writeTask({ reopenCount: 0 });
     await state.load();
     const result = await qaRejectTool(state).handler(
@@ -105,6 +105,19 @@ describe('qa_reject bounded escalation', () => {
     expect(result.status).toBe('PLANNING');
     expect(result.reopenCount).toBe(3);
     expect(result.parkedForHuman).toBe(false);
+    expect(result.exceededReopenCap).toBe(true);
+  });
+
+  it('ignores a maxReopens key on the task file: the reopen cap stays 3', async () => {
+    // No tool writes task.maxReopens and qa_reject no longer reads it, so a stray
+    // key (a hand-edited or legacy file) still loads and cannot move the cap.
+    setupMoe(); writeEpic(); writeTask({ reopenCount: 2, maxReopens: 10 } as Partial<Task>);
+    await state.load();
+    const result = await qaRejectTool(state).handler(
+      { taskId: 'task-1', reason: 'still broken', workerId: 'qa-a' }, state,
+    ) as RejectResult & { maxReopens: number };
+    expect(result.maxReopens).toBe(3);
+    expect(result.status).toBe('PLANNING');
     expect(result.exceededReopenCap).toBe(true);
   });
 
@@ -486,11 +499,6 @@ describe('moe.qa_reject', () => {
   it('clears stale rejectionDetails after structured details are followed by reason-only rejection', async () => {
     const rejectTool = qaRejectTool(h.state);
 
-    // Raise the reopen cap so this test (which performs three rejections)
-    // doesn't trip the auto-flip-to-PLANNING path that newer qa_reject
-    // applies once reopenCount >= maxReopens.
-    await h.state.updateTask('task-1', { maxReopens: 10 } as Partial<import('../types/schema.js').Task>);
-
     await rejectTool.handler({
       taskId: 'task-1',
       reason: 'Initial structured rejection',
@@ -512,7 +520,9 @@ describe('moe.qa_reject', () => {
       failedDodItems: ['New DoD item only'],
     });
 
-    await h.state.updateTask('task-1', { status: 'REVIEW' });
+    // A third rejection would reach the reopen cap (3) and flip to PLANNING;
+    // this test is about rejectionDetails, so keep it below the cap.
+    await h.state.updateTask('task-1', { status: 'REVIEW', reopenCount: 0 });
     const reasonOnlyResult = await rejectTool.handler({
       taskId: 'task-1',
       reason: 'Reason-only rejection',

@@ -376,9 +376,9 @@ export interface Project {
 export const CURRENT_SCHEMA_VERSION = 6;
 
 /**
- * Default cap on QA reopen cycles. After this many rejections, qa_reject
+ * Cap on QA reopen cycles, the same for every task: there is no per-task override
+ * (the `_DEFAULT` suffix is historical). After this many rejections, qa_reject
  * sends the task back to PLANNING for re-planning instead of WORKING.
- * Override per-task via `task.maxReopens`.
  */
 export const MAX_REOPENS_DEFAULT = 3;
 
@@ -982,12 +982,6 @@ export interface Task {
    * "overwrite-and-lose" behavior.
    */
   rejectionHistory?: RejectionHistoryEntry[];
-  /**
-   * Hard cap on QA reopen cycles before the task is auto-flipped back to
-   * PLANNING (architect picks it up rather than the worker spinning on the
-   * same rejection). Defaults to MAX_REOPENS_DEFAULT (3).
-   */
-  maxReopens?: number;
   /**
    * Launch tier set at submit_plan (architect choice, floored by plan size)
    * and bumped one step by each qa_reject. Drives the claim `launch` hint.

@@ -20,7 +20,7 @@ const VALID_ISSUE_TYPES: QAIssueType[] = [
 export function qaRejectTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_reject',
-    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the task\'s reopen cap (task.maxReopens, default 3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human (needsHumanReview), and a row so parked refuses any supplied workerId with NOT_ALLOWED. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH. A verdict frees the QA seat: the reply carries sessionHandoff END_SESSION for it and no nextAction, so end the session; do not claim or wait inside it.',
+    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the reopen cap (3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human (needsHumanReview), and a row so parked refuses any supplied workerId with NOT_ALLOWED. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH. A verdict frees the QA seat: the reply carries sessionHandoff END_SESSION for it and no nextAction, so end the session; do not claim or wait inside it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -202,8 +202,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       const priorHistory = Array.isArray(task.rejectionHistory) ? task.rejectionHistory : [];
       const updatedHistory = [historyEntry, ...priorHistory].slice(0, 20);
 
-      // Bounded escalation. Two tiers off the reopen cap (default
-      // MAX_REOPENS_DEFAULT (3), per-task override via task.maxReopens):
+      // Bounded escalation. Two tiers off the reopen cap, MAX_REOPENS_DEFAULT
+      // (3) for every task (there is no per-task override):
       //   soft cap  (newReopenCount >= maxReopens, no cap re-plan recorded):
       //             flip back to PLANNING once so the architect gets ONE
       //             re-plan instead of the worker spinning, and stamp
@@ -218,9 +218,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       // therefore needs capReplanAt; a row without it (written before the field
       // existed) reads as "no re-plan yet". Once it is set, every later reject
       // past the cap parks, so the PLANNING↔WORKING↔REVIEW loop stays bounded.
-      const maxReopens = typeof task.maxReopens === 'number' && task.maxReopens > 0
-        ? task.maxReopens
-        : MAX_REOPENS_DEFAULT;
+      const maxReopens = MAX_REOPENS_DEFAULT;
       const softCap = maxReopens;
       const hardCap = maxReopens + 1;
       const capReplanned = typeof task.capReplanAt === 'string' && task.capReplanAt.length > 0;

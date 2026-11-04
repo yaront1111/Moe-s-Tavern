@@ -877,7 +877,6 @@ describe('governance control-plane features', () => {
         status: 'REVIEW',
         assignedWorkerId: 'qa-1',
         contextFetchedBy: ['qa-1'], // simulate QA preflight get_context
-        maxReopens: 10, // ensure reopen-cap does NOT trigger first
         implementationPlan: [
           { stepId: 'step-1', description: 's', status: 'COMPLETED', affectedFiles: [] },
         ],
@@ -908,12 +907,13 @@ describe('governance control-plane features', () => {
         reason: 'still failing tests',
         failedDodItems: ['Tests pass'],
         workerId: 'qa-1',
-      }, state) as { status: string; repeatedFailedDodItem?: string };
+      }, state) as { status: string; repeatedFailedDodItem?: string; exceededReopenCap: boolean };
 
       expect(result.status).toBe('PLANNING');
       expect(result.repeatedFailedDodItem).toBe('Tests pass');
       expect(state.getTask('task-d')!.status).toBe('PLANNING');
-      // Did NOT hit the reopen cap (maxReopens=10, count=2)
+      // Did NOT hit the reopen cap (3, count=2): the repeated item caused the flip.
+      expect(result.exceededReopenCap).toBe(false);
       expect(state.getTask('task-d')!.reopenCount).toBe(2);
     });
   });

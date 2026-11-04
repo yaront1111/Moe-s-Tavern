@@ -492,7 +492,6 @@ interface Task {
   rejectionDetails?: RejectionDetails;          // Latest structured QA feedback (cleared on next cycle)
   rejectionHistory?: RejectionHistoryEntry[];   // Newest-first; capped at 20 entries
   failedDodItems?: FailedDodItem[];             // Append-only DoD failure log; capped at last 100
-  maxReopens?: number;                          // Per-task override of MAX_REOPENS_DEFAULT (3)
   capReplanAt?: string;                         // ISO time of the qa_reject that reached the reopen cap and flipped the row to PLANNING for its one re-plan; never cleared
   needsHumanReview?: boolean;                   // true from a qa_reject past the cap once capReplanAt is set (row stays REVIEW, unassigned, out of QA claims); cleared by qa_approve, a reopen, release_task, set_task_status or a board move into REVIEW
   tier?: 'light' | 'standard' | 'heavy';        // Launch tier: submit_plan (floored by plan size), +1 per qa_reject
@@ -1113,12 +1112,14 @@ interface PlanCritiqueResult {
 export const MAX_REOPENS_DEFAULT = 3;
 ```
 
-`moe.qa_reject` auto-flips a task from `WORKING` back to `PLANNING` when either:
+`moe.qa_reject` auto-flips a task from `REVIEW` back to `PLANNING` when either:
 
-1. `reopenCount ≥ task.maxReopens ?? MAX_REOPENS_DEFAULT`, or
+1. `reopenCount ≥ MAX_REOPENS_DEFAULT` and the task has had no cap re-plan yet (`capReplanAt` unset), or
 2. The same DoD item has been recorded in `failedDodItems[]` two or more times.
 
 In both cases the architect (not the worker) is expected to pick up the re-plan; the daemon cross-posts a heads-up to `#architects` and emits a `TASK_REOPENED` activity event with the rejection history.
+
+The cap is the same for every task: there is no per-task override. Once `capReplanAt` is set, a rejection past the cap (`reopenCount ≥ MAX_REOPENS_DEFAULT + 1`) parks the task in `REVIEW` for a human (`needsHumanReview`) instead of flipping it again.
 
 ---
 
