@@ -22,9 +22,9 @@
       "modifiedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts"
       ],
-      "note": "New test file ported from the architect prototype.",
-      "startedAt": "2026-11-04T00:20:29.328Z",
-      "completedAt": "2026-11-04T00:20:44.170Z"
+      "note": "Landing recovery: confirmed the 120-line test file is already in the worktree at checkpoint 75355f80 (git diff 1d830f75 75355f80); not rewritten.",
+      "startedAt": "2026-11-04T05:29:46.990Z",
+      "completedAt": "2026-11-04T05:29:49.150Z"
     },
     {
       "stepId": "step-2",
@@ -38,9 +38,9 @@
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/util/routing.ts"
       ],
-      "note": "Floored kept stored effort in submit_plan and resolveLaunch via maxEffort+effortFloor.",
-      "startedAt": "2026-11-04T00:20:44.860Z",
-      "completedAt": "2026-11-04T00:20:55.558Z"
+      "note": "Landing recovery: confirmed the stored-effort floor in submitPlan.ts and resolveLaunch's floor in routing.ts are already in the worktree at 75355f80; not rewritten.",
+      "startedAt": "2026-11-04T05:29:50.554Z",
+      "completedAt": "2026-11-04T05:29:53.160Z"
     },
     {
       "stepId": "step-3",
@@ -52,18 +52,18 @@
       "modifiedFiles": [
         "docs/MCP_SERVER.md"
       ],
-      "note": "Extended the Launch effort and models bullet in ### moe.submit_plan only.",
-      "startedAt": "2026-11-04T00:20:56.313Z",
-      "completedAt": "2026-11-04T00:20:59.093Z"
+      "note": "Landing recovery: the one-bullet docs edit inside ### moe.submit_plan is already in the worktree at 75355f80; not rewritten.",
+      "startedAt": "2026-11-04T05:29:53.838Z",
+      "completedAt": "2026-11-04T05:29:56.000Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written. The same text (730 bytes) is at /mnt/d/moe-scratch/plan-87cba58c/checkref-gate.txt.\n- What it does: it overlays submitPlan.ts, the new test and routing.ts onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive, mem:gotcha-daemon-linux-snapshot-gate). Then, under env -i with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci` and vitest on the new file plus submitPlan.test.ts, qaReject.test.ts (the launch-escalation cases) and routing.test.ts.\n- Expected: exit 0, 'Test Files  4 passed (4)', and a last line of 'effortFloor ok (/tmp/m87cb.XXXX)'.\n- Architect dry runs, from a --shared clone at 0f56d3a7 with this plan's prototype uncommitted:\n  - this command: exit 0, 4 files and 131 tests;\n  - the full daemon suite with the prototype: 279 files, 7432 passed, 24 skipped.\n- Then rm -rf the printed literal /tmp/m87cb.XXXX path.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit, read the printed path and the log tail first, then fix the earlier steps' files.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "checkRef exit 0: 4 files, 131 tests passed, 'effortFloor ok (/tmp/m87cb.de6i)'.",
-      "startedAt": "2026-11-04T00:20:59.859Z",
-      "completedAt": "2026-11-04T00:21:11.828Z"
+      "note": "Fresh checkRef run: exit 0, Test Files 4 passed (4), Tests 131 passed (131), 'effortFloor ok (/tmp/m87cb.nbTk)'. Scratch dir removed.",
+      "startedAt": "2026-11-04T05:29:56.702Z",
+      "completedAt": "2026-11-04T05:30:09.577Z"
     },
     {
       "stepId": "step-5",
@@ -75,23 +75,23 @@
         "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts"
       ],
       "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts",
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/util/routing.ts",
-        "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts",
         "docs/MCP_SERVER.md"
       ],
-      "note": "Self-review found no changes needed. Docs/tests-only rows still keep low/medium, because effortFloor is undefined for them. No new concurrency. Scope is exactly the four planned files. RED re-proof with the original sources: 3 failed (an omitted effort on a re-plan the size floor raises to heavy; an explicit tier heavy with effort omitted; resolveLaunch floors a stored effort), 2 passed (control explicit high; a re-plan that stays standard). Scratch snapshot removed.",
-      "startedAt": "2026-11-04T00:21:13.542Z",
-      "completedAt": "2026-11-04T00:21:28.168Z"
+      "note": "Re-read the diff 1d830f75..75355f80: scope is exactly the four planned files, docs edit confined to the submit_plan Launch effort bullet, explicit-effort branch and effortRaised untouched, effortFloor is undefined for docs/tests-only so low efforts are kept, no new concurrency. No file changed in this session. The RED re-proof (3 failed / 2 passed) was done by the prior session and recorded in the completion summary; not re-run.",
+      "startedAt": "2026-11-04T05:30:10.212Z",
+      "completedAt": "2026-11-04T05:30:14.038Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Landing recovery only, no code change owed. worker-2dc72348 finished all 5 steps at 00:21:32Z (11-04). Its wrapper committed them to moe/task/task-87cba58c1835452dab48f6817278e033 as checkpoint 75355f80, and the task worktree is clean at that commit. Then the 00:30:15Z deregister wave killed the wrapper while it waited for the git-land lease. No completion reached moe/work-2026-10-24, and no receipt journal or rescue ref exists. The daemon closed attempt-6f2bc0c2 at that moment, so no unlanded/landingRetry route could fire, and qa-58a8e460's landed gate parked the row (MOE_CONTROL_CHECKOUT_BEHIND). This reopen resets the steps to PENDING. For each step, confirm the bytes already in the worktree (git diff 1d830f75 75355f80) instead of rewriting them. Then re-run the plan's verification command and call moe.complete_task; the wrapper lands the completion.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -99,17 +99,15 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:59:31.684Z",
-  "updatedAt": "2026-11-04T05:25:21.219Z",
+  "updatedAt": "2026-11-04T05:31:07.234Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:15:38.624Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 10
   },
   "contextFetchedBy": [
-    "architect-1dd28c7c",
-    "worker-2dc72348",
-    "qa-58a8e460"
+    "worker-593560ee"
   ],
   "tier": "standard",
   "effort": "high",
@@ -188,12 +186,12 @@
   "planApprovedAt": "2026-11-04T00:19:24.277Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T00:20:29.328Z",
-  "reviewStartedAt": "2026-11-04T00:21:32.701Z",
+  "reviewStartedAt": "2026-11-04T05:30:19.707Z",
   "verification": {
     "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/m87cb.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in tools/submitPlan{,.effortFloor.test}.ts util/routing.ts; do cp \"$R/$f\" $f || exit 1; done && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx vitest run src/tools/submitPlan{.effortFloor,}.test.ts src/tools/qaReject.test.ts src/util/routing.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aq '✓ src/tools/submitPlan.effortFloor' ../v.log && echo \"effortFloor ok ($L)\" )",
     "exitCode": 0,
-    "outputTail": "Test Files  4 passed (4)\n      Tests  131 passed (131)\neffortFloor ok (/tmp/m87cb.de6i)",
-    "reportedAt": "2026-11-04T00:21:32.701Z",
+    "outputTail": "Test Files  4 passed (4)\n      Tests  131 passed (131)\neffortFloor ok (/tmp/m87cb.nbTk)",
+    "reportedAt": "2026-11-04T05:30:19.707Z",
     "source": "agent-reported"
   },
   "filesModified": [
@@ -202,10 +200,37 @@
     "packages/moe-daemon/src/util/routing.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "A kept stored effort is now floored to the tier minimum in submit_plan (the `if (task.effort)` branch) and in resolveLaunch, so a standard/high row re-planned into heavy is stored and launched at xhigh. Docs/tests-only rows keep low/medium and explicit-effort behaviour is unchanged. New test file submitPlan.effortFloor.test.ts has 5 cases. RED re-proof with the original sources gave 3 failed (omitted effort on a heavy re-plan; explicit tier heavy with effort omitted; resolveLaunch floor) and 2 passed (controls). docs/MCP_SERVER.md's ### moe.submit_plan \"Launch effort and models\" bullet now covers the kept stored effort and the claim-time launch hint.",
-  "blockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-87cba58c1835452dab48f6817278e033: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only",
+  "completionSummary": "A kept stored effort is now floored to the tier minimum in submit_plan (the `if (task.effort)` branch) and in resolveLaunch, so a standard/high row re-planned into heavy is stored and launched at xhigh. Docs/tests-only rows keep low/medium; the explicit-effort branch and effortRaised are unchanged. New test file submitPlan.effortFloor.test.ts has 5 cases (RED proof by the prior session: 3 failed, 2 passed). docs/MCP_SERVER.md's ### moe.submit_plan \"Launch effort and models\" bullet covers the kept stored effort and the claim-time launch hint. Landing recovery: the bytes were already committed at checkpoint 75355f80 on the task branch; this session re-confirmed them via git diff 1d830f75 75355f80 and re-ran the verification fresh (4 files, 131 tests passed).",
+  "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-04T05:25:21.219Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-87cba58c1835452dab48f6817278e033: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only",
+  "commits": [
+    {
+      "sha": "c54b063b4ae577a91ca07e9f7b59fdbeb7fcfa64",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T05:28:59Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/util/routing.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T05:31:07.234Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T05:28:59Z",
+    "at": "2026-11-04T05:31:07.234Z"
+  }
 }
