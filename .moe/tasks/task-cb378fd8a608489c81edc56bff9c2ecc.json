@@ -57,7 +57,17 @@
       "stepId": "step-6",
       "description": "Verification, run ONCE after steps 1-5, from this task's worktree root, holding the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). Call moe.acquire_resource { resourceId: \"jetbrains-gradle\" } first, and moe.release_resource on every path, red or green.\nThe command is the 5 executionContract.checkRefs joined with ' && ', in order:\n- content check A (CONFIGURATION, README);\n- content check B (GETTING_STARTED, SCHEMA, the JetBrains and VS Code labels, the new JUnit test);\n- task-c199e177's 'gemini mode' rows, on WSL node (bash) and Windows node.exe (PowerShell 5.1 and pwsh 7) in parallel;\n- parity-check.sh, parity-check.ps1 on pwsh.exe and powershell.exe, and npm run lint;\n- Gradle --tests com.moe.util.TerminalAgentLauncherTest.\nIts fresh output is the complete_task evidence. Expect: 'docs check A f=0', 'docs check B f=0', 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8' (8 or more each), PASS parity-check.sh, PASS parity-check.ps1 twice, the lint OK lines, BUILD SUCCESSFUL, failures=\"0\" errors=\"0\" and 'gradle rc=0'.\nThe dry run took about 1 min without Gradle; budget 3-5 min against the human's 20-min cap. Do not run postflight.sh or postflight.ps1 (the human's 18:05Z decision, comment-1a9850e2).\nError handling for a red run:\n- A red content check names the file and string: fix the text, never the check.\n- A red gemini mode row means task-c199e177's landed launcher or test changed. Read the log whose path the line prints, then moe.report_blocked naming task-c199e177. Never edit a launcher or test from this row.\n- A Gradle compile error is in the new test: re-check the backticks and the FQN.\n- A lease held elsewhere: moe.report_blocked { resourceId: \"jetbrains-gradle\" }.\nWSL notes: mem:gotcha-jetbrains-gradle-from-wsl, mem:gotcha-pwsh7-reachable-from-wsl.",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification, run ONCE after steps 1-5, from this task's worktree root, holding the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). Call moe.acquire_resource { resourceId: \"jetbrains-gradle\" } first, and moe.release_resource on every path, red or green.\nThe command is the 5 executionContract.checkRefs, each wrapped VERBATIM in its own subshell and chained in order: `( <checkRefs[0]> ) && ( <checkRefs[1]> ) && ( <checkRefs[2]> ) && ( <checkRefs[3]> ) && ( <checkRefs[4]> )`. Never join the bare refs with ' && '. Refs 0, 1 and 4 end in `exit $f`/`exit $r`, so a bare join exits 0 after 'docs check A f=0', and checks B to E never run (comment-0a43e151). Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`. The chain stops at the first red ref and returns its code. Submit that exact command and its output tail as moe.complete_task verification. The refs, in order:\n- content check A (CONFIGURATION, README);\n- content check B (GETTING_STARTED, SCHEMA, the JetBrains and VS Code labels, the new JUnit test);\n- task-c199e177's 'gemini mode' rows, on WSL node (bash) and Windows node.exe (PowerShell 5.1 and pwsh 7) in parallel;\n- parity-check.sh, parity-check.ps1 on pwsh.exe and powershell.exe, and npm run lint;\n- Gradle --tests com.moe.util.TerminalAgentLauncherTest.\nIts fresh output is the complete_task evidence. Expect: 'docs check A f=0', 'docs check B f=0', 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8' (8 or more each), PASS parity-check.sh, PASS parity-check.ps1 twice, the lint OK lines, BUILD SUCCESSFUL, failures=\"0\" errors=\"0\" and 'gradle rc=0'. All five must appear: if the output ends after check A, the chain is wrong.\nThe dry run took about 1 min without Gradle; budget 3-5 min against the human's 20-min cap. Do not run postflight.sh or postflight.ps1 (the human's 18:05Z decision, comment-1a9850e2).\nError handling for a red run:\n- A red content check names the file and string: fix the text, never the check.\n- A red gemini mode row means task-c199e177's landed launcher or test changed. Read the log whose path the line prints, then moe.report_blocked naming task-c199e177. Never edit a launcher or test from this row.\n- A Gradle compile error is in the new test: re-check the backticks and the FQN.\n- A lease held elsewhere: moe.report_blocked { resourceId: \"jetbrains-gradle\" }.\nWSL notes: mem:gotcha-jetbrains-gradle-from-wsl, mem:gotcha-pwsh7-reachable-from-wsl.",
+          "reason": "Verification trap found by architect-2a219562 (comment-0a43e151 on this row). Refs 0, 1 and 4 end in `exit $f`/`exit $r`, and every ref is a `;`-sequence. Joined with bare ' && ', the run exits 0 right after 'docs check A f=0', and checks B to E never run: a false-green gate. Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`, so subshells change nothing else. No ref byte changes.",
+          "amendedBy": "governor-e6142a94",
+          "amendedAt": "2026-11-04T19:36:52.345Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-7",
@@ -66,7 +76,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -105,11 +115,17 @@
       "author": "architect-cd0ac706",
       "content": "@governor-e6142a94 Re comment-8c983720, comment-1a9850e2 and comment-54724844: I planned this row (rev 1, TURBO, now WORKING but gated) and split the port.\n\n- Split. The whole port needs 13 files, and the plan cap is 10. This DoD can't be edited over MCP, so this row is the last slice. It carries the docs (README, CONFIGURATION, GETTING_STARTED, SCHEMA), the JetBrains label plus a JUnit pin, the VS Code quick-pick label, and the 18-hunk #208 map. New row task-c199e177 (PLANNING; I plan it next) carries both launchers, the parity needles and the fake-binary rows. This row now dependsOn [task-74fe4c99, task-c199e177]. c199e177 dependsOn task-74fe4c99 (CQ-M07s) only, per your 17:56Z change, so it runs in parallel with t.\n- Your constraints. Neither row touches postflight-vm-route. Every edit is anchored by text, checked once each at edc3e937. The AGY parity needles go after s's landed lines (sh: after the grok banner loop; ps1: the last $required group). The gemini mode rows go in scripts/tests/protected-agent-command.test.mjs, the whole-launcher harness that covers agentCommand.\n- Gates follow your scoped list, no postflight. They were dry-run in a scratch clone: c199e177's rows plus the type rows take about 50 s, parity, parse and lint about 6 s. This row adds content checks, the same rows and Gradle on TerminalAgentLauncherTest, about 3-5 min. Both are well under 20 min.\n- A design point beyond #208: under MOE_RUNTIME_PROTECTED=1 a literal port would still require the Gemini CLI to be installed, because protected_resolve_cli resolves the name first, and would then run a bare agy or an unvetted MOE_AGY_COMMAND. c199e177 resolves agy through the trusted lookup and doesn't read MOE_AGY_COMMAND under the marker. The protected allowlist is unchanged, so agy stays refused there.\n- Follow-ups outside #208, not done, for you to file if you want them:\n  (1) SCHEMA's NOTE under WorkerType still says every worker records as CLAUDE. That has been stale since task-0b40957c.\n  (2) plugin.xml's and moe-vscode/package.json's marketplace descriptions still say 'Gemini CLI'.\n  (3) protected-agent-command.test.mjs, along with 6 other scripts/tests files, is not wired into CI. The agy detection is CI-pinned through prompt-cache-launcher's typeCases.",
       "timestamp": "2026-11-04T18:28:35.356Z"
+    },
+    {
+      "id": "comment-0a43e15151504bc0b74a16cc54ef61e7",
+      "author": "architect-2a219562",
+      "content": "Verification trap, found by architect-2a219562 while planning task-ff0df867 (proof run in bash). Step 6 runs the 5 checkRefs \"joined with ' && '\", but each ref is a `;`-sequence. `&&` therefore links only one ref's last command to the next ref's first command (its `cd`). Refs 0, 1 and 4 also end in `exit $f`/`exit $r`, so a joined run exits 0 right after \"docs check A f=0\" and checks B to E never run. Proof: `bash -c 'echo \"check A f=0\"; f=0; exit $f && echo B1; echo \"check B ran\"; false'` prints only the first line and returns 0.\nFix, with no ref byte changed: wrap each ref in a subshell, `( <ref0> ) && ( <ref1> ) && ( <ref2> ) && ( <ref3> ) && ( <ref4> )`. Each `exit` then ends only its own subshell, and the chain stops at the first red ref with that ref's code. task-c199e177 has the same trap without the exit (see the comment there). @governor-e6142a94 FYI, in case you want to amend the step text.",
+      "timestamp": "2026-11-04T19:27:07.524Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T17:48:59.958Z",
-  "updatedAt": "2026-11-04T19:01:51.751Z",
+  "updatedAt": "2026-11-04T19:36:52.345Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T17:49:00.398Z",
     "plannedStepCount": 7,

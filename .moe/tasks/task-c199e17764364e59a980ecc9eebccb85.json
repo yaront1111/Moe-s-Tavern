@@ -49,7 +49,17 @@
       "stepId": "step-5",
       "description": "Verification, run ONCE after steps 1-4, from this task's worktree root. The command is the 3 executionContract.checkRefs joined with ' && ', in order:\n- the 'gemini mode' rows on WSL node (bash) and on Windows node.exe (PowerShell 5.1 and pwsh 7), in parallel;\n- the agy typeCases on both nodes, in parallel;\n- bash -n, parity-check.sh and npm run lint, then ParseFile of moe-agent.ps1 and parity-check.ps1 on pwsh.exe and on powershell.exe.\nIts fresh output is the complete_task evidence. Expect:\n- 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8' (8 or more each);\n- 'agy type rows: rc=0 linux=2 windows=6' (or more);\n- PASS parity-check.sh, the lint OK lines, and 'ParseFile ok' plus PASS parity-check.ps1 twice.\nThe architect's dry run took about 50 s for the rows plus 6 s for the rest. That fits the human's 20-minute gate rail; per that rail and comment-1a9850e2, do not run postflight.sh or postflight.ps1, and no JetBrains test (no Kotlin changes here). Linux pwsh is optional: on WSL its rows skip, and the gate counts bash there.\nError handling for a red run:\n- A red row prints its log path: read the TAP 'not ok' block, which carries the wrapper's stdout and stderr.\n- 'a CLI ran' or a wrong ran.log line means the remap or protected resolution is off.\n- A count below 8 with rc=0 means a row skipped: the engine is missing, so check pwsh.exe and powershell.exe on the WSL PATH (mem:gotcha-pwsh7-reachable-from-wsl).\n- Never weaken a row or the count.\n- WSL leaks MOE_* into Windows processes: the pieces unset every MOE_*/CLAUDE* variable (mem:gotcha-launcher-ps1-rows-from-wsl).",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification, run ONCE after steps 1-4, from this task's worktree root. The command is the 3 executionContract.checkRefs, each wrapped VERBATIM in its own subshell and chained in order: `( <checkRefs[0]> ) && ( <checkRefs[1]> ) && ( <checkRefs[2]> )`. Never join the bare refs with ' && '. Each ref is a `;`-sequence, so a bare join links only the boundary commands, and a red check inside a ref would not fail the gate (comment-0a43e151 on task-cb378fd8). Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`, so the subshells need nothing else. The chain stops at the first red ref and returns its code. Submit that exact command and its output tail as moe.complete_task verification. The refs cover:\n- the 'gemini mode' rows on WSL node (bash) and on Windows node.exe (PowerShell 5.1 and pwsh 7), in parallel;\n- the agy typeCases on both nodes, in parallel;\n- bash -n, parity-check.sh and npm run lint, then ParseFile of moe-agent.ps1 and parity-check.ps1 on pwsh.exe and on powershell.exe.\nIts fresh output is the complete_task evidence. Expect:\n- 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8' (8 or more each);\n- 'agy type rows: rc=0 linux=2 windows=6' (or more);\n- PASS parity-check.sh, the lint OK lines, and 'ParseFile ok' plus PASS parity-check.ps1 twice.\nThe architect's dry run took about 50 s for the rows plus 6 s for the rest. That fits the human's 20-minute gate rail; per that rail and comment-1a9850e2, do not run postflight.sh or postflight.ps1, and no JetBrains test (no Kotlin changes here). Linux pwsh is optional: on WSL its rows skip, and the gate counts bash there.\nError handling for a red run:\n- A red row prints its log path: read the TAP 'not ok' block, which carries the wrapper's stdout and stderr.\n- 'a CLI ran' or a wrong ran.log line means the remap or protected resolution is off.\n- A count below 8 with rc=0 means a row skipped: the engine is missing, so check pwsh.exe and powershell.exe on the WSL PATH (mem:gotcha-pwsh7-reachable-from-wsl).\n- Never weaken a row or the count.\n- WSL leaks MOE_* into Windows processes: the pieces unset every MOE_*/CLAUDE* variable (mem:gotcha-launcher-ps1-rows-from-wsl).",
+          "reason": "Verification trap found by architect-2a219562 (comment-0a43e151 on cb378fd8). Each checkRef is a `;`-sequence (refs 0/1/2 have 13/12/4 top-level `;`). Joined with bare ' && ', the && links only the boundary commands, so a red check inside a ref can't fail the gate. Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`, so subshells change nothing else. No ref byte changes, only how they're chained.",
+          "amendedBy": "governor-e6142a94",
+          "amendedAt": "2026-11-04T19:36:52.296Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-6",
@@ -58,9 +68,9 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-593560ee",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -72,17 +82,25 @@
   ],
   "priority": "MEDIUM",
   "order": 537.2,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-b2fad41493c6499b9eed658f47ccff2f",
+      "author": "architect-2a219562",
+      "content": "Verification trap, found by architect-2a219562 while planning task-ff0df867 (proof run in bash). The verify step joins the 3 checkRefs with ' && ', but each ref is a `;`-sequence. `&&` links only one ref's last command to the next ref's `cd`, so the rest of the next ref runs anyway and the exit code is the LAST ref's alone. A red \"gemini mode rows\" ref followed by green parity/lint therefore returns 0. Proof: `bash -c 'echo \"ref0 says FAIL\"; false && cd /; echo \"ref1 body ran\"; true'` returns 0.\nFix, with no ref byte changed: wrap each ref in a subshell, `( <ref0> ) && ( <ref1> ) && ( <ref2> )`. The chain then stops at the first red ref and returns its code.",
+      "timestamp": "2026-11-04T19:27:10.207Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T18:14:14.056Z",
-  "updatedAt": "2026-11-04T18:32:11.994Z",
+  "updatedAt": "2026-11-04T19:42:38.819Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T18:28:59.222Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6
   },
   "contextFetchedBy": [
-    "architect-cd0ac706"
+    "architect-cd0ac706",
+    "worker-593560ee"
   ],
   "tier": "heavy",
   "effort": "xhigh",

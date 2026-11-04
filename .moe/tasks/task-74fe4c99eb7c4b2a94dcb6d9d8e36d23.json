@@ -102,8 +102,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -149,12 +149,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:19.711Z",
-  "updatedAt": "2026-11-04T18:44:52.911Z",
+  "updatedAt": "2026-11-04T19:43:04.670Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:08:35.564Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T19:42:15.738Z",
+    "wallClockMs": 27220174
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -284,15 +286,20 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T15:18:36Z",
-    "at": "2026-11-04T18:11:58.230Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T18:40:27Z",
+    "at": "2026-11-04T19:43:04.670Z"
   },
   "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-74fe4c99eb7c4b2a94dcb6d9d8e36d23: completion edc3e937ef390df064eccf1ffde6f1a813130d55 is not in the control HEAD da80b2d853f249f455955c374ff765e0ef028523 (git merge-base --is-ancestor exited 1); QA reviews landed bytes only"
+  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-74fe4c99eb7c4b2a94dcb6d9d8e36d23: completion edc3e937ef390df064eccf1ffde6f1a813130d55 is not in the control HEAD da80b2d853f249f455955c374ff765e0ef028523 (git merge-base --is-ancestor exited 1); QA reviews landed bytes only",
+  "completedAt": "2026-11-04T19:42:15.738Z",
+  "reviewCompletedAt": "2026-11-04T19:42:15.738Z",
+  "reviewSummary": "Reviewed landed edc3e937: net 425 over 4 files, which matches the CQ-M07s size rail, so I reviewed it on substance. The worktree tree equals edc3e937's.\n\nGate: checkRefs[0], EXIT=0 in 3389 s. The engine legs ran in parallel (pwsh from the worktree, PS 5.1 from an archive of edc3e937), not one after the other.\n- Both engines: 106/16/11, worktree 77/0, WT-14 11, vm-route PASS, postflight.ps1 PASS, and both [strong gate] ok lines.\n- parity sh and ps1 PASS; lint OK.\n\nDoD:\n1. The strong L6 is freeze, record, then dispatch on M -p B. No host gate is reachable. SG-pass pins it.\n2. Every non-pass row is FAILED_GATE with main at B, and its lines are identical to sh's.\n3. The legacy elseif body is unchanged, and the test diff only adds lines.\n4. Both parity files gain the family plus 4 literals. My NO_REPORT rename mutant fails both. BOM kept.\n5. Covered by the gate.\n\nAdversarial review:\n- 16 extra verdict probes per engine all match sh's Python.\n- Credentials and GIT_* are restored.\n- The exit code comes from the held handle, and a non-int counts as 1.\n- Kills go only by the held pid.\n- The Ctrl+C defer uses SetConsoleCtrlHandler, so the child still gets SIGINT.\n\nNotes, none blocking:\n- The Windows timeout kill can leak a VM; that is task-e444f6ae.\n- checkRefs[0] (about 1h50m serial) exceeds the 20-min gate rail. The DoD requires it here; future ps1 rows should use scoped gates.\n- Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

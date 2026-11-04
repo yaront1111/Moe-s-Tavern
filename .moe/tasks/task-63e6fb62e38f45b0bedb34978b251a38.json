@@ -56,7 +56,17 @@
       "stepId": "step-6",
       "description": "Verification. Run executionContract.checkRefs 0-8 fresh, from the task worktree, joined with ' && ' in order. Submit that exact command and its output tail as moe.complete_task verification.\n- [0] Prerequisites r, s, t, w and v2 have landed, and the diff touches only this plan's 5 files.\n- [1] DoD 1: the git grep, plus a joined-line scan of every docs/*.md for the stale phrases, including the 3 fragments found at planning and 'No DeliveryReceipt is sent:'.\n- [2] DoD 2: the executionProfile row names all 15 READINESS_IDS, moe.get_execution_readiness, both refusal codes and the 5-minute re-evaluation. Neither row says '(refused)' or 'is still refused'. checkEnvironments names RUNNER_ENVIRONMENT_NOT_APPROVED, and MOE_AGENT_SEAT_PATH is documented.\n- [3] DoD 2 reverse guard: every backticked code, path and moe.<tool> in those two rows exists at HEAD.\n- [4] Every MOE_ token that r/s/t added is documented.\n- [5] DoD 3: tokens in the CERTIFICATION `## Activation` section.\n- [6] DoD 4: tokens in the ARCHITECTURE section, the `- **Seat VM route.**` bullet and the architect.reference section.\n- [7] `npm run lint` and parity-check.sh.\n- [8] DoD 5: a clone at B with the 5 files overlaid, then npm ci and build. Build's prebuild regenerates initFiles.ts, so `sha1sum -c` proves the Edit-applied hunks. Then the full daemon test suite. A clone snapshot outside the repo is allowed by the customRules, and the generator needs its git history, which a git archive lacks.\n\nPlanning baseline of [8] at HEAD: 293 test files, 7594 passed, 24 skipped, about 1 minute. Every check was dry-run RED at HEAD, GREEN on a simulated edit, and RED on five mutants. Put the DoD 2 greps in the completion summary.\n\nError handling:\n- Fix a red check in the doc, never by editing the check.\n- If [0] fails because a prerequisite has not landed, call moe.report_blocked naming it. Do not document unlanded code.\n- If [1] fails only on docs/MCP_SERVER.md, that sentence belongs to CQ-M07v2 (comment-6afa8b4d): report_blocked naming task-636745311cc444f58ebb4b8ac53b96fd, and do not edit MCP_SERVER.md.",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification. Run executionContract.checkRefs 0-8 fresh, from the task worktree, each wrapped VERBATIM in its own subshell and chained in order: `( <checkRefs[0]> ) && ( <checkRefs[1]> ) && … && ( <checkRefs[8]> )`. Never join the bare refs with ' && '. Refs 0-4 are `;`-sequences, so a bare join links only the boundary commands, and a red check inside them would not fail the gate (comment-0a43e151 on task-cb378fd8). Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`. The chain stops at the first red ref and returns its code. Submit that exact command and its output tail as moe.complete_task verification.\n- [0] Prerequisites r, s, t, w and v2 have landed, and the diff touches only this plan's 5 files.\n- [1] DoD 1: the git grep, plus a joined-line scan of every docs/*.md for the stale phrases, including the 3 fragments found at planning and 'No DeliveryReceipt is sent:'.\n- [2] DoD 2: the executionProfile row names all 15 READINESS_IDS, moe.get_execution_readiness, both refusal codes and the 5-minute re-evaluation. Neither row says '(refused)' or 'is still refused'. checkEnvironments names RUNNER_ENVIRONMENT_NOT_APPROVED, and MOE_AGENT_SEAT_PATH is documented.\n- [3] DoD 2 reverse guard: every backticked code, path and moe.<tool> in those two rows exists at HEAD.\n- [4] Every MOE_ token that r/s/t added is documented.\n- [5] DoD 3: tokens in the CERTIFICATION `## Activation` section.\n- [6] DoD 4: tokens in the ARCHITECTURE section, the `- **Seat VM route.**` bullet and the architect.reference section.\n- [7] `npm run lint` and parity-check.sh.\n- [8] DoD 5: a clone at B with the 5 files overlaid, then npm ci and build. Build's prebuild regenerates initFiles.ts, so `sha1sum -c` proves the Edit-applied hunks. Then the full daemon test suite. A clone snapshot outside the repo is allowed by the customRules, and the generator needs its git history, which a git archive lacks.\n\nPlanning baseline of [8] at HEAD: 293 test files, 7594 passed, 24 skipped, about 1 minute. Every check was dry-run RED at HEAD, GREEN on a simulated edit, and RED on five mutants. Put the DoD 2 greps in the completion summary.\n\nError handling:\n- Fix a red check in the doc, never by editing the check.\n- If [0] fails because a prerequisite has not landed, call moe.report_blocked naming it. Do not document unlanded code.\n- If [1] fails only on docs/MCP_SERVER.md, that sentence belongs to CQ-M07v2 (comment-6afa8b4d): report_blocked naming task-636745311cc444f58ebb4b8ac53b96fd, and do not edit MCP_SERVER.md.",
+          "reason": "The same verification trap found by architect-2a219562 (comment-0a43e151 on cb378fd8). Refs 0-4 here are `;`-sequences (3/2/2/1/2 top-level `;`). Joined with bare ' && ', the && links only boundary commands, so a red check inside those refs can't fail the gate. Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`, so subshells change nothing else. No ref byte changes.",
+          "amendedBy": "governor-e6142a94",
+          "amendedAt": "2026-11-04T19:36:52.376Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-7",
@@ -65,7 +75,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -84,7 +94,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:57:24.860Z",
-  "updatedAt": "2026-11-04T12:35:26.352Z",
+  "updatedAt": "2026-11-04T19:36:52.376Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:15:09.520Z",
     "plannedStepCount": 7,

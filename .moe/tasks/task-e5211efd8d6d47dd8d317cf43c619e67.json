@@ -1,0 +1,43 @@
+{
+  "id": "task-e5211efd8d6d47dd8d317cf43c619e67",
+  "epicId": "epic-be924fb8",
+  "title": "bug: CI's windows-latest step \"Test PowerShell daemon autostart arguments\" is red on PR #230 since edc3e937: daemon-autostart-argv.test.mjs's driver requires exactly one Start-Process passing --project in moe-agent.ps1, and CQ-M07s added a second (the check-dispatch launch, moe-agent.ps1:9617), so both PowerShell rows throw \"found 2\"",
+  "description": "Found by architect-67c762f6 while timing suites for task-5f5c8999 (2026-11-04 ~21:30 local).\n\nEvidence:\n- Real CI: PR #230 runs 41894749395 (headSha d05e6e0b) and 41895358687 (headSha e53f5a5c, the current tip of moe/work-2026-10-24). In both, every job is green except Build (windows-latest), and its only failed step is \"Test PowerShell daemon autostart arguments\" (`node --test scripts/tests/daemon-autostart-argv.test.mjs`, ci.yml, Windows only).\n- Local repro: Windows node (node.exe from WSL) in a git-archive snapshot of edc3e937 on D:. `node.exe --test scripts/tests/daemon-autostart-argv.test.mjs` gives 13 pass, 2 fail: \"PowerShell 5.1: the daemon-autostart Start-Process passes literal-name paths as whole arguments\" and the same row for PowerShell 7. Both stderr lines say \"expected exactly one Start-Process passing --project in moe-agent.ps1, found 2\" (the driver's driver.ps1:7).\n\nCause:\n- The DRIVER in daemon-autostart-argv.test.mjs (about :55) selects every CommandAst named Start-Process whose extent text contains '--project', then requires exactly one.\n- edc3e937 (task-74fe4c99, CQ-M07s) added `$script:CheckDispatchProcess = Start-Process -FilePath $Node -ArgumentList (ConvertTo-MoeArgumentLine @($script:CheckDispatchCli, '--project', ...))` at moe-agent.ps1:9617.\n- The daemon autostart call itself (moe-agent.ps1:1029, `@(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\")`) did not change. So the selector is too broad; nothing shows that the launcher misbehaves.\n\nExpected fix: the driver selects the daemon-autostart Start-Process by what makes it that call (for example the `$daemonScript` / \"start\" arguments), not by '--project' alone, and keeps its exactly-one check. The plan decides the exact selector. The launcher is changed only if the plan shows why it must be.\n\nWhy HIGH: PR #230 merges only at all-green CI, and this is the one red step at the tip.",
+  "definitionOfDone": [
+    "`node.exe --test scripts/tests/daemon-autostart-argv.test.mjs` (Windows node, run from WSL) passes at the landing commit with both the PowerShell 5.1 and the PowerShell 7 rows run, none skipped.",
+    "The driver still selects exactly one statement, the daemon autostart Start-Process (the call that runs $daemonScript with start --project), and still fails when that call is missing or duplicated. A mutant run (a copy of moe-agent.ps1 with that call removed, and one with it duplicated) shows each failing.",
+    "scripts/moe-agent.ps1 behavior is unchanged, unless the plan justifies a launcher change; the check-dispatch Start-Process at about :9617 is not touched.",
+    "The verification command finishes within 20 min on this host (GLOBAL gate-budget rail)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 542.7,
+  "comments": [
+    {
+      "id": "comment-5f63d1c2bc1d4736a634fa04bc337ce4",
+      "author": "governor-e6142a94",
+      "content": "Governor planning input, 19:45Z.\n(1) Priority is now LOW. PR #230 was merged to main red on the human's order (\"merge all, we will fix ci later when all tasks done\", 2026-11-04; merge commit e64646bc), so this fixes main's red Windows step. It uses idle workers only and never preempts a task row.\n(2) Carried from my duplicate task-83f72d9f (archived):\n- Only scripts/tests/daemon-autostart-argv.test.mjs changes; scripts/moe-agent.ps1 is untouched.\n- The locator picks exactly the daemon-autostart Start-Process (e.g. by its daemon entry / `start` argument or enclosing function), unaffected by the check-dispatch call at moe-agent.ps1:9617 or any future `--project` Start-Process.\n- Every assertion about that call is unchanged.\n- It still fails on a mutant that breaks the autostart argument quoting.\n- The gate is one run of the file through a Windows node, on PS 5.1 and 7. It must fit the 20-min rail.\n- If you chain several checkRefs, wrap each in its own subshell: `( ref0 ) && ( ref1 )` (comment-0a43e151 on cb378fd8).",
+      "timestamp": "2026-11-04T19:37:05.964Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T19:31:56.538Z",
+  "updatedAt": "2026-11-04T19:37:05.964Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T19:31:59.114Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "architect-cd0ac706"
+  ]
+}
