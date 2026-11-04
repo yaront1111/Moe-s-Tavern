@@ -1,0 +1,38 @@
+{
+  "id": "task-7e9ba059d3d245aab8bd599a3307204e",
+  "epicId": "epic-be924fb8",
+  "title": "docs: the architect role docs (architect.md, architect.reference.md's Claude account switch) say only a submit_plan reply carries accountSwitch, but since task-d27edf88 an in-session claim_next_task after a row ended without submit_plan (archive_task) answers hasNext:false with accountSwitch and claims nothing (role-doc twin of task-a160251a)",
+  "description": "Filed by architect-2a219562 on 2026-11-04 while planning task-a160251a.\n\nBACKGROUND\n- task-d27edf88 makes claim_next_task answer a due idle Claude account switch for a seat the moe-account-switch mod flags. The reply is `{hasNext:false, accountSwitch}` with no nextAction, and nothing is claimed (docs/MCP_SERVER.md, `### moe.claim_next_task`, **Account switch**).\n- d27edf88 explicitly put the role-doc wording out of scope.\n- task-a160251a syncs only the docs the generator does not vendor: scripts/CLAUDE.md, packages/moe-daemon/CLAUDE.md, the accountStore.ts comments and docs/TROUBLESHOOTING.md.\n- This row is the vendored-doc half. It needs initFiles.ts regenerated, which is why it is a separate row.\n\nSTALE TEXT (checked at e575ecec plus 5265909c)\n- docs/roles/architect.md:34, the tasks-per-session bullet: \"A `submit_plan` reply with `accountSwitch` (`ACCOUNT-SWITCH:`) outranks the budget and `nextAction`: claim nothing more and end the turn\".\n  - A `claim_next_task` reply now carries it too: the in-session claim after a row the architect ended without submit_plan, such as archive_task on every defect-hunt row.\n- docs/roles/architect.reference.md:81, **Claude account switch**: \"`moe.submit_plan` adds `accountSwitch { from, to, fromPeakPercent, switchAtPercent, reason, instruction }`\". Its bullets speak only of \"the plan you just submitted\".\n  - Add the claim_next_task case: the reply is hasNext:false with the same accountSwitch, and nothing is claimed.\n  - The architect writes the handoff memory of the row it just ended, if that row needs one, then ends the turn. The session then exits by itself and relaunches on the next account, as for submit_plan.\n\nDELIVERABLE\n- Both role docs name the claim_next_task case.\n- architect.md keeps the rule on its one line. The file is at 39 lines, and the lint caps it at 40.\n- packages/moe-daemon/src/generated/initFiles.ts is regenerated: the ROLE_DOCS architect entries, via `npm run generate-init-files`. The recipe is in `mem:gotcha-moe-doc-generated-artifacts`. Never run `npm run build` or `prebuild` in the shared checkout.\n- The .moe/roles copies refresh at the next daemon start. Never edit them by hand.\n\nNOT IN SCOPE\n- docs/MCP_SERVER.md: d27edf88 already synced it.\n- The four files of task-a160251a.\n- docs/plans/2026-10-20-claude-account-rotation.md: a dated design record.\n- governor, worker and qa docs: governors never claim, and workers switch at step boundaries.\n\nVERIFY (from the repo root): the DoD's three greps, then `bash scripts/tests/parity-check.sh && npm run lint`. Also, in a snapshot outside the shared checkout, `npx vitest run src/util/initFiles.test.ts` plus the regenerated-artifact `cmp`.",
+  "definitionOfDone": [
+    "`grep -n 'claim_next_task` reply with `accountSwitch`' docs/roles/architect.md` exits 0 (the tasks-per-session rule names the claim_next_task reply beside submit_plan's; it fails at e575ecec), and docs/roles/architect.md is still at most 40 lines",
+    "`grep -n accountSwitch docs/roles/architect.reference.md | grep claim_next_task` exits 0: the **Claude account switch** section says an in-session claim_next_task answers hasNext:false with the same accountSwitch and claims nothing (fails at e575ecec)",
+    "packages/moe-daemon/src/generated/initFiles.ts carries the new text: re-running `npm run generate-init-files` from the edited docs (recipe in mem:gotcha-moe-doc-generated-artifacts) leaves it byte-identical (`cmp` exits 0), and `npx vitest run src/util/initFiles.test.ts` passes in a snapshot outside the shared checkout",
+    "`bash scripts/tests/parity-check.sh && npm run lint` exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-d27edf88f4f0494b8c5834a017ddec96"
+  ],
+  "priority": "LOW",
+  "order": 509.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:33:42.652Z",
+  "updatedAt": "2026-11-04T08:34:25.381Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:34:11.813Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}
