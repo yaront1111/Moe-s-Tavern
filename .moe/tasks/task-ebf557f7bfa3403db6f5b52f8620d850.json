@@ -13,28 +13,42 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (DoD 1 and 2). Load test-driven-development. Create scripts/tests/analyze-task-metrics.test.mjs with the session's own editing tool: Write on a Claude seat, apply_patch on a codex exec seat. Never use a shell write or a subagent.\n\nHarness, node:test (same imports as the hunt repro /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs):\n- a mkdtemp project under os.tmpdir() with .moe/tasks/, removed in finally or t.after;\n- a task(id, status, metrics, plan = a 2-step implementationPlan) writer;\n- run = execFileSync(process.execPath, [script, '--project', root, '--json'], { env: { PATH: process.env.PATH } }), parsed. The clean env keeps the seat's MOE_PROJECT_PATH out.\n\nRows (exact values; each must fail at the base commit):\n- T1 (DoD 1): one DONE row, one ARCHIVED row with metrics.doneAt, and one ARCHIVED row without it, each with plannedStepCount 2. Expect buckets[0].tasks === 3 and buckets[0].done === 2.\n- T2 (DoD 2):\n  - All-ARCHIVED rows with metrics.doneAt and plannedStepCount 2, 6, 10 and 14 (one per bucket): done === tasks in every non-empty bucket.\n  - A row with doneAt '  ', a row with no metrics object (its size comes from the 2-step plan) and a row whose metrics is the string 'x': none counts as done, and the script still exits 0.\n- T3: without --json, the table row for '1-4 steps' shows the same done value as the JSON. The column header stays 'done'.\n\nRun `node --test scripts/tests/analyze-task-metrics.test.mjs` before step 2 and record the failing rows in the step note (RED).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/analyze-task-metrics.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/analyze-task-metrics.test.mjs"
+      ],
+      "note": "RED at base: 3 of 4 fail (DONE+ARCHIVED-with-doneAt done=1 not 2; all-ARCHIVED buckets done=0; table row 1 not 2). The negative guard (blank/missing/non-object metrics) passes at base, as expected.",
+      "startedAt": "2026-11-04T08:15:43.099Z",
+      "completedAt": "2026-11-04T08:16:07.092Z"
     },
     {
       "stepId": "step-2",
       "description": "IMPLEMENT (DoD 1-3) with the session's own editing tool.\n\n1. scripts/analyze-task-metrics.mjs:\n   - Add a function isDelivered(t) beside stepCount (:141). It returns true when t?.status === 'DONE', or when t?.status === 'ARCHIVED' and typeof t?.metrics?.doneAt === 'string' and t.metrics.doneAt.trim() !== ''.\n   - Give it a one-line comment naming its twin: packages/moe-daemon/src/util/metrics.ts isDelivered (task-83cf11f5). This .mjs cannot import the TS module, so the rule is inlined; keep the two in step.\n   - Replace :163 with `const done = inBucket.filter(isDelivered);`.\n   - Keep the JSON key `done` and the table column unchanged, so --json consumers do not break.\n   - Error handling: a missing or non-object metrics value means \"not archived-delivered\". The helper never throws on a malformed record, and nothing else in the script changes.\n2. .github/workflows/ci.yml: append ` scripts/tests/analyze-task-metrics.test.mjs` to the node --test list of the \"Test agent runtime discovery\" step (:267). Keep the line otherwise byte-identical.\n\nRun the step-1 file: every row passes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/analyze-task-metrics.mjs",
         ".github/workflows/ci.yml"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/analyze-task-metrics.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Added isDelivered (twin comment) and switched the done filter; appended the test path to ci.yml line 267. New test: 4/4 pass.",
+      "startedAt": "2026-11-04T08:16:07.811Z",
+      "completedAt": "2026-11-04T08:16:22.607Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY (DoD 1-3), once. From the task worktree root, run exactly:\nnode --test scripts/tests/analyze-task-metrics.test.mjs && grep -n \"analyze-task-metrics.test.mjs\" .github/workflows/ci.yml && S=$(mktemp -d /tmp/moe-ebf5-gate-XXXXXX) && mkdir -p \"$S/scripts/tests\" && cp scripts/analyze-task-metrics.mjs \"$S/scripts/\" && cp /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs \"$S/scripts/tests/\" && node --test \"$S/scripts/tests/zzHuntB-analyze-task-metrics-done.test.mjs\"\n\nIt must exit 0. The last leg runs the hunt repro unchanged against the fixed script in a scratch tree outside the checkout; the repro resolves ../analyze-task-metrics.mjs from its own folder. Its fresh output is the complete_task verification evidence: both node:test summaries and the ci.yml line.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/analyze-task-metrics.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:16:23.294Z"
     },
     {
       "stepId": "step-4",
@@ -47,7 +61,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-5772dacf",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -59,20 +73,25 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:04:04.228Z",
-  "updatedAt": "2026-11-04T08:12:49.904Z",
+  "updatedAt": "2026-11-04T08:16:23.294Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:11:41.156Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-cd0ac706"
+    "architect-cd0ac706",
+    "worker-5772dacf"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:12:49.873Z",
   "executionContract": {
@@ -131,5 +150,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T08:12:49.904Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:15:43.099Z"
 }

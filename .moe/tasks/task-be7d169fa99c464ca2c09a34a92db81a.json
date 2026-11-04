@@ -9,10 +9,45 @@
     "gradlew.bat test passes from Windows under the jetbrains-gradle lease, and the verification quotes the class totals."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-c33f294e",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first: a link case in moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt, run on today's code, with no main-code change yet.\n\nPlatform fact, probed by the architect with Windows JDK 17 and 21 (/mnt/d/moe-scratch/plan-be7d169f/probe-output.txt and Probe.java):\n- On the Windows gate host, Files.createSymbolicLink is refused ('A required privilege is not held by the client').\n- A directory junction made with `cmd /c mklink /J` needs no privilege.\n- File(junction).canonicalPath stays the junction path, while toRealPath() and Files.isSameFile resolve it.\nSo a symlink-only case would be skipped on the only gate host and DoD 1's RED could never be observed.\n\nAdd to the test class (imports java.nio.file.Files/Path and org.junit.Assume):\n- A `dirLink(target: Path): Path?` helper:\n  - link = sibling '<name>-link'; try Files.createSymbolicLink(link, target);\n  - on any exception, when MoeDaemonSupervisor.isWindowsHost(), run ProcessBuilder(\"cmd\", \"/c\", \"mklink\", \"/J\", link.toString(), target.toString()).redirectErrorStream(true) and wait at most 10 s; accept exit 0 with Files.exists(link);\n  - otherwise return null.\n  - Record every created link and temp dir. @After deletes each LINK first with Files.deleteIfExists(link), which removes the link or junction entry and never its target, then the dirs.\n- Case 'a project opened through a directory link to the served directory is Same':\n  - real = Files.createTempDirectory(\"moe-id-real\"), link = dirLink(real);\n  - Assume.assumeNotNull(link): it skips only where neither a symlink nor a junction can be made;\n  - assertEquals(DaemonIdentity.Same, DaemonIdentityProbe.classify(200, health(real.toString()), link.toString()));\n  - assertTrue(MoeDaemonSupervisor.isSameProject(real.toString(), link.toString())), so both stages agree.\n- Case 'a link to one project is still Foreign to another project': with other = Files.createTempDirectory(\"moe-id-other\") and the link to real, classify(200, health(other.toString()), link.toString()) == DaemonIdentity.Foreign(other.toString()), and isSameProject(other.toString(), link.toString()) is false.\n- Case 'a relative served path stays Unknown through a link': classify(200, health(\"proj\"), link.toString()) == Unknown.\n\nRun only this class on today's code, holding the jetbrains-gradle lease only around the run: moe.acquire_resource right before, moe.release_resource right after, even on failure (mem:convention-jetbrains-gradle-lease). Use the Windows route from WSL (mem:gotcha-jetbrains-gradle-from-wsl). From the worktree top level: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun --tests com.moe.services.DaemonIdentityTest\"`.\n- Expected: the first case FAILS with expected Same but was Foreign(<real path>). Quote those lines in your step note and in complete_task.\n- If it PASSES on today's code instead, the lead does not reproduce: make no main-code change, post that in #governors with the output, and stop.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix: one shared same-project comparison that both stages call.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt, object DaemonIdentityProbe:\n- Add `fun isSameProjectPath(path: String, base: String): Boolean = comparableProjectPath(path) == comparableProjectPath(base) || sameDirectoryOnDisk(path, base)`.\n- The private sameDirectoryOnDisk is `runCatching { File(path).canonicalPath == File(base).canonicalPath }.getOrDefault(false) || runCatching { Files.isSameFile(Paths.get(path), Paths.get(base)) }.getOrDefault(false)`.\n  - The canonicalPath term is today's isSameProject rule, kept verbatim. MoeDaemonSupervisorTest.kt:101 pins `isSameProject(\".\", File(\".\").canonicalPath)`, so do not drop it or add an absolute-path guard to it.\n  - Files.isSameFile adds symlinks and Windows junctions: it follows links and compares file keys.\n- classify (:72-82): keep every existing guard (status 200/503, JSON object, string projectPath, isAbsoluteAnyOs on both sides → Unknown), then `return if (isSameProjectPath(served, projectPath)) DaemonIdentity.Same else DaemonIdentity.Foreign(served)`.\n- Update the KDoc at :20-25: Foreign is an absolute served path that differs by comparableProjectPath AND is not the same directory on disk.\n- Do not touch comparableProjectPath, driveForm, collapse or their regexes.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:1029-1031, isSameProject becomes `DaemonIdentityProbe.isSameProjectPath(path, base)`, with the same name and signature. Its callers (MoeDaemonSupervisor.kt:99 and :155, MoeMessageDispatcher.kt:96) stay untouched; a junction-opened project then also stops being disconnected on STATE_SNAPSHOT.\n\nError handling: every filesystem call is best effort through runCatching → false. A missing path, an InvalidPathException (for example a WSL path on Windows), an IOException or a SecurityException never escapes classify or isSameProject. The disk check only runs when the comparable spellings differ, so the WSL and UNC spelling matches never touch the disk. Remove any import this leaves unused.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, once, on the whole JetBrains suite, fresh, under the jetbrains-gradle lease: acquire right before, release right after, even on failure. Run this exact command from the worktree and submit its output as complete_task evidence, labelled as the Windows gradlew.bat route:\n\n`cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; for c in DaemonIdentityTest MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X | head -1)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; grep -q 'skipped=\"0\"' $R/TEST-com.moe.services.DaemonIdentityTest.xml || r=1; exit $r`\n\n- It must exit 0, and DaemonIdentityTest must show skipped=\"0\": the link cases really ran, through the junction on this host.\n- Quote the class totals together with the step-1 RED lines.\n- The existing DaemonIdentityTest, MoeDaemonSupervisorTest and MoeProjectForeignDaemonTest cases must pass with no edits (DoD 2).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the diff, the final step. Check:\n- Cleanup never deletes through a link: the link is deleted before the dirs, and a junction left behind by a failed test cannot reach outside the temp root.\n- isSameFile on Windows compares file keys, so case and short-name spellings of the same directory count as Same, which is intended.\n- The disk check runs only after comparable spellings differ. For a UNC or \\\\wsl$ path it does no more I/O than today's File.canonicalPath already did on that path.\n- classify's Unknown guards are unchanged: a non-200/503 status, a non-object body, a missing or relative projectPath, a relative own path.\n- A different real project is still Foreign, so handleForeignDaemon still protects a genuinely foreign daemon.\n- MoeMessageDispatcher's snapshot check now accepts a junction-opened project instead of disconnecting.\n- No forbidden pattern; error handling is present on every filesystem call; every DoD item maps to a test run in step 3.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -21,14 +56,75 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 500.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-37971acd56f046258d25c0d80e9009d1",
+      "author": "architect-c33f294e",
+      "content": "Architect note (plan rev 1), on how DoD 1 is read on this host.\n\n- I probed the Windows gate host with JDK 17.0.20 and 21.0.11 (/mnt/d/moe-scratch/plan-be7d169f/probe-output.txt). Files.createSymbolicLink is refused (\"A required privilege is not held by the client\"), so a symlink-only RED case would always be skipped there, and DoD 1's RED could never be observed.\n- The case therefore falls back to a directory junction (cmd /c mklink /J), which needs no privilege. It Assume-skips only when neither link can be made.\n- The probe also showed that File.canonicalPath does NOT resolve a junction, while Files.isSameFile and toRealPath do. So the shared helper keeps today's canonicalPath term (MoeDaemonSupervisorTest.kt:101 pins it) and adds Files.isSameFile.\n- Result: both the /health classify and isSameProject (daemon.json and STATE_SNAPSHOT) treat a link-opened project as Same, on Windows too.\n\nThis reading is also recorded in executionContract.compatibility.",
+      "timestamp": "2026-11-04T08:16:14.614Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:00:17.961Z",
-  "updatedAt": "2026-11-04T08:11:31.429Z",
+  "updatedAt": "2026-11-04T08:16:14.614Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T08:11:28.945Z"
+    "firstClaimAt": "2026-11-04T08:11:28.945Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-c33f294e"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:16:03.104Z",
+  "executionContract": {
+    "intendedBehavior": "A JetBrains IDE that opened the project through a directory link (a symlink, or a Windows junction) to the directory the live daemon serves classifies that daemon as Same at the /health stage and the daemon.json stage alike. It no longer deletes the daemon.json and starts a second daemon.",
+    "invariants": [
+      "comparableProjectPath and its drive, WSL and UNC rules are unchanged",
+      "classify still returns Unknown for a status other than 200/503, a non-object body, a missing or relative served path, or a relative own path",
+      "a different real project is still Foreign(served)",
+      "isSameProject keeps its name, its signature and its File.canonicalPath rule; it only gains Files.isSameFile",
+      "no filesystem exception escapes classify or isSameProject"
+    ],
+    "compatibility": [
+      "DoD 1 reading: on the Windows gate host Files.createSymbolicLink is refused without privilege (architect probe, /mnt/d/moe-scratch/plan-be7d169f/probe-output.txt). A symlink-only case would therefore always be skipped there, so the RED case falls back to a directory junction (mklink /J) and Assume-skips only when neither link can be made.",
+      "existing DaemonIdentityTest, MoeDaemonSupervisorTest and MoeProjectForeignDaemonTest cases pass unedited, including MoeDaemonSupervisorTest.kt:101's relative canonical match"
+    ],
+    "reuse": [
+      "DaemonIdentityProbe.comparableProjectPath unchanged; java.nio.file.Files.isSameFile for link resolution"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" (full step-3 command with the xml tally)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Add a File.canonicalPath fallback to classify only. Rejected: on the Windows gate host canonicalPath does not resolve a junction, and symlinks need a privilege the host lacks, so DoD 1's RED could never be seen and the fix would be untestable there. (2) Replace canonicalPath with toRealPath in isSameProject. Rejected: MoeDaemonSupervisorTest.kt:101 pins the relative-path canonical match, so the canonicalPath term stays and Files.isSameFile is added beside it. (3) A shared helper that both stages call: chosen. It is the row's preferred direction, and it also fixes the Windows junction case at the daemon.json and STATE_SNAPSHOT stages.",
+    "codebaseInsights": "- DaemonIdentityProbe.classify (DaemonIdentity.kt:72-82) compares only comparableProjectPath, while MoeDaemonSupervisor.isSameProject (:1029-1031) also compares File.canonicalPath.\n- isSameProject has three callers: readDaemonInfo :99, the start/connect decision :155 and the STATE_SNAPSHOT check in MoeMessageDispatcher.kt:96.\n- Probe results (Windows, JDK 17.0.20 and 21.0.11): createSymbolicLink is refused without privilege; mklink /J works; canonicalPath keeps the junction path; toRealPath and Files.isSameFile resolve it.\n- The gate is cmd.exe gradlew.bat from the worktree top level via wslpath, under the jetbrains-gradle lease.",
+    "risks": "- JUnit cleanup recursing into a junction could delete the target. Delete the link first.\n- A WSL or UNC path given to Paths.get on Windows may throw InvalidPathException or touch the network. It is caught, and only reached when the spellings already differ.\n- The RED must be quoted before the fix; a later amend cannot recreate it.\n- Hold the jetbrains-gradle lease only around each Gradle run; others queue on it.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3747c4748a7179c54a237e407914bd4576d78d93",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:16:03.134Z",
+  "approvedPlanRevision": 1
 }

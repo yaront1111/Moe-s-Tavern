@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "Daemon, test first, then implement: claim_next_task answers a due between-task account switch. Read mem:decision-account-switch-end-session first.\n\nTEST FIRST (red at HEAD) in packages/moe-daemon/src/tools/accountTools.test.ts, inside the existing `describe('switching accounts between tasks')` (:244), beside the submit_plan and chat_wait cases (:257-353). Reuse that describe's lease and usage setup. The hunt repro /mnt/d/moe-scratch/hunt-1c736204/A/c1-inSessionClaim/inSessionClaimSwitch.test.ts shows a full fixture: the accounts file, then lease_account, report_account_usage 0.91, archive_task, then the claim. Add a `claim(workerId, acceptsAccountSwitch = true)` helper that calls claimNextTaskTool(state).handler({ workerId, statuses: ['PLANNING'], acceptsAccountSwitch }, state), with an unassigned PLANNING row in the fixture. Cases, with mutation-resistant assertions:\n- (a) An idle seat (no currentTaskId) leased on acct-1 past switchAtPercent, with the flag:\n  - hasNext === false;\n  - accountSwitch.from === 'acct-1' and accountSwitch.to === 'acct-2';\n  - accountSwitch.instruction starts with 'ACCOUNT-SWITCH:' and contains 'Claim nothing more';\n  - no nextAction key;\n  - the PLANNING row's assignedWorkerId is still null, no attempt was opened for it, and the seat's currentTaskId is still null.\n- (b) The same state without the flag claims the row exactly as today: hasNext true, the task id, the assignee set.\n- (c) With the flag but under switchAtPercent, the claim is normal and the reply has no accountSwitch key.\n- (d) With the flag, a seat that already holds a task gets the unchanged alreadyAssigned reply, with no accountSwitch.\n- (e) With the flag, a seat that never leased claims normally.\nAlso update the file's header comment (:19-21) to name claim_next_task.\n\nIMPLEMENT in packages/moe-daemon/src/tools/claimNextTask.ts:\n- Import ACCEPTS_ACCOUNT_SWITCH, accountSwitchReply and idleSwitchFor from '../state/accountStore.js'. The models are submitPlan.ts:20/:726-768 and chatWait.ts:7/:63-71/:402-409.\n- Add `acceptsAccountSwitch: ACCEPTS_ACCOUNT_SWITCH` to inputSchema.properties (:395-424), keeping additionalProperties:false, and add `acceptsAccountSwitch?: unknown` to the params type (:436-447).\n- Put the check inside the runExclusive, right AFTER the `if (params.workerId) { blockingHold ... ownFinalizingAttempt ... }` block (ends about :550) and BEFORE `let tasks: Task[]`, i.e. before any ranking, eligibility scan, eviction or assignment write:\n  - if `params.acceptsAccountSwitch === true && params.workerId` and `idleSwitchFor(state, params.workerId)` returns a change, log logger.info({ workerId, to }, 'Claim skipped: Claude account switch due');\n  - then return `{ hasNext: false, accountSwitch: accountSwitchReply(change, `Claim nothing more and end your turn now: Moe restarts this seat on ${change.toLabel}, and the new session claims the next task.`) }`.\n  - Return NO nextAction: a claim or wait hint would put the next task on the spent account.\n- The order keeps every existing answer first: the governor redirect, the status validation, the refreshWorkerType/endReloadHold bookkeeping, alreadyAssigned and resume (idleSwitchFor is null while currentTaskId is set), and ATTEMPT_FINALIZING.\n- A call without the flag (the wrapper pre-flight claim, headless seats) must stay byte-for-byte unchanged.\n- Error handling: idleSwitchFor and accountSwitchFor already return null on an unreadable or missing registry or no lease, so the claim proceeds. Add no try/catch that could hide a claim error.\n- Append one sentence to the tool description: 'With acceptsAccountSwitch (set only by the moe-account-switch mod), a seat holding no task whose Claude account must switch gets hasNext:false with accountSwitch instead of a claim and must end its turn.'",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/tools/accountTools.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:14:45.302Z"
     },
     {
       "stepId": "step-2",
@@ -76,7 +77,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:30.209Z",
-  "updatedAt": "2026-11-04T08:13:33.290Z",
+  "updatedAt": "2026-11-04T08:14:45.302Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:06:23.667Z",
     "plannedStepCount": 5,
@@ -139,5 +140,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T08:11:09.593Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:14:45.302Z"
 }

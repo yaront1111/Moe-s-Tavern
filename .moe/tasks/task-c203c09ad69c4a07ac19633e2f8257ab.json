@@ -72,8 +72,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -85,12 +85,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:58:04.053Z",
-  "updatedAt": "2026-11-04T08:14:18.703Z",
+  "updatedAt": "2026-11-04T08:16:22.173Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:00:29.051Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:15:49.193Z",
+    "wallClockMs": 920142
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -208,9 +210,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T08:05:57Z",
-    "at": "2026-11-04T08:13:15.746Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T08:13:58Z",
+    "at": "2026-11-04T08:16:22.173Z"
+  },
+  "completedAt": "2026-11-04T08:15:49.193Z",
+  "reviewCompletedAt": "2026-11-04T08:15:49.193Z",
+  "reviewSummary": "APPROVED. Reviewed completion e62cd216 (on moe/work-2026-10-24; HEAD blobs of both files equal the commit's). Diff +62 MoeDaemonClient.ts, +266 new tests/daemon-bindhost.test.cjs = 328 net, two files = approvedScope.\n\nRe-ran task.verification verbatim (whole-repo git-archive snapshot, env -i, node 24.21.0, npm ci && npm test && npm run compile): EXIT=0, 785 tests, 775 pass, 0 fail, 10 skip (all Windows-only/PowerShell, none a bindhost row). All 13 daemon-bindhost rows ran (IPv6 loopback present). tsc clean. daemon-identity, daemon-start, protected-daemon-provenance unchanged, green. Base RED confirmed: e62cd216^ source + only the new test file = 8 fail (B1-B4 on the refused start spawn, four B5 'not a function'), 5 B6 guards pass by design.\n\nDoD1: sync daemonBindRefusal() runs in connect() before ensureDaemonRunning/getVerifiedDaemonInfo; refusal sets manualDisconnect, shows ONE error naming the host, throws. B1 (::1 only) and B2 (other project on 127.0.0.1:P) assert no spawn, daemon.json byte-identical, one message, no reconnect timer, 0 /health + 0 /ws. DoD2: absent/non-string/loopback-serving bindHost, dead pid, pid 0/-1/1.5/2**31/1e300, other project, other side of WSL, bad records -> null (B5); configured port/host, missing/unparseable/oversized daemon.json keep today's path (B6). DoD3: gate above.\n\nInvariants: bindHost only compared/printed, never dialed; SHOWABLE_HOST gates display (B4); projectPath never shown; pid shown only as int 1..2**31-1; try/catch never throws; pathsMatch/classifyIdentity/getDaemonInfo/ensureDaemonRunning untouched.\n\nNon-blocking: pre-check runs before any probe (JetBrains only when !isReachable), so 'localhost'/'127.0.0.2' bindHost is refused even if reachable; per row contract. Worker's unverified lead: JetBrains connect may still reach Foreign removal in the port-collision case. Nothing to cut (ponytail).",
+  "requiredCheckAtDone": null
 }

@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (DoD 1 and 2). Load test-driven-development. Edit scripts/tests/serena-ignore.test.mjs with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat. Never use a shell write or a subagent.\n\nThe module imports gain parseStringSequence (step 2 exports it; parseIgnoredPaths stays exported and unchanged).\n\n- EXPECTED (the F1 literal, shared by F1/F2/F3/F4): after the ignored_paths items, add\n  'ignored_memory_patterns:'\n  '  - \"_archive/.*\"'\n  This fixture's project.yml has no such key. Also update the WHY comment lines to the wording step 2 writes. EXPECTED stays a literal; never build it from renderBlock.\n- U5: parseStringSequence(text, 'ignored_memory_patterns') returns:\n  - [] for an absent key and for '[]';\n  - ['x', '_archive/.*'] for a block and for a flow sequence;\n  - null for '- *alias', a duplicate key, or a regex that is unquoted and not plain, such as '- ^a|b'.\n  parseStringSequence(text, 'ignored_paths') deep-equals parseIgnoredPaths(text) on every U3 input.\n- F8, the merge, one row per project.yml memory list. Use fx.put('.serena/project.yml', ...) on top of the fixture's ignored_paths.\n  - `ignored_memory_patterns: []` gives ['_archive/.*'].\n  - `ignored_memory_patterns:\\n- x\\n` gives ['x', '_archive/.*'].\n  - A list already holding '_archive/.*' gives it once.\n  For each, parseStringSequence(read(fx.file), 'ignored_memory_patterns') deep-equals the expected list, and exactly one line of the written file starts with 'ignored_memory_patterns:'.\n- F9, the opt-outs:\n  - A user part `${U}ignored_memory_patterns: [mine]\\n` keeps its bytes exactly. The run still writes the block (an OK line), the block carries ignored_paths but no ignored_memory_patterns, and the whole file has exactly one 'ignored_memory_patterns:' line, the user's (no duplicate key).\n  - A project.yml memory list that cannot be read safely (`ignored_memory_patterns:\\n- *alias\\n`) gives a block with ignored_paths and no ignored_memory_patterns key.\n\nRun `node --test scripts/tests/serena-ignore.test.mjs` before step 2 and record the failing rows in the step note (RED).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/serena-ignore.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:15:05.494Z"
     },
     {
       "stepId": "step-2",
@@ -65,7 +66,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:58:35.668Z",
-  "updatedAt": "2026-11-04T08:14:19.051Z",
+  "updatedAt": "2026-11-04T08:15:05.494Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:09:10.293Z",
     "plannedStepCount": 5,
@@ -142,5 +143,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T08:11:27.682Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:15:05.494Z"
 }
