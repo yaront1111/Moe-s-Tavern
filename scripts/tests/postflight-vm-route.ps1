@@ -577,9 +577,22 @@ function ConvertTo-VmcJson($H) {
     $o = [ordered]@{}; foreach ($k in @($H.Keys | Sort-Object)) { $o[$k] = $H[$k] }
     return (ConvertTo-Json $o -Compress -Depth 4)
 }
+# SHA-256 of a file as upper-case hex, through .NET only: Windows PowerShell 5.1
+# started by node under pwsh (CI's 5.1 leg) inherits pwsh's PSModulePath and cannot
+# autoload the Utility module's file-hash cmdlet. Same as postflight.ps1
+# Get-Sha256Hex, sharing-violation retry included.
+function Get-VmcSha256([string]$Path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        for ($attempt = 1; ; $attempt++) {
+            try { return ([BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($Path))) -replace '-', '') }
+            catch [IO.IOException] { if ($attempt -ge 5) { throw }; Start-Sleep -Milliseconds 300 }
+        }
+    } finally { $sha.Dispose() }
+}
 function Get-VmcControl([hashtable]$V) {
     return (@((Invoke-VmcGit $V.R @('symbolic-ref', '-q', 'HEAD')), (Invoke-VmcGit $V.R @('rev-parse', 'HEAD', 'refs/heads/main')),
-        (Get-FileHash -LiteralPath (Join-Path $V.R '.git\index') -Algorithm SHA256).Hash,
+        (Get-VmcSha256 (Join-Path $V.R '.git\index')),
         (Invoke-VmcGit $V.R @('--no-optional-locks', 'status', '--porcelain', '-uall', '-z'))) -join "`n")
 }
 function Get-VmcRefs([hashtable]$V) { return (Invoke-VmcGit $V.R @('for-each-ref', '--format=%(refname) %(objectname)')) }
@@ -590,11 +603,11 @@ function Get-VmcOthers([hashtable]$V) {
 function Get-VmcWFiles([hashtable]$V) {
     $base = (Resolve-Path -LiteralPath $V.W).ProviderPath.TrimEnd('\') + '\'
     $files = @(Get-ChildItem -LiteralPath $V.W -Recurse -File -Force | Where-Object { $_.FullName -cne ($base + '.git') } | Sort-Object -Property FullName |
-        ForEach-Object { $_.FullName.Substring($base.Length) + ' ' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash })
+        ForEach-Object { $_.FullName.Substring($base.Length) + ' ' + (Get-VmcSha256 $_.FullName) })
     return ((@((Invoke-VmcGit $V.W @('symbolic-ref', '-q', 'HEAD') -NoThrow), (Invoke-VmcGit $V.W @('ls-files', '-s', '-t'))) + $files) -join "`n")
 }
 function Get-VmcWIndex([hashtable]$V) {
-    return (Get-FileHash -LiteralPath (Join-Path (Invoke-VmcGit $V.W @('rev-parse', '--absolute-git-dir')) 'index') -Algorithm SHA256).Hash
+    return (Get-VmcSha256 (Join-Path (Invoke-VmcGit $V.W @('rev-parse', '--absolute-git-dir')) 'index'))
 }
 # New-VmcTree V BASE PATH CONTENT... -- BASE plus each PATH's blob (CONTENT '-'
 # deletes it) through a private index, as admission.mjs writeTree builds an
@@ -829,6 +842,9 @@ function Invoke-VmcSections {
     $script:vmcLog = New-Object System.Collections.ArrayList; $script:vmcChat = New-Object System.Collections.ArrayList
     $dir = Join-Path $tempRoot 'vmc'; $hooks = Join-Path $dir 'hooks'; $gcfg = Join-Path $dir 'gitconfig'
     New-Item -ItemType Directory -Force -Path $hooks | Out-Null
+    # Known answer (SHA-256 of 'abc'): every caller compares two snapshots from this helper.
+    $kat = Join-Path $dir 'kat.txt'; [IO.File]::WriteAllText($kat, 'abc')
+    if ((Get-VmcSha256 $kat) -cne 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD') { throw 'VM ROUTE FAILED ([vm candidate] sha256): Get-VmcSha256 is not the upper-case SHA-256 of abc' }
     [IO.File]::WriteAllText($gcfg, "[user]`n`tname = vmc`n`temail = vmc@example.invalid`n[core]`n`tautocrlf = false`n")
     foreach ($h in @('pre-commit', 'commit-msg')) { [IO.File]::WriteAllText((Join-Path $hooks $h), "#!/bin/sh`nexit 1`n") }
     $saved = @{}
