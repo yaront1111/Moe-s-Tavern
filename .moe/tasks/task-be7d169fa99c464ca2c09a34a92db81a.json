@@ -13,28 +13,41 @@
     {
       "stepId": "step-1",
       "description": "RED first: a link case in moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt, run on today's code, with no main-code change yet.\n\nPlatform fact, probed by the architect with Windows JDK 17 and 21 (/mnt/d/moe-scratch/plan-be7d169f/probe-output.txt and Probe.java):\n- On the Windows gate host, Files.createSymbolicLink is refused ('A required privilege is not held by the client').\n- A directory junction made with `cmd /c mklink /J` needs no privilege.\n- File(junction).canonicalPath stays the junction path, while toRealPath() and Files.isSameFile resolve it.\nSo a symlink-only case would be skipped on the only gate host and DoD 1's RED could never be observed.\n\nAdd to the test class (imports java.nio.file.Files/Path and org.junit.Assume):\n- A `dirLink(target: Path): Path?` helper:\n  - link = sibling '<name>-link'; try Files.createSymbolicLink(link, target);\n  - on any exception, when MoeDaemonSupervisor.isWindowsHost(), run ProcessBuilder(\"cmd\", \"/c\", \"mklink\", \"/J\", link.toString(), target.toString()).redirectErrorStream(true) and wait at most 10 s; accept exit 0 with Files.exists(link);\n  - otherwise return null.\n  - Record every created link and temp dir. @After deletes each LINK first with Files.deleteIfExists(link), which removes the link or junction entry and never its target, then the dirs.\n- Case 'a project opened through a directory link to the served directory is Same':\n  - real = Files.createTempDirectory(\"moe-id-real\"), link = dirLink(real);\n  - Assume.assumeNotNull(link): it skips only where neither a symlink nor a junction can be made;\n  - assertEquals(DaemonIdentity.Same, DaemonIdentityProbe.classify(200, health(real.toString()), link.toString()));\n  - assertTrue(MoeDaemonSupervisor.isSameProject(real.toString(), link.toString())), so both stages agree.\n- Case 'a link to one project is still Foreign to another project': with other = Files.createTempDirectory(\"moe-id-other\") and the link to real, classify(200, health(other.toString()), link.toString()) == DaemonIdentity.Foreign(other.toString()), and isSameProject(other.toString(), link.toString()) is false.\n- Case 'a relative served path stays Unknown through a link': classify(200, health(\"proj\"), link.toString()) == Unknown.\n\nRun only this class on today's code, holding the jetbrains-gradle lease only around the run: moe.acquire_resource right before, moe.release_resource right after, even on failure (mem:convention-jetbrains-gradle-lease). Use the Windows route from WSL (mem:gotcha-jetbrains-gradle-from-wsl). From the worktree top level: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun --tests com.moe.services.DaemonIdentityTest\"`.\n- Expected: the first case FAILS with expected Same but was Foreign(<real path>). Quote those lines in your step note and in complete_task.\n- If it PASSES on today's code instead, the lead does not reproduce: make no main-code change, post that in #governors with the output, and stop.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
       ],
-      "startedAt": "2026-11-04T08:28:31.468Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
+      ],
+      "note": "RED observed on today's code (no main-code change). Added 3 link cases plus the dirLink/junction/tempDir helpers. @After deletes the links first, then the dirs. The dirs/links lists use .add(), because Path is Iterable<Path> and += resolves to the plus(Iterable) overload. Run under the jetbrains-gradle lease (acquired 08:29:05Z, released after): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun --tests com.moe.services.DaemonIdentityTest\"` → exit 1:\nDaemonIdentityTest > a project opened through a directory link to the served directory is Same FAILED\n    java.lang.AssertionError at DaemonIdentityTest.kt:51\n22 tests completed, 1 failed\nXML: tests=\"22\" skipped=\"0\" failures=\"1\" errors=\"0\"; failure message: expected:<Same> but was:<Foreign(projectPath=C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-id-real12041055452963526061)>.\nskipped=0 means the junction fallback ran (no symlink privilege on this host). The other two link cases already pass. No moe-id-* leftovers remain in %TEMP%.",
+      "startedAt": "2026-11-04T08:28:31.468Z",
+      "completedAt": "2026-11-04T08:31:09.838Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix: one shared same-project comparison that both stages call.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt, object DaemonIdentityProbe:\n- Add `fun isSameProjectPath(path: String, base: String): Boolean = comparableProjectPath(path) == comparableProjectPath(base) || sameDirectoryOnDisk(path, base)`.\n- The private sameDirectoryOnDisk is `runCatching { File(path).canonicalPath == File(base).canonicalPath }.getOrDefault(false) || runCatching { Files.isSameFile(Paths.get(path), Paths.get(base)) }.getOrDefault(false)`.\n  - The canonicalPath term is today's isSameProject rule, kept verbatim. MoeDaemonSupervisorTest.kt:101 pins `isSameProject(\".\", File(\".\").canonicalPath)`, so do not drop it or add an absolute-path guard to it.\n  - Files.isSameFile adds symlinks and Windows junctions: it follows links and compares file keys.\n- classify (:72-82): keep every existing guard (status 200/503, JSON object, string projectPath, isAbsoluteAnyOs on both sides → Unknown), then `return if (isSameProjectPath(served, projectPath)) DaemonIdentity.Same else DaemonIdentity.Foreign(served)`.\n- Update the KDoc at :20-25: Foreign is an absolute served path that differs by comparableProjectPath AND is not the same directory on disk.\n- Do not touch comparableProjectPath, driveForm, collapse or their regexes.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:1029-1031, isSameProject becomes `DaemonIdentityProbe.isSameProjectPath(path, base)`, with the same name and signature. Its callers (MoeDaemonSupervisor.kt:99 and :155, MoeMessageDispatcher.kt:96) stay untouched; a junction-opened project then also stops being disconnected on STATE_SNAPSHOT.\n\nError handling: every filesystem call is best effort through runCatching → false. A missing path, an InvalidPathException (for example a WSL path on Windows), an IOException or a SecurityException never escapes classify or isSameProject. The disk check only runs when the comparable spellings differ, so the WSL and UNC spelling matches never touch the disk. Remove any import this leaves unused.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Added public DaemonIdentityProbe.isSameProjectPath(path, base) = comparableProjectPath equality || private sameDirectoryOnDisk. The disk check is runCatching{File.canonicalPath ==} || runCatching{Files.isSameFile(Paths.get, Paths.get)}, both getOrDefault(false), so no filesystem exception escapes. classify keeps all its Unknown guards, then returns Same/Foreign(served) through the helper. MoeDaemonSupervisor.isSameProject delegates to it with the same name and signature; its three callers are untouched. The KDoc names the on-disk rule. comparableProjectPath, driveForm, collapse and the regexes are unchanged. New imports in DaemonIdentity.kt: java.io.File, java.nio.file.Files, java.nio.file.Paths. The supervisor's File import is still used elsewhere. Side effect: the old isSameProject could throw an IOException out of canonicalPath, and now it cannot. GREEN evidence comes in the step-3 full-suite run.",
+      "startedAt": "2026-11-04T08:31:11.979Z",
+      "completedAt": "2026-11-04T08:31:52.941Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification, once, on the whole JetBrains suite, fresh, under the jetbrains-gradle lease: acquire right before, release right after, even on failure. Run this exact command from the worktree and submit its output as complete_task evidence, labelled as the Windows gradlew.bat route:\n\n`cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; for c in DaemonIdentityTest MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X | head -1)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; grep -q 'skipped=\"0\"' $R/TEST-com.moe.services.DaemonIdentityTest.xml || r=1; exit $r`\n\n- It must exit 0, and DaemonIdentityTest must show skipped=\"0\": the link cases really ran, through the junction on this host.\n- Quote the class totals together with the step-1 RED lines.\n- The existing DaemonIdentityTest, MoeDaemonSupervisorTest and MoeProjectForeignDaemonTest cases must pass with no edits (DoD 2).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:31:54.196Z"
     },
     {
       "stepId": "step-4",
@@ -67,11 +80,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:00:17.961Z",
-  "updatedAt": "2026-11-04T08:28:31.468Z",
+  "updatedAt": "2026-11-04T08:31:54.196Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:11:28.945Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -81,7 +95,10 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:16:03.104Z",
   "executionContract": {
