@@ -11,6 +11,12 @@ const windows = process.platform === 'win32';
 const fwd = (p) => p.replaceAll('\\', '/');
 const shq = (v) => "'" + String(v).replaceAll("'", "'\\''") + "'";
 const psq = (v) => "'" + String(v).replaceAll("'", "''") + "'";
+// pwsh 7's ConciseView colours an error record and wraps it at the console width
+// behind a "     | " gutter (CI run 41830422144 split "...one.md' is" / "| denied."),
+// and Windows PowerShell 5.1 wraps before a long path: match error text on plain().
+const ANSI = /\x1B\[[0-9;?]*[A-Za-z]/g;
+const plain = (out) => out.replace(ANSI, '').replace(/\r?\n[ \t]*\|?[ \t]*/g, ' ').replace(/\s+/g, ' ');
+const DENIED = { sh: /Permission denied/, ps1: /Access to the path '.+' is denied\./ };
 const wrapper = (ext) => fileURLToPath(new URL('../moe-agent.' + ext, import.meta.url));
 const read = (ext) => readFileSync(wrapper(ext), 'utf8').replace(/^\ufeff/, '').replaceAll('\r\n', '\n');
 function between(source, start, end) {
@@ -189,8 +195,9 @@ for (const engine of ENGINES) {
   t('B: any other copy failure still stops the pre-flight', () => withFixture((dir) => {
     const r = injectedRun(engine, dir, false);
     assert.notEqual(r.status, 0, r.out);
-    assert.match(r.out, engine.ext === 'sh' ? /Permission denied/ : /is denied/);
-    assert.doesNotMatch(r.out, /@@ after mirror/);
+    const text = plain(r.out);
+    assert.match(text, DENIED[engine.ext]);
+    assert.doesNotMatch(text, /@@ after mirror/);
     assert.equal(existsSync(path.join(r.project, '.claude', 'agents', 'one.md')), false);
   }));
   if (engine.ext === 'sh') {
@@ -205,3 +212,18 @@ for (const engine of ENGINES) {
     assert.equal(r.status, 0, r.stdout + r.stderr);
   });
 }
+
+// Verbatim from CI run 41830422144 (windows-latest, pwsh 7): the input B's old /is denied/ failed on.
+const CI_PWSH7 = '\x1B[31;1mGet-ChildItem: \x1B[0mC:\\Users\\runneradmin\\AppData\\Local\\Temp\\moe-mirror-vTPP70\\seat.ps1:25\x1B[0m\n'
+  + '\x1B[31;1m\x1B[0m\x1B[36;1mLine |\x1B[0m\n'
+  + '\x1B[31;1m\x1B[0m\x1B[36;1m\x1B[36;1m  25 | \x1B[0m         \x1B[36;1mGet-ChildItem -LiteralPath $moeAgentsDir -File -Filter "*.md"\x1B[0m \u2026\x1B[0m\n'
+  + '\x1B[31;1m\x1B[0m\x1B[36;1m\x1B[36;1m\x1B[0m\x1B[36;1m\x1B[0m\x1B[36;1m     | \x1B[31;1m         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\x1B[0m\n'
+  + "\x1B[31;1m\x1B[0m\x1B[36;1m\x1B[36;1m\x1B[0m\x1B[36;1m\x1B[0m\x1B[36;1m\x1B[31;1m\x1B[31;1m\x1B[36;1m     | \x1B[31;1mAccess to the path 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\moe-mirror-vTPP70\\project\\.claude\\agents\\one.md' is\x1B[0m\n"
+  + '\x1B[31;1m\x1B[0m\x1B[36;1m\x1B[36;1m\x1B[0m\x1B[36;1m\x1B[0m\x1B[36;1m\x1B[31;1m\x1B[31;1m\x1B[36;1m\x1B[31;1m\x1B[36;1m     | \x1B[31;1mdenied.\x1B[0m\n';
+test('PowerShell 7 ConciseView: the wrapped CI error matches B only after plain()', () => {
+  assert.doesNotMatch(CI_PWSH7, /is denied/);
+  assert.doesNotMatch(CI_PWSH7, DENIED.ps1);
+  const text = plain(CI_PWSH7);
+  assert.match(text, DENIED.ps1);
+  assert.ok(text.includes("Access to the path 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\moe-mirror-vTPP70\\project\\.claude\\agents\\one.md' is denied."), text);
+});
