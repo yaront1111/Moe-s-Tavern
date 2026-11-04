@@ -1683,8 +1683,7 @@ a direct `REVIEW → WORKING` would). Assignment: entering `BLOCKED` preserves
 `assignedWorkerId`; returning to `blockedFromStatus` preserves it only while
 that worker exists, is not `DEAD` and still points at the task. Any other exit
 keeps the normal clear-on-move semantics. The plugin `/ws` board-move handler
-enforces the same transition rules, but its return to `blockedFromStatus`
-still restores the recorded assignee without that owner check.
+enforces the same rules.
 
 ---
 

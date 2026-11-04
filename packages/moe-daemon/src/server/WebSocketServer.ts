@@ -2,7 +2,7 @@
 // WebSocketServer - plugin + MCP proxy connections
 // =============================================================================
 
-import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
+import { carriedBlockQuestion, parkedHoldOwner } from '../state/dependencyUnblock.js';
 import { deliveryProjection, type TaskDelivery } from '../state/deliveryProjection.js';
 import type { Task, TaskStatus } from '../types/schema.js';
 import { VALID_TRANSITIONS } from '../tools/setTaskStatus.js';
@@ -507,9 +507,9 @@ export class MoeWebSocketServer {
                   // BLOCKED is a parking state: judge exits against the status
                   // the task was blocked FROM (a two-hop BLOCKED hop must not
                   // launder past the direct transition's gates), clear the
-                  // block bookkeeping, and preserve the parked worker only
-                  // when returning to that same status. Mirrors
-                  // src/tools/setTaskStatus.ts.
+                  // block bookkeeping, and keep only a genuine parked hold
+                  // when returning to that same status (parkedHoldOwner, as
+                  // set_task_status and both auto-unblocks do).
                   if (existing.status === 'BLOCKED') {
                     const effectiveFrom = existing.blockedFromStatus ?? 'WORKING';
                     const carriedQuestion = carriedBlockQuestion(this.state, existing);
@@ -544,7 +544,7 @@ export class MoeWebSocketServer {
                       blockedOnTaskIds: null,
                       blockedFromStatus: null,
                       blockedAt: null,
-                      ...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {}),
+                      ...(newStatus === effectiveFrom ? { assignedWorkerId: parkedHoldOwner(this.state, existing) } : {}),
                     };
                     unblockedFromBoard = true;
                   }
