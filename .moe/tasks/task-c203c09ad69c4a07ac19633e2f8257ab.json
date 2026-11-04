@@ -58,16 +58,22 @@
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an attacker who controls .moe/daemon.json, and as an unlucky user:\n- Can any repository text other than a SHOWABLE_HOST-matching host reach a toast or a log line? projectPath must never be shown, and the pid only as a validated positive integer.\n- Can any path still unlink daemon.json or spawn `start` for a live same-project off-loopback record (B2)? Check the reconnect timer, moe.reconnect and a connect() raced by disconnect().\n- Do these behave exactly as before: a configured port or host, autoStart=false, a missing, unparseable or oversized daemon.json, a dead or reused pid, and a record from the other side of WSL?\n- Is bindHost ever dialed, resolved or probed? It must not be.\n- Does the diff stay out of task-e07e695c's hunks (pathsMatch, :184, :1576, :1656, :1861)?\n- Does the new test file leave no listener, timer or temp dir behind (t.after cleanup)?\nIf anything changes, re-run the step-3 command and use that fresh output for complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
       ],
-      "startedAt": "2026-11-04T08:11:00.457Z"
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-bindhost.test.cjs"
+      ],
+      "note": "Adversarial self-review of `git diff` (+62 in MoeDaemonClient.ts, plus the new test file). No edits, so the step-3 gate output still stands. (1) Repository text reaching a toast or log line: only the pid, shown after Number.isInteger, > 0 and <= 2**31-1, and bindHost, shown only when it matches SHOWABLE_HOST (no brackets, parentheses, slash or space, so no [text](link) and no URL). Otherwise the fixed phrase 'an address other than 127.0.0.1' is shown. projectPath is never shown. B4 asserts the toast, error and log lines hold no '](', 'command:' or 'reloadWindow'. (2) Other paths to unlink daemon.json or spawn `start` for a live same-project off-loopback record: ensureDaemonRunning and getVerifiedDaemonInfo are called only from connect() (grep). The check is synchronous and sits before both, so a disconnect() or dispose() cannot interleave. The refusal sets manualDisconnect, so scheduleReconnect returns early (B1-B4 assert reconnectTimeout stays undefined, state disconnected, connectInProgress false). extension.ts calls connect() only at activation, on moe.reconnect and on a settings path, and none of them watches daemon.json, so there is no loop. moe.connect or moe.reconnect clears manualDisconnect and asks again, which re-shows the one toast. (3) Today's path is kept for: a configured port or host; a missing, unparseable or oversized daemon.json; a dead pid; a pid <= 0, non-integer or over int32; another project's record; a record from the other side of WSL. B5 and B6 pin each. Deliberate choice: the pre-check also runs when moe.daemon.autoStart is false, because getVerifiedDaemonInfo's foreign-removal path deletes daemon.json and spawns `start` regardless of autoStart. Known trade-off: a reused pid makes a stale off-loopback record read as live, so VS Code keeps the record and asks for a restart (conservative, as in JetBrains). A bindHost such as 'localhost' or '127.0.0.2' is outside the loopback-serving set and is refused, as in JetBrains and per the contract. (4) bindHost is never dialed, resolved or probed: it is only compared with Set.has, tested with a regex and printed; probeDaemonIdentity and isPortOpen are not called by the new code. (5) The diff stays out of task-e07e695c's hunks: pathsMatch, classifyIdentity, getDaemonInfo, ensureDaemonRunning and waitForDaemonInfo are untouched. The three hunks are the module-level block after removeDaemonJsonIfUnchanged, the connect() pre-check, and daemonBindRefusal() before getVerifiedDaemonInfo. (6) Test file cleanup: every listener closes in t.after (ws clients terminated, closeAllConnections), every client is disconnected, every temp project is removed. The gate process exited on its own, so no handle was left open.",
+      "startedAt": "2026-11-04T08:11:00.457Z",
+      "completedAt": "2026-11-04T08:11:49.774Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -79,16 +85,17 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:58:04.053Z",
-  "updatedAt": "2026-11-04T08:11:00.457Z",
+  "updatedAt": "2026-11-04T08:12:19.318Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:00:29.051Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-593560ee"
+    "worker-593560ee",
+    "architect-67c762f6"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -97,7 +104,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:05:51.785Z",
@@ -166,5 +174,18 @@
   },
   "planApprovedAt": "2026-11-04T08:05:51.821Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T08:06:52.389Z"
+  "workStartedAt": "2026-11-04T08:06:52.389Z",
+  "reviewStartedAt": "2026-11-04T08:12:19.316Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/moe-c203-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp moe-vscode/src/services/MoeDaemonClient.ts \"$S/moe-vscode/src/services/MoeDaemonClient.ts\" && cp moe-vscode/tests/daemon-bindhost.test.cjs \"$S/moe-vscode/tests/daemon-bindhost.test.cjs\" && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund >/dev/null && npm test && npm run compile'",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 785\nℹ suites 0\nℹ pass 775\nℹ fail 0\nℹ cancelled 0\nℹ skipped 10\nℹ todo 0\nℹ duration_ms 4227.787859\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\nEXIT=0\n(10 skips are all Windows-only rows; the 13 daemon-bindhost rows all ran, B1/B2 included. Project qualityGate `bash scripts/tests/parity-check.sh && npm run lint` also run fresh in the worktree: exit 0, PASS parity-check.sh, role-doc lint OK.)",
+    "reportedAt": "2026-11-04T08:12:19.316Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/daemon-bindhost.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "completionSummary": "VS Code twin of JetBrains offLoopbackBindRefusal (task-fe811130). MoeDaemonClient.ts gains exported offLoopbackBindRefusal(record, workspace, windows) and isOtherSideOfWsl, constants LOOPBACK_SERVING_BIND_HOSTS {127.0.0.1, 0.0.0.0, ::, wsl}, SHOWABLE_HOST and MAX_PID, and a private daemonBindRefusal(). connect() runs it synchronously before ensureDaemonRunning. On a live same-project daemon (pid integer 1..2**31-1 and alive, projectPath matching or absent, record from this side of WSL) bound off loopback, connect() keeps daemon.json byte-identical, spawns nothing, probes nothing (so it also covers the port collision with another project's daemon on 127.0.0.1), shows one error naming the host (only when it matches SHOWABLE_HOST, otherwise 'an address other than 127.0.0.1'), sets manualDisconnect so no reconnect timer is scheduled, and throws. A configured moe.daemon.port or non-default moe.daemon.host, and a missing, unparseable or oversized daemon.json, keep today's path. bindHost is only compared and shown, never dialed. New tests/daemon-bindhost.test.cjs: 13 rows. At base B1-B4 fail on the refused `start` spawn and the four B5 helper rows fail with 'not a function'; the five B6 guard rows pass at base by design. Five mutants (no int32 cap, no other-side check, no manualDisconnect, no SHOWABLE check, ESRCH read as alive) are each killed. Deliberate choices: the pre-check ignores autoStart, and a pid over int32 reads as null. Out of scope and untouched: dialing bindHost, a WSL-remote window facing a Windows-owned daemon, and task-e07e695c's hunks."
 }
