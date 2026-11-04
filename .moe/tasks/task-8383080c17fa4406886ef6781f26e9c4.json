@@ -92,7 +92,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:53:50.379Z",
-  "updatedAt": "2026-11-04T07:25:30.612Z",
+  "updatedAt": "2026-11-04T07:26:21.591Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:58:16.989Z",
     "plannedStepCount": 5,
@@ -179,11 +179,10 @@
   "planApprovedAt": "2026-11-04T07:15:05.261Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-cd0ac706@2026-11-04T06:58:14Z",
-    "at": "2026-11-04T07:16:07.634Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T07:15:17Z",
+    "at": "2026-11-04T07:26:21.591Z"
   },
   "workStartedAt": "2026-11-04T07:16:25.978Z",
   "reviewStartedAt": "2026-11-04T07:25:30.610Z",
@@ -200,5 +199,25 @@
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
     "docs/CONFIGURATION.md"
   ],
-  "completionSummary": "A set MOE_DAEMON_COMMAND now wins over every resolving daemon script (legacy profile; PROTECTED never reads it), and the override is rewritten so it starts a daemon. MoeDaemonSupervisor gets a `daemonCommandOverride` constructor seam right after processLookup. buildDaemonCommand(basePath, overrideCommand) substitutes {projectPath}, uses a command with --project as written, appends `--project \"<p>\"` when a word after the first is a daemon subcommand, and otherwise appends `start --project \"<p>\"`, so `npx moe-daemon` becomes `npx moe-daemon start --project \"<p>\"`. In WSL agent mode it appends ` --host wsl` unless the command has a --host word. A throwing seam is logged and treated as unset. New MoeDaemonCommandOverrideTest O1-O5, W1/W2 in MoeDaemonSupervisorTest get `{ null }`, and the docs/CONFIGURATION.md row states the precedence and the start rule. Windows `./gradlew test` (gradlew.bat test --rerun under the jetbrains-gradle lease): 671 tests, 6 skipped, 0 failures, 0 errors, 44 classes; MoeDaemonCommandOverrideTest 5/5. Mutants in an archive copy (M0 baseline green): M1 -> O1, M2 -> O2, M3 -> O3/O1/O5, M4 -> O3 (after I changed the O3 quoted-path fixture to `node \"/opt/my start dir/index.js\"`, because the planned one would not have bitten), M5 -> O1/O5, M6 -> O5, M7 -> O1. Quality gate: parity-check.sh PASS, npm run lint OK. Known limits: the `--host=wsl` form and a flag value equal to a subcommand are not special-cased. Windows installer machines now start the installer's start-daemon.cmd instead of the bundled daemon (intended by DoD 1, stated in the docs)."
+  "completionSummary": "A set MOE_DAEMON_COMMAND now wins over every resolving daemon script (legacy profile; PROTECTED never reads it), and the override is rewritten so it starts a daemon. MoeDaemonSupervisor gets a `daemonCommandOverride` constructor seam right after processLookup. buildDaemonCommand(basePath, overrideCommand) substitutes {projectPath}, uses a command with --project as written, appends `--project \"<p>\"` when a word after the first is a daemon subcommand, and otherwise appends `start --project \"<p>\"`, so `npx moe-daemon` becomes `npx moe-daemon start --project \"<p>\"`. In WSL agent mode it appends ` --host wsl` unless the command has a --host word. A throwing seam is logged and treated as unset. New MoeDaemonCommandOverrideTest O1-O5, W1/W2 in MoeDaemonSupervisorTest get `{ null }`, and the docs/CONFIGURATION.md row states the precedence and the start rule. Windows `./gradlew test` (gradlew.bat test --rerun under the jetbrains-gradle lease): 671 tests, 6 skipped, 0 failures, 0 errors, 44 classes; MoeDaemonCommandOverrideTest 5/5. Mutants in an archive copy (M0 baseline green): M1 -> O1, M2 -> O2, M3 -> O3/O1/O5, M4 -> O3 (after I changed the O3 quoted-path fixture to `node \"/opt/my start dir/index.js\"`, because the planned one would not have bitten), M5 -> O1/O5, M6 -> O5, M7 -> O1. Quality gate: parity-check.sh PASS, npm run lint OK. Known limits: the `--host=wsl` form and a flag value equal to a subcommand are not special-cased. Windows installer machines now start the installer's start-daemon.cmd instead of the bundled daemon (intended by DoD 1, stated in the docs).",
+  "commits": [
+    {
+      "sha": "3cd256eb36359471bc677c029e0e2e9ac6d1f457",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T07:15:17Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T07:26:21.591Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
