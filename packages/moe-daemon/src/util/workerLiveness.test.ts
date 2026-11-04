@@ -156,3 +156,48 @@ describe('findFreshestLiveWorkerByRole', () => {
     expect(findFreshestLiveWorkerByRole([], [], 'architect', { nowMs: NOW_MS })).toBeNull();
   });
 });
+
+describe('findFreshestLiveWorkerByRole: team role first, then the id prefix', () => {
+  const PROJECT = team('team-project', null);
+  const MIXED: Team[] = [...TEAMS, PROJECT];
+  function findIn(teams: Team[], workers: Worker[], opts: Parameters<typeof findFreshestLiveWorkerByRole>[3] = {}) {
+    return findFreshestLiveWorkerByRole(workers, teams, 'architect', { nowMs: NOW_MS, ...opts });
+  }
+
+  it('matches an architect- seat on a role-less team by its id prefix, with no roled architect team at all', () => {
+    expect(findIn([PROJECT], [architect('architect-p', 5, { teamId: 'team-project' })])?.id).toBe('architect-p');
+    const legacy = { ...team('team-legacy', null) } as Partial<Team>;
+    delete legacy.role;
+    expect(findIn([legacy as Team], [architect('architect-l', 5, { teamId: 'team-legacy' })])?.id).toBe('architect-l');
+  });
+
+  it('never picks a seat on a roled non-architect team, even with an architect- prefix', () => {
+    const misfiled = architect('architect-misfiled', 0, { teamId: 'team-workers' });
+    expect(findIn(MIXED, [misfiled])).toBeNull();
+    expect(findIn(MIXED, [misfiled, architect('architect-p', 60, { teamId: 'team-project' })])?.id).toBe('architect-p');
+  });
+
+  it('lets an explicit architect team win over an id that declares another role', () => {
+    expect(findIn(MIXED, [worker('worker-promoted')])?.id).toBe('worker-promoted');
+  });
+
+  it('never picks a role-less-team seat whose id declares another role or none, and never throws on a non-string id', () => {
+    const seats = ['worker-x', 'qa-x', 'governor-x', 'seat-x', 'human'].map((id) => worker(id, { teamId: 'team-project' }));
+    const broken = { ...worker('placeholder', { teamId: 'team-project' }), id: 42 as unknown as string };
+    expect(findIn(MIXED, [...seats, broken])).toBeNull();
+  });
+
+  it("returns null when the role-less team's only architect is stale, DEAD or excluded", () => {
+    expect(findIn(MIXED, [architect('architect-stale', LIVENESS_TIMEOUT_MS / 1000 + 1, { teamId: 'team-project' })])).toBeNull();
+    expect(findIn(MIXED, [architect('architect-dead', 1, { teamId: 'team-project', status: 'DEAD' })])).toBeNull();
+    expect(findIn(MIXED, [architect('architect-self', 1, { teamId: 'team-project' })], { excludeWorkerIds: ['architect-self'] })).toBeNull();
+  });
+
+  it('pools roled-team and role-less-team architects for freshness and the lowest-id tie-break', () => {
+    expect(findIn(MIXED, [architect('architect-old', 90), architect('architect-new', 3, { teamId: 'team-project' })])?.id).toBe('architect-new');
+    const a = architect('architect-a', 10, { teamId: 'team-project' });
+    const b = architect('architect-b', 10);
+    expect(findIn(MIXED, [a, b])?.id).toBe('architect-a');
+    expect(findIn(MIXED, [b, a])?.id).toBe('architect-a');
+  });
+});

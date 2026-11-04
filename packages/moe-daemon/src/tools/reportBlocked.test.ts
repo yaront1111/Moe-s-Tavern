@@ -7,6 +7,7 @@ import { reportBlockedTool } from './reportBlocked.js';
 import { unblockWorkerTool } from './unblockWorker.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import { LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { runDependencyUnblock } from '../state/dependencyUnblock.js';
 import type { Epic, Project, Task, TeamRole } from '../types/schema.js';
 
@@ -291,6 +292,40 @@ describe('moe.report_blocked', () => {
 
     expect(result.notified).toEqual({ target: '@governors', via: 'governors-fallback' });
     expect(mentionedGeneralPosts()[0]).not.toContain('@worker-1');
+  });
+
+  describe("on the launchers' role-less project team (team role, then id prefix)", () => {
+    async function addProjectTeamSeat(workerId: string, secondsAgo: number): Promise<void> {
+      let team = Array.from(state.teams.values()).find(t => t.name === 'moes' && !t.role);
+      if (!team) team = await state.createTeam({ name: 'moes' });
+      await state.createWorker({ id: workerId, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1', currentTaskId: null, status: 'IDLE' });
+      await state.addTeamMember(team.id, workerId);
+      await state.updateWorker(workerId, { lastActivityAt: new Date(Date.now() - secondsAgo * 1000).toISOString() });
+    }
+
+    it('direct-mentions its live architect in #general and #architects; #governors gets the unmentioned copy', async () => {
+      await addProjectTeamSeat('architect-2a219562', 5);
+      // The daemon's own role resolution agrees this seat is an architect.
+      expect(resolveWorkerRole(state, 'architect-2a219562')).toBe('architect');
+      const result = await report();
+      expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+      expect(result.notified).toEqual({ target: 'architect-2a219562', via: 'freshest-live-architect' });
+      expect(result.message).toBe('Task blocked; seat freed — this response does not start another task session. Pinged architect-2a219562 (freshest live architect).');
+      expect(mentionedGeneralPosts()).toHaveLength(1);
+      const paged = mentionedGeneralPosts()[0];
+      expect(paged).toMatch(/^@architect-2a219562 🚧 worker-1 blocked on task-1: npm install fails behind the proxy$/);
+      expect(rolePosts).toEqual([['architects', paged], ['governors', paged.slice('@architect-2a219562 '.length)]]);
+    });
+
+    it('still escalates to @governors when its only architects are stale or DEAD', async () => {
+      await addProjectTeamSeat('architect-stale', LIVENESS_TIMEOUT_MS / 1000 + 60);
+      await addProjectTeamSeat('architect-dead', 2);
+      await state.updateWorker('architect-dead', { status: 'DEAD' });
+      const result = await report();
+      expect(result.notified).toEqual({ target: '@governors', via: 'governors-fallback' });
+      expect(rolePosts.map(([role]) => role)).toEqual(['governors']);
+      expect(rolePosts[0][1]).toMatch(/^@governors 🚧 worker-1 blocked on task-1: /);
+    });
   });
 
   it('always posts to #governors, with or without a live architect', async () => {
