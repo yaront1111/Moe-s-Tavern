@@ -148,7 +148,12 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       // DoD/rails/diff produces a bogus rejectionReason that sends the worker in
       // circles. No-ops on the human path (assignedWorkerId null).
       assertContextFetched(task, params.workerId, 'qa_reject');
-      const handoffWorkerId = task.assignedWorkerId || params.workerId;
+      // Idle only the seat that held this row: its assignee. On an unassigned
+      // row, where assertWorkerOwns lets any seat give the verdict, that is the
+      // caller only when its own pointer is on this row, so a seat that holds
+      // another task keeps its claim.
+      const handoffWorkerId = task.assignedWorkerId
+        || (params.workerId && state.getWorker(params.workerId)?.currentTaskId === task.id ? params.workerId : null);
 
       // Same hard candidate gate as qa_approve, for the same reason: a rejection
       // must name the bytes it judged, or the worker re-reads feedback written

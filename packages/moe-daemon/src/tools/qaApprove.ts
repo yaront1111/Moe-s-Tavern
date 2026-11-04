@@ -124,7 +124,12 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         throw invalidInput('summary', `too long (max ${MAX_SUMMARY_CHARS} chars)`);
       }
       const reviewSummary = params.summary.trim();
-      const handoffWorkerId = task.assignedWorkerId || params.workerId;
+      // Idle only the seat that held this row: its assignee. On an unassigned
+      // row, where assertWorkerOwns lets any seat give the verdict, that is the
+      // caller only when its own pointer is on this row, so a seat that holds
+      // another task keeps its claim.
+      const handoffWorkerId = task.assignedWorkerId
+        || (params.workerId && state.getWorker(params.workerId)?.currentTaskId === task.id ? params.workerId : null);
 
       // THE HARD GATE. An approval must apply to the bytes the reviewer read, so
       // the candidate they name is checked against the task's CURRENT candidate
