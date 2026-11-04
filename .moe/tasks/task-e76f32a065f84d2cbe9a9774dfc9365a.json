@@ -59,13 +59,20 @@
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (load adversarial-self-review) of your `git diff`, read as an attacker. Fix any finding, then re-run step 3's gates in full before complete_task: the evidence must come from the final bytes.\n\n(1) Scope: exactly 2 files. The fake's hunks are only:\n- the FAKE_SCOPE_ASSIGNEE doc lines;\n- the hoisted scan (dedent, the new comment, the finalizingAttempt lines moved below it);\n- the orphanCaller line.\nThe test file only gains the appended block. Nothing changes in postflight.sh/.ps1, postflight-owner-guard.cjs, .github/workflows/ci.yml or the daemon.\n\n(2) It is an exact mirror of getCommitScope.ts:234-242:\n- only the holder of THIS task's well-formed finalizing hold is exempt;\n- an absent or empty workerId is never an orphan;\n- livePeerIds is unchanged, and peersActive is still activePeerIds.length > 0;\n- the exemption does not depend on FAKE_SCOPE_FINALIZING: with the knob unset it still applies and still omits the field.\n\n(3) The serving modes are unchanged: unset omits finalizingAttempt, 'null' serves null whatever the records say, and 'malformed' serves the corrupt value. The 13 old tests pass unchanged.\n\n(4) Concurrency and huge input: the fake only reads .moe/attempts. A missing dir, a BOM, garbage JSON or thousands of records cannot throw: there is one readdir per call and a per-file try/catch.\n\n(5) Rows whose answer flips: owner-guard finalizing-own and sequential now get peersActive false. Neither asserts it. Confirm that both passed in BOTH legs of your GREEN log ('[owner guard] finalizing-own', '[owner guard] sequential', 'PASS owner guard scenarios').\n\n(6) The tests discriminate: on a scratch copy, re-run one mutant. Exempting on `!named` must fail (f2).\n\nThen call moe.complete_task with step 3's evidence, and quote the RED-AT-BASE output in the summary. Out of scope, do not fix: .github/workflows/ci.yml does not run postflight-owner-scope.test.mjs (it has not since 9a9b46d8). Say so in the completion summary for the governor.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "note": "Self-review of the diff: 2 files only. The fake's hunks are the doc lines, the hoisted scan and the orphanCaller line. It mirrors getCommitScope.ts:241. Mutant (orphanCaller exempts on !named) fails (f2), 16 pass and 1 fail. RED-AT-BASE re-printed. GREEN log (EXIT=0) shows owner guard finalizing-own and sequential in both legs, and the snapshot files cmp-match HEAD. Out of scope: ci.yml does not run postflight-owner-scope.test.mjs.",
+      "startedAt": "2026-11-04T06:53:59.935Z",
+      "completedAt": "2026-11-04T06:54:03.346Z"
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5772dacf",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -80,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T21:02:55.403Z",
-  "updatedAt": "2026-11-04T06:52:15.217Z",
+  "updatedAt": "2026-11-04T06:54:59.896Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T21:03:54.168Z",
@@ -90,7 +97,7 @@
     "firstClaimAt": "2026-11-03T21:19:33.768Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -105,7 +112,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:18:24.475Z",
@@ -169,11 +177,10 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-03T22:20:51.791Z",
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-5772dacf@2026-11-04T05:24:13Z",
-    "at": "2026-11-04T06:52:15.217Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5772dacf@2026-11-04T06:52:49Z",
+    "at": "2026-11-04T06:54:59.896Z"
   },
   "commits": [
     {
@@ -191,11 +198,35 @@
       "treeId": "da12209da5b3fcc6ea7bf446bff68a5b3ebc935e",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "9d5c8924be83ec83938a1012a8ddb511c652f646",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T06:52:49Z",
+      "paths": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T06:54:59.896Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "scripts/tests/postflight-fake-proxy.js",
-    "scripts/tests/postflight-owner-scope.test.mjs"
+    "scripts/tests/postflight-owner-scope.test.mjs",
+    "scripts/tests/postflight-fake-proxy.js"
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-11-04T06:54:12.623Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && grep -qF 'neither the assignee nor the holder' scripts/tests/postflight-fake-proxy.js && ! grep -qF 'A caller that is not the assignee joins' scripts/tests/postflight-fake-proxy.js && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-e76f32a0.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight-owner-scope.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && node --test scripts/tests/postflight-owner-scope.test.mjs && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=240 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=240 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\"",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 17\nℹ pass 17\nℹ fail 0\nPASS parity-check.sh\nPASS frozen candidate scenarios: 106\n[owner guard] finalizing-own\n[owner guard] sequential\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 12\nPASS postflight-vm-route.sh\nPASS postflight.sh\nPASS frozen candidate scenarios: 106\n[owner guard] finalizing-own\n[owner guard] sequential\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 11\nPASS postflight-vm-route.ps1\nPASS postflight.ps1\nEXIT=0",
+    "reportedAt": "2026-11-04T06:54:12.623Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "The postflight fake's get_commit_scope now applies the finalizing-holder exemption task-7d3428d1 landed in the daemon (getCommitScope.ts:241). A caller joins activePeerIds only when it is neither the assignee nor the holder of this task's well-formed finalizing attempt. The attempts scan is hoisted out of the FAKE_SCOPE_FINALIZING if-block, so the exemption applies in every mode while the served finalizingAttempt field behaves as before. The FAKE_SCOPE_ASSIGNEE doc lines are updated.\n\nTests (f1)-(f4) are appended to postflight-owner-scope.test.mjs:\n- (f1) holder, no assignee: activePeerIds [] and peersActive false, with FAKE_SCOPE_FINALIZING unset and 'computed'.\n- (f2) a non-holder stays an orphan peer.\n- (f3) a hold on another task, or a record isHoldingFinalizingAttempt rejects, exempts nobody.\n- (f4) the exempt holder still counts a real live peer.\n\nRED-AT-BASE (tests against 5592bcc0's fake): tests 17, pass 15, fail 2, failing (f1) and (f4); the gate printed RED-AT-BASE.\nGREEN: unit tests 17/17, parity-check, and the full bash postflight.sh and postflight.ps1 (PS 5.1) both print PASS, EXIT=0. Owner guard rows finalizing-own and sequential pass in both legs.\nMutant: exempting on !named fails (f2).\n\nOut of scope, for the governor: .github/workflows/ci.yml does not run postflight-owner-scope.test.mjs, and has not since 9a9b46d8."
 }

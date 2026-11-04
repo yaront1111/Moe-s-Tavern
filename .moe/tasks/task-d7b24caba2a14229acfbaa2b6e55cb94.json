@@ -1,0 +1,31 @@
+{
+  "id": "task-d7b24caba2a14229acfbaa2b6e55cb94",
+  "epicId": "epic-be924fb8",
+  "title": "bug: doctor run from WSL reports a live Windows daemon's daemon.json as stale, because it checks the Windows pid with kill -0, which WSL cannot see. TROUBLESHOOTING.md's \"daemon.json is stale\" fix then says rm .moe/daemon.json, so a WSL agent-mode seat that follows doctor deletes the live daemon's discovery file",
+  "description": "Hunt #17 (task-3488566e) found this as held item (a). It was re-run read-only from WSL at bb0bc17e on 2026-11-04; the evidence is in /mnt/d/moe-scratch/hunt-3488566e/mine/doctor-wsl-foreign-live.txt.\n- `node <snapshot>/packages/moe-daemon/dist/index.js doctor --project /mnt/d/projexts/moes` prints `[WARN] daemon.json: daemon.json present but pid 36176 not running (stale)` and exits 0.\n- daemon.json holds pid 36176, port 9876, bindHost wsl and projectPath D:/projexts/moes, so it is a Windows-owned record.\n- In WSL, `kill -0 36176` gives \"No such process\".\n- `curl http://172.26.208.1:9876/health` (the WSL gateway) answers healthy, with pid 36176 and projectPath D:/projexts/moes.\n\nCause: packages/moe-daemon/src/commands/doctor.ts:99-107 decides liveness with isProcessAlive(parsed.pid) alone. index.ts already handles a foreign record: isForeignDaemonInfo (:97), wslGatewayHost (:122), and validateDaemonInfoForProject (:357-380), which probes /health over loopback and then the WSL gateway. The launchers' sh pre-flight does the same, and it refuses to delete daemon.json when the probe fails. doctor reuses none of this.\n\nHarm: docs/TROUBLESHOOTING.md:75-82 (\"daemon.json is stale\", then `rm .moe/daemon.json`) has no liveness check. This repo runs in WSL agent mode, so following doctor's advice there deletes the live daemon's daemon.json. New proxies then cannot find the port, and a later start may launch a second daemon on the same .moe/.\n\nFix direction:\n- For a foreign record (isForeignDaemonInfo), doctor's daemon.json probe asks /health over loopback, then over the WSL gateway.\n- A reply whose projectPath is this project counts as alive: report pass and name the host that answered.\n- Report stale only when no /health answers.\n- In TROUBLESHOOTING's stale section, tell the reader to confirm /health does not answer before removing daemon.json, checking the WSL gateway too when in WSL, and never to remove it while /health answers.\n\nSequencing: this row depends on task-78fa7110 (relative --project), whose fix is expected to touch index.ts's foreign-daemon helpers. Plan against its landed shape and re-anchor the line numbers above.\n\nPlacement: task-3950184e also edits doctor.test.ts and TROUBLESHOOTING.md (around rows 1254-1255). Put this row's tests in their own describe block and edit only the stale section. No dependency edge is needed in worktree mode.",
+  "definitionOfDone": [
+    "From WSL, take a daemon.json whose projectPath is a drive-letter path while a /health reporting the same project answers on loopback or the WSL gateway. Doctor's daemon.json probe must not report 'not running (stale)': it reports the daemon live and names the host that answered. A regression test in doctor.test.ts covers this foreign-live case with a stubbed health server, and a foreign-dead case (no /health answers) still warns stale.",
+    "The 'daemon.json is stale' section of docs/TROUBLESHOOTING.md tells the reader to confirm /health does not answer before removing daemon.json, checking the WSL gateway as well when in WSL, as the launchers do. It also says never to remove daemon.json while /health answers.",
+    "The daemon tests for the touched files pass (doctor.test.ts, plus a test of any helper this row moves or shares), tsc is clean, and npm run lint passes at the repo root."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-78fa711078cf4dda861262291e0adf83"
+  ],
+  "priority": "MEDIUM",
+  "order": 491.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:53:41.394Z",
+  "updatedAt": "2026-11-04T06:53:41.394Z"
+}

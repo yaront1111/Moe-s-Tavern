@@ -13,20 +13,27 @@
     {
       "stepId": "step-1",
       "description": "Tests first (DoD 1, 2): the harness arm and the fake-proxy knobs it needs. Port the two test-file hunks of the reference /mnt/d/moe-scratch/plan-3416b309/code.diff, prototyped at 2a1c5a36 and RED/GREEN on both engines. Use the Edit tool for a TOOL witness, and never run the scratch patch_*.py scripts against W. Read mem:task-task-3416b309111740aa800b0e03bcb836e8-handoff and mem:convention-postflight-scratch-harness first.\n(a) postflight-fake-proxy.js, two default-off knobs.\n- In get_context's FAKE_CTX_LANDING block, FAKE_CTX_LANDING_FROM_CLAIM=N serves task.landing only once .moe/claim-count is >= N. FAKE_CLAIM_ONCE/FAKE_CLAIM_LIMIT keep that file.\n- In `case 'report_blocked'`, FAKE_REPORT_BLOCKED_FAIL=1 logs the call (appendRpc), then answers a JSON-RPC error.\n(b) postflight-worktree.cjs, module-level helpers right after wtQaGate.\n- `qaRun(p,name,knobs)`:\n  - deletes .moe/claim-count and .moe/second-claim, which launch() keeps across runs;\n  - runs the qa role with the claude shim, FAKE_CLAIM_WORKSPACE null, FAKE_TASK_STATUS REVIEW and WT_CLI_RECORD;\n  - sets MOE_TASKLESS_WAIT_SEC '5' before ...knobs, so an idle claim ends a single-shot run in about 5 s instead of 300;\n  - returns {...r, prompt, launches: the number of recorded CLI runs}.\n- `qaParked(p,r,re)` asserts:\n  - exit 0;\n  - a `[WARN] MOE_CONTROL_CHECKOUT_BEHIND: ` line and no `[ERROR] MOE_CONTROL_CHECKOUT_BEHIND` line;\n  - exactly one report_blocked with [taskId, workerId, blockedOnTaskIds] = [TASK, WID, []], and a reason that starts with `MOE_CONTROL_CHECKOUT_BEHIND: ` and matches re;\n  - in rpcs(p), a claim_next_task before that report_blocked and one after it, with no deregister_worker before the second claim.\n(c) wtQaGate.\n- `const run=qaRun`.\n- wt-qa-behind gets FAKE_CLAIM_ONCE '1' and stays `refused`: HEAD lacks main's tip, a seat-level miss.\n- The six row-level cases (none, checkpoint, malformed, upper, unknown, git-fail) run with {FAKE_CLAIM_ONCE:'1', ...knobs} and assert qaParked(p,r,re) plus !r.cliRan.\n- wt-qa-git-fail parks because the stub's --is-ancestor exit 1 means 'not an ancestor' while HEAD equals main's tip.\n- Update the arm's header comment to the row/seat split.\n(d) New arm `wtQaPark` in its own block, registered as 'wt-qa-park' right after 'wt-qa-gate' in the cases map.\n1. repo('wt-qa-park'), c = commitOn main. Run with landed(c) + FAKE_CTX_LANDING_FROM_CLAIM '2' + FAKE_CLAIM_LIMIT '2'. Assert:\n   - qaParked(.., /no recorded completion commit/);\n   - launches === 1;\n   - the prompt names `Review commit ${c}: ` once;\n   - claim-count '2' and no second-claim.\n   This is the same seat claiming and starting a second REVIEW row. The fake reuses one task id, and the landing knob makes the second claim the next row.\n2. FAKE_CLAIM_ONCE + FAKE_REPORT_BLOCKED_FAIL: refused(r,'MOE_CONTROL_CHECKOUT_BEHIND'), the log has 'moe.report_blocked failed', and claim-count is '1'.\n3. FAKE_GET_CONTEXT_FAIL 'error' and 'mismatch', with landed(c) + FAKE_CLAIM_ONCE: refused, with a reason matching /did not answer for this task/.\nError handling in the harness: every QA-gate run is claim-bounded, so a park-and-reclaim regression fails in seconds instead of at the 180 s launch LIMIT.\n- Expected RED on today's wrappers (sh leg, fixture parent under /tmp, MOE_WORKTREE_ONLY=wt-qa-gate,wt-qa-park):\n  - `wt-qa-gate FAILED: AssertionError: wt-qa-none: exit code 1, expected 0`;\n  - `wt-qa-park FAILED: AssertionError: exit code 1, expected 0`.\n- `node --check` both files.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-04T06:52:20.040Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Ported both test-file hunks of code.diff with the Edit tool; both files are byte-identical to the reference (cmp against a patched HEAD archive). node --check passes for both. RED on today's wrapper (sh leg, fixture parent /tmp, MOE_WORKTREE_ONLY=wt-qa-gate,wt-qa-park): \"wt-qa-gate FAILED: AssertionError: wt-qa-none: exit code 1, expected 0\" and \"wt-qa-park FAILED: AssertionError: exit code 1, expected 0\", 0 ok / 2 failed, as the plan expected.",
+      "startedAt": "2026-11-04T06:52:20.040Z",
+      "completedAt": "2026-11-04T06:55:00.223Z"
     },
     {
       "stepId": "step-2",
       "description": "sh wrapper (DoD 1, 2), the scripts/moe-agent.sh hunks of code.diff. Edit in place in W with the Edit tool (in a task worktree the atomic-save rule does not apply), then `bash -n scripts/moe-agent.sh`. Leave worktree_stop untouched: every worker provisioning guard uses it.\n(a) qa_control_preflight.\n- Set the global `QA_LAND_B=\"\"` first, then: `if sync_land_target \"$target\"; then QA_LAND_B=\"$LAND_B\"; elif [ \"$LAND_WT_PUB\" = remote ]; then <the existing WARN line>; fi`, then follow_control_checkout.\n- In local mode sync_land_target only reads refs/heads/<target> (no fetch), so QA_LAND_B is the local tip read BEFORE the follow. In remote mode it is origin's tip, just fetched.\n- Extend the header comment.\n(b) New `qa_gate_park DETAIL` right after it. It sends one moe_rpc report_blocked with {taskId, workerId, reason: \"MOE_CONTROL_CHECKOUT_BEHIND: DETAIL\", blockedOnTaskIds: []}.\n- Why the explicit []: an omitted list makes report_blocked parse task ids out of the reason. If they are all DONE, it answers dependenciesSatisfied and does NOT block, so the row would stay claimable and the seat would re-claim it forever (mem:gotcha-report-blocked-reason-ids-become-blockers).\n- On success it prints `[WARN] MOE_CONTROL_CHECKOUT_BEHIND: DETAIL` and `[WARN] task <tid> is parked with no CLI run; this seat goes on to its next claim.`, then returns 0.\n- Error handling: when the args build or the RPC fails, it prints `[ERROR] MOE_CONTROL_CHECKOUT_BEHIND: DETAIL` and worktree_stop's `[WARN] moe.report_blocked failed for <tid>; the seat stops anyway.`, runs stop_heartbeat_sidecar, then exit 1. There is no second call, so a row the daemon never parked is never re-claimed in a loop.\n(c) qa_landed_gate.\n- The python takes \"$tid\" as argv[1]. It prints nothing unless the context's task.id equals it; it prints the sha when it is 40 lowercase hex, else 'none'.\n- Empty → worktree_stop \"task $tid: the pre-flight get_context did not answer for this task, so its recorded completion is unknown\". This is seat-level, as today.\n- 'none' → qa_gate_park <today's no-recorded-completion detail> and `return 1`.\n- Unreadable HEAD → unchanged.\n- Then a `why` variable:\n  - cat-file -e fails → why = <today's not-a-commit detail>;\n  - otherwise `merge-base --is-ancestor` rc != 0 → why = <today's not-in-HEAD detail>, and rc != 1 (a git error) → worktree_stop \"$why\".\n- With why set:\n  - QA_LAND_B non-empty and (== HEAD, or `merge-base --is-ancestor \"$QA_LAND_B\" \"$head\"` exits 0) → qa_gate_park \"$why\"; return 1;\n  - else worktree_stop \"$why\". HEAD lacks the synced tip (a failed sync or follow), which every row would hit, so the seat stops.\n- Keep every detail string byte-identical to today's, so the existing reason regexes still match. Rewrite the header comment to state the split.\n(d) Call site, the WT-13 (§6.4) block: `qa_landed_gate || continue`, with a 2-line comment.\n- The continue also skips the loop-end --no-loop break; the precedent is `account_wait_recheck || continue`.\n- FIRST_RUN=false was already set, so the next pass gets the poll sleep like any ended session.\n- The gate runs before the baseline, the live marker, the account lease and the heartbeat sidecar, so nothing needs undoing.\n- report_blocked's hand-back closes the QA claim's attempt (taskStore closeAttemptsOnHandBack).\n- Green check: the sh leg with MOE_WORKTREE_ONLY=wt-qa-gate,wt-qa-park → 2 ok.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "startedAt": "2026-11-04T06:55:01.366Z"
     },
     {
       "stepId": "step-3",
@@ -66,11 +73,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:54:04.824Z",
-  "updatedAt": "2026-11-04T06:52:20.040Z",
+  "updatedAt": "2026-11-04T06:55:01.366Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T05:54:07.529Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 6
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -83,7 +91,9 @@
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:50:15.717Z",
   "executionContract": {

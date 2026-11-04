@@ -1,0 +1,28 @@
+{
+  "id": "task-8383080c17fa4406886ef6781f26e9c4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains plugin reads MOE_DAEMON_COMMAND only when no bundled daemon script resolves, so the override is dead in a normal install. For the documented example `npx moe-daemon` it never appends `start`, so when the override is used it runs `npx moe-daemon --project <path>`, which prints usage and exits 0 without starting a daemon",
+  "description": "Hunt #17 (task-3488566e) found this as held item (b). The governor re-checked the code at 59e95024.\n\n- **Spawn order:** MoeDaemonSupervisor.kt:182-190 uses buildDirectDaemonCommand (the bundled or local daemon script) whenever that script resolves. It falls back to buildDaemonCommand, the only reader of MOE_DAEMON_COMMAND, only when the script does not resolve. Yet docs/CONFIGURATION.md:60 documents MOE_DAEMON_COMMAND as the \"Daemon start command override (JetBrains plugin)\", and CLAUDE.md describes it as override resolution.\n- **Missing `start`:** buildDaemonCommand (:665-690) appends `start` only when the command ends in .cmd, .ps1 or .js, or equals `moe-daemon`. So the documented example `npx moe-daemon` becomes `npx moe-daemon --project \"<path>\"`. Given no subcommand, the daemon CLI prints usage and exits 0 without writing daemon.json. Evidence: /mnt/d/moe-scratch/hunt-3488566e/A/repro-daemon-command.{sh,out}.\n- **WSL host suffix:** the override branch returns before the WSL agent-mode `--host` suffix is added. Check whether an override daemon in WSL agent mode binds loopback only.\n\nFix direction:\n- An explicitly set MOE_DAEMON_COMMAND wins over the bundled script.\n- Append `start` whenever the command names no daemon subcommand. Match the daemon CLI's subcommand list, not file extensions.\n- In WSL agent mode, add the same --host suffix as the other spawn paths unless the command already carries --host.\n- Keep the {projectPath} template and an explicit --project working as they do today.\n\nPlacement: task-fe811130 also edits MoeDaemonSupervisor.kt (the bindHost probe). Edit only buildDaemonCommand and the spawn-path selection, and put the tests in their own test class or block. No dependency edge is needed in worktree mode. The Kotlin gate is gradlew.bat test from Windows, run under the jetbrains-gradle lease.",
+  "definitionOfDone": [
+    "With MOE_DAEMON_COMMAND set, the plugin spawns the override even when a bundled daemon script resolves. With it unset, the spawn path is unchanged. A JUnit test pins both cases.",
+    "buildDaemonCommand turns `npx moe-daemon`, or any command that names no daemon subcommand, into one that runs `start --project <path>`. It leaves unchanged a command that already names a subcommand, carries --project or uses {projectPath}. In WSL agent mode it adds the --host suffix the other spawn paths add, unless the command already carries --host. JUnit tests pin each case.",
+    "docs/CONFIGURATION.md's MOE_DAEMON_COMMAND row states the precedence and the start rule. `./gradlew test` passes, run as gradlew.bat test from Windows under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 492.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:53:50.379Z",
+  "updatedAt": "2026-11-04T06:53:50.379Z"
+}
