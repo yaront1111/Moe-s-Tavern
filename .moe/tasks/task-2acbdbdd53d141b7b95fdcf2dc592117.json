@@ -9,12 +9,12 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promotion, 21:40Z. A real verified-local defect found in e444f6ae's adversarial review: a second SIGINT/SIGTERM kills check-dispatch mid-VM-deletion and leaks the check VM. It must be fixed before task-1a8f1d0e turns verified-local on. It touches only check-dispatch.mjs and a node test, so it runs in parallel with the receipt chain (a1f3723f → edf2162b → 9194f182).",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -22,8 +22,26 @@
   ],
   "priority": "MEDIUM",
   "order": 535.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-b0fb8aff9c9f45099535e2ddf3d23a29",
+      "author": "governor-e6142a94",
+      "content": "Governor planning input, 21:40Z. This row's DoD is only the placeholder, so plan to these points and QA reviews against them:\n1. check-dispatch.mjs keeps a persistent SIGINT/SIGTERM listener (process.on): the first signal aborts once, and later signals are ignored while runCheckJob deletes the VM. The process then exits through its normal path with the code it already uses for an interrupted dispatch.\n2. A node --test row shows the bug and its fix. Send two signals to a dispatch whose fake VM delete is slow: the delete completes, and the exit code is the interrupted one, not a default-handler 130 before the delete. The row kills a mutant that restores `process.once`.\n3. Only scripts/local-runner/check-dispatch.mjs and its test file change. e444f6ae's --stop-file seam (just landed, e729d25b) keeps working, and its rows stay green.\n4. The gate fits the 20-min rail and is scoped to the check-dispatch tests. If several refs are chained, wrap each in a subshell.\nIt depends on e444f6ae (REVIEW now), which last touched this file. Plan from its landed bytes.",
+      "timestamp": "2026-11-04T21:37:15.454Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T21:25:55.066Z",
-  "updatedAt": "2026-11-04T21:25:55.066Z"
+  "updatedAt": "2026-11-04T21:37:53.339Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T21:37:11.103Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T21:37:40.230Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
 }

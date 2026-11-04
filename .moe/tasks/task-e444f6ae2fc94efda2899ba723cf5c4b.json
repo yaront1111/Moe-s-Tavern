@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,7 +110,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:38:55.700Z",
-  "updatedAt": "2026-11-04T21:34:49.079Z",
+  "updatedAt": "2026-11-04T21:49:00.750Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T16:04:04.872Z",
@@ -120,11 +120,14 @@
     "firstClaimAt": "2026-11-04T16:04:17.535Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T21:48:20.345Z",
+    "wallClockMs": 20642810
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -216,10 +219,11 @@
   "planApprovedAt": "2026-11-04T16:27:54.943Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T20:47:43Z",
-    "at": "2026-11-04T21:34:49.079Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T21:37:20Z",
+    "at": "2026-11-04T21:49:00.750Z"
   },
   "workStartedAt": "2026-11-04T20:49:15.909Z",
   "reviewStartedAt": "2026-11-04T21:33:20.480Z",
@@ -258,5 +262,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T21:48:20.345Z",
+  "reviewCompletedAt": "2026-11-04T21:48:20.345Z",
+  "reviewSummary": "Reviewed completion e729d25b (on moe/work-2026-10-24, origin too), git show only. Size +207/-53, net 154, 5 files = filesModified; moe-agent.sh, postflight-vm-route.sh, parity-check.* untouched.\n\nRe-ran checkRefs[0] verbatim in a clean --shared clone at e729d25b (/mnt/d/moe-scratch/qa-te444-4030090): EXIT=0 in ~8.5 min. ps5 (pwsh->node->5.1) and ps7 both 'PASS postflight-vm-route.ps1' with '[strong gate] ok SGV, SGU U1-U9, SG8 and SG-interrupt' and E2E incl. timeout; local-runner-dispatch 27/27 on WSL node and node.exe; postflight-vm-route.sh PASS; parity sh/ps1 PASS; lint OK.\n\nAC check:\n1 argv: 6 or 8 tokens, --stop-file last, absolute, no CONTROL; S1 pins 9 refusals with opened/loaded 0.\n2 stop: unref'd latched existsSync poll; AbortSignal.any with the entry signal; S2 (file, file+signal, signal) shows VM remove/removed before resolve, no 2nd check, RUNNER_ABORTED, exit 2; S3 pre-existing file -> no VM; S4 real entry exits by itself.\n3 ps1: GUID path under GetTempPath, never pre-created; argv ends --stop-file; timeout writes file, waits CheckDispatchGraceSec, taskkill by PID only if alive; still TIMEOUT (U5/U8/SG-timeout).\n4 record cleared last, outside finally, typed PipelineStoppedException rethrow (U7, U9).\n5/6 no new MOE_ code/printed line/ps1 function; path never printed; BOM/LF kept.\n\nMy mutants on scratch copies: stop=signal (drop file watch) -> 2 node rows fail; drop isAbsolute(stopFile) -> S1 fails. Worker's ps1 mutants (clear-first/U9, kill-at-once and wait-out-grace/U8) are consistent with the rows I read.\n\nNon-blocking: (a) $script:CheckDispatchStopFile is set after Start-Process; a runspace stop exactly between those statements gets grace+kill without the seam (assigning before the spawn closes it). (b) S4 alone doesn't prove unref, since close() in finally also frees the loop; unref keeps legacy liveness. Follow-up already filed: task-2acbdbdd (process.once second Ctrl+C).",
+  "requiredCheckAtDone": null
 }
