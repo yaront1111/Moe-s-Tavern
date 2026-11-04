@@ -304,8 +304,9 @@ async function retryUnrecordedLanding(state: StateManager, attempt: ExecutionAtt
  * comment (`note`, when given, opens it). A REVIEW row goes to WORKING,
  * unassigned, keeping reopenCount and its completed steps, or to BLOCKED
  * (unblocking to WORKING) for 'diverged' or the 3rd unlanded landing in a row.
- * A row not in REVIEW keeps its status and assignment. Caller must hold
- * state.mutex.
+ * A row not in REVIEW keeps its status and assignment, and so does a REVIEW row
+ * parked for a human (needsHumanReview, the qa_reject hard cap), which still gets
+ * the retry record and the comment. Caller must hold state.mutex.
  */
 export async function routeUnlandedLanding(
   state: StateManager,
@@ -320,13 +321,19 @@ export async function routeUnlandedLanding(
   const at = new Date().toISOString();
   const landingRetry = { ...unlanded, count, at };
   const { reason, paths, rescueRef, targetTip } = landingRetry;
-  const status = task.status !== 'REVIEW' ? task.status : reason === 'diverged' || count >= 3 ? 'BLOCKED' : 'WORKING';
+  // A REVIEW row the qa_reject hard cap parked for a human stays put: the claim
+  // fences (claimNextTask) refuse only REVIEW + needsHumanReview, so WORKING or
+  // BLOCKED would hand a human-reserved row to the next worker.
+  const parked = task.status === 'REVIEW' && task.needsHumanReview === true;
+  const status = task.status !== 'REVIEW' || parked ? task.status
+    : reason === 'diverged' || count >= 3 ? 'BLOCKED' : 'WORKING';
   const preview = paths.slice(0, 20).join(', ') || '(none reported)';
   const comment = { id: generateId('comment'), author: 'moe-daemon', timestamp: at,
     content: `${note ? `${note} ` : ''}Landing unlanded (${reason}) ${count} time(s) in a row; attempt ${attempt.id} ` +
       `(generation ${attempt.generation}); paths: ${preview}${paths.length > 20 ? ` (+${paths.length - 20} more)` : ''}; ` +
-      `rescue ref: ${rescueRef}; target tip: ${targetTip ?? 'unknown'}; task ${status}.` };
-  const routing: Partial<Task> = task.status !== 'REVIEW' ? {} : { status, assignedWorkerId: null,
+      `rescue ref: ${rescueRef}; target tip: ${targetTip ?? 'unknown'}; task ${status}` +
+      `${parked ? ', kept parked for human review (needsHumanReview)' : ''}.` };
+  const routing: Partial<Task> = task.status !== 'REVIEW' || parked ? {} : { status, assignedWorkerId: null,
     ...(status === 'BLOCKED' ? {
       blockedReason: `Landing unlanded (${reason}) ${count} time(s) in a row; ${rescueRef}; reconcile, then move the task to WORKING`,
       blockedResourceId: null, blockedOnTaskIds: null, blockedFromStatus: 'WORKING' as const, blockedAt: at,
