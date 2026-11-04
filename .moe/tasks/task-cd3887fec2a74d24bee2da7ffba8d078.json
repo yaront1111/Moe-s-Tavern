@@ -55,12 +55,18 @@
     {
       "stepId": "step-4",
       "description": "Postflight harness twins, scripts/tests/postflight-vm-route.sh and postflight-vm-route.ps1. Add a check right after the T-legacy row: in sh after its task/worker identity check (:125-126), and in ps1 after 'record lacks task and worker identity' (:797). In order:\n1. Print one line, `[vm route] T-legacy usage receipt: <rows>`. <rows> is the JSONL lines of the launch's one receipt file under `<project>/logs/moe-usage/`, each `timestamp` value replaced by `<ts>` and the launchId by `<launch>`, joined by ` | `. Nothing else is masked, so a before/after diff of this line is the DoD's 'receipt unchanged' evidence.\n2. Assert: exactly one `*.jsonl` file; exactly 2 rows; coverage `pending` then `missing`; one shared non-null launchId; provider `claude`, taskId `task-postflight`, workerId `worker-vmr`, role `worker`, launchMode `headless`. Each failure names its mismatch.\n3. Assert the CLI record's env (sh `$REC`, ps1 `$rec`) holds neither key, checking MOE_USAGE_RECEIPT_FILE first. Fail with exactly `the CLI env carries <KEY>` (sh `vmr_fail T-legacy`, ps1 `Stop-Vmr $r`).\nIn sh, write the check as one `\"$NODE\" -e '...' \"$REC\" \"$PROJECT/logs/moe-usage\"` with single-quoted JS, as the file already does. In ps1, use PowerShell (Get-ChildItem, [IO.File]::ReadAllLines, ConvertFrom-Json, -replace) or a .cjs written to $tempRoot like rec.cjs. Never pass a double-quoted multi-line `node -e` from ps1: PS 5.1 mangles it in native argv.\nAlso fix the sh mask comment. Its last bullet (:103) names 'MOE_USAGE_CONTEXT_JSON launchId, the usage receipt file', which no longer reach the CLI. Measure two T-legacy runs with the uuid `.replace` removed (scratch copy). If the records then match, delete that `.replace` and its bullet. If they don't, keep it and name the value that still differs. The ps1 'Per-run masks only' comment stays.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.sh",
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-04T11:55:00.818Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "postflight-vm-route twins:\n- After the T-legacy identity check, each prints `[vm route] T-legacy usage receipt: <rows>` with only timestamp and launchId masked, joined by ' | '.\n- Each then asserts: 1 jsonl file; 2 rows, pending then missing; one shared launchId; provider/taskId/workerId/role/launchMode as planned.\n- Last, each asserts the CLI record's env lacks MOE_USAGE_RECEIPT_FILE, then MOE_USAGE_CONTEXT_JSON, failing with `the CLI env carries <KEY>`. sh does this in one single-quoted node -e whose reason goes to stderr then vmr_fail T-legacy; ps1 uses Get-ChildItem/ReadAllLines/ConvertFrom-Json and Stop-Vmr.\nMask measurement: a scratch copy (/mnt/d/moe-scratch/cd38-mask.fkLkRM) with the sh uuid `.replace` removed passed the whole harness on the edited launchers (EXIT=0, T-legacy2 and every T-row diff clean). So the replace and its bullet are deleted, and a comment names why. The ps1 'Per-run masks only' comment stays.\nDev runs on the edited bytes: postflight-vm-route.sh PASS (EXIT=0) and postflight-vm-route.ps1 on PS 5.1 PASS. Both print the receipt line. bash -n and ParseFile are clean.",
+      "startedAt": "2026-11-04T11:55:00.818Z",
+      "completedAt": "2026-11-04T12:10:38.600Z"
     },
     {
       "stepId": "step-5",
@@ -93,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:06:21.135Z",
-  "updatedAt": "2026-11-04T11:55:00.819Z",
+  "updatedAt": "2026-11-04T12:10:38.600Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:57.567Z",
@@ -103,7 +109,7 @@
     "firstClaimAt": "2026-11-04T10:57:11.313Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -116,7 +122,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T11:23:55.643Z",

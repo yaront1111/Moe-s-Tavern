@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:53:45.785Z",
-  "updatedAt": "2026-11-04T12:02:20.094Z",
+  "updatedAt": "2026-11-04T12:10:40.667Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:54.562Z",
@@ -117,11 +117,14 @@
     "firstClaimAt": "2026-11-04T10:57:12.679Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T12:10:15.632Z",
+    "wallClockMs": 4382953
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -201,10 +204,11 @@
   "planApprovedAt": "2026-11-04T11:18:31.335Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T11:42:57Z",
-    "at": "2026-11-04T12:02:20.094Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T12:02:41Z",
+    "at": "2026-11-04T12:10:40.667Z"
   },
   "workStartedAt": "2026-11-04T11:44:21.052Z",
   "reviewStartedAt": "2026-11-04T12:01:24.318Z",
@@ -237,5 +241,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T12:10:15.632Z",
+  "reviewCompletedAt": "2026-11-04T12:10:15.632Z",
+  "reviewSummary": "Reviewed completion 0fa7750e (on moe/work-2026-10-24 = control HEAD) via git show; 2 files, net +44.\n\nDoD1: moe-agent.ps1 decide/chain hunk is a one-for-one port of sh 3586957f. Flag appended on the `$moeSkipLaunch = $false; ...` line (still the only line with that prefix), set only in the $script:MoeVmRoute block, which no longer prints. The skip chain prints the unchanged vm-route line first, then elseif claim-failed/teamless/idle byte for byte. Legacy never sets the flag. BOM kept.\n\nDoD2: postflight-vm-route.ps1 adds Assert-VmrOneReason (fails on 0 or >1 lines; the name bbd7ad2d reuses). VR-taskless asserts exit 0 plus one vm-route. New rows VR-taskless-teamless and VR-taskless-idle. VR-reload sets FAKE_MENTION and requires every reason to be vm-route. Legacy T-taskless-idle/T-taskless-mention in try/finally. Existing order checks and T baseline untouched.\n\nRED: worker's red-pwsh.log shows VR-taskless 'saw 2' on the unfixed wrapper.\n\nRe-run on my own git-archive snapshot of 0fa7750e, env scrubbed:\n- parity-check.sh PASS (BOM incl.).\n- seat-registration.test.mjs with pwsh 7: 59 tests, 40 pass, 0 fail, 19 skipped. First pass had 1 fail (ENOENT ci.yml) because my snapshot omitted .github; rerun with it is fail 0.\n- postflight-vm-route.ps1 on powershell.exe 5.1 and pwsh.exe 7: both PASS, new rows present in both logs.\n\nUncovered by a row (same branch, disclosed): VM claim-failed with a mention, unparseable claim, outage probe (bbd7ad2d). Nothing to cut.",
+  "requiredCheckAtDone": null
 }
