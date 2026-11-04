@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { summarizePostflight } from './postflight-safe.mjs';
+import { POSTFLIGHT_TIMEOUT_MS, runPostflight, summarizePostflight } from './postflight-safe.mjs';
 
 test('success requires the exact engine-specific PASS line', () => {
     for (const engine of ['bash', 'powershell', 'pwsh']) {
@@ -129,5 +129,27 @@ test('SKIPPED, a later skip word and lowercase skipped notes leave a clean run g
         const result = summarizePostflight('bash', 0, `${line}\nPASS postflight.sh\n`);
         assert.equal(result.failureClass, 'NONE', line);
         assert.equal(result.exit, 0, line);
+    }
+});
+
+test('the harness bound is at least 120 minutes and a kill at the bound is a nonzero TIMEOUT', async () => {
+    assert.ok(Number.isSafeInteger(POSTFLIGHT_TIMEOUT_MS), `bound ${POSTFLIGHT_TIMEOUT_MS}`);
+    assert.ok(POSTFLIGHT_TIMEOUT_MS >= 120 * 60 * 1000, `bound ${POSTFLIGHT_TIMEOUT_MS} ms is under 120 min`);
+    assert.ok(POSTFLIGHT_TIMEOUT_MS < 360 * 60 * 1000, `bound ${POSTFLIGHT_TIMEOUT_MS} ms reaches GitHub's 360-min job default`);
+    for (const engine of ['bash', 'powershell', 'pwsh']) {
+        const calls = [];
+        const pass = `PASS postflight.${engine === 'bash' ? 'sh' : 'ps1'}`;
+        const killed = await runPostflight(engine, (file, args, options, callback) => {
+            calls.push({ file, options });
+            callback(Object.assign(new Error('Command failed'), { killed: true, code: null, signal: 'SIGKILL' }),
+                `[scenario Q] ok\n${pass}\n`, '');
+        });
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].file, engine);
+        assert.equal(calls[0].options.timeout, POSTFLIGHT_TIMEOUT_MS);
+        assert.equal(calls[0].options.killSignal, 'SIGKILL');
+        assert.deepEqual(killed, { engine, exit: 1, lastScenario: 'Q', failureClass: 'TIMEOUT', failureLine: null });
+        const clean = await runPostflight(engine, (file, args, options, callback) => callback(null, `${pass}\n`, ''));
+        assert.deepEqual(clean, { engine, exit: 0, lastScenario: null, failureClass: 'NONE', failureLine: null });
     }
 });

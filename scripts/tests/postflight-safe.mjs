@@ -10,6 +10,9 @@ const failures = new Set(['SPAWN_FAILED', 'TIMEOUT', 'OUTPUT_LIMIT']);
 // "[scenario WT14D]" and an optional "(sub-case)" tag: "[scenario WT14D] SKIP (root ignores mode bits)".
 // SKIPPED, a later "skips", and lowercase "skipped:" host-capability notes are not skips.
 const SKIP_LINE = /^(?:\[[^\]\r\n]*\][ \t]+(?:\([^)\r\n]*\)[ \t]+)?)?SKIP(?:\s|:|$)/i;
+// A harness run that outlives this bound is killed (SIGKILL) and reported as TIMEOUT.
+// runPostflight's execFile comment gives the measured runs it is sized from.
+export const POSTFLIGHT_TIMEOUT_MS = 180 * 60 * 1000;
 
 // Output is untrusted fixture material. Return only this closed metadata shape.
 export function summarizePostflight(engine, exitCode, output = '', failure = null, sourceLineCount = 0) {
@@ -35,7 +38,7 @@ export function summarizePostflight(engine, exitCode, output = '', failure = nul
     };
 }
 
-function runPostflight(engine) {
+export function runPostflight(engine, run = execFile) {
     if (!engines.has(engine)) return Promise.resolve(summarizePostflight(engine, null));
     const harness = fileURLToPath(new URL(`./postflight.${engine === 'bash' ? 'sh' : 'ps1'}`, import.meta.url));
     const sourceLineCount = readFileSync(harness, 'utf8').split(/\r?\n/).length;
@@ -43,12 +46,16 @@ function runPostflight(engine) {
         : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', harness];
     return new Promise(resolveResult => {
         // Never inherit stdout/stderr or write them to artifacts. execFile keeps
-        // bounded buffers in memory and kills a timed-out/overlong child. Windows
-        // PowerShell 5.1 runs every scenario in about 20 minutes on a desktop and
-        // past 30 on windows-latest, so the bound is an hour.
-        execFile(engine, args, {
+        // bounded buffers in memory and kills a timed-out/overlong child. Sizing,
+        // measured at f38a17d4 (task-5f7f43fa): the full postflight.ps1 took 3200 s
+        // under Windows PowerShell 5.1 and 3400 s under pwsh 7 on an idle desktop,
+        // and windows-latest runs this work about 1.5-1.6x slower (landing guards
+        // 47 s vs 30 s, 45 s vs 28 s), so 80-90 min there; ubuntu-latest's bash run
+        // took 2690-2750 s. 180 min keeps the slowest at about half the bound and
+        // well inside GitHub's 360-min job default.
+        run(engine, args, {
             cwd: fileURLToPath(new URL('../../', import.meta.url)),
-            windowsHide: true, encoding: 'utf8', timeout: 60 * 60 * 1000,
+            windowsHide: true, encoding: 'utf8', timeout: POSTFLIGHT_TIMEOUT_MS,
             maxBuffer: 16 * 1024 * 1024, killSignal: 'SIGKILL',
         }, (error, stdout, stderr) => {
             const failure = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'OUTPUT_LIMIT'
