@@ -1,6 +1,6 @@
 # moe-proxy
 
-Part of [Moe's Tavern](https://github.com/yaront1111/Moe-s-Tavern), an AI agent task board for Claude Code, Codex, Gemini CLI and Grok Build. This package is the MCP stdio proxy an agent CLI speaks to; it forwards every `moe.*` call to the daemon.
+Part of [Moe's Tavern](https://github.com/yaront1111/Moe-s-Tavern), an AI agent task board for Claude Code, Codex, Antigravity and Grok Build. This package is the MCP stdio proxy an agent CLI speaks to; it forwards every `moe.*` call to the daemon.
 
 ## Installation
 

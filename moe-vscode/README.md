@@ -1,6 +1,6 @@
 # Moe's Tavern
 
-An AI agent task board for VS Code and Antigravity: run Claude Code, Codex, Gemini CLI and Grok Build through a shared Kanban board with human plan approval.
+An AI agent task board for VS Code and Antigravity: run Claude Code, Codex, agy and Grok Build through a shared Kanban board with human plan approval.
 
 JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary interface to the same daemon and `.moe/` project state. Full documentation lives in the [repository](https://github.com/yaront1111/Moe-s-Tavern).
 
@@ -22,7 +22,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 ## Requirements
 
 - Node.js 22.22+ on PATH (24 LTS recommended; the extension bundles the Moe daemon and MCP proxy and starts them for you)
-- One coding CLI installed and signed in: Claude Code, Codex, Gemini CLI or Grok Build
+- One coding CLI installed and signed in: Claude Code, Codex, Antigravity or Grok Build
 
 ## Getting started
 
