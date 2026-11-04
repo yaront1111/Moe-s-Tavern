@@ -13,28 +13,43 @@
     {
       "stepId": "step-1",
       "description": "RED first, with no behavior change yet.\n(1) DaemonIdentity.kt: turn the private sameDirectoryOnDisk (lines 93-96) into a test seam, following the convention of RuntimeSelectionPolicy.sameDirectory (RuntimeSelectionPolicy.kt:85-87). Keep both runCatching calls exactly as they are. isSameProjectPath keeps calling it exactly as today.\n```kotlin\n// The disk identity check: canonicalPath, else isSameFile (a Windows junction). Tests replace it to see which spellings reach the disk.\n@Volatile\ninternal var sameDirectoryOnDisk: (String, String) -> Boolean = { path, base ->\n    runCatching { File(path).canonicalPath == File(base).canonicalPath }.getOrDefault(false) ||\n        runCatching { Files.isSameFile(Paths.get(path), Paths.get(base)) }.getOrDefault(false)\n}\n```\n(2) DaemonIdentityTest.kt: add `private val realDiskCheck = DaemonIdentityProbe.sameDirectoryOnDisk` and restore it as the first line of tearDown(), so a failing case never leaks a stub. Add three cases. Each one:\n- installs a recording stub `DaemonIdentityProbe.sameDirectoryOnDisk = { a, b -> asked += a to b; <answer> }`, with `val asked = CopyOnWriteArrayList<Pair<String, String>>()` (already imported);\n- uses a real local project, `val local = tempDir(\"moe-id-local\").toString()`, which is host-absolute on every OS.\nThe three cases:\n- (a) `a UNC or device spelling never reaches the disk check and is Foreign`. The stub answers true: a disk check that says Same. So only the new guard can keep these spellings Foreign, and no run ever opens SMB. Run these checks for each of \"\"\"\\\\host\\share\\x\"\"\", \"//host/share/x\", \"\"\"\\\\?\\UNC\\host\\share\\x\"\"\", \"\"\"\\\\.\\C:\\x\"\"\" and \"\"\"\\\\?\\C:\\x\"\"\":\n  - assertEquals(DaemonIdentity.Foreign(it), DaemonIdentityProbe.classify(200, health(it), local)) (/health);\n  - assertFalse(MoeDaemonSupervisor.isSameProject(it, local)) (the daemon.json and STATE_SNAPSHOT helper);\n  - assertFalse(DaemonIdentityProbe.isSameProjectPath(local, it)) (a UNC IDE base).\n  Then assertEquals(emptyList<Pair<String, String>>(), asked).\n- (b) `two local spellings that differ still reach the disk check`. This is the positive control that keeps (a) from passing vacuously. Set `val other = tempDir(\"moe-id-other\").toString()`; the stub answers false. Assert assertEquals(DaemonIdentity.Foreign(other), DaemonIdentityProbe.classify(200, health(other), local)) and assertEquals(listOf(other to local), asked).\n- (c) `a relative spelling is answered by its spelling alone`. The stub answers true. For each of \".\", \"proj\", \"sub/p\", \"D:proj\" and \"\"\"\\proj\"\"\": assertFalse(MoeDaemonSupervisor.isSameProject(it, local)) and assertFalse(DaemonIdentityProbe.isSameProjectPath(local, it)). asked stays empty.\n(3) MoeDaemonSupervisorTest.kt:101, the relative-case decision: drop the canonical fallback for relative spellings at every site, daemon.json included.\n- Replace the assertTrue with assertFalse(\"a relative spelling never reaches the disk check\", MoeDaemonSupervisor.isSameProject(\".\", File(\".\").canonicalPath)).\n- Add a one-line comment with the reason. A relative daemon.json projectPath names the daemon's cwd, but File(\".\") is the IDE's cwd, so the old match was a coincidence. VS Code's isSameProject refuses it too. Since 9f6857ee (task-78fa7110) the daemon records an absolute path (absoluteProjectPath, packages/moe-daemon/src/util/projectPath.ts).\n- Keep the test's name, its other rows and the File import.\nRED run, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease; route and --tests quoting in mem:gotcha-jetbrains-gradle-from-wsl). Acquire the lease right before and release it right after, even on failure:\n```bash\ncd \"$(git rev-parse --show-toplevel)\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.services.DaemonIdentityTest --tests com.moe.services.MoeDaemonSupervisorTest --rerun\" 2>&1 | grep -aE \"FAILED|tests completed|BUILD\"\n```\nExpect exactly three failures: (a), (c) and `isSameProject compares cross OS literals before canonical paths`. (b) and every existing case pass. Keep the FAILED lines for the summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
       ],
-      "startedAt": "2026-11-04T08:58:59.909Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "sameDirectoryOnDisk is now an @Volatile internal var seam (same body). Added the UNC/device, positive-control and relative cases to DaemonIdentityTest, with the seam restored first in tearDown. Flipped MoeDaemonSupervisorTest:101 to assertFalse with its reason. RED run under the jetbrains-gradle lease (lease released): 119 tests, 3 failed, 2 skipped (the 2 skips are pre-existing F1b/F1c in MoeDaemonSupervisorTest; DaemonIdentityTest skipped=0). FAILED lines: \"DaemonIdentityTest > a UNC or device spelling never reaches the disk check and is Foreign FAILED\", \"DaemonIdentityTest > a relative spelling is answered by its spelling alone FAILED\", \"MoeDaemonSupervisorTest > isSameProject compares cross OS literals before canonical paths FAILED\". The positive control and every other case passed.",
+      "startedAt": "2026-11-04T08:58:59.909Z",
+      "completedAt": "2026-11-04T09:00:05.341Z"
     },
     {
       "stepId": "step-2",
       "description": "Add the guard in DaemonIdentity.kt. It is VS Code's rule (moe-vscode/src/services/MoeDaemonClient.ts:157-165: isFullyQualified(p) && !/^[\\\\/]{2}/.test(p)):\n```kotlin\n/** Two leading separators of either kind: UNC (`\\\\host\\share`, `//host/share`) and device (`\\\\?\\`, `\\\\.\\`) forms. */\nprivate val NETWORK_OR_DEVICE = Regex(\"\"\"^[\\\\/]{2}\"\"\")\nprivate val DRIVE_ABSOLUTE = Regex(\"\"\"^[A-Za-z]:[\\\\/]\"\"\")\n\ninternal fun isLocalHostAbsolute(path: String, windows: Boolean = MoeDaemonSupervisor.isWindowsHost()): Boolean =\n    !NETWORK_OR_DEVICE.containsMatchIn(path) && if (windows) DRIVE_ABSOLUTE.containsMatchIn(path) else path.startsWith(\"/\")\n\nfun isSameProjectPath(path: String, base: String): Boolean =\n    comparableProjectPath(path) == comparableProjectPath(base) ||\n        (isLocalHostAbsolute(path) && isLocalHostAbsolute(base) && sameDirectoryOnDisk(path, base))\n```\n- Reuse MoeDaemonSupervisor.isWindowsHost() (MoeDaemonSupervisor.kt:1023). Do not add a second host rule.\n- isSameProjectPath keeps its signature, so MoeDaemonSupervisor.isSameProject (daemon.json, :1029) and MoeMessageDispatcher (STATE_SNAPSHOT, :96) get the guard with no edit. Neither of those files changes.\n- classify keeps its isAbsoluteAnyOs gate, so a UNC served path stays Foreign, never Unknown (DoD 2).\n- Rewrite the KDoc of isSameProjectPath, of the seam and of the DaemonIdentity interface (lines 19-30) to say why:\n  - daemon.json is repository content, and /health and STATE_SNAPSHOT come from any local listener;\n  - on Windows, File.canonicalPath or Files.isSameFile on a UNC or device spelling opens an SMB session to the named host (NTLM exposure);\n  - a relative spelling names the daemon's cwd;\n  - WSL-share spellings (\\\\wsl$\\..., //wsl.localhost/...) still match, because comparableProjectPath folds them before the guard.\n- Error handling: the guard is a pure string check and never throws. The disk check keeps both runCatching wrappers, so an unreadable path still answers false and no caller sees a new exception.\n- DaemonIdentityTest.kt: add `isLocalHostAbsolute keeps network, device and relative spellings off the disk`. Its rows cover both branches and mirror VS Code's isFullyQualified (use raw strings for the backslash rows):\n  - windows=true accepts D:\\x, d:/x, D:\\ and D:/.\n  - windows=true rejects \\\\host\\share\\x, //host/share/x, \\\\?\\UNC\\host\\share\\x, \\\\?\\D:\\x, \\\\.\\C:\\x, //?/D:/x, \\/host/x, /x, /mnt/d/x, \\x, D:x, D:, ., proj, the empty string, and \" D:/x\".\n  - windows=false accepts /x, /, /mnt/d/x and /home/u/p.\n  - windows=false rejects //host/share/x, \\\\host\\share\\x, //wsl$/Ubuntu/x, /\\host, D:\\x, d:/x, ., proj, the empty string, \\x and \" /x\".\nNo gradle run here: step 3 runs the whole suite once.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
+      ],
+      "note": "Added the NETWORK_OR_DEVICE and DRIVE_ABSOLUTE regexes and internal isLocalHostAbsolute(path, windows = MoeDaemonSupervisor.isWindowsHost()). isSameProjectPath keeps its signature and now reaches the sameDirectoryOnDisk seam only when both spellings are host-absolute with no two leading separators. Rewrote the KDoc of the interface, isSameProjectPath and the seam. Added the isLocalHostAbsolute test with the plan's rows for both host branches. No gradle run in this step; step 3 runs the whole suite.",
+      "startedAt": "2026-11-04T09:00:07.022Z",
+      "completedAt": "2026-11-04T09:00:36.185Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification runs once, fresh, on the whole JetBrains suite, under the jetbrains-gradle lease. Acquire it right before and release it right after, even on failure. Run this exact command from the worktree, and submit its output as complete_task evidence labelled as the Windows gradlew.bat route. It is be7d169f's gate with MoeSnapshotProjectCheckTest added for the STATE_SNAPSHOT site:\n```bash\ncd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; for c in DaemonIdentityTest MoeDaemonSupervisorTest MoeProjectForeignDaemonTest MoeSnapshotProjectCheckTest; do X=$R/TEST-com.moe.services.$c.xml; echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X | head -1)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; grep -q 'skipped=\"0\"' $R/TEST-com.moe.services.DaemonIdentityTest.xml || r=1; exit $r\n```\n- It must exit 0.\n- DaemonIdentityTest must show skipped=\"0\". That proves the dirLink symlink and junction cases really ran (on the gate host through cmd /c mklink /J) and still classify Same through the real disk check (DoD 2).\n- Every existing case passes unedited, except MoeDaemonSupervisorTest:101, which step 1 flipped on purpose.\n- Quote the BUILD line, the xml totals and the four class lines in the summary, next to step 1's RED lines.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T09:00:37.832Z"
     },
     {
       "stepId": "step-4",
@@ -61,11 +76,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:42:33.111Z",
-  "updatedAt": "2026-11-04T08:58:59.909Z",
+  "updatedAt": "2026-11-04T09:00:37.833Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:48:24.603Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -75,7 +91,10 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:57:44.169Z",
   "executionContract": {

@@ -14,32 +14,51 @@
     {
       "stepId": "step-1",
       "description": "architect.md:34, the Tasks-per-session rule: edit one sentence in place (DoD 1).\n\nIn docs/roles/architect.md, on line 34 (the long line that starts 'Tasks per session:'), replace only this text. It occurs exactly once in the file.\nOLD: outranks the budget and `nextAction`: claim nothing more and end the turn\nNEW: outranks the budget and `nextAction`, and so does a `claim_next_task` reply with `accountSwitch`, which claims nothing (`hasNext:false`): claim nothing more and end the turn\n\nLeave the rest of the line as it is, including its em dashes and the emoji. Do not add a line: the file stays at 39 lines, and the lint caps it at 40. The result must match the architect.md hunk of /mnt/d/moe-scratch/plan-7e9ba059/proto-doc.diff byte for byte. README.txt in that folder explains every artifact.\n\nWhy: since task-d27edf88, claim_next_task with acceptsAccountSwitch answers {hasNext:false, accountSwitch} and claims nothing, for a seat that holds no task and whose Claude account must switch. Sources:\n- packages/moe-daemon/src/tools/claimNextTask.ts:553-570.\n- docs/MCP_SERVER.md, ### moe.claim_next_task, **Account switch**.\n- The moe-account-switch mod marks claim_next_task (scripts/mods/moe-account-switch/hooks/register.ts:48).\n\nRules:\n- Edit with your session's own editor: Edit on Claude, apply_patch on codex exec. Never use Serena (its project config ignores docs/) or a shell write. That is the global rail on TOOL witnesses.\n- Never put a full 32-hex task id in architect.md. targetedContextGuidance.test.ts forbids one in this stable-prefix doc.\n- Do not touch .moe/roles. It refreshes at the next daemon start, and a worktree has no .moe/ anyway.\n\nError handling: if the match fails, re-read line 34 and retry the exact sentence. Never rewrite the whole line or the file.\n\nTests for this step: r0 and r1 in the step 4 gate.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/roles/architect.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/roles/architect.md"
+      ],
+      "note": "Edited line 34; doc diff matches proto-doc.diff (verified with both hunks).",
+      "startedAt": "2026-11-04T09:00:03.448Z",
+      "completedAt": "2026-11-04T09:00:16.077Z"
     },
     {
       "stepId": "step-2",
       "description": "architect.reference.md, '## Claude account switch': add one paragraph (DoD 2).\n\nInsert the paragraph below, then a blank line, directly before the paragraph that starts 'A switch is not a failure:'. That puts it between the third bullet ('- The session then exits by itself ...') and that closing paragraph.\n\nWith Edit:\n- old_string: A switch is not a failure: report nothing and block nothing.\n- new_string: the paragraph, then two newlines, then that same sentence.\n- The anchor sentence occurs once in this file.\n\nThe paragraph, exact, on one line:\nA row you end without `moe.submit_plan` (`moe.archive_task` on a defect-hunt row, for example) gets no such reply, so the switch comes at your next in-session `moe.claim_next_task`: it answers `hasNext:false` with the same `accountSwitch`, claims nothing and names no `nextAction`. Write the handoff memory of the row you just ended if it needs one and you have not, then end the turn. The session then exits by itself, as above, and the new session on the next account claims the next PLANNING task.\n\nLeave the rest of the section as it is: the intro paragraph, the three bullets and the closing paragraph.\n- They describe the submit_plan case, and it still holds.\n- 'A claim made anyway is refused' covers both cases: the mod's HELD set refuses a claim once any switch is pending (register.ts:52, :281-285).\n\nThe result must match the architect.reference.md hunk of proto-doc.diff byte for byte.\n\nThe facts behind each clause, all checked at 58e54180:\n- archive_task carries no accountSwitch. The mod marks only submit_plan, chat_wait and claim_next_task (register.ts:48, MARKED).\n- The reply is hasNext:false plus the same accountSwitch shape { from, to, fromPeakPercent, switchAtPercent, reason, instruction }, built by accountSwitchReply (packages/moe-daemon/src/state/accountStore.ts:541). It has no nextAction and writes nothing (claimNextTask.ts:553-570).\n- The relaunched seat's pre-flight claims the next task (docs/MCP_SERVER.md, claim_next_task, **Account switch**).\n\nUse the same editor rule as step 1. Error handling: as in step 1.\n\nTests for this step: r0 in the step 4 gate.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/roles/architect.reference.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/roles/architect.reference.md"
+      ],
+      "note": "Inserted the claim_next_task paragraph; git diff matches proto-doc.diff byte for byte.",
+      "startedAt": "2026-11-04T09:00:16.925Z",
+      "completedAt": "2026-11-04T09:00:19.773Z"
     },
     {
       "stepId": "step-3",
       "description": "Ship the edited docs in the vendored copy (DoD 3). packages/moe-daemon/src/generated/initFiles.ts must equal the generate-init-files output for the two edited docs. Background: mem:gotcha-moe-doc-generated-artifacts and mem:convention-role-doc-edits-regenerate-initfiles.\n\nCompute the generator base B as r3.sh does:\nB=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD)\n\nFAST PATH. Take it when both checks pass:\n- `git diff --quiet 58e54180 $B -- docs/roles docs/agents packages/moe-daemon/src/generated/initFiles.ts` passes.\n- `git diff $B -- docs | diff - /mnt/d/moe-scratch/plan-7e9ba059/proto-doc.diff` prints nothing.\n\nThen apply the 6 OLD/NEW pairs of /mnt/d/moe-scratch/plan-7e9ba059/initFiles-edit-pairs.txt, in order, with your own Edit tool. They are:\n- The two ROLE_DOCS markers: architect.md 5095739efdb8 -> 2a2e5b1b46d8, and architect.reference.md 4e6e159ba84b -> 168bfad12f83.\n- The changed architect.md sentence and the new reference paragraph. The template literal escapes their backticks with a backslash: keep the backslashes.\n- One new sha per doc, inserted in sorted order into SHIPPED_ROLE_BODY_SHAS: '2a2e5b1b46d8' after '1eb2a6b8ae47' in the architect.md list, and '168bfad12f83' after '08b07943437a' in the architect.reference.md list. Keep every old sha, so stale marked .moe/roles copies still upgrade.\n\nThen `cmp packages/moe-daemon/src/generated/initFiles.ts /mnt/d/moe-scratch/plan-7e9ba059/proto-initFiles.ts` must print nothing.\n\nREGENERATE ROUTE, otherwise:\n1. Clone at B with r3.sh's recipe: `S=$(mktemp -d) && git clone -q --shared --no-checkout . $S/r && git -C $S/r checkout -q --detach $B`.\n2. Copy your two docs into $S/r with `cp --parents`. That is a scratch write outside the checkout, so it is allowed.\n3. In $S/r/packages/moe-daemon, under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin`, run `npm ci --no-audit -q && npm run -s generate-init-files`. It must print a 'Generated ...' line. A 'skipping' line means the docs are missing.\n4. Diff the clone's initFiles.ts against yours, and apply each hunk with Edit.\n\nNever:\n- Copy the generated file back into the worktree. That is a shell write.\n- Run npm build, prebuild, clean, ci or install in the shared checkout or in the task worktree (global rail). Run them only in the /tmp clone.\n- Use a git archive snapshot. The generator needs git history for the SHIPPED_ROLE_BODY_SHAS lists.\n- Hand-write a sha. The generator computes each one from the doc body.\n\nError handling:\n- An OLD that does not match means your docs or B differ from the prototype. Take the regenerate route.\n- The Edit tool trims a trailing space (mem:gotcha-edit-tool-trims-trailing-space). Every pair starts and ends on a non-space character.\n\nTests for this step: r3 in the step 4 gate.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/generated/initFiles.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Fast path: applied the 6 pairs; cmp against proto-initFiles.ts is byte-identical.",
+      "startedAt": "2026-11-04T09:00:20.626Z",
+      "completedAt": "2026-11-04T09:00:39.879Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, run once. From your worktree root, run exactly this command. Submit its fresh result as moe.complete_task verification { command, exitCode, outputTail }:\n(cd /mnt/d/moe-scratch/plan-7e9ba059 && sha256sum -c --quiet SHA256SUMS) && bash /mnt/d/moe-scratch/plan-7e9ba059/r0.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r1.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r2.sh && bash /mnt/d/moe-scratch/plan-7e9ba059/r3.sh\n\nThe four scripts are byte-identical to the executionContract checkRefs, and SHA256SUMS pins them and the prototype files. What each one checks:\n- R0 (DoD 1 and 2):\n  - architect.md's Tasks-per-session line names `submit_plan` reply with `accountSwitch`, `claim_next_task` reply with `accountSwitch` and `hasNext:false`, and keeps 'claim nothing more and end the turn'.\n  - The file is at most 40 lines.\n  - The DoD 2 grep passes.\n  - The **Claude account switch** section holds the new phrases, and its submit_plan bullet and closing paragraph stay.\n- R1 (DoD 4, the project qualityGate): scripts/tests/parity-check.sh, then npm run lint.\n- R2: scope against B. Only the three named files may change under docs, packages, scripts, moe-jetbrains and moe-vscode.\n- R3 (DoD 3): runs in a clone at B, outside the repo.\n  - It proves the base initFiles.ts is generator-fresh.\n  - It overlays your three files, regenerates, and checks with sha1sum -c that initFiles.ts is byte-identical.\n  - It runs the vitest files initFiles, daemonGitDocs, targetedContextGuidance, qaCommitPolicy and blockedSeatGuidance.\n  - On the prototype: 5 files, 44 tests, about 26 s.\n\nOn a failure, read the FAIL line, fix it in the step that owns the file, and re-run the whole command. Never edit the scripts or SHA256SUMS.\n\nThis gate is the full regression for this change. The prototype ran the whole daemon suite: every test file that reads the architect entries' content is in R3, and the rest of the suite was unaffected (README.txt).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T09:00:40.866Z"
     },
     {
       "stepId": "step-5",
@@ -69,11 +88,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:33:42.652Z",
-  "updatedAt": "2026-11-04T08:59:26.098Z",
+  "updatedAt": "2026-11-04T09:00:40.866Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:34:11.813Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -83,7 +103,11 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:47:45.474Z",
   "executionContract": {
@@ -163,5 +187,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-cd0ac706@2026-11-04T08:34:09Z",
     "at": "2026-11-04T08:48:54.379Z"
-  }
+  },
+  "workStartedAt": "2026-11-04T09:00:03.448Z"
 }

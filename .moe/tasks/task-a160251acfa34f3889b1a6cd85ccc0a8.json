@@ -43,14 +43,16 @@
     {
       "stepId": "step-3",
       "description": "Verify once, then self-review once. This step changes no file.\n\n1. From the worktree root, run this exact command and submit its fresh output as the complete_task verification. It is also the plan's checkRef:\ngrep -c 'acceptsAccountSwitch` to `submit_plan`/`chat_wait`/`claim_next_task`' scripts/CLAUDE.md && grep -n 'idleSwitchFor`): `submit_plan.accountSwitch`, a `claim_next_task`' packages/moe-daemon/CLAUDE.md && grep -n 'All three idle signals need' packages/moe-daemon/CLAUDE.md && grep -n -B5 '^export function idleSwitchFor' packages/moe-daemon/src/state/accountStore.ts | grep claim_next_task && grep -n 'mod adds to submit_plan, chat_wait and' packages/moe-daemon/src/state/accountStore.ts && grep -n '`submit_plan`, `claim_next_task` or `chat_wait` reply' docs/TROUBLESHOOTING.md && grep -n 'next in-session `claim_next_task`' docs/TROUBLESHOOTING.md && ! grep -n 'Both idle signals' packages/moe-daemon/CLAUDE.md && bash scripts/tests/parity-check.sh && npm run lint\n\nAbout that command:\n- Every grep phrase fails on the unedited text (checked on e575ecec+5265909c) and passes on the step 1-2 text (dry-run on scratch copies).\n- scripts/CLAUDE.md uses grep -c because its line 42 is 8.5k chars.\n- The trailing `bash scripts/tests/parity-check.sh && npm run lint` is DoD 2 and the project qualityGate. It was green on the same tree.\n- There is no vitest run: docs and comments only change no behavior.\n- isEpicFinal on this row is only the highest-order fallback on the rolling Stability & Hardening bucket epic, not a designated hardening task.\n- Error handling: no code path or error path changes, because only docs and comments are edited. The command is an `&&` chain, so the first missing phrase or failing gate exits non-zero. A non-zero exit means fix the edit and re-run, never complete with it.\n\n2. Self-review `git diff` and `git status --short`:\n- In accountStore.ts every changed line starts with ` * `, no `*/` was added, and the delimiters are untouched. That is why no tsc run is needed. Do NOT run tsc in the worktree: a tsc emit run left the stray register.js/register.test.js that got task-d27edf88 reopened.\n- `git diff --word-diff scripts/CLAUDE.md` shows one sentence changed, on a line that is still one line.\n- The status lists exactly the four planned files: no generated, scratch or .moe/ file.\n- The wording matches what register.ts MARKED and claimNextTask.ts do as landed.\n\nCovers DoD 1 and DoD 2.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T08:59:54.521Z"
+      "note": "Verified; self-review: 4 files, accountStore.ts only comment lines changed.",
+      "startedAt": "2026-11-04T08:59:54.521Z",
+      "completedAt": "2026-11-04T09:00:12.409Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5772dacf",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -65,12 +67,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:24:48.690Z",
-  "updatedAt": "2026-11-04T08:59:54.521Z",
+  "updatedAt": "2026-11-04T09:01:07.717Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:25:08.544Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -82,7 +84,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:37:54.161Z",
@@ -147,11 +150,45 @@
   "planApprovedAt": "2026-11-04T08:37:54.197Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-2a219562@2026-11-04T08:25:06Z",
-    "at": "2026-11-04T08:52:38.233Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5772dacf@2026-11-04T08:58:46Z",
+    "at": "2026-11-04T09:01:07.717Z"
   },
-  "workStartedAt": "2026-11-04T08:59:32.168Z"
+  "workStartedAt": "2026-11-04T08:59:32.168Z",
+  "reviewStartedAt": "2026-11-04T09:00:17.177Z",
+  "verification": {
+    "command": "grep -c 'acceptsAccountSwitch` to `submit_plan`/`chat_wait`/`claim_next_task`' scripts/CLAUDE.md && grep -n 'idleSwitchFor`): `submit_plan.accountSwitch`, a `claim_next_task`' packages/moe-daemon/CLAUDE.md && grep -n 'All three idle signals need' packages/moe-daemon/CLAUDE.md && grep -n -B5 '^export function idleSwitchFor' packages/moe-daemon/src/state/accountStore.ts | grep claim_next_task && grep -n 'mod adds to submit_plan, chat_wait and' packages/moe-daemon/src/state/accountStore.ts && grep -n '`submit_plan`, `claim_next_task` or `chat_wait` reply' docs/TROUBLESHOOTING.md && grep -n 'next in-session `claim_next_task`' docs/TROUBLESHOOTING.md && ! grep -n 'Both idle signals' packages/moe-daemon/CLAUDE.md && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nlint=0",
+    "reportedAt": "2026-11-04T09:00:17.177Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/CLAUDE.md",
+    "packages/moe-daemon/CLAUDE.md",
+    "packages/moe-daemon/src/state/accountStore.ts",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completionSummary": "Docs/comments only: named claim_next_task as the third idle account-switch signal in scripts/CLAUDE.md (line 42 still one line), packages/moe-daemon/CLAUDE.md (signal list + 'All three idle signals'), accountStore.ts JSDoc (ACCEPTS_ACCOUNT_SWITCH, idleSwitchFor; no code lines changed) and docs/TROUBLESHOOTING.md (both bullets). Wording matches register.ts MARKED and claimNextTask.ts as landed; no behavior change.",
+  "commits": [
+    {
+      "sha": "bd75f88a57e4778c6ff145f0d728fb32c257deef",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T08:58:46Z",
+      "paths": [
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/CLAUDE.md",
+        "packages/moe-daemon/src/state/accountStore.ts",
+        "scripts/CLAUDE.md"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T09:01:07.717Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
