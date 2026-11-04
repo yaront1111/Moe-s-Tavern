@@ -6,6 +6,7 @@ import { assertPlanRails, checkPlanRails, planRailText } from '../util/rails.js'
 import {
   validateExecutionContract, MAX_CONTRACT_BEHAVIOR_CHARS, MAX_CONTRACT_LIST_ITEMS, MAX_CONTRACT_ITEM_CHARS,
   MAX_REQUIRED_CHECKS, MAX_REQUIRED_CHECK_PATHS, MAX_REQUIRED_CHECK_COMMAND_CHARS,
+  validatePlanningNotes, MAX_PLANNING_NOTE_CHARS, MAX_PLANNING_KEY_FILES, MAX_PLANNING_KEY_FILE_CHARS, MAX_PLAN_STEPS,
 } from '../state/validators.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
@@ -213,6 +214,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         },
         steps: {
           type: 'array',
+          maxItems: MAX_PLAN_STEPS,
           description: 'Ordered implementation steps; each has a description and the files it edits (affectedFiles) or creates (newFiles)',
           items: {
             type: 'object',
@@ -280,10 +282,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           type: 'object',
           description: 'Architect reasoning notes for the worker (approaches considered, codebase insights, risks, key files)',
           properties: {
-            approachesConsidered: { type: 'string', description: 'What alternatives were evaluated and why rejected' },
-            codebaseInsights: { type: 'string', description: 'Patterns, conventions, architecture discovered' },
-            risks: { type: 'string', description: 'Edge cases and potential issues the worker should watch for' },
-            keyFiles: { type: 'array', items: { type: 'string' }, description: 'Critical files to understand' }
+            approachesConsidered: { type: 'string', maxLength: MAX_PLANNING_NOTE_CHARS, description: 'What alternatives were evaluated and why rejected' },
+            codebaseInsights: { type: 'string', maxLength: MAX_PLANNING_NOTE_CHARS, description: 'Patterns, conventions, architecture discovered' },
+            risks: { type: 'string', maxLength: MAX_PLANNING_NOTE_CHARS, description: 'Edge cases and potential issues the worker should watch for' },
+            keyFiles: { type: 'array', maxItems: MAX_PLANNING_KEY_FILES, items: { type: 'string', maxLength: MAX_PLANNING_KEY_FILE_CHARS }, description: 'Critical files to understand' }
           },
           additionalProperties: false
         },
@@ -300,6 +302,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       }
       const input = args as { executionContract?: unknown; requiredCheckRevision?: unknown };
       const measuredContract = validateExecutionContract(input.executionContract, 'executionContract');
+      // Refused before any I/O or write, like the contract: never clipped or coerced.
+      const planningNotes = validatePlanningNotes((args as { planningNotes?: unknown } | null)?.planningNotes);
       const revision = input.requiredCheckRevision;
       if (revision !== undefined && (typeof revision !== 'string' || !/^[0-9a-f]{40}$/.test(revision)
           || !measuredContract?.requiredChecks)) {
@@ -326,12 +330,6 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           acceptsAccountSwitch?: unknown;
           executionContract?: unknown;
           steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[];
-          planningNotes?: {
-            approachesConsidered?: string;
-            codebaseInsights?: string;
-            risks?: string;
-            keyFiles?: string[];
-          };
         };
 
         const task = state.getTask(params.taskId);
@@ -349,8 +347,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         }
 
         // Validate step count bounds
-        if (params.steps.length > 100) {
-          throw invalidInput('steps', 'maximum 100 steps allowed');
+        if (params.steps.length > MAX_PLAN_STEPS) {
+          throw invalidInput('steps', `maximum ${MAX_PLAN_STEPS} steps allowed`);
         }
 
         // Validate each step has a non-empty description + normalize affectedFiles.
@@ -568,13 +566,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         if (executionContract !== undefined || task.executionContract !== undefined) {
           updatePayload.executionContract = executionContract ?? null;
         }
-        if (params.planningNotes) {
-          updatePayload.planningNotes = {
-            approachesConsidered: params.planningNotes.approachesConsidered?.slice(0, 5000),
-            codebaseInsights: params.planningNotes.codebaseInsights?.slice(0, 5000),
-            risks: params.planningNotes.risks?.slice(0, 5000),
-            keyFiles: params.planningNotes.keyFiles?.slice(0, 50),
-          };
+        if (planningNotes) {
+          updatePayload.planningNotes = planningNotes;
         }
         // Keep the Task this write returned: its planRevision is the value that
         // was actually committed with this plan. Reading the cache later would

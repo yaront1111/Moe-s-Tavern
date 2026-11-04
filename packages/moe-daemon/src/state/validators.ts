@@ -128,6 +128,14 @@ export const MAX_CONTRACT_LIST_ITEMS = 50;
 export const MAX_CONTRACT_ITEM_CHARS = 1000;
 
 export const MAX_REQUIRED_CHECKS = 20;
+/**
+ * Most steps one plan may hold. moe.submit_plan refuses more, taskSizing's
+ * warnSteps/maxSteps validate up to it, and sanitizeImplementationPlan keeps
+ * exactly this many on every write and reload. One number, like the step caps
+ * in util/planSize, so no accepted plan loses its tail on the next write: the
+ * sanitizer used to keep 50 while submit_plan accepted 100.
+ */
+export const MAX_PLAN_STEPS = 100;
 export const MAX_REQUIRED_CHECK_PATHS = 50;
 export const MAX_REQUIRED_CHECK_COMMAND_CHARS = 1000;
 const CHECK_PATH_KINDS = ['configs', 'scripts', 'assertionRoots'] as const;
@@ -220,6 +228,45 @@ export function validateExecutionContract(value: unknown, fieldName = 'execution
     if (items.length) contract[key] = items;
   }
   return Object.keys(contract).length ? contract : undefined;
+}
+
+export const MAX_PLANNING_NOTE_CHARS = 5000;
+export const MAX_PLANNING_KEY_FILES = 50;
+export const MAX_PLANNING_KEY_FILE_CHARS = 1000;
+const PLANNING_NOTE_TEXT_FIELDS = ['approachesConsidered', 'codebaseInsights', 'risks'] as const;
+
+export interface PlanningNotes {
+  approachesConsidered?: string;
+  codebaseInsights?: string;
+  risks?: string;
+  keyFiles?: string[];
+}
+
+/**
+ * submit_plan's planningNotes, checked like the execution contract: a wrong
+ * type, an unknown key or an over-limit value is refused INVALID_INPUT, and
+ * nothing is clipped or coerced. Absent or null means no notes.
+ */
+export function validatePlanningNotes(value: unknown, fieldName = 'planningNotes'): PlanningNotes | undefined {
+  if (value === undefined || value === null) return undefined;
+  const input = requirePlainObject(value, fieldName);
+  rejectUnknownFields(input, [...PLANNING_NOTE_TEXT_FIELDS, 'keyFiles'], fieldName);
+  const notes: PlanningNotes = {};
+  for (const key of PLANNING_NOTE_TEXT_FIELDS) {
+    const item = input[key];
+    if (item === undefined || item === null) continue;
+    notes[key] = validateStringValue(item, `${fieldName}.${key}`, { maxLength: MAX_PLANNING_NOTE_CHARS, allowEmpty: true, allowNewlines: true });
+  }
+  const files = input.keyFiles;
+  if (files !== undefined && files !== null) {
+    if (!Array.isArray(files)) throw invalidInput(`${fieldName}.keyFiles`, 'must be an array of strings');
+    if (files.length > MAX_PLANNING_KEY_FILES) {
+      throw invalidInput(`${fieldName}.keyFiles`, `must contain ${MAX_PLANNING_KEY_FILES} items or fewer`);
+    }
+    notes.keyFiles = Array.from(files, (file, index) =>
+      validateStringValue(file, `${fieldName}.keyFiles[${index}]`, { maxLength: MAX_PLANNING_KEY_FILE_CHARS }));
+  }
+  return notes;
 }
 
 export function validateBooleanValue(value: unknown, fieldName: string): boolean {
@@ -487,10 +534,10 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     ], 'taskSizing setting');
     const merged: NonNullable<ProjectSettings['taskSizing']> = { ...(next.taskSizing || {}) };
     if (incoming.warnSteps !== undefined) {
-      merged.warnSteps = validateIntegerValue(incoming.warnSteps, 'taskSizing.warnSteps', 1, 100);
+      merged.warnSteps = validateIntegerValue(incoming.warnSteps, 'taskSizing.warnSteps', 1, MAX_PLAN_STEPS);
     }
     if (incoming.maxSteps !== undefined) {
-      merged.maxSteps = validateIntegerValue(incoming.maxSteps, 'taskSizing.maxSteps', 1, 100);
+      merged.maxSteps = validateIntegerValue(incoming.maxSteps, 'taskSizing.maxSteps', 1, MAX_PLAN_STEPS);
     }
     if (incoming.warnDistinctFiles !== undefined) {
       merged.warnDistinctFiles = validateIntegerValue(incoming.warnDistinctFiles, 'taskSizing.warnDistinctFiles', 1, 100);
@@ -772,7 +819,7 @@ export function sanitizeStepAmendments(value: unknown): StepAmendment[] {
 export function sanitizeImplementationPlan(plan: unknown): ImplementationStep[] {
   if (!Array.isArray(plan)) return [];
   const VALID_STEP_STATUSES = ['PENDING', 'IN_PROGRESS', 'COMPLETED'];
-  const capped = plan.slice(0, 50);
+  const capped = plan.slice(0, MAX_PLAN_STEPS);
   const result: ImplementationStep[] = [];
   for (const step of capped) {
     if (!step || typeof step !== 'object') continue;
