@@ -1,0 +1,28 @@
+{
+  "id": "task-c0adee448ca64dffa5fde553507f7374",
+  "epicId": "epic-be924fb8",
+  "title": "docs: DEVELOPMENT.md's Plugin Bundling layout (:253-258) says daemon/ and proxy/ ship \"node_modules minus .bin\" and leaves scripts/moe-serena-ignore.mjs out, though since 864103f3/c76a8bf8 both bundles ship only the lockfiles' production packages (the vsix built from bc4793cf has 30 of the daemon's 65 node_modules entries, no typescript, vitest, tsx or @types) and since 5f731334 the shared manifest ships moe-serena-ignore.mjs",
+  "description": "Filed by hunt #20 (task-9f3eac6d), lane 2: both IDE bundles compared with each other and with the docs that describe them.\n\nPROBLEM\n- docs/DEVELOPMENT.md:253-254 describe daemon/ and proxy/ as \"dist minus *.test.* / *.spec.*, its package.json, node_modules minus .bin\". That stopped being true on 11-02, with task-864103f3 (JetBrains) and task-c76a8bf8 (VS Code).\n  - Since then each bundle copies only its lockfile's production packages: every packages-map entry not marked `\"dev\": true`, each without its own nested node_modules.\n  - JetBrains: build.gradle.kts `productionPackages` and prepareSandbox's `daemonPackages`/`proxyPackages` loops.\n  - VS Code: moe-vscode/scripts/bundle-assets.mjs `productionPackages` (:67-89) and its copy loop (:242-246).\n  - So devDependencies never ship.\n- docs/DEVELOPMENT.md:255-258 list the bundled scripts without moe-serena-ignore.mjs.\n  - scripts/bundle-manifest.json:20 has shipped it in both bundles since 5f731334 (task-c6a24053, 11-03).\n  - The wrappers load it: moe-agent.sh `$SCRIPT_DIR/moe-serena-ignore.mjs`, and moe-agent.ps1 names it 4 times.\n- The rest of the block matches the manifest and both bundlers, :261 (\"mods/ # everything except *.test.ts and .claude-plugin/types/\") included.\n  - The compiled register.js and register.test.js that still ship belong to task-d27edf88's rework, not to this row.\n\nEVIDENCE (HEAD bc4793cf; lines unchanged at acea850b)\n- ci.yml's \"Package the VS Code extension and smoke-test its bundle\" step, run in a snapshot, built a 1467-file vsix (bundled/), identical to the staged moe-vscode/bundled.\n- Listing: /mnt/d/moe-scratch/hunt-9f3eac6d/bundles/moe-vscode-vsix-files.txt.\n  - `grep -c '^extension/bundled/scripts/moe-serena-ignore.mjs$'` gives 1.\n  - `grep -cE '^extension/bundled/daemon/node_modules/(typescript|vitest|tsx|@types|@vitest)/'` gives 0.\n- packages/moe-daemon/node_modules after ci.yml's `npm install` holds 65 entries, including those 5: bundles/installed-daemon-node_modules.txt.\n- bundled/daemon/node_modules holds 30: bundles/vsix-daemon-node_modules.txt.\n- JetBrains reads the same manifest and applies equivalent rules. The Kotlin and JS lockfile parsers match, and none of the 132 shipped manifest files matches a Gradle default exclude. So the JetBrains zip carries the same set; it was not built (no JDK in WSL).\n\nFIX DIRECTION\n- Edit docs/DEVELOPMENT.md only.\n  - Lines 253-254: say node_modules holds only the lockfile's production packages (no devDependencies, no .bin), and name where the rule lives, for example \"(the lockfile rule in build.gradle.kts and bundle-assets.mjs)\".\n  - Line 257 or 258: add moe-serena-ignore.mjs.\n- Keep the tree format.\n- Do not touch scripts/CLAUDE.md: its :41 bundle sentence matches the manifest.\n\nFILES: docs/DEVELOPMENT.md only. Not held by any open row (lanes.js -v at 09:36Z).\nPLACEMENT: no dependsOn.",
+  "definitionOfDone": [
+    "`grep -n 'minus .bin' docs/DEVELOPMENT.md` no longer matches the daemon/ or proxy/ layout lines, and those lines say node_modules holds only the lockfile's production packages (no devDependencies).",
+    "`grep -n 'moe-serena-ignore.mjs' docs/DEVELOPMENT.md` matches a line inside the \"## Plugin Bundling\" layout block.",
+    "The row's diff touches only docs/DEVELOPMENT.md, and `npm run lint` at the repo root exits 0 in a git-archive snapshot of the fix commit."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 518.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:36:28.989Z",
+  "updatedAt": "2026-11-04T09:36:28.989Z"
+}

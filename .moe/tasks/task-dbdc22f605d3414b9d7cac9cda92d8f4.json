@@ -1,0 +1,34 @@
+{
+  "id": "task-dbdc22f605d3414b9d7cac9cda92d8f4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains plugin treats the IDE's LightEdit pseudo-project as a Moe project: projectOpened registers it in ~/.moe/projects.json, scaffolds .moe/ into the IDE config folder (<config>/light-edit) and spawns a daemon for it, so opening a single file or an unrecognised folder in LightEdit starts a stray Moe daemon (PyCharm 2026.1, 2026-11-02 10:52: port 9877, pid 37792)",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 from hunt #21's held-back item (a) (task-e5d38de9, architect-2a219562, #governors msg-74156a8d). The draft is /mnt/d/moe-scratch/hunt-e5d38de9/mine/lightedit-row-draft.md, and the evidence is /mnt/d/moe-scratch/hunt-e5d38de9/mine/lightedit-evidence.txt. The governor re-verified the code citation at origin/moe/work-2026-10-24 and the on-disk state on 11-04.\n\nPROBLEM\n- moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt:11-16 runs for every opened project: `MoeProjectRegistry.registerProject(basePath, project.name)`, then `project.service<MoeProjectService>().connect()`.\n- connect() (MoeProjectService.kt:140-161) calls daemonSupervisor.ensureMoeInitialized(). That scaffolds .moe/ when it is missing (MoeDaemonSupervisor.kt:654-665, MoeProjectInitializer.initializeProject), then calls ensureDaemonRunning(), which spawns a daemon.\n- Nothing checks LightEdit. `git grep -i lightedit` over moe-jetbrains/src/main at the tip is empty.\n- The LightEdit project is the IDE's internal single-file editor. Its basePath is the IDE config folder (C:/Users/<u>/AppData/Roaming/JetBrains/<IDE>/light-edit), not a user project.\n- PyCharm falls back to it when a folder will not open as a project. idea.log shows \"No processor found for project in D:\\projexts\\U&AI\" right before the start.\n\nEVIDENCE (the user's own IDE)\n- idea.log, 2026-11-02 10:52:03-04 local: \"Removed stale daemon.json (PID 11892 not reachable or another project)\", then \"Started Moe daemon for C:/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.1/light-edit\", then the daemon listening on port 9877.\n- ~/.moe/projects.json:13 registers that light-edit path. The entry is named LightEditProject.\n- <config>/light-edit/.moe/ exists. Its activity.log and agent-context.md date from 2026-07-13, so this has recurred since July. Its daemon.json is from 2026-11-02 (pid 37792, port 9877).\n\nFIX DIRECTION\n- In MoeProjectOpenListener.projectOpened, return early when `LightEdit.owns(project)` (com.intellij.ide.lightEdit.LightEdit). That skips the registry entry, the .moe/ scaffold and the daemon.\n- Guard MoeProjectService.connect() too, since the tool window and panels can call it. The same check for WorktreeExclusionListener is optional.\n- If the platform call cannot be faked in a unit test, inject a predicate, like the service's other seams.\n- Out of scope: cleaning the existing light-edit/.moe/ folder and the projects.json entry. Mention them in the summary as a manual one-off.\n\nSCOPE AND CHECKS\n- MoeProjectOpenListener.kt, MoeProjectService.kt and their tests. At filing time no open row holds them (lanes.js, 09:30Z).\n- Gate: `cd moe-jetbrains && ./gradlew test` on the Windows gate host under the jetbrains-gradle lease.",
+  "definitionOfDone": [
+    "Opening a LightEdit project neither registers it in ~/.moe/projects.json, creates .moe/, nor starts a daemon. A JUnit test pins the guard and fails without it.",
+    "A normal project still registers, scaffolds and starts its daemon as before, and the existing tests stay green.",
+    "`./gradlew test` passes on the gate host under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 517.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:34:09.187Z",
+  "updatedAt": "2026-11-04T09:38:15.778Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:38:11.589Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}

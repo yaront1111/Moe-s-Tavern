@@ -1,0 +1,31 @@
+{
+  "id": "task-6b3ab9d82a494d7c8704a50c5fe5b29e",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: CI's \"Test launcher literal project paths\" (literal-project-path.test.mjs G2) is red on all 3 legs since 2e96f697 (CQ-M07n3, task-23c803d2), because the seat-runner Start-Process it added at moe-agent.ps1:9408 has no escaped -WorkingDirectory, so PS 5.1 resolves the inherited location as a wildcard for a project path containing [ or ]",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 from hunt #20's held-back item (task-9f3eac6d, architect-cd0ac706, #governors msg-3a9783bf). The governor re-verified it at origin/moe/work-2026-10-24.\n\nPROBLEM\n- scripts/tests/literal-project-path.test.mjs:63-67 enforces G2: every Start-Process in the launcher passes its own escaped -WorkingDirectory, because PS 5.1 resolves an inherited current location as a wildcard.\n- moe-agent.ps1:9408 is `return (Start-Process -FilePath ... -ArgumentList (ConvertTo-MoeArgumentLine (@($script:AgentSeatCli) + $SeatArgs)) -RedirectStandardOutput $BackgroundOut -NoNewWindow -PassThru -ErrorAction Stop)`. It has no -WorkingDirectory at all.\n- The line came in with 2e96f697 ([CQ-M07n3] seat VM and per-task seat job, task-23c803d2). The hunt's dry run shows the step passes at 2e96f697^ and fails on all 3 OS legs since. ci.yml:269-270 runs `node --test scripts/tests/literal-project-path.test.mjs`.\n- CQ-M07n's WIP (80879746) still carries the same line at about :9363, and its gate does not run this test.\n\nFIX\n- Use the launcher's own pattern from :1026-1029: `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`.\n- Apply it to every Start-Process that CQ-M07n leaves without one; re-scan after it lands.\n\nPLACEMENT\n- moe-agent.ps1 is held by task-62ec51f1 (CQ-M07n, step 7 of 7), so this row depends on it and plans against its landed bytes.\n- task-bbd7ad2d, task-1dfec7a4 and task-cd3887fe also edit moe-agent.ps1 after 62ec51f1. Keep this a one-hunk change near the seat-runner call, not a reflow.\n\nVERIFY\n- `node --test scripts/tests/literal-project-path.test.mjs` in a snapshot outside the shared checkout.\n- `bash scripts/tests/parity-check.sh`, plus the ParseFile check of moe-agent.ps1.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/literal-project-path.test.mjs` passes at the row's tip, with G1 and G2 reporting no violations, run in a snapshot outside the shared checkout.",
+    "Every Start-Process in scripts/moe-agent.ps1 passes the escaped -WorkingDirectory form from :1029, and the diff is limited to those call sites.",
+    "`bash scripts/tests/parity-check.sh` exits 0 and moe-agent.ps1 parses cleanly with [System.Management.Automation.Language.Parser]::ParseFile."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-62ec51f179494706a39045154d07e544"
+  ],
+  "priority": "MEDIUM",
+  "order": 243.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:38:17.145Z",
+  "updatedAt": "2026-11-04T09:38:17.145Z"
+}

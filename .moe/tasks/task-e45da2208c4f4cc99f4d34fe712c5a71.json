@@ -1,0 +1,38 @@
+{
+  "id": "task-e45da2208c4f4cc99f4d34fe712c5a71",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: postflight-worktree.cjs serena-ignore and serena-ignore-wt fail on moe/work-2026-10-24 bd75f88a (both wrappers), because e575ecec (task-3ef33217) made moe-serena-ignore.mjs write an ignored_memory_patterns block but did not update the harness's expected serenaBlock, so postflight.sh and postflight.ps1 both throw at the worktree suite",
+  "description": "Repro: `git archive bd75f88a scripts` into /mnt/d/moe-scratch/x, then `MOE_WORKTREE_ONLY=serena-ignore,serena-ignore-wt node scripts/tests/postflight-worktree.cjs sh <x>/scripts/moe-agent.sh <x>/scripts/tests/postflight-fake-proxy.js <x>/tmp $(command -v bash)` -> both FAILED. The diff is that `actual` has two extra comment lines ('# Moe also hides QA-archived memories (_archive/.*)...') and an 'ignored_memory_patterns: [\"_archive/.*\"]' block that serenaBlock() at postflight-worktree.cjs:1763 lacks. The ps1 leg (powershell.exe 5.1 and pwsh 7) fails identically, and postflight.ps1:1245 then throws, so every later section (accounts, the vm-route suite, ...) never runs. Origin is task-3ef3321758f94dad89875a5b64792e12 (epic-be924fb8). Found by worker-a408f113 while gating task-62ec51f1 on the merged tree. Fix it in the harness's expected block, or in the script if the block is wrong.",
+  "definitionOfDone": [
+    "MOE_WORKTREE_ONLY=serena-ignore,serena-ignore-off,serena-ignore-wt passes for postflight-worktree.cjs on both sh and ps1 at the fix's commit.",
+    "Full bash scripts/tests/postflight.sh and postflight.ps1 (5.1) get past the worktree suite with no FAILED line."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote from BACKLOG under the human's standing \"move from backlog\" (2026-11-02 21:00Z): a fleet-filed row (worker-a408f113) with no dependsOn. HIGH, because the target's launcher harness is red: postflight-worktree.cjs serena-ignore and serena-ignore-wt fail on both wrappers since e575ecec (task-3ef33217), and postflight.sh and postflight.ps1 stop at the worktree suite, so later sections never run. Scope is the harness's expected serenaBlock (postflight-worktree.cjs:1809), or the script if the block is wrong. No open row holds postflight-worktree.cjs; 62ec51f1 holds postflight-vm-route.ps1 and parity-check, not this file. The human can drag it back to veto.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 242.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:32:43.052Z",
+  "updatedAt": "2026-11-04T09:34:53.124Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T09:33:09.500Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:34:51.074Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "task-20f59bc955f44875832072dcec91868e",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: local-runner-bridge.test.mjs I1 and I3 probe the agent child with a bare kill(pid, 0) right after the bridge supervisor exits, so a job the uncontained fixture leaves for PID 1 to reap reads as alive; I3 fails at :532 under load and CI's \"Test local runner prerequisite bundles\" step goes red at random (1 of 7 CI-shaped and 1 of 8 loaded runs on bc4793cf); sibling gap of task-b712ce09's S11 probe fix",
+  "description": "Filed by hunt #20 (task-9f3eac6d, a CI dry run of moe/work-2026-10-24 at bc4793cf). It goes in this epic because task-b712ce09, the S11 twin of this race, was filed and fixed here, and CQ-R (the bridge's own epic) is complete.\n\nPROBLEM\n- local-runner-bridge.test.mjs:443 defines `alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } }`. kill(pid, 0) succeeds for a zombie, and for a process that is still exiting.\n- I1 (:493) and I3 (:532, once for each of its 16 cases) assert `alive(host.child) === false` straight after the supervisor's exit event or `host.end()`.\n- `host.child` is the job's global pid (AGENT_CHILD :439).\n- The test runs as non-root, so guest-supervisor.py runs uncontained (see the GUARD comment, :99-104). The guard forks init, init starts the job with Popen, and all three share the guard's process group.\n- On exit 74 or 76, relay()'s `finally` (guest-supervisor.py:563-569) SIGKILLs that group, but `reap(child)` waits for the guard only. init and the job are reparented and reaped later by PID 1, so right after the supervisor's exit the job's pid can still exist.\n- task-b712ce09 (DONE 11-02, fb32db90) fixed the same race for S11. Its probe counts a process as unable to run by CANNOT_RUN (:1220-1226): State Z or X, SIGKILL pending in ShdPnd, or PF_EXITING. Another sibling (:1172) polls up to 5 s for its pids to go.\n- I1 and I3 got neither fix.\n\nEVIDENCE (HEAD bc4793cf, every MOE_* var cleared, Linux node 24, WSL kernel 6.18)\n- CI dry run, step \"Test local runner prerequisite bundles\" (its 14 files): exit 1 (tests 741, pass 737, fail 1, skipped 3). It ran in parallel with two other CI jobs. Log: /mnt/d/moe-scratch/hunt-9f3eac6d/ci/j4/08-local-runner.log\n    test at scripts/tests/local-runner-bridge.test.mjs:517:1\n    ✖ I3 an unknown, answered or malformed host response ends the bridge as a protocol violation (928.700442ms)\n      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n      true !== false\n          at TestContext.<anonymous> (file:///.../scripts/tests/local-runner-bridge.test.mjs:532:12)\n- The same file alone, unloaded: 6 of 6 runs pass (90 pass, 1 skipped). Logs: /mnt/d/moe-scratch/hunt-9f3eac6d/ci/bridge-rerun-*.log\n- With 16 busy-loop processes running, I1+I3 failed 1 of 8 runs at the same :532 assertion. Repro: `bash /mnt/d/moe-scratch/hunt-9f3eac6d/mine/bridge-load-repro.sh <snapshot root> [runs] [burners]`; it kills only the burner PIDs it records. Logs: /mnt/d/moe-scratch/hunt-9f3eac6d/ci/bridge-load-*.log\n\nFIX DIRECTION\n- Test-side. Give I1 and I3 the \"gone\" rule that S11 settled on: a pid is gone when it is reaped or its /proc view is CANNOT_RUN.\n  - That means /proc/<pid>/status and /proc/<pid>/stat on Linux, with kill(pid, 0) elsewhere.\n  - Alternatively, wait a bounded time for it to disappear, as :1172 does.\n- Keep the final assertion that the job does not survive the bridge, and leave the exit-code assertions unchanged.\n- Do not change relay(). Its contract (guest-supervisor.py:19-20) is to kill the child group before the stream ends, not to reap every descendant.\n\nFILES: scripts/tests/local-runner-bridge.test.mjs only. Not held by any open row (lanes.js -v at 09:12Z).\nPLACEMENT: no dependsOn. It is file-disjoint from 62ec51f1, 1dfec7a4 and bbd7ad2d.",
+  "definitionOfDone": [
+    "I1 and I3 count the job pid as gone only when it is reaped or its /proc view cannot run (the S11 CANNOT_RUN rule), or after a bounded wait of at most 5 s, and still fail when the job is alive and runnable after that.",
+    "`bash /mnt/d/moe-scratch/hunt-9f3eac6d/mine/bridge-load-repro.sh <snapshot root> 10` reports 0 of 10 failed runs on a Linux git-archive snapshot of the fix commit, and `node --test scripts/tests/local-runner-bridge.test.mjs` passes unloaded there.",
+    "The row's diff leaves scripts/local-runner/guest-supervisor.py unchanged, and the CI step's 14-file `node --test scripts/tests/local-runner*.test.mjs` command (as listed in ci.yml) exits 0 in that snapshot with every MOE_* var unset."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 241.6,
+  "comments": [
+    {
+      "id": "comment-3b4a73519e254df98506446c75cde67d",
+      "author": "architect-cd0ac706",
+      "content": "Filer's follow-up, re-derived at bc4793cf.\n\n1) A cheaper fix than the one in the description already exists in this file.\n   - `const running = pid => alive(pid) && (process.platform !== 'linux' || procState(pid)?.[0] !== 'Z')` is defined at :1145.\n   - It is the zombie-aware probe that :1172 polls for up to 5 s: `for (let waited = 0; waited < 5000 && [...].some(running); waited += 100) await sleep(100)`.\n   - Fix: give I1 (:493) and I3 (:532) the same bounded poll on `running(host.child)` before asserting that it is false.\n   - `running` is a module-scope const, so the earlier tests can use it.\n   - Port the S11 CANNOT_RUN rule only if the poll alone still flakes under bridge-load-repro.sh.\n2) Line corrections:\n   - CANNOT_RUN is at :1224-1227, not :1220-1226.\n   - relay()'s finally block is guest-supervisor.py:559-566 (killpg at :563, reap at :566).\n   - The GUARD comment is :99-104, and the exit-code contract is :19-20.",
+      "timestamp": "2026-11-04T09:19:19.213Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:13:49.972Z",
+  "updatedAt": "2026-11-04T09:19:19.213Z"
+}

@@ -1,0 +1,34 @@
+{
+  "id": "task-1d9a965133b54181b441d08dcac6b94c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: `moe-daemon check-architecture` runs the daemon-wide parseArgs() before its own never-throws argument check, so a trailing `--project` (an empty variable) throws: main().catch writes a pino fatal line with `\"error\":{}` to stdout and exits 1, the code for a real \"failed\" outcome, instead of the one JSON usage line with exit 2 that `--project ''` and every other bad argument get",
+  "description": "Filed by hunt #21 (task-e5d38de9, architect-2a219562) on 2026-11-04, from lane 3 (the check-architecture CLI). I re-ran it myself. Sibling: task-d63e3dba (the installed bin never runs main) edits the same file in a different hunk; see HUNK OWNERSHIP.\n\nPROBLEM\n- The promise: CLAUDE.md:56 says check-architecture prints one JSON line and exits 0 for passed, 1 for failed, and 2 for inconclusive or unavailable. index.ts:1248 repeats this.\n  - runCheckArchitecture (src/commands/checkArchitecture.ts) never throws. It answers every argument problem with `{\"outcome\":\"unavailable\",\"reason\":\"usage\"}` and exit 2.\n- main() (index.ts:1206-1213) runs the daemon-wide parseArgs() first, for every command except `accounts`, which branches out at :1208-1212.\n- parseArgs (:59-66) reads `args[projectIndex + 1]` after `--project` and passes undefined to absoluteProjectPath, which throws.\n- main().catch (:1289-1291) then logs `logger.fatal({ error: err }, 'Fatal error')` to stdout and exits 1. pino has no serializer for the `error` key, so it prints `{}`.\n- So `check-architecture --rules arch.json --project $EMPTY` exits 1, which reads as a violation, and prints a line with no outcome. `--project ''` and `--bogus` exit 2 with the usage report.\n- Also, `process.cwd()` is evaluated outside the envelope (:1249, and parseArgs's own fallback at :66):\n  - in a deleted cwd, production mode exits 1 with `\"error\":{\"code\":\"ENOENT\",\"syscall\":\"uv_cwd\"}` on stdout;\n  - dev mode hangs 10 s in pino's flush (/mnt/d/moe-scratch/hunt-e5d38de9/B/probe2.out).\n- Exposure: low. It needs an empty `--project` or a vanished cwd, and the check never passes either way. The defects are the wrong exit code and stdout that is not JSON. A gate or required check that parses the line gets no outcome.\n\nEVIDENCE (HEAD acea850b)\n- `bash /mnt/d/moe-scratch/hunt-e5d38de9/mine/repro-checkarch-trailing-project.sh`; its output is the .out next to it:\n  - `check-architecture --rules arch.json --project $EMPTY` with NODE_ENV=production: exit=1, stdout `{\"level\":\"fatal\",...,\"error\":{},\"msg\":\"Fatal error\"}`;\n  - the same with NODE_ENV=development: exit=1, stdout `FATAL: Fatal error` / `error: {}`;\n  - `--project ''`: exit=2, `{\"detail\":\"unexpected argument \\\"--project\\\"\",\"outcome\":\"unavailable\",\"reason\":\"usage\"}`;\n  - `--bogus`: exit=2, the same usage report.\n- Vitest repro: /mnt/d/moe-scratch/hunt-e5d38de9/B/checkArchDispatchEnvelope.test.ts, with its output in vitest-checkArchDispatchEnvelope.out. It fails 2/2 at HEAD: it expected {status:2, lines:1, outcome:'unavailable', reason:'usage'} and received status 1 with the pino fatal line. It spawns the entry the way src/index.version.test.ts does.\n\nFIX DIRECTION\n- Dispatch check-architecture before parseArgs(), the way `accounts` already does at :1208-1212.\n- Take the cwd inside a try that maps a failure to the same unavailable report with exit 2.\n- runCheckArchitecture already refuses `--project` as an unexpected argument, so valid calls do not change.\n- Do not change parseArgs or the other commands.\n\nHUNK OWNERSHIP: this row owns main()'s dispatch (index.ts:1206-1253). The entry guard and main().catch block at :1288-1293 belong to task-d63e3dba; do not edit them here. merge-tree lands distinct hunks cleanly, so no dependsOn is needed.\n\nFILES: packages/moe-daemon/src/index.ts (main()'s dispatch only), plus one test file, either a new packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts or an extension of an existing CLI-spawning test. No open row holds index.ts (lanes.js, 2026-11-04 09:30Z).\n\nGATE: vitest in packages/moe-daemon, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "`check-architecture --rules arch.json --project` (no value) prints exactly one JSON line with outcome \"unavailable\" and reason \"usage\" and exits 2, under both NODE_ENV=production and development. A test that spawns the entry (as src/index.version.test.ts does) pins this, and it fails at acea850b.",
+    "Valid and other invalid calls are unchanged: the passed, failed and inconclusive cases in src/commands/checkArchitecture.test.ts stay green, and `--project ''` and `--bogus` still give the usage report with exit 2. The diff touches neither parseArgs nor index.ts:1288-1293.",
+    "`cd packages/moe-daemon && npx vitest run src/commands/ src/index.version.test.ts` (plus the new test file, if it lives elsewhere) exits 0 in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-c33f294e",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 516.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:32:51.394Z",
+  "updatedAt": "2026-11-04T09:37:48.385Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:37:46.339Z"
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "id": "task-19869d862fe144948941d53687a3d9e2",
+  "epicId": "epic-be924fb8",
+  "title": "docs: scripts/doctor.sh:39-40 (\"Node.js ... (>= 18 required)\", passing major 18+), moe-vscode/README.md:24 (\"Node.js 18+\") and docs/MAC_INSTALL.md:11 (\"Node.js 18+\") still state an 18 floor, while packages/moe-daemon/package.json engines is >=22.22.0 and TROUBLESHOOTING.md and the installers already gate on 22.22",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 from hunt #20's held-back item (task-9f3eac6d, architect-cd0ac706, #governors msg-3a9783bf). The governor re-verified each line at origin/moe/work-2026-10-24.\n\nPROBLEM\n- scripts/doctor.sh:39-40 checks `if [ \"$major\" -ge 18 ]` and prints \"[OK] Node.js version $version (>= 18 required)\". A Node 18 or 20 machine passes doctor.\n- moe-vscode/README.md:24 says \"Node.js 18+ on PATH\".\n- docs/MAC_INSTALL.md:11 says \"**Node.js 18+**: `brew install node`\".\n- The real floor is packages/moe-daemon/package.json:34-35 `\"engines\": { \"node\": \">=22.22.0\" }`, and docs/TROUBLESHOOTING.md:68 agrees. The installers already gate correctly (install-dependencies.sh:18, install-dependencies.ps1:130).\n- This is message drift: a user on Node 18 or 20 is told the setup is fine. The hunt saw the bundled daemon start on 18 and 20, but that is outside engines and unsupported.\n\nFIX\n- Raise doctor.sh's check to 22.22.0, comparing major.minor and not just the major, with the matching message.\n- Update the two docs lines to \"Node.js 22.22+\".\n- Check whether any other user-facing \"18\" floor remains (`git grep -n -E \"Node(\\.js)? *18\"`), and fix only those that state a requirement.\n\nSCOPE AND CHECKS\n- scripts/doctor.sh, moe-vscode/README.md and docs/MAC_INSTALL.md, plus any other floor statement the grep finds.\n- No open row holds them (checked against lanes.js at 09:40Z).\n- Verify with `bash -n scripts/doctor.sh`, then run doctor.sh's node check under a stub `node` that reports v20.11.0 and one that reports v22.22.0, in a snapshot.",
+  "definitionOfDone": [
+    "scripts/doctor.sh fails a Node below 22.22.0 and passes 22.22.0 or newer, comparing major.minor. The completion summary quotes both stub runs.",
+    "moe-vscode/README.md, docs/MAC_INSTALL.md and every other user-facing Node floor that `git grep` finds state 22.22+, matching packages/moe-daemon/package.json engines.",
+    "`bash -n scripts/doctor.sh` exits 0, and the diff touches only floor statements."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 519.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:38:27.340Z",
+  "updatedAt": "2026-11-04T09:38:27.340Z"
+}

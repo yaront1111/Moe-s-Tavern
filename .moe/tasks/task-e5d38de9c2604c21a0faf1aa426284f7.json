@@ -1,0 +1,34 @@
+{
+  "id": "task-e5d38de9c2604c21a0faf1aa426284f7",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #21): file 2-4 evidence-backed bug rows from the JetBrains seat-launch and seat-tracking path (StartAgentAction, TerminalAgentLauncher, AgentSeatTracker) and its Accounts tab, against the launchers' argument contract and the daemon's accounts behavior, then the check-architecture CLI (CQ-V10)",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04. It runs in parallel with hunt #20 (task-9f3eac6d: a CI dry run of the tip, and the two IDE bundles' contents), whose lanes it must not touch.\n\nWHY. At 09:05Z, 3 coders, 3 QA seats and 3 architects are idle, and the only open work is CQ-M07n's last step and hunt #20. Two hunts on disjoint lanes doubled the yield on 11-03 (hunts #10 and #11).\n\nLANE, in order of preference\n1. The JetBrains seat-launch path. JetBrains is the primary IDE, so implement and test there first.\n   - The code: moe-jetbrains/src/main/kotlin/com/moe/**/StartAgentAction.kt, TerminalAgentLauncher.kt and AgentSeatTracker.kt.\n   - Check how the IDE builds each seat's command line against what scripts/moe-agent.sh and moe-agent.ps1 accept: role and CLI flags, the interactive defaults (architect and governor TUI; worker and QA one-shot), the \"Run Agents in WSL\" toggle with its /mnt/ paths and `--host wsl` daemon, paths with spaces or non-ASCII characters, and quoting.\n   - Check how AgentSeatTracker maps a closed tab or an exited process to a deregister reason. Per memory, `terminal_closed` is hard-coded, so a set -e abort reads as a human trim.\n   - Then the Accounts tab (AccountsPanel.kt, AccountPresentation.kt) against `moe-daemon accounts list|add|login|check|remove` and the /ws account messages. Hunt #13 covered the daemon side and the /ws messages, so cite which of its rows you are not duplicating.\n   - Evidence: a file:line pair between the Kotlin builder and the launcher's parser, plus a repro that runs the exact string the IDE builds through the launcher's argument parsing in a snapshot (`bash -n`, or the parser's own dry path). Alternatively, a JUnit case written in a snapshot that goes red.\n2. The check-architecture CLI (CQ-V10, 87f7316f, 2026-10-30): `node packages/moe-daemon/dist/index.js check-architecture --rules <path> [--base <rev>] [--tree <rev>]`.\n   - CLAUDE.md promises one JSON line, and exit codes 0 for passed, 1 for failed and 2 for inconclusive or unavailable.\n   - Check the flag handling, revs that do not resolve, a rules file that is missing or malformed, and output on stdout versus stderr against that promise and docs/MCP_SERVER.md / CONFIGURATION.md.\n   - Hunt #6 covered \"the daemon CLI commands\", so grep its rows first and skip what they filed.\n   - Gate for a filed row: vitest in packages/moe-daemon.\n\nSKIP\n- Hunt #20's lanes, the lanes of hunts #1-#19 (read the archived hunt-row titles), and every row filed on 11-03 or 11-04 (grep .moe/tasks first).\n- Files open rows hold. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` at start. At filing time that is 62ec51f1's scripts/moe-agent.ps1, scripts/tests/postflight-vm-route.ps1 and scripts/tests/parity-check.{sh,ps1}. Reading the launchers for their argument contract is fine. A finding whose fix belongs in a launcher is filed with a placement note and dependsOn 62ec51f1, because launcher rows serialize behind the wrapper lane.\n- Never build, install or test in the shared checkout: its packages/moe-daemon/dist is the live runtime. JetBrains gates run on the Windows gate host under the jetbrains-gradle lease.\n\nEVIDENCE BAR. Same as hunts #2-#20. One of:\n- a repro on HEAD 3cd127c0 or later, run in a snapshot outside the shared checkout;\n- a failure line from today's logs;\n- a doc/code file:line pair with a call or test that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code, status PLANNING. Add no dependsOn unless a real logic edge exists; a shared file gets a placement note instead. Give each row a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. Post the ids, or \"nothing real\", in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way, the outcome is posted in #governors with a mention of governor-e6142a94.",
+    "Every filed row cites its evidence: a repro on HEAD 3cd127c0 or later run outside the shared checkout, a failure line from today's logs, or a doc/code file:line pair with a call or test that shows the difference. A launcher-side fix row carries dependsOn 62ec51f1 and a placement note.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a row filed on 11-03 or 11-04, including hunt #20's. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 512.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:06:44.994Z",
+  "updatedAt": "2026-11-04T09:33:54.603Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:07:10.176Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}

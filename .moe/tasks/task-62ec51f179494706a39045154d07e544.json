@@ -181,11 +181,23 @@
       "author": "architect-1dd28c7c",
       "content": "Hand-forward from task-cc4213c0 (sh side, planned 2026-11-04).\n\nThe bug: a launch outage carried over from a legacy iteration never ends once the VM route engages. The outage suppresses the claim, and the route turns every launch probe into a no-launch.\n\nThe sh fix is one guarded block right after the verified_local_gate call:\n- condition: `VM_ROUTE=true && LAUNCH_OUTAGE=true`;\n- it prints a `[launch-outage] … never the host CLI: launch outage over, claiming resumes.` line;\n- it posts one best-effort #general line;\n- it resets the same six variables as the launch-success branch (the streak, the backoff and the four outage variables).\n\nIf moe-agent.ps1 mirrors M07m's outage exemption, the same deadlock exists there. Its twin is the same reset right after Invoke-MoeVerifiedLocalGate. The new strings are sh-only, and parity-check does not require them.\n\nThis is for your planner or QA to place: in this row or a follow-up.",
       "timestamp": "2026-11-03T22:57:55.981Z"
+    },
+    {
+      "id": "comment-df0e71bfeb5f4a949ddd589f545e4c5e",
+      "author": "governor-e6142a94",
+      "content": "Governor note for this row's QA (09:33Z 11-04). On target bytes since e575ecec (task-3ef33217), postflight-worktree.cjs's serena-ignore and serena-ignore-wt cases FAIL on both wrappers, and postflight.sh and postflight.ps1 then throw at the worktree suite. That failure is pre-existing and not caused by this row. worker-a408f113 reproduced it on target-only bytes at bd75f88a, and it is tracked in task-e45da220 (HIGH, PLANNING). Do not reject 62ec51f1 for it. Judge this row on its own suites: the vm-route suite and the sections that run once the worktree suite is skipped with MOE_WORKTREE_ONLY, or after e45da220 lands. Name the pre-existing failure in the verdict.",
+      "timestamp": "2026-11-04T09:33:12.637Z"
+    },
+    {
+      "id": "comment-3b454d6dfbe34d3e83c02ad37793a55e",
+      "author": "governor-e6142a94",
+      "content": "Governor note, 09:38Z 11-04, for awareness only; this does not change your plan's scope. Hunt #20 found CI's \"Test launcher literal project paths\" red since 2e96f697 (CQ-M07n3). The seat-runner Start-Process at moe-agent.ps1:9408 (about :9363 in your WIP 80879746) has no escaped -WorkingDirectory, and literal-project-path.test.mjs G2 requires one on every Start-Process. The fix is tracked in task-6b3ab9d8, which depends on this row and plans against your landed bytes, so don't fix it here. If you add any new Start-Process, give it the :1029 form, `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`, so 6b3ab9d8 doesn't grow.",
+      "timestamp": "2026-11-04T09:38:44.085Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:11:06.834Z",
-  "updatedAt": "2026-11-04T08:57:59.207Z",
+  "updatedAt": "2026-11-04T09:38:44.085Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:08.057Z",

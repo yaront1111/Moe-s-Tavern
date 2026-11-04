@@ -1,0 +1,47 @@
+{
+  "id": "task-d63e3dba718e434da8c0bce28ad5a036",
+  "epicId": "epic-be924fb8",
+  "title": "bug: on Linux and macOS the installed moe-daemon bin (the npm bin symlink that npm install -g, npm link and npx create) never runs main(), because index.ts's entry guard compares import.meta.url with the symlink path in argv[1]; every subcommand prints nothing and exits 0, so `moe-daemon check-architecture` passes a forbidden import and moe-agent.sh's daemon autostart, which prefers moe-daemon on PATH, dies with \"Daemon process exited unexpectedly\"",
+  "description": "Filed by hunt #21 (task-e5d38de9, architect-2a219562) on 2026-11-04. The evidence came from lane 3 (the check-architecture CLI). Re-verified with a real npm install.\n\nPROBLEM\n- packages/moe-daemon/src/index.ts:1288 runs main() only when `import.meta.url === pathToFileURL(process.argv[1]).href`.\n  - Node loads the main module by its real path. process.argv[1] keeps the path the shell ran.\n  - Off Windows, npm's bin-links makes the package bin (package.json:50-51, \"moe-daemon\": \"./dist/index.js\") a symlink:\n    - PREFIX/bin/moe-daemon -> ../lib/node_modules/moe-daemon/dist/index.js, for npm install -g and npm link;\n    - node_modules/.bin/moe-daemon, for npx and a local install.\n  - So the guard is false, main() never runs, and the process exits 0 with no output.\n- Every subcommand is inert: version, start, init, stop, status, doctor, accounts and check-architecture.\n- Windows is not affected, because npm writes .cmd/.ps1 shims there that run node on the real file. The moe-proxy bin is not affected either: packages/moe-proxy/src/index.ts has no entry guard.\n- The guard dates from ebb4bf3d (2026-05-14).\n\nWho hits it:\n- packages/moe-daemon/README.md:8 (`npm install -g moe-daemon`) and :13 (`npx moe-daemon start --project ...`), the documented install.\n- scripts/install-mac.sh:143-148. `--global` runs `npm link` in the daemon and proxy packages, and :223 then uses `moe-daemon` for the launchd setup.\n- scripts/moe-agent.sh:1955-1956 prefers `moe-daemon` on PATH for its daemon autostart, when MOE_DAEMON_PATH is unset and the runtime is not protected. The inert bin exits 0 at once, no daemon.json appears, and :1996 prints \"Daemon process exited unexpectedly\" and exits 1.\n- The JetBrains MOE_DAEMON_COMMAND override. docs/CONFIGURATION.md:60's example is `npx moe-daemon`, honoured since 8383080c, and on Linux/macOS it starts nothing.\n- The installed checker form `moe-daemon check-architecture` (delivery/requiredChecks.ts:33 INSTALLED_ARCHITECTURE_CHECK; docs/ARCHITECTURE.md:388 and :440). As a qualityGate or required check it exits 0 for any candidate, so the gate records \"passed\". This fails open.\n\nEVIDENCE (HEAD acea850b; snapshot /tmp/hunt-e5d3-snap, dist built with `npx tsc -p .`)\n- `bash /mnt/d/moe-scratch/hunt-e5d38de9/mine/repro-npm-global-bin.sh`; its output is repro-npm-global-bin.out next to it.\n  - A real `npm install -g --prefix <tmp> --offline <snapshot>/packages/moe-daemon` creates `moe-daemon -> ../lib/node_modules/moe-daemon/dist/index.js`.\n  - The repo's HEAD adds a forbidden src/ui -> src/db import. Results:\n    - `node <pkg>/dist/index.js version`: exit=0, stdout `0.8.0`.\n    - `moe-daemon version`: exit=0 stdout_bytes=0 stderr_bytes=0.\n    - `node <pkg>/dist/index.js check-architecture --rules arch.json`: exit=1, one JSON line with `\"violations\":[{\"ruleId\":\"ui-no-db\",...}]` and outcome failed.\n    - `moe-daemon check-architecture --rules arch.json`: exit=0 stdout_bytes=0 stderr_bytes=0.\n    - `moe-daemon start --project <repo>`: exit=0 stdout_bytes=0, and no daemon.json is written.\n- Vitest repro: /mnt/d/moe-scratch/hunt-e5d38de9/B/installedBinSymlink.test.ts, with its output in vitest-installedBinSymlink.out.\n  - It fails 2/2 at HEAD and passes 2/2 against the real path.\n  - It symlinks <tmp>/prefix/bin/moe-daemon -> src/index.ts and spawns `process.execPath --import tsx <link> version`, the same pattern as src/index.version.test.ts. Expected \"0.8.0\\n\"; received \"\" with status 0.\n  - It also spawns `... check-architecture --rules arch.json`. Expected {status:1, lines:1, outcome:'failed'}; received {status:0, lines:0}.\n\nFIX DIRECTION\n- index.ts:1288: decide \"is main\" on real paths. For example, a small exported helper `isMainModule(argv1, moduleUrl)` returns `fs.realpathSync.native(argv1) === fs.realpathSync.native(fileURLToPath(moduleUrl))`, and false on any error, so an absent argv[1] still never runs main and importing index.ts from tests never starts the daemon.\n- Alternatively, ship a dedicated bin entry that imports and runs main, and point package.json bin at it. The realpath guard is the smaller change.\n- Keep the main().catch(...) body as it is.\n- No README, installer or launcher change is needed once the bin works.\n\nHUNK OWNERSHIP: this row owns only the entry guard block at index.ts:1288-1293 and any helper it adds. main()'s dispatch (:1206-1253) belongs to the sibling check-architecture dispatch row filed alongside this one. Do not edit it here.\n\nFILES: packages/moe-daemon/src/index.ts (entry guard only) and packages/moe-daemon/src/index.bin.test.ts (new). No open row holds index.ts (lanes.js, 2026-11-04 09:30Z). No launcher file is touched.\n\nGATE: vitest in packages/moe-daemon, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "Through a symlink to the entry (<tmp>/bin/moe-daemon -> src/index.ts, run as `node --import tsx <link> ...`), `version` prints the package version and exits 0, and `check-architecture --rules arch.json` on a fixture whose HEAD adds a forbidden import prints one JSON line with outcome \"failed\" and exits 1. A new test in packages/moe-daemon/src/index.bin.test.ts pins this; it is skipped on win32 (symlinks need privileges there) and fails at acea850b.",
+    "Running the entry by its real path still works, and importing index.ts from a test still never starts main(). `cd packages/moe-daemon && npx vitest run src/index.bin.test.ts src/index.version.test.ts src/index.test.ts src/index.relativeProject.test.ts src/commands/checkArchitecture.test.ts` exits 0 in a snapshot outside the shared checkout.",
+    "After `npm install -g --prefix <tmp> --offline <snapshot>/packages/moe-daemon`, `<tmp>/bin/moe-daemon version` prints the version. Re-running /mnt/d/moe-scratch/hunt-e5d38de9/mine/repro-npm-global-bin.sh on the fixed snapshot shows cases B, D and E with output (B prints the version, D exits 1 with the violation line, E writes daemon.json), not exit=0 with stdout_bytes=0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 515.7,
+  "comments": [
+    {
+      "id": "comment-b2db56b594df4099ad9ef59dd4a31796",
+      "author": "architect-2a219562",
+      "content": "Correction to DoD 3 (filer, hunt #21). The saved repro's case E is now read-only: /mnt/d/moe-scratch/hunt-e5d38de9/mine/repro-npm-global-bin.sh runs `moe-daemon status --project <repo>` instead of `start`. The reason is that, once the bin works, `start` would launch a real supervised daemon on the shared host, and the global rail forbids that. So read DoD 3's \"E writes daemon.json\" as \"E prints the status line (Daemon not running)\". At acea850b case E still prints nothing and exits 0 (re-run 09:33Z, .out refreshed). Never run `moe-daemon start` against a real project to check this row.",
+      "timestamp": "2026-11-04T09:32:33.325Z"
+    },
+    {
+      "id": "comment-0500bf01e7a74ceb8590b0bf53d62fe2",
+      "author": "architect-2a219562",
+      "content": "The sibling named in HUNK OWNERSHIP is task-1d9a9651 (\"check-architecture runs the daemon-wide parseArgs() before its own never-throws argument check\"). It owns main()'s dispatch, index.ts:1206-1253. This row owns only the entry guard block, :1288-1293. No dependsOn is needed: merge-tree lands distinct hunks.",
+      "timestamp": "2026-11-04T09:32:56.210Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:32:14.596Z",
+  "updatedAt": "2026-11-04T09:34:02.577Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:33:59.551Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}

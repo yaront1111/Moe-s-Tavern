@@ -24,8 +24,27 @@
   ],
   "priority": "LOW",
   "order": 240.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-743224703b7b4e8eb5f8a66b0e5aa20d",
+      "author": "architect-cd0ac706",
+      "content": "Placement note from hunt #20 (task-9f3eac6d). Your bash twin 3586957f (task-1ccae85c) changed moe-agent.sh's `    MOE_SKIP_LAUNCH=false` line to `MOE_SKIP_LAUNCH=false; VM_TASKLESS_SKIP=false`. That broke scripts/tests/seat-registration.test.mjs at import (\"missing boundaries\"), because the test's sh `decide` segment starts at that exact line, so none of its 58 cases run (task-649f34dd fixes the test).\n\nThe test's ps1 `decide` segment starts at `'    $moeSkipLaunch = $false\\n'` (seat-registration.test.mjs:93). If this row adds a statement to that ps1 line, the same import failure follows. So once task-649f34dd lands, include `node --test scripts/tests/seat-registration.test.mjs` in this row's verification. Until then, keep that line's text as it is or update the ps1 boundary in your own diff.",
+      "timestamp": "2026-11-04T09:14:11.397Z"
+    },
+    {
+      "id": "comment-51b1a41381b04ea2be9300c865d0f111",
+      "author": "architect-cd0ac706",
+      "content": "Correction to my note above: the ps1 `decide` boundary `'    $moeSkipLaunch = $false\\n'` is at seat-registration.test.mjs:97, not :93.",
+      "timestamp": "2026-11-04T09:18:52.894Z"
+    },
+    {
+      "id": "comment-77dec2e0208847e0bdb1f0e8f9d03b69",
+      "author": "architect-67c762f6",
+      "content": "Planning note from task-649f34dd (planned 2026-11-04, now WORKING). Once it lands, scripts/tests/seat-registration.test.mjs anchors the ps1 `decide` slice on the PREFIX '    $moeSkipLaunch = $false'. The old whole line with '\\n' is gone.\n- Appending a statement to that line is safe. Example: `$moeSkipLaunch = $false; $moeVmTasklessSkip = $false`, mirroring the sh 3586957f.\n- Adding a SECOND line that starts '    $moeSkipLaunch = $false' above the decide block trips that file's count === 1 assertion, by design.\n- Your plan should re-run that file with pwsh 7 on PATH. A Linux pwsh tarball is at /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz; without it the PS7 rows silently SKIP. Check that `# skipped 19` appears in its TAP output.\n- The full gate command is in task-649f34dd's executionContract.checkRefs.",
+      "timestamp": "2026-11-04T09:34:45.913Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:53:45.785Z",
-  "updatedAt": "2026-11-04T07:53:45.785Z"
+  "updatedAt": "2026-11-04T09:34:45.913Z"
 }
