@@ -47,15 +47,18 @@
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE, fresh. WSL has no JDK, so this is the Windows route (mem:gotcha-jetbrains-gradle-from-wsl); label it Windows in complete_task. Hold the jetbrains-gradle lease only around each Gradle run: moe.acquire_resource right before it and moe.release_resource right after, even on failure (mem:convention-jetbrains-gradle-lease). Edit only what a finding needs, with the step-1 editor rule.\n\n1. Mutants first, in an archive copy, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, section 'Worker variant: uncommitted diff'). Run each with --tests on com.moe.services.MoeDaemonSupervisorTest and com.moe.services.MoeProjectForeignDaemonTest. A kill counts only on an assertion failure, never a compile error. Expected kills:\n   a. WSL_BIND_HOST dropped from LOOPBACK_SERVING_BIND_HOSTS: the wsl rows of BH2 and BH5.\n   b. isProcessAlive moved before the other-side check: BH3 (probed is not empty).\n   c. The pid <= 0 check dropped: BH2's pid-0 row.\n   d. No guard in ensureDaemonRunningImpl: BH1 and BH4.\n   e. No guard in connect(): BH4 and BH5's kept row.\n   f. scheduleReconnect() added to connect()'s guard: BH4 and BH5's kept row.\n   g. The !isProcessAlive condition dropped: the dead-pid rows of BH2 and BH5.\n   Restore the copy, check its sha256, and list the kills in the completion summary.\n2. Then run the exact command below once, from the worktree, after `git status --porcelain -- moe-jetbrains` lists only this plan's five files. Its fresh output is the complete_task evidence. It runs the full plugin suite with --rerun. It fails unless both classes report failures=\"0\" errors=\"0\" and exactly 5 BH testcases ran, and it greps Models.kt for the nullable field (DoD 3). The architect dry-ran it with stubbed git, cmd.exe and wslpath: green exits 0, and a missing class XML exits 1.\ncd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"BH' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) BH=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 5 ] || r=1; grep -n bindHost moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T07:17:00.076Z"
+      "note": "Windows route, jetbrains-gradle lease held only around each Gradle run. (1) Mutants in archive copy /mnt/d/moe-scratch/fe8111-mut/repo (git archive HEAD + the 5 modified files; harness /mnt/d/moe-scratch/fe8111-harness/mutate.py; logs run1.log/run2.log there), --tests MoeDaemonSupervisorTest + MoeProjectForeignDaemonTest, every kill an AssertionError <failure>, no compile error: a (wsl dropped from the set) -> BH2 (wsl,42,true) + BH5 (wsl,true,false); b (pid probe before other-side check) -> BH3 [42]; c (pid<=0 dropped) -> BH2 (::1,0,true); d (no supervisor guard) -> BH1 ::1 + BH4; e (no connect guard) -> BH4 + BH5 (::1,true,true); f (scheduleReconnect in connect guard) -> BH4 (reconnectFuture not null) + BH5 (::1,true,true); g (!isProcessAlive dropped) -> BH2 (::1,42,false) + BH5 (::1,false,false). Each restore sha-asserted; sha256sum -c over the copy and over the worktree src snapshot both OK. (2) Exact plan gate from the worktree after git status listed only the five files: BUILD SUCCESSFUL, xml tests=671 skipped=6 failures=0 errors=0; MoeDaemonSupervisorTest 94/2 skipped/0/0 BH=3; MoeProjectForeignDaemonTest 12/0/0/0 BH=2; Models.kt:296 val bindHost: String? = null; exit 0. XML fresh (07:22:28Z), :test executed. qualityGate (parity-check.sh && npm run lint) also exit 0.",
+      "startedAt": "2026-11-04T07:17:00.076Z",
+      "completedAt": "2026-11-04T07:22:53.660Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the five-file diff twice: once as someone who controls .moe/daemon.json (repository content), and once as a user who started the daemon from a terminal with --host or MOE_BIND_HOST.\n- Can anything dial, resolve or trust bindHost? It may only be compared and shown.\n- Can a record from the other side of the WSL boundary reach isProcessAlive? (BH3)\n- Does every existing deleter still fire for a record with no bindHost, an empty one or a loopback-serving one, for a dead or non-positive pid, and for another project's record? (BH2, BH5 and the unchanged suites)\n- A planted bindHost plus any live pid (1, or the IDE's own) now parks the plugin with this status instead of replacing the daemon, and the plugin signals nothing by itself. Recovery is the explicit Restart Daemon, whose signaling rules this task does not change. Say so in the handoff.\n- An odd host (very long, or with control characters) can only make the label ugly, because the text never starts with it.\n- A JSON array or object bindHost now fails the whole Gson parse, so the record reads as absent, as any malformed field already does. The spawned start then runs the daemon's own existing-daemon guard on the intact file. Confirm this in the handoff.\n- If this step changes any code, rerun step 3's command fresh and submit that output.\nWrite the Serena memory task-task-fe8111309de04ddd92e109144b50a228-handoff with the mutant kills and the gate counts.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T07:22:54.795Z"
     }
   ],
   "planRevision": 1,
@@ -79,12 +82,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:50:51.601Z",
-  "updatedAt": "2026-11-04T07:17:00.076Z",
+  "updatedAt": "2026-11-04T07:22:54.795Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:51:37.106Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -96,7 +99,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T07:09:55.690Z",
