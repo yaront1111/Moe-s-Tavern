@@ -9,10 +9,79 @@
     "docs/MCP_SERVER.md's `### moe.report_blocked` Ping routing text states the team-role-then-id-prefix rule, and no other section of the file changes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-c33f294e",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix the selector and pin it in workerLiveness.test.ts. Edit with the Edit tool only (global rail: TOOL witness). Read mem:gotcha-daemon-team-membership-and-freshness first. The architect's verified dry run is /mnt/d/moe-scratch/plan-31a2aa2f/prototype.diff (+98/-6 over the 4 files, gate green). Mirror it.\n\nA. packages/moe-daemon/src/util/workerLiveness.ts, findFreshestLiveWorkerByRole only:\n- Add `import { roleFromWorkerId } from './workerRole.js';` under the type import. workerRole.ts imports StateManager as a type only, so there is no runtime cycle. teamMembershipHeal.ts:3 already imports it this way.\n- Replace three things with a `teamsById` Map (skip a team entry with no id): the roleTeamIds Set, its `if (roleTeamIds.size === 0) return null;` early return, and the `roleTeamIds.has(worker.teamId)` filter.\n- Per worker:\n  - skip it when it has no teamId;\n  - skip it when its team is not in the map;\n  - compute `const seatRole = team.role || (typeof worker.id === 'string' ? roleFromWorkerId(worker.id) : null);`;\n  - skip it unless `seatRole === role`.\n  That is resolveWorkerRole's precedence (util/workerRole.ts:48-53). A roled team wins over the id. A team with no role (null, or no role key in a legacy team file) defers to the id prefix.\n- Keep everything after that as it is: excludeWorkerIds, isWorkerAlive with nowMs/timeoutMs, and the lowest-id tie-break.\n- Do NOT fall back for a worker with no team or a missing team. Two existing cases pin that skip: 'skips workers with no teamId or a teamId pointing at a missing team' (:114-117) and 'returns null when no team carries the requested role' (:119-127). DoD 2 keeps every existing test unchanged; see executionContract.compatibility. Leave both cases byte-for-byte.\n- Update the JSDoc paragraph that starts 'Role membership resolves through `worker.teamId`' to say three things:\n  - the rule is team role first, then the id prefix;\n  - the launchers' role-less project team is the common case;\n  - a worker with no team, or whose team is not in `teams`, is still skipped.\n- Error handling: the function stays total. A non-string worker id must not throw, because report_blocked calls this outside its best-effort chat try/catch. Guard it with the typeof check and a one-line comment saying why. No new I/O.\n\nB. packages/moe-daemon/src/util/workerLiveness.test.ts: append ONE new top-level describe at EOF, 'findFreshestLiveWorkerByRole: team role first, then the id prefix'. It holds exactly 6 plain `it` cases (no it.each; the gate counts 21 tests in the file). Reuse the file's team/worker/architect helpers, TEAMS and NOW_MS. Add `const PROJECT = team('team-project', null)`, `const MIXED: Team[] = [...TEAMS, PROJECT]` and a local findIn(teams, workers, opts) helper.\n1. Role-less team, id prefix. An architect- seat on a role-less team matches by its id prefix when teams = [PROJECT] only, which proves the early return is gone. A legacy team object with its role key deleted matches too.\n2. Roled non-architect team. A live seat on team-workers is never picked, even when named 'architect-misfiled' and fresher. With an older role-less-team architect beside it, the older one is picked.\n3. An explicit architect team wins over an id that declares another role: worker('worker-promoted') on team-architects is picked.\n4. Role-less-team seats whose id declares another role or none are never picked: 'worker-x', 'qa-x', 'governor-x', 'seat-x' and 'human'. A record with a non-string id (`42 as unknown as string`) does not throw, and the result is null.\n5. No live architect gives null, which is what makes report_blocked escalate to the governors. Cover three role-less-team architects: one stale (LIVENESS_TIMEOUT_MS / 1000 + 1 s), one DEAD, and one excluded via excludeWorkerIds.\n6. Roled-team and role-less-team architects are pooled. The fresher one wins whichever team it is on, and a lastActivityAt tie breaks to the lowest id in both iteration orders.\nCases 1, 2 and 6 fail on the unfixed selector (RED check done in the dry run). Cases 3-5 pin invariants and pass either way.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/workerLiveness.ts",
+        "packages/moe-daemon/src/util/workerLiveness.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/workerLiveness.ts",
+        "packages/moe-daemon/src/util/workerLiveness.test.ts"
+      ],
+      "note": "findFreshestLiveWorkerByRole now resolves team role first, then roleFromWorkerId for a team that exists with no role; no-team/missing-team still skipped (existing cases untouched). Added 6-case describe at EOF of workerLiveness.test.ts. Verification runs at step 4.",
+      "startedAt": "2026-11-04T06:22:56.069Z",
+      "completedAt": "2026-11-04T06:23:18.624Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Prove the hunt repro end to end in reportBlocked.test.ts. Edit tool only.\n- Where: in the first `describe('moe.report_blocked')` block, the one with the addWorker/report/mentionedGeneralPosts helpers. Insert a nested describe, \"on the launchers' role-less project team (team role, then id prefix)\", directly before the case 'always posts to #governors, with or without a live architect'.\n- Import: add `import { resolveWorkerRole } from '../util/workerRole.js';` right under the existing workerLiveness import.\n- Do not edit addWorker or any existing case.\n\nLocal helper addProjectTeamSeat(workerId, secondsAgo):\n- reuse the one role-less team named 'moes', calling state.createTeam({ name: 'moes' }) the first time;\n- createWorker exactly as addWorker does, then addTeamMember;\n- THEN stamp lastActivityAt, because addTeamMember bumps it (mem:gotcha-daemon-team-membership-and-freshness).\n\nCase 1 (DoD 1, the hunt #16 repro):\n- call addProjectTeamSeat('architect-2a219562', 5);\n- assert resolveWorkerRole(state, 'architect-2a219562') is 'architect';\n- call report() and assert task-1 is BLOCKED;\n- notified toEqual { target: 'architect-2a219562', via: 'freshest-live-architect' };\n- message toBe 'Task blocked; seat freed — this response does not start another task session. Pinged architect-2a219562 (freshest live architect).';\n- exactly one mentioned #general post, matching /^@architect-2a219562 🚧 worker-1 blocked on task-1: npm install fails behind the proxy$/;\n- rolePosts toEqual [['architects', paged], ['governors', paged.slice('@architect-2a219562 '.length)]].\nDo NOT copy the repro's `c.slice(0, 60)` literals from /mnt/d/moe-scratch/hunt-151a2c54/B. They are mis-sized because 🚧 is two UTF-16 code units, so they fail even with the fix. Assert whole strings or anchored regexes as above.\n\nCase 2 (with no live architect the ping still escalates to the governors):\n- addProjectTeamSeat('architect-stale', LIVENESS_TIMEOUT_MS / 1000 + 60);\n- addProjectTeamSeat('architect-dead', 2), then updateWorker('architect-dead', { status: 'DEAD' });\n- call report();\n- notified toEqual { target: '@governors', via: 'governors-fallback' };\n- the rolePosts roles toEqual ['governors'], and that copy matches /^@governors 🚧 worker-1 blocked on task-1: /.\n\nCase 1 fails on the unfixed selector. Case 2 passes either way: it pins the escalation test coverage. No production code changes in this step; reportBlocked.ts stays untouched because its call site (:405-433) already routes a non-null result to the architect page.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "note": "Added resolveWorkerRole import and a nested describe with 2 cases (hunt repro end to end; stale/DEAD escalation) before 'always posts to #governors'. No existing case or helper edited; reportBlocked.ts untouched.",
+      "startedAt": "2026-11-04T06:23:21.896Z",
+      "completedAt": "2026-11-04T06:23:38.698Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Sync the contract. Edit tool only.\n- Where: in docs/MCP_SERVER.md `### moe.report_blocked`, edit ONLY the `- **Ping routing:**` bullet. Find it by its text; it was at :1241 at b9205914 and moves as other rows land.\n- What: replace the clause 'resolving the role through `worker.teamId`.' with the team-role-then-id-prefix rule. Keep the exact phrase 'team role first, then the id prefix', because the gate greps for it on the Ping routing line.\n- Verified wording: '…resolving the role through `worker.teamId`, team role first, then the id prefix: a seat whose team has a `role` takes that role, so an `architect-…` seat on a `worker` team is never paged, and a seat whose team has no role (the launchers put every architect, worker and QA seat on one role-less project team) counts as an architect when its id starts with `architect-`. A seat with no team, or whose team no longer exists, is not paged.' The existing sentences that start 'The blocked worker itself is excluded' then continue unchanged.\n- Leave everything else untouched:\n  - the '- With **no live architect**' bullet;\n  - the Stale-block visibility bullet (task-590b98bd owns it);\n  - the Returns block;\n  - the governors auto-push line that quotes '🚧 {worker} blocked on {taskId}';\n  - every other section.\n- Check: `git diff -- docs/MCP_SERVER.md` must show one hunk with one changed line (DoD 3).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Ping routing bullet of ### moe.report_blocked now states 'team role first, then the id prefix'. git diff shows one hunk, one changed line.",
+      "startedAt": "2026-11-04T06:23:41.637Z",
+      "completedAt": "2026-11-04T06:23:50.871Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. After steps 1-3, run this exact command once from the worktree root. It is the moe.complete_task verification command, and QA re-runs it:\n( set -o pipefail; cd \"$(git rev-parse --show-toplevel)\" && grep -c 'Ping routing:.*team role first, then the id prefix' docs/MCP_SERVER.md && L=$(mktemp -d) && git archive HEAD | tar -x -C \"$L\" && cp --parents packages/moe-daemon/src/{util/workerLiveness{,.test}.ts,tools/reportBlocked.test.ts} \"$L/\" && cd \"$L/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"include\":[\"src/util/workerLiveness.test.ts\",\"src/tools/reportBlocked.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx tsc --noEmit && npx tsc -p tt.json --noEmit && npx vitest run src/util/worker{Liveness,Role}.test.ts src/tools/reportBlocked.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) | ✓ src/' ../v.log; grep -aq 'workerLiveness\\.test\\.ts (2[1-9] tests' ../v.log && grep -aq 'reportBlocked\\.test\\.ts (6[5-9] tests' ../v.log && echo PINNED )\n\nWhat it does, in order:\n- greps the Ping routing rule;\n- archives HEAD into a temp dir and copies the three edited code/test files over it;\n- runs npm ci;\n- runs the project typecheck, then a typecheck of the two test files (tt.json, because tsconfig excludes tests);\n- runs vitest on workerLiveness, workerRole and reportBlocked.\n\nExpected output: '1', workerLiveness 21 tests, workerRole 6, reportBlocked 65, 3 files and 92 tests passed, then PINNED, exit 0.\n- On failure it prints the temp dir and the log tail. A bare '0' with exit 1 means the docs phrase is missing.\n- Never run npm in packages/ of the shared checkout or of the worktree (global rail): this command runs everything in /tmp.\n- Keep NO_COLOR=1: vitest colors its summary even when redirected, which breaks the greps.\n- Do not lengthen the command: it is 980 chars, and a checkRef is capped at 1000.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Plan verification command ran fresh in a git-archive snapshot: docs grep 1, tsc + test-file tsc clean, workerLiveness 21, workerRole 6, reportBlocked 65, 3 files / 92 tests passed, PINNED, exit 0.",
+      "startedAt": "2026-11-04T06:23:52.466Z",
+      "completedAt": "2026-11-04T06:24:06.122Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, once, at the end. Load the adversarial-self-review skill and read your own diff as an attacker:\n1. report_blocked must never throw from the selector. Try a non-string id, a null worker or team entry, a team without an id, and a team whose role key is missing.\n2. Precedence: a roled team always wins. An architect- seat on the worker, qa or governor team is never paged, and a worker- id on the architect team still is.\n3. The pre-existing cases are byte-identical: 15 in workerLiveness and 63 in reportBlocked. `git diff` shows only additions in both test files, plus the one import line.\n4. excludeWorkerIds, the 120 s window and the lowest-id tie-break behave exactly as before. The blocked worker and the caller can still never be paged.\n5. The doc diff is one line, inside the Ping routing bullet.\n6. What breaks if this runs twice concurrently? Nothing: the selector is pure, with no writes.\nIf the review changes any byte, re-run step 4's command and submit that fresh output with moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/workerLiveness.ts",
+        "packages/moe-daemon/src/util/workerLiveness.test.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review, no bytes changed: (1) selector stays total — null worker/team guarded by ?., team without id skipped, typeof guard on worker.id, missing role key falls to prefix (pinned by tests); (2) truthy team.role always wins, roled non-architect team never paged, worker- id on architect team still paged; (3) git diff shows zero removed lines in both test files, only additions plus the one import; (4) excludeWorkerIds, isWorkerAlive window, lowest-id tie-break lines untouched; (5) docs diff is one hunk, one line; (6) selector is pure, no writes, so concurrency is moot. Known leftover (ruled in plan): a seat with no team or a missing team is still not paged — no production impact, all live seats sit on the role-less moes team.",
+      "startedAt": "2026-11-04T06:24:08.099Z",
+      "completedAt": "2026-11-04T06:24:20.120Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -37,11 +106,138 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:01:20.354Z",
-  "updatedAt": "2026-11-04T06:20:22.994Z",
+  "updatedAt": "2026-11-04T06:25:45.437Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T06:01:39.606Z"
+    "firstClaimAt": "2026-11-04T06:01:39.606Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-c33f294e"
-  ]
+    "architect-c33f294e",
+    "worker-a408f113"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T06:21:26.447Z",
+  "executionContract": {
+    "intendedBehavior": "moe.report_blocked direct-mentions the freshest live architect on the launchers' role-less project team, whose role comes from its architect- id prefix. The mention goes to #general and #architects, and #governors gets an unmentioned copy. findFreshestLiveWorkerByRole resolves a seat's role from its team's role first. When the seat's team exists but has no role, it uses the id prefix. It returns null, which escalates to @governors, only when no live, non-excluded architect resolves.",
+    "acceptanceCriteria": [
+      "Only a live architect-2a219562 exists, on a role-less 'moes' team. report_blocked then returns notified {target:'architect-2a219562', via:'freshest-live-architect'}. #general and #architects get '@architect-2a219562 🚧 worker-1 blocked on task-1: …', and #governors gets the same text unmentioned.",
+      "An architect- seat on a roled non-architect team is never returned. A non-architect id on the architect team still is.",
+      "When the role-less team's architect is stale, DEAD or excluded, the selector returns null. report_blocked then answers governors-fallback, and the @governors copy goes to #governors only.",
+      "The 15 existing workerLiveness cases and 63 existing reportBlocked cases are unchanged and pass.",
+      "docs/MCP_SERVER.md changes in exactly one line: the Ping routing bullet of ### moe.report_blocked, which then states 'team role first, then the id prefix'."
+    ],
+    "invariants": [
+      "A team with a role always decides the seat's role. The id prefix is consulted only when the seat's team has none.",
+      "The selector never throws, whether on non-string ids or null entries: report_blocked must not fail on chat routing.",
+      "The liveness window (isWorkerAlive, 120 s), excludeWorkerIds and the lowest-id tie-break are unchanged.",
+      "The blocked worker and the caller are still excluded, so an architect never pages itself."
+    ],
+    "compatibility": [
+      "Ruling on the DoD versus the fix direction. The description's fix direction also wants the id-prefix fallback for a worker with no team or a missing team, which is full resolveWorkerRole parity. Measured on a 3500ae19 snapshot, that fails exactly 2 existing cases in workerLiveness.test.ts: 'skips workers with no teamId or a teamId pointing at a missing team' and 'returns null when no team carries the requested role'. DoD 2 keeps the existing tests unchanged, and the DoD is human-owned. So the fallback applies only to a seat whose team exists and has no role. Both cases stay byte-identical and keep passing. The leftover gap has no production impact today: every live architect, worker and QA seat sits on the role-less 'moes' team (team-a94dc136). Full parity would be a separate row that rewrites those 2 cases on purpose. The ruling is recorded as a task comment too.",
+      "Wire shapes are unchanged: the notified target/via values, the message strings, and the channel set and order.",
+      "Legacy .moe/teams files that lack a role key behave as role-less teams. The check is truthiness, as in resolveWorkerRole."
+    ],
+    "approvedScope": [
+      "findFreshestLiveWorkerByRole in packages/moe-daemon/src/util/workerLiveness.ts: its team lookup, its role resolution and its JSDoc. isWorkerAlive, LIVENESS_TIMEOUT_MS and FreshestLiveWorkerOptions stay unchanged.",
+      "One new describe block at EOF of workerLiveness.test.ts, with 6 cases.",
+      "One nested describe with 2 cases in reportBlocked.test.ts, plus one resolveWorkerRole import.",
+      "The Ping routing bullet of docs/MCP_SERVER.md ### moe.report_blocked.",
+      "reportBlocked.ts is NOT edited: its only call site (:405-433) already maps a non-null result to the architect page."
+    ],
+    "reuse": [
+      "roleFromWorkerId (packages/moe-daemon/src/util/workerRole.ts:17) is the single id-prefix table, and teamMembershipHeal.ts:3/:144 already imports it. No new prefix list.",
+      "resolveWorkerRole cannot be called here: it needs a StateManager, and this helper is pure over iterables by design."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/workerLiveness.ts:59-89, findFreshestLiveWorkerByRole: the team.role-only filter is at :69-78, with the early return at :73.",
+      "packages/moe-daemon/src/util/workerRole.ts: roleFromWorkerId is at :17-22 and resolveWorkerRole (team role, then prefix) at :48-53. Its StateManager import is type-only.",
+      "packages/moe-daemon/src/tools/reportBlocked.ts:405-433 is the only caller. A null result means the '@governors ' prefix and the governors-only escalation.",
+      "packages/moe-daemon/src/state/teamStore.ts:46-50: getTeamForWorker reads worker.teamId.",
+      "The repro's slice(0, 60) literals in /mnt/d/moe-scratch/hunt-151a2c54/B are mis-sized, because 🚧 is 2 UTF-16 code units. With the fix its routing is correct (verified)."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; cd \"$(git rev-parse --show-toplevel)\" && grep -c 'Ping routing:.*team role first, then the id prefix' docs/MCP_SERVER.md && L=$(mktemp -d) && git archive HEAD | tar -x -C \"$L\" && cp --parents packages/moe-daemon/src/{util/workerLiveness{,.test}.ts,tools/reportBlocked.test.ts} \"$L/\" && cd \"$L/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"include\":[\"src/util/workerLiveness.test.ts\",\"src/tools/reportBlocked.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx tsc --noEmit && npx tsc -p tt.json --noEmit && npx vitest run src/util/worker{Liveness,Role}.test.ts src/tools/reportBlocked.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) | ✓ src/' ../v.log; grep -aq 'workerLiveness\\.test\\.ts (2[1-9] tests' ../v.log && grep -aq 'reportBlocked\\.test\\.ts (6[5-9] tests' ../v.log && echo PINNED )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Full resolveWorkerRole parity, the description's fix direction: also fall back to the id prefix for no team or a missing team. Rejected: it fails 2 existing workerLiveness cases (measured), against DoD 2's 'existing tests pass unchanged'. (b) Chosen: fall back to the id prefix only when the seat's team exists and has no role. It fixes the production bug fully and keeps every existing test. (c) Call resolveWorkerRole directly. Rejected: it needs a StateManager, and this helper is pure over iterables by design. (d) Give architects a roled team in the launchers. Out of scope: the launchers set a role only for governors on purpose (moe-agent.sh:2105-2114), and the mention router relies on that.",
+    "codebaseInsights": "The daemon resolves roles team first, then id prefix, in resolveWorkerRole, McpAdapter's tools/list and the claim announcement. This selector was the outlier: it was written on 2026-07-31 (53e33369), before the prefix fallback existed (b0dae824, 2026-09-05). Live board: the 'Architects' team (team-ceeda973, role architect) has 0 members, and 'moes' (team-a94dc136, role null) holds every architect, worker and QA seat. The governor sits on a second 'moes' team with role governor. Baseline at 3500ae19: workerLiveness 15 tests, workerRole 6, reportBlocked 63. The dry run ends at 21/6/65, and 4 new cases are RED without the fix.",
+    "risks": "- rolePosts is exact-matched; createTeam and addTeamMember post nothing to role channels (verified in the dry run).\n- addTeamMember bumps lastActivityAt, so stamp freshness after the join.\n- The hunt repro's slice literals are wrong; don't copy them.\n- The checkRef is 980 chars, close to the 1000 cap.\n- NO_COLOR=1 is required.\n- The sibling task-590b98bd will edit the Stale-block visibility bullet of the same section. That is a distinct hunk, so worktree-mode merge-tree lands both.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/workerLiveness.ts",
+      "packages/moe-daemon/src/util/workerLiveness.test.ts",
+      "packages/moe-daemon/src/util/workerRole.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "b93a43e1e493260bc4234802067a5a866c4dbae3",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T06:21:26.477Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T06:22:56.069Z",
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a408f113@2026-11-04T06:21:53Z",
+    "at": "2026-11-04T06:25:45.437Z"
+  },
+  "reviewStartedAt": "2026-11-04T06:24:35.701Z",
+  "verification": {
+    "command": "( set -o pipefail; cd \"$(git rev-parse --show-toplevel)\" && grep -c 'Ping routing:.*team role first, then the id prefix' docs/MCP_SERVER.md && L=$(mktemp -d) && git archive HEAD | tar -x -C \"$L\" && cp --parents packages/moe-daemon/src/{util/workerLiveness{,.test}.ts,tools/reportBlocked.test.ts} \"$L/\" && cd \"$L/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"include\":[\"src/util/workerLiveness.test.ts\",\"src/tools/reportBlocked.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx tsc --noEmit && npx tsc -p tt.json --noEmit && npx vitest run src/util/worker{Liveness,Role}.test.ts src/tools/reportBlocked.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) | ✓ src/' ../v.log; grep -aq 'workerLiveness\\.test\\.ts (2[1-9] tests' ../v.log && grep -aq 'reportBlocked\\.test\\.ts (6[5-9] tests' ../v.log && echo PINNED )",
+    "exitCode": 0,
+    "outputTail": "1\n ✓ src/util/workerLiveness.test.ts (21 tests) 5ms\n ✓ src/util/workerRole.test.ts (6 tests) 210ms\n ✓ src/tools/reportBlocked.test.ts (65 tests) 3402ms\n Test Files  3 passed (3)\n      Tests  92 passed (92)\nPINNED",
+    "reportedAt": "2026-11-04T06:24:35.701Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/workerLiveness.ts",
+    "packages/moe-daemon/src/util/workerLiveness.test.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "findFreshestLiveWorkerByRole (util/workerLiveness.ts) now resolves a seat's role team-role-first, then by id prefix via roleFromWorkerId, but only when the seat's team exists and has no role (resolveWorkerRole's precedence). So report_blocked direct-mentions the freshest live architect on the launchers' role-less project team (#general + #architects, unmentioned copy to #governors) instead of always escalating to @governors. A roled non-architect team still never matches, a no-team/missing-team seat is still skipped (the 2 existing cases stay byte-identical, per the DoD-vs-fix-direction ruling in the task comment), and the selector stays total on null entries/non-string ids. Liveness window, excludeWorkerIds and lowest-id tie-break are unchanged; reportBlocked.ts is untouched. Tests: 6 new cases in workerLiveness.test.ts (21 total) and a nested describe with 2 cases in reportBlocked.test.ts (65 total) covering the hunt repro end to end plus stale/DEAD escalation; zero existing lines changed. docs/MCP_SERVER.md: one line, the Ping routing bullet of moe.report_blocked, now states 'team role first, then the id prefix'. Also ran the project qualityGate locally: parity-check.sh PASS, npm run lint OK.",
+  "commits": [
+    {
+      "sha": "db7a8bfd526d42ecd7817a357281362f2c1e852b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T06:21:53Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+        "packages/moe-daemon/src/util/workerLiveness.test.ts",
+        "packages/moe-daemon/src/util/workerLiveness.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T06:25:45.437Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

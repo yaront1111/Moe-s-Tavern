@@ -55,22 +55,29 @@
     {
       "stepId": "step-4",
       "description": "Docs (DoD 3). Use Edit, never Serena (which ignores docs/) and never a shell write (mem:gotcha-docs-edit-via-bash-python-no-tool-witness).\n\nscripts/CLAUDE.md, **Land on every exit, worktree mode**:\n- The L9-L10 bullet (:25). After the MOE_PUSH_REMOTE_REJECTED_APPLIED clause, replace \"otherwise, or when that fetch fails, it is `MOE_PUSH_FAILED`, unlanded `remote`.\" with:\n  \"otherwise it is `MOE_PUSH_FAILED`, unlanded `remote`. A re-check that shows origin lacking C drops the receipt journal. One whose fetch fails keeps it as `push remote-rejected-unverified: …`, which only a fetch settles, never a re-push. The task's next landing records C's owed row (`pushed: true`) and finalizes `landed` when origin holds C, and drops the journal when origin lacks it.\"\n- The **Replay.** bullet (:31). After \"In remote mode `reconcile_push` settles the journaled C against origin.\" add:\n  \"A `push remote-rejected-unverified` journal gets a fetch instead, never a re-push: origin lacking C drops it, and origin holding C keeps it for the task's next landing, or settles it at once while its attempt is still `finalizing`.\"\n\ndocs/plans/2026-10-30-per-task-worktrees.md:\n- The L9 row (:121). Replace \"otherwise, or when that fetch fails, `MOE_PUSH_FAILED`, unlanded `remote`, no more rounds.\" with:\n  \"otherwise `MOE_PUSH_FAILED`, unlanded `remote`, no more rounds. A re-check that shows C absent drops the journal; one whose fetch fails keeps it (`push remote-rejected-unverified: …`) for the task's next landing, whose L5 proves it by a fetch, never a re-push (2.9).\"\n- §2.9 (:146): add one sentence: \"A journal kept as `push remote-rejected-unverified` (L9) is proven by a fetch of origin instead of `receipt_landed_as`: origin holding C makes C this landing's (its row `pushed: true`, finalize `landed`), and origin lacking C drops the journal.\"\n- The L9 summary (:179): append \"(a failed re-check fetch keeps the journal for the next landing)\" after \"else unlanded `remote` at once\".\n\nTouch no other text. Re-grep each anchor first; if one moved, edit the same sentence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/CLAUDE.md",
         "docs/plans/2026-10-30-per-task-worktrees.md"
       ],
-      "startedAt": "2026-11-04T06:20:50.814Z"
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Docs edited with the Edit tool and the plan's exact text:\n- scripts/CLAUDE.md: the L9-L10 bullet (the kept unverified journal, settled only by a fetch, with the next landing recording pushed:true and finalizing landed, or dropping the journal) and the Replay bullet (the unverified journal gets a fetch instead of a re-push).\n- Design doc: the L9 row, a §2.9 sentence and the L9 summary parenthetical.\n\nAll anchors were still at their planned lines, and no other text was touched.",
+      "startedAt": "2026-11-04T06:20:50.814Z",
+      "completedAt": "2026-11-04T06:21:18.671Z"
     },
     {
       "stepId": "step-5",
       "description": "Verify once, from the task worktree root, after the last edit. The run's fresh output is the complete_task evidence. Run the executionContract checkRef exactly as written; it is task-bc6ba91b's DONE gate with wt-replay added to MOE_WORKTREE_ONLY.\n\nWhat it runs:\n- bash -n;\n- parity-check.sh and parity-check.ps1;\n- postflight-worktree.cjs on sh and ps1, for wt-remote-rejected, wt-unlanded, wt-push, wt-completion, wt-replay, wt-replay-remote and codes;\n- postflight-migration.cjs (migration shares wt_push_target);\n- the held-out worktree-landing.sh and worktree-landing.ps1, which must pass unchanged. Never edit them.\n\nRun conditions:\n- The scratch dir sits on /mnt/d: a /tmp cwd breaks the Windows legs (mem:gotcha-qa-ps1-postflight-from-wsl).\n- bc6ba91b's run of this gate took about 17 min, which is past the 10-min Bash cap. Launch it detached into a log and poll for its end (mem:gotcha-qa-session-env-and-signals-leak-into-harness). Kill only PIDs your session recorded.\n- Never edit the wrappers mid-run (mem:gotcha-editing-wrapper-while-harness-runs).\n\nExpected: exit 0, and `[worktree] … 0 failed` for both engines.\n\nError handling for a red run:\n- If a Windows leg fails, re-run that leg on HEAD's scripts before blaming the change.\n- Fix the cause in step 1, 2 or 3's file, never by weakening an assertion.\n- Then re-run the whole command.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T06:21:19.778Z"
     },
     {
       "stepId": "step-6",
@@ -100,7 +107,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:38:02.611Z",
-  "updatedAt": "2026-11-04T06:20:50.814Z",
+  "updatedAt": "2026-11-04T06:21:19.778Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:44:41.089Z",
@@ -110,7 +117,7 @@
     "firstClaimAt": "2026-11-04T05:45:19.172Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -123,7 +130,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:00:21.505Z",

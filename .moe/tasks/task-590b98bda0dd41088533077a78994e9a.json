@@ -9,10 +9,73 @@
     "The existing dependencyUnblock tests pass. Any test that encoded prune-on-miss is named in the completion summary, together with why it changed."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-cd0ac706",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED): packages/moe-daemon/src/state/dependencyUnblock.test.ts. Add `import { StateManager } from './StateManager.js';` after the `./sweeps.js` import. Add three cases inside describe('stale-block alert') (the first top-level describe, whose beforeEach runs setupMoeFolder + createEpic), just before 'the blocked-timeout sweep runs the extended alert pass'. Reuse that block's HOUR, staleDeplessRow, staleDepRow and captureRolePosts, and pass an explicit nowMs (const now = Date.now()) to every alertStaleBlocks call. The architect's verified version of all three is in /mnt/d/moe-scratch/plan-590b98bd/prototype.diff. It is a reference only: apply your hunks with Edit, never with patch or cp.\n(a) DoD 1, the hunt repro's case 2: 'pages a block instance once while the row stays BLOCKED, however often it stops and starts qualifying'.\n- Seed: staleDepRow('task-c0n5um', ['task-p4e4eq'], 1.5 * HOUR) and h.createTask({ id: 'task-p4e4eq', status: 'BACKLOG' }); load; capture; record the row's blockedAt.\n- Passes: at now, 1 (BACKLOG prerequisite). Move the prerequisite to WORKING: now + 60_000 gives 0 (moving and under 2x, the pass that used to prune the key); now + HOUR gives 0 (past 2x, qualifies again, same instance). Move it back to BACKLOG: now + HOUR + 60_000 gives 0.\n- Then exactly 1 post, and the row toMatchObject { status: 'BLOCKED', blockedAt }.\n(b) DoD 1's 'still alert again' half: 'pages a new block instance: a re-block under a new blockedAt, and a row resolved then blocked again'.\n- Seed dep-less task-n3wat1 and task-r350lv, both 2h old; record task-r350lv's blockedAt. At now: 2.\n- updateTask task-n3wat1 { blockedAt: new Date(now).toISOString() }; updateTask task-r350lv { status: 'WORKING', blockedReason: null, blockedFromStatus: null, blockedAt: null }. At now + 2*HOUR: 1 (task-n3wat1; this pass sees task-r350lv resolved).\n- updateTask task-r350lv { status: 'BLOCKED', blockedReason: 'asked again', blockedFromStatus: 'WORKING', blockedAt: <its first blockedAt> }. At now + 2*HOUR: 1.\n- Each id then has exactly 2 posts starting with `⚠️ ${id} `. The same-blockedAt re-block is deliberate: it is the one input where only the prune makes the second page happen.\n(c) DoD 2, the hunt repro's case 1 with a real post: 'a daemon restart reads #governors back: no second page for a standing block, a page for one it never paged'.\n- Seed dep-less task-5ta1e1 (2h), task-qu0te1 (30 min: under the timeout, so never paged before the restart) and task-n3wb1k (2h); load.\n- vi.spyOn(h.state, 'postToRoleChannel') with NO mockImplementation, so the pages land in the #governors JSONL. At now: 2, and the spy is called twice.\n- On the governors channel (in h.state.channels, type 'role', name 'governors'), call h.state.sendMessage({ channel, sender: 'governor-x', content: '⚠️ task-qu0te1 (Test Task) has been BLOCKED 90m with no blockedOnTaskIds' }). A governor quoting a page is not a page.\n- updateTask task-n3wb1k { blockedAt: new Date(now + 60_000).toISOString() }: strictly after its page, so a new instance.\n- Restart: const restarted = new StateManager({ projectPath: h.testDir }); await restarted.load(); spy on restarted.postToRoleChannel. alertStaleBlocks(restarted, now + 3 * HOUR) gives 2, and the paged ids (the second space-separated token of each message), sorted, equal ['task-n3wb1k', 'task-qu0te1'].\nRED, in a snapshot only, never in the shared checkout (use the checkRef's recipe): at base the file gives 2 failed | 60 passed. (a) and (c) fail; (b) passes and guards the re-page. The architect measured exactly that.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+      ],
+      "note": "Added StateManager import and three cases in describe('stale-block alert') (a: once per instance across qualify/stop/qualify; b: new blockedAt and resolved-then-reblocked re-page; c: restart reads #governors back). RED proven in a git-archive snapshot (/tmp, outside the repo): 2 failed | 60 passed — (a) and (c) fail, (b) passes as the re-page guard.",
+      "startedAt": "2026-11-04T06:22:55.077Z",
+      "completedAt": "2026-11-04T06:23:34.925Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix both halves in packages/moe-daemon/src/state/dependencyUnblock.ts (reference: prototype.diff).\n1. Within one daemon lifetime:\n- Add `function staleBlockKey(task: Pick<Task, 'id' | 'blockedAt'>): string`, returning `${task.id}:${task.blockedAt}`.\n- In alertStaleBlocks's loop, right after `if (Number.isNaN(blockedAtMs)) continue;`: compute the key, call liveKeys.add(key), then `if (task.blockedResourceId || memo.has(key)) continue;`. The resource skip moves below the blockedAt parse. Delete the old key / liveKeys.add / memo.has block before the post.\n- Every BLOCKED row with a parseable blockedAt is now live, resource-parked rows included. That is a superset of the row's FIX DIRECTION, so a row that goes resource-parked and back under one blockedAt is not re-paged either. The prune then drops only rows that left BLOCKED or changed blockedAt, as its comment already claims.\n2. Restart. Decision: persist, by reading back the log the daemon already keeps.\n- Add `function seedAlertedStaleBlocks(state: StateManager): Set<string>`. In alertStaleBlocks, create the memo with `memo = seedAlertedStaleBlocks(state)` instead of `new Set<string>()`.\n- It finds the role channel named 'governors' in state.channels; with none it returns an empty set.\n- It reads readTailJsonl(state, path.join(state.moePath, 'messages', `${channel.id}.jsonl`), CHAT_READ_WINDOW_BYTES). Import both from './chatStore.js', add `import path from 'path'`, and add ChatMessage to the '../types/schema.js' type import.\n- Error handling: ENOENT returns empty silently. Any other read error does one logger.warn and returns empty. It never throws: the worst case is one repeat page, never silence.\n- For each line that includes ' has been BLOCKED ', JSON.parse it in try/catch. Keep only sender === 'system', with string content matching /^⚠️ (\\S+) \\(.*?\\) has been BLOCKED /su and a parseable timestamp. Record the latest page time per task id. Copy the ⚠️ from an existing alert literal: it is U+26A0 U+FE0F.\n- Then, for each BLOCKED row with a blockedAt whose latest page is strictly after Date.parse(blockedAt), add staleBlockKey(row). Strictly after, because every page of an earlier instance comes before that instance's resolution, and so before the next instance's blockedAt.\n3. Comments:\n- The memo docblock says what a block instance is, and that a fresh daemon seeds from #governors.\n- In alertStaleBlocks's docblock, 'one line in #governors per block instance' gains 'a restart included'.\n- seedAlertedStaleBlocks's docblock says it reads the newest CHAT_READ_WINDOW_BYTES, the window chat_read serves. A page that has left that window (shown to no reader), or that never landed, is paged once more after a restart.\nThen the three cases pass: 62 passed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ],
+      "note": "alertStaleBlocks: key (new module-private staleBlockKey) is added to liveKeys for every BLOCKED row with a parseable blockedAt before the qualification checks, resource skip moved below it. The memo is created by new seedAlertedStaleBlocks (reads the newest CHAT_READ_WINDOW_BYTES of #governors, keeps only sender 'system' pages strictly after the row's blockedAt, never throws, ENOENT silent, other errors logger.warn). Docblocks updated. Snapshot run: tsc clean, dependencyUnblock.test.ts 62/62.",
+      "startedAt": "2026-11-04T06:23:36.951Z",
+      "completedAt": "2026-11-04T06:24:15.205Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/MCP_SERVER.md, `### moe.report_blocked`: edit only the **Stale-block visibility** bullet. It is one line (:1246 at 6fbdc22f) and moves as other rows land. The Ping routing bullets below it belong to task-31a2aa2f. Keep the bullet's text, and after its last sentence (ending 'dep-waiting past 2× `blockedTimeoutMs`.') append exactly: ` A block instance is the row's `blockedAt`: one page however often the row stops and starts qualifying, and a fresh page only once it is blocked again (a new `blockedAt`, or BLOCKED again after leaving it). A daemon restart reads the newest 1 MiB of `#governors` back, the window `chat_read` serves, so it re-pages a standing block only when the daemon's page for it has left that window or never landed.` The checkRef greps 'reads the newest 1 MiB of `#governors` back'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Appended the block-instance and restart sentences to the Stale-block visibility bullet of ### moe.report_blocked only (1 line changed). The checkRef's grep for 'reads the newest 1 MiB of `#governors` back' matches.",
+      "startedAt": "2026-11-04T06:24:17.293Z",
+      "completedAt": "2026-11-04T06:24:28.832Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once: run the plan's checkRef (executionContract.checkRefs; copy also at /mnt/d/moe-scratch/plan-590b98bd/checkref.txt) verbatim from the worktree root, and submit its fresh output as complete_task verification.\n- What it does: greps the doc sentence; overlays the three edited files on a git archive of HEAD in a mktemp snapshot; runs npm ci, tsc --noEmit, tsc on the test file and the full daemon suite; pins dependencyUnblock.test.ts at 62+ tests. The shared checkout is the live runtime, so no npm ci or npm test there.\n- Expected: the 'stale-block pin ok' line. The architect ran it on the prototype at 6fbdc22f: 288 files passed, 7497 passed | 24 skipped, stale-block pin ok, exit 0.\n- Set TMPDIR on the OUTER bash if you want the snapshot somewhere you can delete.\n- A known load flake that is not this row's: src/util/LogRotator.rotateFailure.test.ts (f2) can fail in a full run with a stray activity.log.rotating.tmp. compressFile's WriteStream open can land after rotate()'s cleanup rmSync. It passed 6/6 alone. If it is the only failure, re-run the checkRef once and report both runs.\n- qualityGate (parity-check + lint) is unaffected: no scripts or role docs change.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the plan's checkRef verbatim from the worktree root: doc grep ok, tsc --noEmit and tsc on the test file clean, full daemon suite Test Files 289 passed (289), Tests 7503 passed | 24 skipped (7527), 'stale-block pin ok', exit 0. No LogRotator flake this run.",
+      "startedAt": "2026-11-04T06:24:35.151Z",
+      "completedAt": "2026-11-04T06:25:29.416Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of the diff against the merge base. This is the one review step, before complete_task. If it changes any file, re-run the checkRef and submit that output.\n- Mutants, in the gate's snapshot only, never in the worktree. `python3 /mnt/d/moe-scratch/plan-590b98bd/mutate.py <snapshot>/packages/moe-daemon/src/state/dependencyUnblock.ts <name>` applies one. Then `npx vitest run src/state/dependencyUnblock.test.ts` must fail exactly the named case:\n  - M1_liveKeys_after_qualify: (a);\n  - M2_no_seed: (c);\n  - M3_any_sender: (c);\n  - M4_ignore_blockedAt: (c);\n  - M5_no_prune: (b).\n  The architect's prototype run failed exactly those. The script's anchors are the prototype's text; if yours differs, make the same five mutations by hand. Restore the file after each.\n- The hunt's scratch repro (/mnt/d/moe-scratch/hunt-151a2c54/B): case 2 passes. Case 1 still fails, because it mocks postToRoleChannel, so no page ever reaches #governors; re-paging a block whose page never landed is the designed behavior. (c) is case 1 with the page landing. Say so in the completion summary.\n- Never throws: an unreadable log, a missing channel, a malformed or null line, non-string content, an unparseable timestamp.\n- Cost: once per StateManager, at most 1 MiB, inside the 5-minute sweep under the global mutex. Only lines containing ' has been BLOCKED ' are parsed.\n- Unchanged: the alert text, the four alert classes, alert-only behavior and the resource-row exclusion. No new .moe path, and no schema.ts edit.\n- DoD 3: no existing test changed, because none encoded prune-on-miss. State that in the summary.\n- Only the Stale-block visibility line of MCP_SERVER.md changed. No added line contains any string from project.json globalRails.forbiddenPatterns.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-04T06:25:30.204Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-a0305b0b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +87,91 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:01:39.792Z",
-  "updatedAt": "2026-11-04T06:02:04.105Z",
+  "updatedAt": "2026-11-04T06:25:30.204Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T06:01:46.958Z"
+    "firstClaimAt": "2026-11-04T06:01:46.958Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-cd0ac706"
-  ]
+    "architect-cd0ac706",
+    "worker-a0305b0b"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T06:21:46.798Z",
+  "executionContract": {
+    "intendedBehavior": "The stale-block #governors page fires at most once per block instance (taskId + blockedAt). Within one daemon lifetime, a row that stays BLOCKED under one blockedAt is never paged twice, however often it stops and starts qualifying. A fresh daemon seeds its memo from the newest CHAT_READ_WINDOW_BYTES of #governors (the daemon's own sender 'system' pages, strictly after the row's blockedAt), so a restart does not re-page a standing block whose page is still in that window. A new instance (a new blockedAt, or BLOCKED again after a pass saw it leave) is paged again.",
+    "acceptanceCriteria": [
+      "(a) A dep-waiting row paged at 1.5h on a BACKLOG prerequisite has exactly one page for its blockedAt, after the prerequisite moves (under 2x), the row passes 2x, and the prerequisite stalls again.",
+      "(b) A re-block under a new blockedAt gets a second page, and so does a row that a pass saw resolved and that is then blocked again.",
+      "(c) After a real page lands in #governors, a fresh StateManager on the same .moe/ does not page that standing block again. It does page a stale row the daemon never paged (a governor quoting the page format does not count) and a row re-blocked after its page.",
+      "The 59 existing dependencyUnblock tests pass unchanged, and the full daemon suite is green."
+    ],
+    "invariants": [
+      "alertStaleBlocks never throws and never parks a row",
+      "Resource-parked rows are never paged",
+      "A page is posted only for a qualifying row whose key is not in the memo",
+      "The memo stays per StateManager (WeakMap)"
+    ],
+    "compatibility": [
+      "No change to schema.ts, any MCP tool contract or any .moe/ path. The alert text and its four classes are unchanged.",
+      "Existing .moe/ state loads unchanged. The seed only reads #governors. An empty, missing or unreadable channel seeds nothing, which is the old behavior: one page per daemon lifetime."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/state/dependencyUnblock.ts: alertStaleBlocks; new module-private staleBlockKey and seedAlertedStaleBlocks; the memo and alert docblocks",
+      "packages/moe-daemon/src/state/dependencyUnblock.test.ts: three new cases in describe('stale-block alert') and the StateManager import",
+      "docs/MCP_SERVER.md: the Stale-block visibility bullet of ### moe.report_blocked only"
+    ],
+    "reuse": [
+      "readTailJsonl and CHAT_READ_WINDOW_BYTES (chatStore.ts), the same window getMessages and chat_read serve",
+      "The existing alertedStaleBlocks WeakMap and its prune loop"
+    ],
+    "sourceAssumptions": [
+      "dependencyUnblock.ts:409-410 adds the key to liveKeys only after the qualification checks; the continue at :378 (deps all met) and :405 (moving deps under 2x) skip it; :420-424 prunes every key not live",
+      "chatStore.ts:509 posts role-channel lines as sender 'system'; :266 CHAT_READ_WINDOW_BYTES = 1 MiB; :276 readTailJsonl, which throws ENOENT for a missing file",
+      "persistence.ts:266 ensureChatInfrastructure creates #governors on every load, so the harness and a restarted StateManager share one channel id",
+      "sweeps.ts:554 calls alertStaleBlocks on every blocked-timeout sweep (every 5 min, :58)"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'reads the newest 1 MiB of `#governors` back' docs/MCP_SERVER.md && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/{dependencyUnblock.ts,dependencyUnblock.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/state/dependencyUnblock.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ] && grep -aqE \" ✓ src/state/dependencyUnblock\\.test\\.ts \\((6[2-9]|[7-9][0-9]) tests\\)\" ../v.log && echo \"stale-block pin ok\"; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Restart decided: persist (option 1), by reading back the #governors log the daemon already writes.\n- Option 2 rejected: it documents a once-per-restart re-page, as recordCommit.ts:43-45 does, but the production evidence shows every cited re-page came from a restart, not the in-lifetime prune. Both rows were past 2x blockedTimeoutMs at each re-page, and a dep-waiting row past 2x qualifies on every pass, so only a lost memo explains them. 1a8f1d0e's 05:28:45Z page is the first 5-minute sweep after daemon.json startedAt 05:23:45Z. 17 sweeps in #governors paged 2+ standing rows at once (11-01 18:28:34Z: 1a8f1d0e, 48f0b3aa, f4811a72). Option 2 would leave all 15 cited pages in place.\n- A dedicated runtime file rejected: a new .moe path needs the root .gitignore, the CLAUDE.md runtime list and the .moe/.gitignore scaffold, plus its own atomic write and corruption handling. The #governors JSONL is already the durable, gitignored record of every page.\n- Seeding by task id alone rejected: a later block instance must page again (mutant M4).\n- The FIX DIRECTION's resource-less liveKeys was widened to every BLOCKED row with a parseable blockedAt.",
+    "codebaseInsights": "- The memo is a WeakMap per StateManager. The sweep runs alertStaleBlocks every 5 min under the global mutex, right after runDependencyUnblock.\n- postToRoleChannel posts as sender 'system' and never throws, so memo.add runs even when a post did not land. After a restart, such a block is paged again, which is correct.\n- ensureChatInfrastructure creates #governors on every load.\n- readTailJsonl with CHAT_READ_WINDOW_BYTES is exactly what getMessages, and so chat_read, reads.\n- ' has been BLOCKED ' occurs only in this module's four alert literals.\n- Live #governors is 2.5 MB, about 55 KB a day, so 1 MiB is about 18 days of pages.\n- The architect prototyped the whole plan in a scratch snapshot:\n  - RED at base: 2 failed | 60 passed;\n  - GREEN: 62/62;\n  - each of the 5 mutants failed exactly its named case;\n  - tsc clean;\n  - the checkRef verbatim at 6fbdc22f: 288 files, 7497 passed | 24 skipped, stale-block pin ok.",
+    "risks": "- QA running the hunt's scratch repro: its case 1 mocks postToRoleChannel, so it fails by design, because no page ever landed. Test (c) is case 1 with a real post.\n- The ⚠️ in the regex must be the literals' code points, U+26A0 U+FE0F. (c) is the round trip that catches drift.\n- A same-millisecond flake is avoided by the strict '>' and by (c)'s +60s blockedAt.\n- The hunter's line refs have moved: the bullet is :1246 at 6fbdc22f. Leave the Ping routing bullets to task-31a2aa2f.\n- A full-suite load flake that is not this row's: LogRotator.rotateFailure.test.ts (f2), with a stray activity.log.rotating.tmp. Re-run once if it is the only failure.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/state/sweeps.ts",
+      "docs/MCP_SERVER.md",
+      "/mnt/d/moe-scratch/plan-590b98bd/prototype.diff"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "b93a43e1e493260bc4234802067a5a866c4dbae3",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T06:21:46.828Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T06:22:55.077Z"
 }
