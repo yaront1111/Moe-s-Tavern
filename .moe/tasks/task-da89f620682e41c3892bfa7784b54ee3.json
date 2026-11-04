@@ -43,20 +43,26 @@
     {
       "stepId": "step-3",
       "description": "Make doctor judge a namespaced record by /health (packages/moe-daemon/src/commands/doctor.ts).\n- probeDaemonJson (:81-136): add `pidNamespace?: unknown` to the parsed type and read it.\n- After the isForeignDaemonInfo branch (:112-114) and before isProcessAlive (:115), when `isOtherPidNamespace(parsed.pidNamespace)`, judge the record by /health at the local probe address. That is the dial rule probeDaemonReachability uses (:239-280): `healthProbeAddress(recordedProbeHost({ bindHost }), HEALTH_PROBE_TIMEOUT_MS)` plus `isLocalAddress`, with its refusal texts when the address is null or not local (nothing dialed).\n- Reuse probeForeignDaemonJson (:216-237) by generalizing it to take the host list and the side label:\n  - WSL: foreignProbeHosts(...) and 'written on the other side of the WSL boundary (pid N, port P)', unchanged.\n  - Namespaced: the one local address and 'written in another pid namespace (pid N, port P)'.\n- The outcomes for a namespaced record:\n  - A confirmed answer is [OK] 'daemon.json valid: written in another pid namespace (pid N, port P); /health answered on <host:port>'.\n  - A non-confirming HTTP answer is [WARN] and never says 'stale'.\n  - No answer is [WARN] '... no /health answered on <host:port> (stale)'.\n- foreignReachability carries the verdict, so probeDaemonReachability never re-dials.\n- Error handling: unchanged. probeHealth never throws, and a bad address returns the existing fail texts.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/doctor.ts"
       ],
-      "startedAt": "2026-11-04T12:29:52.636Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "note": "doctor.ts: probeDaemonJson reads pidNamespace; namespaced branch after the WSL branch, before isProcessAlive. probeForeignDaemonJson now takes (port, pid, hosts, side, expected); the WSL caller passes foreignProbeHosts + the unchanged side text. The local dial rule (with its two 'not dialed' refusal texts) is extracted to localProbeAddress(), shared by probeDaemonReachability and the namespaced branch; a refused address gives a daemon.json [WARN] plus the refusal as foreignReachability (never re-dialed). tsc clean; existing index+doctor tests 173 passed / 1 skipped in /tmp snapshot.",
+      "startedAt": "2026-11-04T12:29:52.636Z",
+      "completedAt": "2026-11-04T12:30:52.557Z"
     },
     {
       "stepId": "step-4",
       "description": "Add the vitest tests. Their names are fixed, because the gate counts them.\n\npackages/moe-daemon/src/index.test.ts: add a new describe 'daemon.json from another pid namespace (task-da89f620)' inside 'daemon lifecycle validation', beside the WSL block.\n- Hoist DEAD_PID, writeDaemonFiles and killSpyWithoutSignals from the WSL describe (:230-260) to the enclosing describe, unchanged, so both blocks share them.\n- Records use pidNamespace 'pid:[1]'. No real namespace inode is 1, so it differs from every reader's on every CI OS.\n- Stub `vi.spyOn(fs, 'readlinkSync')` when a case needs a known own namespace; probeHost.ts reads through the same default fs object.\n- Import ownPidNamespace, isOtherPidNamespace and buildDaemonInfo dynamically inside N1/N2 (`await import(...)`), so the rest of the file still runs against 2037e856 for the RED check.\n- Cases:\n  - N1: truth table for isOtherPidNamespace and ownPidNamespace.\n    - isOtherPidNamespace is true for a different value and for an undefined own.\n    - It is false for an equal value, absent, 7, 'pid:[x]', 'pid:[1', 21 digits and 'net:[1]'.\n    - ownPidNamespace returns 'pid:[7]' when readlink is stubbed to 'pid:[7]', and undefined when the stub throws or returns 'garbage'.\n  - N2: buildDaemonInfo adds the stubbed pidNamespace and omits the key when readlink throws; its bindHost rule is unchanged.\n  - N3: validateDaemonInfoForProject.\n    - A healthy namespaced record (healthServer(testDir, DEAD_PID)) gives {valid:true, info, namespaced:true}.\n    - An unreachable one (unusedPort()) gives {valid:false, reason:'pid namespace daemon unreachable', namespaced:true}.\n    - The same record without the field gives reason 'pid not alive'.\n  - N4: statusDaemon keeps a healthy namespaced daemon.json byte-identical, exits 0 and never logs 'not running'.\n  - N5: statusDaemon removes an unreachable namespaced daemon.json.\n  - N6: stopDaemon on a healthy namespaced record sends no non-zero signal, keeps daemon.json byte-identical, writes no daemon.stop and sets exitCode 1.\n  - N7: stopDaemon on an unreachable namespaced record sends no signal and removes daemon.json.\n  - N8: existingDaemonBlocksStart returns true and keeps the file for a healthy namespaced record. It returns false and removes the file for an unreachable one (a restarted container starts).\n  - N9: a record carrying the reader's own namespace (readlink stubbed to 'pid:[7]', record 'pid:[7]') with a dead pid keeps today's results: validate gives 'pid not alive', and statusDaemon removes it.\n\npackages/moe-daemon/src/commands/doctor.test.ts: add a new describe 'runDoctor — daemon.json from another pid namespace (task-da89f620)'. Import only runDoctor, as the F block does. Copy or hoist the F-series' healthServer, unusedPort and DEAD_PID. Cases:\n  - D1: a namespaced record with a dead pid whose /health answers for this project on 127.0.0.1. The daemon.json line is [OK], naming 'another pid namespace' and 127.0.0.1:<port>, with no 'not running' or 'stale'. The reachability line is [OK], and exitCode is 0.\n  - D2: a namespaced record whose port answers nothing. The daemon.json line is [WARN], naming 'another pid namespace' and ending '(stale)'.\n  - D3: a record without the field and with a dead pid keeps '[WARN] daemon.json: daemon.json present but pid <DEAD_PID> not running (stale)'.\n\nRED check (DoD 1), in the same snapshot:\n- Restore `git show 2037e856:<path>` for types/schema.ts, server/probeHost.ts, index.ts and commands/doctor.ts.\n- Run `npx vitest run src/index.test.ts src/commands/doctor.test.ts -t 'pid namespace'`.\n- Expect N1-N8 and D1-D2 to fail and N9 and D3 to pass. Put the counts in complete_step's note.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/index.test.ts",
         "packages/moe-daemon/src/commands/doctor.test.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T12:30:55.865Z"
     },
     {
       "stepId": "step-5",
@@ -101,12 +107,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:00.640Z",
-  "updatedAt": "2026-11-04T12:29:52.637Z",
+  "updatedAt": "2026-11-04T12:30:55.865Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:14:58.170Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -121,7 +127,8 @@
   ],
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:25:10.917Z",

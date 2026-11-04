@@ -95,8 +95,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -112,7 +112,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:06:21.135Z",
-  "updatedAt": "2026-11-04T12:28:59.600Z",
+  "updatedAt": "2026-11-04T12:31:52.624Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:57.567Z",
@@ -223,11 +223,47 @@
   "planApprovedAt": "2026-11-04T11:23:55.680Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-cd0ac706@2026-11-04T10:57:08Z",
-    "at": "2026-11-04T11:24:51.366Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T11:42:47Z",
+    "at": "2026-11-04T12:31:52.624Z"
   },
-  "workStartedAt": "2026-11-04T11:44:17.913Z"
+  "workStartedAt": "2026-11-04T11:44:17.913Z",
+  "reviewStartedAt": "2026-11-04T12:30:58.011Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass\" && bash -n scripts/moe-agent.sh && $P -Command \"\\$e=\\$null;[void][Management.Automation.Language.Parser]::ParseFile('$(wslpath -w scripts/moe-agent.ps1)',[ref]\\$null,[ref]\\$e);exit \\$e.Count\" && [ \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d ' \\n')\" = efbbbf ] && env $E bash scripts/tests/parity-check.sh && $P -File \"$(wslpath -w scripts/tests/parity-check.ps1)\" && $P -File \"$(wslpath -w scripts/tests/importee-guard.ps1)\" && echo C1-OK && cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && env $E node --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs && env $E \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs && echo C2-OK && cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && L=/mnt/d/moe-scratch/cd38-vmr && mkdir -p \"$L\" && T=\"env $E MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC\" && V=\"$(wslpath -w scripts/tests/postflight-vm-route.ps1)\" && $T bash scripts/tests/postflight-vm-route.sh > \"$L/after-sh.log\" 2>&1 && $T powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$V\" > \"$L/after-51.log\" 2>&1 && $T pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$V\" > \"$L/after-7.log\" 2>&1 && for t in sh 51 7; do tr -d '\\0\\r' < \"$L/after-$t.log\" | grep -E '^(\\[vm route\\] T-legacy usage receipt: |PASS postflight-vm-route)'; done && echo C3-OK && cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && L=/mnt/d/moe-scratch/cd38-vmr && B=$(mktemp -d /mnt/d/moe-scratch/cd38-base.XXXXXX) && mkdir -p \"$B/packages/moe-daemon/src/state\" && cp -r scripts \"$B/\" && cp packages/moe-daemon/src/state/validators.ts \"$B/packages/moe-daemon/src/state/\" && R=${BASE_REV:-$(git merge-base HEAD refs/heads/moe/work-2026-10-24)} && git show \"$R:scripts/moe-agent.sh\" > \"$B/scripts/moe-agent.sh\" && git show \"$R:scripts/moe-agent.ps1\" > \"$B/scripts/moe-agent.ps1\" && T=\"env $E MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC\" && { $T bash \"$B/scripts/tests/postflight-vm-route.sh\" > \"$L/before-sh.log\" 2>&1; $T powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$B/scripts/tests/postflight-vm-route.ps1\")\" > \"$L/before-51.log\" 2>&1; true; } && echo \"C4a-OK base=$R snapshot=$B\" && L=/mnt/d/moe-scratch/cd38-vmr && ( k(){ tr -d '\\0\\r' < \"$L/$1-$2.log\" | grep '^\\[vm route\\] T-legacy usage receipt: '; }; for t in sh 51; do [ -n \"$(k after $t)\" ] && [ \"$(k before $t)\" = \"$(k after $t)\" ] && tr -d '\\0\\r' < \"$L/before-$t.log\" | grep -q 'the CLI env carries MOE_USAGE_RECEIPT_FILE' && echo \"$t: receipt unchanged before/after; base launcher RED\" || exit 1; done ) && echo C4b-OK",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nPASS parity-check.ps1\nimportee-guard.ps1: 53 passed, 0 failed\nC1-OK   (bash -n ok; ParseFile 0 errors; ps1 BOM efbbbf)\n[WSL node] ℹ tests 41 ℹ pass 39 ℹ fail 0 ℹ skipped 2\n[Windows node.exe] ℹ tests 129 ℹ pass 129 ℹ fail 0 ℹ skipped 0\nC2-OK\n[vm route] T-legacy usage receipt: {\"version\":1,\"timestamp\":\"<ts>\",\"provider\":\"claude\",\"taskId\":\"task-postflight\",\"workerId\":\"worker-vmr\",\"role\":\"worker\",\"attemptId\":\"attempt-postflight\",\"launchId\":\"<launch>\",...,\"launchMode\":\"headless\",...,\"coverage\":\"pending\",...} | {...same launchId <launch>...,\"coverage\":\"missing\",\"outcome\":\"unknown\",...}\nPASS postflight-vm-route.sh\n[vm route] T-legacy usage receipt: (identical line)\nPASS postflight-vm-route.ps1   (Windows PowerShell 5.1)\n[vm route] T-legacy usage receipt: (identical line)\nPASS postflight-vm-route.ps1   (pwsh 7)\nC3-OK\nC4a-OK base=500e3f29e6ad30438376ce6f702093b85c95cb11 snapshot=/mnt/d/moe-scratch/cd38-base.ioBpn4\nsh: receipt unchanged before/after; base launcher RED\n51: receipt unchanged before/after; base launcher RED\nC4b-OK\nCHAIN_EXIT=0\n(the receipt line is byte-identical in all 5 logs: before-sh, before-51, after-sh, after-51, after-7; base logs end 'VM ROUTE FAILED (T-legacy): the CLI env carries MOE_USAGE_RECEIPT_FILE'. Full output: /mnt/d/moe-scratch/cd38-chain.out, 14:27 local, after the last edit at 14:05. QA re-run from the landed tree: BASE_REV=<completion>^)",
+    "reportedAt": "2026-11-04T12:30:58.011Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/usage-launcher.test.mjs",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "completionSummary": "The usage receipt pair (MOE_USAGE_RECEIPT_FILE, MOE_USAGE_CONTEXT_JSON) is no longer exported. Only the wrapper's own usage helpers get it, per call. 5 files, +144/-47, net 97.\n- moe-agent.sh: start_moe_usage_receipt keeps the pair in UNEXPORTED USAGE_RECEIPT_FILE/USAGE_RECEIPT_CONTEXT. It passes inline MOE_USAGE_* prefixes to usage-start, codex-stream and both claude-stream pipelines; usage-session.mjs gets only the context. The loop-top unset clears all four.\n- moe-agent.ps1: $script:MoeUsageReceiptFile/$script:MoeUsageContextJson. The new Invoke-MoeUsageHelper sets $env: around a single call and clears it in finally. It wraps usage-start, the claude result branch and the claude finally fallback. The codex -Begin block gets the pair via $psi.EnvironmentVariables (no else; anchors byte-identical). BOM kept.\n- usage-launcher.test.mjs: the fake CLI records its env and spawns prompt-cache.mjs usage-start as its own child. The headless claude/codex tests assert the CLI env has neither key, with still exactly 2 rows. A new interactive-claude test per engine. A CHILD_ENV probe in 'fresh'.\n- postflight-vm-route.{sh,ps1} T-legacy: print the masked receipt, assert pending+missing with one launchId and identity fields, and fail 'the CLI env carries <KEY>' on the base. The sh uuid mask in vmr_normalized is removed: measured unneeded once the pair left the CLI env.\nRED on 500e3f29 launchers: WSL 6/10 fail, Windows 18/30 (6 per engine on PS 5.1, pwsh 7 and Git Bash). Without the env asserts the base writes 3 rows instead of 2 (interactive: 2 instead of 1).\nGREEN: C1 parity sh+ps1 PASS, importee-guard 53/0, bash -n + ParseFile 0, BOM. C2 WSL 41/39/0/2skip and Windows 129/129. C3 vm-route PASS sh, PS 5.1 and pwsh 7. C4b: the receipt is unchanged before/after for sh and 5.1, and the base is RED. qualityGate (parity-check.sh && npm run lint) rc 0.",
+  "commits": [
+    {
+      "sha": "4c7d6464b92acac046e5933d546f6b9ade17c3e0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T11:42:47Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/usage-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T12:31:52.624Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

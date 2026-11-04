@@ -51,18 +51,24 @@
     {
       "stepId": "step-3",
       "description": "Run the one verification command, executionContract.checkRefs[0], verbatim and fresh from your task worktree root after step 2. It runs postflight-vm-route.ps1 on powershell.exe (5.1) and then on pwsh.exe (7), then parity-check.sh, then the BOM test, and ends with BBD7_GATE_OK.\n\nHow to run it:\n- It is long. Put the command in a scratch script at /mnt/d/moe-scratch/bbd7/gate.sh (a shell write outside the checkout is fine).\n- Start it with nohup, logging to /mnt/d/moe-scratch/bbd7/gate.log, record its PID $P, and poll with `until ! kill -0 $P || [ $SECONDS -ge 540 ]` loops (mem:gotcha-qa-ps1-postflight-from-wsl).\n- Read 5.1 output through `tr -d '\\0'`.\n\nPass: exit 0, two 'PASS postflight-vm-route.ps1' lines, each after a '[seat outage] ok' line, the parity OK, and BBD7_GATE_OK. The log's tail is complete_task's outputTail.\n\nOn a failure:\n- Read the actual line: grepping 'FAIL' also matches 'FAILED' scenario names.\n- If the failure is outside this task's rows, rerun the same harness on the base revision's scripts before blaming the change: `git archive $(git merge-base HEAD moe/work-2026-10-24) scripts | tar -x -C /mnt/d/moe-scratch/bbd7/base`.\n- Report it rather than editing other rows.\n\nThis is the narrow mid-epic test gate. The change is inert unless $script:MoeVmRoute is set, and full postflight.ps1 regression belongs to the epic's final task (task-ced85748). Never run npm build, install or test in the shared checkout.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T12:17:52.934Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Gate (checkRefs[0] verbatim via /mnt/d/moe-scratch/bbd7/gate.sh): EXIT=0. PASS postflight-vm-route.ps1 on powershell.exe 5.1 and pwsh.exe 7, each after '[seat outage] ok VR-outage'; PASS parity-check.sh; BOM test; BBD7_GATE_OK. Log /mnt/d/moe-scratch/bbd7/gate.log. First gate attempt (gate-1.log) failed in the in-process block case 'sent' (chat_send args): my stub's declared param $Args read as the automatic array; fixed in the harness stub with [Alias('Args')]$RpcArgs (the repo idiom from taskless-binding-notice.test.mjs). No wrapper change involved.",
+      "startedAt": "2026-11-04T12:17:52.934Z",
+      "completedAt": "2026-11-04T12:31:51.200Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (skill adversarial-self-review), then moe.complete_task with step 3's evidence. If this step changes any byte, re-run step 3 first.\n\n1. Scope:\n   - `git diff --stat` shows exactly these 2 files.\n   - `git diff -U0 -- scripts/moe-agent.ps1` is ONE hunk of added lines only (none removed or reflowed), right after the Invoke-MoeVerifiedLocalGate call.\n   - `git diff -U0 -- scripts/tests/postflight-vm-route.ps1` is the init line, the two Invoke-VmrRow lines and the [seat outage] section. The VR-taskless row, [seat reload] and every existing ok/PASS line are unchanged.\n2. Strings: the ps1 line and the #general text equal the sh twin's in scripts/moe-agent.sh (grep 'never the host CLI'), apart from interpolation syntax.\n3. Encoding:\n   - moe-agent.ps1 starts with ef bb bf.\n   - `LC_ALL=C grep -nP '[^\\x00-\\x7F]' scripts/tests/postflight-vm-route.ps1` prints nothing.\n   - Neither file gained a CR (`grep -c $'\\r'` is 0 for both).\n4. Attack the fix:\n   - A gate refusal exits before the block.\n   - A capacity wait ends before the block, so it runs only once the seat VM exists.\n   - A task held through the outage: HeldTaskId is cleared, so the marked claim resumes it (alreadyAssigned) on the VM route, as in sh.\n   - A hot reload re-runs the script's initializers, so nothing carries over.\n   - A later VM job that fast-fails three times: the streak counts from 0, with one escalation and no outage (62ec51f1's design).\n   - A legacy seat: MoeVmRoute stays false, so the block is inert.\n   - Concurrency: the wrapper is single-threaded, and the block runs once per iteration at most.\n5. Attack the test:\n   - The step 1 RED log stopped at 'printed MOE_LAUNCH_PROBE'.\n   - Mentally delete each of the six resets, and the `if ($generalChannelId)` guard, and confirm the in-process check throws for each.\n   - The finally restores every env var, VmrLoop, VmrCommand and VmrTimeoutSec, so [seat waits], [seat reload] and the T-legacy rows ran unchanged in step 3.\n6. No role doc changed, so the landing qualityGate's lint part is unaffected, and parity passed in step 3.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T12:31:51.770Z"
     }
   ],
   "planRevision": 2,
@@ -102,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:53:40.368Z",
-  "updatedAt": "2026-11-04T12:17:52.934Z",
+  "updatedAt": "2026-11-04T12:31:51.770Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:51.016Z",
@@ -112,7 +118,7 @@
     "firstClaimAt": "2026-11-04T10:57:08.677Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -124,7 +130,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T11:18:23.472Z",
