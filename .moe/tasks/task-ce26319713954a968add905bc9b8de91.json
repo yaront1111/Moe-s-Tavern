@@ -9,10 +9,51 @@
     "`git diff --stat` for the task names only scripts/tests/importee-guard-bash.test.mjs. The case still asserts that the witness file holds exactly ['plain.txt'] and that each of the 3 refused raw paths has its WARN line."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2a219562",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fold CRLF before the two assertions of the one failing test. This is a test-only change. Write it with your Edit tool (global rail: a sed/heredoc write leaves no TOOL witness). The file is scripts/tests/importee-guard-bash.test.mjs, test 'Bash stream parser refuses a tool path holding a control character, forging no second witness line' (:298-326).\n(a) Right after `assert.equal(run.status, 0, run.stderr);` (:319), add exactly:\n    // Windows Python writes both in text mode (CRLF). Fold only CRLF pairs, so a lone CR in a raw path must still match.\n    const lf = text => text.replaceAll('\\r\\n', '\\n');\n(b) Line :321 becomes `assert.deepEqual(lf(readFileSync(tools, 'utf8')).split('\\n').filter(Boolean), ['plain.txt']);`\n(c) Line :323 becomes `assert.ok(lf(run.stdout).includes(`  [WARN] tool write outside the repo not harvested: ${raw}\\n`), run.stdout);`\nThe net diff is +4/-2. Keep everything else byte for byte: the `calls` table (the 3 refused raws, i.e. the Edit LF raw, the Write lone-CR raw and the Serena LF raw, plus plain.txt), the expected ['plain.txt'], the expected WARN template, the existing 'not vacuous' comment, `python` at :12, and every other test.\nWhy fold only CRLF pairs:\n- STREAM_JSON_PARSER writes its WARN lines with sys.stdout.write (scripts/moe-agent.sh:11922) and the witness file with open(harvest_path, 'a', encoding='utf-8') (:11925). Both are text mode, so Windows Python turns every LF into CRLF, including the LF inside a refused raw path. A lone CR passes through unchanged.\n- Production's reader (:4515-4517, rstrip('\\n').rstrip('\\r')) already accepts CRLF.\n- A lone CR is the forging vector the Write case covers. Never fold a lone CR (no /\\r/g, no split(/\\r|\\n/)), and never normalize the expected side. Either one makes the Write check unmatchable or vacuous.\nDo NOT edit scripts/moe-agent.sh, scripts/moe-agent.ps1 or scripts/tests/importee-guard.ps1. The ps1 twin passed 53/53 on PS 5.1 and 7 in hunt #22.\nError handling: no new IO or process is added. A failed parser run still surfaces first through `assert.equal(run.status, 0, run.stderr)`, and `lf` only takes strings the test has already read.\nRED at the base is already recorded, so you need not re-run it. At 566778a0, Windows node gave 41 tests / 40 pass / 1 fail at :321 with actual ['plain.txt\\r']; Linux node gave 41/41.\nThis file executes the real parser text cut out of moe-agent.sh: mem:gotcha-wrapper-slice-tests-execute-text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ],
+      "startedAt": "2026-11-04T10:45:02.689Z",
+      "completedAt": "2026-11-04T10:45:11.291Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification: run this gate ONCE, from your task worktree, exactly as written. It builds its own git-archive snapshot of scripts and docs under /mnt/d/moe-scratch, copies your edited test file into it, and runs no test inside the checkout (global rail). Gate:\n( set -eo pipefail; R=$(git rev-parse --show-toplevel); S=$(mktemp -d /mnt/d/moe-scratch/gate-ce263197.XXXXXX); git -C \"$R\" archive HEAD scripts docs | tar -x -C \"$S\"; cp \"$R/scripts/tests/importee-guard-bash.test.mjs\" \"$S/scripts/tests/\"; cd \"$S\"; echo \"snapshot=$S\"; F=scripts/tests/importee-guard-bash.test.mjs; N=\"/mnt/c/Program Files/nodejs/node.exe\"; set +e; \"$N\" --test \"$F\" > win.txt 2>&1; w=$?; env -i HOME=\"$HOME\" PATH=\"$PATH\" node --test \"$F\" > lin.txt 2>&1; l=$?; \"$N\" --test \"$F\" scripts/tests/hook-isolation-bash.test.mjs scripts/tests/postflight-safe.test.mjs > step.txt 2>&1; s=$?; grep -H -E \"^ℹ (tests|pass|fail) \" win.txt lin.txt step.txt; awk '/^ℹ tests /{n=$3} END{exit !(n>=41)}' win.txt && awk '/^ℹ tests /{n=$3} END{exit !(n>=41)}' lin.txt; c=$?; echo \"exit win=$w lin=$l step=$s count=$c\"; [ \"$w$l$s$c\" = 0000 ] )\nExpected result:\n- The gate prints `exit win=0 lin=0 step=0 count=0` and exits 0.\n- Windows node and Linux node each report tests 41 (at least 41) and fail 0 (DoD 1 and 2).\n- The whole CI step (ci.yml:289-290, all three files) under Windows node reports tests 64, fail 0. It was 64 tests / 63 pass / 1 fail at 566778a0.\nSubmit this output as the verification evidence for complete_task.\nDoD 3, run in the worktree: `git diff --stat HEAD && [ \"$(git diff --name-only HEAD)\" = scripts/tests/importee-guard-bash.test.mjs ]`. It must list only that file (about +4/-2). QA proves the same on the landed commit with `git show --stat --format= <completion>`.\nThe gate needs a WSL seat because it runs Windows node through /mnt/c. Do not wrap node.exe in env -i: it needs WSL_INTEROP, and it receives only WSLENV vars anyway, so no MOE_* var leaks in. The Linux leg runs under env -i so the seat's MOE_* env cannot leak in. If either path is missing on your seat, call moe.report_blocked instead of substituting another engine.\nError handling: if a leg fails, read win.txt, lin.txt and step.txt in the printed snapshot before changing anything (mem:gotcha-launcher-ps1-rows-from-wsl, mem:gotcha-git-bash-native-env-conversion-and-function-stubs).\nAfterwards, remove the snapshot by its literal printed path (rm -rf /mnt/d/moe-scratch/gate-ce263197.<suffix>).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ],
+      "startedAt": "2026-11-04T10:45:11.873Z",
+      "completedAt": "2026-11-04T10:48:00.169Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of your diff (final step). Prove the fold kept the case's teeth with three mutants.\n1. Copy the step-2 snapshot three times (cp -r <snapshot> <snapshot>-<mode>; these are scratch copies outside the checkout).\n2. Apply one mutant per copy: node /mnt/d/moe-scratch/arch-ce263197/logs/patch.cjs <mut|mutcr|mutwarn> <copy>. Each mode edits only that copy's scripts/moe-agent.sh, exactly once. If that file is gone, make the same edits by hand in the copy:\n   - mut: `        return None if re.search(r'[\\x00-\\x1f]', rest) else rest` becomes `        return rest`, and `    if not p or re.search(r'[\\x00-\\x1f]', p) or any(` becomes `    if not p or any(`.\n   - mutcr: in the same two lines, `re.search(r'[\\x00-\\x1f]', X)` becomes `'\\n' in X`.\n   - mutwarn: `            w('  [WARN] tool write outside the repo not harvested: %s\\n' % raw)` becomes `            pass`.\n3. In each copy, run `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/importee-guard-bash.test.mjs` and `env -i HOME=\"$HOME\" PATH=\"$PATH\" node --test scripts/tests/importee-guard-bash.test.mjs`.\nEvery run must exit 1 with only this case failing:\n- mut (no control-character refusal) fails on a forged 'ok.txt' witness line;\n- mutcr (LF-only refusal) fails on 'a.txt\\rforged.txt';\n- mutwarn (WARN print dropped) fails at the WARN assertion.\nThe architect's runs of these mutants all went red on both engines (TAPs in /mnt/d/moe-scratch/arch-ce263197/logs).\nThen answer each of these:\n- Can lf ever fold a CR that is not followed by LF? It must not.\n- Are the expected strings and the calls table unchanged?\n- Is the diff exactly the one file?\n- Can two runs collide? No: each test makes its own mkdtemp scratch.\nIf this review changes the file, re-run the step-2 gate and submit that fresh output to complete_task.\nRemove the mutant copies by literal path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ],
+      "note": "Mutants mut/mutcr/mutwarn each failed only this case on Windows and Linux node. lf folds only CRLF pairs; expected strings and calls table unchanged; diff is the one file (+4/-2).",
+      "startedAt": "2026-11-04T10:48:00.505Z",
+      "completedAt": "2026-11-04T10:48:04.007Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +65,124 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T10:28:38.657Z",
-  "updatedAt": "2026-11-04T10:28:54.239Z",
+  "updatedAt": "2026-11-04T10:49:24.777Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T10:28:40.271Z"
+    "firstClaimAt": "2026-11-04T10:28:40.271Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-2a219562"
-  ]
+    "architect-2a219562",
+    "worker-593560ee"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T10:43:47.625Z",
+  "executionContract": {
+    "intendedBehavior": "Under Windows node, the importee-guard-bash case 'Bash stream parser refuses a tool path holding a control character, forging no second witness line' passes. It folds CRLF pairs to LF in the witness-file text and in the parser's stdout before its existing assertions, so text-mode CRLF from Windows Python no longer fails it. It still asserts that the witness file holds exactly ['plain.txt'] and that each of the 3 refused raw paths gets its WARN line. Linux behavior is unchanged, and so is production code.",
+    "acceptanceCriteria": [
+      "Windows node, run from a git-archive snapshot of scripts and docs outside the shared checkout: scripts/tests/importee-guard-bash.test.mjs reports at least 41 tests, fail 0.",
+      "Linux node, same snapshot: the same file reports fail 0 (41 tests at 566778a0).",
+      "Windows node, same snapshot: CI's 'Test Bash landing and postflight runner' step files (importee-guard-bash, hook-isolation-bash, postflight-safe) report fail 0 (64 tests at 566778a0).",
+      "The task's diff names only scripts/tests/importee-guard-bash.test.mjs.",
+      "Mutants of the snapshot's STREAM_JSON_PARSER (no control-character refusal; LF-only refusal; WARN print dropped) each turn this case red under both Windows node and Linux node."
+    ],
+    "invariants": [
+      "Only CRLF pairs fold. A lone CR (the Write case's raw path) survives and must still match.",
+      "The expected side is unchanged: ['plain.txt'] and `  [WARN] tool write outside the repo not harvested: ${raw}\\n`.",
+      "The calls table, the python/python3 choice at :12, and every other test in the file are unchanged.",
+      "scripts/moe-agent.sh (STREAM_JSON_PARSER and the resolve_attribution reader), scripts/moe-agent.ps1 and scripts/tests/importee-guard.ps1 are unchanged."
+    ],
+    "compatibility": [
+      "Test-only. CI's ubuntu-latest, macos-latest and windows-latest legs all run this step (ci.yml:289-290, no OS condition). Each must stay green."
+    ],
+    "approvedScope": [
+      "The single test case at scripts/tests/importee-guard-bash.test.mjs:298-326: a local `lf` arrow (text => text.replaceAll('\\r\\n', '\\n')) plus a one-line why-comment, applied to the witness-file read (:321) and to run.stdout in the WARN loop (:323)."
+    ],
+    "reuse": [
+      "String.prototype.replaceAll in a local arrow. The task's fix direction confirms production's reader (moe-agent.sh:4515-4517) already accepts CRLF, so the parser and wrapper stay as they are."
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/importee-guard-bash.test.mjs:11 cuts STREAM_JSON_PARSER out of scripts/moe-agent.sh, and :12 runs it with `python` on win32.",
+      "scripts/moe-agent.sh:11922 prints the WARN through w() (sys.stdout.write), and :11925 appends the witness via open(harvest_path, 'a', encoding='utf-8'). Both are text mode.",
+      "scripts/moe-agent.sh:11827-11850 to_top_rel refuses [\\x00-\\x1f] in both its absolute and relative branches.",
+      "scripts/moe-agent.sh:4515-4517 reads the TOOL witness with line.rstrip('\\n').rstrip('\\r').",
+      ".github/workflows/ci.yml:289-290 'Test Bash landing and postflight runner' runs importee-guard-bash, hook-isolation-bash and postflight-safe on every OS leg."
+    ],
+    "checkRefs": [
+      "( set -eo pipefail; R=$(git rev-parse --show-toplevel); S=$(mktemp -d /mnt/d/moe-scratch/gate-ce263197.XXXXXX); git -C \"$R\" archive HEAD scripts docs | tar -x -C \"$S\"; cp \"$R/scripts/tests/importee-guard-bash.test.mjs\" \"$S/scripts/tests/\"; cd \"$S\"; echo \"snapshot=$S\"; F=scripts/tests/importee-guard-bash.test.mjs; N=\"/mnt/c/Program Files/nodejs/node.exe\"; set +e; \"$N\" --test \"$F\" > win.txt 2>&1; w=$?; env -i HOME=\"$HOME\" PATH=\"$PATH\" node --test \"$F\" > lin.txt 2>&1; l=$?; \"$N\" --test \"$F\" scripts/tests/hook-isolation-bash.test.mjs scripts/tests/postflight-safe.test.mjs > step.txt 2>&1; s=$?; grep -H -E \"^ℹ (tests|pass|fail) \" win.txt lin.txt step.txt; awk '/^ℹ tests /{n=$3} END{exit !(n>=41)}' win.txt && awk '/^ℹ tests /{n=$3} END{exit !(n>=41)}' lin.txt; c=$?; echo \"exit win=$w lin=$l step=$s count=$c\"; [ \"$w$l$s$c\" = 0000 ] )",
+      "git diff --stat HEAD && [ \"$(git diff --name-only HEAD)\" = scripts/tests/importee-guard-bash.test.mjs ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Fix the parser instead (newline='\\n' on the witness file, binary stdout). Rejected: production is correct, because moe-agent.sh:4515-4517 strips CR. The task's fix direction is test-only, and touching STREAM_JSON_PARSER would drag in its ps1 twin and the parity check.\n2) The hunt's fixcheck form: .split(/\\r?\\n/) for the file and run.stdout.replaceAll('\\r\\n','\\n') for stdout. It is equivalent and was also verified 41/41 on both engines. I chose one `lf` fold for both reads so one comment explains both.\n3) Fold every CR (split(/\\r\\n|\\r|\\n/), replace(/\\r/g,'')). Rejected: on stdout it makes the Write case's expected `${raw}\\n`, which holds a lone CR, unmatchable. Applied to both sides, it would hide a lone-CR regression.\n4) Skip the case on win32. Rejected: the Windows leg is exactly what CI runs, and the case passes there once folded.",
+    "codebaseInsights": "The test executes the real STREAM_JSON_PARSER text cut out of scripts/moe-agent.sh, so a parser regression shows up here. Windows Python's text mode writes each LF as CRLF and leaves a lone CR alone; Node reads both as-is. From WSL, /mnt/c/Program Files/nodejs/node.exe gets only WSLENV vars and resolves the Windows `python` (3.14 on this host).\nArchitect measurements at 566778a0, in a git-archive snapshot of scripts+docs under /mnt/d/moe-scratch:\n- Windows node, this file: 41 tests / 40 pass / 1 fail (this case, :321, actual ['plain.txt\\r']). Linux node: 41/41.\n- The whole CI step: Windows 64/63/1 in 21 s; Linux 64/64 in 3 s.\n- With the planned fix: 41/41 on both engines, and the CI step 64/64 on Windows.\n- Mutants mut, mutcr and mutwarn each turned the case red on both engines. Logs and patch.cjs are in /mnt/d/moe-scratch/arch-ce263197/logs.\nepic-be924fb8 has no finalTaskId, so this row's isEpicFinal:true comes from the max-order fallback in a rolling bug bucket. The gate is therefore scoped to the one CI step this row repairs, not to a whole-epic sweep.",
+    "risks": "(1) Weakening the case: folding a lone CR, or normalizing the expected side, makes the lone-CR Write check vacuous. The mutcr mutant catches this.\n(2) Running node --test in the shared checkout or the worktree instead of the snapshot. The gate builds its own snapshot, so run it as written.\n(3) Shell-writing the test file (sed/heredoc) leaves no TOOL witness. Use the Edit tool.\n(4) env -i on node.exe drops WSL_INTEROP, which is why the gate uses env -i only on the Linux leg.\n(5) The gate needs /mnt/d/moe-scratch and /mnt/c/Program Files/nodejs/node.exe, i.e. a WSL seat. Without them, block; never substitute another engine, because the DoD names Windows node.\n(6) Leave the ps1 twin (importee-guard.ps1) and both launchers alone.",
+    "keyFiles": [
+      "scripts/tests/importee-guard-bash.test.mjs:298-326 (the case), :11-12 (parser cut, python choice)",
+      "scripts/moe-agent.sh:11767-11930 (STREAM_JSON_PARSER: to_top_rel :11827-11850, WARN print :11922, witness append :11925)",
+      "scripts/moe-agent.sh:4515-4517 (resolve_attribution's CRLF-tolerant TOOL reader)",
+      ".github/workflows/ci.yml:289-290 (the CI step)",
+      "/mnt/d/moe-scratch/arch-ce263197/logs (architect RED/GREEN/mutant TAPs and patch.cjs)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7811de419e26925bac1f38827748e797fad48f3b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T10:43:47.664Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T10:45:02.689Z",
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T10:44:03Z",
+    "at": "2026-11-04T10:49:24.777Z"
+  },
+  "reviewStartedAt": "2026-11-04T10:48:07.063Z",
+  "verification": {
+    "command": "snapshot gate: git archive HEAD scripts docs + edited test; Windows node --test importee-guard-bash.test.mjs; Linux node same; Windows node with hook-isolation-bash and postflight-safe",
+    "exitCode": 0,
+    "outputTail": "win.txt: tests 41 pass 41 fail 0\nlin.txt: tests 41 pass 41 fail 0\nstep.txt: tests 64 pass 64 fail 0\nexit win=0 lin=0 step=0 count=0\ngit diff --stat: scripts/tests/importee-guard-bash.test.mjs | 6 ++++--, 4 insertions(+), 2 deletions(-)",
+    "reportedAt": "2026-11-04T10:48:07.063Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/importee-guard-bash.test.mjs"
+  ],
+  "completionSummary": "Test-only: importee-guard-bash control-character case folds CRLF pairs to LF (local lf arrow) before the witness-file and WARN-stdout assertions, so Windows Python text-mode CRLF no longer fails it. Lone CR still survives. Windows and Linux node both 41/41; CI step files 64/64 on Windows; three parser mutants still turn the case red on both engines.",
+  "commits": [
+    {
+      "sha": "2e48186b7f0c66b7017a3491d76eb561687015e4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T10:44:03Z",
+      "paths": [
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T10:49:24.411Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
