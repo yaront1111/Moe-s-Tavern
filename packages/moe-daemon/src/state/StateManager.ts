@@ -1063,11 +1063,14 @@ export class StateManager {
 
       this.epics = loadEntities<Epic>(path.join(this.moePath, 'epics'));
       this.tasks = loadEntities<Task>(path.join(this.moePath, 'tasks'));
-      // Backfill priority and comments for existing tasks
+      // Backfill priority, comments and reopenCount for existing tasks
       for (const [id, task] of this.tasks) {
         const updates: Partial<Task> = {};
         if (!task.priority) updates.priority = 'MEDIUM' as TaskPriority;
         if (!Array.isArray(task.comments)) updates.comments = [];
+        // A file written before reopenCount existed has no key or null: default it as
+        // createTask does (taskStore.ts:338) so every reopen path's `reopenCount + 1` stays a number.
+        if (!Number.isInteger(task.reopenCount) || task.reopenCount < 0) updates.reopenCount = 0;
         if (task.contextFetchedBy !== undefined && !Array.isArray(task.contextFetchedBy)) {
           updates.contextFetchedBy = [];
         }
