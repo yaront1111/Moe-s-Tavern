@@ -35,12 +35,14 @@ check_command() {
 check_node_version() {
     if command -v node &> /dev/null; then
         local version=$(node -v | sed 's/v//')
-        local major=$(echo "$version" | cut -d. -f1)
-        if [ "$major" -ge 18 ]; then
-            echo -e "${GREEN}[OK]${NC} Node.js version $version (>= 18 required)"
+        # Floor matches packages/moe-daemon/package.json engines (>=22.22.0).
+        # An unparseable version fails here, so no non-number reaches a numeric test.
+        if [[ "$version" =~ ^([0-9]+)\.([0-9]+) ]] &&
+           { [ "${BASH_REMATCH[1]}" -gt 22 ] || { [ "${BASH_REMATCH[1]}" -eq 22 ] && [ "${BASH_REMATCH[2]}" -ge 22 ]; }; }; then
+            echo -e "${GREEN}[OK]${NC} Node.js version $version (>= 22.22 required)"
             return 0
         else
-            echo -e "${RED}[ERROR]${NC} Node.js version $version is too old. Requires >= 18"
+            echo -e "${RED}[ERROR]${NC} Node.js version $version is too old. Requires >= 22.22 (24 LTS recommended)"
             echo -e "    ${YELLOW}Update:${NC} brew upgrade node"
             return 1
         fi

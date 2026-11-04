@@ -151,6 +151,42 @@ for (const version of ['v22.22.0', 'v22.23.1', 'v24.0.0', 'v26.0.0']) {
   });
 }
 
+// doctor.sh runs top to bottom, so assert on its Node.js line only (other checks depend on the host).
+const doctor = fileURLToPath(new URL('../doctor.sh', import.meta.url));
+function doctorNodeLine(t, version) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe doctor test '));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'bin'));
+  fs.mkdirSync(path.join(dir, 'home'));
+  fs.writeFileSync(path.join(dir, 'bin', 'node'), `#!/bin/bash\necho '${version}'\n`, { mode: 0o755 });
+  const result = spawnSync(bash, [shellPath(doctor)], {
+    encoding: 'utf8', timeout: 45000,
+    env: { ...process.env, HOME: shellPath(path.join(dir, 'home')), PATH: `${shellPath(path.join(dir, 'bin'))}:/usr/bin:/bin` },
+  });
+  const out = result.stdout.replace(/\x1b\[[0-9;]*m/g, '');
+  return { line: out.split('\n').find(l => l.includes('Node.js version')), stderr: result.stderr };
+}
+
+for (const version of ['v18.20.0', 'v20.11.0', 'v22.21.1']) {
+  test(`doctor rejects Node ${version} below the 22.22 floor`, t => {
+    const { line } = doctorNodeLine(t, version);
+    assert.equal(line, `[ERROR] Node.js version ${version.slice(1)} is too old. Requires >= 22.22 (24 LTS recommended)`);
+  });
+}
+
+for (const version of ['v22.22.0', 'v23.1.0', 'v24.0.0', 'v26.0.0']) {
+  test(`doctor accepts Node ${version}`, t => {
+    const { line } = doctorNodeLine(t, version);
+    assert.equal(line, `[OK] Node.js version ${version.slice(1)} (>= 22.22 required)`);
+  });
+}
+
+test('doctor fails an unparseable Node version without a numeric-test error', t => {
+  const { line, stderr } = doctorNodeLine(t, 'vX');
+  assert.match(line, /^\[ERROR\] Node\.js version X is too old/);
+  assert.doesNotMatch(stderr, /integer expression expected/);
+});
+
 for (const blocked of ['.local', '.local/share/moe/env.sh', '.profile']) {
   test(`environment persistence stops when ${blocked} cannot be written`, t => {
     const dir = fixture(t);

@@ -14,7 +14,7 @@ Please read and follow our [Code of Conduct](CODE_OF_CONDUCT.md). We expect all 
 
 | Tool | Version | Download |
 |------|---------|----------|
-| Node.js | 18+ | [nodejs.org](https://nodejs.org/) |
+| Node.js | 22.22+ (24 LTS recommended) | [nodejs.org](https://nodejs.org/) |
 | JDK | 17+ | [adoptium.net](https://adoptium.net/) |
 | IntelliJ IDEA | 2023.1+ | [jetbrains.com](https://www.jetbrains.com/idea/) |
 | Git | Latest | [git-scm.com](https://git-scm.com/) |

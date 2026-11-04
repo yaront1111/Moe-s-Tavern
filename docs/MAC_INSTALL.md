@@ -8,7 +8,7 @@ Complete installation guide for Moe's Tavern on macOS (Intel and Apple Silicon).
 
 ### Prerequisites
 
-- **Node.js 18+**: `brew install node`
+- **Node.js 22.22+** (24 LTS recommended): `brew install node`
 - **Git**: `brew install git`
 - **JDK 17+** (optional, for plugin): `brew install openjdk@17`
 

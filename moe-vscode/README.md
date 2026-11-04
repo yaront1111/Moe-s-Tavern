@@ -21,7 +21,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 
 ## Requirements
 
-- Node.js 18+ on PATH (the extension bundles the Moe daemon and MCP proxy and starts them for you)
+- Node.js 22.22+ on PATH (24 LTS recommended; the extension bundles the Moe daemon and MCP proxy and starts them for you)
 - One coding CLI installed and signed in: Claude Code, Codex, Gemini CLI or Grok Build
 
 ## Getting started
