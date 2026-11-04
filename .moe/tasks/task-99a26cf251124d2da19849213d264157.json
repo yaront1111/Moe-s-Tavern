@@ -50,7 +50,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -63,16 +63,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T10:28:23.030Z",
-  "updatedAt": "2026-11-04T10:53:30.001Z",
+  "updatedAt": "2026-11-04T10:57:12.914Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T10:28:26.924Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T10:56:43.641Z",
+    "wallClockMs": 1696717
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-25f21f0a"
   ],
   "tier": "light",
   "effort": "medium",
@@ -147,10 +150,11 @@
   "planApprovedAt": "2026-11-04T10:49:58.276Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T10:50:02Z",
-    "at": "2026-11-04T10:53:30.001Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T10:54:48Z",
+    "at": "2026-11-04T10:57:12.914Z"
   },
   "workStartedAt": "2026-11-04T10:51:01.954Z",
   "reviewStartedAt": "2026-11-04T10:52:17.973Z",
@@ -180,5 +184,9 @@
       "status": "REVIEW"
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T10:56:43.641Z",
+  "reviewCompletedAt": "2026-11-04T10:56:43.641Z",
+  "reviewSummary": "Reviewed completion 500e3f29 (on moe/work-2026-10-24; git show, not the dirty tree). One file, scripts/tests/taskless-handoff.test.mjs, +28/-4, matches the reference patch; moe-agent.ps1/.sh unchanged (git diff --quiet 500e3f29^ 500e3f29 on both). Re-ran checkRefs[0] from a git-archive snapshot under /mnt/d/moe-scratch (removed after): GATE-OK. Windows node.exe, WSLENV empty: 107 tests / 107 pass / 0 fail / 0 skipped, all 6 powershell+pwsh claimed-qa cases ok (35,60,61,66,91,92). Linux node under env -i: 45/45, 0 fail. Mutant (the single `function Test-MoeControlWorktreeMode` line removed, exactly 1 line differs): exit 1, `# fail 1`, only the new guard case fails and its message names Test-MoeControlWorktreeMode. DoD 1-3 verified. Adversarial: the four between() anchors are untouched; psStubs has no `${` or backtick; the stand-in text is on exactly one line (mutant not vacuous); the guard spawns nothing, so it behaves the same on all three CI legs; a null scan is rejected by the non-vacuity assert. Scanned the live slices: they call exactly Initialize-MoeWorktree and Test-MoeControlWorktreeMode (both stubbed) plus the 3 allowlisted names; guards confirmed in moe-agent.ps1: Stop-MoeVerifiedLocalSeat :10424-10425 behind $script:MoeVmRoute (set only at :3241), Invoke-MoeQaControlPreflight/Assert-MoeQaLandedCommit :10430-10432 behind Test-MoeControlWorktreeMode. checkRefs[1] was checked against the commit diff, because the control tree carries unrelated .moe/ edits. Net 24 LOC. Ponytail pass: nothing to cut. Existing tests keep names and assertions; bash setup unchanged.",
+  "requiredCheckAtDone": null
 }
