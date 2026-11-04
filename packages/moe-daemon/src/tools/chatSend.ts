@@ -55,12 +55,13 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
       const channel = state.resolveChannelRef(params.channel);
       if (!channel) throw notFound('Channel', params.channel);
 
-      // Validate replyTo points to a real message in the same channel.
+      // Validate replyTo points to a real message in the same channel, whatever
+      // its age (the whole JSONL, not only getMessages' newest window).
       if (params.replyTo) {
         if (typeof params.replyTo !== 'string') {
           throw invalidInput('replyTo', 'must be a string');
         }
-        if (!state.messageExistsInChannel(channel.id, params.replyTo)) {
+        if (!state.messageExistsAnywhereInChannel(channel.id, params.replyTo)) {
           throw invalidInput('replyTo', `message ${params.replyTo} not found in channel ${params.channel}`);
         }
       }

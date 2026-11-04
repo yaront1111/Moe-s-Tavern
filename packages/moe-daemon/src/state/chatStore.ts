@@ -32,6 +32,7 @@ import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { sanitizeString } from '../util/sanitize.js';
 import { atomicWriteJson } from '../util/atomicWrite.js';
+import { notFound } from '../util/errors.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { parseRawMentions } from '../util/mentionRouter.js';
 import { MAX_CHAT_MESSAGE_BYTES, isSystemFeedMessage } from '../util/chatPayload.js';
@@ -259,6 +260,15 @@ export async function sendMessage(state: StateManager, opts: {
 }
 
 /**
+ * The newest bytes of a channel's JSONL that getMessages reads, and that
+ * messageExistsInChannel checks. The two must agree: see messageExistsInChannel.
+ */
+export const CHAT_READ_WINDOW_BYTES = 1024 * 1024;
+
+/** Chunk size of messageExistsAnywhereInChannel's whole-file scan (exported for its test). */
+export const MESSAGE_SCAN_CHUNK_BYTES = 256 * 1024;
+
+/**
  * Read up to the last `maxBytes` of a JSONL file. Truncates any partial
  * leading line so callers always receive complete JSON records.
  * TODO: replace with a per-channel offset index for true cursor-based reads.
@@ -298,12 +308,12 @@ export async function getMessages(state: StateManager,
   const messagesFile = path.join(state.moePath, 'messages', `${channelId}.jsonl`);
   if (!fs.existsSync(messagesFile)) return [];
 
-  // Bound the read to the last 1 MB of the JSONL file to avoid loading
-  // arbitrarily large channels into memory.
+  // Bound the read to the newest CHAT_READ_WINDOW_BYTES of the JSONL file to
+  // avoid loading arbitrarily large channels into memory.
   // TODO: replace with a per-channel index so old messages remain reachable.
   let raw: string;
   try {
-    raw = readTailJsonl(state, messagesFile, 1024 * 1024);
+    raw = readTailJsonl(state, messagesFile, CHAT_READ_WINDOW_BYTES);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return [];
@@ -350,9 +360,13 @@ export async function getMessages(state: StateManager,
 }
 
 /**
- * Check if a message exists in a channel's JSONL file.
- * Bounded to the last 1 MB — sufficient for recent-message callers
- * (e.g. pinMessage). Older messages cannot be referenced.
+ * Whether a message with this id is in the NEWEST CHAT_READ_WINDOW_BYTES (1 MiB)
+ * of the channel's JSONL: the same window getMessages reads. Bounded on purpose.
+ * chat_read's all-channel mode and chat_wait's catch-up (collectChatBacklog) ask
+ * it whether getMessages can page from an explicit sinceId; an id older than the
+ * window would trip getMessages' expired-cursor fallback and replay the newest
+ * window on every call. A check that must find a message whatever its age
+ * (chat_send's replyTo, pinMessage) uses messageExistsAnywhereInChannel.
  */
 export function messageExistsInChannel(state: StateManager, channelId: string, messageId: string): boolean {
   const messagesFile = path.join(state.moePath, 'messages', `${channelId}.jsonl`);
@@ -360,7 +374,7 @@ export function messageExistsInChannel(state: StateManager, channelId: string, m
 
   let raw: string;
   try {
-    raw = readTailJsonl(state, messagesFile, 1024 * 1024);
+    raw = readTailJsonl(state, messagesFile, CHAT_READ_WINDOW_BYTES);
   } catch {
     return false;
   }
@@ -372,6 +386,62 @@ export function messageExistsInChannel(state: StateManager, channelId: string, m
       if (msg.id === messageId) return true;
     } catch {
       continue;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the channel's JSONL holds a message with this id ANYWHERE in the file,
+ * whatever its age: chat_send's replyTo check and pinMessage. The newest window
+ * is checked first (most references are recent); on a miss the whole file is
+ * read in MESSAGE_SCAN_CHUNK_BYTES chunks, and only a line whose bytes contain
+ * the id as a JSON string is decoded and parsed, so memory stays at one chunk
+ * plus one line (sendMessage caps a line's content at 10 KB). A match is the
+ * line's `id`: the same id in another line's replyTo or content is not one.
+ * A missing file holds nothing; any other read error is thrown, so an
+ * unreadable log never reads as "no such message".
+ */
+export function messageExistsAnywhereInChannel(state: StateManager, channelId: string, messageId: string): boolean {
+  if (messageExistsInChannel(state, channelId, messageId)) return true;
+  const messagesFile = path.join(state.moePath, 'messages', `${channelId}.jsonl`);
+  const needle = Buffer.from(JSON.stringify(messageId), 'utf-8');
+  let fd: number;
+  try {
+    fd = fs.openSync(messagesFile, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  try {
+    const chunk = Buffer.allocUnsafe(MESSAGE_SCAN_CHUNK_BYTES);
+    let carry = Buffer.alloc(0); // the unfinished last line of the bytes read so far
+    for (let position = 0; ;) {
+      const read = fs.readSync(fd, chunk, 0, chunk.length, position);
+      position += read;
+      const data = carry.length > 0 ? Buffer.concat([carry, chunk.subarray(0, read)]) : chunk.subarray(0, read);
+      // Lines end at a 0x0A byte, which never occurs inside a UTF-8 sequence. At
+      // the end of the file the last line needs no newline.
+      const complete = read > 0 ? data.lastIndexOf(0x0a) + 1 : data.length;
+      if (blockHoldsMessage(data.subarray(0, complete), needle, messageId)) return true;
+      if (read === 0) return false;
+      carry = Buffer.from(data.subarray(complete)); // a copy: `chunk` is reused
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Whether a block of whole JSONL lines holds a line whose `id` is messageId. */
+function blockHoldsMessage(block: Buffer, needle: Buffer, messageId: string): boolean {
+  for (let at = block.indexOf(needle); at >= 0; at = block.indexOf(needle, at + needle.length)) {
+    const start = block.lastIndexOf(0x0a, at) + 1;
+    const newline = block.indexOf(0x0a, at);
+    try {
+      const msg = JSON.parse(block.toString('utf-8', start, newline < 0 ? block.length : newline)) as ChatMessage;
+      if (msg?.id === messageId) return true;
+    } catch {
+      // A malformed line holds no message; keep looking.
     }
   }
   return false;
@@ -519,9 +589,10 @@ export async function pinMessage(state: StateManager, channelId: string, message
     const channel = state.channels.get(channelId);
     if (!channel) throw new Error(`Channel not found: ${channelId}`);
 
-    // Validate messageId exists in channel (scans full JSONL, no limit)
-    if (!messageExistsInChannel(state, channelId, messageId)) {
-      throw new Error(`Message not found in channel: ${messageId}`);
+    // Validate messageId exists in the channel, whatever its age: the newest
+    // window first, then the whole JSONL (messageExistsAnywhereInChannel).
+    if (!messageExistsAnywhereInChannel(state, channelId, messageId)) {
+      throw notFound('Message', messageId);
     }
 
     const pins = readPins(state, channelId);

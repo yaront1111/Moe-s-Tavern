@@ -158,6 +158,7 @@ import {
   getPins,
   getUnreadSummary,
   incrementUnread,
+  messageExistsAnywhereInChannel,
   messageExistsInChannel,
   pinMessage,
   postSystemMessage,
@@ -868,6 +869,10 @@ export class StateManager {
 
   messageExistsInChannel(channelId: string, messageId: string): boolean {
     return messageExistsInChannel(this, channelId, messageId);
+  }
+
+  messageExistsAnywhereInChannel(channelId: string, messageId: string): boolean {
+    return messageExistsAnywhereInChannel(this, channelId, messageId);
   }
 
   async postSystemMessage(entityId: string, content: string, opts?: SystemPostOptions): Promise<void> {

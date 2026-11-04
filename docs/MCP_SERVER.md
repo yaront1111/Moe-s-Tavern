@@ -2595,6 +2595,9 @@ Send a chat message to a channel. Parses @mentions and returns routing info.
   message routes only to the seats it mentions other than itself, and to nobody
   while the loop guard has the channel paused. A human message with no mention
   routes to every online seat (not `IDLE` or `DEAD`).
+- `replyTo` must name a message of the same channel, whatever its age: the check
+  reads the newest 1 MiB of the channel's log first, then scans the whole file.
+  An id the channel does not hold is refused `INVALID_INPUT` (`field: replyTo`).
 
 ---
 
@@ -2773,6 +2776,8 @@ Pin a chat message to a channel. Pinned messages serve as todos or important ref
 ```typescript
 { success: true, pin }
 ```
+
+`messageId` must name a message of that channel, whatever its age: like `moe.chat_send`'s `replyTo` check, the lookup reads the newest 1 MiB of the channel's log first, then scans the whole file. An id the channel does not hold is refused `NOT_FOUND` (`context: { entity: 'Message', id }`); the board's `PIN_MESSAGE` frame gets the same refusal.
 
 PIN_CREATED records the caller as the activity event's `workerId`, so `moe.get_activity_log { workerId }` finds it. The payload is unchanged (`pinnedBy` is kept).
 
