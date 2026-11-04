@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "RED first: a link case in moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt, run on today's code, with no main-code change yet.\n\nPlatform fact, probed by the architect with Windows JDK 17 and 21 (/mnt/d/moe-scratch/plan-be7d169f/probe-output.txt and Probe.java):\n- On the Windows gate host, Files.createSymbolicLink is refused ('A required privilege is not held by the client').\n- A directory junction made with `cmd /c mklink /J` needs no privilege.\n- File(junction).canonicalPath stays the junction path, while toRealPath() and Files.isSameFile resolve it.\nSo a symlink-only case would be skipped on the only gate host and DoD 1's RED could never be observed.\n\nAdd to the test class (imports java.nio.file.Files/Path and org.junit.Assume):\n- A `dirLink(target: Path): Path?` helper:\n  - link = sibling '<name>-link'; try Files.createSymbolicLink(link, target);\n  - on any exception, when MoeDaemonSupervisor.isWindowsHost(), run ProcessBuilder(\"cmd\", \"/c\", \"mklink\", \"/J\", link.toString(), target.toString()).redirectErrorStream(true) and wait at most 10 s; accept exit 0 with Files.exists(link);\n  - otherwise return null.\n  - Record every created link and temp dir. @After deletes each LINK first with Files.deleteIfExists(link), which removes the link or junction entry and never its target, then the dirs.\n- Case 'a project opened through a directory link to the served directory is Same':\n  - real = Files.createTempDirectory(\"moe-id-real\"), link = dirLink(real);\n  - Assume.assumeNotNull(link): it skips only where neither a symlink nor a junction can be made;\n  - assertEquals(DaemonIdentity.Same, DaemonIdentityProbe.classify(200, health(real.toString()), link.toString()));\n  - assertTrue(MoeDaemonSupervisor.isSameProject(real.toString(), link.toString())), so both stages agree.\n- Case 'a link to one project is still Foreign to another project': with other = Files.createTempDirectory(\"moe-id-other\") and the link to real, classify(200, health(other.toString()), link.toString()) == DaemonIdentity.Foreign(other.toString()), and isSameProject(other.toString(), link.toString()) is false.\n- Case 'a relative served path stays Unknown through a link': classify(200, health(\"proj\"), link.toString()) == Unknown.\n\nRun only this class on today's code, holding the jetbrains-gradle lease only around the run: moe.acquire_resource right before, moe.release_resource right after, even on failure (mem:convention-jetbrains-gradle-lease). Use the Windows route from WSL (mem:gotcha-jetbrains-gradle-from-wsl). From the worktree top level: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun --tests com.moe.services.DaemonIdentityTest\"`.\n- Expected: the first case FAILS with expected Same but was Foreign(<real path>). Quote those lines in your step note and in complete_task.\n- If it PASSES on today's code instead, the lead does not reproduce: make no main-code change, post that in #governors with the output, and stop.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:28:31.468Z"
     },
     {
       "stepId": "step-2",
@@ -66,7 +67,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:00:17.961Z",
-  "updatedAt": "2026-11-04T08:27:27.565Z",
+  "updatedAt": "2026-11-04T08:28:31.468Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:11:28.945Z",
     "plannedStepCount": 4,
@@ -127,5 +128,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T08:16:03.134Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:28:31.468Z"
 }

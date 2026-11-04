@@ -9,10 +9,53 @@
     "`npx vitest run src/util/metrics.test.ts src/tools/listMetrics.delivered.test.ts src/tools/qaReject.test.ts src/tools/setTaskStatus.test.ts` passes in the same snapshot, and the diff touches no file under moe-jetbrains/ or moe-vscode/."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-cd0ac706",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (DoD 1, 2). Load test-driven-development. Create packages/moe-daemon/src/tools/listMetrics.reopen.test.ts with your own editor: Write on a Claude seat, apply_patch on a codex exec seat. Never use cp, a shell write or a subagent; those leave no TOOL witness.\n\nThe architect validated a sketch at /mnt/d/moe-scratch/plan-fc10f071/listMetrics.reopen.proto.test.ts; README.txt there has its counts. Read it, then write the file yourself. Give it a header naming task-fc10f071 and the hunt repro /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB_metricsReopenStale.test.ts.\n\nFixture: ToolTestHarness with a DONE row 'task-x' as one qa_reject then qa_approve leave it: reopenCount 1, metrics { firstClaimAt, doneAt, wallClockMs, rejectCount: 1, reopenCount: 1 }.\n\nThe helper expectReopenedTwice() requires all of:\n- stored reopenCount 2;\n- stored metrics.reopenCount 2;\n- list_metrics aggregate.avgReopenCount 2;\n- list_metrics tasks[0].metrics.reopenCount 2.\n\nRows (exact values):\n- R1: setTaskStatusTool { status: 'WORKING', reason } on the DONE row, then expectReopenedTwice.\n- R2: h.state.reopenTask(id, reason), DONE to BACKLOG; same check.\n- R3: the real board drag.\n  - Start a node http server on 127.0.0.1 port 0 and new MoeWebSocketServer(httpServer, h.state, new McpAdapter(h.state)).\n  - Open a ws client on /ws that buffers frames from the start.\n  - Wait (5 s bound) for STATE_SNAPSHOT, then send UPDATE_TASK { taskId, updates: { status: 'WORKING' } }.\n  - Wait for TASK_UPDATED or ERROR, assert there is no ERROR frame, then expectReopenedTwice.\n  - In finally: ws.close(), await wss.close(), close the http server. No handle may leak (mem:gotcha-ws-task-transition-parity).\n- L1 (DoD 2): a legacy ARCHIVED row stored with reopenCount 2 and mirror 1. list_metrics gives aggregate 2 and per-task 2. Afterwards the stored mirror still reads 1 and the task file's bytes are unchanged: no write and no in-place mutation.\n- E1: a row with no metrics object, reopened via set_task_status, still has no metrics object; the aggregate reads the canonical 2.\n- E2: inject a stored metrics 'x' with h.state.tasks.set. list_metrics does not throw, the aggregate reads the canonical count, and tasks[0].metrics stays 'x'.\n- H1-H4 call buildReopenClearingUpdates directly:\n  - H1: the R fixture gives metrics deep-equal { firstClaimAt, rejectCount: 1, reopenCount: 2 }, and the input deep-equals its pre-call structuredClone.\n  - H2: metrics { firstClaimAt } with reopenCount 0 gives { firstClaimAt, reopenCount: 1 }.\n  - H3: reopenCount 1.5 leaves the mirror as today: { firstClaimAt, rejectCount: 1, reopenCount: 1 }, or undefined when there is no doneAt or wallClockMs.\n  - H4: metrics 'x', [] or undefined each give updates.metrics undefined.\n\nRED: run step 4's command B with only this file changed. Exactly R1 R2 R3 L1 H1 H2 must fail, and E1 E2 H3 H4 must pass. Record the result in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/listMetrics.reopen.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITER (DoD 1), with your own editor, in packages/moe-daemon/src/util/reopen.ts, buildReopenClearingUpdates (:49-72).\n\n- Replace the metrics block (:61-64) as follows.\n  - When task.metrics is a plain object (not an array) and task.reopenCount is a non-negative integer, set updates.metrics to the metrics without doneAt/wallClockMs plus reopenCount: task.reopenCount + 1.\n  - Otherwise keep today's rule exactly: strip doneAt/wallClockMs only when one of them is set, and never touch the mirror.\n- Doc comment (:29-48):\n  - Add a bullet: the helper keeps metrics.reopenCount, the mirror qa_reject also writes (qaReject.ts:262-266), at task.reopenCount + 1, because list_metrics, GET_METRICS and both IDE Reopens KPIs read the mirror first.\n  - Reword the closing sentence: the caller owns status, reopenCount and reopenReason, and must set reopenCount to task.reopenCount + 1, as all three callers do (setTaskStatus.ts:248, taskStore.ts:816, WebSocketServer.ts:622).\n- Error handling: a string or array metrics, a missing metrics object and a non-integer reopenCount all keep today's result. The helper never throws, never mutates its input, and never creates a metrics object the row did not have.\n\nRe-run the step-1 file: every row except L1 passes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/reopen.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "READER (DoD 2), with your own editor, in packages/moe-daemon/src/util/metrics.ts.\n\n- Add reopenCountOf(task) beside isDelivered (:60).\n  - It returns task.reopenCount when that is a finite number, else metrics.reopenCount when that is a finite number, else 0.\n  - Its doc comment says task.reopenCount is canonical, because every reopen path bumps it, and metrics.reopenCount is its mirror, which is stale on rows reopened outside qa_reject before task-fc10f071.\n- Change :99 to `reopenSum += reopenCountOf(task);`. The string `m.reopenCount ?? task.reopenCount` must be gone (DoD 2 grep).\n- toPerTaskMetric (:154-162):\n  - When the stored metrics has a reopenCount and task.reopenCount is a finite number, return a COPY with reopenCount = task.reopenCount.\n  - Test the mirror with `!== undefined`, never `in` or hasOwnProperty (mem:gotcha-daemon-task-undefined-own-key).\n  - Otherwise return task.metrics ?? {} as today, so no key is added to a row without a mirror.\n- Error handling: this is a read path. Never assign into the stored object and never write (L1 pins both). A non-object metrics passes through unchanged (E2).\n\nRe-run the step-1 file: 10/10.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/metrics.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY (DoD 1-3), once, from the task worktree root. Run the two checkRefs as one line, `<A> && <B>`, exactly as written (mem:gotcha-daemon-linux-snapshot-gate).\n\n- A is the DoD-2 grep plus the check that nothing under moe-jetbrains/ or moe-vscode/ changed since the merge-base with moe/work-2026-10-24.\n- B archives the worktree HEAD of the whole repo into a mktemp dir and overlays the three owned files. Then it runs, in order:\n  - npm ci;\n  - tsc --noEmit;\n  - a tt.json type-check of the new test (mem:gotcha-daemon-tests-not-type-checked);\n  - one vitest run over the new file plus DoD 3's four files (verbose; at least 10 reopen rows);\n  - the full daemon suite.\n- The architect's dry run of A && B with the sketch at 3747c474 exited 0 in 54 s: 5 files / 74 tests, then the full suite at 291 files, 7575 passed | 24 skipped. The base is 290 / 7565 | 24.\n- That fresh output is moe.complete_task's verification evidence.\n- Known load flakes on this shared host: index.version.test.ts, server/bindHosts.test.ts (D-fail) and benchmarks/baselineRun.test.ts (E2). If one fails, check uptime, re-run that file alone in the snapshot, then re-run the line.\n- Never weaken an assertion. Never run npm in the shared checkout (project rail).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/metrics.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\nMutants run in a snapshot. Pin each restore to `git show HEAD:<path>`, take one backup per mutant, and cmp the files before citing the gate. Expected kills:\n- m1, the helper writes restMetrics without the mirror: R1 R2 R3 H1 H2 die.\n- m2, :99 goes back to mirror-first: L1 dies.\n- m3, toPerTaskMetric returns task.metrics ?? {}: L1 dies.\n- m4, the overlay assigns into the stored object: L1's stored-mirror check dies.\n- m5, the Number.isInteger guard is dropped: H3 dies.\nPut killed or survived for each in the completion summary, with the step-1 RED list.\n\nAlso check:\n- Two racing reopens: every writer runs under the state mutex and derives both counters from the same task.reopenCount.\n- Grep the `reopenCount:` writers: does any caller of the helper bump by something other than 1?\n- qa_reject's own mirror write is unchanged.\n- The list_metrics and GET_METRICS response shapes are unchanged.\n- No moe-jetbrains/ or moe-vscode/ file is touched.\n\nIf any byte changed, re-run step 4's line and use that output for complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/reopen.ts",
+        "packages/moe-daemon/src/util/metrics.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +67,86 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:04:57.380Z",
-  "updatedAt": "2026-11-04T08:14:39.164Z",
+  "updatedAt": "2026-11-04T08:30:12.370Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T08:14:36.064Z"
+    "firstClaimAt": "2026-11-04T08:14:36.064Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-cd0ac706"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:30:12.330Z",
+  "executionContract": {
+    "intendedBehavior": "Every non-QA reopen keeps metrics.reopenCount equal to the new task.reopenCount through the shared buildReopenClearingUpdates: set_task_status, StateManager.reopenTask and the /ws board drag, so both IDE Reopens KPIs and the board card read the right count with no client change. list_metrics (aggregate avgReopenCount and per-task metrics.reopenCount) and GET_METRICS read the canonical task.reopenCount, so a legacy row with a stale mirror reads right without a write.",
+    "acceptanceCriteria": [
+      "After each of set_task_status DONE->WORKING, state.reopenTask and a real /ws UPDATE_TASK drag out of DONE, on a row with reopenCount 1 and metrics.reopenCount 1: stored metrics.reopenCount === 2, list_metrics aggregate.avgReopenCount === 2 and tasks[0].metrics.reopenCount === 2.",
+      "A legacy row stored with metrics.reopenCount 1 and reopenCount 2 reads 2 in list_metrics (aggregate and per-task), its stored mirror stays 1 and its task file is unchanged. `m.reopenCount ?? task.reopenCount` is gone from util/metrics.ts.",
+      "util/metrics.test.ts, listMetrics.delivered.test.ts, qaReject.test.ts, setTaskStatus.test.ts and the full daemon suite pass in a snapshot, and the diff touches no moe-jetbrains/ or moe-vscode/ file."
+    ],
+    "invariants": [
+      "The list_metrics and GET_METRICS response shapes are unchanged.",
+      "A row without a metrics object gets none from a reopen. list_metrics adds no reopenCount key to a row whose metrics has none.",
+      "buildReopenClearingUpdates never throws and never mutates its input. A non-object metrics or a non-integer reopenCount keeps today's result.",
+      "qa_reject's own counter writes are unchanged."
+    ],
+    "compatibility": [
+      "The JetBrains (TaskCard.kt:141, TaskDetailDialog.kt:861) and VS Code (board.js:969, TaskDetailPanel.ts:1238) readers keep reading the mirror, which now stays in step.",
+      "The two legacy rows (task-07474ee4, task-bde86540) are not rewritten. list_metrics heals them on read, and their mirror heals at their next reopen."
+    ],
+    "approvedScope": [
+      "util/reopen.ts: the buildReopenClearingUpdates metrics block and its doc comment.",
+      "util/metrics.ts: a new reopenCountOf, the :99 aggregate line, and the toPerTaskMetric overlay.",
+      "tools/listMetrics.reopen.test.ts (new): rows R1-R3, L1, E1, E2, H1-H4."
+    ],
+    "reuse": [
+      "buildReopenClearingUpdates is already the single helper all three non-QA reopen paths merge, so one write there covers them all.",
+      "ToolTestHarness, and the /ws drive pattern of server/WebSocketServer.test.ts:642-688.",
+      "The architect's validated sketch: /mnt/d/moe-scratch/plan-fc10f071/ (proto test, fix.proto.diff, README.txt)."
+    ],
+    "sourceAssumptions": [
+      "At 3747c474, util/reopen.ts:61-64 rebuilds metrics only to strip doneAt and wallClockMs.",
+      "setTaskStatus.ts:248, taskStore.ts:816 and WebSocketServer.ts:622 each set reopenCount to task.reopenCount + 1 and merge the helper.",
+      "qaReject.ts:262-266 and :285 write both counters.",
+      "util/metrics.ts:99 reads the mirror first, and :154-162 passes task.metrics through raw.",
+      "WebSocketServer UPDATE_TASK_DENYLIST strips client metrics and reopenCount (:63-76)."
+    ],
+    "checkRefs": [
+      "! grep -n \"m.reopenCount ?? task.reopenCount\" packages/moe-daemon/src/util/metrics.ts && test -z \"$(git diff --name-only $(git merge-base HEAD moe/work-2026-10-24) -- moe-jetbrains moe-vscode; git status --porcelain -- moe-jetbrains moe-vscode)\"",
+      "( S=$(mktemp -d /tmp/moe-fc10-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cd packages/moe-daemon && cp --parents src/util/reopen.ts src/util/metrics.ts src/tools/listMetrics.reopen.test.ts \"$S/packages/moe-daemon\" && cd \"$S/packages/moe-daemon\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/listMetrics.reopen.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/listMetrics src/util/metrics.test src/tools/qaReject.test src/tools/setTaskStatus.test --reporter=verbose > d.log 2>&1 && npx vitest run > full.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' d.log full.log; N=$(grep -acE '✓ .*listMetrics\\.reopen' d.log); echo \"E=$E rows=$N/10 $S\"; [ $E = 0 ] && [ \"$N\" -ge 10 ] )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Drop the mirror and make every reader canonical-only. Rejected: both IDE clients read the mirror (out of scope), and the per-task wire shape would change.\n2) Bump the mirror at each of the three call sites. Rejected: that is three places to keep in step, the same drift that caused this bug. The helper is the one place all three already merge.\n3) Chosen: the helper keeps the mirror, and the daemon reader prefers the canonical count. Legacy rows heal on read with no write and no migration.\n4) Migrate the two legacy rows. Rejected as out of scope by the row.",
+    "codebaseInsights": "- The architect prototyped the exact fix in a 3747c474 snapshot (/mnt/d/moe-scratch/plan-fc10f071/).\n  - The test at base: 6 RED (R1 R2 R3 L1 H1 H2).\n  - With the fix: 10/10.\n  - Full suite: 291 files, 7575 passed | 24 skipped (base 290 / 7565 | 24). No existing test asserted the helper's metrics output.\n- recordCommit.test.ts:331 calls the helper but checks only ledger keys and reviewStartedAt.\n- WebSocketServer.test.ts:642 checks only doneAt and wallClockMs after a drag.\n- A real /ws UPDATE_TASK works from a tools/ test file with MoeWebSocketServer + McpAdapter on an http server bound to 127.0.0.1 port 0; R3 takes about 180 ms.",
+    "risks": "- The helper assumes its caller sets reopenCount to task.reopenCount + 1, which all three callers do. The doc comment must state that contract, so a future caller that never bumps does not push the mirror ahead.\n- A metrics object with no mirror gains one at the first reopen. usage-report.mjs metricsReopenCount then reads non-null (equal to reopenCount), and the IDE detail panes show their Reopens row (already shown, since reopenCount > 0).\n- The full suite has known load flakes on this host (see step 4).\n- docs/MCP_SERVER.md list_metrics does not describe the reopen source, and the shape is unchanged, so no docs edit is planned.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/reopen.ts",
+      "packages/moe-daemon/src/util/metrics.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "173bfaa804bf0ae4bb01f85870763caa5249f7a8",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:30:12.370Z",
+  "approvedPlanRevision": 1
 }

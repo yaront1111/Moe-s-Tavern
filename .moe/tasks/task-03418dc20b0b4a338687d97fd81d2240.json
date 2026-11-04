@@ -67,7 +67,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -87,16 +87,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:50.128Z",
-  "updatedAt": "2026-11-04T08:28:17.264Z",
+  "updatedAt": "2026-11-04T08:30:28.594Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:08:47.436Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:30:28.592Z",
+    "wallClockMs": 1301156
   },
   "contextFetchedBy": [
     "architect-2a219562",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-1cd86a39"
   ],
   "tier": "standard",
   "effort": "high",
@@ -220,5 +223,9 @@
     "kind": "completion",
     "sessionId": "worker-593560ee@2026-11-04T08:24:11Z",
     "at": "2026-11-04T08:28:17.264Z"
-  }
+  },
+  "completedAt": "2026-11-04T08:30:28.592Z",
+  "reviewCompletedAt": "2026-11-04T08:30:28.592Z",
+  "reviewSummary": "Reviewed completion 173bfaa8 via git show: 4 files under scripts/tests, +45/-1, nothing under scripts/moe-agent.* or logs/ (DoD 3 scope OK, size fine).\n\nRe-ran task.verification in a fresh git-archive snapshot (daemon+proxy built there, env -i): node --test usage-receipt + prompt-cache + prompt-cache-launcher + hunt repro = 57 tests, 55 pass, 0 fail, 2 skipped (no PowerShell on linux); '✔ G1:' printed (DoD 1); hunt repro passes (DoD 2); plain onboarding.mjs PASS.\n\nBundle-mode step: the full gate does NOT print GATE-OK at HEAD. onboarding.mjs on moe-vscode/bundled dies at its unchanged line 55 scan: 'Bundled test artifact(s): scripts/mods/moe-account-switch/hooks/register.test.js'. Cause is not this diff: 5265909c (task-d27edf88) added that compiled test file, which bundle-assets ships. Checked the task's own claim separately: in the scratch snapshot I removed that one file, re-ran bundle mode with MOE_USAGE_RECEIPT_FILE holding 'L': PASS, receipt still exactly 'L' (DoD 3). Mutant: pre-fix onboarding.mjs (no delete) grew the receipt to 2 lines, so its delete is load-bearing (only this bundle check catches it; G1 is blind, as the worker disclosed). I did not re-run the worker's other mutants; read G1 instead: both vars overridden in child env, temp dir removed in t.after, nonzero exit/timeout/missing build fails via assert, tap '# fail 0' and '# pass N>=1' and 'PASS onboarding:' asserted, receipt compared byte-for-byte. The deletes sit right after imports, above every test() and spawn. qualityGate parity-check PASS, npm run lint OK.\n\nNon-blocking: onboarding.mjs also lost a space (const root =fileURLToPath), a stray edit outside the approved scope, no behaviour change. The unrelated register.test.js bundling break is posted in #governors (no existing row) with a suggested bug row.",
+  "requiredCheckAtDone": null
 }
