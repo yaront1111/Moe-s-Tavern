@@ -1,0 +1,28 @@
+{
+  "id": "task-31a2aa2fc7e9419da5178c489dc6d35a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: report_blocked picks the architect to page by team.role only, but the launchers put every architect on the role-less project team, so every block escalates to the governors as \"no live architect\" and #architects has never received a block page",
+  "description": "Filed by defect hunt #16 (task-151a2c54, architect-2a219562) on 2026-11-04. Found by the lane-2 subagent; the holder re-ran the repro and re-read every cited line at b9205914.\n\nPROBLEM\n- packages/moe-daemon/src/util/workerLiveness.ts:69-78, findFreshestLiveWorkerByRole:\n  - it collects only teams whose `role === 'architect'`;\n  - it returns null when there are none (:73);\n  - it counts a worker only when `worker.teamId` is one of those teams (:78).\n  It has no id-prefix fallback.\n- Its only caller is tools/reportBlocked.ts:405-417. A null result makes the mention prefix `@governors ` (:417), so the 🚧 page skips #architects and is addressed to the governors.\n- The launchers deliberately give a team role to governors only: scripts/moe-agent.sh:2105-2114 and :2516-2520, and moe-agent.ps1:1783-1788 and :1970-1975. Their comment: \"For architect/worker/qa we omit role ... The mention router falls back to a workerId-substring match ... when team.role isn't set.\"\n- util/workerRole.ts:22-52 (resolveWorkerRole) calls a seat on a role-less team \"not a rare edge\". It resolves the team role first, then the id prefix (roleFromWorkerId). This selector is the one role lookup that skips that fallback.\n- Contract: docs/MCP_SERVER.md, `### moe.report_blocked`, the Ping routing bullets (:1241-1242). The daemon direct-mentions the freshest live architect, \"resolving the role through `worker.teamId`\", and escalates to the governors only \"with no live architect\".\n- Live state, read-only at 05:55Z: the \"moes\" team (team-a94dc136, role null) holds all 4 architects, 3 QA and 4 workers. The \"Architects\" team (team-ceeda973, role architect) has 0 members.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-151a2c54/B/zzHuntB_reportBlockedRolelessArchitect.test.ts, with its .output.txt beside it. In a git archive of b9205914, run `cd packages/moe-daemon && npx vitest run src/tools/zzHuntB_reportBlockedRolelessArchitect.test.ts`. It fails: it expects \"architects: (mention of the architect) 🚧 worker-… blocked on task-1: …\" and receives only \"governors: (governors mention) 🚧 …\". Its first assertion, that resolveWorkerRole gives 'architect' for the same seat, passes.\n- Production (#governors, .moe/messages/chan-15c8e232.jsonl, counted by the holder): 148 system 🚧 block lines, 139 addressed to the governors group and 0 to an architect. #architects (chan-18116c9a.jsonl) has received none. Example: 2026-11-04T05:25:21.251Z \"🚧 qa-58a8e460 blocked on task-87cba58c…\" went to the governors 40 s after architect-2a219562's last activity (activity.log 05:24:40.817Z).\n\nFIX DIRECTION\nIn findFreshestLiveWorkerByRole, match a worker when its team's role equals the role. When its team has no role, or it has no team or a missing team, match it when roleFromWorkerId(worker.id) equals the role. That is resolveWorkerRole's precedence: an explicit roled team still wins over the id. Keep the liveness window, the excluded ids and the tie-break as they are. Then sync the Ping routing wording in `### moe.report_blocked`.\n- Hunk ownership in docs/MCP_SERVER.md: edit only the Ping routing bullets (:1241-1242). The Stale-block visibility bullet (:1237) belongs to the sibling stale-block row filed in the same hunt.\n\nFILES\n- packages/moe-daemon/src/util/workerLiveness.ts\n- packages/moe-daemon/src/util/workerLiveness.test.ts\n- packages/moe-daemon/src/tools/reportBlocked.test.ts\n- docs/MCP_SERVER.md (### moe.report_blocked, Ping routing only)\nNothing here is held by an open row at 06:01Z.",
+  "definitionOfDone": [
+    "A report_blocked on a task whose only live architect sits on a role-less team, with an architect- id prefix, direct-mentions that architect in #general and #architects, while #governors gets its unmentioned copy. This is proven by a new vitest case asserting the hunt repro's expectations.",
+    "New vitest cases in workerLiveness.test.ts pin the rest. A live seat on a roled team whose role is not architect is never picked, even with an architect- prefix. With no live architect, the ping still escalates to the governors. The existing workerLiveness and reportBlocked tests pass unchanged.",
+    "docs/MCP_SERVER.md's `### moe.report_blocked` Ping routing text states the team-role-then-id-prefix rule, and no other section of the file changes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 480.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:01:20.354Z",
+  "updatedAt": "2026-11-04T06:01:20.354Z"
+}

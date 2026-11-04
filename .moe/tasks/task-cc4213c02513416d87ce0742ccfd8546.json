@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:12:21.590Z",
-  "updatedAt": "2026-11-04T05:28:13.425Z",
+  "updatedAt": "2026-11-04T06:01:24.351Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:41:27.476Z",
@@ -107,7 +107,9 @@
     "firstClaimAt": "2026-11-03T22:43:02.962Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:00:48.993Z",
+    "wallClockMs": 26266031
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -233,10 +235,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c9368191@2026-11-03T23:40:40Z",
-    "at": "2026-11-04T00:22:23.462Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T05:27:55Z",
+    "at": "2026-11-04T06:01:24.351Z"
   },
   "reviewStartedAt": "2026-11-04T00:21:24.813Z",
   "verification": {
@@ -246,5 +249,9 @@
     "reportedAt": "2026-11-04T00:21:24.813Z",
     "source": "agent-reported"
   },
-  "completionSummary": "A bash verified-local iteration now ends a launch outage carried over from an earlier legacy iteration of the same wrapper process.\n\nscripts/moe-agent.sh gains one block, right after the verified_local_gate call site and guarded by VM_ROUTE=true && LAUNCH_OUTAGE=true. It does three things:\n- prints one green [launch-outage] line ('The verified-local VM route runs this seat's sessions in its VM, never the host CLI: launch outage over, claiming resumes.');\n- posts a best-effort #general line ('... after N host launch failures. Launch outage over: claiming resumes.');\n- applies the success branch's six resets: streak, backoff, outage, held id, release-tried and announce.\n\nThat iteration then makes its marked claim, launches no host CLI and prints no MOE_LAUNCH_PROBE. The probe echo is unreachable on the route. No other site was touched, so legacy (VM_ROUTE=false) bytes and the outage flow are unchanged.\n\nFixture: FAKE_READINESS_AFTER=<n>:<mode> in postflight-fake-proxy.js. It sits in the readiness handler only and is inert when unset; it counts reads in .moe/readiness-count and answers FAKE_READINESS=<mode> from read n+1 on.\n\nRow VR-outage (postflight-vm-route.sh) runs 3 legacy failing launches into the outage, then flips readiness to verified-local. It asserts:\n- exit 0;\n- one outage-over line and no MOE_LAUNCH_PROBE;\n- 3 host CLI rows, all before the flip;\n- unmarked claims before the flip and executionRoute vm claims after it;\n- seat-start then seat-stop;\n- the #general line;\n- a single reason=vm-route line.\n\nMutant RED: the harness against the pre-fix wrapper (09529122) fails VR-outage with 'expected one outage-over line (0 !== 1)'. Its output shows the defect: the claim is suppressed, MOE_LAUNCH_PROBE prints, then reason=vm-route.\n\nGate: bash -n + parity + full postflight.sh (scenario AH unchanged, vm-route chained). EXIT=0.\n\nAccepted residue: the first VM iteration still waits one outage backoff at the loop top, and prints the outage backoff line before the route"
+  "completionSummary": "A bash verified-local iteration now ends a launch outage carried over from an earlier legacy iteration of the same wrapper process.\n\nscripts/moe-agent.sh gains one block, right after the verified_local_gate call site and guarded by VM_ROUTE=true && LAUNCH_OUTAGE=true. It does three things:\n- prints one green [launch-outage] line ('The verified-local VM route runs this seat's sessions in its VM, never the host CLI: launch outage over, claiming resumes.');\n- posts a best-effort #general line ('... after N host launch failures. Launch outage over: claiming resumes.');\n- applies the success branch's six resets: streak, backoff, outage, held id, release-tried and announce.\n\nThat iteration then makes its marked claim, launches no host CLI and prints no MOE_LAUNCH_PROBE. The probe echo is unreachable on the route. No other site was touched, so legacy (VM_ROUTE=false) bytes and the outage flow are unchanged.\n\nFixture: FAKE_READINESS_AFTER=<n>:<mode> in postflight-fake-proxy.js. It sits in the readiness handler only and is inert when unset; it counts reads in .moe/readiness-count and answers FAKE_READINESS=<mode> from read n+1 on.\n\nRow VR-outage (postflight-vm-route.sh) runs 3 legacy failing launches into the outage, then flips readiness to verified-local. It asserts:\n- exit 0;\n- one outage-over line and no MOE_LAUNCH_PROBE;\n- 3 host CLI rows, all before the flip;\n- unmarked claims before the flip and executionRoute vm claims after it;\n- seat-start then seat-stop;\n- the #general line;\n- a single reason=vm-route line.\n\nMutant RED: the harness against the pre-fix wrapper (09529122) fails VR-outage with 'expected one outage-over line (0 !== 1)'. Its output shows the defect: the claim is suppressed, MOE_LAUNCH_PROBE prints, then reason=vm-route.\n\nGate: bash -n + parity + full postflight.sh (scenario AH unchanged, vm-route chained). EXIT=0.\n\nAccepted residue: the first VM iteration still waits one outage backoff at the loop top, and prints the outage backoff line before the route",
+  "completedAt": "2026-11-04T06:00:48.993Z",
+  "reviewCompletedAt": "2026-11-04T06:00:48.993Z",
+  "reviewSummary": "Completion 8ca6a40b is on moe/work-2026-10-24 and pushed. Diff: 3 files, +65/-1, the planned scope; ps1 untouched.\n\nRe-gated the landed sha because the target moved after the worker's base (1d830f75 changed moe-agent.sh). Full-tree git archive in /tmp, blobs hash-checked, then the exact checkRef (env -i, node24, bash -n + parity-check + postflight.sh). EXIT=0, 05:30-06:00Z: PASS parity; '[scenario AH] ok'; '[seat job] PASS ... outage, reload'; PASS postflight-vm-route.sh; PASS postflight.sh.\n\nMutant: the same snapshot with a5157059's moe-agent.sh, postflight-vm-route.sh alone, EXIT=1. VR-outage fails with 'expected one outage-over line'. The log shows the defect: claim suppressed, MOE_LAUNCH_PROBE, then reason=vm-route.\n\nDoD 1: the block is guarded by VM_ROUTE=true && LAUNCH_OUTAGE=true and sits right after the verified_local_gate call. VM_ROUTE resets false per iteration and is set only after every refusal. Its six resets equal the success branch's. The row asserts:\n- 3 host-cli rows, all before the flip;\n- unmarked claims before it, executionRoute vm after it;\n- seat-start then seat-stop;\n- no MOE_LAUNCH_PROBE, one clear line, the #general line.\n\nDoD 2: no legacy site edited; AH passes with its harness unchanged.\nDoD 3: the row, focused rows and parity pass.\n\nFAKE_READINESS_AFTER lives in the readiness handler only. It is inert when unset, and a malformed value throws. The chat post is best-effort (|| true).\n\nNotes, non-blocking:\n- The first VM iteration still waits one outage backoff and prints the outage backoff line (accepted residue).\n- TROUBLESHOOTING.md ~:427 still says only a running launch ends the outage; left for the CQ-M07 docs sweep.\n- Ponytail: the reset list is duplicated on purpose, because a helper would touch legacy bytes.",
+  "requiredCheckAtDone": null
 }

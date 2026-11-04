@@ -31,26 +31,39 @@
     {
       "stepId": "step-2",
       "description": "Implement. Edit tool only.\n(a) packages/moe-daemon/src/state/validators.ts:\n- Add `export const MAX_PLAN_STEPS = 100;` beside the contract caps, after MAX_REQUIRED_CHECKS (:130). Doc comment: it is the most steps one plan may hold; submit_plan refuses more, taskSizing warnSteps and maxSteps validate up to it, and sanitizeImplementationPlan keeps exactly this many. It is one number, like the step caps in util/planSize; the sanitizer kept 50 while submit_plan accepted 100. It lives here, not in util/planSize, so the plan stays at 5 files and the standard tier.\n- sanitizeImplementationPlan (:775) becomes `plan.slice(0, MAX_PLAN_STEPS)`.\n- The taskSizing validator (:490 and :493): the warnSteps and maxSteps upper bound becomes MAX_PLAN_STEPS. The value stays 100; the two are now tied.\n- Add validatePlanningNotes(value, fieldName = 'planningNotes') beside validateExecutionContract, with exported MAX_PLANNING_NOTE_CHARS = 5000, MAX_PLANNING_KEY_FILES = 50, MAX_PLANNING_KEY_FILE_CHARS = 1000 and a PlanningNotes interface:\n  - undefined or null → undefined;\n  - requirePlainObject, then rejectUnknownFields over the four keys;\n  - each text field through validateStringValue({ maxLength 5000, allowEmpty: true, allowNewlines: true }), skipping null or undefined;\n  - keyFiles not an array → invalidInput('planningNotes.keyFiles', 'must be an array of strings'); more than 50 → 'must contain 50 items or fewer';\n  - each keyFiles entry through validateStringValue({ maxLength 1000 }) at `planningNotes.keyFiles[i]`.\n  No trimming and no path normalization: keyFiles are informational and may be absolute scratch paths.\n(b) packages/moe-daemon/src/tools/submitPlan.ts:\n- Import validatePlanningNotes, MAX_PLAN_STEPS and the three note caps in the existing '../state/validators.js' import block (:6-9).\n- Right after `const measuredContract = validateExecutionContract(...)` (:302), add `const planningNotes = validatePlanningNotes((args as { planningNotes?: unknown } | null)?.planningNotes);`. A bad note is then refused before the Git reads, the mutex and any write.\n- :352-353 becomes `params.steps.length > MAX_PLAN_STEPS` → invalidInput('steps', `maximum ${MAX_PLAN_STEPS} steps allowed`). The message text is unchanged.\n- :571-578 becomes `if (planningNotes) updatePayload.planningNotes = planningNotes;` with no slice. Drop planningNotes from the inner params cast (:329-334).\n- inputSchema: steps `maxItems: MAX_PLAN_STEPS`; the three note strings `maxLength: MAX_PLANNING_NOTE_CHARS`; keyFiles `maxItems: MAX_PLANNING_KEY_FILES`, with items of `maxLength: MAX_PLANNING_KEY_FILE_CHARS`.\nError handling: every new refusal is a coded INVALID_INPUT, raised through invalidInput, requirePlainObject, rejectUnknownFields or validateStringValue, and carries context.field. Each is thrown before any write, and nothing is clipped or coerced. Omitted planningNotes still keeps a stored set, as today.\nGREEN: step 1's file passes 9/9 and B28 passes.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/validators.ts",
         "packages/moe-daemon/src/tools/submitPlan.ts"
       ],
-      "startedAt": "2026-11-04T05:59:44.073Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "validators.ts: MAX_PLAN_STEPS = 100 (after MAX_REQUIRED_CHECKS); sanitizeImplementationPlan and the taskSizing warnSteps/maxSteps upper bound now use it; added MAX_PLANNING_NOTE_CHARS/MAX_PLANNING_KEY_FILES/MAX_PLANNING_KEY_FILE_CHARS, PlanningNotes and validatePlanningNotes (requirePlainObject, rejectUnknownFields, validateStringValue; keyFiles array-of-<=50, entries 1-1000, no trim/normalization). submitPlan.ts: imports; validatePlanningNotes called right after validateExecutionContract (before any I/O/mutex/write); steps bound uses MAX_PLAN_STEPS with unchanged message text; planningNotes payload is the validated object (no slice), dropped from the inner params cast; inputSchema maxItems/maxLength from the constants. Edit tool only. GREEN in a git-archive snapshot with the 4 owned source files overlaid: tsc --noEmit exit 0; vitest on submitPlan.intakeBounds + submitPlan.test + StateManager.test -> 3 files passed, 247 tests passed; intakeBounds 9/9, B28 included. Snapshot removed.",
+      "startedAt": "2026-11-04T05:59:44.073Z",
+      "completedAt": "2026-11-04T06:00:46.859Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs: docs/MCP_SERVER.md, inside `### moe.submit_plan` only (governor ruling msg-71db57ac). Edit tool. Use the exact text in the prototype diff.\n- Parameters block: the planningNotes line gains `// texts <=5000 chars; keyFiles <=50 strings of 1-1000 chars`.\n- The 'Step bounds' bullet:\n  - it says max 100 steps (`MAX_PLAN_STEPS`), and that `settings.taskSizing` `warnSteps` and `maxSteps` validate up to the same number;\n  - the sanitizer bounds the step count too, at these same caps (`util/planSize`, `state/validators`), so every step of an accepted plan is stored byte-for-byte;\n  - add one sentence: it used to keep only the first 50 steps.\n- A new 'Planning notes' bullet, directly before 'Enforced rails':\n  - validated like the execution contract, before any I/O or write;\n  - the four keys only: three strings of at most 5000 chars each (empty allowed, newlines kept), and keyFiles as up to 50 strings of 1-1000 chars;\n  - anything else is refused INVALID_INPUT with context.field naming it, and the call writes nothing;\n  - omitted or null writes no notes and keeps a stored set.\nNo docs/CONFIGURATION.md edit: taskSizing's range stays 1-100, and its row states no range. No docs/SCHEMA.md edit: its PlanningNotes table stays true.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md, Edit tool, exact prototype text, only inside ### moe.submit_plan (336-403): hunks at 367 (planningNotes parameter comment), 382 (Step bounds bullet: MAX_PLAN_STEPS, taskSizing up to the same number, sanitizer bounds the step count, 'used to keep only the first 50'), and the new Planning notes bullet at 378 before Enforced rails. +3/-2. CONFIGURATION.md and SCHEMA.md untouched, as planned.",
+      "startedAt": "2026-11-04T06:00:48.446Z",
+      "completedAt": "2026-11-04T06:01:06.966Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, ONCE, from the task worktree root. Run the checkRef exactly as written; it is also in /mnt/d/moe-scratch/task-e67470ce/checkref.txt.\n- It archives HEAD into a mktemp snapshot and overlays the 5 owned files.\n- It runs npm ci, then `tsc --noEmit`, then a tsc of the new test file through tt.json. Only the new file is type-checked: the package tsconfig excludes tests, and StateManager.test.ts already has a TS2322 at :79.\n- It runs the FULL daemon vitest suite, because state/validators.ts is shared persistence code.\n- It pins the new file at ≥ 9 passing tests.\nNever run npm in the shared checkout (global rail). Never put TMPDIR inside the env -i (mem:convention-daemon-full-suite-gate-checkref).\nExpected tail, from the architect dry-run at 9224de15: 'Test Files  286 passed (286)', 'Tests  7468 passed | 24 skipped (7492)', 'intake pin ok', exit 0. The counts grow if the target has moved.\nSubmit this fresh command, its exit code and the output tail to moe.complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T06:01:07.855Z"
     },
     {
       "stepId": "step-5",
@@ -76,7 +89,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:43.353Z",
-  "updatedAt": "2026-11-04T05:59:44.073Z",
+  "updatedAt": "2026-11-04T06:01:07.855Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:47:30.839Z",
@@ -86,7 +99,7 @@
     "firstClaimAt": "2026-11-04T05:47:49.758Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -97,7 +110,9 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:57:44.498Z",
