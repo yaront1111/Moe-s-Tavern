@@ -59,15 +59,18 @@
     {
       "stepId": "step-4",
       "description": "VERIFY once, after steps 1-3 (DoD 3: `./gradlew test` passes). WSL has no JDK, so run the Windows gradlew.bat from this task's worktree, the form QA accepts for `./gradlew test` (mem:gotcha-jetbrains-gradle-from-wsl). Hold the `jetbrains-gradle` lease only around each Gradle run: moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId } (if queued, moe.wait_for_resource), then moe.release_resource, on failure too (mem:convention-jetbrains-gradle-lease). The exact command:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\.worktrees\\task-8383080c17fa4406886ef6781f26e9c4\\moe-jetbrains && .\\gradlew.bat test --rerun\"\nIf your worktree is elsewhere, put `wslpath -w \"$MOE_WORKTREE_PATH\"` in the cd. While iterating, a focused run with the unquoted filter `--tests com.moe.services.MoeDaemonCommandOverrideTest` is fine; the full run is the evidence. Confirm real execution in moe-jetbrains/build/test-results/test/: TEST-com.moe.services.MoeDaemonCommandOverrideTest.xml carries tests=\"5\" failures=\"0\" errors=\"0\"; every TEST-*.xml timestamp is after the run start (the Windows clock lags WSL by about 3.5 s); and the suite totals (the grep/awk in mem:gotcha-gradle-jetbrains-shared-box) show 0 failures and 0 errors. On a red exit with a truncated tail, check the Gradle daemon log for the MessageIOException IPC flake before believing it. In complete_task, verification.command is the exact cmd.exe line, labelled as the Windows run of `./gradlew test`, with the totals in the summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T07:18:04.579Z"
+      "note": "Windows `gradlew.bat test --rerun` from the task worktree under the jetbrains-gradle lease: BUILD SUCCESSFUL in 51s, exit 0. TEST-*.xml totals: 44 classes, tests=671 skipped=6 failures=0 errors=0 (6 skipped are existing Assume skips). TEST-com.moe.services.MoeDaemonCommandOverrideTest.xml: tests=5 failures=0 errors=0, timestamp 07:21:18Z, after the 07:20:51Z run start. Lease released.",
+      "startedAt": "2026-11-04T07:18:04.579Z",
+      "completedAt": "2026-11-04T07:21:56.981Z"
     },
     {
       "stepId": "step-5",
       "description": "SELF-REVIEW once, as the last step (load adversarial-self-review), over this task's diff only. The plan was written without a Gradle dry run, so prove the tests bite with mutants in an archive copy, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, Worker variant): `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/m8383/repo`, copy this task's changed and new files over it, then for each mutant make one exact-anchor replace, run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\m8383\\repo\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonCommandOverrideTest --rerun\"` under the lease, restore, and check the sha256. Each must turn red:\n- M1: the selection keeps buildDirectDaemonCommand when an override is set (O1);\n- M2: the `overrideCommand != null` branch moved before `isProtected`, with the read made unconditional (O2);\n- M3: the old extension rule, `start` only for .cmd/.ps1/.js or `moe-daemon` (O3);\n- M4: commandWords as a plain whitespace split (O3, the quoted path);\n- M5: the override branch drops hostSuffix (O5).\nName each mutant's failing test in the complete_task summary. Then the checklist:\n- two ensureDaemonRunning calls racing: one override read per call, cooldown and attempt counters unchanged;\n- null, blank, padded, quoted and huge values;\n- a value carrying both {projectPath} and --host;\n- the Windows `cmd /c` and POSIX `bash -lc` prefixes;\n- nothing under PROTECTED calls daemonCommandOverride;\n- MoeDaemonSupervisorTest.kt changed only in W1 and W2;\n- `git diff --stat` shows exactly the four planned files.\nIf the review changes any byte, re-run step 4's command and use that output as the evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T07:21:57.853Z"
     }
   ],
   "planRevision": 1,
@@ -84,12 +87,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:53:50.379Z",
-  "updatedAt": "2026-11-04T07:18:04.579Z",
+  "updatedAt": "2026-11-04T07:21:57.853Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:58:16.989Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -102,7 +105,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T07:15:05.229Z",

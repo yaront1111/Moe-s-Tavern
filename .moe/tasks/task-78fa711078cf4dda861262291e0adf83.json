@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,16 +82,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:50:29.049Z",
-  "updatedAt": "2026-11-04T07:17:11.832Z",
+  "updatedAt": "2026-11-04T07:22:32.615Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:50:33.037Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T07:22:08.713Z",
+    "wallClockMs": 1895676
   },
   "contextFetchedBy": [
     "architect-2a219562",
-    "worker-a408f113"
+    "worker-a408f113",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -169,10 +172,11 @@
   "planApprovedAt": "2026-11-04T07:11:51.418Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T07:12:26Z",
-    "at": "2026-11-04T07:17:11.832Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T07:20:17Z",
+    "at": "2026-11-04T07:22:32.615Z"
   },
   "workStartedAt": "2026-11-04T07:13:29.044Z",
   "reviewStartedAt": "2026-11-04T07:16:11.346Z",
@@ -209,5 +213,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T07:22:08.713Z",
+  "reviewCompletedAt": "2026-11-04T07:22:08.713Z",
+  "reviewSummary": "Reviewed completion 9f6857ee (on moe/work-2026-10-24; owned paths identical to control HEAD): 4 files, +179/-10 (net +169). Re-ran task.verification as written in a fresh git-archive snapshot outside the shared checkout: tsc clean; Test Files 2 passed (2), Tests 78 passed | 1 skipped (79) (win32-only skip), exit 0.\nDoD 1: (r1) `init --project .` and (r2) `init` with MOE_PROJECT_PATH=. over a legacy rootPath '.' assert daemon.json, /health and project.json rootPath all equal path.resolve(cwd).\nDoD 2: (r3) second `start --project <abs>` from another cwd: exit 0, 'Moe daemon already running', no spawn/cleanup, pid and port unchanged, first daemon healthy, nothing on second port; (r4) abs spelling `${p}/` recorded unchanged; (r5) parseArgs table keeps POSIX/drive/UNC byte-identical, resolves relative.\nDoD 3: the vitest run above.\nDiff: absoluteProjectPath is moe-proxy utils.ts:39's rule; comparableProjectPath reuses it with identical semantics; parseArgs(args, env) exported, main() still calls it with no args; two comments otherwise. My snapshot mutant (resolve only --project, leave MOE_PROJECT_PATH raw) fails (r5): 1 failed | 4 passed. A trailing `--project` with no value still exits 1 'Fatal error', not defaulted. No leaked daemon processes (read-only ps). Harness hygiene OK: scratch HOME, async spawn, own-PID cleanup guarded by /health, no pattern kill. src/util run in a docs-augmented snapshot: 604 passed; the 3 failing files read root CLAUDE.md and scripts/, absent from the snapshot, so not attributable.\nNot verified: live JetBrains/VS Code against a relative-path daemon (out of scope; Kotlin untouched). Accepted out of scope per worker: a pre-fix daemon keeps its '.' daemon.json until restart; runner key (sha256 of projectPath) is fresh under the absolute name at next start. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
