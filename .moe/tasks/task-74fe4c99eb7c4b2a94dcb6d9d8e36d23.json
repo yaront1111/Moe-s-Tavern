@@ -18,16 +18,30 @@
     {
       "stepId": "step-1",
       "description": "Port contract, read before editing anything. This row is a byte-faithful port of CQ-M07r (task-ba7a8c84). Its WORKING claim is withheld until that row and task-fa0fea1a (the PS 5.1 vm-route harness fix) are DONE, so both are landed when you start.\n\n- Read CQ-M07r's completion with `git show <its completion sha> -- scripts/moe-agent.sh scripts/tests/postflight-vm-route.sh scripts/tests/postflight-fake-check-dispatch.js`. Take the sha from that task's commits in moe.get_context.\n- Read its two comments as well: the environment-id printing (comment-732e84b5 on r, comment-058a3fed on this row).\n- Write the port contract into this step's note:\n  - every new MOE_ code, warning and message string, verbatim;\n  - the env var (MOE_CHECK_DISPATCH_PATH) and its protected-mode warning;\n  - the dispatch argv, its time bound, and how the JSON line is parsed;\n  - the commit-tree identity and message R chose;\n  - the gate line format, including environment=<id>;\n  - each new postflight-vm-route.sh row: name, setup and assertions;\n  - whether R added a code family that parity-check does not compare yet.\nThis list is what steps 2-4 must match. No file changes in this step.\n\nmem:decision-verified-local-check-gate holds the design.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "PORT CONTRACT (from 9e9e7345; R's round 2 not landed at 15:40Z, target tip = 9e9e7345).\nCodes, all family MOE_CHECK_DISPATCH_ (parity compares none yet): env PATH, TIMEOUT_SEC; warning PATH_IGNORED; line REFUSED; verdicts UNAVAILABLE, TIMEOUT_INVALID, TIMEOUT, NO_REPORT, REPLY_INVALID, NOT_PASSED. Child fixed codes pass through (stopped.code first, then top-level code).\nWarning (stderr, verbatim): `[WARN] MOE_CHECK_DISPATCH_PATH_IGNORED: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/check-dispatch.mjs runs.` Resolver default <scripts>/local-runner/check-dispatch.mjs; override honored only unprotected.\nL6: `if gate && taskId && strong` -> freeze (New-MoeFrozenCandidate + Send-MoeCandidate) && dispatch, else MOE_COMMIT_FAILED_GATE msg `the merged tree $m on $b was not frozen, recorded and passed by the check VMs (<code or 'no dispatch'>[ environment=<id>])`; legacy `if` becomes `elseif`, body unchanged. Dispatched commit = the frozen candidate's commit (commit-tree M -p B, 'Moe frozen candidate snapshot'); no second commit-tree (ps1 G8 forbids 'commit-tree' text before the intent call).\nDispatch order: Rel -> existing MOE_WORKTREE_PROJECT_NOT_TOP line + code; bound Get-MoeLandLeaseBudget(MOE_CHECK_DISPATCH_TIMEOUT_SEC or 3600) else TIMEOUT_INVALID; no node / no CLI file -> UNAVAILABLE; spawn node CLI --project <projectPath> --task <id> --commit <frozen commit>, 5 credentials + GIT_INDEX_FILE/GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR removed, stdin empty, stdout to a file, stderr discarded; cyan `Post-flight: owed checks in check VMs: task <id> candidate <cand>`; poll to the bound; timeout -> stop, TIMEOUT; else verdict. PASS -> green `[OK] check VMs passed every owed check of candidate <cand>.`; else one stderr `[WARN] MOE_CHECK_DISPATCH_REFUSED: <verdict>`.\nVerdict (python port): read <=1048577 bytes; missing/empty NO_REPORT; >1 MiB BAD; strict UTF-8; drop exactly ONE trailing \\n; any \\n or \\r left BAD; JSON object else BAD; 'stopped' key -> its code must fullmatch [A-Z][A-Z0-9_]{0,63} else BAD, plus ' environment=<e>' only on fullmatch moe-local-vm-v1:[0-9a-f]{64}; 'code' key -> fixed code else BAD; taskId/candidateId equal and results a list else BAD; rc!=0 NOT_PASSED; non-empty results PASS else BAD. Keys case-sensitive.\nStop (sh): TERM group once, 120 s grace, KILL, pid cleared LAST; EXIT trap (cleanup_temp) stops a running dispatch.\nWINDOWS DEVIATION (no TERM exists that the wrapper could send to the child alone; node raises SIGTERM never, and check-dispatch.mjs handles only SIGINT/SIGTERM): the child shares the wrapper's console, so an operator Ctrl+C reaches it once as SIGINT. The wrapper never signals it: Stop-MoeCheckDispatch waits a grace for it to exit, then `taskkill /T /F /PID <recorded pid>`, record cleared last. Grace 120 s on the interrupt paths (invoker finally, outer finally after Stop-MoeGateChild), 0 on the timeout (nothing was delivered, so waiting is pointless). A timed-out check VM can therefore leak on Windows: I will file a bug for a Windows stop seam in check-dispatch.mjs (out of scope: no local-runner change).\nsh rows to mirror: SG-pass/legacy/observe/nonzero/stopped/nothing-owed/undeclared/crash/unparsable/env/env-malformed/missing/timeout/protected (E2E, codex VM worker, OPENAI_API_KEY, FAKE_TASK_STATUS=REVIEW, FAKE_ATTEMPT_PROFILE, canary qualityGate witness); SGV verdict table (+ round-2 D: pass+\"\\n\\n\" BAD, E: results {\"outcome\":\"passed\"} rc0 BAD); SGU U1-U7 (U7 ported as a runspace Stop() mid-dispatch: the PipelineStoppedException a Ctrl+C raises); SG8 static if/elseif order; round-2 G = static order pin of the outer finally (Stop-MoeCheckDispatch after Stop-MoeGateChild, before Invoke-MoeTeardownRescue and Complete-MoePostflight).\nParity: R added the MOE_CHECK_DISPATCH_ family sh-only; step 4 adds it to both scripts plus require_both literals.",
+      "startedAt": "2026-11-04T15:19:46.983Z",
+      "completedAt": "2026-11-04T15:28:39.537Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Port contract. Read this before editing anything. This row is a byte-faithful port of CQ-M07r (task-ba7a8c84).\n\nEARLY START (the human's decision, 2026-11-04 about 15:20Z, relayed by governor-e6142a94)\n- This row's WORKING claim no longer waits for CQ-M07r to be DONE. task-fa0fea1a is DONE.\n- R's completion 9e9e7345 is landed on moe/work-2026-10-24. QA round 1 (15:12Z) found the substance green and bounced it only for size and three missing test pins.\n- R's round 2 changes scripts/tests/postflight-vm-route.sh only, with no runtime change. It adds:\n  - G: a pin that fails when cleanup_temp no longer stops a running dispatch (the guarded stop_check_dispatch line, moe-agent.sh about :270). For example, an SG8-style order check on cleanup_temp's body, before teardown_rescue and finalize_postflight.\n  - D: an SGV row where a pass line followed by \"\\n\\n\" gives REPLY_INVALID. The verdict drops exactly ONE trailing newline, never rstrip.\n  - E: an SGV row where results {\"outcome\":\"passed\"}, which is not a list, at rc 0 gives REPLY_INVALID.\n- Port all three as ps1 rows in step 3. For G, use the ps1 cleanup path's equivalent of the EXIT trap.\n- If R's round-2 completion has landed by the time you reach step 3, port its exact rows: `git show <round-2 sha> -- scripts/tests/postflight-vm-route.sh`.\n- Otherwise, port them from the descriptions above and ba7a8c84's rejectionDetails. Say so in the completion summary, so QA can compare once R lands.\n\nREADING\n- Read CQ-M07r's completion: `git show 9e9e7345 -- scripts/moe-agent.sh scripts/tests/postflight-vm-route.sh scripts/tests/postflight-fake-check-dispatch.js`. The sha is also in that task's commits in moe.get_context.\n- Read its two comments as well, on the environment-id printing: comment-732e84b5 on r, and comment-058a3fed on this row.\n\nWrite the port contract into this step's note:\n- every new MOE_ code, warning and message string, verbatim;\n- the env var (MOE_CHECK_DISPATCH_PATH) and its protected-mode warning;\n- the dispatch argv, its time bound, and how the JSON line is parsed;\n- the commit-tree identity and message R chose;\n- the gate line format, including environment=<id>;\n- each new postflight-vm-route.sh row (name, setup and assertions), including R's round-2 pins G, D and E above;\n- whether R added a code family that parity-check does not compare yet.\nThis list is what steps 2-4 must match. This step makes no file changes.\n\nSIZE\n- R's 484 net lines were over the 400-line QA cap, and this port will likely be over it too.\n- Right after your last edit, and before the long verification in step 5, check the net. If `git diff --numstat <target>...HEAD` nets over 400 lines, file moe.propose_rail EPIC ADD_RAIL 'CQ-M07s size exception', using the CQ-M07q/CQ-M07n2 template:\n  - name this row;\n  - give the per-file numstat;\n  - say \"waives size only; grow only by QA-required fixes\";\n  - say that every DoD item, the rails and fresh verification still apply.\n- Then ping #governors with the prop id, so the human can approve it while the gate runs.\n\nmem:decision-verified-local-check-gate holds the design.",
+          "reason": "The human decided at 15:20Z on 2026-11-04 to start this row early against CQ-M07r's landed 9e9e7345, while r reworks test pins only. This amendment adds the re-sync instructions for r's three round-2 pins, and the size-exception step that r's QA bounce showed is needed.",
+          "amendedBy": "governor-e6142a94",
+          "amendedAt": "2026-11-04T15:18:22.446Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
       "description": "moe-agent.ps1 runtime: the check-VM gate at L6 under the strong profile. Keep the file UTF-8 with a BOM, and edit it in place in the task worktree with the editing tool (scripts/CLAUDE.md: never a shell write).\n\n(a) RESOLVER, next to $script:AgentSeatCli (about line 9398):\n- `$script:CheckDispatchCli = Join-Path $script:MoeScriptRoot 'local-runner\\check-dispatch.mjs'`;\n- MOE_CHECK_DISPATCH_PATH is honored only when -not $script:MoeRuntimeProtected. Under it, write R's exact warning to stderr.\n\n(b) INVOKER, modeled on Invoke-MoeSeatCli (about line 9405):\n- the same credential scrub before node runs (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, CODEX_API_KEY), restored in finally;\n- the same UTF-8 pipe and console encodings for PS 5.1;\n- only stdout captured, $LASTEXITCODE kept;\n- the time bound from the port contract. Stop a child that outlives it by its recorded process id only, never by name.\n\n(c) L6 in Invoke-MoeWorktreeRounds (about lines 7381-7399):\n- When Test-MoeStrongLandingTask $preflightTaskId $Git.GitDir is true: keep `New-MoeFrozenCandidate $Git $m $b` and Send-MoeCandidate as today. Then `git commit-tree $m -p $b` with R's identity and message choice. Then the dispatch: `--project <control top> --task $preflightTaskId --commit <that commit>`.\n- ConvertFrom-Json reads the one line for fixed codes only.\n- Exit 0 with every owed check passed: continue to Test-MoeWorktreeStrongIntent with that frozen candidate.\n- Any other result: $Res.Code = 'MOE_COMMIT_FAILED_GATE', with R's exact $L.Msg. Append environment=<id> only when the stop's environment matches ^moe-local-vm-v1:[0-9a-f]{64}$ exactly (-cmatch). Return $false.\n- Error handling: a missing CLI, a spawn failure, a timeout, a non-JSON or multi-line reply and a commit-tree failure each fail the round the same way, with nothing published and no credential in the child.\n- An interrupt during the dispatch fails the round. The existing Ctrl+C deferral and the finally block must not record a host-gate CheckRun for a gate that never ran.\n\n(d) LEGACY. Every non-strong path (legacy, observe, task-less) keeps today's Invoke-MoeFrozenGate -WorktreeMode branch byte for byte. Under the strong branch the host Invoke-MoeFrozenGate is never called.\n\n(e) PS 5.1 SYNTAX: no `??`, ternary `? :` or `&&`/`||` pipeline-chain operators; ParseFile must parse cleanly on 5.1 and 7.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T15:28:45.587Z"
     },
     {
       "stepId": "step-3",
@@ -59,9 +73,9 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-5772dacf",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -69,7 +83,6 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-ba7a8c84fff44b95bf04c829791db935",
     "task-fa0fea1ab154449fad01749b3956213b"
   ],
   "priority": "MEDIUM",
@@ -84,20 +97,24 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:19.711Z",
-  "updatedAt": "2026-11-04T12:10:48.584Z",
+  "updatedAt": "2026-11-04T15:28:45.587Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:08:35.564Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-c33f294e"
+    "architect-c33f294e",
+    "worker-5772dacf"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:10:48.551Z",
   "executionContract": {
@@ -169,5 +186,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T12:10:48.584Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T15:19:46.983Z"
 }

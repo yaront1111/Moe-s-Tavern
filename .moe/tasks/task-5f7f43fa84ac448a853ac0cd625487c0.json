@@ -1,0 +1,41 @@
+{
+  "id": "task-5f7f43fa84ac448a853ac0cd625487c0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: postflight-safe.mjs kills the wrapper harness at 60 min (:51), but at f38a17d4 the full postflight.ps1 takes 3200 s (5.1) and 3400 s (pwsh 7) on an idle Ryzen 9 9950X3D desktop, and windows-latest runs this work about 1.5x slower, so CI's \"Test Windows PowerShell wrapper postflight\" will end in failureClass TIMEOUT now that task-02af8654 lets the job reach it (the 30-min cap did the same on 10-31, a95f7199)",
+  "description": "Filed by hunt #25 (task-9ca91400, architect-67c762f6) on 2026-11-04. Lane: the windows-latest steps after step 15, which no completed PR #230 run had reached since 2037e856 (governor comment-f95ba6c8).\n\nPROBLEM\n- scripts/tests/postflight-safe.mjs runs postflight.sh or postflight.ps1 with execFile `timeout: 60 * 60 * 1000` and `killSignal: 'SIGKILL'` (:51-52).\n  - A kill becomes failureClass TIMEOUT and exit 1 (:55, :8).\n  - The comment at :45-48 sizes that bound on \"about 20 minutes on a desktop and past 30 on windows-latest\".\n- The harness has grown since then. Between main (3ed7a299, the dependabot PR base) and f38a17d4:\n  - postflight.ps1 went from 5013 to 6165 lines;\n  - postflight-vm-route.ps1 went from 0 to 1008 lines;\n  - the shared postflight-worktree.cjs gained 1340 lines;\n  - postflight.sh went from 5645 to 6725 lines, and postflight-vm-route.sh from 0 to 777. 9e9e7345 (CQ-M07r) then added another 255 to postflight-vm-route.sh.\n  - CQ-M07s and CQ-M07t (74fe4c99, 527735ea, open) add more VM-route scenarios to both suites.\n\nEVIDENCE\n1. Desktop run of the full harness at f38a17d4, using hunt #22's CI emulation (scripts in /mnt/d/moe-scratch/hunt-9ca91400/mine/: ci-lib.ps1, leg-p5.ps1, leg-p7.ps1, postflight-tee.mjs).\n   - Emulation: env stripped, CI=true, a fresh HOME, an 8.3 TEMP, and the CI chain pwsh step -> node -> engine. postflight-tee.mjs repeats postflight-safe's exact execFile but keeps the output.\n   - Deviation: GITHUB_ACTIONS was removed for that sub-step only. postflight.ps1:4317 is its only reader, the scenario AE symlink check this host cannot pass.\n   - The host is an AMD Ryzen 9 9950X3D with 32 threads, at 13% CPU load sampled mid-run. The 5.1 and pwsh 7 runs overlapped.\n   - Windows PowerShell 5.1: PASS in 3200 s, 89% of the cap. Verdict {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}. Log: /mnt/d/moe-scratch/hunt-9ca91400/logs/p5-postflight-ps1-full.log, last line \"rawExit=0 failure=null secs=3200\".\n   - pwsh 7: PASS in 3400 s, 94% of the cap. Log: logs/p7-postflight-pwsh-full.log, \"secs=3400\".\n2. Runner against desktop, for the same kind of work (sequential PowerShell and git process spawns):\n   - Live CI run 41848822541 at 9e9e7345 on windows-latest:\n     - \"Test Windows PowerShell landing guard\" took 47 s, against 30 s on this desktop (1.57x).\n     - \"Test PowerShell 7 landing guard\" took 45 s, against 28 s (1.61x).\n   - a95f7199 (10-31): run 41198897512's \"Test Windows PowerShell wrapper postflight\" was \"killed at exactly 30:01\", {\"engine\":\"powershell\",\"exit\":1,\"lastScenario\":\"Z\",\"failureClass\":\"TIMEOUT\"}, while the suite took about 20 min locally (1.5x or more).\n   - Linux: postflight-safe bash took 1841 s in hunt #25's WSL run. ubuntu-latest's \"Test Bash wrapper postflight and parity\" took 2750 s at 80078651 (run 41834653023), 2692 s at 2037e856 and 2688 s at 060d7b8c. That is about 1.46x.\n   - At 1.5x, 5.1 needs about 4800 s and pwsh 7 about 5100 s, against the 3600 s cap. To pass, the runner would have to be at most 12.5% slower than this desktop for 5.1, and 6% for pwsh 7.\n3. Why CI has not shown it yet:\n   - Since 2037e856 the windows-latest job stopped at step 15 (task-02af8654, DONE 9463e77d). Before that it stopped at the worktree suite (task-e45da220).\n   - main-based runs (the dependabot PRs at 00:23Z) show main's smaller suite on windows-latest: 1846-2092 s for 5.1 and 1689-1948 s for pwsh 7.\n4. Live: run 41848822541 (9e9e7345, which includes 02af8654's fix) passed windows-latest steps 15-20.\n   - Step 22, \"Test Windows PowerShell wrapper postflight\", began at 15:14:00Z.\n   - Predicted: it fails at about 16:18Z, after worktree-landing.ps1 and then the 60-min kill. Hunt #25 adds its outcome as a comment on this row.\n5. ubuntu-latest already uses about 2690 s of the same cap (76%), before CQ-M07r's 255 new vm-route.sh lines.\n\nFIX DIRECTION\n- Raise the bound in postflight-safe.mjs so that the predicted runner time fits with headroom: at least 120 min.\n  - ci.yml sets no timeout-minutes, so GitHub's 360-min job default still applies.\n  - Keep SIGKILL and the TIMEOUT class.\n  - Replace the :45-48 comment with the measured numbers above.\n- Optional: an env override for the bound. It is not needed for the fix.\n- Out of scope unless the governor asks: splitting the 5.1 and pwsh 7 postflights into separate jobs to cut wall time.\n  - Two steps of about 80 min each make the Windows job about 3 h.\n  - The concurrency group lets the run in progress finish, so PR #230 results would lag by that much.\n\nFILES\n- scripts/tests/postflight-safe.mjs\n- scripts/tests/postflight-safe.test.mjs\n- No open row holds either (lanes.js at 15:26Z).\n\nNOTES FOR THE PLANNER\n- epic-be924fb8 has no finalTaskId, so this newest row reads isEpicFinal:true through the max-order fallback. Keep the gate narrow: `node --test scripts/tests/postflight-safe.test.mjs`.\n- Do not plan a full postflight run as the gate. It takes 55-60 min per engine on this desktop.",
+  "definitionOfDone": [
+    "scripts/tests/postflight-safe.mjs bounds the harness at no less than 120 min (7,200,000 ms), still with killSignal SIGKILL and failureClass TIMEOUT on a kill. The comment at :45-48 cites measured durations (this row's 3200 s / 3400 s desktop runs and the runner ratio) instead of \"about 20 minutes on a desktop and past 30 on windows-latest\".",
+    "scripts/tests/postflight-safe.test.mjs has a case that fails if the bound drops below 120 min. The test reads the bound from the module (exported, not copied). `node --test scripts/tests/postflight-safe.test.mjs` passes.",
+    "The completion summary names the first PR #230 CI run that contains the change, and reports its windows-latest \"Test Windows PowerShell wrapper postflight\" and \"Test PowerShell 7 wrapper postflight and parity\" outcomes, or says the run is still in progress."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-c33f294e",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 535.7,
+  "comments": [
+    {
+      "id": "comment-7ed4d663a4534b41a504f695b2a738e5",
+      "author": "governor-e6142a94",
+      "content": "Evidence from real CI for the planner, from the governor. The same 60-min cap is close on Linux too, so size the fix for both platforms.\n- On PR #230's ubuntu-latest, \"Test Bash wrapper postflight and parity\" (postflight-safe.mjs bash) took:\n  - 44:48 (run 41830422144 at 060d7b8c, 12:39:47 to 13:24:35Z);\n  - 44:52 (run 41823611051 at 2037e856);\n  - 45:50 (run 41834653023 at 80078651, 13:29:43 to 14:15:33Z).\n  That is 75-76% of the 60-min execFile cap (postflight-safe.mjs:51), and it grows with every wrapper row. CQ-M07r/s/t are adding postflight scenarios right now.\n- The job has no timeout-minutes in ci.yml, so the cap at :51 is the only bound.\n- The fix should leave real headroom on all three postflight steps, not just the two Windows ones. That could be a per-step budget, an env-overridable cap, or splitting the suite across steps/jobs.\n- Get the runner timings with `gh.exe run view <id> --json jobs`.",
+      "timestamp": "2026-11-04T15:27:21.462Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T15:27:08.909Z",
+  "updatedAt": "2026-11-04T15:27:26.474Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T15:27:15.313Z"
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e"
+  ]
+}
