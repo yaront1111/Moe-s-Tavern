@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 // (task-8c875cc8). Row A runs the autostart's Start-Process statement, lifted
 // from moe-agent.ps1 by the PowerShell AST, on the literal fixture name; row B
 // runs the real launcher under spaced project and daemon-script paths. Each
-// fake daemon records the argv node gave it.
+// fake daemon records the argv node gave it. Row C runs row A's driver on
+// copies of moe-agent.ps1 with that statement removed and duplicated.
 const windows = process.platform === 'win32';
 const PS1 = fileURLToPath(new URL('../moe-agent.ps1', import.meta.url));
 const LITERAL = "control é [x] $;'";
@@ -44,16 +45,24 @@ const project = process.argv[process.argv.indexOf('--project') + 1];
 if (project && fs.existsSync(path.join(project, '.moe'))) fs.writeFileSync(path.join(project, '.moe', 'daemon.json'), JSON.stringify({ pid: process.ppid, port: 1, projectPath: project }));
 `;
 
-// Finds the one daemon-autostart Start-Process (the one passing --project),
-// defines the wrapper functions that statement calls, then runs the statement
+// Finds the one daemon-autostart Start-Process: the call that runs
+// $daemonScript with the literals start and --project. --project alone is not
+// enough, since the CQ-M07s check dispatch passes it too (task-e5211efd).
+// Defines the wrapper functions that statement calls, then runs the statement
 // once per case with that case's $daemonScript and $projectPath.
+const AUTOSTART_COUNT = 'expected exactly one daemon-autostart Start-Process in moe-agent.ps1, found';
 const DRIVER = `param([string]$Wrapper, [string]$Cases)
 $ErrorActionPreference = 'Stop'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($Wrapper, [ref]$tokens, [ref]$errors)
 if ($errors.Count -gt 0) { throw "moe-agent.ps1 does not parse: $($errors[0].Message)" }
-$calls = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-Process' -and $n.Extent.Text.Contains('--project') }, $true))
-if ($calls.Count -ne 1) { throw "expected exactly one Start-Process passing --project in moe-agent.ps1, found $($calls.Count)" }
+$calls = @($ast.FindAll({ param($n)
+    if (-not ($n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-Process')) { return $false }
+    $vars = @($n.FindAll({ param($x) $x -is [System.Management.Automation.Language.VariableExpressionAst] }, $true) | ForEach-Object { $_.VariablePath.UserPath })
+    $strs = @($n.FindAll({ param($x) $x -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object { $_.Value })
+    ($vars -contains 'daemonScript') -and ($strs -contains 'start') -and ($strs -contains '--project')
+}, $true))
+if ($calls.Count -ne 1) { throw "${AUTOSTART_COUNT} $($calls.Count)" }
 $call = $calls[0]
 $names = @($call.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ })
 foreach ($f in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $names -contains $n.Name }, $true))) {
@@ -111,6 +120,9 @@ function run(exe, args, { cwd, env, capMs, stopOn = [] }) {
     });
   });
 }
+// pwsh 7's ConciseView colours an error and wraps it at the console width
+// behind a "     | " gutter; match error text after plain() (subagent-mirror.test.mjs).
+const plain = (out) => out.replace(/\x1B\[[0-9;?]*[A-Za-z]/g, '').replace(/\r?\n[ \t]*\|?[ \t]*/g, ' ').replace(/\s+/g, ' ');
 const show = (r) => `exit ${r.code}${r.stopped ? ' (stopped)' : ''}${r.spawnError ? ` spawn error: ${r.spawnError.message}` : ''}\n--- stdout\n${r.stdout}\n--- stderr\n${r.stderr}`;
 const PS_ARGS = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File'];
 async function waitForFiles(files, ms) {
@@ -166,5 +178,27 @@ for (const engine of ENGINES) {
     assert.doesNotMatch(out, /Daemon failed to start/, show(r));
     assert.ok(fs.existsSync(record), `node never ran the daemon script: its path was split (${script})\n${show(r)}`);
     assert.deepEqual(readRecord(record), [script, 'start', '--project', project], `the project argument was split\n${show(r)}`);
+  });
+
+  // The exactly-one guard: copies of moe-agent.ps1 (BOM and line endings kept)
+  // with the autostart line removed, then duplicated, must each stop the driver.
+  test(`${engine.name}: the driver refuses a wrapper whose daemon autostart is missing or duplicated`, opts, async (t) => {
+    const root = fixtureRoot(t);
+    const lines = fs.readFileSync(PS1, 'utf8').split('\n');
+    const at = lines.flatMap((l, i) => (/\bStart-Process\b.*\$daemonScript\b/.test(l) ? [i] : []));
+    assert.equal(at.length, 1, `expected one daemon-autostart line in moe-agent.ps1 to mutate, found ${at.length}`);
+    const casesFile = path.join(root, 'cases.json');
+    fs.writeFileSync(casesFile, '[]', 'utf8');
+    const driver = path.join(root, 'driver.ps1');
+    fs.writeFileSync(driver, '\u{feff}' + DRIVER, 'utf8');
+    for (const [name, found, mutant] of [['removed', 0, lines.toSpliced(at[0], 1)], ['duplicated', 2, lines.toSpliced(at[0], 0, lines[at[0]])]]) {
+      const wrapper = path.join(root, `moe-agent-${name}.ps1`);
+      fs.writeFileSync(wrapper, mutant.join('\n'), 'utf8');
+      const r = await run(engine.exe, [...PS_ARGS, driver, '-Wrapper', wrapper, '-Cases', casesFile], { cwd: root, env: childEnv(root), capMs: DRIVER_CAP_MS });
+      assert.equal(r.spawnError, null, show(r));
+      assert.notEqual(r.code, 0, `the driver accepted a wrapper with its daemon autostart ${name}\n${show(r)}`);
+      assert.ok(plain(r.stderr).includes(`${AUTOSTART_COUNT} ${found}`), `the ${name} copy did not stop at the count check\n${show(r)}`);
+      t.diagnostic(`autostart ${name}: ${AUTOSTART_COUNT} ${found}`);
+    }
   });
 }
