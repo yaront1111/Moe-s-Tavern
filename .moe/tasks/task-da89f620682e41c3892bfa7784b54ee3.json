@@ -123,8 +123,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -136,12 +136,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:00.640Z",
-  "updatedAt": "2026-11-04T12:40:22.357Z",
+  "updatedAt": "2026-11-04T12:45:15.912Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:14:58.170Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-04T12:45:15.909Z",
+    "wallClockMs": 1817739
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -279,5 +281,9 @@
     "kind": "completion",
     "sessionId": "worker-a408f113@2026-11-04T12:25:47Z",
     "at": "2026-11-04T12:39:44.879Z"
-  }
+  },
+  "completedAt": "2026-11-04T12:45:15.909Z",
+  "reviewCompletedAt": "2026-11-04T12:45:15.909Z",
+  "reviewSummary": "Reviewed completion 6d147217, on moe/work-2026-10-24 and origin after a fresh fetch. 8 files, +429/-54, net 375 LOC; scope matches approvedScope.\n\nRe-run:\n- task.verification verbatim (HEAD=6d147217, paths clean): exit 0, 293 files, 7622 passed | 24 skipped, N 9/9, D 3/3.\n- RED with 2037e856's 4 sources: N1-N8, D1, D2 fail; N9, D3 pass.\n- Gate (parity-check.sh && npm run lint): exit 0.\n- Real boot of a /tmp snapshot build (HOME redirected, scratch project, port 19977), stopped by its own stop.\n\nDoD:\n1. With the live record rewritten to pidNamespace pid:[1], bindHost 0.0.0.0:\n   - status kept it byte-identical, owner 'another pid namespace'.\n   - doctor gave [OK] daemon.json and reachability.\n   - stop exited 1, sent no signal, wrote no sentinel; the live daemon survived, which covers the SIGTERM risk.\n   - start refused ('already running', nothing on 19978).\n   - Once stopped: doctor WARN '(stale)', and status removed it.\n2. N9 and D3 pass on old and new code. In index.test.ts the helpers are only hoisted. Full suite green.\n3. The real daemon wrote pidNamespace pid:[4026532219], matching readlink. SCHEMA.md and ARCHITECTURE.md are updated.\n\nInvariants hold: WSL branch first and unchanged; exact-form regex; local-only dial; no namespaced path probes the record pid.\n\nNon-blocking:\n- A namespaced record with a projectPath mismatch (a non-documented mount path) keeps the native pid rules, as today.\n- daemon.lock is still pid-judged (declared out of scope).\n- Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

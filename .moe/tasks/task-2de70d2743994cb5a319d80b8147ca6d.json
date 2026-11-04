@@ -9,10 +9,49 @@
     "Neither package.json files array changes, and the daemon and proxy builds and test suites still pass in a snapshot."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-c33f294e",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create packages/moe-daemon/LICENSE and packages/moe-proxy/LICENSE, each a byte-identical copy of the root LICENSE.\n\nThe root LICENSE is MIT, 21 lines, 1087 bytes, LF, with a final newline, no trailing spaces and no CR. Write each copy with the Write tool, because a cp leaves no TOOL witness, then prove both with `cmp LICENSE packages/moe-daemon/LICENSE && cmp LICENSE packages/moe-proxy/LICENSE`. `git check-attr` already gives both new paths `text: auto` / `eol: lf` (the same as the root), so every OS checks out LF and the copies stay identical on Windows too.\n\nDo not touch either package.json `files` array: it already names LICENSE (packages/moe-daemon/package.json:37-41, packages/moe-proxy/package.json:35-39), and npm always includes a package-root LICENSE.\n\nError handling: if cmp reports a difference (a dropped final newline, say), rewrite the copy. Never edit the root LICENSE.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/LICENSE",
+        "packages/moe-proxy/LICENSE"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/LICENSE",
+        "packages/moe-proxy/LICENSE"
+      ],
+      "note": "Both copies cmp-equal the root LICENSE.",
+      "startedAt": "2026-11-04T12:44:59.688Z",
+      "completedAt": "2026-11-04T12:45:16.421Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the guard as one node:test case at the end of scripts/tests/release-version.mjs. CI already runs that file on ubuntu, windows and macos (.github/workflows/ci.yml:238, the 'Test release version guard' step), so ci.yml needs no change.\n\nThe case is named 'both npm packages ship the root LICENSE byte for byte' and reuses the file's existing imports (assert, fs, path, fileURLToPath, test). Resolve the repo root from import.meta.url (`fileURLToPath(new URL('../../', import.meta.url))`), never from cwd. For each of packages/moe-daemon and packages/moe-proxy it asserts three things:\n1. the copy exists, with a message naming the path and saying npm packs only the package directory;\n2. `fs.readFileSync(copy).equals(rootLicense)`, comparing Buffers byte for byte, not strings, so an EOL change is caught;\n3. the package.json `files` is an array that still includes 'LICENSE', which blocks the wrong 'fix' of dropping LICENSE from files (DoD 3).\n\nA 12-line version was dry-run at planning; with both copies present it passes and the file reports 7 pass, 0 fail.\n\nError handling: check existsSync before readFileSync, so a missing copy fails with an assertion that names the path instead of a bare ENOENT. checkRef 3 proves the case turns RED both when a copy is missing and when one differs by one byte.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "scripts/tests/release-version.mjs"
+      ],
+      "startedAt": "2026-11-04T12:45:17.110Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run executionContract.checkRefs 0-3 fresh, from the task worktree, joined with ' && ' in order. Submit that exact command and its output tail as moe.complete_task verification.\n- [0] Static checks: both package.json files are unchanged against B, both copies cmp-equal the root LICENSE, ci.yml still runs release-version.mjs, and only the 3 planned paths differ.\n- [1] DoD 1: in a clone snapshot at B with the 3 files overlaid, `npm pack --dry-run --json` lists LICENSE for both packages, and a real `npm pack` tarball's package/LICENSE cmp-equals the root. npm 12 prints an object keyed by the package name, not an array; the parse handles both.\n- [2] DoD 3: the same snapshot form runs release-version.mjs, then npm ci, build and npm test for the daemon and the proxy. It is a clone, not a tar snapshot, because the daemon build's generate-init-files needs git history, or it rewrites initFiles.ts.\n- [3] DoD 2: a mutation proof. The guard passes, turns RED with the proxy copy removed, passes again, then turns RED with one byte appended to the daemon copy.\n\nPlanning dry-run, on a simulated edit:\n- [0] was RED at HEAD (rc 2, no copy) and GREEN on the simulation.\n- [1] printed moe-daemon 3 and moe-proxy 3 (unbuilt pack file counts) and PACK-OK.\n- [2] gave 7 pass / 0 fail, daemon 293 files / 7610 passed / 24 skipped, and proxy 9 files / 335 passed.\n- [3] printed MUTANTS-RED.\n\nError handling: fix a red check in the files, never by editing the check. npm runs only inside the /tmp snapshots, never in the checkout.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Self-review: one adversarial pass over this diff.\n1. Cross-platform: the copies carry eol=lf like the root, and the test compares Buffers with path.join, so Windows CI compares the same bytes.\n2. Nothing else changes. package.json, release.yml and the IDE bundles are untouched; the bundles copy dist, package.json and node_modules, never the package-root LICENSE.\n3. The test fails for the right reasons: checkRef 3 shows RED on a missing copy and on a one-byte difference, and the files assertion guards DoD 3.\n4. Test hygiene: no temp dirs, no writes, and nothing that depends on cwd.\n\nError handling: anything found here is fixed before moe.complete_task, never deferred.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-593560ee",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +63,86 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:13:15.066Z",
-  "updatedAt": "2026-11-04T12:36:06.040Z",
+  "updatedAt": "2026-11-04T12:45:17.110Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T12:36:03.111Z"
+    "firstClaimAt": "2026-11-04T12:36:03.111Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-c33f294e"
-  ]
+    "architect-c33f294e",
+    "worker-593560ee"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:43:49.681Z",
+  "executionContract": {
+    "intendedBehavior": "The moe-daemon and moe-proxy npm tarballs carry the MIT LICENSE text byte for byte, and a CI-run test fails if either package-root copy goes missing, drifts from the root LICENSE, or is dropped from its package.json files array.",
+    "acceptanceCriteria": [
+      "npm pack --dry-run --json in both package directories lists LICENSE, and each packed package/LICENSE cmp-equals the root LICENSE (checkRef 1).",
+      "scripts/tests/release-version.mjs fails when either copy is missing or differs, and passes with both in place (checkRef 3; CI runs it at ci.yml:238).",
+      "Neither package.json files array changes, and the daemon and proxy builds and test suites pass in a snapshot (checkRefs 0 and 2)."
+    ],
+    "invariants": [
+      "The root LICENSE is unchanged.",
+      "packages/moe-daemon/package.json and packages/moe-proxy/package.json are unchanged.",
+      "No change to release.yml, ci.yml or any IDE bundle script."
+    ],
+    "compatibility": [
+      "The existing release-version.mjs cases (tag and version sync) keep passing unchanged."
+    ],
+    "approvedScope": [
+      "Two new files: packages/moe-daemon/LICENSE and packages/moe-proxy/LICENSE, copies of the root LICENSE.",
+      "One new node:test case in scripts/tests/release-version.mjs."
+    ],
+    "reuse": [
+      "The existing CI step 'Test release version guard' (ci.yml:238) runs the guard on all three OS legs, so no new workflow step is needed.",
+      "The test file's existing imports and the node:test runner."
+    ],
+    "sourceAssumptions": [
+      "The root LICENSE is MIT, 21 lines, 1087 bytes, LF, with a final newline; git check-attr gives text: auto / eol: lf to it and to both new package-root paths.",
+      "The files arrays name dist, README.md and LICENSE: packages/moe-daemon/package.json:37-41, packages/moe-proxy/package.json:35-39.",
+      "`npm pack --dry-run --json` under npm 12.2.0 prints an object keyed by package name ({\"moe-daemon\": {files: [...]}}), not an array.",
+      "Building the daemon in a tar snapshot without git history makes generate-init-files rewrite initFiles.ts with truncated shipped-body lists; a git clone snapshot avoids it."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && git diff --quiet \"$B\" -- packages/moe-daemon/package.json packages/moe-proxy/package.json && cmp LICENSE packages/moe-daemon/LICENSE && cmp LICENSE packages/moe-proxy/LICENSE && grep -qF 'node --test scripts/tests/release-version.mjs' .github/workflows/ci.yml && X=$({ git diff --name-only \"$B\" -- . ':!.moe'; git ls-files -o --exclude-standard -- . ':!.moe'; } | sort -u | grep -vxE 'packages/moe-(daemon|proxy)/LICENSE|scripts/tests/release-version\\.mjs' || true) && { [ -z \"$X\" ] || { echo \"out of scope: $X\"; exit 1; }; }",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && S=$(mktemp -d /tmp/lic-XXXXXX)/r && git clone -q --shared --no-checkout \"$(git rev-parse --git-common-dir)\" $S && git -C $S checkout -q --detach $B && cp --parents packages/moe-daemon/LICENSE packages/moe-proxy/LICENSE scripts/tests/release-version.mjs $S && env -i HOME=$HOME S=$S PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin bash -c 'set -eo pipefail; for p in moe-daemon moe-proxy; do cd $S/packages/$p; npm pack --dry-run --json --ignore-scripts 2>/dev/null | node -e \"let j=JSON.parse(require(\\\"fs\\\").readFileSync(0));j=j[0]||Object.values(j)[0];const f=j.files.map(x=>x.path);console.log(\\\"$p\\\",f.length);process.exit(f.includes(\\\"LICENSE\\\")?0:1)\"; npm pack -q --ignore-scripts --pack-destination $S >/dev/null; tar -xzOf $S/$p-*.tgz package/LICENSE | cmp - $S/LICENSE; done; echo PACK-OK'",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && S=$(mktemp -d /tmp/lic-XXXXXX)/r && git clone -q --shared --no-checkout \"$(git rev-parse --git-common-dir)\" $S && git -C $S checkout -q --detach $B && cp --parents packages/moe-daemon/LICENSE packages/moe-proxy/LICENSE scripts/tests/release-version.mjs $S && env -i HOME=$HOME S=$S PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -eo pipefail; cd $S; node --test --test-reporter=tap scripts/tests/release-version.mjs | grep -aE \"^# (pass|fail) \"; for p in moe-daemon moe-proxy; do cd $S/packages/$p; npm ci --no-audit -q >/dev/null 2>&1; npm run -s build >/dev/null; npm test 2>&1 | grep -aE \"Test Files |Tests |FAIL\"; done; echo SUITES-OK'",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d /tmp/licm-XXXXXX) && git ls-files -z -co --exclude-standard -- LICENSE packages/moe-daemon/LICENSE packages/moe-daemon/package.json packages/moe-proxy/LICENSE packages/moe-proxy/package.json scripts | tar --null -T - -c | tar -x -C $S && cd $S && t(){ $HOME/.nvm/versions/node/v24.21.0/bin/node --test scripts/tests/release-version.mjs >/dev/null 2>&1; } && t && mv packages/moe-proxy/LICENSE x && ! t && mv x packages/moe-proxy/LICENSE && t && printf ' ' >> packages/moe-daemon/LICENSE && ! t && echo MUTANTS-RED"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "A vitest guard in each package (proxy distContents.test.ts plus a daemon twin) would mean two files and two suites. The existing release-version.mjs node test already runs in CI on all three OS legs and is about release contents, so one case there covers both packages with no ci.yml edit. Copying LICENSE at pack time (prepack) was rejected: a committed copy is simpler, visible and testable.",
+    "codebaseInsights": "Every checkRef was dry-run: [0] and [1] are RED at HEAD and GREEN on a simulated edit, [2] gave daemon 7610 / proxy 335 passing in a clone snapshot, and [3] printed MUTANTS-RED. Two traps found while dry-running: npm 12 --json pack output is an object keyed by name, and a tar snapshot (no git history) makes the daemon build rewrite initFiles.ts.",
+    "risks": "The Write tool must keep the final newline: cmp catches a miss. Do not run npm pack or npm ci in the checkout; the checkRefs do it in /tmp clones. The node --test default reporter in Node 24 is spec, so checkRef 2 passes --test-reporter=tap to grep the '# fail 0' line.",
+    "keyFiles": [
+      "LICENSE",
+      "scripts/tests/release-version.mjs",
+      "packages/moe-daemon/package.json",
+      "packages/moe-proxy/package.json",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6d1472171c4ed2006c861a43dd436f9edae67963",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:43:49.715Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T12:44:59.688Z"
 }
