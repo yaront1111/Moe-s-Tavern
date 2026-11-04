@@ -137,8 +137,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -199,7 +199,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:11:06.834Z",
-  "updatedAt": "2026-11-04T10:40:31.968Z",
+  "updatedAt": "2026-11-04T11:43:24.913Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:08.057Z",
@@ -209,7 +209,9 @@
     "firstClaimAt": "2026-11-01T14:15:13.146Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-04T11:42:38.417Z",
+    "wallClockMs": 250045271
   },
   "contextFetchedBy": [
     "architect-30d804be",
@@ -334,10 +336,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T08:56:47Z",
-    "at": "2026-11-04T10:39:26.082Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T10:40:07Z",
+    "at": "2026-11-04T11:43:24.913Z"
   },
   "reviewStartedAt": "2026-11-04T10:36:02.746Z",
   "verification": {
@@ -347,5 +350,9 @@
     "reportedAt": "2026-11-04T10:36:02.746Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M07n: ported CQ-M07m's error paths to moe-agent.ps1.\n- Capacity: exit 75 waits in a loop before any claim and prints MOE_SEAT_CAPACITY_WAIT; any other failure stops with MOE_SEAT_START_FAILED.\n- codex credentials: OPENAI_API_KEY, else CODEX_API_KEY, travel on the stdin pipe only. With neither set, the gate refuses before seat-start and claim, with one #general line.\n- claude credentials: a missing token prints MOE_VM_CREDENTIAL_UNAVAILABLE account=<id|none>, escalates once per account, waits retry-sec, rechecks the attempt and re-leases.\n- Failed job: MOE_SEAT_JOB_FAILED, then seat-stop and the instance forgotten. The existing streak, backoff and resume budgets apply; VM seats get no outage mode.\n- Helper Rc 1: the admitted tree goes to a vm-helper-refused rescue ref.\n- Reload stops the VM before the wrapper_restart deregister.\n- Parity adds the MOE_VERIFIED_LOCAL_/SEAT_/VM_ families and the route literals, with one sh-only exemption (WSL_UNSUPPORTED).\n\nDoD:\n1. [vm route] today path, plus every postflight.ps1 row.\n2. [vm seat] happy, plus [vm route] refusals (not-ready, gemini/grok).\n3. The claude canary in [vm seat] happy, and the OPENAI/CODEX canaries in [seat credentials], on both engines.\n4. Happy and sigint, [seat failures], [seat waits] and [seat reload].\n5. Fresh full postflight.ps1 on this task's bytes, PS 5.1 AND pwsh 7: both PASS, EXIT=0, 0 FAIL, 0 SKIP (frozen 106, owner 16, migration 11, worktree 76/0, every vm-route section); logs /mnt/d/moe-scratch/m07n/fullW-{7,51}.log. Parity passes in sh and ps1, and the BOM is ef bb bf.\n\nSize: 282 changed lines, ≤400.\n\nNotes:\n- ps1 floors a 0 PollInterval at 1 s; sh sleeps 0.\n- [seat reload] runs FAKE_CLAIM_MODE=idle, since the reload fires between tasks.\n- The gate ran THIS worktree's harness, not the shared path.\n\nMerged tree (target bd75f88a, incl. 16e14abd): merge-tree is clean, and the qualityGate and postflight-vm-route.ps1 pass on 5.1 and 7. Full postflight fails only at postflight-worktree serena-ignore "
+  "completionSummary": "CQ-M07n: ported CQ-M07m's error paths to moe-agent.ps1.\n- Capacity: exit 75 waits in a loop before any claim and prints MOE_SEAT_CAPACITY_WAIT; any other failure stops with MOE_SEAT_START_FAILED.\n- codex credentials: OPENAI_API_KEY, else CODEX_API_KEY, travel on the stdin pipe only. With neither set, the gate refuses before seat-start and claim, with one #general line.\n- claude credentials: a missing token prints MOE_VM_CREDENTIAL_UNAVAILABLE account=<id|none>, escalates once per account, waits retry-sec, rechecks the attempt and re-leases.\n- Failed job: MOE_SEAT_JOB_FAILED, then seat-stop and the instance forgotten. The existing streak, backoff and resume budgets apply; VM seats get no outage mode.\n- Helper Rc 1: the admitted tree goes to a vm-helper-refused rescue ref.\n- Reload stops the VM before the wrapper_restart deregister.\n- Parity adds the MOE_VERIFIED_LOCAL_/SEAT_/VM_ families and the route literals, with one sh-only exemption (WSL_UNSUPPORTED).\n\nDoD:\n1. [vm route] today path, plus every postflight.ps1 row.\n2. [vm seat] happy, plus [vm route] refusals (not-ready, gemini/grok).\n3. The claude canary in [vm seat] happy, and the OPENAI/CODEX canaries in [seat credentials], on both engines.\n4. Happy and sigint, [seat failures], [seat waits] and [seat reload].\n5. Fresh full postflight.ps1 on this task's bytes, PS 5.1 AND pwsh 7: both PASS, EXIT=0, 0 FAIL, 0 SKIP (frozen 106, owner 16, migration 11, worktree 76/0, every vm-route section); logs /mnt/d/moe-scratch/m07n/fullW-{7,51}.log. Parity passes in sh and ps1, and the BOM is ef bb bf.\n\nSize: 282 changed lines, ≤400.\n\nNotes:\n- ps1 floors a 0 PollInterval at 1 s; sh sleeps 0.\n- [seat reload] runs FAKE_CLAIM_MODE=idle, since the reload fires between tasks.\n- The gate ran THIS worktree's harness, not the shared path.\n\nMerged tree (target bd75f88a, incl. 16e14abd): merge-tree is clean, and the qualityGate and postflight-vm-route.ps1 pass on 5.1 and 7. Full postflight fails only at postflight-worktree serena-ignore ",
+  "completedAt": "2026-11-04T11:42:38.417Z",
+  "reviewCompletedAt": "2026-11-04T11:42:38.417Z",
+  "reviewSummary": "Reviewed completion ac3e5afb (on moe/work-2026-10-24, in HEAD 7811de41): 4 files, 282 changed lines (under 400). Compared line by line with M07m sh 5592bcc0: capacity loop, codex gate and announce, Wait-MoeVmCredential, failed job, rescue, outage exemption. Strings are byte-identical. The reload stop runs before the wrapper_restart deregister. Every hunk is gated on the VM route. The credential travels only on stdin, and the seat child env is scrubbed and restored.\n\nFresh runs on a snapshot of HEAD 7811de41 (wrapper and vm-route bytes identical to ac3e5afb, plus the e45da220 harness fix). Env scrubbed, cwd on D:, timeout 360.\n- postflight.ps1 under PS 5.1.26100: PASS, EXIT=0.\n- postflight.ps1 under pwsh 7.6.9: PASS, EXIT=0.\n- Both: 0 FAIL, SKIP or timeouts; frozen 106, owner 16, migration 11, worktree 77/0, every vm-route section ok.\n- On ac3e5afb: parity-check.sh PASS, parity-check.ps1 PASS, npm run lint PASS, BOM ef bb bf.\n\nMutants: a renamed MOE_SEAT_ code fails both parity checks. Removing the failed-job seat-stop is caught by VE-failed; removing the reload seat-stop is caught by VR-reload.\n\nStatic node tests that read moe-agent.ps1: 204 pass, 47 skip, 1 fail. The failure is literal-project-path G2, identical on parent 566778a0 (tracked in task-6b3ab9d8).\n\nDoD 1-5 met: today-path rows; order and refusal rows; claude, OPENAI and CODEX canaries on 5.1 and 7; happy, sigint, failure and reload rows; both engines, parity and BOM.\n\nNot blocking:\n- (a) Invoke-MoeVmJob keeps an exit-1 refusal, \"no VM token\". sh treats that case as a failed job. It is reachable only in a token-vanished race, and no host CLI runs.\n- (b) codex keys stay in the operator's own env, as in sh and legacy.\n- (c) ps1 floors a 0 PollInterval at 1 s.\n- (d) Follow-ups task-bbd7ad2d and task-1dfec7a4.",
+  "requiredCheckAtDone": null
 }

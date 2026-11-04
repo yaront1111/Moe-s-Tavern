@@ -24,8 +24,8 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-c33f294e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -110,17 +110,24 @@
       "author": "governor-978922c1",
       "content": "Governor, relaying two advisory doc points from CQ-M06's QA approval (task-ced85748, 22:41Z), for when this row rewrites the verified-local text in docs/MCP_SERVER.md:\n1. In get_context's Execution policy context paragraph, \"an open attempt whose own snapshot is verified-local shows ... under a non-strict effectiveProfile\" holds only when the TASK snapshot is not verified-local. A stored verified-local task snapshot floors effectiveProfile.\n2. In the Strict completion (CQ-F08) bullet, \"completes as legacy after the rollback\" also covers a rollback to observe.\nNeither blocked M06.",
       "timestamp": "2026-11-01T22:42:23.021Z"
+    },
+    {
+      "id": "comment-737bdb9d7662448ab3a40a9f576bac6a",
+      "author": "governor-e6142a94",
+      "content": "Governor note for this row's planner (11:4xZ 11-04). The chain tails 62ec51f1, 7a0dadf9, d56fb46e and 5c4b5fab are all DONE, so the row auto-returned to PLANNING.\n- **Rail 6 (open design decisions go to the human before submit_plan):** this is already met. The human settled them in the architect REPL on 2026-11-01: VM per seat with a supervisor reset mode, a host-size cap, native Windows worker/QA under WSL mode, a host-store certify report with live match, and per-account VM tokens. They are recorded in comment-6af90ea8 and mem:decision-cq-m07-verified-local-activation. Cite those in the plan and do not re-ask. A blocking question parks an interactive seat for hours.\n- **DoD 8 (one real-VM end-to-end task on Windows and Linux, run by the human or the governor):** no seat runs Multipass (rail 4). Plan a step that prepares the exact runbook (commands, expected evidence, where the outcome comment goes), then hand it to the governor with an @governor-e6142a94 comment, or with report_blocked naming the governor run if nothing else remains. Do not plan the VM run itself as a worker step. The governor has run real-VM certify before (R13: SSH transport, both hosts PASS on 11-01).\n- **Size:** 9 DoD items across JetBrains, VS Code, the wrappers, the daemon and docs may exceed the 12-step / 10-file limit. If so, split per moe-epic-breakdown and keep this row last.",
+      "timestamp": "2026-11-04T11:43:11.121Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-01T22:42:23.021Z",
+  "updatedAt": "2026-11-04T11:43:17.917Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z"
   },
   "contextFetchedBy": [
     "architect-b742aab1",
-    "architect-30d804be"
+    "architect-30d804be",
+    "architect-c33f294e"
   ],
   "commits": [
     {
@@ -176,14 +183,9 @@
     "sessionId": "architect-30d804be@2026-11-01T07:33:39Z",
     "at": "2026-11-01T14:14:38.068Z"
   },
-  "blockedReason": "Split per the row's own instruction (moe-epic-breakdown) after the human settled the open decisions in the architect REPL on 2026-11-01: VM per seat with a supervisor reset mode, a host-size cap, native Windows worker/QA under WSL mode, a host-store certify report with live match, and per-account VM tokens. Recorded in comment-6af90ea8 and mem:decision-cq-m07-verified-local-activation. This row is now the integration row of 17 slices (CQ-M07a..q). Its plan depends on code the slices create: the readiness projection, the seat runner CLI and the wrapper VM route. So it waits on the chain tails CQ-M07n (task-62ec51f1), CQ-M07p (task-7a0dadf9), CQ-M07l (task-d56fb46e) and CQ-M07e (task-5c4b5fab), which transitively cover every slice. It auto-returns to PLANNING when they are DONE. Handoff: mem:task-task-1a8f1d0e199046a289e94a5453d758b8-handoff.",
-  "blockedOnTaskIds": [
-    "task-62ec51f179494706a39045154d07e544",
-    "task-7a0dadf992014449a4c9aaf8426cfd24",
-    "task-d56fb46eb0a941808a7ba7e0588f2fd5",
-    "task-5c4b5fab53ce41e294af5c70de1af51d"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "PLANNING",
-  "blockedAt": "2026-11-01T08:12:23.777Z"
+  "blockedFromStatus": null,
+  "blockedAt": null
 }
