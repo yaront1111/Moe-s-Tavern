@@ -216,6 +216,14 @@ the contract declares `requiredChecks`.
 
 When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appended to the task's `contextFetchedBy` list so that `moe.start_step` can later verify the caller has seen the plan. See **Ownership & Ordering** below.
 
+**WORKING `nextAction`.** On a WORKING task the hint follows the plan:
+- no plan → `moe.request_replan` with its `reason` filled in (every step tool and `moe.complete_task` refuse a plan-less row);
+- the first unfinished step `IN_PROGRESS` → `moe.complete_step` for it (`moe.start_step` accepts only `PENDING`, and `moe.complete_step`'s own hint does the same);
+- `PENDING` → `moe.start_step`;
+- nothing left → `moe.complete_task`.
+
+A step hint's reason quotes the step's effective text: its active amendment when one is in force.
+
 **Returns:**
 ```typescript
 {
