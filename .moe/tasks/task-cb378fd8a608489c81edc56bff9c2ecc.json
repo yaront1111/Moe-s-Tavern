@@ -116,7 +116,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -170,17 +170,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T17:48:59.958Z",
-  "updatedAt": "2026-11-04T20:34:39.227Z",
+  "updatedAt": "2026-11-04T20:54:59.850Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T17:49:00.398Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-04T20:54:59.848Z",
+    "wallClockMs": 11159450
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
     "worker-5772dacf",
-    "qa-1cd86a39"
+    "qa-1cd86a39",
+    "qa-96811257"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -331,5 +334,9 @@
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-cb378fd8a608489c81edc56bff9c2ecc: completion d35f2bc3f375c0f1668e97dc379fc846dc19bfd7 is not in the control HEAD e6c06b00421f7192530725b7079fcfb8068567d2 (git merge-base --is-ancestor exited 1); QA reviews landed bytes only"
+  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-cb378fd8a608489c81edc56bff9c2ecc: completion d35f2bc3f375c0f1668e97dc379fc846dc19bfd7 is not in the control HEAD e6c06b00421f7192530725b7079fcfb8068567d2 (git merge-base --is-ancestor exited 1); QA reviews landed bytes only",
+  "completedAt": "2026-11-04T20:54:59.848Z",
+  "reviewCompletedAt": "2026-11-04T20:54:59.848Z",
+  "reviewSummary": "Reviewed completion d35f2bc3. Its tree e5a017e9 equals the candidate's, and it is the tip of origin/moe/work-2026-10-24. 8 files, +28/-15 (net 13), exactly approvedScope. No scripts/, packages/ or .moe/ path.\n\nGate: task.verification verbatim (5 refs, each in ( )), run in a clean git-archive snapshot of d35f2bc3 on D:, because control has a dirty MoeBundle and moe-agent.sh. Held the jetbrains-gradle lease. GATE_RC=0 in 92 s:\n- check A f=0, check B f=0;\n- gemini mode rows bash=9 ps51=9 ps7=9, none SKIP;\n- parity sh, pwsh and 5.1 PASS; lint OK;\n- Gradle TerminalAgentLauncherTest 61 tests, 0 failures, 0 errors, new testcase present.\n\nDoD1: a1e93d27's launchers (sh:11660-75, ps1:11179-91) read MOE_AGY_COMMAND only when unprotected and treat blank as unset. They map gemini to agy and print the one fixed not-found line. AG1-AG7 pin this on all 3 engines; AG3 shows no agy means a stop with nothing run.\n\nDoD2:\n- parity-check.sh:221-224 and .ps1:172-174 require MOE_AGY_COMMAND plus both message literals.\n- README has 0 'Gemini CLI' and 5 'Antigravity (agy)' lines plus the badge.\n- CONFIGURATION's MOE_AGY_COMMAND row comes right after MOE_GROK_MODEL, and its quote equals the landed string. The opus-5-5 fallback matches RESOLVED_MODEL.\n- GETTING_STARTED and SCHEMA are as planned.\n- The JetBrains enum and bundle labels are pinned by an assertEquals test; the command stays gemini.\n- The VS Code label is 'Antigravity', and the provider id stays gemini.\n\nDoD3: gh pr diff 208 has 18 hunks in 10 files, matching the summary's map. Hunk 12 (PWSH_CASE retry 2 / 15000) and hunk 13 (BOM EF BB BF) are on the branch. #208's strings equal a1e93d27's.\n\nNot run: the VS Code typecheck (no node_modules; one string literal; CI covers it).\nPonytail: nothing to cut.\nOut of scope: SCHEMA's NOTE lines are stale, and plugin.xml/package.json still say 'Gemini CLI' (task-ee7509fb).",
+  "requiredCheckAtDone": null
 }

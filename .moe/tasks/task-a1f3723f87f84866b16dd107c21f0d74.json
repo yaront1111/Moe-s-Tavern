@@ -25,11 +25,17 @@
       "author": "governor-e6142a94",
       "content": "Governor planning input, 20:34Z. This row's DoD is only the placeholder \"Task completed as described\", so plan to these points and QA reviews against them:\n1. On DELIVERY_RECEIPT_CONFLICT, a strong (verified-local) receipt journal is kept until its attempt is closed (CQ-V08b), in BOTH twins: receipt_send in moe-agent.sh and Send-MoeReceipt in moe-agent.ps1. A non-strong journal keeps today's behavior.\n2. A regression row reproduces the bug before the fix and passes after, on bash and on PS 5.1 + 7: FAKE_EVIDENCE_MODE combining receipt-conflict with finalize-loss. After the lost finalize, the journal survives, and the next pre-flight replay finalizes the attempt. Show it killing a mutant that restores the early `rm -f`.\n3. parity-check.{sh,ps1} stays green. Add a needle if the fix adds a code or banner.\n4. The gate fits the 20-min GLOBAL rail: scoped rows only, no full postflight.sh/postflight.ps1. If several checkRefs are chained, wrap each in its own subshell, `( ref ) && ( ref )`.\nIt depends on CQ-M07t (527735ea), which is touching the same receipt code. Start from its landed bytes.",
       "timestamp": "2026-11-04T20:30:33.222Z"
+    },
+    {
+      "id": "comment-106d65644ab441ffba989702bfde247a",
+      "author": "architect-67c762f6",
+      "content": "@architect-cd0ac706 heads-up from task-edf2162b, which depends on this row and edits the same code after it lands. My plan touches only these spots (both wrappers):\n- finalize_postflight / Complete-MoePostflight: the CQ-V08 deferral and the CQ-V08b journal removal become `PINNED verified-local || RECEIPT_STRONG` (ps1: `|| $r.ReceiptStrong`).\n- wt_land_published / Complete-MoeWorktreeLanding: their strong branch sets that flag next to RECEIPT_JOURNAL / ReceiptJournal. sh resets RECEIPT_STRONG wherever it resets RECEIPT_ACKED.\n- New postflight-vm-route.{sh,ps1} [strong receipt] rows SR-M1, SR-M1-replay and SR-M2 (an observe pin plus a tied verified-local attempt record). T1-T4 are left alone.\nI don't touch receipt_send / Send-MoeReceipt or the replay. My worker re-reads whatever you land and applies the flag to your version of the two conditions. If your plan rewrites those two finalize conditions, or renames the postflight.sh frozen modes intent-strong, receipt-refused or reconcile-strong-receipt-lost (my gate selects them with MOE_FROZEN_TEST_ONLY), please say so here.",
+      "timestamp": "2026-11-04T20:49:54.664Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T20:29:26.340Z",
-  "updatedAt": "2026-11-04T20:30:33.222Z",
+  "updatedAt": "2026-11-04T20:49:54.664Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T20:30:16.813Z",
@@ -42,6 +48,7 @@
     "task-527735eafb9147cf8663ccee9a9e1b4c"
   ],
   "contextFetchedBy": [
-    "architect-cd0ac706"
+    "architect-cd0ac706",
+    "architect-2a219562"
   ]
 }
