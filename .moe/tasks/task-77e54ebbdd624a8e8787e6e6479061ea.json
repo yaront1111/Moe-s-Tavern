@@ -83,8 +83,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -106,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:19.281Z",
-  "updatedAt": "2026-11-04T06:02:35.814Z",
+  "updatedAt": "2026-11-04T06:06:13.618Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T00:27:53.895Z",
@@ -116,7 +116,9 @@
     "firstClaimAt": "2026-11-04T00:28:52.393Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:05:33.434Z",
+    "wallClockMs": 20201041
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -250,7 +252,11 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-cd0ac706@2026-11-04T05:24:04Z",
-    "at": "2026-11-04T05:58:28.133Z"
-  }
+    "sessionId": "qa-25f21f0a@2026-11-04T06:02:18Z",
+    "at": "2026-11-04T06:06:13.618Z"
+  },
+  "completedAt": "2026-11-04T06:05:33.434Z",
+  "reviewCompletedAt": "2026-11-04T06:05:33.434Z",
+  "reviewSummary": "Approved. Reviewed completion 4469377b (in control HEAD 3500ae19); 5 files, +147/-16 (net 131), under the 400 cap.\n\nVerification: re-ran task.verification verbatim in a git-archive snapshot. Both tsc passes OK. Run 1 exited 1 on one unrelated test, LogRotator.rotateFailure.test.ts (f2, a stray activity.log.rotating.tmp): other task's code (d4a387ef), this commit touches nothing in src/util, passes 3/3 alone. Full-suite re-run in the same snapshot was green: 286 files, 7475 passed | 24 skipped; qaReject.test.ts 29 tests (pin holds). The two owned test files alone: 35 passed. Mutation check: with qaReject.ts restored to 4469377b^, they give 5 failed | 30 passed, exactly the 5 new cases.\n\nDoD 1: both hunt repros (human REVIEW->WORKING and DONE->WORKING reopen onto reopenCount 3) end in PLANNING, parkedForHuman false. DoD 2: after the re-plan the next reject parks (REVIEW, unassigned, needsHumanReview true); capReplanAt survives a reload. The 3 existing fixtures and park() gain only capReplanAt, assertions byte-identical, per the architect's DoD 2/3 ruling. DoD 3: a field-less row at the cap gets PLANNING plus the stamp; ### moe.qa_reject docs (:2375-2377 only) state the gate, capReplanAt, non-QA reopens and the legacy reading.\n\nAudit: the stamp is written only on the soft-cap flip, in the same updateTask; same-item flips, WORKING rejects and parks never write it; nothing clears it (reopen.ts, setTaskStatus.ts, WebSocketServer.ts untouched). Once set, every reject at >= maxReopens+1 parks, so the loop is bounded. Missing, non-string or empty reads as absent; no migration. No hunk at the tool description, handoffWorkerId or touchWorker. Not re-run: the worker-reported qualityGate (no scripts or role docs touched). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

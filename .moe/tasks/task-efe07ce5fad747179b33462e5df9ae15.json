@@ -96,8 +96,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -109,12 +109,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:33:38.409Z",
-  "updatedAt": "2026-11-04T06:01:27.518Z",
+  "updatedAt": "2026-11-04T06:06:18.870Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T05:36:24.918Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T06:06:18.867Z",
+    "wallClockMs": 1793949
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -254,5 +256,9 @@
     "kind": "completion",
     "sessionId": "worker-a0305b0b@2026-11-04T05:51:13Z",
     "at": "2026-11-04T06:00:15.701Z"
-  }
+  },
+  "completedAt": "2026-11-04T06:06:18.867Z",
+  "reviewCompletedAt": "2026-11-04T06:06:18.867Z",
+  "reviewSummary": "Completion 3500ae19 (only completion this round) is on origin/moe/work-2026-10-24 and moe/control (fresh fetch). Parent 05f4240f and tree e35bc0fd match the candidate. 6 files, +237/-30, net 207 LOC; the file set matches approvedScope, and workerStore.ts and the launchers are untouched.\n\nRe-ran task.verification verbatim in a mktemp snapshot of HEAD=3500ae19 under env -i with Node 24.21: tsc clean (both); focused 3 files, 115/115, with (11 tests) pinned; full npm test 286 files, 7475 passed | 24 skipped; EXIT=0. The qualityGate passes in the snapshot. RED: the new test against 05f4240f's runtime gives exactly 5 failed | 69 passed (deregister, deleteWorker prune, startup purge, prior-round completion, BLOCKED on the 3rd).\n\nDoD:\n1. All 3 close paths are covered. Each asserts the attempt closed; WORKING and unassigned; reopenCount and steps kept; landingRetry contention / [] / task branch / null / count 1; one moe-daemon comment.\n2. The plain close is kept for a this-round completion, a shared attempt, a mode-less attempt, a non-REVIEW row and a row another seat holds. A failed write keeps the close and leaves the row in REVIEW.\n3. MCP_SERVER.md deregister_worker bullet and finalize_attempt items 2 and 5; SCHEMA.md and the schema.ts comments are synced. LANDING-RETRY: contention was checked against both launchers' worktree_resume.\n\nCode: routeUnlandedLanding is finalize's body moved verbatim (byte-identical with no note; finalizeAttempt.test unchanged). The routing runs after the close and its announcement, inside a try/catch, and never throws. complete_task unassigns at REVIEW, so the live case matches. No git reads, no import cycle. Ponytail pass: no findings. Known edge (needsHumanReview) filed as task-7e735953.",
+  "requiredCheckAtDone": null
 }

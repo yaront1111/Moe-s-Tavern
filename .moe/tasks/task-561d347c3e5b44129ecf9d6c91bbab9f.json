@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "Tests first (DoD 1-3), in scripts/tests/postflight-worktree.cjs. Read mem:gotcha-postflight-worktree-git-stub. The stub knobs WT_GIT_PUSH_REMOTE_REJECTED and WT_GIT_FETCH_FAIL_AFTER_PUSH (task-bc6ba91b, stub :125-216) already exist, so the stub itself does not change. Line numbers are at d1062cb0.\n\nShared strings. Steps 2 and 3 print them byte-identically in both wrappers, and this step's regexes match them:\n- journal pushResult prefix: `push remote-rejected-unverified: ` (a journal one wrapper writes, the other may replay);\n- push detail suffix: `; the re-check could not read origin's <T> (<detail>)`;\n- replay, origin holds C: `[receipt] origin's <T> holds <C>, the [remote rejected] push of task <id>; <file> kept until that task lands again, which records its row and finalizes landed.`;\n- replay, origin lacks C: `[receipt] origin's <T> does not hold <C>, the [remote rejected] push of task <id>; dropped <file>.`;\n- replay, re-check fetch failed again: `[WARN] receipt journal <file> kept: the [remote rejected] push of <C> is still unverified (<detail>).`\n\n(a) wtRemoteRejected (:1246), arm 'fetch-fails'. Keep its existing assertions, then add:\n- The journal is KEPT. Parse readOr(journal(p)), stripping a leading BOM as wtReplayRemote does. Its targetAfter is c, and its pushResult starts with the prefix and contains \"the re-check could not read origin's main\".\n- The retry: fs.rmSync(marker), then landRun(p,'wt-remote-rejected-fetch-fails-retry',{},{...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0'}). It sets no stub knob, so it runs real git.\n- Assert on the retry:\n  - exit 0, and the log has the holds-C line;\n  - finals(p) is [['landed',c]], and done(p) maps to [['committed',null,c,true]];\n  - the journal is gone, retryOf(p) is null, mainOf(p) is c, and origin's main is still c (the pushes log still has one line);\n  - no MOE_COMMIT_NOTHING_TO_COMMIT and no MOE_PUSH_FAILED in the log.\n\n(b) A new arm 'absent', after the loop, with its own repo, bare remote and marker. Write wtUnlanded's 'rejected' pre-receive hook (exit 1) into the bare remote and set both knobs, so the real push is refused, the stub still answers [remote rejected], and the re-check fetch fails.\n- Run 1 (REVIEW):\n  - origin's main is still main;\n  - the journal is kept with the unverified prefix; save C1 = its targetAfter;\n  - done(p) maps to [['failed','MOE_PUSH_FAILED',false]], and unlanded(p) is [['unlanded','remote',main,null]].\n- Remove the hook and the marker, then run the retry as in (a):\n  - the log has the does-not-hold line for C1, and the journal is gone;\n  - origin's main is a new C2, not C1, with parents [main] and src/a.txt 'done\\n';\n  - finals(p) is [['landed',C2]], done(p) maps to [['committed',null,C2,true]], and retryOf(p) is null.\n\n(c) wtUnlanded's 'rejected' arm (:1216): a pre-receive refusal with a working re-check fetch. After its landing run, add `if(n==='rejected')` assert that journal(p) is absent: a re-check that proves C absent still removes the journal.\n\nRED at HEAD: (a)'s journal assertion and (b)'s run-1 journal assertion fail, because wt_publish deletes the journal. (c) passes both before and after.\n\nError handling in the harness: each arm gets its own repo, bare remote, hook and marker, all removed before its retry, so no knob leaks into another arm or case. Edit with your TOOL-witnessed editor; never use a shell write.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T06:04:26.392Z"
     },
     {
       "stepId": "step-2",
@@ -81,7 +82,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:38:02.611Z",
-  "updatedAt": "2026-11-04T06:00:53.697Z",
+  "updatedAt": "2026-11-04T06:04:26.393Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:44:41.089Z",
@@ -178,5 +179,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T06:00:21.533Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T06:04:26.393Z"
 }
