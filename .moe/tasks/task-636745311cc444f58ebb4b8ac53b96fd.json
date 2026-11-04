@@ -10,10 +10,53 @@
     "`npm run lint` passes, and the daemon suite passes in a git-archive snapshot with the docs overlaid."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2a219562",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "docs/MCP_SERVER.md: the two tool sections (DoD 1). Use the Edit tool in your task worktree W (a TOOL witness). Write everything from the landed source, field for field; never from the task text.\n\nPlacement: insert `### moe.get_execution_readiness`, then `### moe.get_seat_liveness`, directly after the `### moe.heartbeat` section, before `### moe.lease_account`. Each heading must be exactly `### moe.<name>` with nothing after it, because util/taskTimeBudgetDocs.test.ts TOOL_HEADING reads tool sections that way. Follow the house style of the neighbouring wrapper-only sections: a lead sentence, **Parameters:** and **Returns:** in typescript blocks, then bullets.\n\nmoe.get_execution_readiness (source: packages/moe-daemon/src/tools/getExecutionReadiness.ts; holder delivery/readinessHolder.ts; gate delivery/executionProfile.ts assertExecutionProfileReady):\n- Wrapper-only: TOOL_AUDIENCE 'wrapper' in tools/index.ts, so no role sees it in tools/list.\n- It is read-only. It writes no state, appends no activity and touches no worker, and it grants nothing: claims and progression are still gated by the same held evaluation in assertExecutionProfileReady (EXECUTION_PROFILE_NOT_READY).\n- Parameters: `refresh?: boolean`; `workerId` is injected by the proxy and never read.\n- Returns exactly `{ profile, ready, missingCapabilities, evaluatedAt }`:\n  - `profile`: the live resolveExecutionProfile, or 'unreadable' for a malformed executionProfile setting;\n  - `missingCapabilities`: a filter over READINESS_IDS, in that order. Point at the TROUBLESHOOTING.md table from step 3;\n  - `evaluatedAt`: null when the evaluator has never run or the last evaluation failed.\n- `refresh: true`:\n  - re-runs the daemon's own evaluator (refreshReadiness with production inputs), and the call awaits it;\n  - is single-flight: a concurrent call joins the run in flight;\n  - starts a new run only when READINESS_REFRESH_WINDOW_MS (30 s) has passed since the last start, or the clock went backwards.\n- Its error handling:\n  - a non-boolean refresh is INVALID_INPUT naming `refresh`;\n  - a failed evaluation never fails the read, because the holder fails closed.\n- `blocking: true`: it runs outside the fleet-wide state mutex because a refresh awaits a bounded evaluation (probe 10 s, guard 11 s). It never parks.\n- The /ws twin, in the same section: `{ type: 'GET_EXECUTION_READINESS', payload?: { refresh?: boolean } }` answers `{ type: 'EXECUTION_READINESS', payload }` with the same four fields. It is read-only like GET_METRICS and needs no mutex. A non-boolean refresh answers ERROR 'GET_EXECUTION_READINESS refresh must be a boolean', and any failure answers ERROR 'GET_EXECUTION_READINESS failed', with no detail, path or stack. Source: server/WebSocketServer.ts, case 'GET_EXECUTION_READINESS'.\n- Add one line under `## Plugin WebSocket Messages`, after the capability-negotiation subsection, naming the message pair and linking to this section.\n\nmoe.get_seat_liveness (source: tools/getSeatLiveness.ts and state/attemptStore.ts countOpenAttempts; consumer: scripts/local-runner/vm-control.mjs seatStateOf):\n- Wrapper-only and read-only. It runs under the state mutex (no blocking flag) and writes nothing.\n- Parameters: `workerId: string`, required. This is the seat inspected, not the caller. It must be non-blank, at most 255 characters and free of control characters, else INVALID_INPUT naming `workerId`. When the caller omits it, moe-proxy injects the caller's own MOE_WORKER_ID, so the call then reports on the caller itself.\n- Returns exactly `{ workerId, registered, status, openAttempts }`:\n  - `registered`: a worker record exists;\n  - `status`: that record's status, else null;\n  - `openAttempts`: the attempts carrying this workerId in phase running, finalizing or reconciling.\n- A seat is gone only when `(!registered || status === 'DEAD') && openAttempts === 0`. vm-control.mjs maps a registered, non-DEAD seat to 'registered', else openAttempts > 0 to 'attempt-open', else 'gone'. A malformed reply is 'unknown' and keeps the VM.\n- A match never proves a process is alive or dead: the runner's own liveness is vm-control.mjs runnerProbe.\n\nThe task's other deliverable: executionRoute 'vm' is already documented on claim_next_task (**Execution route**, about :1479 at 0fa7750e) and wait_for_task (about :1632 and :1641). Verify it against tools/claimNextTask.ts and waitForTask.ts, change nothing there, and say so in the summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/MCP_SERVER.md: the stale verified-local text (DoD 2). Edit tool in W. Quotes and line numbers are from 0fa7750e; find each by its quote.\n\n(a) serverCapabilities, under `## Plugin WebSocket Messages` > Optional client capability negotiation (about :3360):\n- In the `capabilities` map, `verifiedLocal: false` becomes `verifiedLocal: true` (server/clientCapabilities.ts SERVER_CAPABILITIES; true since CQ-M07d2).\n- The example's `negotiatedCapabilities.verifiedLocal` stays false, which is correct for that hello: it sent only planRevisions, and negotiated means server support AND client literal true. Say so in one short clause, so the remaining `false` reads as intended.\n- In the paragraph that starts 'Capabilities describe **wire support, not authentication, trusted evidence or readiness**', replace 'verified-local stays unconditionally unavailable even for a fully capable client with a matching revision'. The replacement says: verifiedLocal is wire support for the readiness projection (moe.get_execution_readiness and GET_EXECUTION_READINESS), never readiness, and verified-local is admitted only while the daemon's held evaluation is ready (assertExecutionProfileReady); a client claim never grants it.\n\n(b) The same stale claim at about :464 ('Passing grants entry only, never readiness: `verified-local` stays unavailable (`EXECUTION_PROFILE_NOT_READY`) at claim and at progression'): reword it to say that a strict claim or progression still needs the held readiness, else EXECUTION_PROFILE_NOT_READY.\n\n(c) The six strict-consumer sentences, task-7aa6be67's residuals. They were cited at 154a1c71's lines 1242, 1249, 1274, 1464, 1508 and 1996; at 0fa7750e they are:\n- :1255 report_blocked Un-block routes, '(auto, all `blockedOnTaskIds` DONE/ARCHIVED)';\n- :1262 the response comment '// Every named prerequisite already DONE/ARCHIVED (fresh flip, no resourceId)';\n- :1287 'satisfiedBlockedOnTaskIds?: … (DONE/ARCHIVED, judged as the auto-unblock judges them)';\n- :1485 claim_next_task BLOCKED hold, 'a set `blockedOnTaskIds` means it auto-unblocks when every listed task is DONE/ARCHIVED';\n- :1529 'blockedOnTaskIds?: string[] // BLOCKED holds only; set = auto-unblocks when all are DONE/ARCHIVED';\n- :2082 release_task, 'the dependency auto-unblock (all `blockedOnTaskIds` DONE/ARCHIVED)'.\nEach gains the strict-consumer rule: for a verified-local consumer each listed task needs retained verified delivery, and a missing id never counts. Use the full form with a pointer to **Strict dependent (CQ-V09)** under moe.claim_next_task Dependency gating (about :1465) in prose, and the short form in the code-comment lines. Check the wording against state/dependencyUnblock.ts dependencyShortfall and CLAUDE.md's sentence ('readiness means retained verified delivery, not merely DONE/ARCHIVED, and a missing prerequisite never satisfies it').\n\n(d) comment-c16cb64b, point 1, at about :338 in get_context's **Execution policy context**. The sentence 'After a project rollback, an open attempt whose own snapshot is `verified-local` shows as `attemptSnapshot.profile: \"verified-local\"` under a non-strict `effectiveProfile`' holds only when the TASK snapshot is not verified-local, because a stored verified-local task snapshot floors effectiveProfile. Say that.\n\n(e) comment-c16cb64b, point 2, at about :590 in moe.complete_task **Strict completion (CQ-F08)**. 'A task that was strict only through the live setting (its task and attempt snapshots are not `verified-local`) completes as legacy after the rollback' also covers a rollback to observe. Say 'after a rollback to `legacy` or `observe`', after confirming in tools/completeTask.ts and delivery/executionProfile.ts that an observe completion takes the legacy path.\n\n(f) Line 1 reads '# Moe - MCP Seclaurveracl SpecifclaudeclaudeCication (Current)', an accidental edit in aa0c3766 ('multi account login', 2026-10-20). Restore it to '# Moe - MCP Server Specification (Current)', the text before that commit.\n\nMake no other content change. Several daemon tests read MCP_SERVER.md (executionContractDocs needles, daemonGitDocs' 'never runs git' ban, getCommitScope, workstreamComposition.e2e), so step 4's full suite is the guard.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/TROUBLESHOOTING.md: the verified-local rows (DoD 3). Edit tool in W.\n\nPlacement:\n- Add a new section `## Verified-local (VM route) Issues` after `## Local Runner Issues` (after its table and the `---` that follows it), before `## Performance Issues`.\n- Add it to the Table of Contents as item 7, `[Verified-local (VM route) Issues](#verified-local-vm-route-issues)`, and renumber the later items.\n- Do not touch `## Claude Account Rotation Issues`: scripts/tests/account-trust-docs.test.mjs slices it. qaCommitPolicy.test.ts reads another heading.\n\nOpen with two sentences:\n- under `executionProfile: \"verified-local\"`, worker and QA seats run their sessions in Moe VMs, and the wrappers refuse to start a seat otherwise;\n- `moe.get_execution_readiness` (the IDE's readiness view) names what is missing.\n\nTable 1, `| Code (where) | Cause | Fix |`:\n- One row for EVERY name that checkRefs[1] lists from the wrappers. Run it first to get the list: at 0fa7750e it is 26 codes, 7 MOE_SEAT_*, 7 MOE_VERIFIED_LOCAL_* and 12 MOE_VM_*. Eight MOE_VM_CANDIDATE_* suffixes come only from the stop helpers' arguments (vm_candidate_stop / Stop-MoeVmCandidate), which the checker reads too.\n- Each name must appear backticked exactly (`` `MOE_SEAT_CAPACITY_WAIT` ``), because the checker greps that form. Codes with one shared cause may share a row only if each is backticked.\n- (where) is moe-agent.sh, moe-agent.ps1 or both. MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED is sh-only.\n- Write each Cause and Fix from the printing branch in moe-agent.sh and its ps1 twin. /mnt/d/moe-scratch/6367-plan/code-index-0fa7750e.txt gives each code's first sh and ps1 line at 0fa7750e; the numbers will have moved after CQ-M07r/s/t land.\n- Also add the check-gate and receipt lines that CQ-M07r, s and t add (task-ba7a8c84, task-74fe4c99, task-527735ea). They have all landed before your claim, because dependsOn holds you until t is DONE and t waits on s, which waits on r. List them with `git log --format='%h %s' --grep='task-ba7a8c84\\|task-74fe4c99\\|task-527735ea'`, then `git show <sha> -- scripts/moe-agent.sh scripts/moe-agent.ps1 | grep '^+' | grep -oE 'MOE_[A-Z][A-Z0-9_]+' | sort -u`, and add a row for every new printed code, whatever its family.\n- Add one row for `MOE_TASKLESS_NO_LAUNCH reason=vm-route`.\n- If the checker lists a name that is a setting the wrappers read, not a printed code, give it one backticked mention in the section's intro as a setting. No row, and no row is invented for it.\n\nTable 2, `| Readiness id | Cause | Operator action |`:\n- One row per READINESS_IDS id (packages/moe-daemon/src/delivery/executionReadiness.ts), all 15, in READINESS_IDS order, each id backticked.\n- Causes come from the evaluator:\n  - controlPlaneProtected: the daemon's install tree and the project or its .moe overlap;\n  - certifiedIsolation: AGENT_VM_ROWS and CHECK_VM_ROWS, the pinned-client probe, and CERTIFICATION_REFUSAL_IDS, which maps each certification refusal to its id;\n  - runnerKeyFiled: a regular-file runner key in the stored format, outside the project and .moe; read server/runnerChannel.ts for where the daemon files it;\n  - localDeliveryRequired: an own settings.deliveryPolicy of 'local-branch'.\n- Actions, at least as the task states them:\n  - certification-report-missing: run certify (docs/CERTIFICATION.md);\n  - certification-report-mismatch: re-certify after an upgrade;\n  - protected-host-control-plane: run the plugin-installed daemon;\n  - revision-bound-local-delivery: set deliveryPolicy to local-branch.\n- Note that a certification or provider failure also lists both isolation ids.\n\nKeep it terse: one line per row, as in the Local Runner table.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once, after steps 1-3 (DoD 3, 4), from W's root. Run checkRefs[0] and checkRefs[1] in separate Bash calls: checkRefs[0] cds into its snapshot.\n\n[0], the gate and the complete_task verification:\ncd \"$(git rev-parse --show-toplevel)\" && npm run lint > /dev/null && echo LINT-OK && node --test scripts/tests/account-trust-docs.test.mjs > /dev/null && echo TRUST-DOCS-OK && S=$(mktemp -d) && git archive HEAD -- . ':(exclude).moe' | tar -x -C $S && cp --parents docs/MCP_SERVER.md docs/TROUBLESHOOTING.md $S && cd $S/packages/moe-daemon && E=\"env -i HOME=$HOME NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" && $E npm ci --no-audit --no-fund > /dev/null 2>&1 && { $E npm test > $S/t.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) \" $S/t.log; grep -aE \"^ FAIL \" $S/t.log | head -5; echo \"suite rc=$r\"; [ $r = 0 ]; }\n\n[1], the completeness check that DoD 3 asks the summary to show:\ncd \"$(git rev-parse --show-toplevel)\" && n=0 m=0 && for c in $( { grep -ohE \"MOE_(VERIFIED_LOCAL|SEAT|VM)_[A-Z0-9_]*[A-Z0-9]\" scripts/moe-agent.sh scripts/moe-agent.ps1 | grep -vx MOE_VM_CANDIDATE; grep -ohE \"vm_candidate_stop [a-z-]+ [A-Z_]+\" scripts/moe-agent.sh | awk '{print \"MOE_VM_CANDIDATE_\" $3}'; grep -ohE \"Stop-MoeVmCandidate [$][A-Za-z]+ '?[a-z-]+'? '?[A-Z_]+\" scripts/moe-agent.ps1 | tr -d \"'\" | awk '{print \"MOE_VM_CANDIDATE_\" $4}'; sed -n '/READINESS_CAPABILITIES = /,/READINESS_IDS = /p' packages/moe-daemon/src/delivery/executionReadiness.ts | grep -oE \"'[a-z][a-z0-9-]+'\" | tr -d \"'\"; } | sort -u ); do n=$((n+1)); grep -qF \"\\`$c\\`\" docs/TROUBLESHOOTING.md || { echo \"MISSING $c\"; m=$((m+1)); }; done; echo \"checked $n codes and readiness ids, missing $m\"; [ $m = 0 ]\n\nWhat they do:\n- [0] runs the root role-doc lint and scripts/tests/account-trust-docs.test.mjs (it reads TROUBLESHOOTING.md) in place, both read-only. It then archives HEAD's whole tree without .moe into a mktemp dir, overlays your two docs, and runs npm ci and the full daemon `npm test` (vitest run) under env -i with Linux node 24. The shared checkout's node_modules are Windows-native: never run npm ci or npm test in place. The suite holds the doc guards (taskTimeBudgetDocs headings, executionContractDocs needles, daemonGitDocs, qaCommitPolicy).\n- [1] lists every MOE_VERIFIED_LOCAL_*, MOE_SEAT_* and MOE_VM_* name in both wrappers, the MOE_VM_CANDIDATE_* suffixes and the 15 READINESS_IDS, and fails on any name not backticked in TROUBLESHOOTING.md.\n\nPlan-time baseline at 0fa7750e, docs unchanged:\n- [0] exit 0: LINT-OK, TRUST-DOCS-OK, 293 files, 7610 passed, 24 skipped;\n- [1] exit 1, 'checked 41 codes and readiness ids, missing 41', so it cannot pass vacuously. After r, s and t land, the count rises if they added codes in these families.\nLogs: /mnt/d/moe-scratch/6367-plan/cr1.base.out and cr2.base.out.\n\nPut [1]'s output and the r/s/t code list from step 3 in the summary. A load flake (index.version.test.ts, bindHosts.test.ts or baselineRun.test.ts timeouts) gets a rerun of that file alone and then the suite, never a skip.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff only (`git diff` in W), then moe.complete_task with checkRefs[0] as the verification. Put checkRefs[1]'s output, the r/s/t code list and the executionRoute finding in the summary. If this step changes any byte, rerun step 4 first.\n1. Scope: only docs/MCP_SERVER.md and docs/TROUBLESHOOTING.md changed, with no code and no other doc. CONFIGURATION, ARCHITECTURE, CERTIFICATION and docs/roles belong to CQ-M07v1 (task-63e6fb62), which waits on this row.\n2. Accuracy: every field, limit and error string in the two tool sections matches the source (getExecutionReadiness.ts, WebSocketServer.ts, getSeatLiveness.ts, attemptStore.ts). Spot-check three TROUBLESHOOTING rows against the printing branches, in both wrappers where both print.\n3. Consistency: no sentence in MCP_SERVER.md still says verified-local is unconditionally unavailable. Check with `grep -nE \"unconditionally unavailable|stays unavailable\" docs/MCP_SERVER.md`. Each of the six strict-consumer sentences states the rule, and both comment-c16cb64b points are applied.\n4. Headings: each new tool heading is exactly `### moe.<name>`. The Table of Contents anchor resolves: GitHub's slug of the new heading is `verified-local-vm-route-issues`.\n5. Tables: every row has three cells, and no `|` inside a cell is unescaped.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -35,11 +78,85 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:57:42.037Z",
-  "updatedAt": "2026-11-04T12:32:28.576Z",
+  "updatedAt": "2026-11-04T12:38:12.660Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T12:27:22.177Z"
+    "firstClaimAt": "2026-11-04T12:27:22.177Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
     "architect-2a219562"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:38:12.627Z",
+  "executionContract": {
+    "intendedBehavior": "Docs-only debt payment for CQ-M07, all from landed code.\n- docs/MCP_SERVER.md: sections for moe.get_execution_readiness (with its /ws twin GET_EXECUTION_READINESS -> EXECUTION_READINESS) and moe.get_seat_liveness; serverCapabilities shows verifiedLocal true, with the readiness-gated meaning; no stale 'verified-local stays unavailable' claim remains; the six strict-consumer DONE/ARCHIVED sentences state the retained-verified-delivery rule; both comment-c16cb64b points are applied; the garbled title is restored.\n- docs/TROUBLESHOOTING.md: a Verified-local (VM route) section with one row per MOE_VERIFIED_LOCAL_*, MOE_SEAT_* and MOE_VM_* code the wrappers print, plus the check-gate and receipt codes CQ-M07r/s/t add, and one row per READINESS_IDS id with its operator action.",
+    "acceptanceCriteria": [
+      "MCP_SERVER.md has `### moe.get_execution_readiness` (payload { profile, ready, missingCapabilities, evaluatedAt }, refresh with its 30 s single-flight window, blocking/read-only, plus the GET_EXECUTION_READINESS/EXECUTION_READINESS /ws twin and its two ERROR messages) and `### moe.get_seat_liveness` ({ workerId, registered, status, openAttempts }, wrapper-only, and the gone rule). Each matches its source field for field.",
+      "The serverCapabilities `capabilities` map shows verifiedLocal: true. The capabilities paragraph and the :464 sentence no longer say verified-local is unavailable regardless of readiness.",
+      "The six strict-consumer sentences (report_blocked x3, claim_next_task x2, release_task) state that a verified-local consumer needs retained verified delivery and that a missing id never counts. The Execution policy context sentence and the Strict completion (CQ-F08) sentence carry the comment-c16cb64b corrections.",
+      "TROUBLESHOOTING.md backticks every name checkRefs[1] lists, inside a row with its cause and fix or operator action, and checkRefs[1] exits 0.",
+      "checkRefs[0] exits 0: lint, account-trust docs, and the full daemon suite in a whole-tree archive snapshot with the two docs overlaid."
+    ],
+    "invariants": [
+      "No code, test or other doc changes; CQ-M07v1 owns CONFIGURATION, ARCHITECTURE, CERTIFICATION and docs/roles.",
+      "Every documented fact comes from landed source; nothing claims that verified-local or readiness can be granted by a client or a caller field.",
+      "Existing doc-guard needles in MCP_SERVER.md and TROUBLESHOOTING.md survive (the full daemon suite and account-trust-docs pass)."
+    ],
+    "compatibility": [
+      "The existing executionRoute documentation on claim_next_task and wait_for_task is already accurate and stays unchanged.",
+      "Existing anchors in both docs are unchanged; only the Table of Contents numbering after item 6 shifts by one."
+    ],
+    "approvedScope": [
+      "docs/MCP_SERVER.md: two new tool sections after moe.heartbeat; one line under Plugin WebSocket Messages; edits to the capability-negotiation block and paragraph, the :464 sentence, the six strict-consumer sentences, the :338 and :590 sentences, and line 1.",
+      "docs/TROUBLESHOOTING.md: a new `## Verified-local (VM route) Issues` section with two tables, and its Table of Contents entry."
+    ],
+    "reuse": [
+      "The new sections follow the wrapper-only section style of moe.heartbeat and moe.lease_account; the new tables follow the Local Runner Issues `| Code (where) | Cause | Fix |` table."
+    ],
+    "sourceAssumptions": [
+      "tools/getExecutionReadiness.ts at 0fa7750e: ExecutionReadinessPayload { profile, ready, missingCapabilities, evaluatedAt }; READINESS_REFRESH_WINDOW_MS = 30_000; refreshWithinWindow is single-flight; blocking: true; INVALID_INPUT for a non-boolean refresh.",
+      "server/WebSocketServer.ts: case GET_EXECUTION_READINESS answers EXECUTION_READINESS, or ERROR 'GET_EXECUTION_READINESS refresh must be a boolean' / 'GET_EXECUTION_READINESS failed'.",
+      "tools/getSeatLiveness.ts: { workerId, registered, status, openAttempts }, workerId at most 255 characters; attemptStore OPEN_PHASES = running, finalizing, reconciling. tools/index.ts TOOL_AUDIENCE marks both tools 'wrapper'.",
+      "server/clientCapabilities.ts SERVER_CAPABILITIES.verifiedLocal is true; delivery/executionProfile.ts assertExecutionProfileReady admits verified-local only when the held readiness is ready.",
+      "delivery/executionReadiness.ts READINESS_IDS: 5 capabilities plus 10 evidence ids (15)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && npm run lint > /dev/null && echo LINT-OK && node --test scripts/tests/account-trust-docs.test.mjs > /dev/null && echo TRUST-DOCS-OK && S=$(mktemp -d) && git archive HEAD -- . ':(exclude).moe' | tar -x -C $S && cp --parents docs/MCP_SERVER.md docs/TROUBLESHOOTING.md $S && cd $S/packages/moe-daemon && E=\"env -i HOME=$HOME NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" && $E npm ci --no-audit --no-fund > /dev/null 2>&1 && { $E npm test > $S/t.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) \" $S/t.log; grep -aE \"^ FAIL \" $S/t.log | head -5; echo \"suite rc=$r\"; [ $r = 0 ]; }",
+      "cd \"$(git rev-parse --show-toplevel)\" && n=0 m=0 && for c in $( { grep -ohE \"MOE_(VERIFIED_LOCAL|SEAT|VM)_[A-Z0-9_]*[A-Z0-9]\" scripts/moe-agent.sh scripts/moe-agent.ps1 | grep -vx MOE_VM_CANDIDATE; grep -ohE \"vm_candidate_stop [a-z-]+ [A-Z_]+\" scripts/moe-agent.sh | awk '{print \"MOE_VM_CANDIDATE_\" $3}'; grep -ohE \"Stop-MoeVmCandidate [$][A-Za-z]+ '?[a-z-]+'? '?[A-Z_]+\" scripts/moe-agent.ps1 | tr -d \"'\" | awk '{print \"MOE_VM_CANDIDATE_\" $4}'; sed -n '/READINESS_CAPABILITIES = /,/READINESS_IDS = /p' packages/moe-daemon/src/delivery/executionReadiness.ts | grep -oE \"'[a-z][a-z0-9-]+'\" | tr -d \"'\"; } | sort -u ); do n=$((n+1)); grep -qF \"\\`$c\\`\" docs/TROUBLESHOOTING.md || { echo \"MISSING $c\"; m=$((m+1)); }; done; echo \"checked $n codes and readiness ids, missing $m\"; [ $m = 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- A test that requires a section for every registered tool: rejected. The only registry guard (taskTimeBudgetDocs) refuses orphan sections and never demands coverage, and adding a test would be code, which is out of scope.\n- One row per code family instead of per code: rejected. DoD 3 asks for one row per printed code, proven by a grep.\n- Hard-coding the code list in the checker: rejected. CQ-M07r/s/t land after plan time, so the checker derives the list from the wrappers and the evaluator at run time.",
+    "codebaseInsights": "- MCP_SERVER.md tool headings must be exactly `### moe.<name>` (TOOL_HEADING).\n- The task's line numbers 1242/1249/1274/1464/1508/1996 match 154a1c71 (task-7aa6be67's landing); at 0fa7750e they are 1255/1262/1287/1485/1529/2082.\n- Seven MOE_VM_CANDIDATE_* codes (COMMIT_FAILED, NOT_WORKTREE, REF_CONTENTION, SYNC_FAILED, TREE_INVALID, plus BASE_MISMATCH and HEAD_MOVED, which also appear literally) are built as `MOE_VM_CANDIDATE_$2` / `\"MOE_VM_CANDIDATE_$Code\"` from the stop helpers' arguments, so a literal grep misses some. The checker reads the helper calls.\n- The doc's title was garbled by aa0c3766.\n- The root `npm run lint` is the role-doc line-cap linter only (scripts/lint-role-docs.sh).",
+    "risks": "- MCP_SERVER.md is edited by many rows; line numbers will have moved by claim time, so find each sentence by its quote.\n- CQ-M07r/s/t may add codes in other families. Step 3 lists them from their landed commits; checkRefs[1] covers only the three families plus the readiness ids, so the summary must name the extras.\n- Full-suite load flakes are known (index.version, bindHosts, baselineRun); rerun alone before blaming the docs.\n- A `|` inside a table cell breaks the row; escape it as `\\|`.",
+    "keyFiles": [
+      "docs/MCP_SERVER.md",
+      "docs/TROUBLESHOOTING.md",
+      "packages/moe-daemon/src/tools/getExecutionReadiness.ts",
+      "packages/moe-daemon/src/tools/getSeatLiveness.ts",
+      "packages/moe-daemon/src/delivery/executionReadiness.ts",
+      "packages/moe-daemon/src/server/clientCapabilities.ts",
+      "scripts/moe-agent.sh / scripts/moe-agent.ps1 (print sites in /mnt/d/moe-scratch/6367-plan/code-index-0fa7750e.txt)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "060d7b8c44afcaf121e195a3d06ae135e82497ca",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:38:12.660Z",
+  "approvedPlanRevision": 1
 }
