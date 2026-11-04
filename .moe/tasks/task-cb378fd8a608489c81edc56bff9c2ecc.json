@@ -13,18 +13,25 @@
     {
       "stepId": "step-1",
       "description": "README.md: name Antigravity (agy) in every coding-CLI list. That is #208's 4 hunks, plus the badge (it existed on 09-29 and #208 missed it) and the account-rotation bullet (added after #208). Edit by text, never by line number; each old string occurs once at edc3e937:\n- intro: 'Run Claude Code, Codex, Gemini CLI, and Grok Build through' -> 'Run Claude Code, Codex, Antigravity (agy), and Grok Build through'\n- 'Works with' badge URL: 'Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Grok' -> 'Codex%20%C2%B7%20Antigravity%20%28agy%29%20%C2%B7%20Grok'\n- features table: 'Launch Claude Code, Codex, Gemini CLI, or Grok Build.' -> 'Launch Claude Code, Codex, Antigravity (agy), or Grok Build.'\n- install paragraph: 'one coding CLI (Claude Code, Codex, Gemini CLI, or Grok Build)' -> 'one coding CLI (Claude Code, Codex, Antigravity (agy), or Grok Build)'\n- installer table row: '| Gemini CLI | `-AgentCommand gemini` | `--agent gemini` |' -> '| Antigravity (agy) | `-AgentCommand gemini` | `--agent gemini` |'. The installers already require agy for gemini: install-dependencies.ps1 calls Assert-MoeCommand \"agy\", and install-dependencies.sh calls moe_has_tool \"agy\".\n- rotation bullet: 'Codex, Gemini CLI, and Grok Build seats are unaffected.' -> 'Codex, Antigravity (agy), and Grok Build seats are unaffected.'\nLeave every 'VS Code / Antigravity' (the IDE) alone. Afterwards `grep -c 'Gemini CLI\\|Gemini%20CLI' README.md` is 0. Content check A (step 6) tests this.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "README.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "README.md"
+      ],
+      "note": "README: 6 coding-CLI mentions now name Antigravity (agy) (intro, badge URL Antigravity%20%28agy%29, features table, install paragraph, installer row, rotation bullet). grep 'Gemini CLI|Gemini%20CLI' = 0; 'Antigravity (agy)' lines = 5 (+ the badge). 'VS Code / Antigravity' untouched. +6/-6.",
+      "startedAt": "2026-11-04T20:15:24.344Z",
+      "completedAt": "2026-11-04T20:15:50.148Z"
     },
     {
       "stepId": "step-2",
       "description": "docs/CONFIGURATION.md: edit four rows and add one, anchored by row key and text.\n(a) The `MOE_WORKER_TYPE` row of `### Agent Scripts` (the one starting 'Exported on every launch'): '(`codex` → `CODEX`, `gemini` → `GEMINI`, `grok` → `GROK`, anything else → `CLAUDE`)' -> '(`codex` → `CODEX`, `gemini` or `agy` → `GEMINI`, `grok` → `GROK`, anything else → `CLAUDE`)'. task-c199e177 maps agy to gemini mode.\n(b) The `MOE_GROK_MODEL` row: '`claude-opus-5` fallback to grok' -> '`claude-opus-5-5` fallback to grok'. This is #208; the wrappers' RESOLVED_MODEL is claude-opus-5-5.\n(c) Directly after the `MOE_GROK_MODEL` row (#208's placement), add exactly this one row:\n| `MOE_AGY_COMMAND` | Antigravity CLI binary for gemini mode (`agentCommand` `gemini`, or `agy`, which the wrappers also accept). Gemini mode always runs Antigravity (`agy`), never the Gemini CLI; set this when the IDE's PATH lacks `agy` (a desktop-launched IDE often misses the shell PATH). A blank value counts as unset. With no `agy` found, the wrapper stops before launching: `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` Not read under `MOE_RUNTIME_PROTECTED=1`: there gemini mode runs only an `agy` on an absolute `PATH` entry outside the project, else it refuses with `MOE_PROTECTED_AGENT_CLI_NOT_FOUND` | `agy` on PATH | `/Users/me/.local/bin/agy`, `C:\\Tools\\agy.exe` |\nThe quoted sentence must be task-c199e177's landed text. Copy it from `grep -o 'Antigravity CLI (agy) not found: [^\"]*' scripts/moe-agent.sh`, with `$COMMAND_BIN` as `<cmd>`. Check A derives it the same way, so a QA-driven rewording there fails here loudly.\n(d) The `agentCommand` row under Settings Reference:\n- description: 'They resolve the CLI only from absolute `PATH` entries outside the project, and report' -> 'They resolve the CLI only from absolute `PATH` entries outside the project (for `gemini`, the `agy` binary), and report'\n- values column: '`claude` (default), `codex`, `gemini`, `grok`' -> '`claude` (default), `codex`, `gemini` (runs Antigravity `agy`; the wrappers also accept `agy`; see `MOE_AGY_COMMAND`), `grok`'\n(e) The `models.{role}` row: \"the wrapper's `claude-opus-5` fallback is never passed to grok\" -> \"the wrapper's `claude-opus-5-5` fallback is never passed to grok\" (#208).\nCQ-M07v1 (task-63e6fb62) also edits this file: the executionProfile, repairPolicy and checkEnvironments rows, plus new Agent Scripts rows. A landing conflict goes through the normal LANDING-CONFLICT resume, keeping both sides, never a hand-merge on the target.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "startedAt": "2026-11-04T20:15:53.339Z"
     },
     {
       "stepId": "step-3",
@@ -125,11 +132,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T17:48:59.958Z",
-  "updatedAt": "2026-11-04T20:14:31.049Z",
+  "updatedAt": "2026-11-04T20:15:53.339Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T17:49:00.398Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 8
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -142,7 +150,9 @@
   "planSizeWarnings": [
     "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T18:28:17.759Z",
   "executionContract": {
@@ -227,5 +237,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-cd0ac706@2026-11-04T17:48:58Z",
     "at": "2026-11-04T19:01:51.751Z"
-  }
+  },
+  "workStartedAt": "2026-11-04T20:15:24.344Z"
 }

@@ -58,17 +58,23 @@
     {
       "stepId": "step-4",
       "description": "postflight-vm-route.ps1 rows: the same T1-T4 in a [strong receipt] section, with the same assertions and byte-identical expected lines. Follow the landed fixtures of [strong intent] and [strong gate]. Follow mem:decision-ps1-harness-pin-inline-wrapper-block and mem:gotcha-wrapper-slice-tests-execute-text. Compare decoded strings under PS 5.1 (mem:gotcha-windows-python-text-mode-crlf-in-node-tests). The same rule as step 3 applies to an older strong row that pins the journal shape.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-04T20:10:45.632Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "ps1 [strong receipt]: Assert-SrRow and Invoke-SrRows run after Invoke-SgRows inside Invoke-SgSections, reusing Initialize-SgFixture and Invoke-SgRow. The five rows SR-T1, SR-T2, SR-T2-replay, SR-T3 and SR-T4 are the same, with the same expected lines byte for byte (MOE_FINALIZE_DEFERRED_RECEIPT, receipt-not-recorded, conflict warn, both 'receipt journal ... kept' texts, '[receipt] replaying ...').\n- The replay restores the project by Copy-Item -Recurse -Force from the kept copy, through a one-row $script:VmrSetup that is reset in finally.\n- Row order uses an ix property added to each RPC row.\n- planRevision is checked as an integer ([int] on 5.1, [long] on 7) equal to 1.\n- One documented port deviation: a PowerShell hashtable's key order is not stable across pwsh processes, so T2's replay receipt is compared in sorted-key name=value form rather than wire bytes (sh compares the exact JSON).\n- Assert-SgRow's receipt count (the SG-pass row) now expects 1 for kind 'pass' and 0 otherwise.\n- The file has no BOM and stays ASCII-only, as before.\n- ParseFile rc=0 on powershell and pwsh.\n- `pwsh.exe -nop -ep Bypass -f postflight-vm-route.ps1` gives `[strong receipt] ok T1, T2, T2-replay, T3, T4` and PASS, exit 0.\n- PS 5.1 runs in the step-5 gate.",
+      "startedAt": "2026-11-04T20:10:45.632Z",
+      "completedAt": "2026-11-04T20:15:23.184Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification, once: run checkRefs[0] exactly as written, from any cwd (it cds into this row's task worktree at scripts/tests). This is the narrowed mid-epic gate the human chose at about 18:05Z on 2026-11-04 (this row's reopenReason).\n- Do not run the full postflight.sh or postflight.ps1. PR #230's CI runs them at every landing and merges only at all-green CI, and the epic-final row task-1a8f1d0e keeps a full gate. DoD 5 is met by checkRefs[0] plus that CI run. QA re-runs checkRefs[0] verbatim.\n\nWhat it runs. MOE_*, CLAUDE* and FAKE_* are unset; MOE_POSTFLIGHT_TIMEOUT_SEC=360 and MOE_WORKTREE_ONLY reach Windows through WSLENV.\n- One background chain per Windows engine (powershell = 5.1, pwsh = 7), each stopping at its first failure:\n  - ParseFile on scripts/moe-agent.ps1 under that engine;\n  - postflight-vm-route.ps1 through pwsh -> cmd -> <engine>. The cmd hop keeps pwsh's PSModulePath, as CI's node hop does, so a 5.1 module-autoload slip (Get-FileHash, New-Guid and the like) fails here as it would in CI;\n  - worktree-landing.ps1 through pwsh -> <engine>, CI's own chain;\n  - postflight-worktree.cjs in ps1 mode on that engine.\n- In the foreground, also stopping at its first failure: bash -n scripts/moe-agent.sh, postflight-vm-route.sh, worktree-landing.sh, postflight-worktree.cjs in sh mode, parity-check.sh, parity-check.ps1 (pwsh) and npm run lint.\n- postflight-worktree.cjs runs only the cases that assert on the receipt journal, the owed rows or the pre-flight replay, through MOE_WORKTREE_ONLY: wt-completion, wt-replay, wt-replay-remote, wt-remote-rejected, wt-fails and wt-crash. Its `codes` case is left out because parity-check.sh compares the same code families.\n- Each chain ends with a lone `@` line only when every command in it passed. The command prints the last 3 lines of each log and exits 0 only when all three `@` lines are present.\n\nHow to run it: detached, then poll; never as one long foreground call (mem:gotcha-qa-ps1-postflight-from-wsl, mem:decision-mid-epic-launcher-gate-narrow).\n- Write checkRefs[0] verbatim to a scratch file outside the checkout, for example /mnt/d/moe-scratch/t5277/gate.sh.\n- Start `nohup bash -c 'bash /mnt/d/moe-scratch/t5277/gate.sh; echo CHAIN_EXIT=$?' > /mnt/d/moe-scratch/t5277/gate.out 2>&1 &` and record `$!`.\n- Poll with `timeout 540 bash -c 'until grep -q ^CHAIN_EXIT= /mnt/d/moe-scratch/t5277/gate.out; do sleep 15; done'` loops. Kill only that recorded PID.\n- Plan-time dry run on a sparse clone of the target at da80b2d8, before CQ-M07s lands: CHAIN_EXIT=0 in 10.5 min at load ~5 (5.1 chain 10 min, pwsh 7 chain 10.5 min, bash chain 8.7 min). Each engine printed `worktree-landing: 18 passed, 0 failed, 0 errors` and `[worktree] 6 ok, 0 failed`; both vm-route harnesses and both parity checks printed PASS, and lint was OK. With CQ-M07s's rows and this row's, expect about 15-20 min.\n- A red check, with both wrapper copies broken, exited 1 at once with no `@` line, and ParseFile printed the error and its line.\n\nError handling for a red run:\n- The tail's `==> <dir>/<log> <==` headers name the log directory: read the failing log there.\n- A Windows leg that wrote only a `UtilAcceptVsock ... accept4 failed` line and exited 1 is a WSL interop flake, not a test result: rerun the whole command.\n- A red row in a suite this row did not edit: rerun the same command on a clone of the target before blaming the change (clone --shared --no-checkout, sparse '/*' '!/.moe/', check out the target sha, change only the cd path).\n- If CHAIN_EXIT has not appeared after 60 min, kill the recorded PID only and report the hang. Never pattern-kill.\n- Never weaken, skip or reorder a row to get green.\n\nEvidence: complete_task's verification is checkRefs[0] verbatim, its exit code and the printed tail. The completion summary lists, per engine (sh, 5.1, 7), the [strong receipt] T1-T4 result lines from the vm-route logs, the worktree-landing count and the `[worktree] 6 ok, 0 failed` line.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T20:15:24.136Z"
     },
     {
       "stepId": "step-6",
@@ -107,12 +113,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:50.151Z",
-  "updatedAt": "2026-11-04T20:10:45.632Z",
+  "updatedAt": "2026-11-04T20:15:24.136Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:11:04.157Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -127,7 +133,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T18:46:43.757Z",
