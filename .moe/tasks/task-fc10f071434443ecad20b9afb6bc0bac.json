@@ -83,7 +83,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -96,16 +96,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:04:57.380Z",
-  "updatedAt": "2026-11-04T08:42:35.042Z",
+  "updatedAt": "2026-11-04T08:45:19.171Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:14:36.064Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T08:44:58.598Z",
+    "wallClockMs": 1822534
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -221,9 +224,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T08:36:58Z",
-    "at": "2026-11-04T08:42:35.042Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T08:42:41Z",
+    "at": "2026-11-04T08:45:19.171Z"
+  },
+  "completedAt": "2026-11-04T08:44:58.598Z",
+  "reviewCompletedAt": "2026-11-04T08:44:58.598Z",
+  "reviewSummary": "Reviewed completion a654bbb4 (on moe/work-2026-10-24; 3 daemon files, +241/-7, net 234 LOC, under the 400 cap). Read the diff: reopen.ts buildReopenClearingUpdates keeps metrics.reopenCount = task.reopenCount + 1 only for a plain-object metrics and a non-negative integer reopenCount (never creates metrics, never mutates input, else strip-only as before). metrics.ts reopenCountOf feeds the aggregate (the `m.reopenCount ?? task.reopenCount` line is gone); reportedMetrics overlays on a copy only when a stored mirror exists. All three callers (setTaskStatus.ts:248-253, taskStore.ts:816-821, WebSocketServer.ts:621-624) bump by exactly +1 from the same task read; qaReject.ts untouched; response shapes unchanged.\n\nRe-ran task.verification myself from the task worktree in a git-archive snapshot (/tmp/moe-fc10-qa-54X4ZD, npm ci under env -i): A-ok (grep clean, nothing under moe-jetbrains/ or moe-vscode/ changed), tsc and tt.json clean, 5 DoD files / 74 tests passed, listMetrics.reopen rows 10/10, full daemon suite 291 files, 7581 passed | 24 skipped, E=0, FINAL=0.\n\nDoD 1: R1 set_task_status, R2 reopenTask, R3 real /ws UPDATE_TASK drag (clean teardown) each assert stored mirror 2, avgReopenCount 2, tasks[0].metrics.reopenCount 2. DoD 2: L1 legacy row (mirror 1, canonical 2) reads 2 in aggregate and per-task; stored mirror stays 1, file bytes unchanged. DoD 3: the four named files and the full suite pass. E1, E2, H1-H4 cover edges with exact values. Worker's mutants m1-m5 all reported killed (not re-run by me). Ponytail pass: nothing to cut. Known cosmetic gap per the row: legacy rows task-07474ee4 and task-bde86540 keep a stale stored mirror in the IDE KPIs until their next reopen.",
+  "requiredCheckAtDone": null
 }
