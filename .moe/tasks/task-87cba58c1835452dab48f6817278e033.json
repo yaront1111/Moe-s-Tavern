@@ -68,18 +68,26 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- Docs/tests-only: a lowEffortEligible plan or row keeps low/medium, because effortFloor is undefined for it.\n- Unchanged paths:\n  - an explicit effort still gets exactly today's result;\n  - a first plan with no stored effort still stores nothing extra; resolveLaunch falls back to tierEffort as before;\n  - qa_reject's escalation (bumpTier plus bumpEffort) stays as qaReject.test.ts pins it.\n- A light/standard row stored at high still launches at high, since their floor is high.\n- A custom settings.routing.efforts that removes a level: effortFloor clamps the floor into the allowed list, so the result is still an allowed level.\n- Concurrency: none new. submit_plan runs under the state mutex, and resolveLaunch is pure.\n- RED re-proof: in a scratch snapshot outside the repo, restore both sources with `git show $(git merge-base HEAD moe/work-2026-10-24):<path>` and run only the new test file. Cases 2, 3 and 5 must fail and 1 and 4 pass; the architect saw 3 failed / 2 passed. Paste the failing names into the completion summary, then rm -rf the literal scratch path.\n- Scope: exactly the four planned files, and the docs change stays inside `### moe.submit_plan`.\nIf this review changes a file, re-run step 4's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in the earlier steps' files.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/util/routing.ts",
         "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts"
       ],
-      "startedAt": "2026-11-04T00:21:13.542Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/util/routing.ts",
+        "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review found no changes needed. Docs/tests-only rows still keep low/medium, because effortFloor is undefined for them. No new concurrency. Scope is exactly the four planned files. RED re-proof with the original sources: 3 failed (an omitted effort on a re-plan the size floor raises to heavy; an explicit tier heavy with effort omitted; resolveLaunch floors a stored effort), 2 passed (control explicit high; a re-plan that stays standard). Scratch snapshot removed.",
+      "startedAt": "2026-11-04T00:21:13.542Z",
+      "completedAt": "2026-11-04T00:21:28.168Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,12 +99,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:59:31.684Z",
-  "updatedAt": "2026-11-04T00:21:13.542Z",
+  "updatedAt": "2026-11-04T00:21:32.716Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:15:38.624Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -110,7 +118,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:19:24.248Z",
@@ -177,5 +186,20 @@
   },
   "planApprovedAt": "2026-11-04T00:19:24.277Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T00:20:29.328Z"
+  "workStartedAt": "2026-11-04T00:20:29.328Z",
+  "reviewStartedAt": "2026-11-04T00:21:32.701Z",
+  "verification": {
+    "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/m87cb.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in tools/submitPlan{,.effortFloor.test}.ts util/routing.ts; do cp \"$R/$f\" $f || exit 1; done && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx vitest run src/tools/submitPlan{.effortFloor,}.test.ts src/tools/qaReject.test.ts src/util/routing.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aq '✓ src/tools/submitPlan.effortFloor' ../v.log && echo \"effortFloor ok ($L)\" )",
+    "exitCode": 0,
+    "outputTail": "Test Files  4 passed (4)\n      Tests  131 passed (131)\neffortFloor ok (/tmp/m87cb.de6i)",
+    "reportedAt": "2026-11-04T00:21:32.701Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/submitPlan.effortFloor.test.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "packages/moe-daemon/src/util/routing.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "A kept stored effort is now floored to the tier minimum in submit_plan (the `if (task.effort)` branch) and in resolveLaunch, so a standard/high row re-planned into heavy is stored and launched at xhigh. Docs/tests-only rows keep low/medium and explicit-effort behaviour is unchanged. New test file submitPlan.effortFloor.test.ts has 5 cases. RED re-proof with the original sources gave 3 failed (omitted effort on a heavy re-plan; explicit tier heavy with effort omitted; resolveLaunch floor) and 2 passed (controls). docs/MCP_SERVER.md's ### moe.submit_plan \"Launch effort and models\" bullet now covers the kept stored effort and the claim-time launch hint."
 }

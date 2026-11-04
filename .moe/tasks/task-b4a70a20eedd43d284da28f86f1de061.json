@@ -29,18 +29,25 @@
     {
       "stepId": "step-2",
       "description": "Panel save decision (DoD 2, JetBrains parity). First read `git show 19af5ca6 -- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicArchive.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicDetailDialog.kt`, mem:decision-ide-epic-archive-split-save and mem:gotcha-epic-update-archive. All edits are in moe-vscode/src/panels/EpicDetailPanel.ts. Add no new value import: the new test loads this panel under node:vm with a require map that offers only `vscode` (`import type` is fine). Do not change media/epicDetail.js, and leave the 'create', 'delete' and 'cancel' cases as they are.\n(1) Texts. Copy these JetBrains MoeBundle.properties values exactly as module constants: moe.message.archiveEpicTitle ('Archive Epic', also the confirm button label), moe.message.archiveEpic (the confirm text; {0} epic title, {1} count) and moe.message.archiveEpicInFlight (its two `\\n` escapes become real newlines; {0} epic title, {1} the list). Fill {0}/{1} in one pass with a replace callback, so a title containing `{1}` or `$&` is inserted verbatim and never re-scanned. Add a constant for moe.archive_epic's IN_FLIGHT statuses (PLANNING, AWAITING_APPROVAL, WORKING), citing packages/moe-daemon/src/tools/archiveEpic.ts.\n(2) In the 'save' case keep the title check, the field normalization, and where epicId and the chosen status come from exactly as today. Decide from the NEWEST cache: the epic is client.currentState's epic with that id, else the one in the snapshot the panel opened with (this.state); the tasks are client.currentState's, else this.state's, else none; only tasks whose epicId is this epic count. Then:\n(a) Not an archive move: the chosen status is not 'ARCHIVED', or the epic is in neither cache (the daemon refuses a deleted epic and plain-updates an archived one), or the epic is already ARCHIVED. Send ONE frame exactly as today: updates {title, description, architectureNotes, epicRails, status}, in that key order.\n(b) An archive move while this epic has a PLANNING, AWAITING_APPROVAL or WORKING task: send nothing. `await vscode.window.showWarningMessage(inFlightText, { modal: true })` with {0} the cached epic title and {1} those tasks' titles in cache order, one '- <title>' line each, joined by '\\n'. The panel stays open with the typed edits.\n(c) Any other archive move: `await vscode.window.showWarningMessage(confirmText, { modal: true }, 'Archive Epic')` with {0} the cached epic title and {1} String(the number of this epic's tasks whose status is not ARCHIVED; BACKLOG, REVIEW, BLOCKED and DONE all count). Ask even when that number is 0. Any answer but 'Archive Epic' sends nothing and keeps the panel open. On confirm, send the field edits WITHOUT a status key: updates {title, description, architectureNotes, epicRails}. Step 3 sends the status-only frame (updates {status:'ARCHIVED'}) only after the daemon echoes these fields, so a refused field save never archives anything.\nError handling for this step: a dismissed modal sends nothing; a modal that rejects lands in the handler's existing catch ('Epic operation failed: ...'); a false updateEpic is handled in step 3.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/panels/EpicDetailPanel.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ],
+      "note": "EpicDetailPanel: JetBrains texts as module constants, one-pass fillPlaceholders, IN_FLIGHT_STATUSES; handleSave decides from the newest cache (non-archive / already-ARCHIVED / missing epic = today's one frame with the same key order; in-flight = modal with nothing sent; else confirm modal then fields-only frame). tsc passes in a scratch copy (symlinked node_modules, removed). No new value import (import type only).",
+      "startedAt": "2026-11-04T00:21:32.682Z",
+      "completedAt": "2026-11-04T00:22:17.330Z"
     },
     {
       "stepId": "step-3",
       "description": "Panel reply handling (DoD 1): never claim success before the daemon answers. /ws has no correlation id, but ERROR is only ever a direct reply and carries operation plus context.epicId (step 1), so match replies by epic id. In moe-vscode/src/panels/EpicDetailPanel.ts keep one private pendingSave record {epicId, title, stage: 'save' | 'fields' | 'archive'}: 'save' is a one-frame save, 'fields' the archive's field frame, 'archive' the status frame. Set it only after updateEpic returned true. title is that save's trimmed typed title. In the constructor subscribe to client.onEpicUpdated, client.onError and client.onConnectionChanged, and push the disposables into this.disposables. Rules:\n(a) An EPIC_UPDATED payload whose id equals pendingSave.epicId (read it with optional chaining: the client fires payloads unvalidated). At 'fields': send {status:'ARCHIVED'} through updateEpic and move to 'archive'. At 'archive': only a payload with status 'ARCHIVED' settles the save: showInformationMessage('Epic \"<title>\" archived.'), then dispose. The field frame's own broadcast and reply echoes are ignored. At 'save': showInformationMessage('Epic \"<title>\" updated.'), then dispose. Never compare echoed field values: validateEpicUpdates truncates long fields.\n(b) onError with operation 'UPDATE_EPIC' and context?.epicId === pendingSave.epicId: clear pendingSave and showErrorMessage('Epic \"<title>\" was saved but not archived: ' + event.message) at 'archive', else ('Epic \"<title>\" was not saved: ' + event.message). The panel stays open, so Save can be retried. Show event.message, never a raw frame. Ignore every other error (another epic, another operation, no context).\n(c) onConnectionChanged to anything but 'connected' while a save is pending: clear it and showWarningMessage('Lost the connection to the Moe daemon before it confirmed the save of epic \"<title>\". Your edits are still in this panel.').\n(d) A Save while pendingSave is set sends nothing, opens no modal and shows showInformationMessage('Still waiting for the Moe daemon to answer the last save of epic \"<title>\".'). One save is in flight at a time.\n(e) updateEpic false on the first frame: showWarningMessage('Not connected to Moe daemon — epic was not saved.') and nothing is pending. updateEpic false for the status frame: if that save is still pending, clear it and showWarningMessage('Not connected to Moe daemon — epic was saved but not archived.'). A throwing socket has already fired onConnectionChanged and warned through (c), so check first that the save is still pending, to show one message, not two.\nError handling: every refusal, send failure and connection loss ends in exactly one message and leaves the panel open with the edits; only a matching echo disposes it. Add a short comment naming the accepted limit: on the one-frame path, a foreign update of the same epic that reaches the daemon in the few ms before this frame would count as the echo.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/src/panels/EpicDetailPanel.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T00:22:22.203Z"
     },
     {
       "stepId": "step-4",
@@ -81,7 +88,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:34:21.111Z",
-  "updatedAt": "2026-11-04T00:20:40.472Z",
+  "updatedAt": "2026-11-04T00:22:22.203Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T23:59:30.368Z",
@@ -91,7 +98,7 @@
     "firstClaimAt": "2026-11-03T23:59:54.131Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
@@ -102,7 +109,8 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:18:49.564Z",
