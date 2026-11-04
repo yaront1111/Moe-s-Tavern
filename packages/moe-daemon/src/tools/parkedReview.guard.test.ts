@@ -67,11 +67,11 @@ describe('a REVIEW row parked for a human refuses agent seats', () => {
   };
   const PARKED = { status: 'REVIEW', assignedWorkerId: null, reopenCount: 4, needsHumanReview: true, rejections: 1 };
 
-  // The real hard-cap path: reopenCount 3 -> 4 past maxReopens parks the row.
+  // The real hard-cap path: reopenCount 3 -> 4 past maxReopens parks a row whose cap re-plan is recorded (capReplanAt).
   // qa-b is a QA seat busy on its own claim (task-2); it never claimed or read task-1.
   async function park() {
     setupMoe();
-    writeTask();
+    writeTask({ capReplanAt: '2026-11-04T00:00:00.000Z' });
     writeTask({ id: 'task-2', order: 2, assignedWorkerId: 'qa-b', contextFetchedBy: ['qa-b'], reopenCount: 0 });
     await state.load();
     await createWorker('qa-a', 'CODING', 'task-1');

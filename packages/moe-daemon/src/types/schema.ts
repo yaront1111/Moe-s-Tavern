@@ -1137,6 +1137,16 @@ export interface Task {
    */
   needsHumanReview?: boolean;
   /**
+   * ISO time of the qa_reject that flipped this task to PLANNING at its reopen
+   * cap: the one architect re-plan the cap grants. Written only by that flip
+   * and never cleared (a reopen keeps it). The hard cap parks the task
+   * (needsHumanReview) only once this is set, because `reopenCount` also counts
+   * non-QA reopens (set_task_status, a board move) and so cannot tell whether
+   * the re-plan ever happened. Absent on rows written before it existed, which
+   * read as "no cap re-plan yet".
+   */
+  capReplanAt?: string;
+  /**
    * Count of governor plan-critique `block` verdicts that flipped this task
    * back to PLANNING. Bounded by MAX_CRITIQUE_BLOCKS_DEFAULT; deliberately
    * separate from `reopenCount` so critique blocks don't corrupt the qa_reject

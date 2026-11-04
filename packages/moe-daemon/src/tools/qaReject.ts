@@ -203,19 +203,27 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
 
       // Bounded escalation. Two tiers off the reopen cap (default
       // MAX_REOPENS_DEFAULT (3), per-task override via task.maxReopens):
-      //   soft cap  (== maxReopens): flip back to PLANNING once so the
-      //             architect gets ONE re-plan instead of the worker spinning.
-      //   hard cap  (>  maxReopens): the re-plan didn't help either — PARK the
-      //             task for a human instead of re-flipping to PLANNING forever.
-      // Because reopenCount is monotonic (never reset), a single `>=` test would
-      // re-flip to PLANNING on every reject past the cap — an unbounded
-      // PLANNING↔WORKING↔REVIEW loop. The hard cap is the terminating tier.
+      //   soft cap  (newReopenCount >= maxReopens, no cap re-plan recorded):
+      //             flip back to PLANNING once so the architect gets ONE
+      //             re-plan instead of the worker spinning, and stamp
+      //             capReplanAt on the same write.
+      //   hard cap  (newReopenCount > maxReopens, capReplanAt set): the re-plan
+      //             didn't help either — PARK the task for a human instead of
+      //             re-flipping to PLANNING forever.
+      // reopenCount is monotonic (never reset) and the non-QA reopens bump it
+      // too (set_task_status, a board drag, REOPEN_TASK), so the count alone
+      // cannot say the re-plan happened: a human reopen that lands the count on
+      // the cap would send the next reject straight to the park. The hard cap
+      // therefore needs capReplanAt; a row without it (written before the field
+      // existed) reads as "no re-plan yet". Once it is set, every later reject
+      // past the cap parks, so the PLANNING↔WORKING↔REVIEW loop stays bounded.
       const maxReopens = typeof task.maxReopens === 'number' && task.maxReopens > 0
         ? task.maxReopens
         : MAX_REOPENS_DEFAULT;
       const softCap = maxReopens;
       const hardCap = maxReopens + 1;
-      const reachedHardCap = newReopenCount >= hardCap;
+      const capReplanned = typeof task.capReplanAt === 'string' && task.capReplanAt.length > 0;
+      const reachedHardCap = capReplanned && newReopenCount >= hardCap;
       const reachedSoftCap = !reachedHardCap && newReopenCount >= softCap;
 
       // Append-only failed-DoD-item log. The append happens regardless of
@@ -310,6 +318,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         // it so the QA claim pool skips it. Status stays REVIEW — inert, not
         // re-flipping to PLANNING — until a human clears the flag.
         ...(parkedForHuman ? { assignedWorkerId: null, needsHumanReview: true } : {}),
+        // Record the cap re-plan in the same write as the PLANNING flip.
+        ...(reachedSoftCap ? { capReplanAt: nowIso } : {}),
         ...(resetSteps
           ? {
               implementationPlan: resetPlanStepsToPending(task.implementationPlan),
