@@ -41,28 +41,40 @@
     {
       "stepId": "step-3",
       "description": "Worktree-mode test rows SR-T5 and SR-T5-replay in scripts/tests/postflight-vm-route.sh [strong receipt].\nAfter SR-T4 add:\n`vmr_run SR-T5 worker codex \"$SG_READY\" on 0 \"${SG_STRONG[@]}\" FAKE_CHECK_DISPATCH=pass FAKE_EVIDENCE_MODE=receipt-conflict-finalize-lost`, then `sr_check SR-T5 lost`.\nThen save the project (`rm -rf \"$TMP_DIR/sr-keep\"; cp -a \"$PROJECT\" \"$TMP_DIR/sr-keep\"`) and set VMR_SETUP=sr_restore (reuse T2's). Run `vmr_run SR-T5-replay worker codex \"$SG_READY\" on 0 \"${SG_STRONG[@]}\" FAKE_CLAIM_MODE=finalizing FAKE_EVIDENCE_MODE=receipt-conflict`, set VMR_SETUP=sg_fixture again, then `sr_check SR-T5-replay lost-replay`.\nUpdate both section echo lines to T1-T5. The closing line must read `[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay`, because checkRefs[0] greps it on every engine.\nNew sr_check kinds:\n- lost (the live worktree landing: a receipt conflict, then every finalize lost):\n  - the prelude as today; rec.length 1, rec[0] deepEqual want, and the completion row before it;\n  - exactly one conflict line;\n  - fin.length 3 (one exhausted finalize), each outcome landed with landedRevision C, and rec[0] before fin[0];\n  - phase finalizing, and deferred 0;\n  - exactly one line that starts with '[WARN] receipt journal ' and ends with ' kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it.';\n  - exactly one '[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect).' line;\n  - the journal still on disk with exactly T2's strong keys and fields: move T2's key and field asserts into one small function both kinds call, rather than copying them;\n  - no .moe/receipts/<id>.json.\n- lost-replay (the next pre-flight: a conflict again, the finalize answered):\n  - rec.length 2, and JSON.stringify(rec[1].args) === JSON.stringify(rec[0].args);\n  - exactly one conflict line and one '[receipt] replaying the delivery receipt of task task-postflight from ' line;\n  - fin.length 4. The last one is landed with landedRevision C, comes after the last receipt, and has attemptId, generation and workerId equal to fin[0]'s;\n  - phase closed, the journal gone, kept 0 and deferred 0;\n  - check-dispatch and record_candidate rows 1 each (nothing re-dispatched or re-frozen), and no stored receipt.\nAlso extend the conflict-line count to ['conflict','lost','lost-replay'], and skip the stored-receipt pushResult check for both lost kinds (a conflict stores nothing). The SR-T1..T4 assertions stay as they are. Test first: on today's wrapper SR-T5 must fail on the missing journal (a full `bash postflight-vm-route.sh` takes about 6 min).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-04T21:55:30.478Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Added sr_check kinds lost and lost-replay, rows SR-T5 (FAKE_EVIDENCE_MODE=receipt-conflict-finalize-lost) and SR-T5-replay (sr-keep snapshot + sr_restore, FAKE_CLAIM_MODE=finalizing, FAKE_EVIDENCE_MODE=receipt-conflict); T2's journal key/field asserts moved into strongJournal() called by deferred and lost; conflict-line count extended to conflict/lost/lost-replay; lost kinds exit early so the stored-receipt pushResult check is skipped for them; section lines now T1-T5 and '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay'. SR-T1..T4 assertions unchanged. bash -n OK. RED on today's wrapper (full bash postflight-vm-route.sh, ~6 min): every section through SR-T4 passes, then 'VM ROUTE FAILED (SR-T5)' at the journal-kept line count (0 !== 1), after rec 1, fin 3, phase finalizing, deferred 0 had passed; the log shows the conflict WARN, 3 invalid finalize acks and one exhausted line.",
+      "startedAt": "2026-11-04T21:55:30.478Z",
+      "completedAt": "2026-11-04T22:04:36.872Z"
     },
     {
       "stepId": "step-4",
       "description": "Worktree-mode test rows, the ps1 twin, in scripts/tests/postflight-vm-route.ps1 (Assert-SrRow kinds lost and lost-replay; Invoke-SrRows rows SR-T5 and SR-T5-replay). Use the same rows and assertions as step 3, ported the way SR-T2 and SR-T2-replay are:\n- Assert-SrRow (Invoke-SgRow SR-T5 ($strong + @{ FAKE_EVIDENCE_MODE = 'receipt-conflict-finalize-lost' })) lost.\n- Copy $project to \"$tempRoot\\sr-keep\" (Remove-Item, then Copy-Item -Recurse -Force).\n- Run SR-T5-replay with $script:VmrSetup set to the restore block, inside a try/finally that resets it to { Initialize-SgFixture }. Its args: @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing'; FAKE_EVIDENCE_MODE = 'receipt-conflict' }. Then Assert-SrRow $r lost-replay.\nCompare the replayed receipt in the sorted-key $canon form, as SR-T2-replay does, because hashtable key order differs across pwsh processes. Match the kept and exhausted lines by StartsWith/EndsWith or -ceq on the same texts as step 3. Extend the conflict-line kinds and the stored-receipt skip in the same way, and update both Write-Host lines: the ok line must read `[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay`.\nTraps (mem:gotcha-ps1-harness-syntax-traps):\n- wrap every result that may be a single item in @();\n- variable names are case-insensitive: $C is main's sha, so do not introduce $c;\n- reuse the file's own helpers (Assert-Sg, $of, $n, $canon).\nKeep the file's encoding as it is.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Ported SR-T5/SR-T5-replay to postflight-vm-route.ps1: Assert-SrRow kinds lost and lost-replay (sorted-key $canon compare of the replayed receipt, StartsWith/EndsWith/-ceq on the same texts as sh), T2's journal key/field asserts moved into a $strongJournal scriptblock used by deferred and lost, conflict-line kinds extended with -in, lost kinds return early (no stored-receipt check). Invoke-SrRows: SR-T5 ($strong + receipt-conflict-finalize-lost), sr-keep copy, SR-T5-replay inside try/finally resetting $script:VmrSetup, both Write-Host lines updated. No $c/$f introduced ($first/$last); file stays ASCII without BOM. ParseFile 0 errors on 5.1 and 7. RED on today's wrapper (pwsh 7 full vm-route.ps1): everything through SR-T4 passes, then 'VM ROUTE FAILED (SR-T5): not one strong journal-kept line' after the receipt/finalize/phase asserts passed.",
+      "startedAt": "2026-11-04T22:04:37.832Z",
+      "completedAt": "2026-11-04T22:06:09.726Z"
     },
     {
       "stepId": "step-5",
       "description": "Fix, in both wrappers: a DELIVERY_RECEIPT_CONFLICT keeps a strong receipt journal until its attempt is closed (CQ-V08b).\nToday (d35f2bc3):\n- sh receipt_send (scripts/moe-agent.sh, about :6464). The accepted branch keeps a strong journal (`[ -z \"$journal\" ] || [ \"$strong\" = 1 ] || rm -f \"$journal\"`), but the conflict branch runs `[ -z \"$journal\" ] || rm -f \"$journal\"`.\n- ps1 Send-MoeReceipt (scripts/moe-agent.ps1, about :2217). `$keep = $ok -and (Get-MoeProp $Report 'profile') -ceq 'verified-local'` is computed while $ok is still $false, so the conflict branch's `$ok = $true` deletes the journal.\nChange exactly this:\n- sh conflict branch: `[ -z \"$journal\" ] || [ \"$strong\" = 1 ] || rm -f \"$journal\"`, the accepted branch's own test. ($strong is the function's second parsed line: 1 when the report's own profile is verified-local.)\n- ps1: `$keep = (Get-MoeProp $Report 'profile') -ceq 'verified-local'`, without the `$ok -and`. $keep is read only inside `if ($ok)`, so a refused or unanswered receipt behaves exactly as today.\n- Both header comments: a strong journal outlives an accepted or a conflicting receipt until its attempt is closed, and finalize_postflight / Complete-MoePostflight or the next replay drops it. Keep the Twin pointers.\nDo not touch:\n- the conflict WARN text;\n- RECEIPT_ACKED=true / return $true on a conflict (a conflict never defers the finalize; SR-T3 pins it);\n- the non-strong conflict path, which still deletes its journal at once;\n- any caller: the shared landing, wt_land_published / Complete-MoeWorktreeLanding, receipt_replay / Invoke-MoeReceiptReplay;\n- the CQ-V08b removal in finalize_postflight / Complete-MoePostflight.\nError handling: no new failure path. The removal stays best-effort, as on the accepted branch (rm -f; -ErrorAction SilentlyContinue). A kept journal is settled by the existing pre-flight replay, which re-sends the receipt, finalizes a still-finalizing attempt, and drops a strong journal only once that attempt is closed.\nEdit in the task worktree with the Edit tool (a TOOL witness, never sed -i), and keep moe-agent.ps1 UTF-8 with its BOM. Then run `bash -n scripts/moe-agent.sh` and checkRefs[0]'s ParseFile on both engines, and rerun the step 2 frozen row on both engines: it must now pass.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T22:06:10.699Z"
     },
     {
       "stepId": "step-6",
@@ -104,7 +116,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T20:29:26.340Z",
-  "updatedAt": "2026-11-04T21:55:30.478Z",
+  "updatedAt": "2026-11-04T22:06:10.699Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T20:30:16.813Z",
@@ -114,7 +126,7 @@
     "firstClaimAt": "2026-11-04T20:30:18.547Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "dependsOn": [
     "task-527735eafb9147cf8663ccee9a9e1b4c",
@@ -134,7 +146,9 @@
   ],
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T20:58:40.539Z",

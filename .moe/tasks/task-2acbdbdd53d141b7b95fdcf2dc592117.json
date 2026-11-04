@@ -63,7 +63,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -86,7 +86,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T21:25:55.066Z",
-  "updatedAt": "2026-11-04T22:03:36.429Z",
+  "updatedAt": "2026-11-04T22:06:30.402Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T21:37:11.103Z",
@@ -96,11 +96,14 @@
     "firstClaimAt": "2026-11-04T21:37:40.230Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T22:06:05.566Z",
+    "wallClockMs": 1705336
   },
   "contextFetchedBy": [
     "architect-67c762f6",
-    "worker-d2c84c0e"
+    "worker-d2c84c0e",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -183,10 +186,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T21:59:49.479Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d2c84c0e@2026-11-04T21:58:46Z",
-    "at": "2026-11-04T22:03:36.429Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T22:04:01Z",
+    "at": "2026-11-04T22:06:30.402Z"
   },
   "reviewStartedAt": "2026-11-04T22:02:33.309Z",
   "verification": {
@@ -218,5 +222,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T22:06:05.566Z",
+  "reviewCompletedAt": "2026-11-04T22:06:05.566Z",
+  "reviewSummary": "Approved. Reviewed completion b3b105f7 (on moe/work-2026-10-24, contained in control HEAD; both files clean against it). Exactly the two planned files, +69/-6.\n\nRe-ran checkRefs[0] verbatim: EXIT=0. WSL node 28/28 with '✔ S5'. node.exe 27 pass, 1 skipped (S5, win32 reason). S1-S4 and the real-entry spawns in K and S4 stay green on both.\n\nMutants I ran on a scratch git-archive copy outside the checkout (removed), each failing only S5 (27/28): process.on -> process.once (child dies by the repeated signal); process.exit(130) on a second signal (exit code); a never-aborting listener (15 s watchdog).\n\nChecked against the contract: runDispatchEntry(argv, deps = {}) is exported, uses process.on, never removes the listeners, and spreads deps before signal so a dep cannot replace it. Rejection text and exit 2 are unchanged. The entry is the one-line invokedDirectly() call, and import arms nothing. It is the only new export. The S5 driver has no signal listener of its own, holds a ref'd interval from create to removed, and gates the delete on stdin EOF (no timers). The test kills only its own child, with env { PATH } only. It asserts code 2, signal null, exact stderr, one stdout line and the report fields for three signal sequences. No forbidden pattern added. verified-local stays unavailable. Complexity pass: nothing to cut.\n\nFollow-up for the epic-final docs sweep (task-1a8f1d0e): the moe-agent.sh:9707 comment ('a second would end its VM deletion') is now stale; the wrappers' one-TERM rule stays as defense in depth. Residual and bounded: a hung delete now ignores further signals, so only SIGKILL or taskkill /F ends it (lifecycle.mjs bounds the delete at 120 s).",
+  "requiredCheckAtDone": null
 }
