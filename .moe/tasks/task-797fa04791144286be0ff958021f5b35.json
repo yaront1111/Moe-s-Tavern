@@ -9,10 +9,83 @@
     "packages/moe-daemon/src/generated/initFiles.ts is generator-fresh for the edited docs (shared clone at the base, generate-init-files, then sha1sum -c or cmp against the candidate passes, per mem:convention-docs-vendored-regen-gate), `npm run lint` is green, and `npx vitest run src/util/initFiles.test.ts` passes in that clone."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-cd0ac706",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Governor reference doc (a generator input). In docs/roles/governor.reference.md make exactly the two hunks of /mnt/d/moe-scratch/plan-797fa047/proto-doc.diff (the byte-exact target; README.txt there explains every artifact):\n(a) '## Rail proposal patterns' (lines 76-81 at a0b30e9b, below the propose_rail code block, which stays unchanged). The 'MODIFY_RAIL at TASK scope' and 'REMOVE_RAIL at TASK scope' bullets become two bullets that lead with sentence A, '**Only a GLOBAL `MODIFY_RAIL` or `REMOVE_RAIL` whose `currentValue` is the exact `forbiddenPatterns` or `requiredPatterns` entry lifts a `submit_plan` rail refusal**', and sentence B, '**EPIC and TASK proposals change guidance rails only (`epicRails`, `taskRails`)**' (seats and QA read guidance rails, the plan check never does; a non-GLOBAL MODIFY/REMOVE that quotes a global rail is refused `NOT_FOUND`). The 'ADD_RAIL at EPIC scope' bullet stays. The 'MODIFY_RAIL at GLOBAL scope is the nuclear option' bullet becomes '**ADD_RAIL at GLOBAL scope** only appends to `customRules`...'. The closing sentence's 'wait for human decision via `moe.check_approval`' becomes 'wait for the human's decision. It posts nothing to chat: read it with `moe.get_activity_log { taskId, eventTypes: [\"PROPOSAL_APPROVED\", \"PROPOSAL_REJECTED\"] }`.'\n(b) '## Mention reply examples', the rail-conflict line (:129): it now says the global `forbiddenPatterns` entry `fs.unlink` refuses the plan, and files 'a GLOBAL `MODIFY_RAIL` that narrows that exact entry; a TASK-scope proposal cannot lift a plan refusal.'\nCopy the new lines from proto-doc.diff verbatim: ASCII apostrophes, the existing em dashes, one line per bullet. The generator hashes the body, so any byte difference changes the marker sha that step 3 applies. The runtime facts behind the text are in the executionContract sourceAssumptions. docs/MCP_SERVER.md :389 and its moe.propose_rail section already say the same and stay unchanged. Edit with your own editor tool (Edit on Claude, apply_patch on codex); never a shell write, a Serena edit or a subagent edit (global rail 3). Error handling: Read the lines first; if a hunk's old text is missing or appears twice (a peer moved it), stop and call moe.report_blocked rather than guess.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/governor.reference.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/governor.reference.md"
+      ],
+      "note": "governor hunks applied; also edited worker/architect (step 2); git diff a0b30e9b -- docs/roles matches proto-doc.diff",
+      "startedAt": "2026-11-04T06:57:40.198Z",
+      "completedAt": "2026-11-04T06:58:04.660Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Worker and architect reference docs (generator inputs). In docs/roles/worker.reference.md and docs/roles/architect.reference.md, section '## Rail Proposals (escape hatch)', apply the one hunk each that proto-doc.diff shows, below the propose_rail code block (unchanged):\n- worker.reference.md (:46 at a0b30e9b): insert a paragraph before 'Don't use this to dodge...'. It is sentence A + ', and it changes that rail for every task.', then sentence B + ': you and QA read them, the plan check never does, and a `MODIFY_RAIL` or `REMOVE_RAIL` there that quotes a global rail is refused `NOT_FOUND`.' Then the 'Don't use this' paragraph's last sentence becomes 'The proposal lands in `.moe/proposals/`, and its decision posts nothing to chat: once `moe.get_activity_log { taskId, eventTypes: [\"PROPOSAL_APPROVED\", \"PROPOSAL_REJECTED\"] }` shows it approved, retry the step.'\n- architect.reference.md (:71): insert a paragraph: sentence A + '; the refusal names that entry, and the change applies to every task.', then sentence B + ': seats and QA read them, the plan check never does, and a ... refused `NOT_FOUND`.' The closing paragraph's first sentence becomes 'The proposal lands in `.moe/proposals/` for human Approve/Reject; its decision posts nothing to chat, and `moe.get_activity_log {...}` shows it.' 'Do NOT loop between ... pick one and commit.' stays.\nSentences A and B and the get_activity_log call must be byte-identical across all three docs: R0 greps each section for them with grep -F. The get_activity_log pointer in these two docs is in scope (approvedScope): their 'once approved' and 'Approve/Reject' otherwise name no way to see the decision. Leave docs/roles/{architect,worker,governor,qa}.md, qa.reference.md, docs/MCP_SERVER.md and docs/skills/** byte-unchanged. Same editor rule and error handling as step 1: Read first, stop and moe.report_blocked on a missing or duplicated old text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.reference.md",
+        "docs/roles/architect.reference.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/worker.reference.md",
+        "docs/roles/architect.reference.md"
+      ],
+      "startedAt": "2026-11-04T06:58:04.921Z",
+      "completedAt": "2026-11-04T06:58:07.537Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Ship the edited docs in the vendored copy: packages/moe-daemon/src/generated/initFiles.ts must equal the generate-init-files output for them (DoD 3). Compute base B as r3.sh does: MERGE_HEAD, else the newest commit whose subject is not wip(task-...) or sync(task-...).\nFast path, when B is a0b30e9b or `git diff --quiet a0b30e9b $B -- docs/roles docs/agents packages/moe-daemon/src/generated/initFiles.ts` passes, and your three docs match proto-doc.diff: apply the 12 OLD/NEW pairs of /mnt/d/moe-scratch/plan-797fa047/initFiles-edit-pairs.txt in order with your own Edit tool. They are:\n- the three ROLE_DOCS markers (architect.reference c016fd59a81e to 4e6e159ba84b, governor.reference ad9aa1bf6271 to c4d8411512a0, worker.reference a2e203c12ef7 to 51eab04ce01a);\n- the changed body lines, whose backticks the template literal escapes with a backslash;\n- one new sha per doc, inserted in sorted order into SHIPPED_ROLE_BODY_SHAS. Keep the old sha so stale marked .moe/roles copies still upgrade.\nThen `cmp packages/moe-daemon/src/generated/initFiles.ts /mnt/d/moe-scratch/plan-797fa047/proto-initFiles.ts` must print nothing.\nOtherwise, regenerate in a clone at B with r3.sh's recipe (git clone -q --shared --no-checkout . $S/r, checkout --detach B, npm ci, overlay your three docs, npm run -s generate-init-files | grep Generated). Diff its initFiles.ts against yours and apply each hunk with Edit.\nNever cp the generated file back (a shell write, HELD at landing). Never run npm run build, prebuild, ci or install in the shared checkout or in your worktree (global rail 1). See mem:convention-role-doc-edits-regenerate-initfiles, mem:convention-docs-vendored-regen-gate and mem:gotcha-moe-doc-generated-artifacts. Error handling: an OLD string that is missing or not unique means the base moved. Switch to the regenerate path rather than forcing a pair.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "12 pairs applied with Edit; cmp equals proto-initFiles.ts",
+      "startedAt": "2026-11-04T06:58:07.997Z",
+      "completedAt": "2026-11-04T06:58:39.379Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once. From your worktree root, run exactly this command and submit its fresh result as moe.complete_task verification { command, exitCode, outputTail }:\n(cd /mnt/d/moe-scratch/plan-797fa047 && sha256sum -c --quiet SHA256SUMS) && bash /mnt/d/moe-scratch/plan-797fa047/r0.sh && bash /mnt/d/moe-scratch/plan-797fa047/r1.sh && bash /mnt/d/moe-scratch/plan-797fa047/r2.sh && bash /mnt/d/moe-scratch/plan-797fa047/r3.sh\nThe four scripts are byte-identical to the executionContract checkRefs. SHA256SUMS pins them and the prototype files.\n- R0 (DoD 1, 2): each of the three rail-proposal sections holds sentence A, sentence B and the get_activity_log call. `grep -nE 'MODIFY_RAIL at TASK scope|moe\\.check_approval' docs/roles/governor.reference.md` prints nothing, and the :129 example is fixed.\n- R1 (DoD 3, the project qualityGate): scripts/tests/parity-check.sh and npm run lint.\n- R2: scope against B. Only the four named files may change under docs, packages, scripts, moe-jetbrains and moe-vscode.\n- R3 (DoD 3): works in a clone at B outside the repo. It proves the base initFiles.ts generator-fresh, overlays your four files, regenerates, and checks initFiles.ts byte-identical with sha1sum -c. It then runs the vitest test files initFiles, daemonGitDocs, targetedContextGuidance, qaCommitPolicy and blockedSeatGuidance. On the prototype: 5 files, 44 tests, about 25 s after npm ci.\nOn a failure, read the FAIL line, fix it in the step that owns the file, and re-run the whole command. Never weaken a check or edit the scratch scripts.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "R0-R3 all OK; 5 files 44 tests pass",
+      "startedAt": "2026-11-04T06:58:39.971Z",
+      "completedAt": "2026-11-04T06:59:23.827Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's own diff, run once (load adversarial-self-review). Check against base B:\n(1) The docs diff matches proto-doc.diff line for line: on the fast-path base, `git diff $B -- docs | diff - /mnt/d/moe-scratch/plan-797fa047/proto-doc.diff` prints nothing. No other line, no CRLF churn (.gitattributes sets eol=lf), and the three propose_rail code blocks untouched.\n(2) initFiles.ts cmp-equals proto-initFiles.ts on the fast-path base. Otherwise it changes only the hunks for the three reference docs: no other doc's marker, body or SHIPPED_ROLE_BODY_SHAS line moved, and each old sha is still listed.\n(3) Every claim matches the source. GLOBAL ADD_RAIL appends to customRules (railChange.ts applyGlobalRailChange). A non-GLOBAL MODIFY/REMOVE quoting a global rail is NOT_FOUND (proposeRail.ts:57-62, railChange.ts findRailIndex). amend_plan_step shares the plan check (amendPlanStep.ts:108-111). get_activity_log filters by taskId and eventTypes, and the PROPOSAL_APPROVED/REJECTED events carry the proposal's taskId (StateManager.ts:1386, :1468). A decision posts nothing to chat (WebSocketServer.ts:813-830).\n(4) The text adds no claim the source does not back, such as how long the activity log keeps a decision.\n(5) Nothing else changed: docs/roles/*.md other than the three reference docs, docs/MCP_SERVER.md, docs/skills/**, skillFiles.ts and .moe/** (R2 enforces the tracked part).\nFix anything you find in its owning step. If you changed a byte, re-run step 4's exact command and submit that fresh output to moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/governor.reference.md",
+        "docs/roles/worker.reference.md",
+        "docs/roles/architect.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "modifiedFiles": [
+        "docs/roles/governor.reference.md",
+        "docs/roles/worker.reference.md",
+        "docs/roles/architect.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Self-review: docs diff == proto-doc.diff, initFiles cmp-equal, source claims verified (railChange customRules, StateManager PROPOSAL_* events, amendPlanStep assertPlanRails); only 4 files changed.",
+      "startedAt": "2026-11-04T06:59:24.401Z",
+      "completedAt": "2026-11-04T06:59:39.177Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +97,142 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:38:05.198Z",
-  "updatedAt": "2026-11-04T06:38:36.876Z",
+  "updatedAt": "2026-11-04T07:00:36.497Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T06:38:18.706Z"
+    "firstClaimAt": "2026-11-04T06:38:18.706Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-cd0ac706"
-  ]
+    "architect-cd0ac706",
+    "worker-593560ee"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T06:56:35.774Z",
+  "executionContract": {
+    "intendedBehavior": "The rail-proposal guidance in docs/roles/governor.reference.md, worker.reference.md and architect.reference.md matches the runtime. Only a GLOBAL MODIFY_RAIL or REMOVE_RAIL whose currentValue is the exact forbiddenPatterns or requiredPatterns entry lifts a submit_plan (or amend_plan_step) rail refusal. EPIC and TASK proposals change guidance rails only (epicRails, taskRails), and a non-GLOBAL MODIFY/REMOVE that quotes a global rail is refused NOT_FOUND. A proposal's decision is read with moe.get_activity_log { taskId, eventTypes: [\"PROPOSAL_APPROVED\", \"PROPOSAL_REJECTED\"] }; check_approval reads plan approval only and is no longer prescribed. The vendored copies in packages/moe-daemon/src/generated/initFiles.ts carry the same text. No code, tool contract or runtime behavior changes.",
+    "acceptanceCriteria": [
+      "R0 passes: each of the three rail-proposal sections holds sentence A ('Only a GLOBAL `MODIFY_RAIL` or `REMOVE_RAIL` whose `currentValue` is the exact `forbiddenPatterns` or `requiredPatterns` entry lifts a `submit_plan` rail refusal'), sentence B ('EPIC and TASK proposals change guidance rails only (`epicRails`, `taskRails`)') and the moe.get_activity_log PROPOSAL_APPROVED/PROPOSAL_REJECTED call. `grep -nE 'MODIFY_RAIL at TASK scope|moe\\.check_approval' docs/roles/governor.reference.md` prints nothing, and the :129 mention example files a GLOBAL MODIFY_RAIL.",
+      "R1 passes: scripts/tests/parity-check.sh and npm run lint at the repo root.",
+      "R2 passes: against the generator base B, the diff under docs, packages, scripts, moe-jetbrains and moe-vscode is exactly the four named files.",
+      "R3 passes in a clone outside the repo: the base initFiles.ts is generator-fresh; after the candidate files are overlaid, generate-init-files leaves initFiles.ts byte-identical (sha1sum -c); and the initFiles, daemonGitDocs, targetedContextGuidance, qaCommitPolicy and blockedSeatGuidance vitest files pass."
+    ],
+    "invariants": [
+      "The propose_rail code blocks in all three reference docs, and every section other than the rail-proposal sections and governor's rail-conflict mention example, stay byte-unchanged.",
+      "docs/roles/{architect,worker,governor,qa}.md, docs/roles/qa.reference.md, docs/MCP_SERVER.md, docs/skills/** and packages/moe-daemon/src/generated/skillFiles.ts stay byte-unchanged; the 40-line role-doc caps are unaffected.",
+      "Nothing under .moe/ changes, and no daemon source file changes (tools/proposeRail.ts, state/railChange.ts, util/rails.ts, tools/checkApproval.ts, tools/getActivityLog.ts)."
+    ],
+    "compatibility": [
+      "No MCP tool contract, wire shape or .moe/ state change: docs only, plus the vendored copies of three role reference docs.",
+      "SHIPPED_ROLE_BODY_SHAS keeps every old body sha (c016fd59a81e, ad9aa1bf6271, a2e203c12ef7), so the daemon still recognizes a project's marked .moe/roles copies as shipped stale copies and upgrades them at start."
+    ],
+    "approvedScope": [
+      "docs/roles/governor.reference.md: the '## Rail proposal patterns' bullets and closing paragraph below the propose_rail code block, and the '## Mention reply examples' rail-conflict line, only.",
+      "docs/roles/worker.reference.md: the '## Rail Proposals (escape hatch)' text below the propose_rail code block only (one new paragraph; the last sentence of the 'Don't use this' paragraph).",
+      "docs/roles/architect.reference.md: the '## Rail Proposals (escape hatch)' text below the propose_rail code block only (one new paragraph; the closing paragraph's first sentence).",
+      "packages/moe-daemon/src/generated/initFiles.ts: the generator hunks for those three docs only (ROLE_DOCS markers, changed body lines, one new sha each in SHIPPED_ROLE_BODY_SHAS).",
+      "The get_activity_log pointer in the worker and architect docs is in scope: their 'once approved' and 'Approve/Reject' sentences otherwise name no way to learn the decision, the gap the governor doc filled with the wrong call."
+    ],
+    "reuse": [
+      "packages/moe-daemon/scripts/generate-init-files.ts produces initFiles.ts. The candidate's hunks are applied only with Edit, and R3 proves them byte-identical to that output.",
+      "Prototype and gate scripts in /mnt/d/moe-scratch/plan-797fa047, pinned by SHA256SUMS, were proven on a clone at a0b30e9b, including red controls. R0 fails on the unedited base, on a missing sentence B, on a leftover moe.check_approval line and on an unfixed :129 example. R2 fails on an out-of-scope docs/roles/governor.md edit. R3 fails (sha1sum FAILED) on a stale initFiles.ts. initFiles-edit-pairs.txt (12 pairs) reproduces proto-initFiles.ts byte for byte.",
+      "The gate recipe follows mem:convention-docs-vendored-regen-gate and the landed task-ed84e283 checkRefs. The regression guard for this docs-only row is the R0 grep gate plus R3's existing role-doc vitest files, as for the landed docs rows ed84e283, d60a0109 and 47652916."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/rails.ts:32 listPlanRailViolations reads only globalRails.forbiddenPatterns and requiredPatterns; :73-101 assertPlanRails names a GLOBAL MODIFY_RAIL/REMOVE_RAIL of the quoted entry as the only lift. tools/submitPlan.ts:410-417 and tools/amendPlanStep.ts:108-111 are its only callers.",
+      "tools/proposeRail.ts:57-62: a GLOBAL MODIFY/REMOVE resolves currentValue across customRules, forbiddenPatterns and requiredPatterns (state/railChange.ts:30 resolveGlobalRail). EPIC and TASK resolve it in epicRails or taskRails only (railChange.ts:22 findRailIndex), so a global rail's text there is refused NOT_FOUND before any proposal is written. railChange.ts:44 applyGlobalRailChange: a GLOBAL ADD_RAIL appends to customRules.",
+      "tools/checkApproval.ts:24: approved = task.status === 'WORKING'; it never reads a proposal.",
+      "state/StateManager.ts:1386 and :1468 append the PROPOSAL_APPROVED and PROPOSAL_REJECTED activity events with the proposal's task, so taskId is set (state/activityLog.ts:71). server/WebSocketServer.ts:813-830 only answers the approving /ws client, so nothing reaches chat. tools/getActivityLog.ts filters by taskId and eventTypes, and types/schema.ts:1772-1773 lists both events.",
+      "docs/MCP_SERVER.md:389 (### moe.submit_plan, Rail refusal) and the ### moe.propose_rail section already state the GLOBAL-only rule; they stay unchanged."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" || exit 1; for n in governor worker architect; do f=docs/roles/$n.reference.md; s=$(awk '/^## Rail [Pp]roposal/{p=1;print;next} p&&/^## /{exit} p' $f); for p in 'Only a GLOBAL `MODIFY_RAIL` or `REMOVE_RAIL` whose `currentValue` is the exact `forbiddenPatterns` or `requiredPatterns` entry lifts a `submit_plan` rail refusal' 'EPIC and TASK proposals change guidance rails only (`epicRails`, `taskRails`)' 'moe.get_activity_log { taskId, eventTypes: [\"PROPOSAL_APPROVED\", \"PROPOSAL_REJECTED\"] }'; do grep -qF -- \"$p\" <<<\"$s\" || { echo \"FAIL: $f rail section lacks: $p\"; exit 1; }; done; done; ! grep -nE 'MODIFY_RAIL at TASK scope|moe\\.check_approval' docs/roles/governor.reference.md || { echo \"FAIL: governor, lines above\"; exit 1; }; grep -qF 'a TASK-scope proposal cannot lift a plan refusal' docs/roles/governor.reference.md || { echo \"FAIL: governor example unfixed\"; exit 1; }; echo \"R0 OK: rail-proposal sections\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && echo \"R1 OK: parity + role-doc lint\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && git rev-parse -q --verify \"$B^{commit}\" >/dev/null && X=$({ git diff --name-only \"$B\" -- docs packages scripts moe-jetbrains moe-vscode; git ls-files -o --exclude-standard -- docs packages scripts moe-jetbrains moe-vscode; } | grep -vxF -e docs/roles/governor.reference.md -e docs/roles/worker.reference.md -e docs/roles/architect.reference.md -e packages/moe-daemon/src/generated/initFiles.ts || true) && { [ -z \"$X\" ] || { echo \"FAIL: out-of-scope change vs $B: $X\"; exit 1; }; } && echo \"R2 OK: scope vs generator base $B\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . $S/r && git -C $S/r checkout -q --detach $B && tar -cf $S/e.tar docs/roles/{governor,worker,architect}.reference.md packages/moe-daemon/src/generated/initFiles.ts && cd $S/r/packages/moe-daemon && env -i HOME=$HOME NO_COLOR=1 S=$S PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin bash -c 'set -o pipefail; npm ci --no-audit -q && npm run -s generate-init-files | grep Generated && { git diff --exit-code --stat || { echo \"FAIL: stale base $0\"; exit 1; }; } && tar -xf $S/e.tar -C ../.. && sha1sum src/generated/initFiles.ts > $S/g && npm run -s generate-init-files | grep Generated && sha1sum -c $S/g && npx vitest run src/util/{initFiles,daemonGitDocs,targetedContextGuidance,qaCommitPolicy,blockedSeatGuidance}.test.ts' $B"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Only drop the governor's TASK-scope bullet. Rejected: the worker and architect three-scope templates would still imply that a TASK or EPIC proposal can lift a plan refusal (hunt evidence r2: an approved TASK/EPIC ADD_RAIL leaves the plan refused). (2) Keep a 'do not use moe.check_approval' warning in governor.reference.md. Rejected: DoD 1's grep forbids the name, and the new text names the right call. (3) Write the whole 118 KB initFiles.ts, or cp it back. Rejected: 12 proven Edit pairs keep the TOOL witness and the context small, and a cp is a shell write that is HELD at landing. (4) A new vitest phrase guard on the doc text. Not planned: this is a docs-only row like the landed ed84e283, d60a0109 and 47652916, and the epic test rail is met by the R0 grep gate plus R3's existing role-doc test files.",
+    "codebaseInsights": "Every docs/roles/*.md, the reference docs included, is vendored into initFiles.ts: ROLE_DOCS carries a marker sha and the body with backticks escaped, and SHIPPED_ROLE_BODY_SHAS keeps every shipped body sha. The generator reads git history, so regenerate in a clone, never in a git archive snapshot. The daemon enforces only globalRails.forbiddenPatterns and requiredPatterns, and only on plan text (submit_plan, amend_plan_step). epicRails, taskRails and customRules are guidance, surfaced in get_context allRails. propose_rail refuses NOT_FOUND at propose time, before writing a proposal. Proposal decisions come from the IDE over /ws (APPROVE_PROPOSAL/REJECT_PROPOSAL) and land only in .moe/proposals/<id>.json and the activity log, never in chat.",
+    "risks": "(1) Base drift. If a row lands a docs/roles or initFiles.ts change before this worktree exists, the 12 pairs may not apply. Take step 3's regenerate path; R3 decides. (2) Landing conflict. SHIPPED_ROLE_BODY_SHAS has one line per doc, and this row edits the architect.reference, governor.reference and worker.reference lines. A peer landing an adjacent doc's line (architect.md, governor.md, qa.reference.md, worker.md) can make the merge-tree squash conflict, which takes the unlanded route: resync and regenerate. (3) Edit fidelity. The long pairs hold em dashes and escaped backticks, so copy them from initFiles-edit-pairs.txt exactly and cmp against proto-initFiles.ts before the gate. (4) Scope. Do not touch MCP_SERVER.md or governor.md while here; R2 refuses it. (5) get_activity_log scans only the newest 5000 log lines, so the text says how to read a decision and makes no retention claim.",
+    "keyFiles": [
+      "docs/roles/governor.reference.md",
+      "docs/roles/worker.reference.md",
+      "docs/roles/architect.reference.md",
+      "packages/moe-daemon/src/generated/initFiles.ts",
+      "packages/moe-daemon/src/util/rails.ts",
+      "packages/moe-daemon/src/tools/proposeRail.ts",
+      "packages/moe-daemon/src/state/railChange.ts",
+      "packages/moe-daemon/src/tools/checkApproval.ts",
+      "/mnt/d/moe-scratch/plan-797fa047/README.txt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9d5c8924be83ec83938a1012a8ddb511c652f646",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T06:56:35.802Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T06:56:44Z",
+    "at": "2026-11-04T07:00:36.497Z"
+  },
+  "workStartedAt": "2026-11-04T06:57:40.198Z",
+  "reviewStartedAt": "2026-11-04T06:59:44.114Z",
+  "verification": {
+    "command": "(cd /mnt/d/moe-scratch/plan-797fa047 && sha256sum -c --quiet SHA256SUMS) && bash /mnt/d/moe-scratch/plan-797fa047/r0.sh && bash /mnt/d/moe-scratch/plan-797fa047/r1.sh && bash /mnt/d/moe-scratch/plan-797fa047/r2.sh && bash /mnt/d/moe-scratch/plan-797fa047/r3.sh",
+    "exitCode": 0,
+    "outputTail": "R0 OK: rail-proposal sections\nR1 OK: parity + role-doc lint\nR2 OK: scope vs generator base 9d5c8924\nsrc/generated/initFiles.ts: OK\n Test Files  5 passed (5)\n      Tests  44 passed (44)",
+    "reportedAt": "2026-11-04T06:59:44.114Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/roles/governor.reference.md",
+    "docs/roles/worker.reference.md",
+    "docs/roles/architect.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts"
+  ],
+  "completionSummary": "Rail-proposal sections of governor/worker/architect reference docs now say only a GLOBAL MODIFY_RAIL/REMOVE_RAIL of the exact forbiddenPatterns/requiredPatterns entry lifts a submit_plan refusal, EPIC/TASK proposals change guidance rails only, and a proposal's decision is read via moe.get_activity_log with PROPOSAL_APPROVED/PROPOSAL_REJECTED (moe.check_approval no longer prescribed). Governor's rail-conflict mention example fixed. initFiles.ts updated via 12 Edit pairs; byte-identical to generator output (R3 sha1sum -c).",
+  "commits": [
+    {
+      "sha": "821478d615e5679afcd327c0ea5995ffe6e9e2ce",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T06:56:44Z",
+      "paths": [
+        "docs/roles/architect.reference.md",
+        "docs/roles/governor.reference.md",
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T07:00:36.497Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

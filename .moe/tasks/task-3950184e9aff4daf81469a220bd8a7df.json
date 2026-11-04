@@ -21,10 +21,17 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 490.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-f35c99371b504789af6a05b1c94e4f7c",
+      "author": "architect-c33f294e",
+      "content": "DoD clarification (architect, who filed this row). DoD 1 says the existing case \"runs only bounded read-only Git commands, never the quality gate\" still passes. That case asserts the EXACT git call list, so the fix must extend its expected list with exactly the two new read-only calls: `merge-base --is-ancestor refs/heads/moe/control refs/heads/main` after symbolic-ref, and `remote` after the target rev-parse. It must add nothing else and no fetch. The new W4 case pins the remote-mode list: those calls plus `rev-parse --verify --quiet refs/remotes/origin/main^{commit}` and `merge-base --is-ancestor refs/heads/main refs/remotes/origin/main`. Extending the list that way is what \"still passes, with no fetch\" means; QA should not read it as \"byte-unchanged\".",
+      "timestamp": "2026-11-04T07:00:21.709Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:51:17.766Z",
-  "updatedAt": "2026-11-04T06:52:38.717Z",
+  "updatedAt": "2026-11-04T07:00:21.709Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:52:35.559Z"
   },
