@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "doctor.sh floor and its regression test (DoD 1, DoD 3).\n\nCHANGE. In scripts/doctor.sh, rewrite check_node_version (:35-49) to compare major.minor against 22.22.0, matching packages/moe-daemon/package.json:34-35 engines `>=22.22.0`.\n- Parse strictly: `local version=$(node -v | sed 's/v//')`, then `[[ \"$version\" =~ ^([0-9]+)\\.([0-9]+) ]]`, taking major and minor from BASH_REMATCH. doctor.sh is #!/bin/bash, and BASH_REMATCH also works in macOS bash 3.2.\n- Pass when major > 22, or when major == 22 and minor >= 22.\n- Error handling: a version that does not parse (empty, `vX`, no minor) takes the same failing branch. It must never reach `[ -ge ]` on a non-number, because under `set -e` that prints `integer expression expected`.\n- Messages, the only text that changes:\n  - OK: `Node.js version $version (>= 22.22 required)`\n  - ERROR: `Node.js version $version is too old. Requires >= 22.22 (24 LTS recommended)`\n- Keep the colours, the `Update: brew upgrade node` hint and the return codes.\n- Like engines, 23, 25 and 27 pass. install-dependencies.sh moe_node_ready (:11-19) is stricter (22.22+, 24 or 26) and replaces odd lines with Node 24. DoD 1 asks for \"22.22.0 or newer\", so follow engines, and note the difference in the summary.\n\nTEST. The epic rail \"All fixes must include regression tests or test updates\" makes the regression test required. It is the one addition that is not a floor statement, and it tests nothing but this floor.\n- Add it to scripts/tests/dependencies.test.mjs, which CI's \"Test installers with isolated profiles\" step already runs on all three OS legs. No ci.yml edit is needed.\n- Run the REAL doctor.sh with bash, using the file's own `bash` and `shellPath` helpers so it works on Windows Git Bash.\n- PATH: a temp dir first, holding an executable stub `node` that prints the fixture version for any argument, then the system dirs. Use a temp HOME.\n- Strip ANSI colour codes from stdout before matching.\n- Assert on the Node.js line only. doctor's overall exit code also depends on npm, git, java and the rest, so do not assert on it.\n- Cases:\n  - v18.20.0, v20.11.0 and v22.21.1 print `[ERROR] Node.js version <v> is too old. Requires >= 22.22`;\n  - v22.22.0, v23.1.0, v24.0.0 and v26.0.0 print `[OK] Node.js version <v> (>= 22.22 required)`;\n  - `vX` prints the ERROR line, and stderr contains no `integer expression expected`.\n- Mirror the shape of the existing moe_node_ready cases at dependencies.test.mjs:138-152.\n- installers.test.mjs:30 replaces doctor.sh with an `exit 0` stub, so it is unaffected.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/doctor.sh",
         "scripts/tests/dependencies.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T09:59:04.468Z"
     },
     {
       "stepId": "step-2",
@@ -62,7 +63,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:38:27.340Z",
-  "updatedAt": "2026-11-04T09:58:18.528Z",
+  "updatedAt": "2026-11-04T09:59:04.468Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:45:23.833Z",
     "plannedStepCount": 4,
@@ -123,5 +124,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T09:49:25.523Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T09:59:04.468Z"
 }
