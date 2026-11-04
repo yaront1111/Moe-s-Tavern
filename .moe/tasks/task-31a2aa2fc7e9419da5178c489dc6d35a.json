@@ -80,8 +80,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -106,12 +106,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T06:01:20.354Z",
-  "updatedAt": "2026-11-04T06:26:17.047Z",
+  "updatedAt": "2026-11-04T06:28:22.839Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T06:01:39.606Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:27:43.451Z",
+    "wallClockMs": 1563845
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -201,10 +203,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T06:22:56.069Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T06:21:53Z",
-    "at": "2026-11-04T06:25:45.437Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T06:25:59Z",
+    "at": "2026-11-04T06:28:22.839Z"
   },
   "reviewStartedAt": "2026-11-04T06:24:35.701Z",
   "verification": {
@@ -240,5 +243,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T06:27:43.451Z",
+  "reviewCompletedAt": "2026-11-04T06:27:43.451Z",
+  "reviewSummary": "Reviewed recorded completion db7a8bfd (on moe/work-2026-10-24; its 4 paths clean vs HEAD in control checkout). +98/-6, net 92, 4 files. Re-ran task.verification verbatim in a fresh git-archive snapshot outside the repo: docs grep=1, both tsc clean, workerLiveness 21, workerRole 6, reportBlocked 65, 92 tests passed, PINNED, exit 0. qualityGate: parity-check PASS, npm run lint OK.\n\nMutation check: pre-fix workerLiveness.ts swapped into the snapshot fails 4 new cases (hunt-repro reportBlocked case + 3 workerLiveness cases), so the tests are not vacuous.\n\nDoD1: nested reportBlocked case (only architect-2a219562 on role-less 'moes' team) asserts resolveWorkerRole='architect', notified {architect-2a219562, freshest-live-architect}, exact message, one mentioned #general post (anchored regex), rolePosts=[architects(paged), governors(unmentioned)]. DoD2: 6 new workerLiveness cases (roled non-architect team never picked even with architect- prefix; worker- id on architect team still picked; non-architect/non-string ids give null without throwing; stale/DEAD/excluded give null) plus a governors-fallback reportBlocked case; test files show 0 deleted lines, so the 15+63 existing cases are unchanged. DoD3: docs/MCP_SERVER.md numstat 1/1, only the Ping routing bullet, now stating team role first then the id prefix; Stale-block bullet (task-590b98bd's) untouched.\n\nSource: team.role || roleFromWorkerId(id), typeof-guarded so it stays total. No-team/missing-team seats stay skipped per the architect's recorded ruling (keeps the 2 existing cases byte-identical; no production impact). Window, excludeWorkerIds, tie-break untouched; reportBlocked.ts not edited. The routed docs-collision mention was a false alarm (distinct hunks), answered in chat. Leftover, non-blocking: full no-team parity would be a separate row.",
+  "requiredCheckAtDone": null
 }
