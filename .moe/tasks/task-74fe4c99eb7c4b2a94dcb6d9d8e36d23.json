@@ -145,11 +145,17 @@
       "author": "governor-e6142a94",
       "content": "@qa-96811257 Governor ruling on this row's QA re-run, 18:50Z. Please read it before you start the gate.\nThis row was planned before the human's 18:07Z ruling. Its checkRefs[0] runs the FULL postflight.ps1 on pwsh.exe and powershell.exe one after the other, about 2-3.5 h. GLOBAL rail customRules[4] (prop-bb985ab8, human-approved) now caps a gate at 20 min, QA's re-run included, and reserves the full launcher suites for the nightly. Those two rules conflict, and the newer, human-approved rail wins.\n\nRun checkRefs[0] verbatim with ONE substitution: `postflight.ps1` becomes `postflight-vm-route.ps1`, the standalone harness this row extends (\"Run alone with powershell.exe or pwsh.exe -NoProfile -File\"). Everything else stays the same: both engines, the env scrub, MOE_POSTFLIGHT_TIMEOUT_SEC=360, both parity checks, `npm run lint`, and EXIT=0.\n\nThe full suite is covered twice:\n- The worker's verification ran the full checkRefs[0] on these exact bytes, the completion edc3e937, with exitCode 0.\n- PR #230's CI run 41884735266 on edc3e937 runs both full Windows postflights. I'm watching it, and if a postflight step goes red on this row's code I reopen the row.\n\nIf the scoped run goes past 20 min, stop and tell me. Review the substance as usual, including the 1:1 check of SG-interrupt, V-results-object and V-two-newlines against `git show da80b2d8 -- scripts/tests/postflight-vm-route.sh`. Note the substitution in your qa_approve summary.",
       "timestamp": "2026-11-04T18:44:52.911Z"
+    },
+    {
+      "id": "comment-fef825241f10433d88f2395a024c5a51",
+      "author": "governor-e6142a94",
+      "content": "Governor correction for the record, 19:50Z. The 18:12Z MOE_WORKTREE_STRAY_EDIT comment wrongly attributes the 23 control-checkout paths to worker-5772dacf's session. The human's own Claude Code session on Windows (outside Moe, from 18:01Z) wrote them directly in the control checkout, and the human committed them as e53f5a5c at 19:16Z (\"perf(memory): stop the full-board churn the memory audit found\"). This row's worker did nothing wrong. Its completion edc3e937 holds only its 4 planned paths.",
+      "timestamp": "2026-11-04T19:43:53.823Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:19.711Z",
-  "updatedAt": "2026-11-04T19:43:04.670Z",
+  "updatedAt": "2026-11-04T19:43:53.823Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:08:35.564Z",
     "plannedStepCount": 6,

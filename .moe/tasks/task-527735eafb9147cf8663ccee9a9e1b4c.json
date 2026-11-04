@@ -15,26 +15,40 @@
     {
       "stepId": "step-1",
       "description": "moe-agent.sh runtime. Start from the bytes CQ-M07r/s landed: the WORKING claim waits for them, so re-find each anchor by name, not by line.\n\n(a) wt_journal_write (about line 7536). When `strong_landing_task \"$LAND_TASK_ID\"` holds, the journal object gains five keys, appended after the existing ones:\n- candidateId = $FROZEN_CANDIDATE_ID;\n- treeSha = $FROZEN_TREE (= M);\n- baseRevision = B (its $2);\n- planRevision = $PINNED_ATTEMPT_PLAN_REVISION (an integer);\n- profile = 'verified-local'.\nWhen strong is true but any of those is empty or malformed, write no journal (return 1), so the round fails closed: a strong landing never publishes without a receipt-capable journal. Non-strong journals keep today's exact keys and bytes.\n\n(b) wt_land_published (about line 7832). For a strong journal, set RECEIPT_JOURNAL=\"$3\", then call `receipt_send \"$(cat \"$3\")\" \"$3\"` after receipt_ledger_send and BEFORE finalize_postflight.\n- receipt_send sets RECEIPT_ACKED, and handles DELIVERY_RECEIPT_CONFLICT with its one log line and no retry, exactly as in shared mode.\n- finalize_postflight's existing CQ-V08 branch then defers finalize (MOE_FINALIZE_DEFERRED_RECEIPT) while the receipt is unacknowledged.\n- A strong journal is removed only when the receipt is acknowledged AND finalize_attempt closed the attempt. Otherwise it is kept, with the existing warn line.\n- Non-strong: the function's bytes are unchanged.\n\n(c) receipt_replay (about line 6554). A worktree journal whose profile is verified-local now gets `receipt_send \"$(cat \"$f\")\" \"$f\"`; today `[ -n \"$wt\" ] || receipt_send` skips it. It then gets the CQ-V08b keep-until-closed rule that shared strong journals already have: relax the `[ -z \"$wt\" ]` guards for strong only. Non-strong worktree journals: unchanged.\n\nError handling: a transport failure leaves RECEIPT_ACKED empty, defers finalize and keeps the journal. A malformed strong journal takes the existing 'malformed; kept' path. No ref, rescue ref or push is added by this row.\n\nEdit in place in the task worktree with the editing tool, then `bash -n scripts/moe-agent.sh`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh runtime. (a) wt_journal_write: under strong_landing_task it appends candidateId=FROZEN_CANDIDATE_ID, treeSha=FROZEN_TREE, baseRevision=B, planRevision=int(PINNED_ATTEMPT_PLAN_REVISION) and profile=verified-local; a missing or malformed value exits 1, so no journal is written and the round fails. Non-strong journals build the same dict and print the same bytes. (b) wt_land_published: a new strong-only branch sets RECEIPT_JOURNAL=$3 and RECEIPT_ACKED='', sends receipt_send (only when the row answered, matching the replay's order), then calls finalize_postflight. Its CQ-V08 branch defers while the receipt is unacknowledged, and its CQ-V08b branch drops the journal once the attempt is closed. Otherwise it warns 'kept'. The non-strong lines are unchanged. (c) receipt_replay: a worktree journal now sends its receipt when strong, and the CQ-V08b keep-until-closed guard drops its `[ -z \"$wt\" ]`. Also, receipt_journal_fields (the replay's parser) now requires a valid candidateId for any strong journal, so a strong worktree journal without one takes the 'malformed; kept' path. That is one strong-only line plus a comment edit. bash -n passes.",
+      "startedAt": "2026-11-04T19:43:38.617Z",
+      "completedAt": "2026-11-04T19:48:18.903Z"
     },
     {
       "stepId": "step-2",
       "description": "moe-agent.ps1 runtime, the twins of step 1. Strings byte-identical to sh; keep UTF-8 with a BOM; PS 5.1 syntax only (no `??`, ternary or `&&`/`||` chains).\n\n(a) Write-MoeWorktreeJournal (about line 7167). Under Test-MoeStrongLandingTask $preflightTaskId, add the same five keys after the existing ones: candidateId, treeSha, baseRevision, planRevision as an integer, and profile 'verified-local'. They come from the round's frozen candidate, which its caller in Invoke-MoeWorktreeRounds (about line 7411) now passes as a new parameter, and from $script:PinnedAttemptPlanRevision. Return $false when any is missing. The read-back compare (`ConvertTo-Json -Depth 5 -Compress`) must still match.\n\n(b) Complete-MoeWorktreeLanding (about line 7508). For a strong journal, call `Send-MoeReceipt $Journal $j` after Send-MoeOwedLedgerRow and before Complete-MoePostflight. Set the ReceiptJournal and ReceiptAcked fields that Complete-MoePostflight's CQ-V08 deferral reads (about line 8670), so an unacknowledged receipt defers finalize. Remove the journal only when the receipt is acknowledged and finalize closed the attempt.\n\n(c) Invoke-MoeReceiptReplay (about line 2489). `if (-not $wt -and -not (Send-MoeReceipt ...))` also sends for a worktree journal whose profile is verified-local. The CQ-V08b keep-until-closed rule applies to strong worktree journals as it does to shared ones.\n\nNon-strong paths: byte for byte as today. Error handling mirrors sh (step 1). Check with [System.Management.Automation.Language.Parser]::ParseFile on PS 5.1 and pwsh 7.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "ps1 twin. (a) Write-MoeWorktreeJournal gains [hashtable]$Frozen and [string]$GitDir. Under Test-MoeStrongLandingTask $preflightTaskId $GitDir it appends candidateId, treeSha, baseRevision, planRevision ([long]) and profile, and returns $false on any missing or malformed value. The caller in Invoke-MoeWorktreeRounds passes `$(if ($Settings.configuredGate) { $frozen } else { $null }) $Git.GitDir`, the same inline guard as Test-MoeWorktreeStrongIntent. (b) Complete-MoeWorktreeLanding: a strong journal (its own profile verified-local) sets $Res.ReceiptJournal/ReceiptAcked=$false, calls Send-MoeReceipt only when the row answered, then Complete-MoePostflight, then warns 'kept' while the journal still exists and returns early. The original if/else lines are textually unchanged. (c) Invoke-MoeReceiptReplay: a wt journal sends when its profile is verified-local, and the CQ-V08b guard drops -not $wt. Test-MoeReceiptJournal requires candidateId for a strong journal. To keep the twins identical, sh's wt_land_published now keys on the journal's own profile (python one-liner) instead of strong_landing_task, which matches the plan's 'for a strong journal'; strong_landing_task covers it anyway through its receipt-journal fallback. The warn text is byte-identical across sh and ps1. The BOM is kept, and ParseFile shows 0 errors on 5.1 and 7; bash -n is OK.",
+      "startedAt": "2026-11-04T19:48:19.841Z",
+      "completedAt": "2026-11-04T19:52:03.931Z"
     },
     {
       "stepId": "step-3",
       "description": "postflight-vm-route.sh rows: a compact new [strong receipt] section after the landed [strong intent]/[strong gate] sections. Reuse their fixtures: the fake proxy's RPC log, the strong attempt record and the fake dispatch.\n\n- T1. A strong worktree landing logs record_commit, then exactly one record_delivery_receipt, then finalize_attempt landed, in that order. The receipt carries candidateId (the frozen id), target refs/heads/<target>, targetBefore B, targetAfter C, landedRevision C and pushResult. The journal held candidateId, treeSha, baseRevision, planRevision and profile until the attempt closed.\n- T2. The fake answers record_delivery_receipt with a transport failure. The line MOE_FINALIZE_DEFERRED_RECEIPT appears, there is no finalize_attempt, and the journal is kept. The next pre-flight replay sends the identical receipt (byte-equal JSON), then finalize_attempt landed, then drops the journal.\n- T3. A DELIVERY_RECEIPT_CONFLICT answer: one warn line, no second receipt call, and finalize proceeds.\n- T4. The legacy control: a non-strong worktree landing logs no record_delivery_receipt, and its journal keys equal today's set.\n\nThe existing legacy and observe rows (postflight-worktree.cjs, the vm-route today-path rows) stay unedited. A strong row that pins the old strong journal shape changes only by the five added keys, and the completion summary names it.\n\nError handling in the harness: a missing log line or an unexpected extra RPC fails the row; it never skips.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.sh"
-      ]
+      ],
+      "startedAt": "2026-11-04T19:52:04.875Z"
     },
     {
       "stepId": "step-4",
@@ -87,11 +101,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:50.151Z",
-  "updatedAt": "2026-11-04T19:42:38.538Z",
+  "updatedAt": "2026-11-04T19:52:04.875Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:11:04.157Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -103,7 +118,10 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T18:46:43.757Z",
   "executionContract": {
@@ -182,5 +200,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-2a219562@2026-11-04T18:07:25Z",
     "at": "2026-11-04T18:47:51.916Z"
-  }
+  },
+  "workStartedAt": "2026-11-04T19:43:38.617Z"
 }
