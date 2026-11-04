@@ -71,15 +71,27 @@
     {
       "stepId": "step-5",
       "description": "Verification: run this ONE chain fresh from W, C1 && C2 && C3 && C4a && C4b. These are the five executionContract.checkRefs, in that order.\n- C1: bash -n; ParseFile reports 0 errors; the BOM is ef bb bf; parity-check.sh and parity-check.ps1 pass; importee-guard.ps1 (PS 5.1) passes, since it AST-loads $parseStreamJson.\n- C2: usage-launcher plus prompt-cache-launcher, on WSL node and on Windows node.exe. Base 500e3f29 gave 40 tests / 38 pass / 0 fail / 2 skipped, and 126 / 126 / 0 / 0. Expect +1 interactive test per engine.\n- C3: postflight-vm-route.sh, and postflight-vm-route.ps1 on PS 5.1 and pwsh 7, on the edited bytes. Logs go to /mnt/d/moe-scratch/cd38-vmr.\n- C4a: the same twins (sh, PS 5.1) on a scratch copy that pairs this task's harness with the BASE launchers (merge-base with moe/work-2026-10-24; set BASE_REV=<completion>^ when re-running from a landed tree). C4b: each base run prints the same `T-legacy usage receipt` line as C3 (before/after: the receipt is unchanged) and fails only at `the CLI env carries MOE_USAGE_RECEIPT_FILE` (RED).\nIn complete_task, quote: the receipt lines (before and after, sh and ps1); each engine's PASS line; the RED lines; both TAP totals; C1's PASS lines. The ps1 runs take about 5 min each: run them detached and poll (mem:gotcha-qa-ps1-postflight-from-wsl). If any suite fails, re-run it on a base snapshot before blaming this change (mem:gotcha-launcher-ps1-rows-from-wsl).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T12:11:25.031Z"
+      "note": "Ran the full chain C1 && C2 && C3 && C4a && C4b fresh from W (script /mnt/d/moe-scratch/cd38-chain.sh, holding the five checkRefs verbatim): CHAIN_EXIT=0.\n- C1: bash -n, ParseFile 0 errors, BOM efbbbf, PASS parity-check.sh, PASS parity-check.ps1, importee-guard.ps1: 53 passed, 0 failed.\n- C2: WSL node 41 tests / 39 pass / 0 fail / 2 skipped; Windows node.exe 129/129/0/0 (base 40/38/2 and 126/126; +1 interactive test per engine).\n- C3: PASS postflight-vm-route.sh, PASS postflight-vm-route.ps1 on PS 5.1 and on pwsh 7.\n- C4a: base=500e3f29, snapshot /mnt/d/moe-scratch/cd38-base.ioBpn4.\n- C4b: \"sh: receipt unchanged before/after; base launcher RED\" and \"51: receipt unchanged before/after; base launcher RED\". Both base logs end with \"VM ROUTE FAILED (T-legacy): the CLI env carries MOE_USAGE_RECEIPT_FILE\". The receipt line is identical across after-sh, before-sh, after-51, before-51 and after-7 (sha256 prefix dd436c1ef9d597c9).\n- Project qualityGate (parity-check.sh && npm run lint): rc 0.\nLogs: /mnt/d/moe-scratch/cd38-vmr/{after,before}-*.log and /mnt/d/moe-scratch/cd38-chain.out.",
+      "startedAt": "2026-11-04T12:11:25.031Z",
+      "completedAt": "2026-11-04T12:28:25.591Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this task's diff only, before complete_task.\n- Grep both launchers for every usage-session / usage-start / claude-stream / codex-stream call. Each one gets the pair: an sh prefix, Invoke-MoeUsageHelper, or the $psi entries. sh must have no `export MOE_USAGE_` left, and ps1 no `$env:MOE_USAGE_RECEIPT_FILE = [string]`.\n- Look for any moment when the pair is in an environment while a CLI, Start-HeartbeatSidecar, the account sign-in probe or the post-flight gate starts. There must be none.\n- Disabled (MOE_USAGE_REPORTING=off) or failed setup: both values empty, nothing written, and the launch proceeds unchanged (error handling stays fail-open).\n- Hot reload: sh exec and the ps1 in-process supervisor both keep env. The loop-top resets must leave nothing stale.\n- CHILD_EXIT=23 rows and the `$global:LASTEXITCODE` restore still hold.\n- PS 5.1 dynamic scope of $line inside Invoke-MoeUsageHelper's scriptblock: the ps1 'records cumulative usage' row proves it on 5.1 and 7.\n- Every anchor listed in steps 1-2 is still byte-identical (grep each one). No `} else {` was added inside the ps1 codex -Begin block.\n- The net change stays under 400 non-board LOC. Then complete_task with the step 5 evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/usage-launcher.test.mjs",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Adversarial self-review of this task's diff (5 files, +144/-47, net 97). Step 6 itself edited nothing; the list is the task's whole set.\n- Every usage-session/usage-start/claude-stream/codex-stream call gets the pair. sh: 4 prefixed calls plus the usage-session context prefix. ps1: usage-start and both claude-stream calls go through Invoke-MoeUsageHelper; codex-stream gets the $psi entries. No `export MOE_USAGE_` and no `$env:MOE_USAGE_RECEIPT_FILE = [string]` remain.\n- ps1 $env holds the pair only inside Invoke-MoeUsageHelper and around usage-session.mjs. Start-HeartbeatSidecar, the CLI, the account sign-in probe and the post-flight gate all start with it clear. sh exports nothing.\n- Disabled and failed setup: both values stay empty and the launch proceeds. Pinned by 'disabled reporting' and 'setup failure' on all 4 engines.\n- Hot reload: sh exec drops unexported vars; ps1's new script scope plus the loop-top reset leaves nothing stale.\n- CHILD_EXIT=23 and SAVED_EXIT=23 hold. $line dynamic scope is proven by 'records cumulative usage' on PS 5.1 and 7.\n- Anchors from steps 1-2 checked by count against 500e3f29: all unchanged. The codex -Begin block gained 2 lines and no else.\nTheoretical only: (1) In ps1, while the claude result line is parsed, the process env briefly holds the pair as the helper starts. The CLI and heartbeat job are already running and the wrapper starts nothing else then. (2) sh now also unsets an inherited USAGE_RECEIPT_FILE/USAGE_RECEIPT_CONTEXT, names nothing else uses.",
+      "startedAt": "2026-11-04T12:28:26.558Z",
+      "completedAt": "2026-11-04T12:28:59.600Z"
     }
   ],
   "planRevision": 1,
@@ -100,7 +112,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:06:21.135Z",
-  "updatedAt": "2026-11-04T12:11:25.031Z",
+  "updatedAt": "2026-11-04T12:28:59.600Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:57.567Z",
@@ -110,7 +122,7 @@
     "firstClaimAt": "2026-11-04T10:57:11.313Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -124,7 +136,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T11:23:55.643Z",

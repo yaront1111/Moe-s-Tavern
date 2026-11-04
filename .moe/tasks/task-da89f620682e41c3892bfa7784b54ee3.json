@@ -13,27 +13,41 @@
     {
       "stepId": "step-1",
       "description": "Add the record field and the namespace predicate.\n- packages/moe-daemon/src/types/schema.ts, DaemonInfo (:1865): add optional `pidNamespace?: string`. Doc comment: Linux only, the writer's `readlink /proc/self/ns/pid` (for example pid:[4026531836]), absent elsewhere. A reader in another pid namespace (a container, another WSL distro) cannot judge `pid`, so /health alone decides; see isOtherPidNamespace.\n- packages/moe-daemon/src/server/probeHost.ts, beside isForeignDaemonInfo (:87-100). Use the module's default `fs` import: its header says tests stub that object, and they will stub fs.readlinkSync.\n  - Export `ownPidNamespace(): string | undefined`. It does `fs.readlinkSync('/proc/self/ns/pid')` in try/catch, with no platform check (Windows and macOS throw ENOENT). It returns the value only when it matches `PID_NAMESPACE = /^pid:\\[[0-9]{1,20}\\]$/`, else undefined. Read it fresh on every call, with no cache.\n  - Export `isOtherPidNamespace(recorded: unknown, own: string | undefined = ownPidNamespace()): boolean`. It is true only when `recorded` is a string matching PID_NAMESPACE and differs from `own`; an undefined `own` counts as different. Any other value is false: absent, non-string, malformed, over 20 digits, or `net:[..]`. So legacy and hand-written records keep today's pid rules.\n- Error handling: neither function throws.\n- Doc comment: a container's pid means nothing on the host. isForeignDaemonInfo (WSL, path form) is checked first and wins.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/server/probeHost.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/server/probeHost.ts"
+      ],
+      "note": "DaemonInfo.pidNamespace?: string documented. probeHost.ts: PID_NAMESPACE regex, ownPidNamespace() (fs.readlinkSync via default fs import, try/catch, no cache), isOtherPidNamespace(recorded, own = ownPidNamespace()). Typecheck runs in the step-6 snapshot.",
+      "startedAt": "2026-11-04T12:26:53.145Z",
+      "completedAt": "2026-11-04T12:27:18.240Z"
     },
     {
       "stepId": "step-2",
       "description": "Record the field, and let /health alone judge a namespaced record in the daemon CLI (packages/moe-daemon/src/index.ts).\n- Extract the DaemonInfo literal in startDaemon (:804-810) into an exported `buildDaemonInfo(port: number, projectPath: string, host: string): DaemonInfo`.\n  - It adds `pidNamespace` when ownPidNamespace() is defined, and omits the key otherwise.\n  - It keeps the bindHost rule (present only when host !== DEFAULT_BIND_HOST).\n  - startDaemon calls writeDaemonInfo(projectPath, buildDaemonInfo(...)). Add buildDaemonInfo to the export block (:1272-1297).\n- DaemonValidationResult (:115-121): add `namespaced?: boolean`, documented as 'the record's pidNamespace is not this reader's; /health alone judged it'. Add `const PID_NAMESPACE_UNREACHABLE = 'pid namespace daemon unreachable'`.\n- validateDaemonInfoForProject (:320-347): after the WSL-foreign branch and before `if (!isProcessAlive(info.pid))` (:341), add a branch for `isOtherPidNamespace(info.pidNamespace)`.\n  - Skip the pid entirely.\n  - Run the same local probe the native path runs: `healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS)`, then `isLocalAddress`, then `probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, address)`. That probe already checks status 'healthy', the projectPath, and that /health's pid equals the record's.\n  - Return `{ valid: true, info, namespaced: true }` on a confirmed answer.\n  - Return `{ valid: false, reason: BIND_HOST_NOT_LOCAL, namespaced: true }` when the address is null or not local (nothing dialed).\n  - Otherwise return `{ valid: false, reason: PID_NAMESPACE_UNREACHABLE, namespaced: true }`.\n- statusDaemon (:1086-1110), for a namespaced record:\n  - Delete it only when reason === PID_NAMESPACE_UNREACHABLE (the daemon is gone, for example a removed container). Log 'Daemon not running (stale daemon.json removed: no /health answer from its pid namespace)'.\n  - A valid record logs status 'running' with owner 'another pid namespace'.\n  - BIND_HOST_NOT_LOCAL keeps the file.\n  - Non-namespaced records keep the existing `!isProcessAlive(info.pid)` rule byte for byte.\n- stopDaemon (:1041-1084): after the foreign branch, handle a valid namespaced record before writeStopSentinel and process.kill.\n  - logger.error with pid and port: 'daemon.json belongs to a live daemon in another pid namespace (for example a container): stop it there, for example with docker stop (no signal sent, nothing removed)'.\n  - Set `process.exitCode = 1` and return.\n  - Invalid namespaced records take the existing branches. BIND_HOST_NOT_LOCAL exits 1 and removes nothing. An unreachable record gets the sentinel and cleanup, as a dead pid's does.\n- existingDaemonBlocksStart (:577-598) needs no new branch. A valid namespaced record already blocks ('Moe daemon already running'), and an unreachable one is cleaned, so a restarted container (a new pid namespace reading its predecessor's record) still starts. Only keep its log truthful: for a namespaced record, log validation.reason, not 'pid not running'.\n- Never signal a namespaced record's pid anywhere. Error handling: no new throw paths; the probe failures above already resolve to false or null.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "index.ts: buildDaemonInfo (exported) adds pidNamespace when ownPidNamespace() is defined; PID_NAMESPACE_UNREACHABLE; DaemonValidationResult.namespaced; validate branch after WSL-foreign, before isProcessAlive (null/non-local address -> BIND_HOST_NOT_LOCAL, nothing dialed); statusDaemon deletes namespaced only on unreachable, owner 'another pid namespace'; stopDaemon valid namespaced -> logger.error, exitCode 1, no signal; namespaced invalid paths never call isProcessAlive on the record pid (stop log, start-gate log). tsc --noEmit clean in /tmp snapshot.",
+      "startedAt": "2026-11-04T12:27:24.560Z",
+      "completedAt": "2026-11-04T12:29:50.284Z"
     },
     {
       "stepId": "step-3",
       "description": "Make doctor judge a namespaced record by /health (packages/moe-daemon/src/commands/doctor.ts).\n- probeDaemonJson (:81-136): add `pidNamespace?: unknown` to the parsed type and read it.\n- After the isForeignDaemonInfo branch (:112-114) and before isProcessAlive (:115), when `isOtherPidNamespace(parsed.pidNamespace)`, judge the record by /health at the local probe address. That is the dial rule probeDaemonReachability uses (:239-280): `healthProbeAddress(recordedProbeHost({ bindHost }), HEALTH_PROBE_TIMEOUT_MS)` plus `isLocalAddress`, with its refusal texts when the address is null or not local (nothing dialed).\n- Reuse probeForeignDaemonJson (:216-237) by generalizing it to take the host list and the side label:\n  - WSL: foreignProbeHosts(...) and 'written on the other side of the WSL boundary (pid N, port P)', unchanged.\n  - Namespaced: the one local address and 'written in another pid namespace (pid N, port P)'.\n- The outcomes for a namespaced record:\n  - A confirmed answer is [OK] 'daemon.json valid: written in another pid namespace (pid N, port P); /health answered on <host:port>'.\n  - A non-confirming HTTP answer is [WARN] and never says 'stale'.\n  - No answer is [WARN] '... no /health answered on <host:port> (stale)'.\n- foreignReachability carries the verdict, so probeDaemonReachability never re-dials.\n- Error handling: unchanged. probeHealth never throws, and a bad address returns the existing fail texts.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/doctor.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T12:29:52.636Z"
     },
     {
       "stepId": "step-4",
@@ -75,7 +89,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-a408f113",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,14 +101,16 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:12:00.640Z",
-  "updatedAt": "2026-11-04T12:25:10.951Z",
+  "updatedAt": "2026-11-04T12:29:52.637Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:14:58.170Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 8
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-cd0ac706"
+    "architect-cd0ac706",
+    "worker-a408f113"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -103,7 +119,10 @@
   "planSizeWarnings": [
     "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:25:10.917Z",
   "executionContract": {
@@ -169,5 +188,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T12:25:10.950Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T12:26:53.145Z"
 }
