@@ -1,0 +1,29 @@
+{
+  "id": "task-eafb62c4f15d4da292f77d6f7eb99d95",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: wt_land_rounds' recovered path (LAND_WT_RECOVERED) reuses a leftover strong journal naming an earlier attempt, so a deferred finalize strands this session's attempt in finalizing (the replay closes only the journal's attempt)",
+  "description": "Repro (both wrappers): a strong (verified-local) receipt journal of attempt A1 survives replays (its receipt refused or unanswered; A1 closed), and a new attempt A2 of the task lands nothing new, so wt_land_rounds / Invoke-MoeWorktreeRounds takes the recovered path and wt_land_published / Complete-MoeWorktreeLanding re-sends the leftover journal's receipt. If it is unacknowledged, finalize defers (MOE_FINALIZE_DEFERRED_RECEIPT) and A2 stays finalizing. The next receipt_replay / Invoke-MoeReceiptReplay finalizes only A1 (the journal's attemptId), then drops the journal, so A2 stays finalizing, its claim holds stay, and the seat's claims are refused (ATTEMPT_FINALIZING).\nThis was already possible under a verified-local pin. Since task-edf2162b, the deferral keys on the journal's own profile (RECEIPT_STRONG / ReceiptStrong), so an observe or legacy pin can reach it too. A fix could finalize this session's attempt in the recovered path whatever the receipt answer, or rewrite the journal's attempt identity to this attempt before sending.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-edf2162b54e24d95a253d7415dba197b"
+  ],
+  "priority": "LOW",
+  "order": 536.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T22:53:01.132Z",
+  "updatedAt": "2026-11-04T22:53:01.132Z"
+}
