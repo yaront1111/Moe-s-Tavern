@@ -68,13 +68,23 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of the whole diff against the merge base. This is the one review step; run it before moe.complete_task.\n- Byte-identical assertions: the qaReject.test.ts and parkedReview.guard.test.ts hunks outside the new describe and the import add only capReplanAt and the one comment line.\n- qaReject.ts hunks only at :199-214 and beside :307; none at :22, :151 or :391-393 (merge-tree with task-fefce964).\n- The stamp is written only on the soft-cap branch. The same-item, WORKING and park branches never write it, and the park keeps the original stamp (case 3).\n- Nothing clears it: util/reopen.ts, setTaskStatus.ts and WebSocketServer.ts are untouched.\n- Bounded loop: with the stamp set, every reject ≥ maxReopens + 1 parks. A raised task.maxReopens grants one new re-plan, only at the new cap.\n- Concurrency: qa_reject runs under the global state mutex, and the stamp and the flip land in one updateTask.\n- Null and empty input: a missing, non-string or empty capReplanAt reads as absent.\n- Legacy: a field-less row loads unchanged and re-plans on its first reject at or past the cap. A parked row stays fenced (a5157059).\n- Docs: only the three qa_reject lines changed.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/qaReject.test.ts",
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial self-review of the diff (5 files, +147/-16). Checked: (1) qaReject.ts hunks only in the escalation comment/tiers (:206-:227) and one spread at :322; none at the tool description, handoffWorkerId or touchWorker. (2) Pre-existing test lines changed only by the capReplanAt fixture records and park()'s comment line; the setTaskStatus import sits after getContextTool in the migrated section. (3) The stamp is written only when reachedSoftCap, which implies nextStatus PLANNING, in the same updateTask; triggeredBySameItem requires !reachedSoftCap, so the same-item flip, WORKING and park branches never write it; the park keeps the stamp (case 3 asserts it, after a reload). (4) Nothing clears it: util/reopen.ts, setTaskStatus.ts and WebSocketServer.ts are untouched. (5) Bounded: with the stamp set, every reject at newReopenCount >= maxReopens + 1 parks; a raised maxReopens re-plans once at the new cap and re-stamps. (6) Concurrency: qa_reject runs under the global state mutex. (7) Null/empty/non-string capReplanAt reads as absent; no migration or backfill. (8) Docs: only the three qa_reject lines (:2375-2377). Residual (accepted, in the contract): a legacy row that had an old-style re-plan gets one more at its next reject past the cap.",
+      "startedAt": "2026-11-04T05:50:36.570Z",
+      "completedAt": "2026-11-04T05:51:01.886Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -96,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:19.281Z",
-  "updatedAt": "2026-11-04T05:50:34.352Z",
+  "updatedAt": "2026-11-04T05:52:25.322Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T00:27:53.895Z",
@@ -106,7 +116,7 @@
     "firstClaimAt": "2026-11-04T00:28:52.393Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -121,7 +131,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:46:44.466Z",
@@ -196,5 +207,48 @@
   },
   "planApprovedAt": "2026-11-04T05:46:44.500Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T05:48:07.323Z"
+  "workStartedAt": "2026-11-04T05:48:07.323Z",
+  "reviewStartedAt": "2026-11-04T05:51:17.238Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/types/schema.ts packages/moe-daemon/src/tools/{qaReject.ts,qaReject.test.ts,parkedReview.guard.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/qaReject.test.ts\",\"src/tools/parkedReview.guard.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ] && grep -aqE \" ✓ src/tools/qaReject\\.test\\.ts \\((29|[3-9][0-9]) tests\\)\" ../v.log && echo \"cap re-plan pin ok\"; }'",
+    "exitCode": 0,
+    "outputTail": " Test Files  283 passed (283)\n      Tests  7453 passed | 24 skipped (7477)\ncap re-plan pin ok\nexit=0",
+    "reportedAt": "2026-11-04T05:51:17.238Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/qaReject.test.ts",
+    "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "qa_reject now parks a REVIEW row for a human only after the task's one cap re-plan has happened.\n- types/schema.ts: new optional Task.capReplanAt (ISO string) after needsHumanReview. Additive; no migration, backfill or schemaVersion bump. A missing, non-string or empty value reads as \"no cap re-plan yet\".\n- qaReject.ts: reachedHardCap = capReplanned && newReopenCount >= maxReopens + 1. The soft-cap flip to PLANNING stamps capReplanAt: nowIso in the same updateTask. The same-DoD-item flip, WORKING rejects and parks never write it, and nothing clears it (util/reopen.ts, setTaskStatus.ts, WebSocketServer.ts untouched). Tier comment rewritten. Reply shape, messages, rejectionHistory, failedDodItems and metrics unchanged. No hunk at the tool description, handoffWorkerId or touchWorker.\n- Tests: qaReject.test.ts gets a nested describe of 5 cases: the two hunt-928a468d repros (human REVIEW->WORKING and DONE->WORKING reopen land on PLANNING, not a park), park after the re-plan with the stamp kept across a StateManager reload, a field-less legacy row, and stamp scope. The three fixtures that seeded rows past the cap now carry capReplanAt, with assertions byte-identical, as the executionContract's DoD 2/3 ruling records. parkedReview.guard.test.ts: park()'s fixture carries capReplanAt too.\n- docs/MCP_SERVER.md ### moe.qa_reject: the re-plan gate, capReplanAt, non-QA reopens, the legacy reading, and the hard-cap park condition.\n- RED at base (only the two test files overlaid): qaReject.test.ts 29 tests, 5 failed (exactly the new cases); parkedReview 6 passed.\n- GREEN: the checkRef ran verbatim, exit 0 (tsc, test-file tsc, full daemon suite, qaReject pin of 29 tests).\n- qualityGate (parity-check.sh and npm run lint) passes.",
+  "commits": [
+    {
+      "sha": "4469377b1e31acfa383d80aa58fe08ae0728bb6b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T05:47:08Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T05:52:25.322Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T05:47:08Z",
+    "at": "2026-11-04T05:52:25.322Z"
+  }
 }
