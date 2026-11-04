@@ -48,12 +48,18 @@
     {
       "stepId": "step-4",
       "description": "Verification, once, in a git-archive snapshot of your worktree HEAD outside the shared checkout (never npm install, build or test in place; use Linux node_modules for packages/moe-daemon). Run this exact command from the snapshot root and submit its fresh output as complete_task evidence:\n\n`(cd packages/moe-daemon && npx vitest run src/tools/accountTools.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts src/tools/workerType.test.ts src/tools/chatWait.test.ts src/tools/submitPlan.test.ts) && env -i PATH=\"$PATH\" HOME=\"$HOME\" CLAUDE_CONFIG_DIR=\"$(mktemp -d)\" claude plugin test scripts/mods/moe-account-switch`\n\n- All must pass. The new daemon cases (a)-(e) and the mod cases must have been red before the implementation: record the red runs in your step notes.\n- env -i keeps this seat's live MOE_* variables out of the mod tests.\n- Optional type check: `node moe-vscode/node_modules/typescript/lib/tsc.js -p scripts/mods/moe-account-switch/tsconfig.json`. Its only known baseline errors are TS5097 and TS2769 in register.test.ts.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "scripts/mods/moe-account-switch/hooks/register.ts"
       ],
+      "modifiedFiles": [
+        "scripts/mods/moe-account-switch/hooks/register.js",
+        "scripts/mods/moe-account-switch/hooks/register.test.js"
+      ],
+      "note": "QA rework (amend-1): DELETED scripts/mods/moe-account-switch/hooks/register.js and register.test.js in the task worktree. Both are tsc emit that 5265909c landed by mistake. Nothing loads them: hooks.json is `{\"modules\":[\"./register.ts\"]}`, git grep finds no other reference, and moe-compaction-keeper tracks no .js. modifiedFiles lists both paths as deletions, so the landing removes them. `git status --porcelain` in the worktree shows only ` D` on those two paths, with no generated or other file.\n\nVerification, snapshot A = /tmp/moe-d27e-verifyA.wzQfL0, `git archive` of worktree HEAD 59e97131 minus the same two files; the 5 authored files are cmp-identical to the worktree.\n- `npm ci --prefer-offline` in packages/moe-daemon (native Linux, outside the repo).\n- The plan's exact command, run from the snapshot root under `env -i PATH HOME bash -c` to keep this seat's MOE_* variables out, exit 0:\n  - vitest: 6 files, 348/348 tests passed;\n  - `claude plugin test scripts/mods/moe-account-switch`: 94 pass, 0 fail. This includes 'a claim answered with a switch claims nothing more and ends the session after the turn' and 'without a leased account a claim carries no acceptsAccountSwitch'.\n- Quality gate `bash scripts/tests/parity-check.sh && npm run lint` in snapshot A: exit 0.\n- Optional type check, in the snapshot only: I copied the gitignored .claude-plugin/types base in from the control checkout, then ran `tsc --noEmit -p scripts/mods/moe-account-switch/tsconfig.json`. It reports exactly the baseline, TS5097 at register.test.ts:3 and TS2769 at :94, and wrote 0 .js files (0 before, 0 after).\n\nThe tree this landing would produce = target tip 58e54180 minus the two paths (both byte-unchanged on the target since 5265909c, so no modify/delete conflict).\n- `git diff --stat tip landed` is the 2 deletions only, -1118 lines.\n- The task's 5 files are identical to worktree HEAD.\n- The quality gate on that tree (snapshot B /tmp/moe-d27e-verifyB.FP7mJg): exit 0.\n\nSide effect, by construction: scripts/bundle-manifest.json copies scripts/mods excluding only **/*.test.ts and */.claude-plugin/types/**. At the tip, bundle-mode `onboarding.mjs` therefore flags register.test.js (mem:gotcha-packaged-bundle-test-artifacts). The same scan simulated on the landed tree flags nothing.\n\nRed runs: no implementation changed this round. The step 1 and 2 RED proofs are in the prior attempt's notes.",
       "startedAt": "2026-11-04T08:35:26.332Z",
+      "completedAt": "2026-11-04T08:39:06.162Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -68,11 +74,12 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this diff, the final step. Check each point:\n- Concurrency: two in-session claims both run inside runExclusive, and the switch answer writes nothing, so nothing can be half-written.\n- The wrapper pre-flight claim never sends the flag: `grep -n acceptsAccountSwitch scripts/moe-agent.sh scripts/moe-agent.ps1` prints nothing.\n- A governor with the flag still gets enter_governance.\n- A seat with no worker record but a lease is switched; a seat with no lease, or an unreadable registry, claims normally.\n- A resume of the seat's own task (currentTaskId set) is never switched.\n- An explicit-taskId claim with the flag is switched exactly like a ranked one.\n- Rollout order, which must go into the completion summary for the governor:\n  - The mod part goes live as soon as it lands, because scripts/ is hot through moe/control. The daemon part goes live only after the human's daemon swap.\n  - The live daemon ignores unknown arguments (McpAdapter.ts:321 passes params.arguments to the handler with no schema check), so until the swap the flag changes nothing.\n  - If the claude client ever rejected the extra field against the old schema, the in-session claim would fail and the session would end idle. The wrapper's own pre-flight claim (no flag) then claims normally.\n  - So ask the governor to restage the daemon after this lands.\n- Error handling: no new throw path, and the claim refusals' order is unchanged.\n- No forbidden pattern in the diff, and every DoD item maps to a passing test or grep.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "scripts/mods/moe-account-switch/hooks/register.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:39:08.282Z"
     }
   ],
   "planRevision": 2,
@@ -108,12 +115,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:30.209Z",
-  "updatedAt": "2026-11-04T08:35:26.333Z",
+  "updatedAt": "2026-11-04T08:39:08.282Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:06:23.667Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 8,
+    "executedStepCount": 9,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -128,7 +135,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:11:09.562Z",

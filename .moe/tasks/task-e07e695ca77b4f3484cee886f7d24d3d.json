@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -88,16 +88,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:57:42.392Z",
-  "updatedAt": "2026-11-04T08:36:49.848Z",
+  "updatedAt": "2026-11-04T08:39:37.301Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T07:57:48.048Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:39:09.101Z",
+    "wallClockMs": 2481053
   },
   "contextFetchedBy": [
     "architect-67c762f6",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -174,10 +177,11 @@
   "planApprovedAt": "2026-11-04T08:18:27.555Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T08:20:43Z",
-    "at": "2026-11-04T08:36:49.848Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T08:36:59Z",
+    "at": "2026-11-04T08:39:37.301Z"
   },
   "workStartedAt": "2026-11-04T08:21:54.931Z",
   "reviewStartedAt": "2026-11-04T08:25:29.328Z",
@@ -210,5 +214,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T08:39:09.101Z",
+  "reviewCompletedAt": "2026-11-04T08:39:09.101Z",
+  "reviewSummary": "APPROVED. Completion 58e54180 (on moe/work-2026-10-24, recorded, pushed). 2 files, +187/-5, net 182 LOC.\n\nRe-ran task.verification verbatim in a git-archive snapshot outside the repo (MOE_LAND_TARGET=58e54180^): npm ci, eslint on MoeDaemonClient.ts, npm test 799 tests / 789 pass / 0 fail / 10 skipped, compile OK, GATE_EXIT=0. RED at merge-base: exactly H1-H5 and L1-L3 not ok, M1-M5 ok.\n\nDoD 1: L1/L2 also fail against git show 3cd256eb source (re-run by me); at the fix they pass: 0 spawns, daemon.json byte-identical, 1 /ws, waitForState true, connected, no Stale/mismatch log. Real symlink, skip only on EPERM/EACCES.\nDoD 2: M1-M5 pin distinct folders at all five sites; H3/H4/H5 pin unresolvable, relative, doubled-separator fallback. daemon-identity/bindhost/start tests pass unchanged.\nDoD 3: npm test + compile green in the snapshot.\n\nSource: isSameProject right after pathsMatch; pathsMatch first, then only isFullyQualified non-doubled-separator spellings reach realPathOrNull (null on error, so false). pathsMatch( is called only inside pathsMatch/isSameProject; isSameProject at exactly the five sites. pathsMatch/comparableProjectPath/isAbsoluteAnyOs unchanged; no new import; no JetBrains edits; spawn-proof admission untouched.\n\nMutants: re-ran all 9 on a snapshot copy; all killed by assertions (s184/s1576/s1656/s1861 L1 L2; s268 L3; nounc H5; noabs H4; onesided H1 L1 L3; alwaysreal H2 H3 M1-M5). qualityGate (parity-check.sh && npm run lint) in place: exit 0 both. Scratch dir removed.\n\nNon-blocking: sync realpath on a hostile /health naming a hung mount could stall the host once (accepted, same as JetBrains canonicalPath).",
+  "requiredCheckAtDone": null
 }
