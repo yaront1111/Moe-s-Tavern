@@ -52,7 +52,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -65,16 +65,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T10:28:38.657Z",
-  "updatedAt": "2026-11-04T10:49:24.777Z",
+  "updatedAt": "2026-11-04T10:53:36.745Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T10:28:40.271Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T10:53:02.661Z",
+    "wallClockMs": 1462390
   },
   "contextFetchedBy": [
     "architect-2a219562",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-25f21f0a"
   ],
   "tier": "light",
   "effort": "medium",
@@ -151,10 +154,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T10:45:02.689Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T10:44:03Z",
-    "at": "2026-11-04T10:49:24.777Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T10:49:33Z",
+    "at": "2026-11-04T10:53:36.745Z"
   },
   "reviewStartedAt": "2026-11-04T10:48:07.063Z",
   "verification": {
@@ -184,5 +188,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T10:53:02.661Z",
+  "reviewCompletedAt": "2026-11-04T10:53:02.661Z",
+  "reviewSummary": "Reviewed landed completion 2e48186b (on moe/work-2026-10-24; recorded in task.commits). Diff is exactly scripts/tests/importee-guard-bash.test.mjs, +4/-2: a local `lf = text => text.replaceAll('\\r\\n','\\n')` plus a one-line why-comment, applied to the witness-file read and to run.stdout in the WARN loop. A lone CR is not folded, so the Write case's raw path still has to match. The expected ['plain.txt'], the WARN template, the calls table and the python choice are untouched. moe-agent.sh and the ps1 files are unchanged.\n\nI re-ran the task's gate on a git-archive snapshot of 2e48186b under /mnt/d/moe-scratch, outside the checkout:\n- Windows node, importee-guard-bash.test.mjs: tests 41, pass 41, fail 0.\n- Linux node (env -i): tests 41, pass 41, fail 0.\n- Windows node, CI step files (importee-guard-bash, hook-isolation-bash, postflight-safe): tests 64, pass 64, fail 0.\n- Gate exit: win=0 lin=0 step=0 count=0.\n\nI applied the three parser mutants (patch.cjs: mut, mutcr, mutwarn) to scratch copies of the snapshot's moe-agent.sh. Each ran on both Windows and Linux node. All six runs exited 1 with 41 tests and fail 1, and the only failure was the control-character case. That means the folded assertions still catch a missing control-character refusal, an LF-only refusal and a dropped WARN print. Snapshot and mutant copies are removed.\n\nDoD: 1 (Windows, at least 41 tests, fail 0) met. 2 (Linux fail 0) met. 3 (diff names only that file; case still asserts ['plain.txt'] and the 3 WARN lines) met.\n\nSize: 4 insertions and 2 deletions, so net +2, well under the 400 cap. This is the epic-final row, and the change is test-only with no schema, protocol or migration change, so the CI-step run above is the regression evidence. No complexity findings: it is the smallest fold that works.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }

@@ -9,10 +9,49 @@
     "`git diff --stat` for the task names only scripts/tests/taskless-handoff.test.mjs; scripts/moe-agent.ps1 and scripts/moe-agent.sh are unchanged."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-cd0ac706",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Edit scripts/tests/taskless-handoff.test.mjs with the Edit tool (a TOOL witness; never git apply, sed or another shell write). The reference diff is /mnt/d/moe-scratch/arch-99a26cf2/fix.patch (+28/-4), gated at planning on 566778a0 and on the current target tip 7811de41. Read it and reproduce its three hunks byte for byte.\n(a) Right after `const psBody = between(...)` (line 24), add a module-level const `psStubs`. It is a plain template literal with no `${`, holding exactly two lines, each on its own line: `function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {}` and `function Test-MoeControlWorktreeMode { $false }`, followed by a newline. Above it goes a 4-line comment: the fixture tests prompt rendering, not provisioning; psContext calls real wrapper helpers but excludes their definitions, so each reachable one gets a side-effect-free stand-in; Initialize-MoeWorktree (WT-04) keeps its signature; Test-MoeControlWorktreeMode (WT-13) answers $false because the fixture renders a shared-mode checkout.\n(b) In render()'s ps setup, replace the two `# This fixture tests prompt rendering...` comment lines and the `function Initialize-MoeWorktree(...) {}` line with `${psStubs}` on its own line, directly followed by the closing backtick and semicolon.\n(c) After the closing `}` of the `for (const [engine, executable] of engines)` loop, and before `// ---- Wrapper-side wait + adoption boundary`, add:\n- A comment: the PowerShell renders run only on Windows. Under $ErrorActionPreference = 'Stop', a slice call to a helper defined outside the slice throws CommandNotFoundException (task-5d517571: Initialize-MoeWorktree; task-99a26cf2: Test-MoeControlWorktreeMode). This check runs on every OS. A mention in a comment counts as a call, so it fails closed.\n- A 2-line `// ponytail:` note: only Verb-MoeNoun names are scanned; scan every function moe-agent.ps1 defines if a slice ever calls one of its few non-Moe helpers (Invoke-PostFlight, Get-RoleDoc).\n- `const psUnreachable = new Set([...])` with exactly these entries: 'Stop-MoeVerifiedLocalSeat' (comment: behind $script:MoeVmRoute, which the fixture never sets), and 'Invoke-MoeQaControlPreflight' and 'Assert-MoeQaLandedCommit' (each with the comment: behind (Test-MoeControlWorktreeMode), stubbed to $false).\n- ONE test named exactly `ps1 prompt slices call only Moe helpers the fixture defines, stubs or cannot reach`:\n  - slices = psContext + psBody;\n  - called = new Set(slices.match(/\\b[A-Z][A-Za-z]+-Moe[A-Za-z0-9]+\\b/g)) (the verb class covers ConvertTo/ConvertFrom);\n  - assert.ok(called.size > 0, 'the helper scan matched nothing: its pattern no longer fits the slices');\n  - defined = the names captured by /^\\s*function\\s+(?:\\w+:)?([\\w-]+)/gm over slices plus a newline plus psStubs;\n  - missing = the called names, in scan order, that are neither defined nor in psUnreachable;\n  - assert.deepEqual(missing, [], with the template message `ps1 prompt slices call Moe helpers the fixture neither defines nor stubs: ${missing.join(', ')}. Add a side-effect-free stand-in to psStubs, or list a call the fixture cannot reach in psUnreachable with its guard.`).\n  The step-2 gate greps that test name and the fragment `nor stubs: Test-MoeControlWorktreeMode. `, so keep both verbatim.\nError handling: every guard assertion carries a message that names each missing helper and the remedy, and the non-vacuity assertion fails when the scan matches nothing. render() keeps its spawn-error and exit-status assertions unchanged.\nLeave alone: the four between() anchor strings at lines 22-25 (mem:gotcha-wrapper-slice-tests-execute-text: an edited anchor kills the whole file at import), the bash setup, and every existing test. Keep the file LF and UTF-8 (it holds a 漢字 fixture). Do not edit scripts/moe-agent.ps1 or scripts/moe-agent.sh: 62ec51f1 (now landed as ac3e5afb) and 6b3ab9d8 hold the ps1.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "startedAt": "2026-11-04T10:51:01.954Z",
+      "completedAt": "2026-11-04T10:51:15.918Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification (no edits). Run this from the root of your task worktree (`git rev-parse --show-toplevel`) on this WSL seat: the gate uses the /mnt/c and /mnt/d paths, as the DoD does. Run the plan's verification command, executionContract.checkRefs[0], exactly as written. It makes a git-archive snapshot of HEAD's scripts and docs under /mnt/d/moe-scratch/t99a26cf2.XXXXXX (outside the shared checkout), overlays your edited test file, and runs three checks:\n1. Windows node.exe with WSLENV empty, so no seat variable reaches it. Expect w.tap `# tests 107`, `# pass 107`, `# fail 0`, `# skipped 0`, with 6 `ok` lines for the powershell and pwsh claimed-qa cases (DoD 1).\n2. Linux node under env -i. Expect l.tap `# tests 45`, `# pass 45`, `# fail 0` (DoD 2).\n3. A mutant copy with the one `function Test-MoeControlWorktreeMode` line removed (the command checks that exactly one line went). It must exit 1 with `# fail 1`, and the failing case must be the guard, naming Test-MoeControlWorktreeMode (DoD 2).\nThe command prints the snapshot path first and GATE-OK last, and takes about 35-40 s (Windows about 30 s). Submit this command, its exit code 0 and its output tail as complete_task's verification.\nThen run checkRefs[1] from the same root (DoD 3). It must print the one-file `git diff --stat` and SCOPE-OK. Quote that output in the complete_task summary.\nIf a check fails, read the TAP files in the printed snapshot dir:\n- a Windows CommandNotFoundException means a stand-in is missing or misspelled;\n- a mutant that passes means the guard does not read psStubs;\n- a missing GATE-OK after green counts means the test name or message drifted from step 1.\nFix only step 1's file, then re-run both commands fresh.\nAfterwards, remove the printed snapshot dir by its literal path (`rm -rf /mnt/d/moe-scratch/t99a26cf2.<suffix>`), never with a command substitution as the target. Background: mem:gotcha-launcher-ps1-rows-from-wsl and mem:gotcha-git-bash-native-env-conversion-and-function-stubs (section 3, probing Windows from WSL).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "note": "GATE-OK: Windows 107/107, Linux 45/45, mutant fails only the guard. SCOPE-OK, +28/-4 in one file.",
+      "startedAt": "2026-11-04T10:51:16.501Z",
+      "completedAt": "2026-11-04T10:52:09.369Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of your own diff: `git diff $(git merge-base HEAD origin/moe/work-2026-10-24)`, which should be +28/-4 in this one file. Check each point:\n(1) The four between() anchors are byte-identical to HEAD.\n(2) psStubs holds no `${` and no backtick, so JS interpolates nothing inside it, and `$false` and `$TaskId` reach PowerShell literally.\n(3) The stand-in is the only line in the file that contains `function Test-MoeControlWorktreeMode`. The gate's mutant deletes that line, so a second match would make the mutant vacuous or over-broad.\n(4) Each psUnreachable name is still called only behind the guard its comment names in the target tip's moe-agent.ps1. At 7811de41 that is :10424-10425 `if ($script:MoeVmRoute -and $Role -eq 'worker' ...)` and :10430-10432 `... -and (Test-MoeControlWorktreeMode)) {`. If a guard has changed, re-check reachability before keeping the entry.\n(5) The 6 claimed-qa ps cases really ran on Windows: ok, not skipped.\n(6) The guard spawns nothing and reads only psContext, psBody and psStubs, so it behaves the same on the ubuntu, macos and windows CI legs.\n(7) Null and empty input: slices.match returning null gives an empty Set, which the non-vacuity assertion rejects.\n(8) Concurrency: the new test writes nothing, and render()'s per-call temp dirs are unchanged.\n(9) The moved comment keeps the old rationale (rendering, not provisioning; same signature).\nIf this review changes any byte, re-run both step-2 commands fresh and submit that output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "note": "Review: diff is the reference patch (+28/-4). Anchors untouched, psStubs has no interpolation, the mutant removed exactly one line, the guard spawns nothing, and the 6 ps qa cases ran ok.",
+      "startedAt": "2026-11-04T10:52:09.823Z",
+      "completedAt": "2026-11-04T10:52:14.578Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +63,122 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T10:28:23.030Z",
-  "updatedAt": "2026-11-04T10:28:41.788Z",
+  "updatedAt": "2026-11-04T10:53:30.001Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T10:28:26.924Z"
+    "firstClaimAt": "2026-11-04T10:28:26.924Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-cd0ac706"
-  ]
+    "architect-cd0ac706",
+    "worker-a0305b0b"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T10:49:58.234Z",
+  "executionContract": {
+    "intendedBehavior": "Under Windows node, taskless-handoff.test.mjs renders every ps1 prompt case, including the 6 powershell/pwsh claimed-qa cases, because the fixture stubs Test-MoeControlWorktreeMode to $false (a shared-mode checkout). A new case that runs on every OS fails, naming the helper, whenever psContext or psBody calls a Verb-MoeNoun helper that is not defined in the slice, not stubbed in psStubs and not allowlisted as unreachable with its guard.",
+    "acceptanceCriteria": [
+      "Windows node.exe from a git-archive snapshot of scripts and docs: # tests 107, # pass 107, # fail 0, # skipped 0, with the 6 powershell/pwsh claimed-qa cases ok.",
+      "Linux node on the same snapshot: # tests 45, # fail 0.",
+      "A copy with the single `function Test-MoeControlWorktreeMode` line removed fails under Linux node with # fail 1. The failing case is the guard, and its message names Test-MoeControlWorktreeMode.",
+      "The task's diff names only scripts/tests/taskless-handoff.test.mjs; scripts/moe-agent.ps1 and scripts/moe-agent.sh are unchanged."
+    ],
+    "invariants": [
+      "The four between() anchor strings (test lines 22-25) are byte-identical.",
+      "Every existing test keeps its name and assertions; the bash setup is unchanged.",
+      "scripts/moe-agent.ps1 and scripts/moe-agent.sh are untouched."
+    ],
+    "compatibility": [
+      "ci.yml:267 runs the file unchanged on ubuntu, macos and windows. The guard spawns nothing, so it runs on all three legs; the PowerShell renders still run only on win32."
+    ],
+    "approvedScope": [
+      "Module-level const psStubs (both stand-ins, one per line), interpolated by render()'s ps setup in place of the inline Initialize-MoeWorktree stand-in",
+      "Module-level const psUnreachable: Stop-MoeVerifiedLocalSeat, Invoke-MoeQaControlPreflight, Assert-MoeQaLandedCommit, each with its guard in a comment",
+      "One new top-level test: 'ps1 prompt slices call only Moe helpers the fixture defines, stubs or cannot reach'"
+    ],
+    "reuse": [
+      "Extends task-5d517571's Initialize-MoeWorktree stand-in (ad36ff9b), and reuses the existing psContext/psBody constants, node:test and node:assert. No new dependency or file."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1 at 7811de41: Test-MoeControlWorktreeMode is defined at :6447, outside psContext (:10290-10437), and called at :10430 in `if ($AutoClaim -and $preflightOk -and $preflightTaskId -and $Role -eq 'qa' -and (Test-MoeControlWorktreeMode)) {`.",
+      "Stop-MoeVerifiedLocalSeat (:10425) runs only inside `if ($script:MoeVmRoute -and $Role -eq 'worker' ...)`, and the fixture never sets $script:MoeVmRoute.",
+      "Invoke-MoeQaControlPreflight and Assert-MoeQaLandedCommit (:10431-10432) run only inside the :10430 if.",
+      "psBody (:10562-10646 at 7811de41) calls no Verb-MoeNoun helper.",
+      "render()'s ps setup sets $ErrorActionPreference = 'Stop' (test line 55), so a reachable unstubbed helper exits the render with 1."
+    ],
+    "checkRefs": [
+      "set -e; T=scripts/tests/taskless-handoff.test.mjs; N=scripts/tests/n.test.mjs; R=--test-reporter=tap; P=\"$(dirname \"$(command -v node)\"):/usr/bin:/bin\"; S=$(mktemp -d /mnt/d/moe-scratch/t99a26cf2.XXXXXX); git archive HEAD scripts docs | tar -x -C \"$S\"; cp \"$T\" \"$S/$T\"; cd \"$S\"; echo \"$S\"; L() { env -i HOME=\"$HOME\" PATH=\"$P\" node --test $R \"$@\"; }; env WSLENV= \"/mnt/c/Program Files/nodejs/node.exe\" --test $R \"$T\" > w.tap || :; L \"$T\" > l.tap || :; grep -HE '^# (tests|pass|fail|skipped) ' w.tap l.tap; grep -qx '# fail 0' w.tap; grep -qx '# skipped 0' w.tap; test \"$(grep -cE '^ok .*(powershell|pwsh): claimed (qa ver|headless qa|interactive qa)' w.tap)\" = 6; grep -qx '# fail 0' l.tap; grep -v 'function Test-MoeControlWorktreeMode' \"$T\" > \"$N\"; test $(($(wc -l < \"$T\") - $(wc -l < \"$N\"))) = 1; ! L \"$N\" > m.tap || exit 1; grep -qx '# fail 1' m.tap; grep -q '^not ok .* - ps1 prompt slices call only Moe helpers' m.tap; grep -q 'nor stubs: Test-MoeControlWorktreeMode\\. ' m.tap; echo GATE-OK",
+      "B=$(git merge-base HEAD origin/moe/work-2026-10-24) && test \"$(git diff --name-only \"$B\")\" = scripts/tests/taskless-handoff.test.mjs && test -z \"$(git ls-files --others --exclude-standard)\" && git diff --quiet \"$B\" -- scripts/moe-agent.ps1 scripts/moe-agent.sh && git diff --stat \"$B\" && echo SCOPE-OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Stub only, the one-line pattern of task-5d517571 (ad36ff9b). Rejected on its own: the DoD needs a guard that the Linux leg runs, and this class has now recurred twice (WT-04, then WT-13), each time visible only on Windows CI.\n2) Keep the stand-ins inline in render() and have the guard parse render.toString() or the test's own source. Rejected as brittle. A module-level psStubs const is the single source that both the PowerShell renders and the guard read, so removing a stand-in breaks both, which the gate's mutant proves.\n3) Scan every function moe-agent.ps1 defines (253 at 566778a0, 14 of them not Verb-Moe) instead of the Verb-MoeNoun pattern. More complete, but it needs per-name word-boundary matching, and the nested function `build` false-matches prose in the prompt text. Deferred with a ponytail note: at 566778a0 and 7811de41 neither slice calls a non-Moe wrapper helper.\n4) Strip PowerShell comments before scanning. Rejected: the slices' here-strings hold '#' heading lines, and a comment mention only forces a stub or allowlist entry, so the guard fails closed.\n5) Flag stale allowlist entries. Rejected: a refactor that moves a call out of a slice would turn CI red with no defect. The allowlist stays a three-name Set with its guards in comments, as the task asks.\n6) Make the wrapper call slice-safe in moe-agent.ps1. Out of scope: 62ec51f1 and 6b3ab9d8 hold the file, and the fix direction is test-only.",
+    "codebaseInsights": "- Slices at 7811de41, the target tip after 62ec51f1 landed as ac3e5afb mid-planning:\n  - psContext is moe-agent.ps1:10290-10437 (`    $dynamicContext = \"\"` to `    # -------- Pre-flight baseline`);\n  - psBody is :10562-10646 (`    $claimPromptBody = $null` to `    $script:CliLaunchedAt = Get-Date`).\n  At 566778a0 they were :10221-10368 and :10493-10577.\n- Verb-MoeNoun calls in psContext:\n  - Initialize-MoeWorktree (~:10422), stubbed since ad36ff9b;\n  - Stop-MoeVerifiedLocalSeat (:10425), inside `if ($script:MoeVmRoute -and $Role -eq 'worker' ...)`;\n  - Test-MoeControlWorktreeMode (:10430), the WT-13 line from 072dd78c, defined at :6447 outside the slice;\n  - Invoke-MoeQaControlPreflight and Assert-MoeQaLandedCommit (:10431-10432), inside that if.\n  psBody calls none. The slice's `if ($script:MoeQaGateParked) { continue }` is reachable only inside the same if.\n- 62ec51f1's landed slices call the same 5 helpers, so the new guard is green at today's tip.\n- render()'s ps setup sets $ErrorActionPreference = 'Stop', so a reachable unstubbed helper exits the render with 1 (CommandNotFoundException). Worker renders short-circuit on `$Role -eq 'qa'`, which is why only the qa cases failed.\n- engines (test :30-32) runs the ps engines only on win32. The ubuntu leg runs bash alone, so only CI's Windows 'Test agent runtime discovery' step (ci.yml:266-267) went red.\n- Measured at planning (Windows node 24.16.0 with PS 5.1 and pwsh 7; WSL node 24.21.0):\n  - unfixed 566778a0: 106 tests, 100 pass, 6 fail, exactly the 6 claimed-qa ps cases;\n  - with /mnt/d/moe-scratch/arch-99a26cf2/fix.patch, on 566778a0 and on 7811de41: Windows 107/107 with 0 skipped, Linux 45/45, and the mutant fails only the guard with `... nor stubs: Test-MoeControlWorktreeMode. Add ...`.\n  The whole gate took 34-39 s.\n- Only ci.yml:267 references this test file; no other test reads it.",
+    "risks": "- The gate is WSL-specific, like the DoD: node.exe under /mnt/c, and scratch under /mnt/d so that Windows node gets a drive path. Run it from the task worktree root, because `cp \"$T\"` uses a relative path.\n- The gate greps the exact guard test name and the message fragment `nor stubs: Test-MoeControlWorktreeMode. `. Do not rephrase either. Each stand-in must sit on its own line: if both shared a line, the mutant would also drop Initialize-MoeWorktree and the message check would fail.\n- Do not edit the between() anchors at test :22-25 (mem:gotcha-wrapper-slice-tests-execute-text).\n- psStubs is a JS template literal, so it must hold no `${`. Then `$false` and `$TaskId` stay literal.\n- Seat env leak: the gate empties WSLENV for node.exe and runs Linux node under env -i. Do not drop either.\n- The scratch dirs /mnt/d/moe-scratch/t99a26cf2.* stay behind. Remove them by literal path: the Bash tool refuses rm -rf with a command substitution as its target.\n- The target keeps moving (62ec51f1 landed mid-planning). If a later ps1 landing adds a Verb-MoeNoun call inside either slice, the guard correctly fails. Do not widen psUnreachable without naming the call's guard and confirming that the fixture cannot reach it.\n- QA, RED proof: run checkRefs[0] from a scratch clone at <completion>^ (`git clone -q --shared --no-checkout . $S/r && git -C $S/r checkout -q --detach <completion>^`, then run from $S/r). It exits 1 with w.tap `# fail 6`. QA's scope check is `git diff --stat <completion>^ <completion>`, which should list only the test file. checkRefs[1] is worker-side only, because it measures W against its fork point; after landing and the task-branch sync it reads empty.",
+    "keyFiles": [
+      "scripts/tests/taskless-handoff.test.mjs (the only file edited)",
+      "scripts/moe-agent.ps1 (read-only: Test-MoeControlWorktreeMode :6447 and the psContext slice :10290-10437 at 7811de41)",
+      ".github/workflows/ci.yml:266-267 (the Windows CI step that runs this file)",
+      "/mnt/d/moe-scratch/arch-99a26cf2/fix.patch (reference diff, gated at planning)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "2e48186b7f0c66b7017a3491d76eb561687015e4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T10:49:58.276Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T10:50:02Z",
+    "at": "2026-11-04T10:53:30.001Z"
+  },
+  "workStartedAt": "2026-11-04T10:51:01.954Z",
+  "reviewStartedAt": "2026-11-04T10:52:17.973Z",
+  "verification": {
+    "command": "checkRefs[0] gate (git-archive snapshot under /mnt/d/moe-scratch; Windows node.exe, Linux node, mutant)",
+    "exitCode": 0,
+    "outputTail": "w.tap:# tests 107\nw.tap:# pass 107\nw.tap:# fail 0\nw.tap:# skipped 0\nl.tap:# tests 45\nl.tap:# pass 45\nl.tap:# fail 0\nl.tap:# skipped 0\nGATE-OK\n 1 file changed, 28 insertions(+), 4 deletions(-)\nSCOPE-OK",
+    "reportedAt": "2026-11-04T10:52:17.973Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/taskless-handoff.test.mjs"
+  ],
+  "completionSummary": "taskless-handoff.test.mjs: added a module-level psStubs const (Initialize-MoeWorktree and Test-MoeControlWorktreeMode stand-ins) that render()'s ps setup now interpolates. Added psUnreachable and a cross-OS guard test, 'ps1 prompt slices call only Moe helpers the fixture defines, stubs or cannot reach'. Windows node: 107/107 pass, 0 skipped, with the 6 claimed-qa ps cases ok. Linux node: 45/45. The mutant with the stand-in removed fails only the guard, naming Test-MoeControlWorktreeMode. The diff is one file, +28/-4, and moe-agent.ps1 and moe-agent.sh are unchanged (SCOPE-OK).",
+  "commits": [
+    {
+      "sha": "500e3f29e6ad30438376ce6f702093b85c95cb11",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T10:50:02Z",
+      "paths": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T10:53:30.001Z",
+      "status": "REVIEW"
+    }
+  ],
+  "unattributedPaths": []
 }
