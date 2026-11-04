@@ -456,6 +456,19 @@ if (tool === 'get_context' && args.taskId) {
 // a malformed reply. `unknown`: McpAdapter's -32601 for an older daemon.
 // `refuse`: a MoeError frame. `fail`: no reply at all (a transport failure).
 // Anything else is JSON served as the tool text; unparseable JSON throws.
+// FAKE_READINESS_AFTER=<n>:<mode> (inert unset): a profile flipping while the
+// wrapper lives. .moe/readiness-count counts the reads; from read n+1 on the
+// answer is FAKE_READINESS=<mode>. A malformed value throws.
+if (tool === 'get_execution_readiness' && process.env.FAKE_READINESS_AFTER) {
+  const m = /^(\d+):([\s\S]+)$/.exec(process.env.FAKE_READINESS_AFTER);
+  if (!m) throw new Error('FAKE_READINESS_AFTER must be <n>:<mode>');
+  ensureDir(moe);
+  const counter = path.join(moe, 'readiness-count');
+  let n = 0;
+  try { n = Number(fs.readFileSync(counter, 'utf8')) || 0; } catch {}
+  fs.writeFileSync(counter, String(++n));
+  if (n > Number(m[1])) process.env.FAKE_READINESS = m[2];
+}
 if (tool === 'get_execution_readiness' && process.env.FAKE_READINESS) {
   const mode = process.env.FAKE_READINESS;
   const error = mode === 'unknown' ? { code: -32601, message: 'Tool not found: moe.get_execution_readiness' }

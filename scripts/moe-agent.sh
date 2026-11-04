@@ -9973,6 +9973,25 @@ while [ "$LOOP_RUNNING" = true ]; do
     read_commit_settings
     # CQ-M07m1: before any claim or chat read; a verified-local reply refuses here.
     case "$ROLE" in worker|qa) verified_local_gate ;; esac
+    # Launch outage mode is host-CLI state. The VM route never enters it (the
+    # fast-failure branch gates entry on VM_ROUTE != true) and turns a probe into
+    # a no-launch, so an outage carried over from a legacy iteration of this
+    # wrapper process would suppress every claim forever (task-cc4213c0). The
+    # route's own job failures restart the shared streak and backoff from 0.
+    if [ "$VM_ROUTE" = true ] && [ "$LAUNCH_OUTAGE" = true ]; then
+        echo -e "${GREEN}[launch-outage]${NC} The verified-local VM route runs this seat's sessions in its VM, never the host CLI: launch outage over, claiming resumes."
+        if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+            LAUNCH_OK_MSG="$WORKER_ID: the verified-local VM route runs this seat's sessions in its VM, never the host CLI, after $LAUNCH_FAIL_STREAK host launch failures. Launch outage over: claiming resumes."
+            LAUNCH_OK_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_OK_MSG" 2>/dev/null || true)
+            moe_rpc chat_send "$LAUNCH_OK_ARGS" > /dev/null 2>&1 || true
+        fi
+        LAUNCH_FAIL_STREAK=0
+        LAUNCH_FAIL_BACKOFF_SEC=0
+        LAUNCH_OUTAGE=false
+        LAUNCH_OUTAGE_HELD_TASK_ID=""
+        LAUNCH_OUTAGE_RELEASE_TRIED=""
+        LAUNCH_OUTAGE_ANNOUNCE=false
+    fi
 
     if [ "$AUTO_CLAIM" = true ]; then
         echo -e "${BLUE}Pre-flight: joining chat, claiming task, loading context...${NC}"

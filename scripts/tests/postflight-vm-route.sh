@@ -506,6 +506,38 @@ vmr_one_reason VR-taskless-teamless teamless; vmj_rows taskless
 vmr_run VR-taskless-idle worker claude "$READY" on 0 FAKE_CLAIM_MODE=idle
 [ "$VMR_CODE" = 0 ] || vmr_fail VR-taskless-idle "exit $VMR_CODE"
 vmr_one_reason VR-taskless-idle idle; vmj_rows taskless
+echo '[seat job] VR-outage: a legacy launch outage ends when the VM route engages (task-cc4213c0)'
+# Three legacy iterations launch the notification-only host CLI, which fails
+# fast; the third enters the outage. The 4th readiness read is verified-local.
+# Rotation off: a failed rotated claude run relaunches and zeroes the streak.
+mkdir -p "$TMP_DIR/outage-bin"
+printf '#!/usr/bin/env bash\nprintf %%s\\\\n %q >> %q\nexit 1\n' '{"tool":"host-cli","args":{}}' "$CALLS" > "$TMP_DIR/outage-bin/outage-cli"
+chmod +x "$TMP_DIR/outage-bin/outage-cli"
+VMR_ARGS=(--poll-interval 0); VMR_CMD="$TMP_DIR/outage-bin/outage-cli"
+vmr_run VR-outage worker claude "$LEGACY" on 0 FAKE_CLAIM_MODE=idle FAKE_MENTION=1 FAKE_READINESS_AFTER="3:$READY" \
+  MOE_ACCOUNT_ROTATION=off MOE_LAUNCH_BACKOFF_BASE_SEC=1 MOE_LAUNCH_BACKOFF_MAX_SEC=1
+VMR_ARGS=(--no-loop --poll-interval 0)
+"$NODE" - "$CALLS" "$OUT" "$PROJECT/.moe/evidence-rpcs.jsonl" "$PROJECT/.moe/messages/chan-general.jsonl" "$VMR_CODE" <<'JS' || vmr_fail VR-outage 'see the assertion above'
+const fs=require('fs'),a=require('node:assert/strict'),[calls,out,ev,chat,rc]=process.argv.slice(2);
+const read=(f)=>fs.readFileSync(f,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+const text=fs.readFileSync(out,'utf8').replace(/\x1b\[[0-9;]*m/g,''),c=read(calls);
+a.equal(rc,'0','exit code');
+a.ok(text.includes('entering launch outage mode'),'the legacy iterations never entered the outage');
+a.equal(text.split('launch outage over, claiming resumes.').length-1,1,'expected one outage-over line');
+a.ok(text.includes('The verified-local VM route runs this seat\'s sessions in its VM, never the host CLI: launch outage over'),'no VM-route clear line');
+a.ok(!text.includes('MOE_LAUNCH_PROBE'),'printed MOE_LAUNCH_PROBE');
+const flip=c.map((r,i)=>r.tool==='get_execution_readiness'?i:-1).filter(i=>i>=0)[3];
+a.ok(flip!==undefined,'no 4th get_execution_readiness read');
+const host=c.map((r,i)=>r.tool==='host-cli'?i:-1).filter(i=>i>=0);
+a.equal(host.length,3,'expected 3 host CLI launches'); a.ok(host.every(i=>i<flip),'a host CLI launched after the flip');
+const claims=c.map((r,i)=>[r,i]).filter(([r])=>r.tool==='claim_next_task');
+const before=claims.filter(([,i])=>i<flip),after=claims.filter(([,i])=>i>flip);
+a.ok(before.length>0,'no legacy claim'); for(const [r] of before) a.ok(!('executionRoute' in r.args),'legacy claim was marked');
+a.ok(after.length>0,'no claim after the flip'); for(const [r] of after) a.equal(r.args.executionRoute,'vm');
+a.deepEqual(read(ev).filter(r=>r.tool==='agent-seat').map(r=>r.args.cmd),['seat-start','seat-stop']);
+a.ok(fs.readFileSync(chat,'utf8').includes('after 3 host launch failures. Launch outage over: claiming resumes.'),'no #general outage-over line');
+JS
+vmr_one_reason VR-outage vm-route
 echo '[seat job] VR-reload: taskless mentions never launch, both instances stopped'
 COPY="$TMP_DIR/reload"; mkdir -p "$COPY"; cp -R "$ROOT_DIR/scripts" "$COPY/"
 git -C "$COPY" init -q -b main; git -C "$COPY" add scripts; git -C "$COPY" commit -qm wrapper
@@ -525,7 +557,7 @@ const d=r.filter(x=>x.tool==='deregister_worker'); a.equal(d[0].args.reason,'wra
 for(let i=0;i<2;i++){a.ok(r.indexOf(s[i*2+1])<r.indexOf(d[i])); const v=s[i*2+1].args.argv; a.equal(v[v.indexOf('--instance')+1],s[i*2].args.instance);}
 a.notEqual(s[0].args.instance,s[2].args.instance);
 JS
-echo '[seat job] PASS VR-happy, nonzero, R2, noclaim, qa-shared, protected, shared, qa, sigint, taskless, taskless-teamless, taskless-idle, reload'
+echo '[seat job] PASS VR-happy, nonzero, R2, noclaim, qa-shared, protected, shared, qa, sigint, taskless, taskless-teamless, taskless-idle, outage, reload'
 )
 
 # --- [vm candidate] CQ-M07m2: land_vm_candidate turns a VM job's admitted tree
