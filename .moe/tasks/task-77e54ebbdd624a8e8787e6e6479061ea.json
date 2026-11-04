@@ -1,0 +1,31 @@
+{
+  "id": "task-77e54ebbdd624a8e8787e6e6479061ea",
+  "epicId": "epic-be924fb8",
+  "title": "bug: qa_reject's soft and hard caps test the monotonic reopenCount, which non-QA reopens also bump (set_task_status, a board drag, a DONE reopen), so a row a human reopened onto the cap is parked \"for a human\" by its next QA reject without the one architect re-plan the soft cap promises",
+  "description": "Filed by the governor from hunt #15's held items (task-928a468d, architect-1dd28c7c, msg-492975dd). Re-verified at tip f76c55f3. It waits in BACKLOG on task-e44fbbf3, which also edits qaReject.ts and defines the parked-for-human fence this row's park relies on. The governor promotes it when e44fbbf3 is DONE.\n\nPROBLEM\nThe contract:\n- CLAUDE.md's lifecycle paragraph and docs/SCHEMA.md:1092: qa_reject flips to PLANNING at the reopen cap.\n- docs/MCP_SERVER.md:2354-2372: maxReopens and exceededReopenCap.\n- The ❌ row of docs/roles/governor.md: the task parks in REVIEW for a human only past the cap.\n- packages/moe-daemon/src/tools/qaReject.ts:190-198 states the intent: soft cap (== maxReopens) gives the architect ONE re-plan, and the hard cap (> maxReopens) parks only because \"the re-plan didn't help either\".\nThe code (:199-206) decides both tiers from newReopenCount = reopenCount + 1 alone. reopenCount is monotonic, and non-QA reopens also bump it: set_task_status REVIEW/DONE → WORKING, the board's drag and REOPEN_TASK. So when a human reopen lands the count on maxReopens, the next QA reject reaches the hard cap directly. The row is parked for a human as \"re-plan exhausted\", although it never entered PLANNING.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-928a468d/A/hardCapSkipsReplan.test.ts, run at d5431577 in a snapshot; output in hardCapSkipsReplan.vitest.txt. Both cases fail with status REVIEW (parked) where PLANNING (one re-plan) was expected:\n(1) A human REVIEW → WORKING reopen at reopenCount 2, then the next QA reject.\n(2) A human DONE → WORKING reopen of a row with 2 past rejects; its first new QA reject parks it.\n\nFIX DIRECTION\nMake the hard cap require that the cap re-plan actually happened. Options: record when the soft cap flips the row to PLANNING (a flag or timestamp on the task) and park only on a later reject; or count QA rejections separately from reopenCount. Error handling unchanged. Keep the audit trail (rejectionHistory, failedDodItems) as is. Rows already parked stay parked: they need no migration, and the epic rail requires backward-compatible state files, so a missing new field reads as \"no re-plan yet\". Sync qa_reject's MCP_SERVER.md section with the rule as shipped (ruling msg-71db57ac).\n\nFILES\npackages/moe-daemon/src/tools/qaReject.ts, possibly types/schema.ts if a field is added, one vitest file, and docs/MCP_SERVER.md (qa_reject section). Gate: the vitest file plus qaReject.test.ts, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "A row whose reopenCount reached the cap through a non-QA reopen gets ONE architect re-plan (PLANNING) on its next QA reject, not a park. Both hunt repro cases pass.",
+    "A row that already had its cap re-plan and is rejected again is still parked in REVIEW for a human. The existing qaReject.test.ts escalation cases still pass unchanged.",
+    "A legacy row without any new field behaves as \"no cap re-plan yet\". qa_reject's MCP_SERVER.md section states the rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-e44fbbf336754fdf9e852f80c93a9ee8"
+  ],
+  "priority": "LOW",
+  "order": 471.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:03:19.281Z",
+  "updatedAt": "2026-11-04T00:03:19.281Z"
+}

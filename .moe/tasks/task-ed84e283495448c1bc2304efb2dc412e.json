@@ -1,0 +1,28 @@
+{
+  "id": "task-ed84e283495448c1bc2304efb2dc412e",
+  "epicId": "epic-be924fb8",
+  "title": "docs: CONFIGURATION.md's taskSizing row and governor.md's size rubric say the distinct-file limit counts step affectedFiles, but submit_plan's size gate also counts newFiles (submitPlan.ts:427-432), so a plan sized by the docs can still be refused at submit",
+  "description": "Filed by the governor from a lane-2 lead in hunt #15 (task-928a468d, msg-492975dd), verified at tip f76c55f3.\n\nPROBLEM\npackages/moe-daemon/src/tools/submitPlan.ts:427-432 builds the size-gate input as `affectedFiles: [...step.affectedFiles, ...step.newFiles]`. Its comment says: \"Count newFiles toward the distinct-file total too ... so the exemption can't be used to dodge the sizing cap\". assessPlanSize (util/planSize.ts:88-109) then compares that union against warnDistinctFiles/maxDistinctFiles.\nTwo documents say only affectedFiles count:\n- docs/CONFIGURATION.md, taskSizing row: \"distinct files = union of step `affectedFiles`\".\n- docs/roles/governor.md:78, size rubric: \">10 distinct `affectedFiles`\" and \"6–10 distinct files\".\nAn architect or governor who sizes a plan by the docs undercounts. A plan with 8 affectedFiles plus 3 newFiles is refused CONSTRAINT_VIOLATION at submit_plan, although the docs say it is inside the limit.\n\nFIX DIRECTION\nDocs only, no code change: say the distinct-file count is the union of each step's affectedFiles and newFiles.\n- In CONFIGURATION.md, edit only that clause of the taskSizing row. Placement note: task-e67470ce (BACKLOG) may later edit the same table row's step limit, so keep the edit to the parenthetical.\n- Make the same change in governor.md:78.\n- Check docs/roles/architect.md:7 and docs/MCP_SERVER.md's submit_plan section for the same wording, and fix it where it appears.\nRole docs ship through the generated packages/moe-daemon/src/generated/initFiles.ts. Regenerate it in a snapshot outside the shared checkout (the prebuild generator, as earlier role-doc commits did, e.g. 93db1ce0), and carry the regenerated file in the same commit. Never run npm run build in the shared checkout (global rail). Edit docs/** with the seat's own editor, never a shell write.\n\nGATE\n`npm run lint` (role-doc linter) at the repo root, and packages/moe-daemon's src/util/initFiles.test.ts in the snapshot.",
+  "definitionOfDone": [
+    "docs/CONFIGURATION.md's taskSizing row and docs/roles/governor.md's size rubric say the distinct-file count is the union of each step's affectedFiles and newFiles, matching submitPlan.ts:427-432. Any other doc found with the same wording (architect.md, the submit_plan section of MCP_SERVER.md) is fixed too.",
+    "packages/moe-daemon/src/generated/initFiles.ts is regenerated from the edited role doc and committed with it. src/util/initFiles.test.ts passes in a snapshot outside the shared checkout.",
+    "npm run lint passes at the repo root, and the diff touches no code."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 474.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:04:19.361Z",
+  "updatedAt": "2026-11-04T00:04:19.361Z"
+}

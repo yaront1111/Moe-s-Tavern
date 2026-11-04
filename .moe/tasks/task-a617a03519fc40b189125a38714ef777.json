@@ -1,0 +1,28 @@
+{
+  "id": "task-a617a03519fc40b189125a38714ef777",
+  "epicId": "epic-be924fb8",
+  "title": "bug: messageExistsInChannel reads only the newest 1 MiB of a channel's JSONL, so chat_send's replyTo and chat_pin refuse a real message older than that (in #general, 16.5 MB, anything more than a few hours old), chat_pin with an uncoded Error, although pinMessage's comment says it \"scans full JSONL, no limit\"",
+  "description": "Filed by the governor from hunt #15's held items (task-928a468d, architect-1dd28c7c, msg-492975dd). Re-verified at tip f76c55f3. None of the files below changed since the repro's HEAD, d5431577.\n\nPROBLEM\n- packages/moe-daemon/src/state/chatStore.ts:357-372 (messageExistsInChannel) reads `readTailJsonl(state, messagesFile, 1024 * 1024)`: only the newest 1 MiB. Its docstring (:352-355) says \"Older messages cannot be referenced\".\n- Its pin caller contradicts that: pinMessage at chatStore.ts:522 says \"Validate messageId exists in channel (scans full JSONL, no limit)\".\n- chat_send's replyTo check (tools/chatSend.ts:63) uses the same function.\n- Live sizes at filing: #general (chan-b6d8273b.jsonl) is 16.5 MB, #governors 2.5 MB, #workers 1.5 MB. The architect measured that the newest 1 MiB of #general reached back only to about 17:57Z on 11-03, roughly 6 hours.\n\nEFFECT\n- chat_send with replyTo naming a real, older message is refused INVALID_INPUT \"Invalid replyTo: message ... not found in channel\".\n- chat_pin of such a message is refused with a bare `Error: Message not found in channel` (chatStore.ts:524), with no MoeError code. Pinned messages are meant as durable todos and references, so pinning an older ruling is exactly the use case.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-928a468d/me/zzHuntMe_chatTailWindow.test.ts, run at d5431577 in a snapshot outside the checkout; output in chatTailWindow.vitest.txt. One message is followed by about 1 MiB of later lines. Then both chat_send replyTo and chat_pin of the first message fail as described above.\n\nFIX DIRECTION AND PITFALL\nGive the replyTo and pin checks a lookup that covers the whole file and stays bounded in memory: a streamed scan, or a per-channel id index. Error handling: chat_pin's not-found becomes a coded MoeError.\nPitfall: chatRead.ts:120 (all-channel mode) and util/chatBacklog.ts:316 (chat_wait) also call messageExistsInChannel. There it decides whether an explicit sinceId belongs to a channel. getMessages still reads only the tail (chatStore.ts:301-306, its own TODO). A full-file \"yes\" there would therefore send an old sinceId into getMessages' expired-cursor fallback and replay the newest window on every call, which is what the chatBacklog comment guards against. Keep those two callers' behavior, for example with a separate full-file check used only by replyTo and pin, and pin it with a test.\n\nFILES\nchatStore.ts, possibly chatSend.ts and chatPin.ts, one vitest file, and docs/MCP_SERVER.md's `### moe.chat_send` and `### moe.chat_pin` sections (ruling msg-71db57ac). No open row holds these files at filing. Gate: the vitest file, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "chat_send with replyTo naming a real message older than the newest 1 MiB of its channel succeeds, and chat_pin pins such a message (the hunt repro's two cases pass). An id the channel never had is still refused: INVALID_INPUT for chat_send, and a coded MoeError, not a bare Error, for chat_pin.",
+    "An explicit sinceId older than the read window behaves exactly as before in chat_read's all-channel mode and in chat_wait. A vitest case pins it: no newest-window replay.",
+    "The comments at chatStore.ts:352-355 and :522 and the `### moe.chat_send` and `### moe.chat_pin` sections state the real lookup bound."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 470.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:02:16.939Z",
+  "updatedAt": "2026-11-04T00:02:16.939Z"
+}

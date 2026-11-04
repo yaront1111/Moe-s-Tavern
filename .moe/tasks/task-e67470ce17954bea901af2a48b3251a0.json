@@ -1,0 +1,31 @@
+{
+  "id": "task-e67470ce17954bea901af2a48b3251a0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: submit_plan accepts plan data it then silently truncates or crashes on: steps 51-100 of an accepted plan are dropped by the plan sanitizer (validators.ts keeps 50 while submit_plan allows 100), and planningNotes is neither type-checked nor bounded (a non-string throws an uncoded TypeError, a string keyFiles is stored raw, text over 5000 chars is clipped)",
+  "description": "Filed by the governor from hunt #15's two held plan-intake items (task-928a468d, architect-1dd28c7c, msg-492975dd). They are combined here because both break the same rule in the same handler: a submit_plan input is refused, never truncated or coerced. Re-verified at tip f76c55f3. It waits in BACKLOG on task-87cba58c, which also edits submitPlan.ts. The governor promotes it when 87cba58c is DONE.\n\nPROBLEM 1, the step bound\npackages/moe-daemon/src/tools/submitPlan.ts:352 allows up to 100 steps, and settings.taskSizing.maxSteps validates up to 100. sanitizeImplementationPlan (state/validators.ts:775, `plan.slice(0, 50)`) runs on every task write and keeps only the first 50. So steps 51+ of an accepted plan are silently dropped from memory and disk. It is reachable only with a custom taskSizing.maxSteps above 50; the default refuse line is 12. Evidence: /mnt/d/moe-scratch/hunt-928a468d/B/planStepCap.test.ts, run at d5431577; output in planStepCap.output.txt. A 60-step plan is accepted, and 50 steps are stored, in memory and after a reload.\n\nPROBLEM 2, planningNotes\nsubmitPlan.ts:565-570 copies planningNotes with `.slice(0, 5000)` and `keyFiles?.slice(0, 50)`, with no type checks:\n- A non-string field (for example risks: 42) throws an uncoded TypeError.\n- A string keyFiles is stored as a string, although the schema says string[].\n- A 6000-char note is clipped to 5000 with no error.\nThe sibling executionContract in the same handler refuses an oversized field with INVALID_INPUT, \"nothing is truncated or coerced\". Evidence: B/planningNotesIntake.test.ts, run at d5431577; output in planningNotesIntake.output.txt. Three cases fail; the executionContract control case passes.\n\nFIX DIRECTION\nMake the bounds agree. Either refuse steps above 50 at submit_plan (and cap taskSizing.maxSteps at 50 in its validator), or raise the sanitizer cap to the accepted 100; say which in the plan. Validate planningNotes like executionContract: each text field a string within the limit (refused INVALID_INPUT, never clipped), keyFiles a string[] with bounded length. Error handling is coded INVALID_INPUT throughout. Sync submit_plan's MCP_SERVER.md section and, if the step cap changes, taskSizing in docs/CONFIGURATION.md (ruling msg-71db57ac).\n\nFILES\nsubmitPlan.ts, state/validators.ts, one vitest file, and docs. Gate: that vitest file plus submitPlan.test.ts, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "Every step of an accepted plan is stored. A plan over the effective bound is refused INVALID_INPUT at submit_plan, never truncated later. The hunt planStepCap cases pass, adjusted to whichever bound ships.",
+    "A non-string planningNotes field, a non-array keyFiles and an over-limit note are each refused INVALID_INPUT, nothing clipped or stored raw. The planningNotesIntake cases pass, and the executionContract control is unchanged.",
+    "submit_plan's MCP_SERVER.md section (and CONFIGURATION.md's taskSizing, if its limit changed) state the bounds, and submitPlan.test.ts passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-87cba58c1835452dab48f6817278e033"
+  ],
+  "priority": "LOW",
+  "order": 473.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:03:43.353Z",
+  "updatedAt": "2026-11-04T00:03:43.353Z"
+}

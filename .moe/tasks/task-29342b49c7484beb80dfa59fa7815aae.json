@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,16 +99,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:34:06.481Z",
-  "updatedAt": "2026-11-04T00:00:44.851Z",
+  "updatedAt": "2026-11-04T00:04:27.221Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T23:54:34.552Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T00:04:03.734Z",
+    "wallClockMs": 569182
   },
   "contextFetchedBy": [
     "architect-74d9e1c7",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -223,9 +226,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-03T23:57:25Z",
-    "at": "2026-11-04T00:00:44.851Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-04T00:02:41Z",
+    "at": "2026-11-04T00:04:27.221Z"
+  },
+  "completedAt": "2026-11-04T00:04:03.734Z",
+  "reviewCompletedAt": "2026-11-04T00:04:03.734Z",
+  "reviewSummary": "Reviewed completion f76c55f3 (on moe/work-2026-10-24 and the control checkout; 4 files, +111/-13, ~98 net, under the 400 cap; scope exactly the 4 approved files, MCP_SERVER.md only the two Notes sections). Re-ran the task checkRef myself in a fresh git-archive snapshot (env -i, nvm Node v24.21.0, npm ci there, never in the shared checkout): exit 0, Test Files 4 passed, Tests 88 passed (chatPresence, chatChannelRef, workerType, listWorkers), 'presence ok'. Structural gate: no PRESENCE_TIMEOUT_MS left in chatWho.ts/chatJoin.ts, both call isWorkerAlive(. Independent RED proof in the snapshot: base chatWho.ts/chatJoin.ts -> 4 of 5 chatPresence tests fail (chat_who no-channel, chat_who with channel, chat_join, list_workers parity), fixture-sanity passes. Mutation check: removing only the Pass 2 `status !== 'DEAD'` guard fails exactly the 'chat_who with a channel ... never the DEAD one' test, so the DEAD-waiter case is pinned (asserts are exact sorted id lists, not truthiness). DoD1: DEAD seat (deregistered, recent lastActivityAt, plus a lingering waiter) never listed by chat_who with/without channel or chat_join. DoD2: live IDLE seat is isAlive:true in list_workers and listed by both tools; chat_join drops the IDLE exclusion per the doc rule/ruling msg-71db57ac and the test pins it. DoD3: both tools use isWorkerAlive; the two MCP_SERVER.md Notes state the same rule (not DEAD, active within 120 s; chat_who channel adds the parked-waiter-past-window rule, never DEAD). Boundary note: chat_join now admits the exact 120 s instant (<=), consistent with isWorkerAlive. Reply shapes unchanged; no other consumer of onlineWorkers (grep: only chatJoin.ts and the doc). No error-handling change. Non-blocking ponytail note: none, diff is lean. Snapshot /tmp/m2934.3jV0 removed.",
+  "requiredCheckAtDone": null
 }

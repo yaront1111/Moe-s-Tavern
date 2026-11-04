@@ -1,0 +1,31 @@
+{
+  "id": "task-fefce9648a4e481fba0a819ca516f56f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: qa_approve and qa_reject on an unassigned REVIEW row fall back to the caller as the hand-off seat (task.assignedWorkerId || params.workerId) and set it IDLE with currentTaskId null, so a seat that holds another task loses its own claim pointer while that task still names it as assignee",
+  "description": "Filed by the governor from hunt #15's held items (task-928a468d, architect-1dd28c7c, msg-492975dd). Re-verified at tip f76c55f3. It waits in BACKLOG on task-e44fbbf3, which edits the same two tools to fence verdicts on rows parked for a human. The governor promotes it when e44fbbf3 is DONE.\n\nPROBLEM\npackages/moe-daemon/src/tools/qaApprove.ts:118 and qaReject.ts:142 compute `handoffWorkerId = task.assignedWorkerId || params.workerId`. After the verdict, qaApprove.ts:251 and qaReject.ts:384 run `touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null })`.\nOn an unassigned REVIEW row, the hand-off seat is therefore the caller itself, even when the caller holds another task. The task still says assignedWorkerId = that seat, while the worker record says IDLE with no current task. The board shows the seat idle, and the seat's own bookkeeping (status, currentTaskId) no longer matches the row it owns.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-928a468d/A/sideLeads.test.ts, case 2, run at d5431577 in a snapshot; output in sideLeads.vitest.txt. qa-b holds task-2 (REVIEW, assigned to qa-b, currentTaskId task-2, status CODING) and calls qa_approve on unassigned REVIEW task-1. Afterwards task-2 is still assigned to qa-b, but qa-b reads status IDLE and currentTaskId null.\n\nFIX DIRECTION\nIdle only the seat that actually held the reviewed row: the captured task.assignedWorkerId. When the row was unassigned, touch no worker, or touch the caller only if its currentTaskId is the reviewed task. Apply this the same way in both tools. Error handling unchanged. Check how e44fbbf3 (landed first) restricts who may give a verdict on an unassigned row, and keep its fence. Sync the qa_approve and qa_reject MCP_SERVER.md sections if they describe the hand-off (ruling msg-71db57ac); if not, the summary says none was owed.\n\nFILES\npackages/moe-daemon/src/tools/qaApprove.ts, qaReject.ts, and one vitest file. Gate: that file plus qaApprove.test.ts and qaReject.test.ts, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "A qa_approve or qa_reject on an unassigned REVIEW row leaves a caller that holds another task untouched: its status and currentTaskId still point at its own task. The hunt repro case 2 passes for both tools.",
+    "A verdict on an assigned REVIEW row still idles that row's assignee exactly as before (an existing or new regression case).",
+    "The behavior is identical in both tools, and the existing qaApprove.test.ts and qaReject.test.ts pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-e44fbbf336754fdf9e852f80c93a9ee8"
+  ],
+  "priority": "LOW",
+  "order": 472.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:03:30.681Z",
+  "updatedAt": "2026-11-04T00:03:30.681Z"
+}
