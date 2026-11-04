@@ -69,29 +69,41 @@
     {
       "stepId": "step-5",
       "description": "Fix, in both wrappers: a DELIVERY_RECEIPT_CONFLICT keeps a strong receipt journal until its attempt is closed (CQ-V08b).\nToday (d35f2bc3):\n- sh receipt_send (scripts/moe-agent.sh, about :6464). The accepted branch keeps a strong journal (`[ -z \"$journal\" ] || [ \"$strong\" = 1 ] || rm -f \"$journal\"`), but the conflict branch runs `[ -z \"$journal\" ] || rm -f \"$journal\"`.\n- ps1 Send-MoeReceipt (scripts/moe-agent.ps1, about :2217). `$keep = $ok -and (Get-MoeProp $Report 'profile') -ceq 'verified-local'` is computed while $ok is still $false, so the conflict branch's `$ok = $true` deletes the journal.\nChange exactly this:\n- sh conflict branch: `[ -z \"$journal\" ] || [ \"$strong\" = 1 ] || rm -f \"$journal\"`, the accepted branch's own test. ($strong is the function's second parsed line: 1 when the report's own profile is verified-local.)\n- ps1: `$keep = (Get-MoeProp $Report 'profile') -ceq 'verified-local'`, without the `$ok -and`. $keep is read only inside `if ($ok)`, so a refused or unanswered receipt behaves exactly as today.\n- Both header comments: a strong journal outlives an accepted or a conflicting receipt until its attempt is closed, and finalize_postflight / Complete-MoePostflight or the next replay drops it. Keep the Twin pointers.\nDo not touch:\n- the conflict WARN text;\n- RECEIPT_ACKED=true / return $true on a conflict (a conflict never defers the finalize; SR-T3 pins it);\n- the non-strong conflict path, which still deletes its journal at once;\n- any caller: the shared landing, wt_land_published / Complete-MoeWorktreeLanding, receipt_replay / Invoke-MoeReceiptReplay;\n- the CQ-V08b removal in finalize_postflight / Complete-MoePostflight.\nError handling: no new failure path. The removal stays best-effort, as on the accepted branch (rm -f; -ErrorAction SilentlyContinue). A kept journal is settled by the existing pre-flight replay, which re-sends the receipt, finalizes a still-finalizing attempt, and drops a strong journal only once that attempt is closed.\nEdit in the task worktree with the Edit tool (a TOOL witness, never sed -i), and keep moe-agent.ps1 UTF-8 with its BOM. Then run `bash -n scripts/moe-agent.sh` and checkRefs[0]'s ParseFile on both engines, and rerun the step 2 frozen row on both engines: it must now pass.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-04T22:06:10.699Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Fix: sh receipt_send's DELIVERY_RECEIPT_CONFLICT branch now runs `[ -z \"$journal\" ] || [ \"$strong\" = 1 ] || rm -f \"$journal\"` (the accepted branch's own keep test); ps1 Send-MoeReceipt computes `$keep = (Get-MoeProp $Report 'profile') -ceq 'verified-local'` without `$ok -and` ($keep is read only inside `if ($ok)`, so refused/unanswered receipts are unchanged). Header comments now say a strong journal outlives an accepted or a conflicting receipt; Twin pointers kept. WARN text, RECEIPT_ACKED=true / return $true, the non-strong conflict deletion and every caller untouched. bash -n OK; ParseFile 0 errors on 5.1 and 7; moe-agent.ps1 BOM kept (ef bb bf). GREEN: MOE_FROZEN_TEST_ONLY=<the 8 gate modes> -> 'PASS frozen candidate scenarios: 8', rc=0 on bash, pwsh 7 and PS 5.1 (62 s in parallel).",
+      "startedAt": "2026-11-04T22:06:10.699Z",
+      "completedAt": "2026-11-04T22:08:27.631Z"
     },
     {
       "stepId": "step-6",
       "description": "Verification, once, before complete_task. Run checkRefs[0] verbatim: its fresh output is the complete_task evidence. It cds into this task's worktree scripts/tests, scrubs MOE_*, CLAUDE* and FAKE_*, and runs three legs in parallel:\n- 5.1 and pwsh 7 legs: ParseFile; postflight-vm-route.ps1 (through cmd, which keeps pwsh's PSModulePath as CI's node hop does); then the frozen-candidate subset of postflight.ps1.\n- bash leg: bash -n, postflight-vm-route.sh, the frozen subset of postflight.sh, parity-check.sh and .ps1, and npm run lint.\nThe frozen subset is MOE_FROZEN_TEST_ONLY: pass, receipt-replay, receipt-refused, receipt-conflict, intent-strong, reconcile-strong-receipt-lost, reconcile-strong-finalize-lost and reconcile-strong-conflict-finalize-lost.\nThe gate exits 0 only when each leg printed its '@', 'PASS frozen candidate scenarios: 8' and the closing '[strong receipt] ok T1, ... T5-replay' line: 9 matches. MOE_FROZEN_TEST_ONLY skips an unknown name silently, so the count is what proves the new mode ran.\nTiming: a dry run of this gate (without the new rows) on e6c06b00's scripts at load ~5 took 513 s; expect about 10-11 min.\nThis is the human's narrowed mid-epic launcher gate (mem:decision-mid-epic-launcher-gate-narrow, mem:convention-20min-parallel-gate-checkref). The full postflight.sh and postflight.ps1 suites run in CI (PR #230 and the nightly), not here.\nError handling for a red run:\n- A leg without its '@' names its engine. Read that leg's log ($L/sh, $L/pwsh or $L/powershell) for the first 'VM ROUTE FAILED', assertion or 'FROZEN FIXTURE' line.\n- A Windows leg that dies at once with only a WSL 'UtilAcceptVsock' line never started the harness: rerun the whole gate (mem:gotcha-qa-ps1-postflight-from-wsl).\n- For a failure outside the new rows, run the same leg on the parent revision's scripts before blaming this change.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] run verbatim (/mnt/d/moe-scratch/a1f3-gate/gate.sh, logs in /tmp/tmp.5BuUegkoDS): CHAIN_EXIT=0, 22:09:15Z to 22:17:40Z (8 min 25 s). 9 markers: each of powershell (5.1), pwsh (7) and sh shows '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay', 'PASS postflight-vm-route.ps1/.sh', 'PASS frozen candidate scenarios: 8' and '@'; the sh leg also PASS parity-check.sh, PASS parity-check.ps1 and role lint OK.",
+      "startedAt": "2026-11-04T22:08:28.613Z",
+      "completedAt": "2026-11-04T22:18:15.141Z"
     },
     {
       "stepId": "step-7",
       "description": "Adversarial self-review of this task's own diff (load adversarial-self-review), then complete_task. Check each point below and give each result in the completion summary:\n1. Every receipt-journal deletion in both wrappers (grep rm -f and Remove-Item near the receipt journals): on no path (shared landing, worktree landing, replay) can a strong journal now go before its attempt is closed.\n2. The legacy path: the frozen receipt-conflict row still sees an empty journal directory, and SR-T1..T4 pass unchanged.\n3. Two seats replaying one kept journal: the second re-sends the receipt (a duplicate or a conflict, both acknowledged), finds the attempt closed, and drops the journal. finalize_attempt is fenced by attempt id and generation, and live_marker_foreign_live skips a journal another live session holds.\n4. A kept strong journal holds the task's next strong landing (MOE_COMMIT_REFUSED_UNRECONCILED_INTENT) until a replay closes its attempt, exactly as CQ-V08b already does after an accepted receipt. Add no new handling.\n5. Mutants, run in a scratch snapshot outside the checkout (git archive of W into /mnt/d/moe-scratch/<dir>; shell edits are fine there, never in W):\n   - M1: the sh conflict branch back to an unconditional rm;\n   - M2: the ps1 $keep back to `$ok -and ...`;\n   - M3: both conflict branches never deleting (the legacy receipt-conflict row must fail);\n   - M4: a conflict returning 1 / $false (SR-T3 and the lost rows must fail on the deferral).\n   Each mutant must turn a named row red on its engine. The frozen subset shows M1-M4 in about a minute per engine.\n6. No existing assertion was loosened: the harness diff is additions plus the two kind-list extensions. The frozen JS blocks of postflight.sh and postflight.ps1 are byte-identical (diff them), and parity-check stays green.\nError handling: a mutant that stays green means an assertion is missing. Add it to the row that mutant names and rerun checkRefs[0] before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review.\n1. Journal deletions: the other rm/Remove-Item sites drop a journal only when its ref or C never moved, on an unlanded route, or once a closed attempt is seen (finalize_postflight :6036 / ps1 :8760; replay :6725 / ps1 :2535-2536 behind the CQ-V08b keep guard). A strong journal no longer goes at a conflict.\n2. Legacy: the frozen receipt-conflict row passes, with an empty journal dir (M3 shows the row would catch a kept one). SR-T1..T4 pass on all 3 engines.\n3. Two seats: live_marker_foreign_live skips a journal another live session holds. A second replay's receipt is acked (duplicate or conflict), the phase is closed, so no finalize, and the journal is dropped. finalize_attempt is fenced by attemptId and generation.\n4. A kept strong journal refuses the task's next strong landing (MOE_COMMIT_REFUSED_UNRECONCILED_INTENT) until a replay closes the attempt, the same as after an accepted receipt. No new handling.\n5. Mutants (scratch /mnt/d/moe-scratch/a1f3-mut): M1 sh unconditional rm and M2 ps1 `$ok -and` are killed by the new frozen row (journal false); M3 never-delete is killed by legacy receipt-conflict on sh and ps7; M4 conflict not acked is killed by the new row's deferral on sh and ps7. The RED runs are M1/M2 on SR-T5.\n6. Removed harness lines are only section echoes, comments and the conflict kind test. The T2 journal asserts moved verbatim into strongJournal. The frozen JS diffs are identical; parity is green.",
+      "startedAt": "2026-11-04T22:18:16.188Z",
+      "completedAt": "2026-11-04T22:20:40.952Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -116,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T20:29:26.340Z",
-  "updatedAt": "2026-11-04T22:06:10.699Z",
+  "updatedAt": "2026-11-04T22:22:28.879Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T20:30:16.813Z",
@@ -126,7 +138,7 @@
     "firstClaimAt": "2026-11-04T20:30:18.547Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 4
+    "executedStepCount": 7
   },
   "dependsOn": [
     "task-527735eafb9147cf8663ccee9a9e1b4c",
@@ -148,7 +160,10 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T20:58:40.539Z",
@@ -225,11 +240,51 @@
   "planApprovedAt": "2026-11-04T20:58:40.569Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-cd0ac706@2026-11-04T20:30:16Z",
-    "at": "2026-11-04T20:59:53.430Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T21:48:23Z",
+    "at": "2026-11-04T22:22:28.879Z"
   },
-  "workStartedAt": "2026-11-04T21:50:20.341Z"
+  "workStartedAt": "2026-11-04T21:50:20.341Z",
+  "reviewStartedAt": "2026-11-04T22:21:29.442Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-a1f3723f*/scripts/tests||exit 1;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_FROZEN_TEST_ONLY MOE_FROZEN_TEST_ONLY=pass,receipt-replay,receipt-refused,receipt-conflict,intent-strong,reconcile-strong-receipt-lost,reconcile-strong-finalize-lost,reconcile-strong-conflict-finalize-lost;L=$(mktemp -d);B='-nop -ep Bypass -f';for e in powershell pwsh;do($e.exe -c \"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\"&&pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1\"&&$e.exe $B postflight.ps1&&echo @)>$L/$e 2>&1 &done;(bash -n ../moe-agent.sh&&bash postflight-vm-route.sh&&bash postflight.sh&&bash parity-check.sh&&pwsh.exe $B parity-check.ps1&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -cE '^@$|scenarios: 8\\b|receipt\\] ok T1.*T5-replay') = 9 ]",
+    "exitCode": 0,
+    "outputTail": "==> /tmp/tmp.5BuUegkoDS/powershell <==\n[frozen candidate] reconcile-strong-conflict-finalize-lost\nPASS frozen candidate scenarios: 8\n@\n\n==> /tmp/tmp.5BuUegkoDS/pwsh <==\n[frozen candidate] reconcile-strong-conflict-finalize-lost\nPASS frozen candidate scenarios: 8\n@\n\n==> /tmp/tmp.5BuUegkoDS/sh <==\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n@\nCHAIN_EXIT=0\n(9 markers counted; every leg also shows '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay' and PASS postflight-vm-route; sh leg PASS parity-check.sh and parity-check.ps1. 22:09:15Z-22:17:40Z, 8 min 25 s)",
+    "reportedAt": "2026-11-04T22:21:29.442Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/tests/postflight-vm-route.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "A DELIVERY_RECEIPT_CONFLICT now keeps a strong (verified-local) receipt journal until its attempt is closed (CQ-V08b), in both wrappers.\n- sh receipt_send: the conflict branch uses the accepted branch's keep test, `|| [ \"$strong\" = 1 ]`.\n- ps1 Send-MoeReceipt: `$keep` no longer has `$ok -and`.\n- A non-strong journal is still deleted. The WARN text, RECEIPT_ACKED=true / $true and every caller are unchanged. Diff: +144/-31 over 7 files.\n\nTests, each RED before the fix:\n- Fixture: new FAKE_EVIDENCE_MODE receipt-conflict-finalize-lost (the receipt conflicts; every finalize gets ok(null)).\n- Shared: frozen mode reconcile-strong-conflict-finalize-lost, identical JS in postflight.sh and .ps1. The live landing keeps the journal (3 lost finalizes, exhausted 1, deferred 0, conflict 1). A replay that loses the finalize again keeps it (one 'still finalizing' line). A replay with the finalize answered closes the attempt and drops the journal. No ref moves.\n- Worktree: SR-T5 (lost) and SR-T5-replay (lost-replay) in postflight-vm-route.sh and .ps1. T2's journal asserts moved verbatim into one helper.\n\nGate: checkRefs[0] gave EXIT 0 in 8.4 min with 9 markers on 5.1, pwsh 7 and bash. Parity sh and ps1, and lint, passed.\n\nSelf-review:\n1. The other journal deletions are no-landing, unlanded or closed-attempt paths.\n2. The legacy receipt-conflict row and SR-T1..T4 pass unchanged.\n3. Two replays: live_marker_foreign_live skips a journal another live session holds. The second replay's receipt is acked and its attempt is already closed, so it drops the journal. finalize_attempt is fenced by attemptId and generation.\n4. A kept journal refuses the task's next strong landing (MOE_COMMIT_REFUSED_UNRECONCILED_INTENT) until a replay closes the attempt, the same as after an accepted receipt.\n5. Mutants: M1 (sh rm) and M2 (ps1 $ok) are killed by the new row; M3 (never delete) by legacy receipt-conflict; M4 (conflict not acked) by the new row's deferral, on sh and ps7.\n6. No assertion was loosened",
+  "commits": [
+    {
+      "sha": "033ccbe90b86371fa1bfb0f56414c88eb5553a27",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T21:48:23Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T22:22:28.879Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
