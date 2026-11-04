@@ -122,7 +122,10 @@ function commitOn(p,ref,files,base='HEAD'){
 // WT_GIT_SWAP_TO, and the first call with the argv element WT_GIT_HOLD writes WT_GIT_HOLD_FILE,
 // then waits (at most 120s) for <WT_GIT_HOLD_FILE>.sent before it runs. While the count in the file
 // WT_GIT_CONFIG_LOCK is above 0, a config write of extensions.worktreeConfig (no --get) takes one and fails
-// as git's config-lock collision does. The rest runs the real git. sh
+// as git's config-lock collision does. With WT_GIT_PUSH_REMOTE_REJECTED=<log file>, a `push --porcelain` appends its
+// last argv to that log, runs the real push with its output discarded (origin really takes it), then answers
+// `[remote rejected]` on stdout and exits 1, as a remote that refuses after applying the update does; that push also
+// creates the file WT_GIT_FETCH_FAIL_AFTER_PUSH, and while it exists every fetch fails. The rest runs the real git. sh
 // engines find `git`; PowerShell finds git.ps1 (a .cmd would mangle `%` in --format).
 function stub(){
   const dir=path.join(root,'git-stub');
@@ -136,6 +139,20 @@ if [ -n "$WT_GIT_CONFIG_LOCK" ]; then
     ck:[1-9]*) w=$WT_GIT_CONFIG_LOCK_WHY; [ -n "$w" ] || w='File exists'
       echo $((n - 1)) > "$WT_GIT_CONFIG_LOCK"; echo "error: could not lock config file .git/config: $w" >&2; exit 255 ;;
   esac
+fi
+if [ -n "$WT_GIT_FETCH_FAIL_AFTER_PUSH" ] && [ -e "$WT_GIT_FETCH_FAIL_AFTER_PUSH" ]; then
+  for a in "$@"; do if [ "$a" = fetch ]; then echo "fatal: wt stub fails fetch after the push" >&2; exit 1; fi; done
+fi
+if [ -n "$WT_GIT_PUSH_REMOTE_REJECTED" ]; then
+  s=; o=; last=
+  for a in "$@"; do case "$a" in push) s=s ;; --porcelain) o=o ;; esac; last=$a; done
+  if [ "$s$o" = so ]; then
+    printf '%s\\n' "$last" >> "$WT_GIT_PUSH_REMOTE_REJECTED"
+    "${realGit.replace(/\\/g,'/')}" "$@" >/dev/null 2>&1
+    [ -z "$WT_GIT_FETCH_FAIL_AFTER_PUSH" ] || : > "$WT_GIT_FETCH_FAIL_AFTER_PUSH"
+    printf 'To origin\\n!\\t%s\\t[remote rejected] (wt stub: applied, then refused)\\nDone\\n' "$last"
+    exit 1
+  fi
 fi
 for a in "$@"; do
   if [ -n "$WT_GIT_VERSION" ] && { [ "$a" = --version ] || [ "$a" = version ]; }; then echo "git version $WT_GIT_VERSION"; exit 0; fi
@@ -167,6 +184,20 @@ if ($env:WT_GIT_CONFIG_LOCK -and $args -ccontains 'config' -and $args -ccontains
     Write-Error "error: could not lock config file .git/config: $why"
     exit 255
   }
+}
+if ($env:WT_GIT_FETCH_FAIL_AFTER_PUSH -and (Test-Path -LiteralPath $env:WT_GIT_FETCH_FAIL_AFTER_PUSH) -and $args -ccontains 'fetch') {
+  Write-Error 'fatal: wt stub fails fetch after the push'
+  exit 1
+}
+if ($env:WT_GIT_PUSH_REMOTE_REJECTED -and $args -ccontains 'push' -and $args -ccontains '--porcelain') {
+  $last = [string]$args[-1]
+  [IO.File]::AppendAllText($env:WT_GIT_PUSH_REMOTE_REJECTED, "$last\`n")
+  $null = & ${real} @args 2>&1
+  if ($env:WT_GIT_FETCH_FAIL_AFTER_PUSH) { [IO.File]::WriteAllText($env:WT_GIT_FETCH_FAIL_AFTER_PUSH, 'pushed') }
+  'To origin'
+  "!\`t$last\`t[remote rejected] (wt stub: applied, then refused)"
+  'Done'
+  exit 1
 }
 foreach ($a in $args) {
   if ($env:WT_GIT_VERSION -and ($a -ceq '--version' -or $a -ceq 'version')) { "git version $env:WT_GIT_VERSION"; exit 0 }
@@ -266,7 +297,7 @@ async function launch(p,run,knobs={},opts={}){
     HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,
     FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:opts.wrapper?null:'1',...knobs};
   for(const k of Object.keys(env))if(env[k]==null)delete env[k];
-  if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP||env.WT_GIT_HOLD||env.WT_GIT_CONFIG_LOCK){
+  if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP||env.WT_GIT_HOLD||env.WT_GIT_CONFIG_LOCK||env.WT_GIT_PUSH_REMOTE_REJECTED){
     env[pathKey]=stub()+path.delimiter+(inherited[pathKey]||'');
     if(!win)env.BASH_ENV=path.join(stub(),'env.sh');
   }
@@ -1208,6 +1239,34 @@ async function wtUnlanded(){
   r=await landRun(p,'wt-unlanded-unknown',{'src/a.txt':'done\n'},{...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0',WT_GIT_FAIL:'push'});
   assert.deepEqual([r.log.includes('MOE_PUSH_OUTCOME_UNKNOWN'),finals(p),retryOf(p)],[true,[],null],'an unknown push finalized'+tail(r.log));
 }
+// task-bc6ba91b: origin can answer [remote rejected] after it applied the update. ONE re-check fetch decides, after ONE
+// push: an origin target holding C is published (MOE_PUSH_REMOTE_REJECTED_APPLIED, a pushed:true row, finalize landed,
+// the journal settled); a failed re-check fetch keeps the old route exactly, though origin holds C (MOE_PUSH_FAILED,
+// a rescue ref at T, unlanded 'remote'). wtUnlanded's 'rejected' arm (a pre-receive refusal) covers origin lacking C.
+async function wtRemoteRejected(){
+  for(const n of ['applied','fetch-fails']){
+    const p=repo('wt-remote-rejected-'+n,{settings:LANDS}),b=path.join(root,`wt-remote-rejected-${n}.git`),applied=n==='applied';
+    const pushes=path.join(root,`wt-remote-rejected-${n}.pushes`),marker=path.join(root,`wt-remote-rejected-${n}.fetch-off`);
+    git(root,'init','-q','--bare',b);git(p.top,'remote','add','origin',b);git(p.top,'push','-q','origin','main');
+    const main=mainOf(p),knobs={...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0',WT_GIT_PUSH_REMOTE_REJECTED:pushes,...(applied?{}:{WT_GIT_FETCH_FAIL_AFTER_PUSH:marker})};
+    const r=await landRun(p,'wt-remote-rejected-'+n,{'src/a.txt':'done\n'},knobs),c=revOf(b,'refs/heads/main');
+    const rescues=git(p.top,'for-each-ref','--format=%(refname)',`refs/moe/rescue/${TASK}/`).split('\n').filter(Boolean),said=k=>(r.log.match(new RegExp(k,'g'))||[]).length;
+    assert.ok(c&&c!==main&&/^Moe-Kind: completion$/m.test(git(b,'log','-1','--format=%B',c)),`${n}: origin's main does not hold the completion C`+tail(r.log));
+    assert.deepEqual([parents(b,c),git(b,'show',c+':src/a.txt'),(readOr(pushes)||'').trim().split(/\r?\n/)],[[main],'done\n',[c+':refs/heads/main']],
+      `${n}: C is not one squash commit on B, or not exactly ONE push`+tail(r.log));
+    if(applied){
+      assert.deepEqual([finals(p),done(p).map(x=>[x.outcome,x.code||null,x.sha,x.pushed]),rescues,retryOf(p),present(journal(p)),mainOf(p)],
+        [[['landed',c]],[['committed',null,c,true]],[],null,false,c],'applied: the finalize, the row, a rescue ref, landingRetry, the journal or the mirror'+tail(r.log));
+      assert.deepEqual([said('MOE_PUSH_REMOTE_REJECTED_APPLIED'),said('MOE_PUSH_FAILED')],[1,0],'applied: the MOE_PUSH_ lines'+tail(r.log));
+    }else{
+      const f=unlanded(p),t=revOf(p.top,p.branch);
+      assert.deepEqual([done(p).map(x=>[x.outcome,x.code,x.pushed]),f.map(x=>[x.outcome,x.unlandedReason,x.targetTip,x.landedRevision]),mainOf(p),present(marker)],
+        [[['failed','MOE_PUSH_FAILED',false]],[['unlanded','remote',main,null]],main,true],'fetch-fails: the row, the finalize, the local main or the fetch-off marker'+tail(r.log));
+      assert.deepEqual([rescues.length,revOf(p.top,rescues[0]||'none'),retryOf(p)&&[retryOf(p).rescueRef,retryOf(p).count],said('MOE_PUSH_REMOTE_REJECTED_APPLIED')],
+        [1,t,[rescues[0],1],0],'fetch-fails: the rescue ref at T, the stored landingRetry, or an applied line'+tail(r.log));
+    }
+  }
+}
 // The conflict chain: the resume leaves markers and MERGE_HEAD; its checkpoint is one commit on T keeping MERGE_HEAD and
 // the unmerged stages; a completion with markers lands nothing (MOE_WORKTREE_UNRESOLVED_CONFLICT, routed conflict again);
 // resolved, C lands B's other change and the partial edit, keeps B's change to a DENY path the task never stages, the
@@ -1768,7 +1827,7 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
   'wt-serena-yml':wtSerenaYml,'serena-ignore':serenaIgnore,'serena-ignore-off':serenaIgnoreOff,'serena-ignore-wt':serenaIgnoreWt,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
-  'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'wt-resume-unmerged':wtResumeUnmerged,'wt-resume-retry-path':wtResumeRetryPath,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
+  'wt-unlanded':wtUnlanded,'wt-remote-rejected':wtRemoteRejected,'wt-resume':wtResume,'wt-resume-unmerged':wtResumeUnmerged,'wt-resume-retry-path':wtResumeRetryPath,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
   'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});
 cases['wt-follow-lock']=wtFollowLock;
 cases['wt-settings']=wtSettings;

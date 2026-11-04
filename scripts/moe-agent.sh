@@ -7480,11 +7480,23 @@ wt_journal_push_result() {
     receipt_journal_write "$1" "$($PYTHON_CMD -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); d["pushResult"]=sys.argv[2]; print(json.dumps(d))' "$1" "$2" 2>/dev/null)"
 }
 
+# wt_remote_holds TARGET C -- the ONE re-check after a [remote rejected] answer (a remote
+# can refuse after it applied the update): 0 only when a fresh fetch (land_fetch, its 3
+# tries) shows origin's TARGET holding C; a failed fetch or any other answer is 1. It
+# never pushes. Twin: Test-MoeRemoteHolds.
+wt_remote_holds() {
+    land_fetch "$1" || return 1
+    git -C "$MOE_TOP" merge-base --is-ancestor "$2" "refs/remotes/origin/$1^{commit}" >/dev/null 2>&1 || return 1
+}
+
 # wt_push_target TARGET B C -- L9 (design §2.2): ONE non-forced push of C, never via
 # push_branch (so no MOE_PUSH_REBASE), read from the porcelain line for the target
-# whatever git's exit code; no definite answer goes to reconcile_push. 0 published;
-# 1 [rejected]; 2 [remote rejected]; 3 reconciled as never applying; 4 unknown (§2.6).
-# 2 and 4 set LAND_PUSH_DETAIL. It moves no local ref. Twin: Send-MoeLandPush.
+# whatever git's exit code; no definite answer goes to reconcile_push. 0 published,
+# or [remote rejected] while wt_remote_holds proves origin's TARGET holds C
+# (MOE_PUSH_REMOTE_REJECTED_APPLIED); 1 [rejected]; 2 [remote rejected] with no such
+# proof (C absent, or the re-check fetch failed); 3 reconciled as never applying;
+# 4 unknown (§2.6). 2 and 4 set LAND_PUSH_DETAIL. It moves no local ref (the re-check
+# only fetches). Twin: Send-MoeLandPush.
 wt_push_target() {
     local out flag dst sum rc=5 ref="refs/heads/$1"
     out=$(git -C "$MOE_TOP" push --porcelain origin "$3:$ref" 2>/dev/null) || true
@@ -7493,12 +7505,16 @@ wt_push_target() {
         case "$flag$sum" in ' '*|'*'*|'='*) rc=0 ;; '![rejected]'*) rc=1 ;; '![remote rejected]'*) rc=2; LAND_PUSH_DETAIL="origin refused $3: $sum" ;; esac
         break
     done <<< "$out"
+    if [ "$rc" = 2 ] && wt_remote_holds "$1" "$3"; then
+        rc=0; echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_REMOTE_REJECTED_APPLIED: origin answered [remote rejected] for $3, but origin's $1 holds it; the push counts as published."
+    fi
     [ "$rc" = 5 ] || return "$rc"
     rc=0; reconcile_push "$1" "$2" "$3" || rc=$?
     [ "$rc" = 0 ] || return $((rc + 2))
 }
 # wt_publish JOURNAL B C -- L9 through wt_push_target. 0 published (the journal says
-# 'pushed …', L10 mirrored C); 1 the round ends; 2 final: [remote rejected]
+# 'pushed …', L10 mirrored C; a [remote rejected] origin proved to hold C included);
+# 1 the round ends; 2 final: [remote rejected] with no proof origin holds C
 # (MOE_PUSH_FAILED), or unknown (§2.6): the journal kept as 'push unknown: …', C on a
 # push-unknown rescue ref, and no row or finalize.
 wt_publish() {
