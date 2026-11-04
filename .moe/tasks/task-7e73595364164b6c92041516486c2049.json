@@ -1,0 +1,30 @@
+{
+  "id": "task-7e73595364164b6c92041516486c2049",
+  "epicId": "epic-be924fb8",
+  "title": "bug: routeUnlandedLanding (finalize_attempt 'unlanded', and since task-efe07ce5 the finalizing close) moves a REVIEW row parked for a human (needsHumanReview) to WORKING with the flag still set, so a worker can claim a row the qa_reject hard cap reserved for a human",
+  "description": "qa_reject has no finalizing fence and accepts any seat or a workerId-less human on the unassigned REVIEW row during a landing (qaReject.ts:137-155). A hard-cap reject there parks it REVIEW + needsHumanReview. If the landing then ends unlanded (finalize 'unlanded', or a deregister/DEAD-record close with no completion recorded), routeUnlandedLanding (state/workerLifecycle.ts) sends it to WORKING without checking needsHumanReview. claimNextTask.ts:574/636 fence only REVIEW+needsHumanReview, so a worker can then claim it. Likely fix: leave such a row in REVIEW (set landingRetry only, or plain close) inside routeUnlandedLanding, plus a test for each route.",
+  "definitionOfDone": [
+    "A daemon test fails on today's code: a REVIEW row with needsHumanReview true and a finalizing worktree attempt goes through finalize_attempt 'unlanded' and through moe.deregister_worker; in both cases it stays REVIEW, unassigned, with needsHumanReview kept, and no worker claim can take it.",
+    "finalizeAttempt.test.ts and state/finalizingCloseRetry.test.ts pass otherwise unchanged; docs/MCP_SERVER.md states the exception in moe.finalize_attempt and moe.deregister_worker."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-efe07ce5fad747179b33462e5df9ae15"
+  ],
+  "priority": "LOW",
+  "order": 479.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T05:58:43.276Z",
+  "updatedAt": "2026-11-04T05:58:43.276Z"
+}

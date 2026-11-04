@@ -99,7 +99,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,17 +112,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:02:16.939Z",
-  "updatedAt": "2026-11-04T05:50:31.453Z",
+  "updatedAt": "2026-11-04T05:59:57.138Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:22:40.468Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T05:59:57.135Z",
+    "wallClockMs": 20236667
   },
   "contextFetchedBy": [
     "architect-24611a0a",
     "architect-c33f294e",
-    "worker-a408f113"
+    "worker-a408f113",
+    "qa-1cd86a39"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -258,5 +261,9 @@
     "kind": "completion",
     "sessionId": "worker-a408f113@2026-11-04T05:44:57Z",
     "at": "2026-11-04T05:50:31.453Z"
-  }
+  },
+  "completedAt": "2026-11-04T05:59:57.135Z",
+  "reviewCompletedAt": "2026-11-04T05:59:57.135Z",
+  "reviewSummary": "Reviewed completion 9224de15 (on moe/control HEAD; 5 files, +252/-12, net 240, under cap), reading the recorded diff.\n\nRe-run: the task's checkRef verbatim in a fresh git-archive snapshot: exit 0, 10 files / 282 tests passed, 'chatMessageLookup ok'; tsc and test typecheck clean; overlay bytes identical to 9224de15's blobs, and none of the touched or adjacent files changed since. Adjacent daemon tests (joinTeam.notification, util chatPayload/mentionRouter/utilFixes, src/server): 24 files / 551 passed. Own mutant M1 (chatRead.ts:120 and chatBacklog.ts:316 pointed at the whole-file lookup) fails exactly cases 6 and 7, so the no-replay pin is mutation-resistant.\n\nDoD 1: replyTo/pin find a message older than the 1 MiB window (cases 1-3). Ghost, replyTo-only, mentions-only and other-channel ids are refused INVALID_INPUT (field replyTo) for chat_send and a coded NOT_FOUND MoeError (context {entity:'Message', id}) for chat_pin, no pin file written (case 4).\nDoD 2: chatRead.ts and chatBacklog.ts untouched, still on the windowed messageExistsInChannel; cases 6 (chat_read all-channel) and 7 (chat_wait) pin it.\nDoD 3: docstring and pinMessage comment state the real bound; 'scans full JSONL, no limit' is gone; chat_send Notes bullet and chat_pin paragraph present in docs/MCP_SERVER.md at HEAD.\n\nCode: window check first, then a 256 KiB chunked scan with one carried line, cut at 0x0A (UTF-8 safe, case 5), Buffer.indexOf prefilter, exact parsed-id compare, ENOENT false, other errors thrown, fd closed in finally. No client matches the old error text. Complexity: nothing to cut (blockHoldsMessage may re-parse a line whose needle repeats; harmless).",
+  "requiredCheckAtDone": null
 }

@@ -76,23 +76,28 @@
     {
       "stepId": "step-5",
       "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written. The same text (971 chars) is at /mnt/d/moe-scratch/plan-efe07ce5/checkref-gate.txt.\n\nWhat it does (mem:convention-daemon-full-suite-gate-checkref, mem:gotcha-harness-snapshot-needs-full-archive):\n- It overlays the six owned files (the two runtime files, the new test, types/schema.ts and both docs) onto a whole-tree `git archive HEAD` snapshot made by mktemp, outside the repo.\n- Under env -i, with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci`, `tsc --noEmit`, then `tsc -p tt.json`, which types the new test.\n- Stage 1 runs vitest on finalizingCloseRetry, attemptHandback and finalizeAttempt, and pins '(11 tests)'.\n- Stage 2 runs the full `npm test` (plain `vitest run`, no pretest), as DoD 3 asks.\n\nExpected, from the architect's dry run of the prototype at d1062cb0: stage 1 'Test Files 3 passed (3)' / 'Tests 115 passed (115)'; full suite 'Test Files 281 passed (281)' / 'Tests 7445 passed | 24 skipped (7469)'; exit 0, about 50 s. Your counts may differ by the tests siblings landed since.\n\nRules:\n- Never run npm in the shared checkout (global rail).\n- Never pass TMPDIR into the env -i.\n- The outer command needs bash, for its brace expansion.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T05:56:10.471Z"
+      "note": "Ran the executionContract checkRef verbatim from the worktree root (snapshot of HEAD 9224de15 + the 6 owned files, under env -i, Node v24.21.0): tsc --noEmit and tsc -p tt.json clean; stage 1 'Test Files 3 passed (3)' / 'Tests 115 passed (115)' with '(11 tests)' pinned; full npm test 'Test Files 286 passed (286)' / 'Tests 7470 passed | 24 skipped (7494)', 40.9 s, EXIT=0. Snapshot removed. qualityGate `bash scripts/tests/parity-check.sh && npm run lint` in the worktree: PASS, exit 0.",
+      "startedAt": "2026-11-04T05:56:10.471Z",
+      "completedAt": "2026-11-04T05:57:21.556Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review, the final step. Load the adversarial-self-review skill and read your diff as an attacker.\n- Refactor fidelity: with note undefined, routeUnlandedLanding's comment and blockedReason are byte-identical to the removed finalize code. Diff the moved block against `git show HEAD:packages/moe-daemon/src/tools/finalizeAttempt.ts`. finalizeAttempt.test.ts passes unchanged.\n- Close first: the attempt is closed and announced before any routing. A failed routing write never fails deregister, the prune or the purge, and never leaves the attempt finalizing.\n- The predicate, case by case:\n  - shared and mode-less attempts: plain close;\n  - a row not in REVIEW (a human qa_reject sent it to WORKING while the landing ran): plain close;\n  - an assigned REVIEW row: plain close;\n  - a completion recorded before the round started: routes;\n  - a completion recorded in the round: plain close;\n  - a missing task (deleted out of band): plain close.\n- Interleaving: every caller holds the state mutex (the deregister tool runs under McpAdapter's dispatch lock; deleteWorker and purgeAllWorkers take state.mutex), so no claim can land between the close and the route.\n  - A QA waiter woken by the close's TASK_UPDATED claims only after the lock is released, by when the row is WORKING.\n  - The routed row is WORKING and unassigned with all steps done. nextStatusForRelease keeps a landingRetry row in WORKING (workerLifecycle.ts:111), and a worker's claim gets the LANDING-RETRY resume.\n- Repeats: a second deregister finds no finalizing attempt and routes nothing. The 3rd unlanded landing in a row is BLOCKED, so a seat that keeps dying cannot loop the row forever.\n- Startup purge: routing at startup runs before any seat connects. updateTask's system message is best-effort and cannot fail the purge.\n- Docs: each claim in the new bullets matches the code (reason, rescueRef, guard list, BLOCKED rule). No other section was touched.\n\nIf anything changes, re-run the step-5 checkRef and submit that fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/workerLifecycle.ts",
         "packages/moe-daemon/src/tools/finalizeAttempt.ts"
-      ]
+      ],
+      "note": "Adversarial self-review, no code change (the step-5 evidence stands).\n- Refactor fidelity: the moved 18-line body is IDENTICAL to HEAD's finalize block apart from the note prefix and the params.unlanded rename. finalizeAttempt.test.ts passes unchanged.\n- Close first: the close and its announce run before the route; a failed close `continue`s before it; the route's try/catch never throws (test (e)).\n- Predicate: shared, mode-less, not-REVIEW, assigned and this-round-completion rows keep the plain close; a prior-round completion routes; a missing task returns early.\n- Locking: deleteWorker (workerStore.ts:240) and purgeAllWorkers (:365) take state.mutex, and deregister runs under the dispatch lock, so no claim can land between the close and the route.\n- Repeats: a second deregister finds no finalizing attempt; the 3rd unlanded landing goes BLOCKED.\n- Docs: the LANDING-RETRY claim was checked against moe-agent.sh worktree_resume (:7977-8010).\n- One edge filed as task-7e735953 (LOW, dependsOn this task): a workerId-less qa_reject hard-cap park (needsHumanReview) during the landing window would be routed to WORKING with the flag set. finalize's own unlanded path already does this, and the (11 tests) pin plus the finalize byte-identical invariant keep the fix out of this task's scope.",
+      "startedAt": "2026-11-04T05:57:22.363Z",
+      "completedAt": "2026-11-04T05:58:51.194Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -104,12 +109,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:33:38.409Z",
-  "updatedAt": "2026-11-04T05:56:10.471Z",
+  "updatedAt": "2026-11-04T06:00:15.701Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T05:36:24.918Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -126,7 +131,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:50:33.740Z",
@@ -201,5 +208,50 @@
   },
   "planApprovedAt": "2026-11-04T05:50:33.772Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T05:52:30.688Z"
+  "workStartedAt": "2026-11-04T05:52:30.688Z",
+  "reviewStartedAt": "2026-11-04T05:59:15.777Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/{state/{workerLifecycle,finalizingCloseRetry.test},tools/finalizeAttempt,types/schema}.ts docs/{MCP_SERVER,SCHEMA}.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/state/finalizingCloseRetry.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/state/{finalizingCloseRetry,attemptHandback}.test.ts src/tools/finalizeAttempt.test.ts > ../r 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../r; [ $r = 0 ]; } && grep -aqE \"finalizingCloseRetry\\.test\\.ts \\(11 tests\\)\" ../r && { npm test > ../v 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "npm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' -p tt.json\n Test Files  3 passed (3)\n      Tests  115 passed (115)\n Test Files  286 passed (286)\n      Tests  7470 passed | 24 skipped (7494)\nEXIT=0\n(qualityGate `bash scripts/tests/parity-check.sh && npm run lint` in the worktree: PASS parity-check.sh; role-doc lint OK; exit 0)",
+    "reportedAt": "2026-11-04T05:59:15.777Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/finalizingCloseRetry.test.ts",
+    "packages/moe-daemon/src/state/workerLifecycle.ts",
+    "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/types/schema.ts"
+  ],
+  "completionSummary": "When a finalizing attempt is closed by moe.deregister_worker, the DEAD-record prune (deleteWorker) or the startup purge, the row is now routed back for a landing retry if no landing was recorded. The conditions: a worktree attempt (workspaceMode 'worktree'), its task in REVIEW, held by no seat, and no completion entry for the current round (completionCommitsForReview). The routing is exactly finalize_attempt's 'unlanded' route: landingRetry { reason 'contention', paths [], rescueRef 'refs/heads/moe/task/<id>', targetTip null, count prior+1 }, one moe-daemon comment naming the attempt, and status WORKING, unassigned, with reopenCount and every COMPLETED step kept. The 3rd unlanded landing in a row goes BLOCKED, unblocking to WORKING.\n\nHow:\n- finalize's routing moved verbatim into an exported routeUnlandedLanding in state/workerLifecycle.ts, with an optional note that opens the comment. The diff against HEAD is identical apart from the note prefix and the rename, and finalize calls the helper.\n- A private retryUnrecordedLanding runs after each real close and announce, inside try/catch, and never throws. The close stays first and unconditional.\n- workerStore.ts is unchanged, and the daemon reads no git.\n\nKept as the plain close: a completion recorded this round, a shared-mode attempt, a mode-less attempt, a row not in REVIEW, and a REVIEW row another seat holds. A failed routing write leaves the row in REVIEW and the close stands.\n\nTests: new state/finalizingCloseRetry.test.ts, 11 tests.\n- RED at 9224de15: exactly 5 failed (the 3 close paths, the prior-round completion, the BLOCKED on the third), 110 passed.\n- GREEN: focused 115/115; full daemon npm test 286 files, 7470 passed, 24 skipped; tsc --noEmit clean.\n\nDocs: MCP_SERVER.md (a new bullet in moe.deregister_worker; finalize_attempt's 'Every end' items 2 and 5), SCHEMA.md landingRetry, and the types/schema.ts comments.\n\nFollow-up filed: task-7e735953 (LOW). A needsHumanReview park made during the landing window woul",
+  "commits": [
+    {
+      "sha": "3500ae19a150f8e2a968deb9e9b6dad44f8bf8fe",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T05:51:13Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/state/finalizingCloseRetry.test.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T06:00:15.701Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T05:51:13Z",
+    "at": "2026-11-04T06:00:15.701Z"
+  }
 }
