@@ -77,8 +77,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -90,12 +90,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:51.394Z",
-  "updatedAt": "2026-11-04T09:52:46.923Z",
+  "updatedAt": "2026-11-04T09:54:20.274Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:37:46.339Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T09:53:52.024Z",
+    "wallClockMs": 965685
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -210,9 +212,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T09:48:48Z",
-    "at": "2026-11-04T09:52:14.302Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T09:52:23Z",
+    "at": "2026-11-04T09:54:20.274Z"
+  },
+  "completedAt": "2026-11-04T09:53:52.024Z",
+  "reviewCompletedAt": "2026-11-04T09:53:52.024Z",
+  "reviewSummary": "Reviewed completion 2237c226 (on moe/work-2026-10-24; +109/-7, net 102 LOC, 2 files: index.ts main() and new checkArchitecture.cli.test.ts). Re-ran task.verification in a /tmp snapshot under env -i: tsc --noEmit clean; vitest src/commands/ src/index.version.test.ts = 5 files, 139 tests green, GATE-OK. Red proof: pre-fix index.ts (2237c226^) in the snapshot fails exactly the new cases 1, 2 (trailing --project, NODE_ENV production and development) and 6 (deleted cwd); cases 3, 4, 5 (--project '', --bogus, valid call) pass both before and after. DoD1: the fix dispatches check-architecture before parseArgs(), after the accounts branch, with process.cwd() in a try that maps a throw to one repository-unavailable JSON line and exit 2; the tests assert stderr '' and exactly one stdout line. DoD2: checkArchitecture.test.ts (21 tests) green; parseArgs and the entry-guard block are byte-identical to 2237c226^ (diffed with the plan's sed ranges); the diff touches only the two main() hunks (dispatch added, unreachable switch case removed). No pino log and no process.exit on the new path. Tests use per-test temp dirs, strip MOE_* and GIT_*, and skip the deleted-cwd case on win32. Not covered, noted by the worker as out of scope: NODE_ENV unset/development with a deleted cwd, where the logger's pino-pretty worker dies (logger.ts). Snapshot removed; the other /tmp/moe-1d9a-* dirs are not mine and were left alone.",
+  "requiredCheckAtDone": null
 }
