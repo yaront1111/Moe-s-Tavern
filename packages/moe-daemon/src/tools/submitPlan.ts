@@ -520,7 +520,13 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             )
           : undefined;
         if (task.effort) {
-          effort = clampEffort(effort ? maxEffort(effort, task.effort) : task.effort, project.settings, lowEffortEligible);
+          // A kept stored effort still meets this tier's minimum: a re-plan that the
+          // size floor (or the planner) moves to a higher tier must not keep a lower
+          // tier's effort. effortFloor is undefined for a docs/tests-only plan.
+          effort = maxEffort(
+            clampEffort(effort ? maxEffort(effort, task.effort) : task.effort, project.settings, lowEffortEligible),
+            effortFloor(tier, project.settings, lowEffortEligible)
+          );
         }
         // Models (claude + codex): each must be its provider's catalog id allowed
         // for this tier. Omitted keeps a prior pick only while still allowed.

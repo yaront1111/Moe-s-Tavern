@@ -258,7 +258,11 @@ export function resolveLaunch(
   // The tier sizes the worker/QA sessions; planning keeps the role default.
   if (!isTier(task.tier) || settings?.routing?.enabled === false || task.status === 'PLANNING') return undefined;
   const low = task.lowEffortEligible === true;
-  let effort = isEffort(task.effort) ? clampEffort(task.effort, settings, low) : tierEffort(task.tier, settings);
+  // A stored effort never launches below its tier's minimum (an older row, or one
+  // written outside submit_plan); a docs/tests-only row has no minimum.
+  let effort = isEffort(task.effort)
+    ? maxEffort(clampEffort(task.effort, settings, low), effortFloor(task.tier, settings, low))
+    : tierEffort(task.tier, settings);
   const entryModel = tierEntry(task.tier, settings).model;
   let model = typeof task.model === 'string' && modelsForTier(task.tier, settings).includes(task.model)
     ? task.model
