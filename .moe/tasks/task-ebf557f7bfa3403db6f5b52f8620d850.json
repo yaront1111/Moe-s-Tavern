@@ -44,11 +44,13 @@
     {
       "stepId": "step-3",
       "description": "VERIFY (DoD 1-3), once. From the task worktree root, run exactly:\nnode --test scripts/tests/analyze-task-metrics.test.mjs && grep -n \"analyze-task-metrics.test.mjs\" .github/workflows/ci.yml && S=$(mktemp -d /tmp/moe-ebf5-gate-XXXXXX) && mkdir -p \"$S/scripts/tests\" && cp scripts/analyze-task-metrics.mjs \"$S/scripts/\" && cp /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs \"$S/scripts/tests/\" && node --test \"$S/scripts/tests/zzHuntB-analyze-task-metrics-done.test.mjs\"\n\nIt must exit 0. The last leg runs the hunt repro unchanged against the fixed script in a scratch tree outside the checkout; the repro resolves ../analyze-task-metrics.mjs from its own folder. Its fresh output is the complete_task verification evidence: both node:test summaries and the ci.yml line.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/analyze-task-metrics.mjs"
       ],
-      "startedAt": "2026-11-04T08:16:23.294Z"
+      "note": "Verification command exit 0: new test 4/4, ci.yml line 267 matches, hunt repro 1/1 against the fixed script.",
+      "startedAt": "2026-11-04T08:16:23.294Z",
+      "completedAt": "2026-11-04T08:16:31.334Z"
     },
     {
       "stepId": "step-4",
@@ -73,12 +75,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:04:04.228Z",
-  "updatedAt": "2026-11-04T08:16:23.294Z",
+  "updatedAt": "2026-11-04T08:17:08.267Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:11:41.156Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -90,7 +92,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:12:49.873Z",
@@ -151,5 +154,36 @@
   },
   "planApprovedAt": "2026-11-04T08:12:49.904Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T08:15:43.099Z"
+  "workStartedAt": "2026-11-04T08:15:43.099Z",
+  "commits": [
+    {
+      "sha": "c9fb0437dc39b4f653853df4f53bf70a156befa7",
+      "ref": "refs/heads/moe/task/task-ebf557f7bfa3403db6f5b52f8620d850",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T08:14:43Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/analyze-task-metrics.mjs",
+        "scripts/tests/analyze-task-metrics.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T08:17:08.267Z",
+      "treeId": "2b8b5c5f530a181b4acabb82a91e79b39cf27ec2",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".github/workflows/ci.yml",
+    "scripts/analyze-task-metrics.mjs",
+    "scripts/tests/analyze-task-metrics.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-5772dacf@2026-11-04T08:14:43Z",
+    "at": "2026-11-04T08:17:08.267Z"
+  }
 }

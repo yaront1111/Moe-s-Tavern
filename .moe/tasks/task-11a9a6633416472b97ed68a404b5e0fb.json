@@ -78,8 +78,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -98,7 +98,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:48:30.637Z",
-  "updatedAt": "2026-11-04T08:15:34.501Z",
+  "updatedAt": "2026-11-04T08:17:13.535Z",
   "dependsOn": [
     "task-d7b24caba2a14229acfbaa2b6e55cb94"
   ],
@@ -111,7 +111,9 @@
     "firstClaimAt": "2026-11-04T07:54:26.456Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T08:16:50.018Z",
+    "wallClockMs": 1343562
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -240,9 +242,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T08:08:13Z",
-    "at": "2026-11-04T08:13:58.601Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T08:15:15Z",
+    "at": "2026-11-04T08:17:13.535Z"
+  },
+  "completedAt": "2026-11-04T08:16:50.018Z",
+  "reviewCompletedAt": "2026-11-04T08:16:50.018Z",
+  "reviewSummary": "Reviewed completion 3747c474 (HEAD of control; owned files clean and equal to the commit). 4 files, +136/-18, net 118 LOC, under the 400 cap. Scope matches approvedScope: probeHost.ts gains exported isValidPort (body verbatim from index.ts); index.ts only drops its private copy and imports it; doctor.ts probeDaemonJson judges the port once, before the pid check and the foreign split, and probeForeignDaemonJson's own guard is removed with messages unchanged; doctor.test.ts is +105/-0 (no existing row edited). Re-ran task.verification in a /tmp snapshot (node v24.21.0, env -i): tsc and the doctor.test.ts type-check clean; Test Files 4 passed, Tests 187 passed | 1 skipped; P 13/12, F6 4/4; exit 0. parity-check.sh PASS, npm run lint exit 0 (in place). 5 own mutants in the snapshot, restore cmp-checked then 100/100 green: drop guard (13 failed), port >= 0 (2), port < 65535 (1), drop .slice(0,120) (1), parsed.port null-deref (1). All killed. Acceptance: (a) live pid with 99999, 65536, 0, -1, 1.5, 1e999, \"8080\" gives exactly one named [FAIL], no reachability line, nothing dialed (http.request and Socket#connect spied), exit 1 (P1 x7); (b) ports 1 and 65535 read '[OK] ... valid' and are dialed (P5), and every existing doctor, bindHost and F6 row passes unchanged; (c) P1-P5 describe block present, 13 rows (extra JSON-null row; gate allows -ge 12). Hostile string port capped at 120 chars, no raw ESC (P2); dead pid gives the same FAIL, never '(stale)' (P3); no port key reads 'missing port' (P4). The worker's extra find, a daemon.json holding JSON null, was a real crash; fixed with parsed?.port and covered by a P4 row. Non-blocking: JSON.stringify leaves U+007F/C1/U+2028 raw in the shown value, the same display rule as bindHost, which the contract names.",
+  "requiredCheckAtDone": null
 }
