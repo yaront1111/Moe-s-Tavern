@@ -12,17 +12,23 @@
     {
       "stepId": "step-1",
       "description": "Edit scripts/tests/postflight-worktree.cjs only, with the Edit tool (TOOL witness). Never touch scripts/moe-serena-ignore.mjs or scripts/tests/serena-ignore.test.mjs.\nIn `serenaBlock` (:1809-1814), add the two things scripts/moe-serena-ignore.mjs has rendered since e575ecec (task-3ef33217). Keep the expectation a LITERAL, as serena-ignore.test.mjs's EXPECTED does. Never import renderBlock: the harness would then follow any regression in the script.\n(a) After `'# yourself outside this block; Moe then removes this block.',` add the two new WHY lines, before `'ignore_all_files_in_gitignore: false'`:\n`'# Moe also hides QA-archived memories (_archive/.*); set ignored_memory_patterns yourself outside',`\n`'# this block to keep your own list instead.',`\n(b) After `...pats.map(x=>`  - \"${x}\"`),` add `'ignored_memory_patterns:','  - \"_archive/.*\"',` before `'# <<< moe serena-ignore <<<'`.\nThe resulting array is: BEGIN, the 6 WHY lines, 'ignore_all_files_in_gitignore: false', 'ignored_paths:', the pats items, 'ignored_memory_patterns:', '  - \"_archive/.*\"', END, ''. That is renderBlock's order (moe-serena-ignore.mjs:142).\nWhy `_archive/.*` alone: the fixture's project.yml, in the control and in W's WT-06 copy, has no ignored_memory_patterns, so the script's list is project.yml's own (none) plus `_archive/.*`. That holds for both files.\nThe MOE_SERENA_IGNORE_ pattern counts (8 and 9) count ignored_paths only, so they stay as they are.\nAdd one line to the comment above SERENA_USER (:1803-1805) saying the block also carries ignored_memory_patterns (task-3ef33217). Change nothing else: not SERENA_PATS, the fixture, serena-ignore-off or any other case.\nQuick check from the worktree root, which prints `[worktree] 3 ok, 0 failed`:\n`F=$(mktemp -d /tmp/e45d-q.XXXXXX) && cp scripts/tests/postflight-fake-proxy.js $F/fp.js && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_WORKTREE_ONLY=serena-ignore,serena-ignore-off,serena-ignore-wt node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" $F/fp.js $F \"$BASH\"`\nThe architect ran the same check: HEAD gives serena-ignore and serena-ignore-wt FAILED, and this exact edit gives 3 ok on sh (15 s) and on PS 5.1 (32 s).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-04T09:43:44.526Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "serenaBlock now has the two WHY lines and ignored_memory_patterns; sh quick check 3 ok.",
+      "startedAt": "2026-11-04T09:43:44.526Z",
+      "completedAt": "2026-11-04T09:44:34.655Z"
     },
     {
       "stepId": "step-2",
       "description": "Gate (DoD 1 and DoD 2): run the two legs below from the ROOT of your task worktree, concurrently. Each must exit 0.\nLeg A, WSL bash:\ncd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && T=scripts/tests && F=$(mktemp -d /tmp/e45d-a.XXXXXX) && cp $T/postflight-fake-proxy.js $F/fp.js && env $E MOE_WORKTREE_ONLY=serena-ignore,serena-ignore-off,serena-ignore-wt node $T/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" $F/fp.js $F \"$BASH\" && { env $E bash $T/postflight.sh > $F/postflight.sh.log 2>&1; echo \"postflight.sh exit=$? log=$F/postflight.sh.log\"; } && grep -E '^\\[worktree\\] [0-9]+ ok, 0 failed$' $F/postflight.sh.log && ! grep -E '^\\[worktree\\] .* FAILED' $F/postflight.sh.log\nLeg B, Windows PowerShell 5.1:\ncd \"$(git rev-parse --show-toplevel)\" && N=\"/mnt/c/Program Files/nodejs/node.exe\" && P=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe && T=scripts/tests && S=$(mktemp -d /mnt/d/moe-scratch/e45d-b.XXXXXX) && w(){ wslpath -w \"$1\"; } && cp $T/postflight-fake-proxy.js $S/fp.js && MOE_WORKTREE_ONLY=serena-ignore,serena-ignore-off,serena-ignore-wt WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(w $T/postflight-worktree.cjs)\" ps1 \"$(w scripts/moe-agent.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell && { WSLENV= \"$P\" -NoProfile -ExecutionPolicy Bypass -File \"$(w $T/postflight.ps1)\" > $S/postflight.ps1.log 2>&1; echo \"postflight.ps1 exit=$? log=$S/postflight.ps1.log\"; } && grep -aE '^\\[worktree\\] [0-9]+ ok, 0 failed' $S/postflight.ps1.log && ! grep -aE '^\\[worktree\\] .* FAILED' $S/postflight.ps1.log\nWhat each leg does: it runs the 3 targeted cases (DoD 1), then the FULL harness with its output in a log. It greps the worktree suite's summary for `0 failed` and checks there is no FAILED line (DoD 2).\nError handling:\n- A leg fails closed when the targeted run or either grep fails.\n- The harness's own exit code is printed, not used as the leg's status. DoD 2 asks only that the run gets past the worktree suite.\nHow to run:\n- The fixtures for sh go under /tmp (mkfifo fails on /mnt/d). The ps1 fixtures go under /mnt/d/moe-scratch, because Windows cannot reach /tmp.\n- Launch each leg DETACHED: a runner file in scratch whose FIRST line is `echo $$ > pid`, then the leg, then `echo EXIT=$?`. Poll with `timeout 570 bash -c 'until grep -q ^EXIT= <log>; do sleep 15; done'`, repeated (mem:convention-postflight-scratch-harness: `set -m; setsid … & echo $!` records the wrong PID).\n- Expect leg A to take about 30-45 min and leg B (PS 5.1) about 45-55 min.\nWhat to expect:\n- At bc4793cf the full postflight.sh suite read `[worktree] 75 ok, 2 failed` (serena-ignore and serena-ignore-wt), after `PASS frozen candidate scenarios: 106`, `PASS owner guard scenarios: 16` and `PASS migration landing scenarios: 12`. Expect `77 ok, 0 failed` on sh.\n- If a harness exits non-zero AFTER the worktree suite, that is not this change: those sections have not run in any gate since e575ecec landed (2026-11-04 08:23Z). Name the section and its first failing line in complete_task's summary and post it in #general for a new row. Do not fix it here.\n- Under heavy load, set MOE_POSTFLIGHT_TIMEOUT_SEC=180 on the run, and say so.\nReporting:\n- Use both legs joined with ' && ' as verification.command, exitCode 0 only when both legs exited 0, and each leg's last lines as outputTail.\n- Kill only the PIDs you recorded. Never pattern-kill (shared-host rail). Delete your scratch dirs by literal path afterwards.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T09:44:35.202Z"
     },
     {
       "stepId": "step-3",
@@ -47,7 +53,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:43.052Z",
-  "updatedAt": "2026-11-04T09:43:44.526Z",
+  "updatedAt": "2026-11-04T09:44:35.202Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T09:33:09.500Z",
@@ -56,7 +62,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-04T09:34:51.074Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-67c762f6",
@@ -67,7 +74,9 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T09:42:37.174Z",
   "executionContract": {

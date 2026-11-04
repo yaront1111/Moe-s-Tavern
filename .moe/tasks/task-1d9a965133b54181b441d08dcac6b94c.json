@@ -9,10 +9,50 @@
     "`cd packages/moe-daemon && npx vitest run src/commands/ src/index.version.test.ts` (plus the new test file, if it lives elsewhere) exits 0 in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-c33f294e",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (DoD 1 and 2). Create packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts with the session's own editing tool. Never use a shell write or a subagent.\n\nThe test spawns the entry the way src/index.version.test.ts does: spawnSync of `process.execPath --import <tsx> <src/index.ts> check-architecture ...`.\n- cwd: a fresh git fixture repo with two commits. The first adds arch.json = {version:1, rules:[{id:'a', from:['src/a'], forbid:['src/b'], reason:'r'}]}; the second adds x.md.\n- env: process.env minus every MOE_* key, plus NODE_ENV. Timeout 30 s.\n- tsx: the child's cwd is the fixture, where a bare tsx does not resolve, so pass an absolute URL: `pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href`.\n- Build the fixture with the isolated git helper from checkArchitecture.test.ts: GIT_* stripped, GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL set to /dev/null or NUL, fixed author.\n\nEvery case asserts: no spawn error, stderr '', stdout exactly one line plus its newline, then the parsed report. Cases:\n1-2. `--rules arch.json --project` with no value, under NODE_ENV=production and under development: exit 2 and exactly {detail:'unexpected argument \"--project\"', outcome:'unavailable', reason:'usage'}.\n3. `--rules arch.json --project ''`: the same report, exit 2.\n4. `--rules arch.json --bogus`: detail 'unexpected argument \"--bogus\"', exit 2.\n5. `--rules arch.json`: exit 0, outcome 'passed', rules 'arch.json'. This proves the early dispatch still runs the real check.\n6. Skipped on win32; NODE_ENV=production only. A deleted working directory gives exit 2 with outcome 'unavailable', reason 'repository-unavailable', and a detail matching ENOENT.\n   - tsx reads the cwd while it loads, so the child removes its own cwd: a second `--import` of a small .mjs, written into a temp dir, that runs `process.chdir(process.env.CHECK_ARCH_GONE)` then `fs.rmdirSync(process.env.CHECK_ARCH_GONE)`. CHECK_ARCH_GONE is an empty temp dir.\n   - Add a comment explaining why production only: with NODE_ENV unset or development, the logger's pino-pretty transport worker itself dies in a deleted cwd (10 s, then exit 1). That is a logger issue outside this dispatch.\nRemove both temp dirs in afterEach.\n\nRed proof: run the step 3 command now. The tests fail, and only cases 1, 2 and 6 fail: at acea850b they exit 1 with the pino fatal line, measured at plan time. Run vitest only in a snapshot outside the shared checkout (global rail).\n\nA vetted copy is at /mnt/d/moe-scratch/arch-1d9a9651/checkArchitecture.cli.test.ts. Read it; never cp it into the tree.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX (DoD 1 and 2). Edit only main() in packages/moe-daemon/src/index.ts, with the session's own editing tool.\n\nRight after the `accounts` branch (:1208-1212) and before `parseArgs()`, add a branch for `process.argv[2] === 'check-architecture'`:\n- Take `process.cwd()` in a try.\n- If it throws, write one line to stdout, `JSON.stringify({ detail, outcome: 'unavailable', reason: 'repository-unavailable' })` (detail is the first line of the error's message, at most 500 chars), set process.exitCode = 2 and return.\n- Otherwise call `const { exitCode, report } = await runCheckArchitecture(process.argv.slice(3), cwd)`, write `JSON.stringify(report)` plus a newline to stdout, set process.exitCode = exitCode and return.\n\nDelete the switch's `case 'check-architecture'` block (:1246-1252); it is now unreachable.\n\nAdd a 3-line comment covering three points: the command prints one JSON line and exits 0, 1 or 2; it answers every bad argument itself, so it runs before parseArgs(), which throws on a trailing --project; a deleted cwd is an unavailable repository, not a crash.\n\nError handling: runCheckArchitecture never throws, because its own envelope maps every failure to exit 2. The only throw left on this path is process.cwd(), handled here. Nothing on this path logs through pino or calls process.exit.\n\nDo NOT touch:\n- parseArgs (:59-71);\n- the import block;\n- the default usage text;\n- the entry guard and main().catch at :1288-1293. task-d63e3dba owns that hunk, and merge-tree lands distinct hunks.\n\nThe plan-time prototype is +18/-7. A vetted copy of the whole file at acea850b plus the fix is at /mnt/d/moe-scratch/arch-1d9a9651/index.ts. Compare against it, never cp it: the target may have moved.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY (DoD 1, 2 and 3), once. From the task worktree root, run the checkRefs command exactly as written. Its fresh output, ending in GATE-OK, is moe.complete_task's verification evidence.\n\nThe command:\n- fails if parseArgs, or the entry-guard block from `if (process.argv[1]` through its closing brace, differs from the fork point with moe/work-2026-10-24;\n- archives HEAD (the daemon package, docs, scripts, CLAUDE.md and .gitignore) into /tmp and overlays your two working-tree files;\n- under env -i, so no MOE_* var is set, runs `npm ci`, then `npx tsc -p . --noEmit` (vitest does not typecheck), then `npx vitest run src/commands/ src/index.version.test.ts`. That is DoD 3's exact suite; the new file lives in src/commands/.\n\nAt plan time this printed GATE-OK in about 8 s, with 5 files and 139 tests. With acea850b's index.ts the same command fails exactly cases 1, 2 and 6.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review, then check:\n1. `git diff --stat $(git merge-base HEAD moe/work-2026-10-24)` lists only index.ts and the new test. index.ts's hunks sit inside main(): no import, parseArgs, export-list or entry-guard line changed.\n2. A valid check-architecture call prints the engine's report unchanged (case 5). version, doctor, accounts and the usage default are untouched.\n3. Nothing on the new path logs or exits early, so stdout carries exactly one line.\n4. Concurrent runs are safe: each test uses its own temp repo and scratch dir, and the deleted-cwd child removes only its own CHECK_ARCH_GONE dir.\n5. The test strips MOE_*, so a seat's MOE_PROJECT_PATH cannot change the result.\n6. On Windows case 6 is skipped. The other cases use process.execPath and an absolute tsx URL.\nFix anything you find. If a file changed, re-run the checkRef.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +64,84 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:32:51.394Z",
-  "updatedAt": "2026-11-04T09:37:48.385Z",
+  "updatedAt": "2026-11-04T09:46:59.258Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T09:37:46.339Z"
+    "firstClaimAt": "2026-11-04T09:37:46.339Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
     "architect-c33f294e"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T09:46:59.222Z",
+  "executionContract": {
+    "intendedBehavior": "`moe-daemon check-architecture` is dispatched in main() before the daemon-wide parseArgs(). A trailing --project (an empty variable) therefore gets the same one-line usage report with exit 2 as every other bad argument, under any NODE_ENV. A process.cwd() failure is reported as outcome unavailable, reason repository-unavailable, with exit 2, instead of a pino fatal line and exit 1.",
+    "acceptanceCriteria": [
+      "`check-architecture --rules arch.json --project` prints exactly {\"detail\":\"unexpected argument \\\"--project\\\"\",\"outcome\":\"unavailable\",\"reason\":\"usage\"} and exits 2 under NODE_ENV=production and development, with stderr empty",
+      "`--project ''` and `--bogus` keep their usage reports with exit 2",
+      "A valid call still prints the engine's report (passed, exit 0)",
+      "On Linux and macOS, a deleted cwd under NODE_ENV=production gives outcome unavailable, reason repository-unavailable, exit 2",
+      "The new spawn test fails at acea850b (cases 1, 2 and 6) and passes with the fix"
+    ],
+    "invariants": [
+      "check-architecture's stdout is exactly one JSON line",
+      "No pino log and no process.exit on the check-architecture path"
+    ],
+    "compatibility": [
+      "Valid check-architecture calls print the same report with the same exit code",
+      "parseArgs, the import block, the entry guard and main().catch (task-d63e3dba's hunk), and every other command are unchanged",
+      "The one-JSON-line, exit 0/1/2 contract stated in CLAUDE.md is what this restores"
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/index.ts main(): a check-architecture branch after the accounts branch, and removal of the switch's check-architecture case",
+      "packages/moe-daemon/src/commands/checkArchitecture.cli.test.ts (new)"
+    ],
+    "reuse": [
+      "runCheckArchitecture's never-throws envelope and its usage reports",
+      "The spawn pattern of src/index.version.test.ts",
+      "The isolated git fixture helper of src/commands/checkArchitecture.test.ts"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts:59-71 parseArgs reads args[projectIndex + 1], and absoluteProjectPath(undefined) throws",
+      "index.ts:1206-1213: main() branches out before parseArgs() only for accounts",
+      "index.ts:1246-1252 is the switch's check-architecture case, which calls process.cwd() outside any try",
+      "index.ts:1288-1293 is the entry guard and main().catch, which logs a pino fatal line to stdout and exits 1 (task-d63e3dba's hunk)",
+      "src/commands/checkArchitecture.ts:44-58 parseArgv refuses any flag other than --rules, --base and --tree with reason usage; :153-160 runCheckArchitecture never throws",
+      "src/util/logger.ts:8 isDev = NODE_ENV !== 'production' selects the pino-pretty transport"
+    ],
+    "checkRefs": [
+      "( set -e; cd \"$(git rev-parse --show-toplevel)\"; D=packages/moe-daemon; F=$D/src/index.ts; T=$D/src/commands/checkArchitecture.cli.test.ts; B=$(git merge-base HEAD moe/work-2026-10-24); for p in '/^function parseArgs/,/^}/p' '/^if (process.argv/,/^}/p'; do diff <(git show \"$B:$F\" | sed -n \"$p\") <(sed -n \"$p\" $F) || { echo 'parseArgs or the entry guard changed'; exit 1; }; done; S=$(mktemp -d /tmp/moe-1d9a-XXXXXX); git archive HEAD $D docs scripts CLAUDE.md .gitignore | tar -x -C \"$S\"; cp $F \"$S/$F\"; cp $T \"$S/$T\"; cd \"$S/$D\"; N=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\"; $N npm ci --no-audit --no-fund > /dev/null; $N npx tsc -p . --noEmit; $N npx vitest run src/commands/ src/index.version.test.ts; echo GATE-OK )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected: making parseArgs tolerate a --project with no value. The DoD forbids touching parseArgs, and every other command would change too.\nRejected: wrapping main()'s parseArgs() in a try. The other commands' failure behaviour would change.\nChosen: dispatch check-architecture early, the way `accounts` already is.\nFor the deleted-cwd test:\n- A real `cd X && rmdir X` before spawning dies inside tsx/esbuild, which calls process.cwd() at module load, before main() runs (measured).\n- So the child deletes its own cwd from a second --import, after tsx has loaded.\n- Rejected: exporting a helper with an injectable cwd from index.ts. That would touch the export list, near task-d63e3dba's hunk, for no gain.",
+    "codebaseInsights": "runCheckArchitecture's parseArgv already refuses --project as an unexpected argument (reason usage, exit 2), so valid calls do not change. src/util/logger.ts selects the pino-pretty transport whenever NODE_ENV !== 'production', which makes dev mode the default. The daemon's typescript is 7.0.2 (native): `tsc -p . --noEmit` takes under 1 s and does catch errors (checked with a planted error). vitest does not typecheck. src/generated/*.ts are tracked, so a git-archive snapshot typechecks without prebuild.",
+    "risks": "Out of scope, left as is: in a deleted cwd with NODE_ENV unset or development, the pino-pretty transport worker dies at startup. Every daemon command then hangs 10 s and exits 1, even after this fix (measured: our JSON line prints first). Fixing that means changing logger.ts.\ntask-d63e3dba (PLANNING) edits the entry guard and main().catch in the same file. These hunks are distinct. If it lands first, the vetted copy of index.ts is stale, so never cp it.\nCase 6 relies on Node running `--import` modules in order (tsx before the cwd remover) and on module hooks running off-thread (Node 22+), so tsx's loader keeps its cwd.\nThe gate's npm ci runs inside the /tmp snapshot, never in the shared checkout (global rail).",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/commands/checkArchitecture.ts",
+      "packages/moe-daemon/src/commands/checkArchitecture.test.ts",
+      "packages/moe-daemon/src/index.version.test.ts",
+      "packages/moe-daemon/src/util/logger.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "95d91dc2107433a2f1b95a2b7882427d4d7c898d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T09:46:59.258Z",
+  "approvedPlanRevision": 1
 }
