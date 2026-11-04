@@ -4,6 +4,7 @@ import type { QAIssue, QAIssueType, RejectionDetails, RejectionHistoryEntry } fr
 import { MAX_REOPENS_DEFAULT } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, invalidState, notAllowed } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { resetPlanStepsToPending } from '../util/reopen.js';
 import { bumpEffort, bumpTier, defaultModel, isEffort, isTier, planSizeFloor, tierEffort } from '../util/routing.js';
 import { recordReview } from '../state/reviewStore.js';
@@ -19,7 +20,7 @@ const VALID_ISSUE_TYPES: QAIssueType[] = [
 export function qaRejectTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_reject',
-    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the task\'s reopen cap (task.maxReopens, default 3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human (needsHumanReview), and a row so parked refuses any supplied workerId with NOT_ALLOWED. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH.',
+    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the task\'s reopen cap (task.maxReopens, default 3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human (needsHumanReview), and a row so parked refuses any supplied workerId with NOT_ALLOWED. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH. A verdict frees the QA seat: the reply carries sessionHandoff END_SESSION for it and no nextAction, so end the session; do not claim or wait inside it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -437,6 +438,24 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         : replanReason
           ? `Task ${updated.id} rejected and flipped to PLANNING (${replanReason}). Architect will re-plan.`
           : `Task ${updated.id} rejected and moved to ${destination}. Worker should address: ${params.reason}`;
+      // Twin of requestReplan.ts's sessionHandoff (task-55a5a9f9): the verdict
+      // frees the QA seat, and the wrapper pinned that session to its claim's
+      // attempt identity, so a claim/wait hint would start a second review whose
+      // verdict is refused ATTEMPT_SUPERSEDED. A governor's verdict must not end
+      // the governance TUI; a seat whose pointer names another task is not ended.
+      const callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor'
+        ? params.workerId : undefined;
+      const seatWorker = handoffWorkerId || callerSeat;
+      const seatTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;
+      const sessionHandoff = seatWorker && !seatTaskId
+        ? {
+            action: 'END_SESSION', taskId: task.id, workerId: seatWorker,
+            reason: 'Rejection recorded on the task. Capture the failure pattern with Serena write_memory (gotcha-<area>), then end this session. ' +
+              'Do not call moe.claim_next_task or moe.wait_for_task inside this session: the wrapper pinned it to this review\'s attempt identity, so a second review claimed here would have its verdict refused ATTEMPT_SUPERSEDED. ' +
+              'The wrapper claims the next REVIEW task in a fresh session. If this is an interactive TUI, return control to its operator so the CLI can exit normally.'
+          }
+        : undefined;
+
       return {
         success: true,
         taskId: updated.id,
@@ -455,14 +474,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         rejectionHistory: updatedHistory,
         failedDodItems: updated.failedDodItems ?? nextFailedItems,
         message,
-        nextAction: {
-          tool: 'moe.wait_for_task',
-          args: {
-            statuses: ['REVIEW'],
-            workerId: params.workerId,
-          },
-          reason: 'Rejection recorded on the task. Capture the failure pattern with Serena write_memory (gotcha-<area>) so future work avoids it, then block until the next REVIEW task arrives.'
-        }
+        ...(sessionHandoff ? { sessionHandoff } : {}),
       };
     }
   };

@@ -110,4 +110,90 @@ describe('a QA verdict idles only the seat that held the reviewed row', () => {
     expect(seat('qa-a')).toEqual({ status: 'IDLE', currentTaskId: null });
     expect(seat('qa-b')).toEqual({ status: 'CODING', currentTaskId: 'task-2' });
   });
+
+  // The verdict frees the QA seat, and the wrapper pinned that session to its
+  // claim's attempt identity, so the reply ends the session instead of hinting
+  // a claim or wait, the rule request_replan follows since task-55a5a9f9.
+  type Reply = Record<string, unknown> & { sessionHandoff?: { action: string; taskId: string; workerId: string; reason: string } };
+  const reply = (tool: Verdict, workerId?: string) => verdict(tool, workerId) as Promise<Reply>;
+  // Every reply field but the hand-off, exactly as before the change.
+  const REPLY_KEYS: Record<Verdict, string[]> = {
+    qa_approve: ['commitEvidence', 'message', 'status', 'success', 'summary', 'taskId', 'warning', 'warnings'],
+    qa_reject: ['exceededReopenCap', 'failedDodItems', 'maxReopens', 'message', 'needsHumanReview', 'parkedForHuman',
+      'reason', 'rejectionDetails', 'rejectionHistory', 'reopenCount', 'repeatedFailedDodItem', 'status', 'success', 'taskId'],
+  };
+  const MESSAGES: Record<Verdict, string> = {
+    qa_approve: 'Task task-1 approved and moved to DONE (WARNING: no completion commit recorded — see warnings)',
+    qa_reject: 'Task task-1 rejected and moved to WORKING. Worker should address: DoD-A fails',
+  };
+  const ended = (workerId: string) => ({ action: 'END_SESSION', taskId: 'task-1', workerId });
+
+  it.each(VERDICTS)('%s by the row\'s assignee ends that seat\'s session and hints no claim or wait', async (tool, landed) => {
+    setupMoe();
+    writeTask({ assignedWorkerId: 'qa-a', contextFetchedBy: ['qa-a'] });
+    await state.load();
+    await createWorker('qa-a', 'CODING', 'task-1');
+
+    const { sessionHandoff, ...rest } = await reply(tool, 'qa-a');
+
+    expect(rest).not.toHaveProperty('nextAction');
+    expect(sessionHandoff).toMatchObject(ended('qa-a'));
+    expect(sessionHandoff!.reason).toContain('Do not call moe.claim_next_task or moe.wait_for_task');
+    expect(Object.keys(rest).sort()).toEqual(REPLY_KEYS[tool]);
+    expect(rest).toMatchObject({ success: true, taskId: 'task-1', status: landed, message: MESSAGES[tool] });
+    expect(seat('qa-a')).toEqual({ status: 'IDLE', currentTaskId: null });
+  });
+
+  it.each(VERDICTS)('%s with no workerId addresses the hand-off to the assignee it idled', async (tool) => {
+    setupMoe();
+    writeTask({ assignedWorkerId: 'qa-a', contextFetchedBy: ['qa-a'] });
+    await state.load();
+    await createWorker('qa-a', 'CODING', 'task-1');
+
+    const res = await reply(tool);
+
+    expect(res).not.toHaveProperty('nextAction');
+    expect(res.sessionHandoff).toMatchObject(ended('qa-a'));
+  });
+
+  it.each(VERDICTS)('%s on an unassigned row by a seat that holds no task ends the caller\'s own session', async (tool) => {
+    setupMoe();
+    writeTask();
+    await state.load();
+    await createWorker('qa-d', 'IDLE', null);
+
+    const res = await reply(tool, 'qa-d');
+
+    expect(res).not.toHaveProperty('nextAction');
+    expect(res.sessionHandoff).toMatchObject(ended('qa-d'));
+  });
+
+  it.each(VERDICTS)('%s by a seat that holds another task leaves its session running: no hand-off, no hint', async (tool) => {
+    setupMoe();
+    writeTask();
+    writeTask({ id: 'task-2', order: 2, assignedWorkerId: 'qa-b', contextFetchedBy: ['qa-b'] });
+    await state.load();
+    await createWorker('qa-b', 'CODING', 'task-2');
+
+    const res = await reply(tool, 'qa-b');
+
+    expect(res).not.toHaveProperty('sessionHandoff');
+    expect(res).not.toHaveProperty('nextAction');
+  });
+
+  // Both ways resolveWorkerRole names a governor: its team's role, else its id prefix.
+  it.each(VERDICTS.flatMap(([tool]) => [[tool, 'ops-1', true], [tool, 'governor-1', false]] as const))(
+    '%s by a governor (%s, governor team %s) never ends the governance session', async (tool, gov, onTeam) => {
+      setupMoe();
+      writeTask();
+      await state.load();
+      await createWorker(gov, 'GOVERNING', null);
+      if (onTeam) await state.addTeamMember((await state.createTeam({ name: 'governors', role: 'governor' })).id, gov);
+
+      const res = await reply(tool, gov);
+
+      expect(res).not.toHaveProperty('sessionHandoff');
+      expect(res).not.toHaveProperty('nextAction');
+      expect(seat(gov)).toEqual({ status: 'GOVERNING', currentTaskId: null });
+    });
 });

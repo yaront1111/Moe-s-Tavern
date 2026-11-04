@@ -2302,7 +2302,8 @@ The summary is persisted on the task as `reviewSummary`. Under `manual-artifact`
     completion: Array<{ sha, ref, pushed: boolean | null, recordedAt }>,   // only entries recorded since this work round began count against the warning (see "When the warning fires")
     checkpoint: Array<{ sha, ref, pushed: boolean | null, recordedAt }>,
     rescue: Array<{ sha, ref, pushed: boolean | null, recordedAt }>
-  }
+  },
+  sessionHandoff?: { action: "END_SESSION", taskId, workerId, reason }   // no nextAction: see "Session hand-off" below
 }
 ```
 
@@ -2326,6 +2327,7 @@ The summary is persisted on the task as `reviewSummary`. Under `manual-artifact`
 - **Race**: the wrapper lands the completion commit and calls `moe.record_commit` *after* the worker's CLI exits, while QA's `wait_for_task` wakes on the REVIEW write itself, so an approval within seconds of REVIEW can legitimately see no commit yet. Wait for the `[OK] Committed completion …` banner / the task-channel record line, then `git show <sha>` — do not review the dirty shared tree.
 - **Under `legacy`, a legacy or observe task's approval is never refused for evidence**: the commit gate is advisory. Reopening (`qa_reject`, `set_task_status`) never clears `task.commits`.
 - QA policy: treat the warning as a reject unless you verified HEAD yourself (`docs/roles/qa.md`).
+- **Session hand-off (no `nextAction`).** The verdict frees the QA seat, and the wrapper pinned that seat's session to its claim's attempt identity, so the reply carries no `nextAction`: no `moe.wait_for_task` or `moe.claim_next_task` hint, because a second review claimed inside that session would have its verdict refused `ATTEMPT_SUPERSEDED`. It carries `sessionHandoff` `END_SESSION` instead, the rule `moe.request_replan` and a seat-freeing `moe.report_blocked` follow. The hand-off is addressed to the seat the verdict idles (the row's assignee, or the caller when its own `currentTaskId` is this row), else to a non-governor caller. It is omitted for a governor (team role or id prefix), for a workerId-less verdict on an unassigned row, and when the addressed seat's worker record still names another `currentTaskId` after the verdict (a caller busy on another task keeps its session). The wrapper claims the next REVIEW task in a fresh session.
 
 **Errors:**
 - `taskId is required`
@@ -2375,7 +2377,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
   rejectionDetails, rejectionHistory: RejectionHistoryEntry[],
   failedDodItems: FailedDodItem[],
   message,
-  nextAction
+  sessionHandoff?: { action: "END_SESSION", taskId, workerId, reason }   // no nextAction: as in qa_approve's "Session hand-off"
 }
 ```
 
@@ -2392,6 +2394,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
 - On auto-flip, posts a heads-up to `#architects`; on every rejection, cross-posts `❌ QA rejected ...` to `#governors`.
 - **Launch escalation:** resets `task.model` and `task.codexModel` to their provider defaults (a failed cheap-model attempt is retried on the strongest model), bumps `task.tier` one step (`light` → `standard` → `heavy`, capped) and `task.effort` one allowed level (`high` → `xhigh` → `max`) for the next attempt, whether it returns to WORKING or PLANNING; an unset tier starts from the plan-size floor and an unset effort from the tier default. A hard-cap park keeps its routing.
 - **Closes the QA seat's attempt:** the flip clears `assignedWorkerId` (the hard-cap park writes `null` explicitly), and that write closes the task's `running`/`reconciling` attempts (see **Close on hand-back** under Ownership & Ordering). A daemon restart after the rejection therefore has nothing of the QA seat's to park, and an explicit `moe.claim_next_task` of the returned row succeeds with the next generation.
+- **Session hand-off — identical to `qa_approve`'s.** No `nextAction`; `sessionHandoff` `END_SESSION` is addressed, and omitted, by the same rule, the hard-cap park included.
 
 **Errors:**
 - `taskId is required`
