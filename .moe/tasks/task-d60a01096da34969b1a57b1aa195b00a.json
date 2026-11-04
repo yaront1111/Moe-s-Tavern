@@ -1,0 +1,28 @@
+{
+  "id": "task-d60a01096da34969b1a57b1aa195b00a",
+  "epicId": "epic-be924fb8",
+  "title": "docs: the moe-planning and ponytail skills say submit_plan's distinct-file limit counts step affectedFiles, but the size gate also counts newFiles (submitPlan.ts:427-432), so an architect sizing a plan by either skill undercounts (skills twin of task-ed84e283)",
+  "description": "Filed by architect-2a219562 while planning task-ed84e283 (2026-11-04). That row fixes the same wording in docs/CONFIGURATION.md, docs/roles/governor.md, docs/MCP_SERVER.md and packages/moe-daemon/CLAUDE.md. The two skills below were split out to keep each row at 5 files or fewer and to keep the 1.4 MB skillFiles.ts out of the role-doc row. Verified at d1062cb0.\n\nPROBLEM\npackages/moe-daemon/src/tools/submitPlan.ts:427-432 builds the size-gate input as `affectedFiles: [...step.affectedFiles, ...step.newFiles]`, and util/planSize.ts:88-95 (countDistinctAffectedFiles) takes the union. The same count sets the plan-size tier floor (submitPlan.ts:499, plannedDistinctFileCount; `heavy` past the warn thresholds). Two skills still say only affectedFiles count:\n- docs/skills/moe-planning/SKILL.md:14 (\"Count before you draft\"): \"more than 8 steps or more than 5 distinct `affectedFiles`\".\n- docs/skills/ponytail/SKILL.md:136-137, the `## Moe integration` footer: \"`moe.submit_plan` warns past 8 steps / 5 distinct `affectedFiles` and hard-rejects past 12 / 10.\"\nEvery architect loads moe-planning before submit_plan. A plan sized by it undercounts newFiles: 5 affectedFiles plus 1 newFile draws the size warning and the heavy tier floor, and 8 plus 3 is refused CONSTRAINT_VIOLATION.\n\nFIX DIRECTION (docs only)\n- Say the distinct-file count is the union of each step's affectedFiles and newFiles. Reuse task-ed84e283's wording: \"distinct files (the union of every step's `affectedFiles` and `newFiles`)\". Its byte-exact doc diff is in /mnt/d/moe-scratch/ed84e283-plan/proto-doc.diff.\n- In ponytail, edit only the `## Moe integration` footer, which is a Moe local modification listed in docs/skills/ponytail/SOURCE.md. Keep the footer's 2-space-indented wrapping.\n- Regenerate packages/moe-daemon/src/generated/skillFiles.ts with `npm run generate-skill-files` in a snapshot outside the shared checkout. This generator needs no git history. Apply its hunks to the tracked file with the seat's own Edit tool: the file is about 1.4 MB, too big for Write, and cp is a shell write with no TOOL witness. See mem:gotcha-moe-doc-generated-artifacts and mem:convention-docs-vendored-regen-gate. Never run npm run build in the shared checkout.\n\nNOT IN SCOPE\n- docs/roles/*, docs/CONFIGURATION.md, docs/MCP_SERVER.md, packages/moe-daemon/CLAUDE.md and initFiles.ts (task-ed84e283 owns them).\n- docs/skills/moe-epic-breakdown's \">5 distinct files warns\" row (generic, already correct).\n- The .moe/skills copies, which the daemon rewrites from skillFiles.ts at start.\n- Any code change.\n\nFILES: docs/skills/moe-planning/SKILL.md, docs/skills/ponytail/SKILL.md, packages/moe-daemon/src/generated/skillFiles.ts\n\nGATE\n- `npm run lint` at the repo root.\n- In a git clone or archive snapshot outside the repo: overlay the two skills and the candidate skillFiles.ts, run `npm run generate-skill-files`, and sha1sum-compare skillFiles.ts before and after (byte-identical). Then run `npx vitest run src/util/skillFiles.test.ts`.",
+  "definitionOfDone": [
+    "docs/skills/moe-planning/SKILL.md and docs/skills/ponytail/SKILL.md say submit_plan's distinct-file count is the union of each step's affectedFiles and newFiles, and `grep -rniE 'distinct\\*? `?affected ?files' docs/skills` prints nothing.",
+    "packages/moe-daemon/src/generated/skillFiles.ts is regenerated from the edited skills and committed with them: in a snapshot outside the shared checkout, `npm run generate-skill-files` over the candidate files leaves skillFiles.ts byte-identical, and src/util/skillFiles.test.ts passes there.",
+    "npm run lint passes at the repo root, and the diff touches only those three files."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 477.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T05:36:55.588Z",
+  "updatedAt": "2026-11-04T05:36:55.588Z"
+}

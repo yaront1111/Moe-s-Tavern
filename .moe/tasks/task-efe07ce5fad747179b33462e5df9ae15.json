@@ -1,0 +1,34 @@
+{
+  "id": "task-efe07ce5fad747179b33462e5df9ae15",
+  "epicId": "epic-be924fb8",
+  "title": "bug: when a deregister closes a worktree worker's finalizing attempt before anything was published (the IDE closed the seat's tab mid-landing), the REVIEW row is left with no completion and no landingRetry, so QA's landed gate parks it BLOCKED and only a governor reopen recovers it, which resets every step (task-87cba58c, 11-04 00:30Z)",
+  "description": "Seen live on task-87cba58c (11-04, governor-e6142a94):\n- 00:21:32Z: worker-2dc72348 calls complete_task, and the row goes to REVIEW with the attempt finalizing.\n- 00:21:59Z: its wrapper's L0-L2 commits W to moe/task/task-87cba58c… as checkpoint 75355f80. The wrapper then waits in L3 for the git-land lease (the live edc27e14 still has the 946358a8 wake bug).\n- 00:30:15Z: the IDE close deregisters every seat (terminal_closed). closeOwnFinalizingAttempts (state/workerLifecycle.ts:248, called at :291) closes attempt-6f2bc0c2 at 00:30:15.062Z.\n- Nothing was published: .git/moe/receipt/ is empty, there is no refs/moe/rescue/task-87cba58c… ref, task.commits is [], and origin/moe/work-2026-10-24 has no feat(task-87cba58c) commit.\n- The row stays REVIEW and unassigned. At 05:24:32Z qa-58a8e460 claims it. qa_landed_gate stops it with MOE_CONTROL_CHECKOUT_BEHIND (\"no recorded completion commit\") and report_blocks the row (05:25:21Z). Nothing auto-heals it.\n\nWhy every recovery hurts:\n- The route that fits is finalize_attempt's unlanded branch (tools/finalizeAttempt.ts:150-171, applyTaskOutcome): REVIEW → WORKING, unassigned, task.landingRetry set, no reopen. The next worker's worktree_resume (scripts/moe-agent.sh ~:7970-7990) then merges the target into W and prompts LANDING-RETRY. But that branch needs a finalizing attempt, and this one is already closed.\n- The governor's only lever is set_task_status WORKING. From a blocked REVIEW row that is a reopen (setTaskStatus.ts:221, isReopening via effectiveFrom), so buildReopenClearingUpdates (util/reopen.ts:49) resets every plan step to PENDING and reopenCount goes up. A worker then re-walks a finished plan only to re-land bytes already on the task branch.\n- closeOwnFinalizingAttempts' own comment (workerLifecycle.ts:228) says the close is \"not evidence of a landing\", and that under the legacy delivery policy NO-COMPLETION-COMMIT is the only guard. Worktree mode's landed gate now turns that gap into a BLOCKED row.\n- The same close also runs from the DEAD-record backstop (workerStore.ts:249, :372).\n\nExpected: when one of these closes ends a worker's finalizing attempt on a worktree-mode task (attempt workspaceMode 'worktree') that is REVIEW with no completion recorded for its current round (delivery/policy.ts:206 completionCommitsForReview), route the row exactly as the unlanded route does: WORKING, unassigned, landingRetry with a task comment, and no reopenCount bump or step reset. Use a reason the launchers already accept (\"conflict\",\"contention\",\"gate\",\"diverged\",\"remote\"; moe-agent.sh:7984 and its ps1 twin), for example contention, so no launcher edit is needed. Keep today's close for a row whose completion is recorded, for shared mode, and for non-REVIEW rows.\nPitfalls:\n- A dead wrapper may have published C without recording it. Its receipt journal then survives, and the next pre-flight's receipt replay records the owed row. Do not try to read git from the daemon.\n- Keep the close itself unconditional, so a dying runner still cannot wedge its row (task-686afecb's rail: never close or release on an idle signal; the DEAD-record backstop stays DEAD-only).",
+  "definitionOfDone": [
+    "A daemon test fails on today's code: a worktree-mode task in REVIEW whose worker attempt is finalizing, with no completion commit for the current round, goes through moe.deregister_worker. The test passes when the attempt is closed AND the task ends WORKING, unassigned, with landingRetry set (a reason worktree_resume accepts), reopenCount unchanged and every plan step still COMPLETED. The DEAD-record backstop path (deleteWorker / startup purge) is covered the same way.",
+    "Tests prove today's behaviour is kept for a REVIEW task whose completion is recorded for the round, for a shared-mode attempt, and for a non-REVIEW row: the attempt is closed and status and landingRetry are untouched.",
+    "The `### moe.deregister_worker` section of docs/MCP_SERVER.md describes the new routing, and so does the list of paths that end a finalizing attempt in `### moe.finalize_attempt` if it has one. `npm test` and `npx tsc --noEmit` pass in packages/moe-daemon."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 475.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T05:33:38.409Z",
+  "updatedAt": "2026-11-04T05:36:27.235Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T05:36:24.918Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}
