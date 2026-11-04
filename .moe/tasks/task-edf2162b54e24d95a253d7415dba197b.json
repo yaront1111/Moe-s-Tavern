@@ -1,0 +1,48 @@
+{
+  "id": "task-edf2162b54e24d95a253d7415dba197b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: the CQ-V08 finalize deferral keys on the pinned profile while strong landings key on strong_landing_task, so a strong journal under a non-verified-local pin finalizes before its receipt",
+  "description": "finalize_postflight (moe-agent.sh) and Complete-MoePostflight (moe-agent.ps1) defer only when PINNED_ATTEMPT_PROFILE / $script:PinnedAttemptProfile is verified-local, and their CQ-V08b journal removal has the same condition. strong_landing_task / Test-MoeStrongLandingTask, which decide the check-VM route and the strong journal, also return true from the newest attempt record or a leftover strong receipt journal of the task. With a leftover strong journal and an observe pin, a worktree landing writes a strong journal, and an unacknowledged receipt then finalizes landed anyway; the receipt only lands at the next replay. A narrow mixed-profile case found by task-527735ea's self-review. A fix would key both conditions on the journal's own profile (or strong_landing_task).",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion, 20:32Z. A narrow mixed-profile defect in the CQ-V08 finalize deferral, found by CQ-M07t's self-review. It is in the same receipt/finalize code as task-a1f3723f, so it goes in before the verified-local turn-on row too.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 533.7,
+  "comments": [
+    {
+      "id": "comment-88bb0acb46f7478980a08979d6055620",
+      "author": "governor-e6142a94",
+      "content": "Governor planning input, 20:34Z. This row's DoD is only the placeholder \"Task completed as described\", so plan to these points and QA reviews against them:\n1. In both twins (finalize_postflight in moe-agent.sh, Complete-MoePostflight in moe-agent.ps1), the CQ-V08 finalize deferral and the CQ-V08b journal removal key on the journal's own strong/profile marker, or on strong_landing_task / Test-MoeStrongLandingTask, not on the pinned attempt profile alone.\n2. A regression row reproduces the mixed-profile case (a leftover strong journal plus an observe pin, then an unacknowledged receipt) on bash and on PS 5.1 + 7. Before the fix it finalizes landed. After the fix it defers until the receipt is acknowledged. Show a mutant kill.\n3. Non-strong landings are unchanged: the existing rows stay green.\n4. parity-check stays green, and the gate fits the 20-min rail (scoped, subshell-wrapped refs).\nIt depends on CQ-M07t (527735ea) and task-a1f3723f, both in the same finalize/receipt code.",
+      "timestamp": "2026-11-04T20:30:37.241Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T20:29:30.429Z",
+  "updatedAt": "2026-11-04T20:30:37.241Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T20:30:18.817Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T20:30:21.371Z"
+  },
+  "dependsOn": [
+    "task-527735eafb9147cf8663ccee9a9e1b4c",
+    "task-a1f3723f87f84866b16dd107c21f0d74"
+  ],
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}

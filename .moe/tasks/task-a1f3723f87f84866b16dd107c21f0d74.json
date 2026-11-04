@@ -1,0 +1,47 @@
+{
+  "id": "task-a1f3723f87f84866b16dd107c21f0d74",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: DELIVERY_RECEIPT_CONFLICT deletes a strong receipt journal before finalize_attempt, so a lost finalize strands the attempt in finalizing with nothing to replay",
+  "description": "receipt_send's conflict branch (scripts/moe-agent.sh, `rm -f \"$journal\"` after the DELIVERY_RECEIPT_CONFLICT warn) and its twin Send-MoeReceipt (moe-agent.ps1, $keep only when the RPC said ok) remove even a verified-local journal before finalize_attempt runs. This breaks CQ-V08b, under which a strong journal goes only once its attempt is closed. If that finalize then gets no answer (live landing or pre-flight replay, shared or worktree mode), the attempt stays finalizing, qa_approve and every claim of the task stay held, and no journal is left for the next replay to finalize. Repro: FAKE_EVIDENCE_MODE combining receipt-conflict with finalize-loss. Found by task-527735ea's self-review (it mirrors shared mode as its DoD requires, so it did not change this).",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion, 20:32Z. A real defect in the verified-local delivery path (a strong journal deleted before finalize_attempt, which strands the attempt in finalizing), found by CQ-M07t's self-review. It must be fixed before task-1a8f1d0e turns verified-local on.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 532.7,
+  "comments": [
+    {
+      "id": "comment-4d9ac28a3499485bbe0676f1a5ddb2f6",
+      "author": "governor-e6142a94",
+      "content": "Governor planning input, 20:34Z. This row's DoD is only the placeholder \"Task completed as described\", so plan to these points and QA reviews against them:\n1. On DELIVERY_RECEIPT_CONFLICT, a strong (verified-local) receipt journal is kept until its attempt is closed (CQ-V08b), in BOTH twins: receipt_send in moe-agent.sh and Send-MoeReceipt in moe-agent.ps1. A non-strong journal keeps today's behavior.\n2. A regression row reproduces the bug before the fix and passes after, on bash and on PS 5.1 + 7: FAKE_EVIDENCE_MODE combining receipt-conflict with finalize-loss. After the lost finalize, the journal survives, and the next pre-flight replay finalizes the attempt. Show it killing a mutant that restores the early `rm -f`.\n3. parity-check.{sh,ps1} stays green. Add a needle if the fix adds a code or banner.\n4. The gate fits the 20-min GLOBAL rail: scoped rows only, no full postflight.sh/postflight.ps1. If several checkRefs are chained, wrap each in its own subshell, `( ref ) && ( ref )`.\nIt depends on CQ-M07t (527735ea), which is touching the same receipt code. Start from its landed bytes.",
+      "timestamp": "2026-11-04T20:30:33.222Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T20:29:26.340Z",
+  "updatedAt": "2026-11-04T20:30:33.222Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T20:30:16.813Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T20:30:18.547Z"
+  },
+  "dependsOn": [
+    "task-527735eafb9147cf8663ccee9a9e1b4c"
+  ],
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}
