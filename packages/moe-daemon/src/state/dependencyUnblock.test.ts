@@ -22,6 +22,7 @@ import {
   unmetDependsOn,
 } from './dependencyUnblock.js';
 import { runBlockedTimeoutSweep } from './sweeps.js';
+import { StateManager } from './StateManager.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { McpAdapter, type JsonRpcResponse } from '../server/McpAdapter.js';
 import { recordCheckRun } from './checkRunStore.js';
@@ -490,6 +491,64 @@ describe('dependencyUnblock', () => {
       expect(roleMsgs[0][1]).toContain('task-t00o1d');
       expect(roleMsgs[0][1]).toContain('task-w04k1n [WORKING]');
       expect(roleMsgs[0][1]).toContain('the blocked timeout');
+    });
+
+    it('pages a block instance once while the row stays BLOCKED, however often it stops and starts qualifying', async () => {
+      const now = Date.now();
+      staleDepRow('task-c0n5um', ['task-p4e4eq'], 1.5 * HOUR); // past the timeout, under the 2× bound
+      h.createTask({ id: 'task-p4e4eq', status: 'BACKLOG' });
+      await h.state.load();
+      const roleMsgs = captureRolePosts();
+      const blockedAt = h.state.getTask('task-c0n5um')!.blockedAt;
+
+      expect(await alertStaleBlocks(h.state, now)).toBe(1); // parked BACKLOG prerequisite
+      await h.state.updateTask('task-p4e4eq', { status: 'WORKING' });
+      expect(await alertStaleBlocks(h.state, now + 60_000)).toBe(0); // moving, under 2×: does not qualify
+      expect(await alertStaleBlocks(h.state, now + HOUR)).toBe(0); // past 2×: qualifies again, same instance
+      await h.state.updateTask('task-p4e4eq', { status: 'BACKLOG' });
+      expect(await alertStaleBlocks(h.state, now + HOUR + 60_000)).toBe(0); // stalls again
+      expect(roleMsgs).toHaveLength(1);
+      expect(h.state.getTask('task-c0n5um')).toMatchObject({ status: 'BLOCKED', blockedAt });
+    });
+
+    it('pages a new block instance: a re-block under a new blockedAt, and a row resolved then blocked again', async () => {
+      const now = Date.now();
+      staleDeplessRow('task-n3wat1', 2 * HOUR);
+      staleDeplessRow('task-r350lv', 2 * HOUR);
+      await h.state.load();
+      const roleMsgs = captureRolePosts();
+      const firstBlockedAt = h.state.getTask('task-r350lv')!.blockedAt;
+      expect(await alertStaleBlocks(h.state, now)).toBe(2);
+
+      await h.state.updateTask('task-n3wat1', { blockedAt: new Date(now).toISOString() });
+      await h.state.updateTask('task-r350lv', { status: 'WORKING', blockedReason: null, blockedFromStatus: null, blockedAt: null } as never);
+      expect(await alertStaleBlocks(h.state, now + 2 * HOUR)).toBe(1); // task-n3wat1; task-r350lv is seen resolved
+      // Blocked again under the very same blockedAt (a restored file): the resolve dropped its key.
+      await h.state.updateTask('task-r350lv', { status: 'BLOCKED', blockedReason: 'asked again', blockedFromStatus: 'WORKING', blockedAt: firstBlockedAt } as never);
+      expect(await alertStaleBlocks(h.state, now + 2 * HOUR)).toBe(1);
+      const pagesFor = (id: string) => roleMsgs.filter(([, m]) => m.startsWith(`⚠️ ${id} `)).length;
+      expect([pagesFor('task-n3wat1'), pagesFor('task-r350lv')]).toEqual([2, 2]);
+    });
+
+    it('a daemon restart reads #governors back: no second page for a standing block, a page for one it never paged', async () => {
+      const now = Date.now();
+      staleDeplessRow('task-5ta1e1', 2 * HOUR); // paged before the restart
+      staleDeplessRow('task-qu0te1', 30 * 60 * 1000); // under the timeout: never paged by the daemon
+      staleDeplessRow('task-n3wb1k', 2 * HOUR); // paged, then re-blocked under a new blockedAt
+      await h.state.load();
+      const posted = vi.spyOn(h.state, 'postToRoleChannel'); // calls through: the pages land in #governors
+      expect(await alertStaleBlocks(h.state, now)).toBe(2);
+      expect(posted).toHaveBeenCalledTimes(2);
+      const governors = Array.from(h.state.channels.values()).find((ch) => ch.type === 'role' && ch.name === 'governors')!;
+      // A governor quoting the page format is not the daemon's page.
+      await h.state.sendMessage({ channel: governors.id, sender: 'governor-x', content: '⚠️ task-qu0te1 (Test Task) has been BLOCKED 90m with no blockedOnTaskIds' });
+      await h.state.updateTask('task-n3wb1k', { blockedAt: new Date(now + 60_000).toISOString() });
+
+      const restarted = new StateManager({ projectPath: h.testDir });
+      await restarted.load();
+      const reposted = vi.spyOn(restarted, 'postToRoleChannel');
+      expect(await alertStaleBlocks(restarted, now + 3 * HOUR)).toBe(2);
+      expect(reposted.mock.calls.map(([, m]) => String(m).split(' ')[1]).sort()).toEqual(['task-n3wb1k', 'task-qu0te1']);
     });
 
     it('the blocked-timeout sweep runs the extended alert pass', async () => {

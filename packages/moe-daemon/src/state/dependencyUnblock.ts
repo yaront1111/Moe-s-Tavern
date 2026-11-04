@@ -27,8 +27,10 @@
 // restore, but a hand-edited task file with garbage in blockedFromStatus must
 // not be able to build a recursion tower either.
 
+import path from 'path';
 import type { StateManager } from './StateManager.js';
-import type { Task, TaskStatus } from '../types/schema.js';
+import type { ChatMessage, Task, TaskStatus } from '../types/schema.js';
+import { CHAT_READ_WINDOW_BYTES, readTailJsonl } from './chatStore.js';
 import { EVIDENCE_TOKENS, evaluateDeliveryEvidence } from '../delivery/policy.js';
 import { readExecutionPolicySnapshot, resolveTaskExecutionProfile } from '../delivery/executionProfile.js';
 import { listCandidatesForTask } from './candidateStore.js';
@@ -294,10 +296,61 @@ export async function runDependencyUnblock(state: StateManager, triggerTaskId?: 
 }
 
 /**
- * Memo of #governors alerts already posted, keyed `taskId:blockedAt` so a
- * re-block (new blockedAt) alerts again while a standing block alerts once.
+ * Memo of #governors alerts already posted, keyed `taskId:blockedAt` (one block
+ * instance) so a re-block (new blockedAt) alerts again while a standing block
+ * alerts once: a key lives while its row stays BLOCKED under that blockedAt,
+ * whether or not the row qualifies on a given pass. A fresh daemon seeds it from
+ * #governors (seedAlertedStaleBlocks), so a restart is not a new instance either.
  */
 const alertedStaleBlocks = new WeakMap<StateManager, Set<string>>();
+
+/** The memo key of one block instance. */
+function staleBlockKey(task: Pick<Task, 'id' | 'blockedAt'>): string {
+  return `${task.id}:${task.blockedAt}`;
+}
+
+/** Every stale-block page reads `⚠️ <taskId> (<title>) has been BLOCKED …`. */
+const STALE_BLOCK_PAGE_RE = /^⚠️ (\S+) \(.*?\) has been BLOCKED /su;
+
+/**
+ * Seed a fresh daemon's memo from #governors: a standing block whose page the
+ * daemon already posted (sender 'system', strictly after the row's blockedAt) is
+ * not paged again after a restart. Reads the newest CHAT_READ_WINDOW_BYTES, the
+ * window chat_read serves: a page that has left it is shown to no reader, so a
+ * restart pages that block once more, as it does a page that never landed. Never
+ * throws: an unreadable log seeds nothing (one repeat page, never silence).
+ */
+function seedAlertedStaleBlocks(state: StateManager): Set<string> {
+  const memo = new Set<string>();
+  const channel = Array.from(state.channels.values()).find((ch) => ch.type === 'role' && ch.name === 'governors');
+  if (!channel) return memo;
+  let raw: string;
+  try {
+    raw = readTailJsonl(state, path.join(state.moePath, 'messages', `${channel.id}.jsonl`), CHAT_READ_WINDOW_BYTES);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.warn({ error, channelId: channel.id }, 'dependencyUnblock: #governors unreadable; a restart re-pages standing stale blocks');
+    }
+    return memo;
+  }
+  const lastPagedAt = new Map<string, number>();
+  for (const line of raw.split('\n')) {
+    if (!line.includes(' has been BLOCKED ')) continue;
+    let message: Partial<ChatMessage> | null;
+    try { message = JSON.parse(line) as Partial<ChatMessage> | null; } catch { continue; }
+    if (message?.sender !== 'system' || typeof message.content !== 'string') continue;
+    const taskId = STALE_BLOCK_PAGE_RE.exec(message.content)?.[1];
+    const pagedAt = Date.parse(String(message.timestamp));
+    if (!taskId || Number.isNaN(pagedAt)) continue;
+    lastPagedAt.set(taskId, Math.max(pagedAt, lastPagedAt.get(taskId) ?? pagedAt));
+  }
+  for (const task of state.tasks.values()) {
+    if (task.status !== 'BLOCKED' || !task.blockedAt) continue;
+    const pagedAt = lastPagedAt.get(task.id);
+    if (pagedAt !== undefined && pagedAt > Date.parse(task.blockedAt)) memo.add(staleBlockKey(task));
+  }
+  return memo;
+}
 
 /** Prerequisite statuses that make no progress on their own — a human must move them. */
 const NON_PROGRESSING_STATUSES = new Set<TaskStatus>(['BLOCKED', 'BACKLOG']);
@@ -331,7 +384,7 @@ export function describeUnmetDependency(state: StateManager, taskId: string, con
 /**
  * Visibility pass for stale blocks (resource-parked rows excluded — the lease
  * reaper bounds those). Four classes draw one line in #governors per block
- * instance; alert ONLY — never auto-park, the un-park decision is human triage
+ * instance (a restart included); alert ONLY — never auto-park, the un-park decision is human triage
  * (set_task_status / unblock paths / promote the prerequisite):
  *   - dep-less rows past blockedTimeoutMs: no machine is on their side, nothing
  *     will ever auto-unblock them;
@@ -351,7 +404,7 @@ export function describeUnmetDependency(state: StateManager, taskId: string, con
 export async function alertStaleBlocks(state: StateManager, nowMs: number = Date.now()): Promise<number> {
   let memo = alertedStaleBlocks.get(state);
   if (!memo) {
-    memo = new Set<string>();
+    memo = seedAlertedStaleBlocks(state);
     alertedStaleBlocks.set(state, memo);
   }
 
@@ -359,9 +412,13 @@ export async function alertStaleBlocks(state: StateManager, nowMs: number = Date
   let alerted = 0;
   for (const task of state.tasks.values()) {
     if (task.status !== 'BLOCKED') continue;
-    if (task.blockedResourceId) continue;
     const blockedAtMs = task.blockedAt ? Date.parse(task.blockedAt) : NaN;
     if (Number.isNaN(blockedAtMs)) continue;
+    // Live whether or not the row qualifies this pass: the prune below drops
+    // only resolved or re-blocked instances, never a row that missed one pass.
+    const key = staleBlockKey(task);
+    liveKeys.add(key);
+    if (task.blockedResourceId || memo.has(key)) continue;
     const ageMs = nowMs - blockedAtMs;
     if (ageMs <= state.blockedTimeoutMs) continue;
     const ageMin = Math.floor(ageMs / 60_000);
@@ -405,10 +462,6 @@ export async function alertStaleBlocks(state: StateManager, nowMs: number = Date
         continue;
       }
     }
-
-    const key = `${task.id}:${task.blockedAt}`;
-    liveKeys.add(key);
-    if (memo.has(key)) continue;
 
     try {
       await state.postToRoleChannel('governors', alert);
