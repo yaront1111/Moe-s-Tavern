@@ -129,7 +129,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T18:14:14.056Z",
-  "updatedAt": "2026-11-04T20:06:44.462Z",
+  "updatedAt": "2026-11-04T20:07:58.941Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T18:28:59.222Z",
     "plannedStepCount": 6,
@@ -241,5 +241,33 @@
     "scripts/tests/protected-agent-command.test.mjs",
     "scripts/tests/prompt-cache-launcher.test.mjs"
   ],
-  "completionSummary": "PR #208 launcher slice, both twins. agentCommand gemini or agy (base name) is gemini mode, MOE_WORKER_TYPE=GEMINI. Without MOE_RUNTIME_PROTECTED the binary is a non-blank MOE_AGY_COMMAND, else agy for a gemini command, else the command as given, never the Gemini CLI. If not found: exit 1, nothing runs, one fixed line. Under the marker the allowlist is unchanged (agy refused), gemini's trusted lookup takes agy, and MOE_AGY_COMMAND is not read. The parity scripts require 3 literals.\n\nPlan deviations (self-review, inside the approved hunks):\n1. sh prints not-found via printf '%b[ERROR]%b %s\\n', not echo -e, so a backslash in MOE_AGY_COMMAND (agy\\c) cannot cut the line.\n2. The gemini->agy test uses detection's $cmdBase/CMD_BASE in both twins: GetFileNameWithoutExtension($Command) throws 'Illegal characters in path' on PS 5.1 for a quoted -Command.\nNew test cases: AG1 '\"gemini\"' and AG3 agy\\c, now 9 rows per engine.\n\nVerification, fresh after all edits: GATE_RC=0 in 53 s.\n- gemini mode rows bash=9 ps51=9 ps7=9; agy type rows linux=2 windows=6.\n- PASS parity-check.sh; lint OK; ParseFile ok + PASS parity-check.ps1 on pwsh.exe and powershell.exe.\n\nMutants (scratch clone), each red on its rows:\n- M1: AG1(agy) bash + linux/Git Bash typeCases. M2: AG2 bash. M3: AG4-6 bash.\n- M4: AG4-6 on 5.1+7. M5: AG1(agy)+AG5 on 5.1+7 + PS typeCases. M6: AG5 on 5.1+7.\n- M7: a one-word change in either wrapper fails both parity scripts (bash, pwsh, 5.1).\n- M8 (echo -e): AG3 bash. M9 (GetFileNameWithoutExtension): AG1 '\"gemini\"' on 5.1+7.\n\nFor task-cb378fd8: the message is `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` sh prints it on stdout after [ERROR]; ps1 writes `[ERROR] ` plus the text to stderr. MOE_AGY_COMMAND = the agy binary path, read only without MOE_RUNTIME_PROTECTED=1; blank or whitespace = unset; it replaces the binary and keeps the command's args."
+  "completionSummary": "PR #208 launcher slice, both twins. agentCommand gemini or agy (base name) is gemini mode, MOE_WORKER_TYPE=GEMINI. Without MOE_RUNTIME_PROTECTED the binary is a non-blank MOE_AGY_COMMAND, else agy for a gemini command, else the command as given, never the Gemini CLI. If not found: exit 1, nothing runs, one fixed line. Under the marker the allowlist is unchanged (agy refused), gemini's trusted lookup takes agy, and MOE_AGY_COMMAND is not read. The parity scripts require 3 literals.\n\nPlan deviations (self-review, inside the approved hunks):\n1. sh prints not-found via printf '%b[ERROR]%b %s\\n', not echo -e, so a backslash in MOE_AGY_COMMAND (agy\\c) cannot cut the line.\n2. The gemini->agy test uses detection's $cmdBase/CMD_BASE in both twins: GetFileNameWithoutExtension($Command) throws 'Illegal characters in path' on PS 5.1 for a quoted -Command.\nNew test cases: AG1 '\"gemini\"' and AG3 agy\\c, now 9 rows per engine.\n\nVerification, fresh after all edits: GATE_RC=0 in 53 s.\n- gemini mode rows bash=9 ps51=9 ps7=9; agy type rows linux=2 windows=6.\n- PASS parity-check.sh; lint OK; ParseFile ok + PASS parity-check.ps1 on pwsh.exe and powershell.exe.\n\nMutants (scratch clone), each red on its rows:\n- M1: AG1(agy) bash + linux/Git Bash typeCases. M2: AG2 bash. M3: AG4-6 bash.\n- M4: AG4-6 on 5.1+7. M5: AG1(agy)+AG5 on 5.1+7 + PS typeCases. M6: AG5 on 5.1+7.\n- M7: a one-word change in either wrapper fails both parity scripts (bash, pwsh, 5.1).\n- M8 (echo -e): AG3 bash. M9 (GetFileNameWithoutExtension): AG1 '\"gemini\"' on 5.1+7.\n\nFor task-cb378fd8: the message is `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` sh prints it on stdout after [ERROR]; ps1 writes `[ERROR] ` plus the text to stderr. MOE_AGY_COMMAND = the agy binary path, read only without MOE_RUNTIME_PROTECTED=1; blank or whitespace = unset; it replaces the binary and keeps the command's args.",
+  "commits": [
+    {
+      "sha": "a1e93d27f0a8383163efd04d2ac736f12c951538",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T19:42:25Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T20:07:58.941Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T19:42:25Z",
+    "at": "2026-11-04T20:07:58.941Z"
+  }
 }
