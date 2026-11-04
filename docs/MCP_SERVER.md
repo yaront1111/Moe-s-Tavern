@@ -3163,6 +3163,7 @@ Read the activity log with filtering and pagination — newest first.
 
 **Notes:**
 - Filtered queries scan at most 5000 recent lines; older matches are not returned
+- Reads cover the live `activity.log` and its rotated `activity.log.<n>.gz` generations (newest `n=1`); rotation keeps `LOG_RETENTION_COUNT` (default 5) of them. A rotation compresses the live log to a temporary file (`activity.log.rotating.tmp`) first and changes the generations only once that file is complete, so a failed or timed-out compression (a full disk, a locked file) keeps every generation and the live log, removes the temporary file, and is not retried for 60 s.
 - Any payload value whose string or JSON form is longer than `maxPayloadChars` is cut and suffixed ` [truncated]`.
 - `eventTypes` values that are not activity event types (`ACTIVITY_EVENT_TYPES` in `types/schema.ts`) match nothing. They are never refused: the reply echoes their distinct values in an additive `unknownEventTypes: string[]` field, present only when non-empty.
 - **`PROJECT_SETTINGS_UPDATED` (CQ-M05, `state/profileRollout.ts`)** records `executionProfile` transitions, one event per settings update (plugin `UPDATE_SETTINGS`) that names the setting and changes it. The payload is flat:
