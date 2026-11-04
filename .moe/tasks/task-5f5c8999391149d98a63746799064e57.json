@@ -16,44 +16,75 @@
     {
       "stepId": "step-1",
       "description": "Wire the unwired suites into .github/workflows/ci.yml, job build-all-platforms. Insert six steps immediately before the existing line `      - name: Test Bash landing and postflight runner` (unique in the file). Change nothing else in the file. The whole planned diff is /mnt/d/moe-scratch/plan-5f5c/planned.diff (hunk 1 is this step) and the dry-run file is /mnt/d/moe-scratch/plan-5f5c/dry/.github/workflows/ci.yml, both made at e53f5a5c by /mnt/d/moe-scratch/plan-5f5c/apply_edits.py. Apply it with your editing tool, never a shell copy (TOOL-witness rail). Insert exactly:\n```\n      - name: Test launcher helper suites\n        # Folder-trust docs, the Serena ignore override and the fake proxy's get_commit_scope knobs.\n        # Not macOS: these suites have not been run there.\n        if: runner.os != 'macOS'\n        run: node --test scripts/tests/account-trust-docs.test.mjs scripts/tests/postflight-owner-scope.test.mjs scripts/tests/serena-ignore.test.mjs\n\n      - name: Test PowerShell doctor and team launch arguments\n        # doctor.ps1's Run-Native and moe-team.ps1's Start-Process build native command lines (PowerShell 5.1 and 7).\n        if: runner.os == 'Windows'\n        run: node --test scripts/tests/doctor-ps1.test.mjs scripts/tests/team-launch-quoting.test.mjs\n\n      - name: Test agent Git-write guard and protected agent command\n        # About 2 min on ubuntu-latest (bash, plus pwsh 7 for the protected launch). Under Windows PowerShell 5.1\n        # and PowerShell 7 the pair takes about 5-6 min on windows-latest, so Windows runs it only in the nightly.\n        if: runner.os == 'Linux'\n        run: node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/protected-agent-command.test.mjs\n\n      - name: Test agent Git-write guard and protected agent command (nightly)\n        # About 5-6 min on windows-latest: only the nightly runs it there.\n        if: inputs.full && runner.os == 'Windows'\n        run: node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/protected-agent-command.test.mjs\n\n      - name: Test Bash routed-mention provenance\n        if: runner.os == 'Linux'\n        run: bash scripts/tests/mention-provenance.sh\n\n      - name: Test PowerShell routed-mention provenance\n        # -PowerShell picks the wrapper's host: Windows PowerShell 5.1, then PowerShell 7.\n        if: runner.os == 'Windows'\n        run: |\n          powershell -NoProfile -File scripts/tests/mention-provenance.ps1 -PowerShell powershell\n          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n          pwsh -NoProfile -File scripts/tests/mention-provenance.ps1 -PowerShell pwsh\n\n```\nWhy this layout:\n- The Windows heavy pair (agent-git-guard plus protected-agent-command) took 191-199 s here under Windows node with its PowerShell 5.1 and 7 rows. That is about 5-6 min on windows-latest, using hunt #25's runner factor of 1.6-1.9x against this desktop. It would push the Windows PR job (about 16 min) past 'a few minutes' (DoD 5), so Windows runs it only in the nightly. Linux runs the pair per push: 72 s here with pwsh 7, about 2 min on ubuntu-latest. The ubuntu job stays far below the Windows job, so PR wall time does not move for it.\n- Do NOT fold doctor-ps1 or team-launch-quoting into 'Test PowerShell daemon autostart arguments'. That step is red on PR #230 (runs 41894749395 and 41895358687; fix row task-e5211efd, filed during this planning), and a shared step would wire the new files red (DoD 3).\n- doctor-ps1 and team-launch-quoting skip off Windows by their own reasons, so they get a Windows step. The three helper suites run on Linux and Windows.\n- macOS runs none of the new steps. None of these suites has been run there, and this host cannot run macOS, so the gate could not prove them (DoD 3).\n- mention-provenance (the DoD 4 decision): wired per push, not skipped. Here it took 13 s under bash and 8-9 s per PowerShell engine, and all three PASSED. -PowerShell picks the wrapper's host, so each engine runs as both parent and child, as CI's pwsh step shell -> powershell chain does.\nMeasured PR cost (local time x 1.6-1.9): ubuntu +2.5-3 min (about 6.4 -> 9-9.5 min), windows +1.5 min (about 16 -> 17.5 min), macOS +0. The nightly Windows job gains 5-6 min.\nError handling: every new step fails its job on a failing suite. A single `node --test` exits non-zero on any failing row. The PowerShell block stops after a failed 5.1 run at the LASTEXITCODE line, and GitHub's pwsh wrapper returns the last native exit code. Add no continue-on-error and no `|| true`. A provenance harness SKIPs with exit 0 when node, python 3 or timeout is missing, but the hosted runners have all three (setup-node, python 3, coreutils), and the gate requires all three PASSED lines locally.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".github/workflows/ci.yml"
-      ]
+      ],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Inserted the six planned steps before 'Test Bash landing and postflight runner'; nothing else in ci.yml changed.",
+      "startedAt": "2026-11-04T20:00:24.942Z",
+      "completedAt": "2026-11-04T20:00:41.227Z"
     },
     {
       "stepId": "step-2",
       "description": "Extend scripts/tests/ci-workflows.test.mjs (task-669e6aff's split pin) with the R7 guard and the new placements. This is the last hunk of /mnt/d/moe-scratch/plan-5f5c/planned.diff; the dry-run copy is /mnt/d/moe-scratch/plan-5f5c/dry/scripts/tests/ci-workflows.test.mjs. Use your editing tool. The edits, in order:\n1. Import readdirSync: `import { readdirSync, readFileSync } from 'node:fs';`.\n2. Header: after the line 'These rows pin that split, ...', add `// R7 keeps every scripts/tests/*.test.mjs in one of the two, or in SKIP with the reason it runs nowhere.`\n3. Before `// [command, the runner.os it runs on]`, add the two-line comment `// About 2 min on ubuntu-latest, 5-6 min under the two Windows PowerShells: Linux runs this pair per push,` / `// Windows only in the nightly.` and then `const AGENT_GUARDS = 'node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/protected-agent-command.test.mjs';`. LONG gets `[AGENT_GUARDS, 'Windows'],` as its FIRST entry: R2 compares the nightly-only commands in file order, and the new nightly step comes before the three postflight ones.\n4. FAST gets four entries after the parity-check.ps1 one: `[AGENT_GUARDS, 'Linux']`, `['bash scripts/tests/mention-provenance.sh', 'Linux']`, `['powershell -NoProfile -File scripts/tests/mention-provenance.ps1 -PowerShell powershell', 'Windows']` and `['pwsh -NoProfile -File scripts/tests/mention-provenance.ps1 -PowerShell pwsh', 'Windows']`.\n5. After `const all = ...`, add `function runsOn(guard, os)` with its two-line comment, as in the diff. Only `runner.os == 'X'` and `runner.os != 'X'` restrict the OS. Any other guard (matrix.os) counts as every OS, which can only add owners, never hide one.\n6. R2: the owners filter gains `&& runsOn(step.guard, os)`, because AGENT_GUARDS now sits in both a Linux PR step and a Windows nightly step. Add the per-file loop from the diff: for a LONG command that starts with `node --test `, no step that runs on that OS and is not nightly-only may name any of its files under any command line (message `${file} runs in PR CI on ${os}`). `nightlyOnly.length` goes from 3 to 4.\n7. R3: retitle it 'R3: the fast launcher suites stay in PR CI on their OS' and add the same runsOn filter.\n8. Append `const SKIP = {};` with its comment, then R7 'R7: every scripts/tests/*.test.mjs is run by a ci.yml step, or SKIP says why not', exactly as in the diff:\n   - named: every whitespace token of every ci.yml run line that starts with `node --test `, in any job. A nightly-only step counts, because nightly.yml calls ci.yml.\n   - files: readdirSync(new URL('.', import.meta.url)) filtered to *.test.mjs, asserting it includes ci-workflows.test.mjs.\n   - deepEqual the unwired, unskipped list against [], with the message 'name each file in a ci.yml `node --test` step (a nightly-only step counts), or add it to SKIP with its reason'.\n   - Each SKIP entry must name an existing file, must not also be wired, and needs a non-blank reason. Object.hasOwn keeps inherited Object keys out of the lookup.\nSKIP stays empty, because all 7 suites pass on every engine CI runs them on. Its comment says a broken suite's reason names its fix row (DoD 1).\nTest proof from planning: /mnt/d/moe-scratch/plan-5f5c/mutants.sh, run against the dry clone. All 7 rows pass on the edited tree, and 14 of 14 mutants fail the test:\n   - a new unwired file;\n   - a wired file dropped from its step;\n   - the Linux pair's guard widened to run on Windows per push;\n   - the Windows nightly guard without inputs.full;\n   - either provenance step dropped;\n   - a guard file added to the Windows PR doctor step, or to the helpers step, under another command line;\n   - the nightly step deleted;\n   - ci.yml reverted to e53f5a5c;\n   - three bad SKIP entries (a wired file, a missing file, a blank reason).\nThe rows only read text, and no runtime code changes. Error handling: every assertion names the file or command it failed on, so a red run says what to wire or skip.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/ci-workflows.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/ci-workflows.test.mjs"
+      ],
+      "note": "ci-workflows.test.mjs now carries AGENT_GUARDS, the new LONG/FAST entries, runsOn, the R2/R3 owner filters, R2's per-file loop, SKIP and R7. It is byte-identical to the planning dry run; node --test passes 7/7.",
+      "startedAt": "2026-11-04T20:00:46.133Z",
+      "completedAt": "2026-11-04T20:01:16.863Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs: two sentences change, and nothing else in either file.\n(1) CLAUDE.md line 81 (the CI paragraph). Replace `adding the bash, Windows PowerShell 5.1 and PowerShell 7 wrapper postflights. Daemon changes` with `adding the bash, Windows PowerShell 5.1 and PowerShell 7 wrapper postflights and the Windows runs of `scripts/tests/agent-git-guard.test.mjs` and `protected-agent-command.test.mjs`. A new `scripts/tests/*.test.mjs` must be named by a ci.yml `node --test` step, or listed with its reason in `SKIP` in `scripts/tests/ci-workflows.test.mjs`, which fails otherwise. Daemon changes`.\n(2) docs/DEVELOPMENT.md, the table row starting '| Windows engines |' (about line 294). Replace `the nightly adds the wrapper post-flight suites under 5.1 and 7 and `worktree-landing.ps1` under 7 | CI `build-all-platforms` (windows-latest); the post-flight suites only in `nightly.yml` |` with `the nightly adds the wrapper post-flight suites under 5.1 and 7, `worktree-landing.ps1` under 7, and `agent-git-guard.test.mjs` and `protected-agent-command.test.mjs` under both | CI `build-all-platforms` (windows-latest); the post-flight suites and those two files only in `nightly.yml` |`.\nBoth anchors match exactly once at e53f5a5c (apply_edits.py asserts it); the exact result is in planned.diff. No other doc names these suites (a git grep at HEAD found none), and RELEASING.md's 'Pull request CI skips the long launcher suites' stays true. Neither file is a role doc or a skill, so no generated init file changes. Do not use the 'never runs git' phrasing that daemonGitDocs.test.ts rejects.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "CLAUDE.md",
         "docs/DEVELOPMENT.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "CLAUDE.md",
+        "docs/DEVELOPMENT.md"
+      ],
+      "note": "CLAUDE.md CI paragraph and the DEVELOPMENT.md 'Windows engines' row each changed one sentence; both files are byte-identical to the planning dry run.",
+      "startedAt": "2026-11-04T20:01:17.776Z",
+      "completedAt": "2026-11-04T20:01:45.688Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification: run the gate once, fresh, from the task worktree. The gate is executionContract checkRefs[0] && checkRefs[1], joined with ' && ' exactly as stored. Each ref is one parenthesized subshell, so the join is safe, and the governor's 19:10Z ruling makes the joined command the gate. Submit that command, its exit code and its output tail as the complete_task evidence. Planning ran it at e53f5a5c plus these edits, from a clone and from a simulated .worktrees/task-* worktree: EXIT 0 in 3m17s-3m22s, at load about 3 on 16 cores (the 20-min rail, DoD 6).\nWhat it runs:\n- ref0 (about 10 s):\n  - the START time;\n  - a PyYAML parse of every workflow ('YAML OK 5');\n  - ci-workflows.test.mjs as a whole file (pass 7);\n  - the 9 CI-reading rows of the other test files, counted to `9` as in task-669e6aff's gate;\n  - the DoD 2 mutant: a temp copy of .github and scripts/tests plus an empty zz-unwired.test.mjs must FAIL ci-workflows.test.mjs, naming that file ('R7-MUTANT-KILLED').\n- ref1 (about 3.3 min) runs three legs in parallel (DoD 6):\n  - w1: CI's Windows PR commands under pwsh.exe, then node or powershell. That is the chain windows-latest uses: its step shell is pwsh, and a node.exe started straight from WSL would hide PSModulePath effects.\n  - w2: the Windows nightly pair.\n  - lx: CI's Linux commands, with a Linux pwsh 7 on PATH so that protected-agent-command's PowerShell 7 rows run as they will on ubuntu-latest.\n  - Then it checks that no row skipped for a missing engine ('is not available on' / 'pwsh.exe not found'), that all three '@' leg markers are there, and that there are three provenance PASSED lines.\nExpected tail, in order:\n- END time;\n- lx helpers: pass 73, fail 0;\n- lx pair: pass 109, fail 0, skipped 6;\n- 'mention-provenance.sh PASSED';\n- w helpers: pass 71, skipped 2;\n- doctor plus team: pass 11;\n- two 'mention-provenance.ps1 PASSED' lines;\n- w pair: pass 95, skipped 52.\nThe counts grow if a sibling row adds rows (task-c199e177 adds protected-agent-command rows). fail must be 0.\nLinux pwsh: this host has none on PATH. The gate uses /tmp/hunt-9ca9/pwsh (PowerShell 7.6.9, extracted by hunt #25), else the copy at /mnt/d/moe-scratch/linux-pwsh-7.6.9, which survives a WSL restart and takes about 0.8 s per launch. If both are gone, the gate fails on 'pwsh is not available on linux'. Restore it with `cp -a` from any surviving copy, never a download.\nError handling for a red run: the output lists $L. Read $L/w1, $L/w2 and $L/lx there, and fix the cause, never the check.\n- A row that fails in this task's own change: fix it.\n- A newly wired suite that fails at W's base for a reason outside this row: fix it here only if the fix is a few clearly correct lines in that suite. Otherwise:\n  - file a fix row with moe.create_task (evidence, failing rows, engine);\n  - move the file from its ci.yml step into SKIP with a reason naming that row, and out of AGENT_GUARDS and FAST if it is there;\n  - say so in the completion summary.\n  Never wire a red suite (DoD 3).\n- A timing-sensitive flake: rerun that leg's command alone once before acting.\nQA re-run: the control checkout may hold another session's uncommitted edits. At planning it held the human's scripts/moe-agent.sh, which agent-git-guard, protected-agent-command and mention-provenance.sh all launch. If `git status --porcelain -- scripts .github CLAUDE.md docs` there is not empty, run the joined gate from a clone on D: detached at the completion sha:\n```\ngit clone -q --shared --no-checkout . /mnt/d/moe-scratch/<dir>\ngit -C <dir> sparse-checkout set --no-cone '/*' '!/.moe/'\ngit -C <dir> checkout -q --detach <sha>\n```\nThen cd into <dir>. It must be on D: so the Windows legs can reach it. RED check: ref0 exits 1 at <sha>^ (no R7 there, so the unwired-file mutant passes), as it did at e53f5a5c in planning.\nDo not run gh workflow run, change repository variables or touch rulesets. Name these follow-ups in the completion summary:\n- the governor watches the first PR #230 run with this commit: the ubuntu and windows PR steps are green, and the Windows (nightly) step is skipped;\n- the Windows pair's first real run is the next nightly, or `gh workflow run ci.yml --ref moe/work-2026-10-24 -f full=true` (the human's call).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Joined gate (checkRefs[0] && checkRefs[1]) run fresh from the task worktree: EXIT 0 in 3m20s (20:02:14 to 20:05:34). YAML OK 5; ci-workflows 7/7; the 9 CI-reading rows; R7-MUTANT-KILLED. Linux helpers pass 73, pair pass 109 (skipped 6), bash provenance PASSED. Windows helpers pass 71 (skipped 2), doctor+team pass 11, two PowerShell provenance PASSED, pair pass 95 (skipped 52). fail 0 on every leg, no 'is not available on' or 'pwsh.exe not found' skip, all three leg markers present. The command was run from a scratch script (/tmp/gate-5f5c.sh) that I transcribed from the decoded stored checkRefs, joined with ' && '.",
+      "startedAt": "2026-11-04T20:01:46.355Z",
+      "completedAt": "2026-11-04T20:05:39.772Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff, once, at the end. Check each item:\n(1) Scope: `git diff --stat` against the target shows exactly ci.yml, ci-workflows.test.mjs, CLAUDE.md and docs/DEVELOPMENT.md, at or near +74/-7. No existing ci.yml step changed: diff the step list (names, if: lines, run lines) against the base, and only the six inserted steps differ.\n(2) Wiring: each of the 7 basenames appears only in its planned steps (grep -c per file). The Windows nightly pair runs under `inputs.full && runner.os == 'Windows'`, exactly like task-669e6aff's three nightly steps. On push and pull_request `inputs.full` is empty, so the step is skipped, never failed.\n(3) Would R7 pass while a file runs nowhere? Re-run at least three mutants against a temp copy outside W, never in W: a new unwired file, the helpers step without serena-ignore, and the nightly step without inputs.full. Each must fail.\n(4) Windows step semantics: the PowerShell provenance block stops after a failed 5.1 run, and a single-command `run:` returns node's exit code.\n(5) Budget: no per-push step that runs on Windows names agent-git-guard.test.mjs or protected-agent-command.test.mjs (R2's per-file loop), and each new step comment carries its measured cost.\n(6) Drift: R2 compares nightly commands in file order. If task-669e6aff's QA or task-e5211efd changed ci.yml since planning, re-anchor on the landed text instead of forcing the planned bytes.\n(7) The docs say only what the workflow does.\n(8) Would I be embarrassed if the next PR #230 run went red on one of these steps? If any item is doubtful, rerun that leg and fix it before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml",
+        "scripts/tests/ci-workflows.test.mjs",
+        "CLAUDE.md",
+        "docs/DEVELOPMENT.md"
+      ],
+      "note": "Self-review done. (1) git diff HEAD is exactly the 4 planned files, +79/-7, and ci.yml has 0 removed lines, so no existing step changed. (2) The basenames appear only in their planned steps (agent-git-guard 2, protected-agent-command 2, mention-provenance 3, the other five 1 each); exactly 4 steps are nightly-only, all inputs.full && runner.os == Windows or Linux. (3) Five mutants on temp copies outside the worktree all fail ci-workflows.test.mjs: an unwired new file, the helpers step without serena-ignore, the nightly step without inputs.full, the heavy pair added to the Windows PR doctor step, and the pwsh provenance line dropped. (4) The PowerShell provenance block exits on a failed 5.1 run before the pwsh run; a single-command run: returns node's exit code. (5) No PR step that runs on Windows names the heavy pair. (6) ci.yml, ci-workflows.test.mjs, CLAUDE.md and DEVELOPMENT.md are unchanged since the planning base e53f5a5c apart from my hunks. (7) The docs only say what the workflow does. (8) Residual risks, not provable here: ubuntu-latest's pwsh is not 7.6.9, the Windows pair has never run on a real windows-latest runner, and macOS runs none of the new steps.",
+      "startedAt": "2026-11-04T20:05:40.572Z",
+      "completedAt": "2026-11-04T20:06:10.031Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a0305b0b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,20 +106,28 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T19:02:36.892Z",
-  "updatedAt": "2026-11-04T19:59:27.039Z",
+  "updatedAt": "2026-11-04T20:07:29.125Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T19:03:16.349Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-67c762f6"
+    "architect-67c762f6",
+    "worker-a0305b0b"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T19:59:21.780Z",
   "executionContract": {
@@ -161,5 +200,47 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T19:59:21.809Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T20:00:24.942Z",
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a0305b0b@2026-11-04T19:59:24Z",
+    "at": "2026-11-04T20:07:29.125Z"
+  },
+  "reviewStartedAt": "2026-11-04T20:06:36.857Z",
+  "verification": {
+    "command": "(date -u +START=%T&&cd \"$(git rev-parse --show-toplevel)\"&&unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}&&set -o pipefail&&python3 -c 'import sys,yaml;[yaml.safe_load(open(f)) for f in sys.argv[1:]];print(\"YAML OK\",len(sys.argv)-1)' .github/workflows/*.yml&&node --test scripts/tests/ci-workflows.test.mjs|tail -n 8&&p='CI runs this suite on Linux and Windows|SH4 |E8 the CI|TC1 |MX0 |SC0 |AS0 |cross-platform CI permanently runs'&&node --test --test-reporter=tap --test-name-pattern=\"^($p)\" scripts/tests/{daemon-json-cap,seat-registration,local-runner-{agents,bundle,check,pinned-client,seat-capacity,seat}}.test.mjs|grep -cE \"^ok [0-9]+ - ($p)\"|grep -x 9&&M=$(mktemp -d)&&mkdir $M/scripts&&cp -r .github $M/&&cp -r scripts/tests $M/scripts/&&echo 'import \"node:test\";'>$M/scripts/tests/zz-unwired.test.mjs&&! node --test $M/scripts/tests/ci-workflows.test.mjs>$M/out 2>&1&&grep -c \"'zz-unwired.test.mjs'\" $M/out&&echo R7-MUTANT-KILLED) && (cd \"$(git rev-parse --show-toplevel)\"&&unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};L=$(mktemp -d);t=scripts/tests;T(){ printf \" $t/%s.test.mjs\" \"$@\";};P=/tmp/hunt-9ca9/pwsh;[ -x $P/pwsh ]||P=/mnt/d/moe-scratch/linux-pwsh-7.6.9;H=$(T account-trust-docs postflight-owner-scope serena-ignore);G=$(T agent-git-guard protected-agent-command);m=\"-nop -f $t/mention-provenance.ps1 -PowerShell\";(pwsh.exe -nop -c \"node --test$H&&node --test$(T doctor-ps1 team-launch-quoting)&&powershell $m powershell&&pwsh $m pwsh\"&&echo @)>$L/w1 2>&1& (pwsh.exe -nop -c \"node --test$G\"&&echo @)>$L/w2 2>&1& (PATH=$P:$PATH;node --test$H&&node --test$G&&bash $t/mention-provenance.sh&&echo @)>$L/lx 2>&1;wait;date -u +END=%T;grep -h '^ℹ \\(pass\\|fail\\|skipped\\)\\|PASSED' $L/*;! grep -l 'is not available on\\|pwsh.exe not found' $L/*&&[ $(cat $L/*|grep -c '^@$') = 3 ]&&[ $(cat $L/*|grep -c 'provenance.* PASSED') = 3 ])",
+    "exitCode": 0,
+    "outputTail": "START=20:02:14\nYAML OK 5\nℹ tests 7 / ℹ pass 7 / ℹ fail 0 (ci-workflows.test.mjs)\n9\n2\nR7-MUTANT-KILLED\nEND=20:05:34\nℹ pass 73 / fail 0 / skipped 0   (Linux helpers)\nℹ pass 109 / fail 0 / skipped 6  (Linux agent-git-guard + protected-agent-command)\nmention-provenance.sh PASSED (8 stored cases + 2 synthetic delivery-failure cases, 5 modes)\nℹ pass 71 / fail 0 / skipped 2   (Windows helpers)\nℹ pass 11 / fail 0 / skipped 0   (Windows doctor-ps1 + team-launch-quoting)\nmention-provenance.ps1 PASSED (8 stored cases + 2 synthetic delivery-failure cases, 3 modes)\nmention-provenance.ps1 PASSED (8 stored cases + 2 synthetic delivery-failure cases, 3 modes)\nℹ pass 95 / fail 0 / skipped 52  (Windows nightly pair)\nEXIT=0",
+    "reportedAt": "2026-11-04T20:06:36.857Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    ".github/workflows/ci.yml",
+    "scripts/tests/ci-workflows.test.mjs",
+    "CLAUDE.md",
+    "docs/DEVELOPMENT.md"
+  ],
+  "completionSummary": "Every scripts/tests/*.test.mjs is now run by a ci.yml `node --test` step, and a new guard fails when one is not. Four files changed, +79/-7: ci.yml, ci-workflows.test.mjs, CLAUDE.md and docs/DEVELOPMENT.md.\n\nci.yml (build-all-platforms): six steps inserted before 'Test Bash landing and postflight runner'. No existing step changed, and the diff has 0 removed lines.\n- Per push, Linux and Windows: account-trust-docs, postflight-owner-scope and serena-ignore (not macOS).\n- Per push, Windows only: doctor-ps1 and team-launch-quoting.\n- Per push, Linux only: agent-git-guard and protected-agent-command. They take about 2 min on ubuntu-latest.\n- Nightly only (`inputs.full && runner.os == 'Windows'`): that same pair on Windows, which is about 5-6 min there.\n- mention-provenance decision: wired per push, not skipped. Bash runs on Linux; PowerShell 5.1 and 7 run on Windows.\n- macOS runs none of the new steps.\n\nci-workflows.test.mjs: new R7 fails when a scripts/tests/*.test.mjs is named by no ci.yml `node --test` step and SKIP does not list it with a reason. SKIP is empty, because all 7 suites pass on every engine CI runs them on. R2 gained a per-file check that no Windows PR step names the heavy pair. R2 and R3 now filter owners by runner.os. The nightly-only count is 4.\n\nEvidence:\n- The joined checkRefs[0] && checkRefs[1] gate ran fresh from the task worktree. It exited 0 in 3m20s, well inside the 20-min rail.\n- ci-workflows 7/7 pass. The R7 mutant (a temp zz-unwired.test.mjs) is killed.\n- Linux: helpers 73 pass, pair 109 pass (6 skipped), provenance.sh PASSED. Windows under pwsh: helpers 71 pass (2 skipped), doctor+team 11 pass, two provenance.ps1 PASSED (5.1 and 7), nightly pair 95 pass (52 skipped). fail 0 on every leg, and no row skipped for a missing engine.\n- Self-review: 5 extra mutants on temp copies were all killed: an unwired file, the helpers step without serena-ignore, the nightly step without `inputs.full`, the heavy pair added to the Windows PR doctor step, and t",
+  "commits": [
+    {
+      "sha": "c0bab562b2d9e9704064d9ae41320196a7568e4e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T19:59:24Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "CLAUDE.md",
+        "docs/DEVELOPMENT.md",
+        "scripts/tests/ci-workflows.test.mjs"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T20:07:29.125Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

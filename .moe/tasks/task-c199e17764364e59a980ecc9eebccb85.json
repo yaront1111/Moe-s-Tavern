@@ -93,14 +93,21 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this row's diff (load adversarial-self-review). Run mutants in a scratch clone outside the checkout (`git clone -q --shared --no-checkout` of the control checkout into /mnt/d/moe-scratch/<dir>, detach at your worktree's HEAD, then copy your working files in). Never mutate W. Each mutant must turn the named piece red:\n- M1 revert sh 1(a) -> AG1(agy) on bash and the linux typeCases;\n- M2 sh `case` back to `if [ -n \"${MOE_AGY_COMMAND:-}\" ]` -> AG2 on bash;\n- M3 revert sh 1(b) -> AG4-AG6 on bash;\n- M4 revert ps1 2(a) -> AG4-AG6 on both PowerShells;\n- M5 revert ps1 2(b) -> AG1(agy) and AG5 on both PowerShells, and the windows typeCases;\n- M6 drop the ps1 `-not $script:MoeRuntimeProtected` guard -> AG5 (custom agy runs);\n- M7 change one word of either wrapper's message -> parity-check.sh and .ps1.\nAlso check:\n- the whole diff is 6 files, with no postflight-vm-route.* or .moe/ path;\n- the gemini block's later uses of $COMMAND_BIN / $Command (the 'Command:' banner and the launch lines) see the new value;\n- a hot reload or a second loop iteration keeps working (ps1 $Command is already agy; sh COMMAND_BIN parses once at ~:765);\n- no added line holds a project.json globalRails.forbiddenPatterns string.\nIn the complete_task summary, name the mutants and their results. Then add one line for the docs row task-cb378fd8: the exact message text and MOE_AGY_COMMAND semantics as landed.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T19:52:31.513Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "Self-review found 2 real defects and fixed both inside the approved hunks.\n(1) The sh not-found line used `echo -e` on a user path (MOE_AGY_COMMAND): `\\c` cut the line and `\\t` became a tab. It now uses printf '%b[ERROR]%b %s\\n' \"$RED\" \"$NC\" \"<msg>\", the refuse_unprotected_runtime pattern, with the same bytes on stdout.\n(2) A quoted ps1 -Command ('\"gemini\"') keeps its quotes through Resolve-CommandParts, and [IO.Path]::GetFileNameWithoutExtension throws 'Illegal characters in path' on PS 5.1 under EAP Stop (probed). Both twins now test the detection base name ($cmdBase / CMD_BASE, computed once from the quote-trimmed token), which also drops sh's GEMINI_BIN_BASE.\nTests: AG1 gains '\"gemini\"' and AG3 gains a 'custom/agy\\c' case, so there are 9 rows per engine.\nMutants were run in a scratch clone (/mnt/d/moe-scratch/c199-mut, now removed), and each turned its named rows red:\n- M1: AG1(agy) on bash, plus the linux and Git Bash typeCases.\n- M2: AG2 on bash.\n- M3: AG4-AG6 on bash.\n- M4: AG4-AG6 on 5.1 and 7.\n- M5: AG1(agy) and AG5 on 5.1 and 7, plus the PS typeCases.\n- M6: AG5 on 5.1 and 7.\n- M7a/M7b: parity-check.sh and .ps1 (pwsh and 5.1).\n- M8 (back to echo -e): AG3 on bash.\n- M9 (back to GetFileNameWithoutExtension($Command)): AG1('\"gemini\"') on 5.1 and 7.\nOther checks: 6 files changed, none under postflight-vm-route.* or .moe/. The banner and launch lines read the new COMMAND_BIN/$Command, and a second loop pass is idempotent. The added lines contain no forbidden patterns. The gate was re-run fresh after these edits: GATE_RC=0.",
+      "startedAt": "2026-11-04T19:52:31.513Z",
+      "completedAt": "2026-11-04T20:05:45.424Z"
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -122,12 +129,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T18:14:14.056Z",
-  "updatedAt": "2026-11-04T19:52:31.513Z",
+  "updatedAt": "2026-11-04T20:06:44.462Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T18:28:59.222Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -145,7 +152,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T18:32:11.964Z",
@@ -216,5 +224,22 @@
   },
   "planApprovedAt": "2026-11-04T18:32:11.994Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T19:44:13.871Z"
+  "workStartedAt": "2026-11-04T19:44:13.871Z",
+  "reviewStartedAt": "2026-11-04T20:06:44.460Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\"; U=$(env | grep -oE '^(MOE_|CLAUDE)[A-Z0-9_]*' | sed 's/^/-u /'); F=scripts/tests/protected-agent-command.test.mjs; L=$(mktemp); N=$(mktemp); (env $U node --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $L 2>&1) & a=$!; (env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $N 2>&1) & b=$!; r=0; wait $a || r=1; wait $b || r=1; k(){ tr -d '\\r' < \"$1\" | grep -E \"^ok [0-9]+ - $2: [^#]*gemini mode\" | grep -vc '# SKIP'; }; s=\"bash=$(k $L bash) ps51=$(k $N 'PowerShell 5.1') ps7=$(k $N 'PowerShell 7')\"; echo \"gemini mode rows: rc=$r $s (logs $L $N)\"; [ $r = 0 ] && echo \"$s\" | grep -qE '^bash=([89]|[1-9][0-9]) ps51=([89]|[1-9][0-9]) ps7=([89]|[1-9][0-9])$' ) && ( cd \"$(git rev-parse --show-toplevel)\"; U=$(env | grep -oE '^(MOE_|CLAUDE)[A-Z0-9_]*' | sed 's/^/-u /'); F=scripts/tests/prompt-cache-launcher.test.mjs; L=$(mktemp); N=$(mktemp); (env $U node --test --test-reporter=tap --test-name-pattern MOE_WORKER_TYPE $F > $L 2>&1) & a=$!; (env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern MOE_WORKER_TYPE $F > $N 2>&1) & b=$!; r=0; wait $a || r=1; wait $b || r=1; k(){ tr -d '\\r' < \"$1\" | grep -E '^ok [0-9]+ - [^#]*: (C:/tools/)?agy(\\.exe)? exports MOE_WORKER_TYPE=GEMINI' | grep -vc '# SKIP'; }; echo \"agy type rows: rc=$r linux=$(k $L) windows=$(k $N) (logs $L $N)\"; [ $r = 0 ] && [ \"$(k $L)\" -ge 2 ] && [ \"$(k $N)\" -ge 6 ] ) && ( cd \"$(git rev-parse --show-toplevel)\"; P=$(wslpath -w \"$PWD\"); bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && npm run lint --silent && for e in pwsh.exe powershell.exe; do $e -NoProfile -Command \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile('$P\\scripts\\moe-agent.ps1',[ref]\\$null,[ref]\\$x);if(\\$x.Count){\\$x;exit 1};'ParseFile ok'\" && $e -NoProfile -ExecutionPolicy Bypass -File \"$P\\scripts\\tests\\parity-check.ps1\" || exit 1; done )",
+    "exitCode": 0,
+    "outputTail": "gemini mode rows: rc=0 bash=9 ps51=9 ps7=9 (logs /tmp/tmp.vjjKO06iEE /tmp/tmp.Uv7VpQtuwc)\nagy type rows: rc=0 linux=2 windows=6 (logs /tmp/tmp.Jj2W8ISSvC /tmp/tmp.L6FN3SsHOU)\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nParseFile ok\nPASS parity-check.ps1\nParseFile ok\nPASS parity-check.ps1\nGATE_RC=0 elapsed=53s",
+    "reportedAt": "2026-11-04T20:06:44.460Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/protected-agent-command.test.mjs",
+    "scripts/tests/prompt-cache-launcher.test.mjs"
+  ],
+  "completionSummary": "PR #208 launcher slice, both twins. agentCommand gemini or agy (base name) is gemini mode, MOE_WORKER_TYPE=GEMINI. Without MOE_RUNTIME_PROTECTED the binary is a non-blank MOE_AGY_COMMAND, else agy for a gemini command, else the command as given, never the Gemini CLI. If not found: exit 1, nothing runs, one fixed line. Under the marker the allowlist is unchanged (agy refused), gemini's trusted lookup takes agy, and MOE_AGY_COMMAND is not read. The parity scripts require 3 literals.\n\nPlan deviations (self-review, inside the approved hunks):\n1. sh prints not-found via printf '%b[ERROR]%b %s\\n', not echo -e, so a backslash in MOE_AGY_COMMAND (agy\\c) cannot cut the line.\n2. The gemini->agy test uses detection's $cmdBase/CMD_BASE in both twins: GetFileNameWithoutExtension($Command) throws 'Illegal characters in path' on PS 5.1 for a quoted -Command.\nNew test cases: AG1 '\"gemini\"' and AG3 agy\\c, now 9 rows per engine.\n\nVerification, fresh after all edits: GATE_RC=0 in 53 s.\n- gemini mode rows bash=9 ps51=9 ps7=9; agy type rows linux=2 windows=6.\n- PASS parity-check.sh; lint OK; ParseFile ok + PASS parity-check.ps1 on pwsh.exe and powershell.exe.\n\nMutants (scratch clone), each red on its rows:\n- M1: AG1(agy) bash + linux/Git Bash typeCases. M2: AG2 bash. M3: AG4-6 bash.\n- M4: AG4-6 on 5.1+7. M5: AG1(agy)+AG5 on 5.1+7 + PS typeCases. M6: AG5 on 5.1+7.\n- M7: a one-word change in either wrapper fails both parity scripts (bash, pwsh, 5.1).\n- M8 (echo -e): AG3 bash. M9 (GetFileNameWithoutExtension): AG1 '\"gemini\"' on 5.1+7.\n\nFor task-cb378fd8: the message is `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` sh prints it on stdout after [ERROR]; ps1 writes `[ERROR] ` plus the text to stderr. MOE_AGY_COMMAND = the agy binary path, read only without MOE_RUNTIME_PROTECTED=1; blank or whitespace = unset; it replaces the binary and keeps the command's args."
 }
