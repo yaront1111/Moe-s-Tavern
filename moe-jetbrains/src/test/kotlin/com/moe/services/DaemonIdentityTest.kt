@@ -7,6 +7,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume
 import org.junit.Test
 import java.io.IOException
 import java.io.OutputStream
@@ -17,6 +18,9 @@ import java.net.ProxySelector
 import java.net.ServerSocket
 import java.net.SocketAddress
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -26,12 +30,45 @@ class DaemonIdentityTest {
     private val servers = mutableListOf<HttpServer>()
     private val executors = mutableListOf<ExecutorService>()
     private val rawServers = mutableListOf<ServerSocket>()
+    private val links = mutableListOf<Path>()
+    private val dirs = mutableListOf<Path>()
 
     @After
     fun tearDown() {
         servers.forEach { it.stop(0) }
         executors.forEach { it.shutdownNow() }
         rawServers.forEach { it.close() }
+        // Links first: deleting a symlink or junction removes the entry, never its target.
+        links.forEach { Files.deleteIfExists(it) }
+        dirs.forEach { Files.deleteIfExists(it) }
+    }
+
+    @Test
+    fun `a project opened through a directory link to the served directory is Same`() {
+        val real = tempDir("moe-id-real")
+        val link = dirLink(real)
+        Assume.assumeNotNull(link)
+        assertEquals(DaemonIdentity.Same, DaemonIdentityProbe.classify(200, health(real.toString()), link.toString()))
+        assertTrue(MoeDaemonSupervisor.isSameProject(real.toString(), link.toString()))
+    }
+
+    @Test
+    fun `a link to one project is still Foreign to another project`() {
+        val other = tempDir("moe-id-other")
+        val link = dirLink(tempDir("moe-id-real"))
+        Assume.assumeNotNull(link)
+        assertEquals(
+            DaemonIdentity.Foreign(other.toString()),
+            DaemonIdentityProbe.classify(200, health(other.toString()), link.toString()),
+        )
+        assertFalse(MoeDaemonSupervisor.isSameProject(other.toString(), link.toString()))
+    }
+
+    @Test
+    fun `a relative served path stays Unknown through a link`() {
+        val link = dirLink(tempDir("moe-id-real"))
+        Assume.assumeNotNull(link)
+        assertEquals(DaemonIdentity.Unknown, DaemonIdentityProbe.classify(200, health("proj"), link.toString()))
     }
 
     @Test
@@ -309,6 +346,36 @@ class DaemonIdentityTest {
         exchange.responseHeaders.add("Content-Type", "application/json")
         exchange.sendResponseHeaders(status, if (bytes.isEmpty()) -1 else bytes.size.toLong())
         if (bytes.isNotEmpty()) exchange.responseBody.write(bytes)
+    }
+
+    private fun tempDir(prefix: String): Path = Files.createTempDirectory(prefix).also { dirs.add(it) }
+
+    /**
+     * A sibling '<name>-link' to [target]: a symlink, else (Windows without the symlink privilege) a
+     * directory junction, which needs none; null when neither can be made.
+     */
+    private fun dirLink(target: Path): Path? {
+        val link = target.resolveSibling("${target.fileName}-link")
+        val made = try {
+            Files.createSymbolicLink(link, target)
+            true
+        } catch (_: Exception) {
+            MoeDaemonSupervisor.isWindowsHost() && junction(link, target)
+        }
+        // Recorded even when a timed-out mklink left an entry behind, so tearDown removes it.
+        if (Files.exists(link, LinkOption.NOFOLLOW_LINKS)) links.add(link)
+        return link.takeIf { made }
+    }
+
+    private fun junction(link: Path, target: Path): Boolean = try {
+        val process = ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(), target.toString())
+            .redirectErrorStream(true)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        if (!process.waitFor(10, TimeUnit.SECONDS)) process.destroyForcibly()
+        !process.isAlive && process.exitValue() == 0 && Files.exists(link)
+    } catch (_: Exception) {
+        false
     }
 
     private fun health(projectPath: String, status: String = "healthy"): String =

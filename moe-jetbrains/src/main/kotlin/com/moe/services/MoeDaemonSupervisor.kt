@@ -1026,9 +1026,7 @@ class MoeDaemonSupervisor(
             (if (windows) Regex("""^/(?![\\/])""") else Regex("""^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])"""))
                 .containsMatchIn(projectPath)
 
-        internal fun isSameProject(path: String, base: String): Boolean =
-            DaemonIdentityProbe.comparableProjectPath(path) == DaemonIdentityProbe.comparableProjectPath(base) ||
-                File(path).canonicalPath == File(base).canonicalPath
+        internal fun isSameProject(path: String, base: String): Boolean = DaemonIdentityProbe.isSameProjectPath(path, base)
         private const val STOP_TIMEOUT_MS = 20_000L
         private const val NOT_STARTED_HERE = "this IDE did not start it from the installed Moe runtime"
         private const val STOP_FAILED = "the stop request failed"

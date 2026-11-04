@@ -7,10 +7,13 @@ import com.google.gson.Strictness
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.StringReader
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
+import java.nio.file.Files
+import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
 
 /**
@@ -20,9 +23,10 @@ import java.util.concurrent.TimeUnit
  * reuse its pid and another project's daemon can take its port. A false [Foreign] is destructive
  * (the caller deletes daemon.json and spawns a second daemon), so the rule errs toward [Same] or
  * [Unknown]: only an absolute served path that differs by [DaemonIdentityProbe.comparableProjectPath]
- * is Foreign. A relative one is Unknown, because /health reports the daemon's raw --project, relative
- * to a cwd the IDE cannot know. The twin is moe-proxy's packages/moe-proxy/src/daemonIdentity.ts,
- * over comparableProjectPath in packages/moe-proxy/src/utils.ts.
+ * and is not the same directory on disk (a symlink or junction to it) is Foreign, the rule of
+ * [DaemonIdentityProbe.isSameProjectPath]. A relative one is Unknown, because /health reports the
+ * daemon's raw --project, relative to a cwd the IDE cannot know. The twin is moe-proxy's
+ * packages/moe-proxy/src/daemonIdentity.ts, over comparableProjectPath in packages/moe-proxy/src/utils.ts.
  */
 sealed interface DaemonIdentity {
     data object Same : DaemonIdentity
@@ -75,12 +79,21 @@ object DaemonIdentityProbe {
             ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
             ?: return DaemonIdentity.Unknown
         if (!isAbsoluteAnyOs(served) || !isAbsoluteAnyOs(projectPath)) return DaemonIdentity.Unknown
-        return if (comparableProjectPath(served) == comparableProjectPath(projectPath)) {
-            DaemonIdentity.Same
-        } else {
-            DaemonIdentity.Foreign(served)
-        }
+        return if (isSameProjectPath(served, projectPath)) DaemonIdentity.Same else DaemonIdentity.Foreign(served)
     }
+
+    /**
+     * Whether [path] and [base] name one project: equal [comparableProjectPath] spellings, else the same
+     * directory on disk. The disk check is best effort and never throws: an unreadable or unparsable
+     * path (a WSL path on Windows) just answers false.
+     */
+    fun isSameProjectPath(path: String, base: String): Boolean =
+        comparableProjectPath(path) == comparableProjectPath(base) || sameDirectoryOnDisk(path, base)
+
+    /** File.canonicalPath resolves a POSIX symlink and a relative path; Files.isSameFile also a Windows junction. */
+    private fun sameDirectoryOnDisk(path: String, base: String): Boolean =
+        runCatching { File(path).canonicalPath == File(base).canonicalPath }.getOrDefault(false) ||
+            runCatching { Files.isSameFile(Paths.get(path), Paths.get(base)) }.getOrDefault(false)
 
     /**
      * A form of [path] comparable across Windows, WSL and UNC spellings, whatever OS the IDE runs on:
