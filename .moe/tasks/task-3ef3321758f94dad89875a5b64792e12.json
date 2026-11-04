@@ -27,10 +27,11 @@
     {
       "stepId": "step-2",
       "description": "IMPLEMENT (DoD 1 and 2) in scripts/moe-serena-ignore.mjs, with the session's own editing tool.\n\nSerena 1.6.2 applies project.local.yml with a whole-key replace: `yaml_data.update(local_yaml_data)` in serena/config/serena_config.py:713-725, under ~/.local/share/uv/tools/serena-agent. So the block must carry project.yml's own list plus '_archive/.*'.\n\n1. Generalise the parser: `export function parseStringSequence(text, key)`.\n   - Build a KEY regex from the key: unquoted, double-quoted or single-quoted, then ':' (the current KEY at :65).\n   - Reuse scalar/flowSequence/blockSequence unchanged.\n   - Keep `export function parseIgnoredPaths(text) { return parseStringSequence(text, 'ignored_paths'); }`.\n2. `renderBlock(patterns, memoryPatterns = null)`: when memoryPatterns is an array, append 'ignored_memory_patterns:' and its items after the ignored_paths items, through the same JSON-quote and escape mapping as the ignored_paths items (factor out one item-renderer). With the default null, the output is byte-identical to today's except for the WHY lines.\n3. WHY and header comments (:1-13, :23-28): say the block also hides QA-archived memories (_archive/.*), and that setting ignored_memory_patterns yourself outside the block keeps your list. With that key, Moe leaves it out of the block instead of removing the block. Suggested extra lines:\n   '# Moe also hides QA-archived memories (_archive/.*); set ignored_memory_patterns yourself outside'\n   '# this block to keep your own list instead.'\n4. In main(): read project.yml once and give the text to collect, so both keys come from one read. Then compute the memory list:\n   - null when any line of local.user matches /^([\"']?)ignored_memory_patterns\\1[ \\t]*:(?:[ \\t]|$)/. That is the user's own key; emitting a second one would be a duplicate YAML key, and Serena's loader can refuse the project.\n   - null when parseStringSequence(yml, 'ignored_memory_patterns') returns null. Error handling: a list that cannot be read safely is never guessed at, and the block is still written for ignored_paths.\n   - otherwise the parsed list, plus '_archive/.*' appended when it is absent.\n   Pass the result to renderBlock.\n   Do NOT add ignored_memory_patterns to OWN_KEY (:140): a user's memory key must not remove the block.\n   checkUser, the skip and remove paths, the 'is up to date' byte comparison and the one-line output contract stay unchanged. The [OK] line's count is still the ignored_paths count.\n5. The module still imports only node: builtins (F7).\n\nRun the step-1 file: every row passes.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-serena-ignore.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-04T08:18:37.122Z"
     },
     {
       "stepId": "step-3",
@@ -71,7 +72,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:58:35.668Z",
-  "updatedAt": "2026-11-04T08:17:05.182Z",
+  "updatedAt": "2026-11-04T08:18:37.122Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:09:10.293Z",
     "plannedStepCount": 5,

@@ -55,15 +55,23 @@
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Check:\n- Does isDelivered match util/metrics.ts:60-64 exactly? DONE, or ARCHIVED with a non-blank string doneAt. A REVIEW row with a stale doneAt is not delivered, and a DONE row without metrics is delivered.\n- Can any task JSON (null metrics, metrics an array or a string, doneAt a number) make the script throw or count wrongly?\n- Are the JSON shape and the table header unchanged?\n- Is the ci.yml list otherwise byte-identical, and does the step still run on every OS?\n- Does the new test leave no temp dir behind, and pass a clean env?\nIf anything changes, re-run the step-3 command and use that fresh output for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/analyze-task-metrics.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/analyze-task-metrics.mjs",
+        "scripts/tests/analyze-task-metrics.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Self-review: isDelivered matches util/metrics.ts exactly (DONE, or ARCHIVED with non-blank string doneAt); optional chaining covers null/string/array metrics and numeric doneAt without throwing; JSON key and table header unchanged; ci.yml diff is a one-path append; test cleans its temp dir via t.after and runs a clean env. Re-ran the step-3 command fresh: exit 0.",
+      "startedAt": "2026-11-04T08:18:52.125Z",
+      "completedAt": "2026-11-04T08:18:55.057Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5772dacf",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,12 +83,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:04:04.228Z",
-  "updatedAt": "2026-11-04T08:17:08.267Z",
+  "updatedAt": "2026-11-04T08:19:58.587Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:11:41.156Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -93,7 +101,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:12:49.873Z",
@@ -172,18 +181,43 @@
       "treeId": "2b8b5c5f530a181b4acabb82a91e79b39cf27ec2",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "76e261b3681bf9509b93f380c5a64fdef740a3b2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T08:17:44Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/analyze-task-metrics.mjs",
+        "scripts/tests/analyze-task-metrics.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T08:19:58.587Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".github/workflows/ci.yml",
+    "scripts/tests/analyze-task-metrics.test.mjs",
     "scripts/analyze-task-metrics.mjs",
-    "scripts/tests/analyze-task-metrics.test.mjs"
+    ".github/workflows/ci.yml"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-5772dacf@2026-11-04T08:14:43Z",
-    "at": "2026-11-04T08:17:08.267Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-5772dacf@2026-11-04T08:17:44Z",
+    "at": "2026-11-04T08:19:58.587Z"
+  },
+  "reviewStartedAt": "2026-11-04T08:19:02.167Z",
+  "verification": {
+    "command": "node --test scripts/tests/analyze-task-metrics.test.mjs && grep -n \"analyze-task-metrics.test.mjs\" .github/workflows/ci.yml && S=$(mktemp -d /tmp/moe-ebf5-gate-XXXXXX) && mkdir -p \"$S/scripts/tests\" && cp scripts/analyze-task-metrics.mjs \"$S/scripts/\" && cp /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs \"$S/scripts/tests/\" && node --test \"$S/scripts/tests/zzHuntB-analyze-task-metrics-done.test.mjs\"",
+    "exitCode": 0,
+    "outputTail": "new test: tests 4, pass 4, fail 0; ci.yml line 267 matches analyze-task-metrics.test.mjs; hunt repro: tests 1, pass 1, fail 0",
+    "reportedAt": "2026-11-04T08:19:02.167Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "analyze-task-metrics.mjs now counts a size bucket's done with the daemon's isDelivered rule (DONE, or ARCHIVED with non-blank metrics.doneAt), inlined with a twin comment. JSON key and table column unchanged; malformed metrics counts as not archived-delivered and never throws. Added scripts/tests/analyze-task-metrics.test.mjs (4 cases) and appended it to the ci.yml node --test list. Hunt repro passes against the fixed script."
 }
