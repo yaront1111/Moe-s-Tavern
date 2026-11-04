@@ -106,7 +106,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -129,16 +129,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T18:14:14.056Z",
-  "updatedAt": "2026-11-04T20:07:58.941Z",
+  "updatedAt": "2026-11-04T20:15:04.808Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T18:28:59.222Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T20:14:18.667Z",
+    "wallClockMs": 6319445
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-1cd86a39"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -265,9 +268,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T19:42:25Z",
-    "at": "2026-11-04T20:07:58.941Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T20:08:31Z",
+    "at": "2026-11-04T20:15:04.808Z"
+  },
+  "completedAt": "2026-11-04T20:14:18.667Z",
+  "reviewCompletedAt": "2026-11-04T20:14:18.667Z",
+  "reviewSummary": "Reviewed completion a1e93d27: pushed, and it is the remote tip of moe/work-2026-10-24. 6 files, +113/-14, net 99 LOC, exactly the approvedScope; no .moe/ or postflight-vm-route path.\n\nGate: re-ran task.verification verbatim, (ref0) && (ref1) && (ref2), in a fresh clone snapshot at a1e93d27. The control checkout's moe-agent.sh holds another session's uncommitted edits. GATE_RC=0 in 63 s:\n- gemini mode rows: bash=9 ps51=9 ps7=9, TAP fail 0;\n- agy type rows: linux=2 windows=6;\n- PASS parity-check.sh, lint OK, and ParseFile ok + PASS parity-check.ps1 on pwsh.exe and powershell.exe.\n\nRED check: the new tests against the base c0bab562 launchers.\n- AG1(agy) and AG2-AG6 fail on every engine, and AG1('\"gemini\"') on 5.1/7.\n- AG1(gemini) and AG7 pass there: they pin behaviour that was already right.\n- parity-check.sh fails with 3 asymmetries.\n\nDoD:\n1. Legacy: MOE_AGY_COMMAND when non-blank, else gemini becomes agy (by the detection base name), then the fixed not-found line and exit 1 before any CLI. sh prints with printf; ps1 uses [Console]::Error.WriteLine.\n2. Protected: gemini resolves the trusted agy; the allowlist is unchanged, so agy is refused; MOE_AGY_COMMAND is not read (AG4-AG7).\n3. Both typeCases pass.\n4. Both parity scripts and lint pass.\n\nAlso checked:\n- The ps1 hot reload passes @PSBoundParameters, so the reassigned $Command does not leak into a reload, and the remap repeats safely in every loop pass.\n- No stale old message or $geminiCheck reference remains.\n- The ps1 BOM is kept with no CR; no forbidden patterns.\n\nBoth plan deviations (printf, detection base name) fix real defects and are pinned by new cases.\n\nComplexity pass: nothing to cut.\n\nNot verified: macOS bash 3.2. protected-agent-command.test.mjs is not CI-wired, which is out of scope.",
+  "requiredCheckAtDone": null
 }

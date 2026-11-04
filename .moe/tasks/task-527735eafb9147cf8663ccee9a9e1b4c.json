@@ -44,19 +44,25 @@
     {
       "stepId": "step-3",
       "description": "postflight-vm-route.sh rows: a compact new [strong receipt] section after the landed [strong intent]/[strong gate] sections. Reuse their fixtures: the fake proxy's RPC log, the strong attempt record and the fake dispatch.\n\n- T1. A strong worktree landing logs record_commit, then exactly one record_delivery_receipt, then finalize_attempt landed, in that order. The receipt carries candidateId (the frozen id), target refs/heads/<target>, targetBefore B, targetAfter C, landedRevision C and pushResult. The journal held candidateId, treeSha, baseRevision, planRevision and profile until the attempt closed.\n- T2. The fake answers record_delivery_receipt with a transport failure. The line MOE_FINALIZE_DEFERRED_RECEIPT appears, there is no finalize_attempt, and the journal is kept. The next pre-flight replay sends the identical receipt (byte-equal JSON), then finalize_attempt landed, then drops the journal.\n- T3. A DELIVERY_RECEIPT_CONFLICT answer: one warn line, no second receipt call, and finalize proceeds.\n- T4. The legacy control: a non-strong worktree landing logs no record_delivery_receipt, and its journal keys equal today's set.\n\nThe existing legacy and observe rows (postflight-worktree.cjs, the vm-route today-path rows) stay unedited. A strong row that pins the old strong journal shape changes only by the five added keys, and the completion summary names it.\n\nError handling in the harness: a missing log line or an unexpected extra RPC fails the row; it never skips.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.sh"
       ],
-      "startedAt": "2026-11-04T19:52:04.875Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "I added a [strong receipt] section after [strong gate], inside its subshell, reusing sg_fixture and SG_STRONG. The new checker is sr_check (node), and the full file passes (`bash scripts/tests/postflight-vm-route.sh` gives `[strong receipt] ok T1, T2, T2-replay, T3, T4` and PASS).\n- T1: the order is record_commit, then one receipt (args exactly candidateId, target refs/heads/main, targetBefore B, targetAfter = landedRevision = C, workerId; no pushResult, stored as null), then finalize landed. The journal is gone and the attempt is closed.\n- T2 (receipt-refused): one exact MOE_FINALIZE_DEFERRED_RECEIPT line, no finalize, attempt still finalizing, journal kept. Its keys are today's 14 plus candidateId, treeSha = M, baseRevision = B, planRevision = 1 and profile, in that order. A same-project second run (FAKE_CLAIM_MODE=finalizing, project restored with cp -a) re-sends a receipt whose args JSON is byte-equal, then finalizes landed, drops the journal and dispatches nothing new.\n- T3 (receipt-conflict): one warn line, one receipt call, finalize landed, journal gone.\n- T4 (legacy, finalize_attempt-refuse so the journal stays readable): no receipt, today's exact key set, and today's 'kept: the completion row or finalize_attempt got no answer' line.\n- One existing strong row changed: sg_check's shared receipt assertion now expects 1 record_delivery_receipt for kind 'pass' (the SG-pass row) and still 0 for host/refused. No legacy or observe row was edited.",
+      "startedAt": "2026-11-04T19:52:04.875Z",
+      "completedAt": "2026-11-04T20:10:42.365Z"
     },
     {
       "stepId": "step-4",
       "description": "postflight-vm-route.ps1 rows: the same T1-T4 in a [strong receipt] section, with the same assertions and byte-identical expected lines. Follow the landed fixtures of [strong intent] and [strong gate]. Follow mem:decision-ps1-harness-pin-inline-wrapper-block and mem:gotcha-wrapper-slice-tests-execute-text. Compare decoded strings under PS 5.1 (mem:gotcha-windows-python-text-mode-crlf-in-node-tests). The same rule as step 3 applies to an older strong row that pins the journal shape.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T20:10:45.632Z"
     },
     {
       "stepId": "step-5",
@@ -101,12 +107,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:50.151Z",
-  "updatedAt": "2026-11-04T19:52:04.875Z",
+  "updatedAt": "2026-11-04T20:10:45.632Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:11:04.157Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -120,7 +126,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T18:46:43.757Z",
