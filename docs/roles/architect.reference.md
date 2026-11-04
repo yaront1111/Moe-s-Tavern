@@ -68,7 +68,9 @@ moe.propose_rail {
 }
 ```
 
-The proposal lands in `.moe/proposals/` for human Approve/Reject. Do NOT loop between `submit_plan` and `propose_rail` — pick one and commit.
+Only a GLOBAL `MODIFY_RAIL` or `REMOVE_RAIL` whose `currentValue` is the exact `forbiddenPatterns` or `requiredPatterns` entry lifts a `submit_plan` rail refusal; the refusal names that entry, and the change applies to every task. EPIC and TASK proposals change guidance rails only (`epicRails`, `taskRails`): seats and QA read them, the plan check never does, and a `MODIFY_RAIL` or `REMOVE_RAIL` there that quotes a global rail is refused `NOT_FOUND`.
+
+The proposal lands in `.moe/proposals/` for human Approve/Reject; its decision posts nothing to chat, and `moe.get_activity_log { taskId, eventTypes: ["PROPOSAL_APPROVED", "PROPOSAL_REJECTED"] }` shows it. Do NOT loop between `submit_plan` and `propose_rail` — pick one and commit.
 
 ## Checkpoint commits of architect sessions
 

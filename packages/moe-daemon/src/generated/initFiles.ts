@@ -62,7 +62,7 @@ You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handli
 
 ## Self-improvement: fix Moe itself
 Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.`,
-  'architect.reference.md': `<!-- moe-generated: sha=c016fd59a81e -->
+  'architect.reference.md': `<!-- moe-generated: sha=4e6e159ba84b -->
 
 # Architect — Reference
 
@@ -134,7 +134,9 @@ moe.propose_rail {
 }
 \`\`\`
 
-The proposal lands in \`.moe/proposals/\` for human Approve/Reject. Do NOT loop between \`submit_plan\` and \`propose_rail\` — pick one and commit.
+Only a GLOBAL \`MODIFY_RAIL\` or \`REMOVE_RAIL\` whose \`currentValue\` is the exact \`forbiddenPatterns\` or \`requiredPatterns\` entry lifts a \`submit_plan\` rail refusal; the refusal names that entry, and the change applies to every task. EPIC and TASK proposals change guidance rails only (\`epicRails\`, \`taskRails\`): seats and QA read them, the plan check never does, and a \`MODIFY_RAIL\` or \`REMOVE_RAIL\` there that quotes a global rail is refused \`NOT_FOUND\`.
+
+The proposal lands in \`.moe/proposals/\` for human Approve/Reject; its decision posts nothing to chat, and \`moe.get_activity_log { taskId, eventTypes: ["PROPOSAL_APPROVED", "PROPOSAL_REJECTED"] }\` shows it. Do NOT loop between \`submit_plan\` and \`propose_rail\` — pick one and commit.
 
 ## Checkpoint commits of architect sessions
 
@@ -299,7 +301,7 @@ Rules that keep this safe:
 - **Governance still applies to you.** Fixing Moe is not planning and not coding product — it is in your lane. But an edit that changes what the fleet may claim (a role gate, a claim filter, a dependency rule) is a hard call: surface it to the human before you push, the same as a release.
 
 Then post it in \`#governors\`: the defect, the commit sha, and what it unblocks. Future-you reads that log to notice the second occurrence of a pattern you have already fixed once.`,
-  'governor.reference.md': `<!-- moe-generated: sha=ad9aa1bf6271 -->
+  'governor.reference.md': `<!-- moe-generated: sha=c4d8411512a0 -->
 
 # Governor — Reference
 
@@ -376,12 +378,12 @@ moe.propose_rail {
 }
 \`\`\`
 
-- **MODIFY_RAIL at TASK scope** when a global rail is right in general but wrong for *this* task. Cheapest, lowest blast radius.
-- **REMOVE_RAIL at TASK scope** when a rail has become obsolete for the task. Document why in \`reason\`.
+- **Only a GLOBAL \`MODIFY_RAIL\` or \`REMOVE_RAIL\` whose \`currentValue\` is the exact \`forbiddenPatterns\` or \`requiredPatterns\` entry lifts a \`submit_plan\` rail refusal**: the plan check (\`submit_plan\`, \`amend_plan_step\`) reads no other rail. The change applies to every task in the project, so first rule out the refusal's default action (revise the plan), and prefer a MODIFY that narrows the pattern to a REMOVE.
+- **EPIC and TASK proposals change guidance rails only (\`epicRails\`, \`taskRails\`)**: seats and QA read them, the plan check never does. A \`MODIFY_RAIL\` or \`REMOVE_RAIL\` there must quote an entry of that scope's own list, so quoting a global rail is refused \`NOT_FOUND\`.
 - **ADD_RAIL at EPIC scope** when you notice multiple tasks in the epic violating an implicit invariant. Codify it.
-- **MODIFY_RAIL at GLOBAL scope** is the nuclear option. Use only when the rail is genuinely broken across the repo.
+- **ADD_RAIL at GLOBAL scope** only appends to \`customRules\`, which are guidance too: it never makes \`submit_plan\` refuse a plan.
 
-Do NOT loop between \`propose_rail\` and other actions on the same task — propose once, then wait for human decision via \`moe.check_approval\`.
+Do NOT loop between \`propose_rail\` and other actions on the same task — propose once, then wait for the human's decision. It posts nothing to chat: read it with \`moe.get_activity_log { taskId, eventTypes: ["PROPOSAL_APPROVED", "PROPOSAL_REJECTED"] }\`.
 
 ## Anti-patterns to avoid
 
@@ -429,7 +431,7 @@ All of these are rotation working, not a crash: never release a task over one.
 
 - "Saw the stale alert on \`worker-foo\`. Pinging them in \`#workers\` first — will report back in one tick."
 - "Rejection #2 on same DoD item. Flipping \`task-bar\` to PLANNING; architect will see it in \`#architects\`."
-- "Rail conflict on \`task-baz\`: \`forbiddenPatterns\` blocks \`fs.unlink\` but the DoD requires deleting temp files. Filing a \`propose_rail\`."
+- "Rail conflict on \`task-baz\`: the global \`forbiddenPatterns\` entry \`fs.unlink\` refuses its plan, but the DoD requires deleting temp files. Filing a GLOBAL \`MODIFY_RAIL\` that narrows that exact entry; a TASK-scope proposal cannot lift a plan refusal."
 - "Worker says they're alive, just running a long test. Standing down on the release — re-check in 5 min."
 
 ## Quality memory
@@ -593,7 +595,7 @@ Reuse what Moe supplied instead of re-reading it: the claimed context and every 
 Memory lives in Serena. On task start, use a supplied memory-name inventory when it covers this task/area; otherwise call \`list_memories\`. Then \`read_memory\` for the relevant prior knowledge. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Always pass \`blockedOnTaskIds\` explicitly: the list wins over reason text (including \`[]\` for no task dependencies); only omission enables legacy reason parsing. Blocking on another task landing? List only its id(s) — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
-  'worker.reference.md': `<!-- moe-generated: sha=a2e203c12ef7 -->
+  'worker.reference.md': `<!-- moe-generated: sha=51eab04ce01a -->
 
 # Worker — Reference
 
@@ -640,7 +642,9 @@ moe.propose_rail {
 }
 \`\`\`
 
-Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in \`.moe/proposals/\`; once approved, retry the step.
+Only a GLOBAL \`MODIFY_RAIL\` or \`REMOVE_RAIL\` whose \`currentValue\` is the exact \`forbiddenPatterns\` or \`requiredPatterns\` entry lifts a \`submit_plan\` rail refusal, and it changes that rail for every task. EPIC and TASK proposals change guidance rails only (\`epicRails\`, \`taskRails\`): you and QA read them, the plan check never does, and a \`MODIFY_RAIL\` or \`REMOVE_RAIL\` there that quotes a global rail is refused \`NOT_FOUND\`.
+
+Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in \`.moe/proposals/\`, and its decision posts nothing to chat: once \`moe.get_activity_log { taskId, eventTypes: ["PROPOSAL_APPROVED", "PROPOSAL_REJECTED"] }\` shows it approved, retry the step.
 
 ## Filing a bug as a card
 
@@ -743,13 +747,13 @@ only you can.
  */
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '5095739efdb8', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b0c0bbe4188c', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
-  'architect.reference.md': ['08b07943437a', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c016fd59a81e', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
+  'architect.reference.md': ['08b07943437a', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '4e6e159ba84b', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c016fd59a81e', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'c9d4b13ad50b', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
-  'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
+  'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c4d8411512a0', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '3d85e1e8146a', '5267e2ff5337', '52ffd8f5e35c', '546f3f3da3d2', '6cf327f722c6', '7a4154466321', '7f0344ccc9be', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', '953f8694c26d', 'a3d65d5877c5', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b', 'e9cd45cbf530'],
   'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '231c9f69ff5b', '2901ab4e47c9', '2b22d0d22444', '3001e8ef81e6', '4351f8a02fb9', '4c65ffa9e027', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a5557290ca4a', 'a7e172e84fd7', 'a936b3d0bc20', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
-  'worker.reference.md': ['00d768586ec5', '2345e537ca85', '27bec85d5275', '3b7b35d18aed', '4818eaa4d242', '4b041787b980', '67ee4edbcc31', '6b8e906e69d9', '73eb0762edac', '7642fd40403b', '7a2b7f00dfd3', '9a727a066966', 'a2e203c12ef7', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
+  'worker.reference.md': ['00d768586ec5', '2345e537ca85', '27bec85d5275', '3b7b35d18aed', '4818eaa4d242', '4b041787b980', '51eab04ce01a', '67ee4edbcc31', '6b8e906e69d9', '73eb0762edac', '7642fd40403b', '7a2b7f00dfd3', '9a727a066966', 'a2e203c12ef7', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
 };
 
 /**

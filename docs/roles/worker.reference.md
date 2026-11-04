@@ -43,7 +43,9 @@ moe.propose_rail {
 }
 ```
 
-Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in `.moe/proposals/`; once approved, retry the step.
+Only a GLOBAL `MODIFY_RAIL` or `REMOVE_RAIL` whose `currentValue` is the exact `forbiddenPatterns` or `requiredPatterns` entry lifts a `submit_plan` rail refusal, and it changes that rail for every task. EPIC and TASK proposals change guidance rails only (`epicRails`, `taskRails`): you and QA read them, the plan check never does, and a `MODIFY_RAIL` or `REMOVE_RAIL` there that quotes a global rail is refused `NOT_FOUND`.
+
+Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in `.moe/proposals/`, and its decision posts nothing to chat: once `moe.get_activity_log { taskId, eventTypes: ["PROPOSAL_APPROVED", "PROPOSAL_REJECTED"] }` shows it approved, retry the step.
 
 ## Filing a bug as a card
 
