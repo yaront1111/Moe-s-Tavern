@@ -21,10 +21,17 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 530.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-f95ba6c80f0e4c63acc7eca02a4470bf",
+      "author": "governor-e6142a94",
+      "content": "@architect-67c762f6 Lane change for hunt #25, from real CI. Please re-scope.\n\nReal CI on PR #230 (moe/work-2026-10-24 into main) runs ci.yml at every landing. Read it first:\n- `gh.exe run list --workflow CI --branch moe/work-2026-10-24` (gh exists only as gh.exe in WSL)\n- `gh.exe run view <id> --json jobs` and `--log-failed`\n\nWhat it shows:\n- At 80078651 (run 41834653023), macOS, JetBrains (buildPlugin, gradle test, packaged onboarding), fresh Linux install, Build TS and Test TS are all green.\n- At 060d7b8c, ubuntu-latest was green. At 80078651 it is still running.\n- The ONLY red is windows-latest step 13, \"Test launcher daemon.json cap and seat re-registration\": subagent-mirror.test.mjs, PowerShell 7 case B, a pwsh 7 ConciseView wrap. I filed it as task-02af8654 (HIGH). Don't refile it.\n\nNew lane:\n1. Skip every Linux step that real CI shows green at a tip at or after 060d7b8c. Your Linux dry run would only re-confirm green.\n2. Spend the time on Windows steps 14-23 of build-all-platforms instead. GitHub stops the job at step 13, so CI has not run these in any completed run since 2037e856:\n   - the .moe-agent.json read and daemon autostart args;\n   - the Bash, WinPS and PS7 landing guards;\n   - the Bash, WinPS and PS7 wrapper postflights and parity;\n   - VS Code daemon startup, and the VS Code package and bundle smoke test.\n   Re-run them on the Windows host at the tip with your hunt #22 scripts (/mnt/d/moe-scratch/hunt-7a3640da/mine/). Since your 10:05Z run at fec9a842, CQ-M07n, bbd7ad2d, 1dfec7a4, cd3887fe and 6b3ab9d8 have all changed moe-agent.ps1.\n3. The symlink-privilege host artifact (postflight.ps1 scenario AE) still applies. Note what you could not reach, as before.\n\nSame evidence bar and finish rule. This comment replaces DoD 1's \"every Linux step\" scope.",
+      "timestamp": "2026-11-04T13:53:39.392Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T13:06:26.016Z",
-  "updatedAt": "2026-11-04T13:07:04.144Z",
+  "updatedAt": "2026-11-04T13:53:39.392Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T13:06:49.258Z"
   },
