@@ -18,9 +18,10 @@ Common issues and solutions for Moe's Tavern.
 4. [Task Sync Issues](#task-sync-issues)
 5. [Claude Account Rotation Issues](#claude-account-rotation-issues)
 6. [Local Runner Issues](#local-runner-issues)
-7. [Performance Issues](#performance-issues)
-8. [Worktree Mode](#worktree-mode)
-9. [Diagnostic Commands](#diagnostic-commands)
+7. [Verified-local (VM route) Issues](#verified-local-vm-route-issues)
+8. [Performance Issues](#performance-issues)
+9. [Worktree Mode](#worktree-mode)
+10. [Diagnostic Commands](#diagnostic-commands)
 
 ---
 
@@ -1196,6 +1197,70 @@ reports `infra-failure` with the code as its `failure`, unless its row says othe
 | `MOE_PROTECTED_AGENT_COMMAND_REFUSED` (`moe-agent.{sh,ps1}`) | `MOE_RUNTIME_PROTECTED=1`, and the agent command is not exactly `claude`, `codex`, `gemini` or `grok` with no arguments. The protected runtime starts only these CLIs, by name. The line quotes the refused value (control characters as `?`, at most 200 characters). The JetBrains launcher refuses the same value earlier, in a dialog. | Set `agentCommand` (or the seat's command) to one of the four names, or run the seat under the legacy profile. |
 | `MOE_PROTECTED_AGENT_CLI_NOT_FOUND` (`moe-agent.{sh,ps1}`) | `MOE_RUNTIME_PROTECTED=1`, and the named CLI is on no absolute PATH entry outside the project. A relative, `.` or in-project PATH entry never counts. | Install the CLI outside the project, put its directory on PATH as an absolute entry, then relaunch the seat. |
 | `MOE_PROTECTED_INTERPRETER_NOT_FOUND` (`moe-agent.{sh,ps1}`, `moe-call.sh`) | `MOE_RUNTIME_PROTECTED=1`, and no trusted `node` (sh: also `python3`) is on an absolute PATH entry outside the project. sh also accepts an absolute `MOE_NODE_COMMAND`, or the managed runtime `~/.local/share/moe/node/current/bin/node`, when the file is named `node` and lies outside the project. `moe-call.sh`: it was run by path under the marker and `/bin/bash` is not executable. | Install node (sh: and python3) outside the project and put it on PATH. With sh you can instead set `MOE_NODE_COMMAND` to node's absolute path. `moe-call.sh`: run it as `<absolute path to bash> scripts/moe-call.sh …`. |
+
+---
+
+## Verified-local (VM route) Issues
+
+Under `executionProfile: "verified-local"`, worker and QA seats run their sessions in Moe VMs, and the wrappers refuse to start a seat any other way. `moe.get_execution_readiness` (the IDE's readiness view) names what is missing; the second table maps each readiness id to the operator action. Lines are printed by `scripts/moe-agent.sh` and `scripts/moe-agent.ps1`; `[ERROR]` lines end the seat with exit 1 before any claim, `[WARN]` lines let it go on.
+
+| Code (where) | Cause | Fix |
+|---|---|---|
+| `MOE_VERIFIED_LOCAL_NOT_READY` (both) | The project runs verified-local and the daemon's held readiness is not ready. The line lists the missing readiness ids. | Look each id up in the table below, fix it, then relaunch the seat. |
+| `MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED` (`moe-agent.sh` only) | A verified-local worker or QA seat was started from WSL. Those seats run natively on Windows, never inside WSL. | Turn off "Run Agents in WSL" and start the seat from the Windows launcher (`moe-agent.ps1`). |
+| `MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED` (both) | The seat's CLI is not `claude` or `codex`. The VM route runs only those two. | Start the seat with `claude` or `codex`. |
+| `MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED` (both) | `settings.worktreeMode` is not `on`, or the claim came back in shared mode. The VM route runs only in worktree mode. | Set `worktreeMode` to `on`, then relaunch. |
+| `MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM` (both) | The seat was started with `--no-auto-claim`. The VM route needs the wrapper's own marked claim (`executionRoute: "vm"`). | Start the seat without `--no-auto-claim`. |
+| `MOE_VERIFIED_LOCAL_CLAIM_UNBUILDABLE` (both) | The wrapper could not build the marked VM claim. | Check that node and the bundled helper scripts exist, then relaunch. |
+| `MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED` (both, `[WARN]`) | `MOE_AGENT_SEAT_PATH` is set under `MOE_RUNTIME_PROTECTED=1`. It is ignored; only the bundled `local-runner/agent-seat.mjs` runs. | Unset `MOE_AGENT_SEAT_PATH`. |
+| `MOE_TASKLESS_NO_LAUNCH reason=vm-route` (both) | A verified-local seat holds no task, so there is no VM job and no agent CLI is started on the host. | Nothing to fix: the seat exits. Queue a task for it. |
+| `MOE_VM_CREDENTIAL_UNAVAILABLE` (both) | The seat has no VM credential: its leased Claude account has no VM token, or codex lacks `OPENAI_API_KEY`/`CODEX_API_KEY`. The seat posts one #governors message and retries; the task stays held. | Mint a token with `node <daemon>/dist/index.js accounts vm-token <id>` (Accounts tab), enable account rotation, or set the codex key. |
+| `MOE_SEAT_CAPACITY_WAIT` (both) | The host-wide agent-VM cap is reached. No task is claimed; the seat retries after the poll interval. | Wait, or stop another seat. |
+| `MOE_SEAT_START_FAILED` (both, `[ERROR]`) | Starting the seat VM failed with a fixed code (printed after the colon). | Fix that code (see Local Runner Issues above), then relaunch. |
+| `MOE_SEAT_JOB_INPUT_MISSING` (both) | The job needs the attempt identity or a full commit id and one is missing or malformed. | Relaunch the seat so it claims afresh. |
+| `MOE_SEAT_JOB_FAILED` (both, `[WARN]`) | The seat job ended without a valid admitted result. The VM is stopped; the normal launch-failure backoff and resume budgets own the retry. | Read the code after the colon; re-run if it was transient. |
+| `MOE_SEAT_STOP_TIMEOUT` (both, `[WARN]`) | The seat VM did not stop within 120 s. | Check it with `multipass list`; the runner cleanup deletes owned `moe-vm-*` VMs. |
+| `MOE_SEAT_STOP_FAILED` (both, `[WARN]`) | The seat stop reported an error (code after the colon). | As above; never delete `moe-vm-*` instances by hand while a seat runs. |
+| `MOE_SEAT_UNREGISTERED` (both) | The seat could not join its team (`moe.join_team` failed), so its chat stays unread; a one-shot run ends with exit 1. | Fix the daemon connection or team, then relaunch. |
+| `MOE_VM_CANDIDATE_COMMITTED` (both, `[OK]`) | The job's admitted tree was committed onto the task branch. | None. |
+| `MOE_VM_CANDIDATE_EMPTY` (both, `[info]`) | The admitted tree equals the base tree; nothing was committed. | None. |
+| `MOE_VM_CANDIDATE_NOT_WORKTREE` (both) | The claim is not in worktree mode, or the worktree is not the linked one of `moe/task/<taskId>`. Nothing written. | Relaunch in worktree mode. |
+| `MOE_VM_CANDIDATE_HEAD_MOVED` (both) | The worktree's HEAD is no longer the task branch at the job's base commit. The admitted tree is kept in a rescue ref. | Recover from the rescue ref; do not move the task branch while a seat runs. |
+| `MOE_VM_CANDIDATE_BASE_MISMATCH` (both) | The job's base tree is not the base commit's tree. Rescue ref kept. | As above. |
+| `MOE_VM_CANDIDATE_DIRTY` (both) | The task worktree has uncommitted or untracked files, or a pending merge. Moe never overwrites them; rescue ref kept. | Commit or clean the worktree, then recover from the rescue ref. |
+| `MOE_VM_CANDIDATE_TREE_INVALID` (both) | The admitted tree is not a tree object in this repository. Nothing written. | Re-run the task. |
+| `MOE_VM_CANDIDATE_COMMIT_FAILED` (both) | `git commit-tree` of the admitted tree failed (identity or signing). | Set `user.name`/`user.email`, or disable signing for the worktree, then re-run. |
+| `MOE_VM_CANDIDATE_SYNC_FAILED` (both) | The worktree could not take the admitted commit; the task branch stays at its base. A rescue ref holds the commit. | Recover from the rescue ref. |
+| `MOE_VM_CANDIDATE_REF_CONTENTION` (both) | The task branch moved before the compare-and-swap. A rescue ref holds the commit. | Recover from the rescue ref. |
+| `MOE_VM_CANDIDATE_RESCUE_FAILED` (both, `[WARN]`) | The rescue ref for a refused candidate could not be written; the line names the commit and tree. | Recover by hand from the named commit and tree. |
+| `MOE_FINALIZE_DEFERRED_RECEIPT` (both, `[WARN]`) | A verified-local landing is published but its delivery receipt is not acknowledged. The attempt stays `finalizing` and the journal is kept. | Nothing: the next pre-flight replays the receipt, then finalizes. |
+| `MOE_CHECK_DISPATCH_REFUSED` (both, `[WARN]`) | The check VMs did not pass every owed check of the frozen candidate; the line carries the verdict (the codes below, or a fixed code from `check-dispatch.mjs`, with `environment=moe-local-vm-v1:<sha256>` when an environment needs approval). The landing is refused as `MOE_COMMIT_FAILED_GATE`, never gated on the host. | Fix the verdict; approve the named environment id if the line gives one. |
+| `MOE_CHECK_DISPATCH_UNAVAILABLE` (both) | No node, or the `check-dispatch.mjs` CLI is missing. | Reinstall the plugin so the bundled `local-runner/check-dispatch.mjs` exists. |
+| `MOE_CHECK_DISPATCH_TIMEOUT` (both) | Dispatch ran past `MOE_CHECK_DISPATCH_TIMEOUT_SEC` (default 3600); its process group was stopped. | Raise the setting, or split the checks. |
+| `MOE_CHECK_DISPATCH_TIMEOUT_INVALID` (both) | `MOE_CHECK_DISPATCH_TIMEOUT_SEC` is not a valid whole number of seconds. | Set a positive integer or unset it. |
+| `MOE_CHECK_DISPATCH_NO_REPORT` (both) | Dispatch exited without writing a report. | Re-run; check the daemon and the Multipass client. |
+| `MOE_CHECK_DISPATCH_REPLY_INVALID` (both) | The report was oversize, multi-line, not JSON, or named another task or candidate. | Re-run; if it repeats, file a bug. |
+| `MOE_CHECK_DISPATCH_NOT_PASSED` (both) | Dispatch exited non-zero with a well-formed report. | Read the check run recorded for the candidate and fix the failing check. |
+| `MOE_CHECK_DISPATCH_PATH_IGNORED` (both, `[WARN]`) | `MOE_CHECK_DISPATCH_PATH` is set under `MOE_RUNTIME_PROTECTED=1`; only the bundled CLI runs. | Unset `MOE_CHECK_DISPATCH_PATH`. |
+| `MOE_WORKTREE_PROJECT_NOT_TOP` (both, `[WARN]`) | A worktree-mode gate needs the project at the repository top; the branch commit is refused. | Run the project from the repository top. |
+
+| Readiness id | Cause | Operator action |
+|---|---|---|
+| `protected-host-control-plane` | The daemon's install tree and the project or its `.moe` overlap. | Run the plugin-installed daemon, outside the project. |
+| `isolated-agent-and-qa-vms` | The agent-VM certify rows did not all pass in the accepted report (provision, readiness, no-mounts, bridge-framing, bridge-eof, guest-network, writer-containment, controller-replacement, recovery, teardown). A certification or provider failure below also lists this id and the next. | Run certify on this host ([CERTIFICATION.md](CERTIFICATION.md)) and fix the failing row. |
+| `isolated-check-vm` | The check-VM certify rows did not all pass (provision, readiness, no-mounts, guest-network, check-containment, controller-replacement, cancellation, recovery, canary-check, teardown). | As above. |
+| `authenticated-runner-evidence` | The project's runner key (`~/.moe/runner-keys/<hash>.key`, or under `MOE_RUNNER_KEY_DIR`) is not a regular file in the stored format, or lies inside the project or `.moe`. | Restart the daemon so it files the key, and keep `MOE_RUNNER_KEY_DIR` outside the project. |
+| `revision-bound-local-delivery` | The project's own `settings.deliveryPolicy` is not `local-branch`. | Set `deliveryPolicy` to `local-branch`. |
+| `certification-host-unsupported` | The host cannot be certified (unsupported platform). | Use a supported host ([CERTIFICATION.md](CERTIFICATION.md)). |
+| `certification-store-unsafe` | The certification store is unsafe or lies in the project. | Keep the store outside the project, owner-only. |
+| `certification-unreadable` | The certification input or store, or the accepted report's identity, could not be read. | Fix the store's permissions, then re-run certify. |
+| `certification-report-missing` | No certification report exists. | Run certify. |
+| `certification-report-rejected` | A report exists but failed validation (unsafe, unreadable, oversize, malformed, schema, checks, injected or uncertified). | Re-run certify; never edit the report. |
+| `certification-report-mismatch` | The report is for another platform, architecture, image, supervisor or provider version. | Re-certify after an upgrade. |
+| `provider-probe-failed` | The pinned Multipass client is missing or its `version` probe failed. | Install Multipass 1.17.0 at its default location. |
+| `provider-probe-timeout` | The probe did not answer in 10 s. | Check the Multipass daemon, then refresh readiness. |
+| `provider-probe-malformed` | The probe's reply was not the expected `multipass`/`multipassd` JSON. | Reinstall Multipass. |
+| `provider-version-mismatch` | The live client or daemon version differs from the certified one. | Re-certify against the installed version. |
 
 ---
 
