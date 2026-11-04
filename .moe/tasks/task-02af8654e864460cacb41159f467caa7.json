@@ -63,7 +63,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -76,16 +76,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T13:53:16.897Z",
-  "updatedAt": "2026-11-04T14:24:21.593Z",
+  "updatedAt": "2026-11-04T14:27:17.713Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T13:53:19.238Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T14:26:47.815Z",
+    "wallClockMs": 2008577
   },
   "contextFetchedBy": [
     "architect-2a219562",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-25f21f0a"
   ],
   "tier": "standard",
   "effort": "high",
@@ -166,10 +169,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T14:20:18.301Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T14:19:23Z",
-    "at": "2026-11-04T14:24:21.593Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T14:24:26Z",
+    "at": "2026-11-04T14:27:17.713Z"
   },
   "reviewStartedAt": "2026-11-04T14:23:25.303Z",
   "verification": {
@@ -199,5 +203,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T14:26:47.815Z",
+  "reviewCompletedAt": "2026-11-04T14:26:47.815Z",
+  "reviewSummary": "Approved. Reviewed completion 9463e77d (on moe/work-2026-10-24, in control HEAD) via git show: +24/-2, scripts/tests/subagent-mirror.test.mjs only, under the 400-LOC cap. moe-agent.ps1/.sh byte-identical; file ASCII.\n\nRE-RAN task.verification gate in the foreground: GATE_OK, red=1 win=0 lin=0 (logs /mnt/d/moe-scratch/g.U2My).\n- RED, base f38a17d4, TEMP forced to 36 chars, node.exe: 'not ok 3 - PowerShell 7: B' at :192; Git Bash B and PS 5.1 B ok.\n- GREEN node.exe same TEMP: pass 11, fail 0.\n- GREEN WSL node + Linux pwsh 7.6.9: pass 8, fail 0, skipped 3 (PS 5.1 rows).\n\nMy checks:\n1. plain() mutants in a scratch copy: identity, no gutter drop, no ANSI strip, join-with-'' each turn the fixture test red; unmutated passes.\n2. Fixture equals the verbatim CI run 41830422144 --log-failed 'actual:' string (eval'd; 692 chars, equal).\n3. B not weakened: non-zero exit, injected denial (DENIED.ps1 stricter than old /is denied/), no '@@ after mirror', no one.md all still asserted. ANSI stripped before gutter join; test names unchanged.\n4. Sibling scan, no hit: seat-registration.test.mjs matches launcher Write-Host/Write-Output lines on stdout (:259, :289, :290, :295, :310, :322); daemon-json-cap.test.mjs strips ANSI (:52, :148) and matches launcher lines or the fixture's own err= line.\n\nNot verified here: real windows-latest. Watch the first ci.yml run on PR #230 at or after 9463e77d: step 'Test launcher daemon.json cap and seat re-registration' should read 170 tests / 157 pass / 0 fail / 13 skipped (was 169/155/1/13), then steps 14-23 run. Run 41841148746 (head f38a17d4) is pre-fix. Latent reds in steps 14-23 are out of scope.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
