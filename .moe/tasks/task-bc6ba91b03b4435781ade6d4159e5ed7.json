@@ -73,8 +73,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,12 +86,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:48:03.572Z",
-  "updatedAt": "2026-11-04T05:24:13.723Z",
+  "updatedAt": "2026-11-04T05:44:07.557Z",
   "metrics": {
     "firstClaimAt": "2026-11-03T22:52:29.147Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T05:44:07.554Z",
+    "wallClockMs": 24698407
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -241,5 +243,9 @@
     "reportedAt": "2026-11-03T23:57:27.417Z",
     "source": "agent-reported"
   },
-  "completionSummary": "On a [remote rejected] answer, a worktree landing push now runs ONE re-check before it gives up: a land_fetch of origin's target, then merge-base --is-ancestor C. The sh helper is wt_remote_holds, called from wt_push_target. The ps1 helper is Test-MoeRemoteHolds, called from Send-MoeLandPush. When origin's target holds C, the push counts as published (rc 0). The wrapper prints MOE_PUSH_REMOTE_REJECTED_APPLIED, and the normal path follows: the journal is marked 'pushed', the mirror runs, a pushed:true completion row is recorded, and the attempt is finalized landed. No rescue ref and no landingRetry are created. When C is absent, the fetch fails or the ref is unresolvable, the result stays MOE_PUSH_FAILED with the unlanded remote route, exactly as before. The re-check never re-pushes or forces. The [rejected], unknown and reconcile paths are unchanged. Migration landing inherits the re-check through the shared push function. Harness: new git-stub knobs WT_GIT_PUSH_REMOTE_REJECTED (a real push, then a [remote rejected] porcelain line, with the push logged so the case asserts exactly ONE push) and WT_GIT_FETCH_FAIL_AFTER_PUSH. A new case, wt-remote-rejected, has an applied arm (RED at the parent on sh and ps1) and a fetch-fails arm (a guard). Docs updated: the scripts/CLAUDE.md L9-L10 bullet, and the design doc's L9 row, 2.5 list and L9 summary. Residual, kept by this DoD: a re-check fetch that fails while origin holds C still deletes the journal. Filed as LOW task-561d347c."
+  "completionSummary": "On a [remote rejected] answer, a worktree landing push now runs ONE re-check before it gives up: a land_fetch of origin's target, then merge-base --is-ancestor C. The sh helper is wt_remote_holds, called from wt_push_target. The ps1 helper is Test-MoeRemoteHolds, called from Send-MoeLandPush. When origin's target holds C, the push counts as published (rc 0). The wrapper prints MOE_PUSH_REMOTE_REJECTED_APPLIED, and the normal path follows: the journal is marked 'pushed', the mirror runs, a pushed:true completion row is recorded, and the attempt is finalized landed. No rescue ref and no landingRetry are created. When C is absent, the fetch fails or the ref is unresolvable, the result stays MOE_PUSH_FAILED with the unlanded remote route, exactly as before. The re-check never re-pushes or forces. The [rejected], unknown and reconcile paths are unchanged. Migration landing inherits the re-check through the shared push function. Harness: new git-stub knobs WT_GIT_PUSH_REMOTE_REJECTED (a real push, then a [remote rejected] porcelain line, with the push logged so the case asserts exactly ONE push) and WT_GIT_FETCH_FAIL_AFTER_PUSH. A new case, wt-remote-rejected, has an applied arm (RED at the parent on sh and ps1) and a fetch-fails arm (a guard). Docs updated: the scripts/CLAUDE.md L9-L10 bullet, and the design doc's L9 row, 2.5 list and L9 summary. Residual, kept by this DoD: a re-check fetch that fails while origin holds C still deletes the journal. Filed as LOW task-561d347c.",
+  "completedAt": "2026-11-04T05:44:07.554Z",
+  "reviewCompletedAt": "2026-11-04T05:44:07.554Z",
+  "reviewSummary": "Completion 1d830f75 (moe/work-2026-10-24, pushed:true). Origin contains it. Its parent is the candidate base 0f56d3a7 and its tree is 6d652fc8. Diff: 5 files, +111/-16 (net 95), exactly approvedScope. The [rejected], unknown and reconcile paths are byte-identical. No VM-route block was touched, the BOM is kept, and the WARN line is identical in both wrappers.\n\nGate: task.verification re-run verbatim from a scratch clone at 1d830f75 (blobs sha-checked), 05:26-05:43Z, GATE_EXIT=0.\n- parity sh/ps1 PASS.\n- postflight-worktree: sh 6 ok, ps1 6 ok (wt-remote-rejected included).\n- postflight-migration: sh 12, ps1 11 (remote-rejected ok).\n- worktree-landing sh/ps1: 18/18 each.\n- npm run lint exits 0.\n\nIndependent sh checks:\n(a) The parent's wrapper fails the applied arm with MOE_PUSH_FAILED, routed unlanded (the incident).\n(b) A mutant wt_remote_holds that returns 0 without fetching fails the fetch-fails arm, so that guard is load-bearing. The case asserts exactly one push.\n\nDoD:\n1. Applied arm, sh and ps1: landed finalize at C, a pushed:true row, no rescue ref, no landingRetry, journal settled, mirror at C.\n2. Fetch-fails arm: MOE_PUSH_FAILED, unlanded remote, a rescue ref at T, landingRetry count 1. wtUnlanded's pre-receive arm and worktree-landing push-remote-rejected stay green, and parity passes.\n3. Docs updated.\n\nNon-blocking notes:\n- On the fetch-fails route, PUSH_DETAIL still says 'origin refused C' and does not mention the failed re-check fetch.\n- A failed re-check fetch while origin holds C still deletes the journal, as the DoD keeps it. That is filed as LOW task-561d347c.\n\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
