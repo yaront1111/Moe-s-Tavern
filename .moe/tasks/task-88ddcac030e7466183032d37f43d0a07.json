@@ -82,8 +82,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -95,12 +95,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T13:20:16.231Z",
-  "updatedAt": "2026-11-04T13:46:43.937Z",
+  "updatedAt": "2026-11-04T13:49:09.118Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T13:20:20.961Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T13:48:35.675Z",
+    "wallClockMs": 1694714
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -187,10 +189,11 @@
   "planApprovedAt": "2026-11-04T13:41:58.366Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T13:42:08Z",
-    "at": "2026-11-04T13:46:18.137Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T13:46:24Z",
+    "at": "2026-11-04T13:49:09.118Z"
   },
   "workStartedAt": "2026-11-04T13:43:14.124Z",
   "reviewStartedAt": "2026-11-04T13:45:17.237Z",
@@ -225,5 +228,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T13:48:35.675Z",
+  "reviewCompletedAt": "2026-11-04T13:48:35.675Z",
+  "reviewSummary": "Approved completion f38a17d4 (on moe/work-2026-10-24, contained in control HEAD; +64/-8, net 56 LOC, 3 files: docs/MCP_SERVER.md, createTask.test.ts, getPendingQuestions.test.ts). Re-ran the task's three executionContract checkRefs (extracted byte-exact from the task JSON) in a `git clone --shared` detached at f38a17d4 with MOE_LAND_TARGET=<sha>^, since checkRef 0 is vacuous on the control checkout: ref0 SCOPE-OK (changed set is exactly the 3 files; MCP_SERVER.md strip-diff outside the six sections is identical to <sha>^); ref1 MARKERS-OK + parity vs frozen 1fef1b76 dump PARITY-OK + npm run lint OK; ref2 in a git-archive snapshot under env -i node 24.21.0: npm ci, vitest 8 files / 87 tests pass (six tool test files + executionContractDocs + taskTimeBudgetDocs), tsc -p ., parity vs rebuilt schemas PARITY-OK. Hand-traced every new doc claim to source: releaseResource.ts:24-25,67-111 (CAS set, INVALID_STATE -32002, runs before state.releaseResource so nothing released), setTaskStatus.ts:13-22,76,81,105-113 (NOT_ALLOWED gate before task lookup; workerId key present incl. ''/null is judged; proxy utils.ts injectWorkerId skips when the key exists), checkApproval.ts:13,22,33, getPendingQuestions.ts:45-48,123, createTask.ts:38,76-78,174, createTeam.ts:7,40-41 + teamStore.getTeamByNameAndRole (name AND role) + claimNextTask.ts:482-493. Corrected latent create_team intro error (idempotency was documented as name-only). Tool code untouched; no existing test edited. New tests assert exact row sets / codeName / no row on disk, so they bite. Minor non-blocking note: createTask test asserts message contains 'status' rather than the exact 'Invalid status' text (looser than planned, still pinned by codeName).",
+  "requiredCheckAtDone": null
 }
