@@ -61,20 +61,32 @@
     {
       "stepId": "step-4",
       "description": "Verification, ONCE, from the task worktree root. Run the checkRef exactly as written; it is also in /mnt/d/moe-scratch/task-e67470ce/checkref.txt.\n- It archives HEAD into a mktemp snapshot and overlays the 5 owned files.\n- It runs npm ci, then `tsc --noEmit`, then a tsc of the new test file through tt.json. Only the new file is type-checked: the package tsconfig excludes tests, and StateManager.test.ts already has a TS2322 at :79.\n- It runs the FULL daemon vitest suite, because state/validators.ts is shared persistence code.\n- It pins the new file at ≥ 9 passing tests.\nNever run npm in the shared checkout (global rail). Never put TMPDIR inside the env -i (mem:convention-daemon-full-suite-gate-checkref).\nExpected tail, from the architect dry-run at 9224de15: 'Test Files  286 passed (286)', 'Tests  7468 passed | 24 skipped (7492)', 'intake pin ok', exit 0. The counts grow if the target has moved.\nSubmit this fresh command, its exit code and the output tail to moe.complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-04T06:01:07.855Z"
+      "note": "Ran the plan's checkRef verbatim (from /mnt/d/moe-scratch/task-e67470ce/checkref.txt, identical to the contract's checkRefs entry) from the task worktree root, with TMPDIR set only on the outer bash so the snapshot could be removed afterwards (not inside env -i). Result: exit 0. tsc --noEmit ok, tsc -p tt.json (new test file) ok, full daemon vitest: Test Files 286 passed (286); Tests 7473 passed | 24 skipped (7497); 'intake pin ok' (submitPlan.intakeBounds.test.ts 9 tests). The count is 5 above the dry-run (7468) because the target moved; no failures. Snapshot removed.",
+      "startedAt": "2026-11-04T06:01:07.855Z",
+      "completedAt": "2026-11-04T06:02:07.100Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of the whole diff against the merge base. This is the one review step.\n- No accepted input is newly refused except malformed planningNotes: steps up to 100 and taskSizing up to 100 stay accepted (epic rail: no breaking MCP change).\n- Every planningNotes refusal runs before measureRequiredCheckSnapshot, capturePlanSourceBasis and runExclusive, and a refused call writes nothing (the cases check the row).\n- The sanitizer change raises the cap for every writer: createTask, updateTask and the board's UPDATE_TASK. Nothing downstream assumes 50 or fewer: stepsCompleted caps at 500.\n- Null and empty: planningNotes null stores none; '' notes are stored; an empty keyFiles entry is refused.\n- Concurrency: the validation is pure.\n- No added line contains any project.json globalRails.forbiddenPatterns string.\n- Docs change only inside the submit_plan section.\n- B28 changes only its name, its length and its expectation.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial self-review of the whole diff (4 modified files +69/-27, plus the new 160-line test). Walked the plan's list: (1) Accepted inputs: nothing newly refused except malformed planningNotes; steps 1-100 and taskSizing 1-100 stay accepted (MAX_PLAN_STEPS = 100 equals both old literals), so no MCP contract narrows. (2) Order: validatePlanningNotes runs right after validateExecutionContract, before measureRequiredCheckSnapshot, capturePlanSourceBasis and runExclusive; the 'refused' helper in all refusal cases asserts the row stays PLANNING with 0 steps and no notes. A bad note on an unknown task now reports INVALID_INPUT before NOT_FOUND, the same order the executionContract already has. (3) The sanitizer raise applies to createTask/updateTask/board UPDATE_TASK; stepsCompleted caps at 500, nothing assumes <=50; recipes do not pass planningNotes (grep). (4) Null/empty: null and undefined store none and omitted keeps a stored set; '' notes are stored (allowEmpty); '' or whitespace-only keyFiles entries and entries with newlines/NUL are refused; {} stores {}. (5) Concurrency: validation is pure, runs before the mutex, shares no state. (6) Forbidden-pattern grep over added lines and the new test: no hits. (7) Docs hunks all inside ### moe.submit_plan. (8) B28 changed only its name, length and expectation. Theoretical only: keyFiles with a newline are refused with 'cannot contain control characters', which the doc's '1-1000 chars' wording does not spell out; acceptable, such a path is not a real file path.",
+      "startedAt": "2026-11-04T06:02:10.102Z",
+      "completedAt": "2026-11-04T06:02:33.141Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a408f113",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -89,7 +101,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:43.353Z",
-  "updatedAt": "2026-11-04T06:01:07.855Z",
+  "updatedAt": "2026-11-04T06:04:01.623Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:47:30.839Z",
@@ -99,7 +111,7 @@
     "firstClaimAt": "2026-11-04T05:47:49.758Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -112,7 +124,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:57:44.498Z",
@@ -185,5 +199,48 @@
   },
   "planApprovedAt": "2026-11-04T05:57:44.525Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T05:58:52.173Z"
+  "workStartedAt": "2026-11-04T05:58:52.173Z",
+  "reviewStartedAt": "2026-11-04T06:02:49.463Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/{state/validators.ts,state/StateManager.test.ts,tools/submitPlan.ts,tools/submitPlan.intakeBounds.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/submitPlan.intakeBounds.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ] && grep -aqE \" ✓ src/tools/submitPlan\\.intakeBounds\\.test\\.ts \\((9|[1-9][0-9]) tests\\)\" ../v.log && echo \"intake pin ok\"; }'",
+    "exitCode": 0,
+    "outputTail": " Test Files  286 passed (286)\n      Tests  7473 passed | 24 skipped (7497)\nintake pin ok\n(exit=0; tsc --noEmit and tsc -p tt.json on the new test file also exit 0. Qualitygate also run: bash scripts/tests/parity-check.sh -> PASS, npm run lint -> OK, both exit 0.)",
+    "reportedAt": "2026-11-04T06:02:49.463Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts",
+    "packages/moe-daemon/src/state/StateManager.test.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "submit_plan now refuses what it cannot store whole, and stores every step of a plan it accepts. One bound, MAX_PLAN_STEPS = 100 (state/validators.ts), is shared by submit_plan's step refusal, the taskSizing warnSteps/maxSteps validator and sanitizeImplementationPlan, which used to keep only 50, so steps 51-100 of an accepted plan were dropped. A 101-step plan is still refused INVALID_INPUT 'maximum 100 steps allowed'. New validatePlanningNotes (requirePlainObject, rejectUnknownFields, validateStringValue; keyFiles an array of <=50 strings of 1-1000 chars) runs right after validateExecutionContract, before any Git read, mutex or write: a non-string field, non-array or over-50 keyFiles, bad entry, over-5000 note, non-object value or unknown key is refused INVALID_INPUT with context.field, never clipped or coerced. Valid notes (empty strings, newlines) are stored byte-for-byte; omitted keeps a stored set, null writes none. inputSchema maxItems/maxLength mirror the bounds. Tests: new submitPlan.intakeBounds.test.ts (9 cases, ported from hunt task-928a468d; RED at base 7 failed|2 passed, GREEN 9/9) and StateManager B28 now pins MAX_PLAN_STEPS. docs/MCP_SERVER.md ### moe.submit_plan states both bounds; CONFIGURATION.md untouched (taskSizing range stays 1-100). Full daemon suite in a git-archive snapshot: 286 files, 7473 passed, 24 skipped, exit 0.",
+  "commits": [
+    {
+      "sha": "2a1c5a36f97a54f91cf946cfb3406d1f4bed34e4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T05:57:57Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T06:04:01.623Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a408f113@2026-11-04T05:57:57Z",
+    "at": "2026-11-04T06:04:01.623Z"
+  }
 }

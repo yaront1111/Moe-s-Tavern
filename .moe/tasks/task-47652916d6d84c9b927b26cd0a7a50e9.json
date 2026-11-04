@@ -1,0 +1,28 @@
+{
+  "id": "task-47652916d6d84c9b927b26cd0a7a50e9",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md's moe.release_task section omits the optional attemptId/generation fence and its ATTEMPT_SUPERSEDED refusal, which releaseTask.ts has enforced since 2026-09-11 and the launchers' outage release sends",
+  "description": "Filed by defect hunt #16 (task-151a2c54, architect-2a219562) on 2026-11-04, from the execution-identity lane. Verified at b9205914.\n\nPROBLEM\nThe code fences a release; the docs say nothing about it.\n- packages/moe-daemon/src/tools/releaseTask.ts:116-126 declares two optional inputs:\n  - `attemptId` (maxLength MAX_ATTEMPT_ID_LEN): \"Optional fencing identity: the attemptId moe.claim_next_task returned. A superseded attempt (the task was re-claimed since) is refused with ATTEMPT_SUPERSEDED before anything is written. Omitted = unfenced, as before.\";\n  - `generation` (integer, minimum 1): \"checked together with attemptId\".\n- :168-170 refuses an attemptId that is too long with INVALID_INPUT.\n- :219-224 runs assertAttemptCurrent (util/enforcement.ts:183) inside the mutex, beside the ownership gates and before any write. That check is equality with the task's current attempt, so a superseded, closed or future attempt is refused STATE_CONFLICT ATTEMPT_SUPERSEDED. A malformed identity is refused INVALID_INPUT.\n- The fence was added in c7f65938 (2026-09-11).\n- The launchers rely on it. scripts/moe-agent.sh:9077-9103 (launch_outage_release) sends the pinned MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION and treats ATTEMPT_SUPERSEDED as a refusal that is not this seat's to force. Its twin is Invoke-MoeLaunchOutageRelease in moe-agent.ps1.\n- docs/MCP_SERVER.md `### moe.release_task` (:2067-2125 at b9205914):\n  - its Parameters block lists only taskId, reason, handoffNote, workerId and force;\n  - neither the intro nor the side effects mention attemptId, generation, ATTEMPT_SUPERSEDED or the malformed-identity refusal.\n  The ownership refusals RELEASE_NOT_ASSIGNEE, STEP_LEASE_HELD and NOT_ALLOWED ARE documented. A reader of the contract cannot learn that a release can be fenced.\n\nEVIDENCE\n- releaseTask.test.ts:1185, \"refuses a late generation-1 release after the same worker re-claimed as generation 2, writing nothing\", asserts code -32002, codeName ATTEMPT_SUPERSEDED and unchanged state.\n- releaseTask.test.ts:1228, \"refuses a malformed attempt identity as invalid input without releasing anything\".\n- In a git archive of b9205914, `cd packages/moe-daemon && npx vitest run src/tools/releaseTask.test.ts -t attempt` gives 14 passed.\n- A scan of the 59-line section finds no attemptId, generation, SUPERSEDED or fenc.\n\nFIX DIRECTION (docs only)\nIn `### moe.release_task`:\n- add `attemptId?` and `generation?` to the Parameters block, using the code's descriptions;\n- add one bullet: a presented identity passes the same currency check as the step tools, before any write. That means equality with the task's current attempt; a superseded, closed or future attempt is refused STATE_CONFLICT ATTEMPT_SUPERSEDED; a malformed one is refused INVALID_INPUT; omitted is the unfenced legacy path.\nEdit only that section. Use your own editor, never a shell write.\n\nFILES\n- docs/MCP_SERVER.md (### moe.release_task only)\nNo open row edits that section at 06:01Z.",
+  "definitionOfDone": [
+    "`### moe.release_task`'s Parameters block lists attemptId and generation, and the section names the ATTEMPT_SUPERSEDED refusal and the malformed-identity INVALID_INPUT, matching releaseTask.ts:116-126, :168-170 and :219-224.",
+    "The diff touches only that section of docs/MCP_SERVER.md, and npm run lint passes at the repo root.",
+    "releaseTask.test.ts passes unchanged in a snapshot outside the shared checkout: the cited cases at :1185 and :1228 pin the documented behavior."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 483.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:03:00.433Z",
+  "updatedAt": "2026-11-04T06:03:00.433Z"
+}

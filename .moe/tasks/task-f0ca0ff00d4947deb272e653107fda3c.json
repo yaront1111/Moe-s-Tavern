@@ -1,0 +1,31 @@
+{
+  "id": "task-f0ca0ff00d4947deb272e653107fda3c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: get_context's WORKING nextAction sends a worker to refused or superseded calls: moe.start_step for a step already IN_PROGRESS (refused INVALID_STATE, so every mid-step resume opens on a refusal), moe.complete_task on a plan-less WORKING row (refused NOT_ALLOWED), and an amended step's original text instead of its amendment",
+  "description": "Filed by defect hunt #16 (task-151a2c54, architect-2a219562) on 2026-11-04. Found by the lane-1 subagent; the holder re-ran all three repros and re-read the cited lines at b9205914. One row: all three defects sit in the same 25-line WORKING branch of one function.\n\nCONTRACT\n- docs/roles/worker.md:23: \"Follow `nextAction` on every Moe tool response.\"\n- docs/MCP_SERVER.md `### moe.get_context` (:180-336 at b9205914) never states the WORKING hint rule. This row adds it.\n\nPROBLEM (packages/moe-daemon/src/util/contextNextAction.ts:29-55, the WORKING branch)\n1. IN_PROGRESS step.\n   - :30 picks the first step that is PENDING or IN_PROGRESS, and :37-41 always answers `moe.start_step`.\n   - tools/startStep.ts:51-52 refuses any step that is not PENDING: `invalidState('Step', status, 'PENDING')`.\n   - complete_step already handles the same case. tools/completeStep.ts:192-198 says \"start_step would reject it (PENDING-only). Point the worker at completing it\" and answers `moe.complete_step`.\n   - Exposure: every relaunched session on its own row after a mid-step crash or timeout. The wrapper's RESUME path keeps the step IN_PROGRESS, so the new session's first hint is refused. Any mid-step re-read (for example after a compaction) hits it too.\n2. Plan-less WORKING row.\n   - An empty plan never matches a remaining step, so :48-52 answers `moe.complete_task` \"All steps complete; hand task off to QA.\"\n   - util/enforcement.ts:256-261 refuses an empty plan NOT_ALLOWED (\"it has no implementation plan\"), and startStep.ts:43-44 refuses it too.\n   - setTaskStatus.ts allows BACKLOG → WORKING, and the claim does not check for a plan. Uncommon, but such a worker gets no route to a plan.\n3. Amended step.\n   - :41 quotes `nextStep.description`. util/planAmendments.ts:36-42 says effectiveStepDescription is \"the ONE resolution point — tools must not re-derive it\".\n   - After moe.amend_plan_step, the hint therefore tells the worker to begin the REPLACED instructions.\n   - This is the daemon twin of the DONE client fixes 37e03b91 (JetBrains), e9a25fbf (VS Code) and c5c092ae (compaction keeper).\n\nEVIDENCE\nRepros are in /mnt/d/moe-scratch/hunt-151a2c54/A/, each with a .output.txt. In a git archive of b9205914, run `cd packages/moe-daemon && npx vitest run src/tools/<file>`; each fails:\n- zzHuntA_inProgressHint.test.ts: expected \"moe.complete_step\", received \"moe.start_step\". Following the hint gives \"[INVALID_STATE] Step is in IN_PROGRESS state, expected PENDING\".\n- zzHuntA_planlessWorking.test.ts: the hint is moe.complete_task, and following it gives \"[NOT_ALLOWED] Cannot complete task task-1: it has no implementation plan…\".\n- zzHuntA_amendedStepHint.test.ts: expected \"Begin step: Keep the cache module; only add a TTL option\", received \"Begin step: Delete the legacy cache module\".\n\nFIX DIRECTION\n- An IN_PROGRESS step answers `moe.complete_step` with \"Finish in-progress step …\", exactly as completeStep.ts:192-198 does.\n- An empty plan answers a call the daemon accepts on that row (`moe.request_replan` accepts WORKING), or no tool.\n- Every step reason quotes effectiveStepDescription(nextStep).\n- Add one bullet stating this rule to `### moe.get_context`, and edit nothing else in docs/MCP_SERVER.md.\n\nFILES\n- packages/moe-daemon/src/util/contextNextAction.ts\n- packages/moe-daemon/src/tools/getContext.test.ts (or a new util/contextNextAction.test.ts)\n- docs/MCP_SERVER.md (### moe.get_context only)\nNothing here is held by an open row at 06:01Z.",
+  "definitionOfDone": [
+    "For a WORKING row whose first unfinished step is IN_PROGRESS, get_context's nextAction is moe.complete_step for that stepId, and calling it as hinted is accepted. A vitest case built from the hunt repro zzHuntA_inProgressHint proves it.",
+    "A plan-less WORKING row is never hinted moe.complete_task, and any hinted call is not refused. Every start_step or complete_step hint quotes effectiveStepDescription, so an amended step shows its replacement text. Vitest cases built from zzHuntA_planlessWorking and zzHuntA_amendedStepHint prove both.",
+    "The existing getContext tests pass. The `### moe.get_context` section states the WORKING hint rule, and no other section of docs/MCP_SERVER.md changes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 482.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:02:45.982Z",
+  "updatedAt": "2026-11-04T06:03:57.994Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:03:57.994Z"
+  }
+}

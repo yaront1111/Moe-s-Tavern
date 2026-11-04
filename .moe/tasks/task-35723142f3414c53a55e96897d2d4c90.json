@@ -1,0 +1,32 @@
+{
+  "id": "task-35723142f3414c53a55e96897d2d4c90",
+  "epicId": "epic-be924fb8",
+  "title": "bug: qa_approve and qa_reject answer nextAction moe.wait_for_task REVIEW, the in-session claim hint, but a QA seat's session is pinned to its first claim's attempt identity, so a QA CLI that follows the hint claims a second row whose get_context and verdict calls are refused ATTEMPT_SUPERSEDED (QA twin of task-55a5a9f9)",
+  "description": "Held item from hunt #16 (task-151a2c54, architect-2a219562, msg-2ded7d4b). The governor filed it at 06:04Z on 2026-11-04 after re-checking it at tip 9224de15.\n\nPROBLEM\n- After a verdict, qa_approve's response sets nextAction to moe.wait_for_task for REVIEW (packages/moe-daemon/src/tools/qaApprove.ts:299), and qa_reject does the same (qaReject.ts:459).\n- The QA wrapper pins the session to the claim's attempt in pre-flight (pin_attempt_identity, scripts/moe-agent.sh ~:10357, and its ps1 twin). moe-proxy then stamps MOE_ATTEMPT_ID/GENERATION onto get_context, qa_approve and qa_reject.\n- So a QA CLI that obeys the hint and claims a second REVIEW row inside the same session presents the first row's attempt identity on every call for the second row. That identity is refused ATTEMPT_SUPERSEDED, and the second review is wasted.\n- task-55a5a9f9 (DONE) fixed the same shape for request_replan: an END_SESSION handoff and no in-session claim hint.\n\nFIX DIRECTION\n- Mirror 55a5a9f9: after a verdict, end the session (an END_SESSION sessionHandoff, or no in-session claim nextAction), so the wrapper's next pre-flight claims and pins the next row.\n- Keep every other field of the verdict response unchanged.\n- Sync the `### moe.qa_approve` and `### moe.qa_reject` sections of docs/MCP_SERVER.md, and any qa.md/qa.reference.md line that tells QA to keep claiming in-session.\n\nPLACEMENT: this waits in BACKLOG on fefce964 and 77e54ebb, both in REVIEW. Both edit qaApprove.ts and qaReject.ts. Once they land, re-anchor :299 and :459 at the tip. The governor promotes the row when both are DONE.",
+  "definitionOfDone": [
+    "A daemon test fails on today's code: after qa_approve, and separately after qa_reject, the response does not hint an in-session claim (no nextAction moe.wait_for_task / claim_next_task). It signals the end of the session the same way request_replan does since task-55a5a9f9. Every other response field is unchanged.",
+    "docs/MCP_SERVER.md (### moe.qa_approve and ### moe.qa_reject) and any QA role-doc line that says to keep claiming in the same session describe the new hand-off. npm run lint passes if a role doc changed.",
+    "npm test and npx tsc --noEmit pass in packages/moe-daemon."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-fefce9648a4e481fba0a819ca516f56f",
+    "task-77e54ebbdd624a8e8787e6e6479061ea"
+  ],
+  "priority": "LOW",
+  "order": 484.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:03:59.905Z",
+  "updatedAt": "2026-11-04T06:03:59.905Z"
+}

@@ -1,0 +1,34 @@
+{
+  "id": "task-590b98bda0dd41088533077a78994e9a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the stale-block #governors alert prunes a still-BLOCKED row's memo key whenever the row misses one sweep's alert condition, so the same block instance is paged again once a moving prerequisite stalls or the 2x bound passes, against its \"a standing block alerts once\" contract",
+  "description": "Filed by defect hunt #16 (task-151a2c54, architect-2a219562) on 2026-11-04. Found by the lane-2 subagent; the holder re-ran the repro and re-read the code at b9205914.\n\nPROBLEM\n- packages/moe-daemon/src/state/dependencyUnblock.ts:296-300 keys the memo of posted alerts by `taskId:blockedAt`, \"so a re-block (new blockedAt) alerts again while a standing block alerts once\". docs/MCP_SERVER.md `### moe.report_blocked`, Stale-block visibility (:1237), promises \"once per block instance\".\n- The sweep adds a row's key to liveKeys (:410) only when the row qualifies this pass. A dependency-waiting row skips that line through `continue` in two cases: every prerequisite is met (:378), or its prerequisites are still moving and it is under 2x blockedTimeoutMs (:405). The prune at :419-423 then deletes the key, although the row is still BLOCKED under the same blockedAt. The prune's own comment says it drops only \"blocks that resolved (or re-blocked under a new blockedAt)\".\n- Result: a row paged because its prerequisite was BLOCKED or BACKLOG is paged again for the same blockedAt. This happens once that prerequisite starts moving and then stalls again, or once the row passes the 2x bound.\n- Restart: the memo is process memory (a WeakMap), so a daemon restart also re-pages every standing stale block once. Hunt #11 judged restart re-pages deliberate by analogy with recordCommit.ts:43-44. This module states no such policy, though, and its docblock and the contract both say once. The row must settle it either way (DoD 2).\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-151a2c54/B/zzHuntB_staleBlockOnce.test.ts, with its .output.txt beside it. In a git archive of b9205914, run `cd packages/moe-daemon && npx vitest run src/state/zzHuntB_staleBlockOnce.test.ts`. It gives 2 failures:\n  - case 2, one daemon lifetime: after the first alert at 90m, a second alert arrives for the same blockedAt, \"⚠️ task-c0n5um (Test Task) has been BLOCKED 150m waiting on task-p4e4e…\";\n  - case 1, a fresh StateManager on the same .moe/: it re-alerts at 120m.\n- Production (#governors, .moe/messages/chan-15c8e232.jsonl):\n  - task-48f0b3aa was paged 8 times for one blockedAt, from 2026-10-31T08:27Z to 11-02T19:18Z;\n  - task-1a8f1d0e was paged 7 times, the last at 2026-11-04T05:28:45Z.\n\nFIX DIRECTION\n- Within one lifetime: add the key to liveKeys for every resource-less BLOCKED row with a parseable blockedAt, before the qualification checks. The prune then drops only resolved or re-blocked rows.\n- Restart: decide in the plan, with a test either way.\n  - Option 1: persist the alerted keys in daemon-owned runtime state without touching packages/moe-daemon/src/types/schema.ts (held by task-77e54ebb).\n  - Option 2: state, in the module docblock and the Stale-block visibility bullet, that a daemon restart re-alerts each standing block once, as recordCommit.ts:43-44 does for its window.\n- Hunk ownership in docs/MCP_SERVER.md: edit only the Stale-block visibility bullet (:1237). The Ping routing bullets (:1241-1242) belong to task-31a2aa2f, filed in the same hunt. Distinct hunks merge cleanly in worktree mode, so no dependsOn.\n\nFILES\n- packages/moe-daemon/src/state/dependencyUnblock.ts\n- packages/moe-daemon/src/state/dependencyUnblock.test.ts\n- docs/MCP_SERVER.md (### moe.report_blocked, Stale-block visibility only)\nNothing here is held by an open row at 06:01Z.",
+  "definitionOfDone": [
+    "Within one daemon lifetime, a BLOCKED row is alerted at most once per blockedAt, even when it stops qualifying for a sweep and qualifies again later (the hunt repro's case 2, as a vitest case). A re-block under a new blockedAt, and a resolved-then-reblocked row, still alert again.",
+    "The restart behavior is decided and pinned by a test. Either a fresh StateManager on the same .moe/ does not re-alert a standing block (the repro's case 1), or the module docblock and the MCP_SERVER.md Stale-block visibility bullet say that a restart re-alerts each standing block once.",
+    "The existing dependencyUnblock tests pass. Any test that encoded prune-on-miss is named in the completion summary, together with why it changed."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 481.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:01:39.792Z",
+  "updatedAt": "2026-11-04T06:02:04.105Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:01:46.958Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}
