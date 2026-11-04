@@ -386,7 +386,8 @@ interface Epic {
 type EpicStatus = 
   | 'PLANNED'      // Not started
   | 'ACTIVE'       // Has worker(s) assigned
-  | 'COMPLETED';   // All tasks done
+  | 'COMPLETED'    // All tasks done
+  | 'ARCHIVED';    // Shelved: set by moe.archive_epic once it has archived every task, or by moe.update_epic (or the board's UPDATE_EPIC) with status ARCHIVED, which runs archive_epic
 ```
 
 **Example:**
@@ -466,6 +467,7 @@ interface Task {
   // Structured, approval-relevant intent for the plan. Absent on legacy rows.
   // Never approval, readiness or evidence by itself. See `executionContract` below.
   executionContract?: TaskExecutionContract;
+  requiredCheckSnapshot?: RequiredCheckSnapshot; // Daemon-owned: set, or cleared by a plan without requiredChecks, only by moe.submit_plan's PLAN_SUBMITTED write. See `requiredCheckSnapshot` below
 
   // Daemon-owned plan-reuse facts (CQ-C07a) and recipe binding (CQ-C08). Never
   // approval, readiness or evidence. See the sections below.
@@ -491,6 +493,8 @@ interface Task {
   rejectionHistory?: RejectionHistoryEntry[];   // Newest-first; capped at 20 entries
   failedDodItems?: FailedDodItem[];             // Append-only DoD failure log; capped at last 100
   maxReopens?: number;                          // Per-task override of MAX_REOPENS_DEFAULT (3)
+  capReplanAt?: string;                         // ISO time of the qa_reject that reached the reopen cap and flipped the row to PLANNING for its one re-plan; never cleared
+  needsHumanReview?: boolean;                   // true from a qa_reject past the cap once capReplanAt is set (row stays REVIEW, unassigned, out of QA claims); cleared by qa_approve, a reopen, release_task, set_task_status or a board move into REVIEW
   tier?: 'light' | 'standard' | 'heavy';        // Launch tier: submit_plan (floored by plan size), +1 per qa_reject
   effort?: Effort;                                // Planner's effort (raised to allowed + tier minimum), +1 allowed level per qa_reject
   lowEffortEligible?: boolean;                    // submit_plan: every plan file matches routing.lowEffortFiles (low/medium allowed)
@@ -511,6 +515,7 @@ interface Task {
   // also frees the seat (assignedWorkerId → null, worker → IDLE); resource
   // blocks keep hold+idle for the grant-return path.
   blockedReason?: string | null;         // Why the task is BLOCKED
+  priorBlockedReason?: string | null;    // The last blockedReason, kept when set_task_status, a board move, archive_task or a resource restore that returns the row unassigned takes it out of BLOCKED (the lease grant, dependency auto-unblock and unblock_worker do not copy it); never cleared
   blockedResourceId?: string | null;     // Shared-resource id the task is queued on; the grant path
                                          // auto-unblocks on lease grant
   blockedOnTaskIds?: string[] | null;    // Task ids this row waits on (report_blocked param ∪ task-… ids
@@ -579,6 +584,7 @@ interface Task {
                                                 // records round-trip without reviving a contract
   pendingPlanCritique?: PendingPlanCritique;    // Set by submit_plan in CONTROL mode
   planCritiqueResult?: PlanCritiqueResult;      // Set by submit_plan_critique
+  critiqueBlockCount?: number;                  // +1 per critique block that flips the row to PLANNING (moe.submit_plan_critique, or submit_plan's size critic under taskSizing.autoCritique); at 2 a block stops flipping; cleared by qa_approve and every reopen
 
   // Creation
   createdBy: 'HUMAN' | 'WORKER' | 'ARCHITECT' | 'QA' | 'GOVERNOR';
@@ -600,6 +606,10 @@ interface Task {
                                  // DONE/ARCHIVED (missing/deleted ids count as satisfied); PLANNING and
                                  // REVIEW claims are unaffected. list_tasks surfaces dependsOnUnmet
 
+  // Comments: questions and answers on the task (TaskComment below)
+  comments: TaskComment[];       // Oldest first, appended by moe.add_comment and the board's ADD_COMMENT; every writer keeps the newest 200 (MOE_MAX_COMMENTS_PER_TASK)
+  hasPendingQuestion?: boolean;  // true on a board comment whose author is 'human'; false at create_task and on every moe.add_comment. Read by get_pending_questions and wait_for_task
+
   // Ownership + ordering bookkeeping (Phase 3; both optional)
   contextFetchedBy?: string[];   // De-duplicated workerIds that invoked moe.get_context for this task
   stepsCompleted?: string[];     // Ordered stepIds already marked COMPLETED
@@ -607,6 +617,10 @@ interface Task {
   // Timestamps
   createdAt: string;
   updatedAt: string;
+  planSubmittedAt?: string;      // Set by every moe.submit_plan, in its AWAITING_APPROVAL write
+  planApprovedAt?: string;       // Set with status WORKING by every approval: the board's (PLAN_APPROVED), SPEED/TURBO auto-approval (PLAN_AUTO_APPROVED) and a relaxed-mode set_task_status approval
+  workStartedAt?: string;        // Set by the first moe.start_step and never overwritten; a reopen keeps it
+  completedAt?: string;          // Set at DONE by moe.qa_approve, with reviewCompletedAt (complete_task stamps only reviewStartedAt); every reopen clears it
   reviewStartedAt?: string;      // Set on the WORKING → REVIEW flip; qa_approve counts completion commits from the current work round: at/after the latest rejection, else the first step start (workStartedAt), else this (completionCommitsForReview in delivery/policy.ts)
   reviewCompletedAt?: string;
 }
@@ -971,6 +985,17 @@ interface TaskCommit {
   message?: string;
 }
 
+/**
+ * One entry of `task.comments`, appended by `moe.add_comment` or the board's
+ * `/ws` ADD_COMMENT. Both refuse empty or over-10000-char content.
+ */
+interface TaskComment {
+  id: string;                // "comment-…"
+  author: string;            // moe.add_comment: the caller's workerId, else 'agent'; board: the sent author, else 'human'
+  content: string;           // Trimmed, ≤10000 chars
+  timestamp: string;         // ISO 8601
+}
+
 interface RejectionDetails {
   failedDodItems?: string[];
   issues?: QAIssue[];
@@ -1076,6 +1101,7 @@ interface PendingPlanCritique {
 interface PlanCritiqueResult {
   verdict: 'pass' | 'block';
   concerns?: string[];       // each ≤1000 chars; required when verdict='block'
+  category?: 'size' | 'correctness' | 'rails' | 'dependency' | 'uncategorized'; // As sent; 'uncategorized' = a block sent without one; absent on a pass sent without one and on the daemon size critic's block
   reviewedBy: string;        // workerId or "governor"
   reviewedAt: string;        // ISO 8601
 }
@@ -1210,6 +1236,7 @@ interface Team {
   name: string;                  // "Coders"
   role: TeamRole | null;         // Optional team role (null = project team)
   memberIds: string[];           // Worker IDs belonging to this team
+  formerMemberIds?: string[];    // Eviction tombstone: members whose worker record was deleted (stale sweep, DEAD prune, restart purge) or DEAD members a join into a full team evicted; read only to auto-rejoin a returning worker, never counted toward maxSize; cleared when it joins or leaves any team
   maxSize: number;               // Maximum members (default 10)
 
   // Timestamps
