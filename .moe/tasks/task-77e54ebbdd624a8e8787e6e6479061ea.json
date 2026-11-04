@@ -13,35 +13,55 @@
     {
       "stepId": "step-1",
       "description": "Tests first, in two EXISTING test files (no new file: a 6th distinct file would floor the plan to heavy). Write only with the Edit tool (global rail). Prototype bytes to port: /mnt/d/moe-scratch/task-77e54ebb/prototype.diff (dry-run green at d1062cb0).\n(a) packages/moe-daemon/src/tools/qaReject.test.ts:\n- Add `import { setTaskStatusTool } from './setTaskStatus.js';` directly after `import { getContextTool } from './getContext.js';` (:254, the migrated section). Leave the top import block (:1-9) alone; task-fefce964 may add imports there.\n- Fixture records, assertions byte-identical: add `capReplanAt: '2026-11-04T00:00:00.000Z'` to the writeTask overrides at :150 (2nd half of 'sets an unset tier…; a parked task keeps its tier'), :159 ('parks in REVIEW for a human past the hard cap…') and :180 ('does not re-flip on repeated rejects past the hard cap'). They model 'a row that already had its cap re-plan' (DoD 2); without the record they read 'no cap re-plan yet' (DoD 3) and would re-plan instead of parking.\n- Insert a nested `describe('the hard cap parks only after the cap re-plan', …)` INSIDE 'qa_reject bounded escalation', directly after the 'does not re-flip…' test (ends :187), reusing setupMoe/writeEpic/writeTask/RejectResult and the outer state/testDir. Helpers: huntRow(overrides) = writeTask with definitionOfDone ['DoD-A'], assignedWorkerId null, contextFetchedBy [], reopenCount 2, reopenReason 'second QA reject', rejectionHistory [{reopenCount 2},{reopenCount 1}], metrics {rejectCount 2, reopenCount 2}; move(status: Task['status'], reason?) = setTaskStatusTool(state).handler with NO workerId (human path); qaReviewAndReject(reason, extra) = claim_next_task REVIEW as 'qa-a', get_context, qa_reject; reload() = new StateManager on testDir + load. Five cases:\n 1. Hunt case 1: huntRow(); move WORKING (with reason) → reopenCount 3; move REVIEW; reject → toEqual {status 'PLANNING', parkedForHuman false, reopenCount 4, planningEntry !== undefined, needsHumanReview undefined}; message contains 'flipped to PLANNING'; capReplanAt is a string.\n 2. Hunt case 2: huntRow({ status: 'DONE' }); move WORKING; move REVIEW; reject → {status 'PLANNING', parkedForHuman false, needsHumanReview undefined}.\n 3. As case 1 up to the PLANNING re-plan; keep stamp; reload() → same stamp; move AWAITING_APPROVAL, WORKING, REVIEW (none is a reopen); reject → {status 'REVIEW', parkedForHuman true, needsHumanReview true, reopenCount 5}, row {assignedWorkerId null, needsHumanReview true, capReplanAt: stamp}.\n 4. Legacy: writeTask({ reopenCount: 3 }) (the old fixture shape) → capReplanAt undefined after load; qa_reject as qa-a → {status 'PLANNING', parkedForHuman false, exceededReopenCap true}; capReplanAt now a string.\n 5. Stamp scope: writeTask({ reopenCount: 2 }) → reject → PLANNING + string stamp; writeTask({ failedDodItems: [prior DoD-X] }) + reload → reject with failedDodItems ['DoD-X'] → PLANNING, capReplanAt undefined; writeTask() + reload → reject → WORKING, capReplanAt undefined.\n(b) packages/moe-daemon/src/tools/parkedReview.guard.test.ts: park()'s `writeTask();` (:74) → `writeTask({ capReplanAt: '2026-11-04T00:00:00.000Z' });`; the comment at :70 ends '…past maxReopens parks a row whose cap re-plan is recorded (capReplanAt).' Nothing else in that file.\nRED (record in the step note): in a `git archive HEAD | tar -x` snapshot with only these two test files overlaid, `npx vitest run src/tools/qaReject.test.ts src/tools/parkedReview.guard.test.ts` → qaReject.test.ts '29 tests | 5 failed' (exactly the 5 new cases), parkedReview 6 passed. The fixture records also pass at base, so they weaken nothing.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/qaReject.test.ts",
         "packages/moe-daemon/src/tools/parkedReview.guard.test.ts"
       ],
-      "startedAt": "2026-11-04T05:48:07.323Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.test.ts",
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts"
+      ],
+      "note": "Tests first via Edit only. qaReject.test.ts: setTaskStatusTool import after getContextTool (migrated section); capReplanAt on 3 fixtures; nested describe with 5 cases after 'does not re-flip'. parkedReview.guard.test.ts: park() fixture + comment. RED in a git-archive snapshot (/tmp/tmp.jY2YCzAvoL) with only these two test files overlaid: qaReject.test.ts '29 tests | 5 failed' (exactly the 5 new cases), parkedReview.guard.test.ts 6 passed (Test Files 1 failed | 1 passed; Tests 5 failed | 30 passed).",
+      "startedAt": "2026-11-04T05:48:07.323Z",
+      "completedAt": "2026-11-04T05:48:59.480Z"
     },
     {
       "stepId": "step-2",
       "description": "Implement the rule. Edit tool only.\n(a) packages/moe-daemon/src/types/schema.ts: directly after `needsHumanReview?: boolean;` (:1138) add `capReplanAt?: string;` with a JSDoc: ISO time of the qa_reject that flipped the task to PLANNING at its reopen cap, the one architect re-plan the cap grants; written only by that flip and never cleared (reopens keep it); the hard cap parks (needsHumanReview) only once it is set, because reopenCount also counts non-QA reopens; absent on rows written before it existed, which read as no cap re-plan yet.\n(b) packages/moe-daemon/src/tools/qaReject.ts, escalation block only:\n- Rewrite the comment at :199-207. Soft cap: newReopenCount ≥ maxReopens with no cap re-plan recorded → PLANNING once, stamping capReplanAt. Hard cap: newReopenCount ≥ maxReopens + 1 with capReplanAt set → park. Say why: reopenCount is monotonic and set_task_status, a board drag and REOPEN_TASK bump it too, so the count alone let a human reopen onto the cap send the next reject straight to the park; a row without the field reads as no re-plan yet; once it is set, every later reject past the cap parks, so the loop stays bounded.\n- :213 becomes `const capReplanned = typeof task.capReplanAt === 'string' && task.capReplanAt.length > 0;` then `const reachedHardCap = capReplanned && newReopenCount >= hardCap;`. reachedSoftCap stays `!reachedHardCap && newReopenCount >= softCap`.\n- updatePayload: directly after the park spread (:307) add `...(reachedSoftCap ? { capReplanAt: nowIso } : {}),` with a one-line comment, so the stamp rides the same updateTask as the PLANNING flip.\nLeave untouched: the tool description (:22), handoffWorkerId (:151) and the touchWorker call (:391-393), which task-fefce964 edits; every message, activity reason and the reply shape; rejectionHistory, failedDodItems and metrics. Error handling stays as is: no new throw, every existing refusal keeps its order and code, and a hand-edited non-string or empty value reads as absent. No load backfill, migration or schemaVersion bump (epic rail: legacy state files stay valid).\nGREEN: the step-1 vitest command now passes (qaReject.test.ts 29, parkedReview 6).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/tools/qaReject.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "note": "schema.ts: Task.capReplanAt?: string with JSDoc after needsHumanReview. qaReject.ts: tier comment rewritten; capReplanned gates reachedHardCap; one capReplanAt: nowIso spread after the park spread (soft-cap flip only). No hunk at the tool description, handoffWorkerId or touchWorker. GREEN in the snapshot: tsc --noEmit ok; qaReject.test.ts 29 passed, parkedReview.guard.test.ts 6 passed.",
+      "startedAt": "2026-11-04T05:49:02.721Z",
+      "completedAt": "2026-11-04T05:49:26.162Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs: docs/MCP_SERVER.md, inside `### moe.qa_reject` only (governor ruling msg-71db57ac). Edit tool.\n- The 'Auto-flip to `PLANNING`' bullet's first sub-bullet (:2375) states the soft cap. It applies at `reopenCount ≥ maxReopens` (default 3 via `MAX_REOPENS_DEFAULT`; per-task override `task.maxReopens`) when the task has had no cap re-plan yet (`task.capReplanAt` unset). This is the task's one architect re-plan. The rejection records it by stamping `capReplanAt` (ISO time), which nothing clears, not even a reopen. `reopenCount` also counts non-QA reopens (`set_task_status` or a board move from REVIEW/DONE/ARCHIVED back to active work), so a task a human reopened onto or past the cap still gets this re-plan before any park. A task without `capReplanAt` (written before the field existed) reads as \"no cap re-plan yet\".\n- The same-DoD-item sub-bullet (:2376): append that this flip does not stamp `capReplanAt`.\n- The 'Hard-cap park' bullet's first sentence (:2377): a rejection that takes `reopenCount` past the cap (`≥ maxReopens + 1`) on a task whose cap re-plan is recorded (`capReplanAt` set) keeps the task in `REVIEW`… (rest of the bullet unchanged).\nNo other bullet, section or file. No docs/SCHEMA.md edit: its Task shape lists neither sibling latch (needsHumanReview, critiqueBlockCount), and its 'Reopen cap' flip rule stays true. Leave qaReject.ts's tool description (:22) alone, per the governor's placement note for task-fefce964.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md ### moe.qa_reject only: soft-cap sub-bullet now states the re-plan gate (capReplanAt unset), the stamp, non-QA reopens and the legacy reading; the same-DoD-item sub-bullet notes it does not stamp; the Hard-cap park sentence requires capReplanAt set. No other bullet, section or file.",
+      "startedAt": "2026-11-04T05:49:29.505Z",
+      "completedAt": "2026-11-04T05:49:38.782Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, ONCE, from the task worktree root: run the checkRef exactly as written (also saved in /mnt/d/moe-scratch/task-77e54ebb/checkref.txt). It archives HEAD into a mktemp snapshot and overlays the 5 owned files. Then it runs npm ci, `tsc --noEmit`, a tsc of the two test files (tt.json: the package tsconfig excludes tests), and the FULL daemon vitest suite, which runs because a shared type changed. Last, it pins qaReject.test.ts at ≥ 29 passing tests. Never run npm in the shared checkout (global rail). Never put TMPDIR inside the env -i: a long temp root breaks tsx's IPC pipe (mem:convention-daemon-full-suite-gate-checkref). Expected tail (architect dry-run at d1062cb0): 'Test Files  280 passed (280)', 'Tests  7439 passed | 24 skipped (7463)', 'cap re-plan pin ok', exit 0. The counts grow if the target moved. Submit this fresh command, exit code and output tail to moe.complete_task. Optional extra evidence for DoD 1: the original repro /mnt/d/moe-scratch/hunt-928a468d/A/hardCapSkipsReplan.test.ts passes when copied into the snapshot's src/__hunt__/.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T05:49:41.580Z"
     },
     {
       "stepId": "step-5",
@@ -74,7 +94,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:19.281Z",
-  "updatedAt": "2026-11-04T05:48:07.323Z",
+  "updatedAt": "2026-11-04T05:49:41.580Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T00:27:53.895Z",
@@ -83,7 +103,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-04T00:28:52.393Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -94,7 +115,11 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:46:44.466Z",
   "executionContract": {

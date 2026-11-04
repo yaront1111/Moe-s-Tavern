@@ -88,17 +88,19 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of your own diff, last, before moe.complete_task (mutant mechanics: mem:convention-daemon-vitest-mutant-checkref).\n\n- The split holds: chatRead.ts and chatBacklog.ts are untouched, and both still call state.messageExistsInChannel.\n- Mutants. Run them in the gate's snapshot only, never in the worktree. Apply each with one sed, and restore from your overlay copy:\n  - M1: point chatRead.ts:120 and chatBacklog.ts:316 at messageExistsAnywhereInChannel. Cases 6 and 7 must fail.\n  - M2: drop the exact id compare (return true on any needle hit). Case 4 must fail.\n  - M3: reset the carry on every chunk. Case 5 must fail.\n  - M4: keep pinMessage's bare Error. Case 4 must fail.\n  In the architect's runs, each mutant failed exactly the named case(s) and nothing else.\n- Edge inputs:\n  - an id with JSON-escaped characters: the needle is JSON.stringify(id), the same spelling sendMessage writes;\n  - an empty file, and a file with no trailing newline;\n  - a malformed line or a `null` line (`parsed?.id`);\n  - a deleted channel log: ENOENT gives false, so chat_send refuses INVALID_INPUT and chat_pin refuses NOT_FOUND.\n- Resources: the fd closes on every path, including a throw from readSync. There is no stream and no async iterator, so nothing is left open.\n- Cost: the scan runs only on a window miss, synchronously, under the tool mutex. The architect measured about 5 ms per 16.7 MB miss on a native filesystem, on a copy of the live #general.\n- The test does not copy the hunt repro's `{ message: { replyTo } }` assertion.\n\nIf anything changes, re-run the step-5 command and submit that fresh output.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/chatStore.ts",
         "packages/moe-daemon/src/tools/chatMessageLookup.test.ts"
       ],
-      "startedAt": "2026-11-04T05:48:13.587Z"
+      "note": "Self-review done; no code changed, so the step-5 run still stands. Split holds: chatRead.ts and chatBacklog.ts are untouched and still call state.messageExistsInChannel. Mutants run only in the gate snapshot: M1 (sinceId callers on the whole-file lookup) failed cases 6 and 7; M2 (no exact id compare) failed case 4; M3 (carry reset per chunk) failed case 5; M4 (bare Error in pinMessage) failed case 4. Nothing else failed in any run, and the restored snapshot passes 7/7. Edge inputs checked against the code: empty file and no trailing newline (EOF read of 0 treats the carry as the last line), a null or bare-string line (msg?.id), ENOENT (false, so INVALID_INPUT / NOT_FOUND), fd closed in finally including a readSync throw. Theoretical only: an empty messageId would parse every line (bounded; chat_send skips a falsy replyTo), and a multi-MB line with no newline would grow the carry (sendMessage caps lines at 10 KB). The test does not copy the repro's { message: { replyTo } } assertion.",
+      "startedAt": "2026-11-04T05:48:13.587Z",
+      "completedAt": "2026-11-04T05:49:02.573Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a408f113",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -110,12 +112,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:02:16.939Z",
-  "updatedAt": "2026-11-04T05:48:13.587Z",
+  "updatedAt": "2026-11-04T05:49:29.239Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:22:40.468Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -131,7 +133,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T05:44:54.579Z",
@@ -212,5 +215,21 @@
   },
   "planApprovedAt": "2026-11-04T05:44:54.611Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T05:45:57.717Z"
+  "workStartedAt": "2026-11-04T05:45:57.717Z",
+  "reviewStartedAt": "2026-11-04T05:49:29.237Z",
+  "verification": {
+    "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && L=$(mktemp -d) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$T/packages/moe-daemon/src\" && cp --parents state/chatStore.ts state/StateManager.ts tools/chatSend.ts tools/chatMessageLookup.test.ts \"$L/packages/moe-daemon/src/\" && cd \"$L/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatMessageLookup.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/chat src/state/StateManager.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aqE '✓ src/tools/chatMessageLookup\\.test\\.ts \\(7 tests\\)' ../v.log && echo \"chatMessageLookup ok ($L)\" )",
+    "exitCode": 0,
+    "outputTail": " Test Files  10 passed (10)\n      Tests  282 passed (282)\nchatMessageLookup ok (/tmp/tmp.V9IjjXTS1M)",
+    "reportedAt": "2026-11-04T05:49:29.237Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatMessageLookup.test.ts",
+    "packages/moe-daemon/src/state/chatStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/chatSend.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "chat_send's replyTo check and chat_pin (and the board's PIN_MESSAGE, which goes through pinMessage) now find a message anywhere in its channel's JSONL, whatever its age. chatStore.ts: new exported messageExistsAnywhereInChannel checks the newest window first, then runs a synchronous chunked scan of the whole file (256 KiB chunks, one carried unfinished line, Buffer.indexOf prefilter on the JSON-quoted id, exact parsed `id` compare, ENOENT false, other read errors thrown, fd closed in finally). Exported CHAT_READ_WINDOW_BYTES (shared by getMessages and messageExistsInChannel) and MESSAGE_SCAN_CHUNK_BYTES. pinMessage uses the whole-file lookup and throws notFound('Message', id), a coded NOT_FOUND, instead of a bare Error; its 'scans full JSONL, no limit' comment and messageExistsInChannel's docstring now state the real bound. StateManager.ts gains the delegate; chatSend.ts calls it. messageExistsInChannel stays windowed, and chatRead.ts (all-channel sinceId) and chatBacklog.ts (chat_wait) are untouched, so an old sinceId still reads from the stored cursor with no newest-window replay. New chatMessageLookup.test.ts has 7 cases (old message found/replied/pinned; ghost, replyTo-only, mentions-only and other-channel ids refused INVALID_INPUT / coded NOT_FOUND with no pin written; a line straddling a chunk with a split multi-byte char; the chat_read and chat_wait no-replay cases). docs/MCP_SERVER.md: one Notes bullet in ### moe.chat_send and one paragraph in ### moe.chat_pin. Verification: the plan's checkRef, exit 0, 10 test files / 282 tests passed, 'chatMessageLookup ok'. Mutants in the snapshot: M1 failed cases 6 and 7, M2 and M4 case 4, M3 case 5, nothing else. The project qualityGate (parity-check.sh and npm run lint) passes in the worktree."
 }
