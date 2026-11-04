@@ -250,12 +250,12 @@ Both IDE plugins bundle everything needed to run agents. The JetBrains zip ships
 ```
 <root>/                 (JetBrains: moe-jetbrains/ · VS Code: bundled/)
 ├── lib/                # Plugin JARs (JetBrains only)
-├── daemon/             # moe-daemon dist minus *.test.* / *.spec.*, its package.json, node_modules minus .bin
-├── proxy/              # moe-proxy dist minus *.test.* / *.spec.*, its package.json, node_modules minus .bin
+├── daemon/             # moe-daemon dist minus *.test.* / *.spec.*, its package.json, node_modules with only its lockfile's production packages (no devDependencies, no .bin)
+├── proxy/              # moe-proxy dist minus *.test.* / *.spec.*, its package.json, node_modules with only its lockfile's production packages (no devDependencies, no .bin)
 ├── scripts/
 │   ├── moe-agent.ps1, moe-agent.sh, moe-call.sh   # the .sh files are LF-normalized
 │   ├── prompt-cache*.mjs, usage-receipt.mjs, usage-session.mjs, usage-report.mjs, analyze-usage.mjs
-│   ├── moe-account-lease.mjs
+│   ├── moe-account-lease.mjs, moe-serena-ignore.mjs
 │   ├── local-runner/   # everything except *.test.* / *.spec.* and any tests/, __tests__/, fixtures/, __fixtures__/ dir
 │   │                   # (includes certified-provider.json, multipass.mjs, doctor.mjs, cli.mjs, vm-control.mjs)
 │   └── mods/           # everything except *.test.ts and .claude-plugin/types/
