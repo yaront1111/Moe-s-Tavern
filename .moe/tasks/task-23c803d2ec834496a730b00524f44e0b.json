@@ -131,8 +131,8 @@
     }
   ],
   "planRevision": 5,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -155,12 +155,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:34:00.801Z",
-  "updatedAt": "2026-11-03T23:15:07.405Z",
+  "updatedAt": "2026-11-04T00:18:01.092Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:55:43.120Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T00:18:01.090Z",
+    "wallClockMs": 192137970
   },
   "contextFetchedBy": [
     "architect-12ae794e",
@@ -302,5 +304,9 @@
     "reportedAt": "2026-11-03T23:13:54.969Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Ported M07m3's PowerShell happy-path VM seat lifecycle: marked copied claims, stdin-only credential transfer, no host CLI fallback, validated job outcomes, admitted-tree landing, QA no-landing, and bounded finally cleanup. Added PS5.1/pwsh7 rows and fixed a full-harness-discovered BOM/Unicode pipe bug with scoped native encoding restoration. Fresh final gate: 3 VM-route PASS, 1 full PS5.1 postflight PASS, 1 parity PASS; independent parity/lint also green. All 3 security/lifecycle mutants rejected at VR-happy. Final scope 396 changed lines, net 370 across the two approved scripts; BOM intact and diff clean. Serena handoff records evidence and the explicitly deferred CQ-M07n hot-reload ordering. No actual VM isolation or profile activation claimed."
+  "completionSummary": "Ported M07m3's PowerShell happy-path VM seat lifecycle: marked copied claims, stdin-only credential transfer, no host CLI fallback, validated job outcomes, admitted-tree landing, QA no-landing, and bounded finally cleanup. Added PS5.1/pwsh7 rows and fixed a full-harness-discovered BOM/Unicode pipe bug with scoped native encoding restoration. Fresh final gate: 3 VM-route PASS, 1 full PS5.1 postflight PASS, 1 parity PASS; independent parity/lint also green. All 3 security/lifecycle mutants rejected at VR-happy. Final scope 396 changed lines, net 370 across the two approved scripts; BOM intact and diff clean. Serena handoff records evidence and the explicitly deferred CQ-M07n hot-reload ordering. No actual VM isolation or profile activation claimed.",
+  "completedAt": "2026-11-04T00:18:01.090Z",
+  "reviewCompletedAt": "2026-11-04T00:18:01.090Z",
+  "reviewSummary": "Completion 2e96f697 (squash on moe/work-2026-10-24 and origin) is recorded as pushed and committed. Diff: moe-agent.ps1 +163/-8 and postflight-vm-route.ps1 +220/-5, net 370 (<400). diff --check is clean, the BOM is kept, no new non-ASCII bytes. The landed tree also carries task-044c7410's hunks, so I gated the exact tree. GATE: task.verification's command on a full git-archive snapshot of 2e96f697, run 23:21Z-00:17Z. exit=0; 3 PASS vm-route, 1 PASS postflight.ps1, 1 PASS parity; no SKIP or FAIL lines; [vm seat] all 10 rows pass on 5.1 and 7; worktree 75/0. lint exit 0. EXTRA: a scratch diagnostic of VR-sigint shows code=0, no guest stdout, nothing committed, and '[seat] stopped', so Ctrl+C really interrupts mid-job. A PSObject.Copy probe on 5.1 and 7 shows $claimRpcArgs stays unmarked. DoD 1: VR-happy shows no host CLI, start then job then stop, and every claim is marked vm; T-legacy stays unmarked. DoD 2: the task branch tip has the stub's tree and parent base, with exactly one record_commit and one MOE_VM_CANDIDATE_COMMITTED. DoD 3: stdinSha256 equals the canary's hash; the canary is absent from seat argv, env and wrapper output; no credential vars on either engine. DoD 4: the happy and sigint rows. DoD 5: VR-shared and VR-protected. DoD 6: the gate above. The port matches af8ca2bb's strings and order, and all nine VM_ROUTE guard sites. The VM dispatch runs before the host CLIs, so there is no fallback; legacy is unchanged. Deferred to CQ-M07n: the reload branch deregisters before the finally's Stop-MoeSeatVm. Notes: the foreground calls 'node' but the background calls $script:MoeNode; VR-sigint could assert no 'guest stdout'; the V3 every-file scan is covered by static trace only. No isolation is claimed.",
+  "requiredCheckAtDone": null
 }
