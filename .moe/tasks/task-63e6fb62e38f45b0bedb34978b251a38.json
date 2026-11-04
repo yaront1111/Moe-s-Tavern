@@ -29,19 +29,25 @@
     {
       "stepId": "step-2",
       "description": "docs/ARCHITECTURE.md: rewrite the stale verified-local claims. Line numbers are from planning time, so anchor on the quoted text.\n\n(a) `### The verified-local path`, opening paragraph (~:343, 'is unconditionally unavailable today'). Verified-local is refused until the daemon's readiness evaluation passes; point to CONFIGURATION.md's executionProfile row and to CERTIFICATION.md `## Activation`. Legacy and observe keep the path above unchanged.\n\n(b) The dispatch bullet (~:377, 'nothing invokes it per candidate yet'). Under strong intent, a worktree completion's gate runs `check-dispatch.mjs` on the frozen merged candidate (`commit-tree M -p B`), and the host never runs the qualityGate for that task. Legacy and observe still run the host gate. Sources: mem:decision-verified-local-check-gate, and the landed r/s code in wt_land_rounds and Invoke-MoeWorktreeRounds; trace both.\n\n(c) **Strong local delivery** (~:421). Add the worktree arm: it sends `moe.record_delivery_receipt` from its receipt journal (CQ-M07t). The receipt is candidate-bound, an identical replay is a duplicate, and a contradicting one gets DELIVERY_RECEIPT_CONFLICT. Verify each claim in the landed code.\n\n(d) `### Worktree mode` (~:311, 'No DeliveryReceipt is sent:'). Reword it to keep the legacy fact (e.g. 'A legacy or observe landing sends no DeliveryReceipt: ...') and say that a strong landing sends one, as in (c).\n\n(e) `## Local Runner Isolation`, intro (~:466-467: 'Nothing here is active yet ... until certification and the client gates pass'). Say what runs under verified-local now. Add a bullet that starts EXACTLY `- **Seat VM route.**`; checkRef 5b reads that bullet up to the next `- **` bullet or heading. It must cover:\n- one VM per worker/QA seat, started by `node scripts/local-runner/agent-seat.mjs seat-start` and reused per job, with the root-only guest-supervisor `reset` between jobs, deleted through the owned ledger when the seat exits;\n- the host-wide cap, as the CQ-M07h code computes it: `SEAT_CAPACITY_FULL` means exit 75, and the seat waits and retries before claiming, never falling back to the host;\n- the WSL rule: under verified-local, worker/QA seats run the native PowerShell wrapper, and moe-agent.sh refuses verified-local inside WSL;\n- credentials: the per-account VM token goes only in the job frame as `CLAUDE_CODE_OAUTH_TOKEN`, and codex keys (`OPENAI_API_KEY`/`CODEX_API_KEY`) come from the wrapper's own environment;\n- gemini and grok are refused.\nSources: mem:decision-cq-m07-verified-local-activation, agent-seat.mjs, and the wrappers' VM route (moe-agent.sh ~:9560-9910).\n\nError handling:\n- Every claim traces to a file and symbol at HEAD. Where the code and a memory differ, the code wins.\n- Write 'no daemon git write', never 'never runs git': util/daemonGitDocs.test.ts fails any docs line matching /never (?:runs|executes|touches) git|runs no git|does not run git/i.\n- Keep the doc's ~118-column wrap.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md"
       ],
-      "startedAt": "2026-11-04T21:08:19.615Z"
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "(a) verified-local path opening: refused until held readiness passes (readinessHolder, start + every five minutes), points to CONFIGURATION executionProfile row and CERTIFICATION Activation. (b) dispatch bullet: strong worktree L6 runs check-dispatch.mjs on commit-tree M -p B instead of the qualityGate (run_check_dispatch / Invoke-MoeCheckDispatch); stops fail as MOE_COMMIT_FAILED_GATE after MOE_CHECK_DISPATCH_REFUSED; legacy/observe keep the host gate. (c) Strong local delivery: worktree arm journal fields, row → record_delivery_receipt (only after row ack) → finalize (wt_land_published, Complete-MoeWorktreeLanding); duplicate:true replay, DELIVERY_RECEIPT_CONFLICT warned once, not retried (receipt_send). (d) Worktree mode: 'A legacy or observe landing sends no DeliveryReceipt'; strong sends one. (e) Local Runner Isolation intro rewritten + new '- **Seat VM route.**' bullet (seat-start/seat-job/seat-stop, reset mode, ledger delete, cleanup via moe.get_seat_liveness, hostAgentVmCap, SEAT_CAPACITY_FULL exit 75 + MOE_SEAT_CAPACITY_WAIT, WSL rule MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED, VM token on stdin → CLAUDE_CODE_OAUTH_TOKEN, codex OPENAI_API_KEY/CODEX_API_KEY else MOE_VM_CREDENTIAL_UNAVAILABLE, gemini/grok MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED). checkRef 6 ARCHITECTURE part green; daemonGitDocs phrase scan clean.",
+      "startedAt": "2026-11-04T21:08:19.615Z",
+      "completedAt": "2026-11-04T21:12:24.894Z"
     },
     {
       "stepId": "step-3",
       "description": "docs/CERTIFICATION.md.\n\n(a) Replace the ~:10 paragraph ('Certification is not activation...'). A certified report filed in the host store is one input of verified-local readiness; point to `## Activation`. Also fix ~:134, '..., and `verified-local` stays refused, as above.': a host with no report stays unsupported, because the isolation capabilities stay missing.\n\n(b) Add a section headed EXACTLY `## Activation`, immediately before `## Certified platforms`; checkRef 5 reads from that heading to the next `## `. Write a numbered operator flow from the code, each step with its exact command, or the exact UI action when none exists:\n1. On each host (Windows x64, Linux x64): run `prerequisites`, then `node scripts/local-runner/cli.mjs certify --work-dir <work-dir>` from the install the daemon runs; readinessHolder.productionReadinessInputs compares the report with that install's pins. A native, certified run files the report in `<OS account home>/.moe/certification` (CONFIGURATION.md ~:547). A pin change needs a re-certify.\n2. For each rotation account: `node <daemon>/dist/index.js accounts vm-token <id>`, or the JetBrains Accounts tab's action. It runs `claude setup-token` and stores the token.\n3. A plugin-installed daemon, whose install tree lies outside the project (`protected-host-control-plane`). A daemon run from the project's own dist never passes.\n4. Project settings, each with how it is written (a dialog, UPDATE_SETTINGS, or `.moe/project.json`): `deliveryPolicy` `local-branch`, `worktreeMode` `on`, a non-blank `qualityGate` and its scope.\n5. Confirm with `moe.get_execution_readiness` (`ready: true`, empty `missingCapabilities`). Give the exact call that works for an operator; check the tool's audience before naming moe-call.sh.\n6. Set `executionProfile` `verified-local`.\n7. JetBrains **Start Agent** for worker and QA seats (claude or codex).\n8. The first owed check names the check environment id (`moe-local-vm-v1:<sha256>`, RUNNER_ENVIRONMENT_NOT_APPROVED). Add it to `checkEnvironments` in `.moe/project.json`.\n\nThen an unsupported list, one line each, with the code that refuses it:\n- macOS: no certified report;\n- gemini and grok;\n- shared mode, i.e. worktreeMode off: MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED;\n- `check-architecture` as a required check until a trusted install exists: `required-check-untrusted-checker`.\n\nError handling:\n- Verify every command against its parser before writing it: scripts/local-runner/cli.mjs usage, packages/moe-daemon/src/accounts/cli.ts, and each setting's writer (StateManager.updateSettings).\n- Give both the Windows (PowerShell) and POSIX forms wherever paths or quoting differ.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/CERTIFICATION.md"
-      ]
+      ],
+      "startedAt": "2026-11-04T21:12:25.719Z"
     },
     {
       "stepId": "step-4",
@@ -101,12 +107,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:57:24.860Z",
-  "updatedAt": "2026-11-04T21:08:19.615Z",
+  "updatedAt": "2026-11-04T21:12:25.719Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:15:09.520Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -117,7 +123,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T12:35:26.321Z",
