@@ -1269,7 +1269,7 @@ If the epic touched shared types, schema, wire protocol, or migrations, say so i
 
 Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
-# moe-generated: sha=247fee8eaf61
+# moe-generated: sha=8a9dfeae8edb
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -1351,7 +1351,7 @@ One step per phase is a fine starting point for non-trivial work. For larger tas
 
 - Set \`affectedFiles\` tight per step.
 - When a Serena memory bears on a step, name it in that step's description as \`mem:<name>\` (for example \`mem:gotcha-moe-doc-generated-artifacts\`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.
-- Cite only live names. A name under \`_archive/\` is hidden from Serena by .serena/project.yml ignored_memory_patterns, and read_memory refuses it.
+- Cite only live names, and never another task's \`task-<id>-handoff\` or \`task-<id>-qa-handoff\`: QA retires those to \`_archive/\` at \`moe.qa_approve\`, and a dependsOn edge holds this task's claim until then, so the worker's read_memory finds nothing (task-62ec51f1's seat, 2026-11-04). Quote the fact the step needs, or cite a \`gotcha-\`/\`pattern-\`/\`decision-\` memory. Serena hides \`_archive/\` names, and read_memory refuses them.
 - Map every Definition-of-Done item to at least one step.
 - State non-obvious design choices in the step \`description\` so the worker doesn't re-derive them.
 

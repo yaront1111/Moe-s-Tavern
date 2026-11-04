@@ -80,7 +80,7 @@ One step per phase is a fine starting point for non-trivial work. For larger tas
 
 - Set `affectedFiles` tight per step.
 - When a Serena memory bears on a step, name it in that step's description as `mem:<name>` (for example `mem:gotcha-moe-doc-generated-artifacts`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.
-- Cite only live names. A name under `_archive/` is hidden from Serena by .serena/project.yml ignored_memory_patterns, and read_memory refuses it.
+- Cite only live names, and never another task's `task-<id>-handoff` or `task-<id>-qa-handoff`: QA retires those to `_archive/` at `moe.qa_approve`, and a dependsOn edge holds this task's claim until then, so the worker's read_memory finds nothing (task-62ec51f1's seat, 2026-11-04). Quote the fact the step needs, or cite a `gotcha-`/`pattern-`/`decision-` memory. Serena hides `_archive/` names, and read_memory refuses them.
 - Map every Definition-of-Done item to at least one step.
 - State non-obvious design choices in the step `description` so the worker doesn't re-derive them.
 

@@ -83,7 +83,7 @@ There is no longer a dedicated session-summary tool. Instead, end-of-session con
 
 ### Architects
 - Before planning: `list_memories` + `read_memory` for relevant `convention-*` / `gotcha-*` / `pattern-*` / `decision-*` entries.
-- In the plan: when a memory bears on a step, name it in that step's description as `mem:<name>` so the worker reads exactly that one instead of scanning `list_memories`. Cite only live names, never an `_archive/` name.
+- In the plan: when a memory bears on a step, name it in that step's description as `mem:<name>` so the worker reads exactly that one instead of scanning `list_memories`. Cite only live names: never an `_archive/` name, and never another task's `task-<id>-handoff`, which QA retires at `moe.qa_approve` before any dependent can claim. Quote the fact in the step, or cite a `gotcha-`/`pattern-`/`decision-` memory.
 - During exploration: `write_memory` conventions, gotchas, and patterns discovered.
 - On plan submission: include `planningNotes` with analysis and reasoning (see below).
 - Before waiting: `write_memory { name: "task-<taskId>-handoff" }`.
