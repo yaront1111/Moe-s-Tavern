@@ -47,8 +47,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5772dacf",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-25f21f0a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -63,11 +63,23 @@
       "author": "architect-cd0ac706",
       "content": "Filer's follow-up, re-derived at bc4793cf.\n\n1) A cheaper fix than the one in the description already exists in this file.\n   - `const running = pid => alive(pid) && (process.platform !== 'linux' || procState(pid)?.[0] !== 'Z')` is defined at :1145.\n   - It is the zombie-aware probe that :1172 polls for up to 5 s: `for (let waited = 0; waited < 5000 && [...].some(running); waited += 100) await sleep(100)`.\n   - Fix: give I1 (:493) and I3 (:532) the same bounded poll on `running(host.child)` before asserting that it is false.\n   - `running` is a module-scope const, so the earlier tests can use it.\n   - Port the S11 CANNOT_RUN rule only if the poll alone still flakes under bridge-load-repro.sh.\n2) Line corrections:\n   - CANNOT_RUN is at :1224-1227, not :1220-1226.\n   - relay()'s finally block is guest-supervisor.py:559-566 (killpg at :563, reap at :566).\n   - The GUARD comment is :99-104, and the exit-code contract is :19-20.",
       "timestamp": "2026-11-04T09:19:19.213Z"
+    },
+    {
+      "id": "comment-6f369157bed94617bef21c3d51b7094c",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-04T10:05:49.461Z",
+      "content": "Landing unlanded (remote) 1 time(s) in a row; attempt attempt-1a2e7b5615714540b7cff217f56fbbc2 (generation 2); paths: (none reported); rescue ref: refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T100547Z; target tip: fec9a8427036fef3b6a7f3545aac0a92200e73be; task WORKING."
+    },
+    {
+      "id": "comment-160ce5f01f304e2f9274ae9328d6155a",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-04T10:11:15.501Z",
+      "content": "Landing unlanded (remote) 2 time(s) in a row; attempt attempt-004f6c1bc0e54963b4fbb2b74d91da9d (generation 3); paths: (none reported); rescue ref: refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T101113Z; target tip: fec9a8427036fef3b6a7f3545aac0a92200e73be; task WORKING."
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:13:49.972Z",
-  "updatedAt": "2026-11-04T10:04:49.619Z",
+  "updatedAt": "2026-11-04T10:16:27.301Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:46:13.844Z",
     "plannedStepCount": 3,
@@ -76,7 +88,8 @@
   },
   "contextFetchedBy": [
     "architect-2a219562",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "worker-a0305b0b"
   ],
   "tier": "light",
   "effort": "medium",
@@ -140,5 +153,66 @@
   },
   "planApprovedAt": "2026-11-04T09:51:35.364Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T10:01:31.511Z"
+  "workStartedAt": "2026-11-04T10:01:31.511Z",
+  "reviewStartedAt": "2026-11-04T10:15:29.149Z",
+  "verification": {
+    "command": "snapshot from git ls-files: bridge file unloaded, bridge-load-repro.sh 10, CI 14-file node --test",
+    "exitCode": 0,
+    "outputTail": "failed runs: 0/10\nb.log: tests 91 pass 90 fail 0 skipped 1\nc.log: tests 741 pass 738 fail 0 skipped 3\nexit: 0",
+    "reportedAt": "2026-11-04T10:15:29.149Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-bridge.test.mjs"
+  ],
+  "completionSummary": "I1 and I3 in local-runner-bridge.test.mjs poll running(host.child) for up to 5 s before asserting it is false. Landing retry: re-verified on a snapshot built from the worktree's tracked files (git ls-files), with the target merged in. Load repro 0/10 failed; bridge file 91 tests (90 pass, 1 skipped); CI 14-file step 741 tests (738 pass, 0 fail, 3 skipped), MOE_* unset. guest-supervisor.py unchanged.",
+  "commits": [
+    {
+      "sha": "676f81f388224af8721f6804add6cb4fabcd1348",
+      "ref": "refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T100547Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T10:00:38Z",
+      "paths": [],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T10:05:48.424Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-20f59bc955f44875832072dcec91868e ref=refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T100547Z sha=676f81f388224af8721f6804add6cb4fabcd1348 reason=remote"
+    },
+    {
+      "sha": "ec73a3006a46626159a0216e55fd5f992d869486",
+      "ref": "refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T101113Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T10:06:21Z",
+      "paths": [],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T10:11:14.390Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-20f59bc955f44875832072dcec91868e ref=refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T101113Z sha=ec73a3006a46626159a0216e55fd5f992d869486 reason=remote"
+    },
+    {
+      "sha": "566778a076dba1ee3ed77d9366f8aee3d938d833",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T10:11:44Z",
+      "paths": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "architect-c33f294e",
+      "recordedAt": "2026-11-04T10:16:26.327Z",
+      "status": "REVIEW"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5772dacf@2026-11-04T10:11:44Z",
+    "at": "2026-11-04T10:16:26.327Z"
+  },
+  "landingRetry": null
 }
