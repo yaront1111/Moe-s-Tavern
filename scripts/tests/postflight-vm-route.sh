@@ -897,6 +897,26 @@ vmr_run SG-protected worker claude '{"profile":"verified-local","ready":false,"m
   || vmr_fail SG-protected 'the override was not ignored with one warning'
 ! grep -Fq "$SG_FAKE" "$OUT" || vmr_fail SG-protected 'the override value was printed'
 echo "[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, missing, crash, unparsable, env, env-malformed, timeout, protected"
+echo '[strong gate] SG-interrupt: a wrapper TERMed mid-dispatch stops the dispatch from its EXIT trap (cleanup_temp), before finalize'
+# The dispatch entry runs the hang fake, then TERMs its own parent, the wrapper,
+# once and only while that is still the parent that spawned it (never a reaper).
+printf '%s\n' 'const w = process.ppid; require(process.env.SG_FAKE_JS);' \
+  'setTimeout(() => { if (w > 1 && process.ppid === w) process.kill(w, "SIGTERM"); }, 1000);' > "$TMP_DIR/sg-interrupt.js"
+vmr_run SG-interrupt worker codex "$SG_READY" on 0 FAKE_ATTEMPT_PROFILE=verified-local MOE_CHECK_DISPATCH_PATH="$TMP_DIR/sg-interrupt.js" \
+  SG_FAKE_JS="$SG_FAKE" FAKE_CHECK_DISPATCH=hang
+SG_PID="$("$NODE" -e 'const r=require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse).find(x=>x.tool==="check-dispatch");console.log(r?r.args.pid:"")' "$PROJECT/.moe/evidence-rpcs.jsonl" 2>/dev/null || true)"
+# A probe only: should the fake outlive the wrapper, this run's own recorded child is killed.
+if [ -n "$SG_PID" ] && kill -0 "$SG_PID" 2>/dev/null; then kill -KILL "$SG_PID" 2>/dev/null || true; vmr_fail SG-interrupt "the dispatch $SG_PID outlived the wrapper"; fi
+"$NODE" - "$PROJECT" "$OUT" "$SG_WITNESS" "$TMP_DIR/sg-base" "$VMR_CODE" <<'JS' || vmr_fail SG-interrupt 'see the assertion above'
+const fs=require('node:fs'),a=require('node:assert/strict'),cp=require('node:child_process'),[p,out,witness,baseFile,rc]=process.argv.slice(2);
+const rows=fs.readFileSync(p+'/.moe/evidence-rpcs.jsonl','utf8').trim().split('\n').map(JSON.parse),of=t=>rows.filter(r=>r.tool===t);
+const d=of('check-dispatch'),term=of('check-dispatch-term'),fin=rows.findIndex(r=>r.tool==='finalize_attempt');
+a.equal(rc,'0'); a.ok(fs.readFileSync(out,'utf8').split('\n').includes('Agent stopped.'),'the TERM trap did not run');
+a.equal(d.length,1); a.deepEqual(term.map(r=>r.args.pid),[d[0].args.pid],'not one TERM to the dispatch');
+a.ok(fin>=0&&rows.indexOf(term[0])<fin,'the attempt was not finalized after the dispatch stopped'); a.equal(fs.existsSync(witness),false,'the host gate ran');
+a.equal(cp.execFileSync('git',['-C',p,'rev-parse','refs/heads/main'],{encoding:'utf8'}).trim(),fs.readFileSync(baseFile,'utf8').trim(),'main moved');
+JS
+echo "[strong gate] ok SG-interrupt"
 
 echo '[strong gate] SGV: check_dispatch_verdict prints PASS or one fixed code, never the reply'
 SGV="$TMP_DIR/sgv"; mkdir -p "$SGV"
@@ -923,10 +943,13 @@ sgv V-pass-rc2 2 MOE_CHECK_DISPATCH_NOT_PASSED "$SGV_PASS$SGV_NL"
 sgv V-other-candidate 0 "$SGV_BAD" '{"taskId":"task-v","candidateId":"cand-other","results":['"$SGV_RESULT"']}'"$SGV_NL"
 sgv V-other-task 0 "$SGV_BAD" '{"taskId":"task-other","candidateId":"cand-v","results":['"$SGV_RESULT"']}'"$SGV_NL"
 sgv V-no-results 0 "$SGV_BAD" '{"taskId":"task-v","candidateId":"cand-v","results":[]}'"$SGV_NL"
+sgv V-results-object 0 "$SGV_BAD" '{"taskId":"task-v","candidateId":"cand-v","results":{"outcome":"passed"}}'"$SGV_NL"
 sgv V-log-line 0 "$SGV_BAD" "dispatch log$SGV_NL$SGV_PASS$SGV_NL"
 # Two more one-line rules json.loads alone would let through: an indented reply, a CR.
 sgv V-indented 0 "$SGV_BAD" '{"taskId":"task-v",'"$SGV_NL"'"candidateId":"cand-v","results":['"$SGV_RESULT"']}'"$SGV_NL"
 sgv V-crlf 0 "$SGV_BAD" "$SGV_PASS"$'\r\n'
+# Only ONE trailing newline is dropped, so a blank second line is still a second line.
+sgv V-two-newlines 0 "$SGV_BAD" "$SGV_PASS$SGV_NL$SGV_NL"
 sgv V-stop-beats-rc0 0 RUNNER_NOTHING_OWED '{"taskId":"task-v","candidateId":"cand-v","results":[],"stopped":{"code":"RUNNER_NOTHING_OWED"}}'"$SGV_NL"
 sgv V-stop-lower 2 "$SGV_BAD" '{"stopped":{"code":"lower case"}}'"$SGV_NL"
 sgv V-code 2 RUNNER_SEAM_UNAVAILABLE '{"code":"RUNNER_SEAM_UNAVAILABLE"}'"$SGV_NL"
