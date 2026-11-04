@@ -66,11 +66,17 @@
       "author": "governor-e6142a94",
       "content": "Evidence from real CI for the planner, from the governor. The same 60-min cap is close on Linux too, so size the fix for both platforms.\n- On PR #230's ubuntu-latest, \"Test Bash wrapper postflight and parity\" (postflight-safe.mjs bash) took:\n  - 44:48 (run 41830422144 at 060d7b8c, 12:39:47 to 13:24:35Z);\n  - 44:52 (run 41823611051 at 2037e856);\n  - 45:50 (run 41834653023 at 80078651, 13:29:43 to 14:15:33Z).\n  That is 75-76% of the 60-min execFile cap (postflight-safe.mjs:51), and it grows with every wrapper row. CQ-M07r/s/t are adding postflight scenarios right now.\n- The job has no timeout-minutes in ci.yml, so the cap at :51 is the only bound.\n- The fix should leave real headroom on all three postflight steps, not just the two Windows ones. That could be a per-step budget, an env-overridable cap, or splitting the suite across steps/jobs.\n- Get the runner timings with `gh.exe run view <id> --json jobs`.",
       "timestamp": "2026-11-04T15:27:21.462Z"
+    },
+    {
+      "id": "comment-dcd1da0c5c144e5aa76b6b4ba4ed7199",
+      "author": "architect-67c762f6",
+      "content": "CONFIRMED by real CI (hunt #25, 16:26Z). Run 41848822541 at 9e9e7345, windows-latest job 126656658211, step 22 \"Test Windows PowerShell wrapper postflight\":\n- 15:17:53Z: `worktree-landing: 18 passed, 0 failed, 0 errors`\n- 16:17:54Z, 60:01 later: `{\"engine\":\"powershell\",\"exit\":1,\"lastScenario\":\"P\",\"failureClass\":\"TIMEOUT\",\"failureLine\":null}`, then `##[error]Process completed with exit code 1.`\n- Step 23 (the pwsh 7 postflight and parity) and steps 24-25 were skipped. PR #230 is red again on windows-latest only. ubuntu-latest step 21 in the same run passed in 2611 s (15:07:05-15:50:36Z).\n- The job log is saved at /mnt/d/moe-scratch/hunt-9ca91400/ci/real-ci-41848822541-windows.log.\n\nSIZING. Read this before planning DoD 1.\n- lastScenario P means the runner got only as far as scenario P (around postflight.ps1:3350 of 6165) in 60 min. This desktop runs the whole file in 53 min.\n- That is about 1.6-1.9x, more than the 1.5x the description assumed. So a full 5.1 run needs roughly 85-100 min on windows-latest, and pwsh 7 (3400 s on the desktop) more than that.\n- Treat DoD 1's 120 min as a floor only, and size the bound at 180 min or more, because CQ-M07s/t (74fe4c99, 527735ea) still add VM-route scenarios.\n- With that bound the Windows job runs about 3.5-4 h, because the two PowerShell postflights run one after the other. That is still under GitHub's 360-min job default.\n- Splitting the two postflights into their own jobs, to cut wall time, is the governor's call. It is not part of this row.",
+      "timestamp": "2026-11-04T16:27:13.481Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:27:08.909Z",
-  "updatedAt": "2026-11-04T15:44:39.878Z",
+  "updatedAt": "2026-11-04T16:27:13.481Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T15:27:15.313Z",
     "plannedStepCount": 3,

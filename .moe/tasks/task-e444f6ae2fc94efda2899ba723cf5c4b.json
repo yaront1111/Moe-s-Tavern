@@ -7,10 +7,56 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-cd0ac706",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the Windows stop seam to the CLI, with its node rows. Edit with the session's editing tool only.\n\n(a) argumentsFor: accept exactly today's 6 tokens, or the same 6 followed by `--stop-file <path>` (8 tokens). The path must be absolute (path.isAbsolute) and contain no CONTROL character. Return it as `stopFile` (undefined without the pair). Every other shape stays RUNNER_CLI_INPUT_INVALID before anything runs: no open, no export, no VM.\n\n(b) runDispatchCli: when input.stopFile is set, arm a watcher just before reportFor and disarm it in a finally.\n- The watcher checks existsSync(stopFile) at once, then every `pollMs` (a new injectable option, default 250), from a setInterval that is unref()'d so it never keeps the process alive.\n- The first hit aborts a local AbortController. The abort is latched: the file disappearing later changes nothing.\n- reportFor receives AbortSignal.any([signal, local.signal]) (CI runs Node 24), or the local signal alone when no `signal` was injected. The stop file and the entry's SIGINT/SIGTERM then take the same path: dispatchFocusedChecks returns RUNNER_ABORTED before the next VM, and runCheckJob's signal deletes the VM in flight.\n- Without --stop-file, pass `signal` through unchanged. moe-agent.sh never passes the flag, so its behavior is unchanged.\n\n(c) Error handling: existsSync returns false on any error, so an unreadable path only means no graceful stop; the wrapper's grace and kill still follow. The path is never printed, and the report stays one JSON line of fixed codes.\n\n(d) Header comment. Explain why the seam exists: Windows cannot deliver SIGTERM to this one process, and a console Ctrl+C reaches every process on the console. State the contract (the file existing means stop; latched; polled; unref'd) and that the sh wrapper never passes it.\n\nTests: new rows in local-runner-dispatch.test.mjs. The existing rows (K, D, CL, CD) must pass unedited. Use pollMs 20 in S1-S3, and exact-value asserts.\n- S1, argv. The 8-token form runs exactly like the 6-token form: the same report and exit 0 for a passing harness run, opened 1. Each of these is refused with opened 0: a missing value, a relative path, a control character in the path, a misspelt flag, a 9th token, and the pair placed before --project.\n- S2, stop mid-run. Drive the real runCheckJob through landedSeam and jobSteps; let jobSteps' session step accept a function of its input. That session creates the stop file, then waits for its `signal` to abort, and fails after 3 s rather than hanging.\n  - Expect no abort while the file is absent (at least 3 polls).\n  - The VM's remove/removed completes before the CLI resolves, and there is no second create.\n  - report.stopped.code is RUNNER_ABORTED, the exit is 2, and the output is one line.\n  - Also: with --stop-file given, aborting the injected `signal` mid-run (the entry's SIGINT/SIGTERM path) still stops the run before the next VM.\n- S3. A stop file that exists before the run: no VM is created, RUNNER_ABORTED, exit 2.\n- S4, the entry. spawnSync the real check-dispatch.mjs with a valid 8-token argv: a temp non-repo --project, MOE_RUNNER_STATE_DIR set to a temp dir in the child env, a stop path that never appears, and timeout 20000. Expect status 2, one fixed-code JSON line, empty stderr and no timeout error. This proves the armed watcher never keeps the process alive.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Teach R's fake the seam, additively. Never write a second fake.\n- `stopFile = flag('stop-file')`.\n- The check-dispatch row gains `stopAtStart`: null without --stop-file, else fs.existsSync(stopFile) at start.\n- hang, when stopFile is set:\n  - Poll the file every 100 ms from an unref()'d setInterval, so the 300 s self-limit still ends the process.\n  - On the first sight, stop polling and wait 1 s (a stand-in for VM deletion). Then append {tool:'check-dispatch-stop', args:{pid}} and exit 143.\n  - A wrapper that kills without waiting therefore leaves no stop row.\n- hang-hard, when stopFile is set: append the same row once on the first sight and keep waiting. It ignores the stop, as it ignores SIGTERM.\n- Without --stop-file both modes behave exactly as today, so postflight-vm-route.sh's rows stay green unedited.\n- Update the header comment for the new row, the field and both modes.\n\nError handling: a failed existsSync counts as absent, and record() keeps its current behaviour. Edit with the session's editing tool only.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-check-dispatch.js"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "moe-agent.ps1 runtime: the wrapper uses the seam before any kill.\n\nFirst read the landed Stop-MoeCheckDispatch, Invoke-MoeCheckDispatchChild and the outer-finally line `try { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec } catch {}`. This plan was written against CQ-M07s's in-flight bytes, and CQ-M07t may move lines. Edit in place with the editing tool, keep the UTF-8 BOM, and use PS 5.1 syntax only: no `??`, no ternary, no pipeline-chain operators.\n\n(a) Invoke-MoeCheckDispatchChild:\n- Before the spawn, pick a stop path in [IO.Path]::GetTempPath() named `moe-check-dispatch-<[guid]::NewGuid().ToString('N')>.stop`.\n- Never create it in advance. Do not use GetTempFileName: it creates its file, which would stop the dispatch at once.\n- Append '--stop-file', <path> after --commit in the ConvertTo-MoeArgumentLine list. That helper quotes paths with spaces; never hand-build the argument line.\n- Set $script:CheckDispatchStopFile only once Start-Process has returned a process.\n- The finally removes the stop path along with the other temp files, after its Stop call.\n\n(b) The timeout branch becomes `Stop-MoeCheckDispatch $script:CheckDispatchGraceSec` (it was 0, because nothing could be delivered), then returns MOE_CHECK_DISPATCH_TIMEOUT as today. This matches the sh twin's TERM-plus-grace and the lease arithmetic its comment already assumes.\n\n(c) Stop-MoeCheckDispatch, while the recorded process still runs:\n1. Write the recorded stop file as an empty file. Rewriting it is harmless, so no once-flag is needed, unlike sh's TERM.\n2. WaitForExit(grace).\n3. Only if it is still running: taskkill /T /F /PID <recorded pid>, then WaitForExit(5000).\n4. Then Dispose, and clear $script:CheckDispatchProcess and $script:CheckDispatchStopFile LAST, outside any finally.\n- A pipeline stop mid-wait must leave the record in place, so the invoker's finally and the outer finally can finish the stop. This is sh's pid-cleared-last rule (mem:gotcha-check-dispatch-stop-term-once).\n- Error handling:\n  - a failed stop-file write is caught and skipped; the grace and the kill still follow;\n  - a .NET error from the wait or the kill is caught, so the record still clears;\n  - a PipelineStoppedException is rethrown (`catch [System.Management.Automation.PipelineStoppedException] { throw }` before a general catch), so it skips the clear;\n  - a stop with no recorded stop file (a hand-spawned process) goes straight to the grace and the kill.\n\n(d) Rewrite the 'Windows deviation' comment above Stop-MoeCheckDispatch to describe the seam.\n\n(e) Add no function (the harness extracts a fixed $names list), no printed line and no MOE_ code (parity compares the MOE_CHECK_DISPATCH_ family). Run ParseFile on pwsh 7 and PS 5.1.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "postflight-vm-route.ps1 [strong gate] rows for the seam.\n\nFirst read the landed section from CQ-M07s, and any CQ-M07t change to Assert-SgRow. Change only the stop rows and the dispatch-argv checks. SGV, SG8, the outer-finally order pin and the E2E pass/refused/host expectations stay otherwise unedited.\n\n- Assert-SguDispatch, and Assert-SgRow's dispatch check:\n  - argv is the 6 tokens, then '--stop-file' and a rooted path;\n  - that path no longer exists after the row;\n  - stopAtStart is $false as a [bool], never $null;\n  - stop rows are exactly @(dispatch pid) for MOE_CHECK_DISPATCH_TIMEOUT, and none otherwise;\n  - check-dispatch-term rows stay none.\n- U5 (hang-hard, bound 1 s, grace 1 s): one stop row, no TERM row, the fake dead, at most 15 s.\n- U8, new (hang, bound 1 s, grace 30 s): `rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT` and one stop row. The fake writes that row after its 1 s stand-in, so it exited by itself. The fake is dead, and the row takes under 15 s, so the wrapper did not wait out the grace.\n- U7 (runspace Stop() mid-dispatch, hang-hard, grace 3 s): as today, plus exactly one stop row, delivered by the invoker's finally.\n- U9, new: a runspace Stop() during the TIMEOUT grace (bound 1 s, hang-hard, grace 5 s; call Stop() once the stop row exists). The fake must still end dead, and the done file must read record=False. Both hold only when the record is cleared last.\n- SG-timeout (E2E, hang, bound 2 s, default grace): exactly one stop row. Keep the 60 s bound; a wrapper that waits out the 120 s grace fails it.\n- SG-interrupt's hand-spawned fake has no stop file: expect no stop row.\n- Update the section's header comment (the deviation text) and its ok line (U1-U9).\n\nAny row that can leave a fake running must first probe it and kill it by its recorded pid (Assert-SgDead), never by name. To run these rows from WSL, read mem:gotcha-launcher-ps1-rows-from-wsl and mem:gotcha-qa-ps1-postflight-from-wsl. This test file is edited with the session's editing tool only.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, once, from the task worktree root: run checkRefs[0] exactly.\n- It runs postflight-vm-route.ps1 on two background legs: pwsh -> node -> Windows PowerShell 5.1 (CI's shape), and pwsh 7.\n- In the foreground it runs local-runner-dispatch.test.mjs under WSL node and under Windows node.exe (CI runs that file on all three OSes), then postflight-vm-route.sh (the fake's sh rows).\n- Then parity-check.sh, parity-check.ps1 and npm run lint.\n- Logs go to /mnt/d/moe-scratch/te444.*, never into the worktree.\n\nUnder load it takes about 10-20 min. Start it detached and record $!, poll with bounded until-loops, and kill only that PID.\n\nError handling for a red run:\n- A UtilAcceptVsock WSL error with no harness output is an interop flake: rerun that leg.\n- Any other red row: rerun the same leg on the target's bytes (a git archive of the landing target) before blaming this change.\n- Fix only in this row's files.\n\nSize: measure the squash numstat. If the net changed lines exceed 400, file the EPIC ADD_RAIL size exception before complete_task (mem:gotcha-cq-plan-size-vs-qa-cap).\n\ncomplete_task's verification is this command. The summary names each leg's result and every new or changed test row: S1-S4, U5, U7, U8, U9, SG-timeout.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this diff, the final step. Use the adversarial-self-review skill.\n(1) The stop file never exists before the stop. No GetTempFileName is used for its path. S3 and stopAtStart pin both sides.\n(2) Every stop path delivers the seam before its grace: the timeout branch, the invoker's finally and the outer finally. A hand-spawned process with no stop file still gets the grace and the kill.\n(3) The record is cleared last. Walk a pipeline stop through every statement of Stop-MoeCheckDispatch; U9 covers the grace wait.\n(4) Legacy: without --stop-file the CLI behaves exactly as before (K, D and CD unedited and green, postflight-vm-route.sh green), and the sh wrapper's argv is unchanged.\n(5) Inputs: a stop path with spaces, a missing temp dir, a file created twice or deleted after the stop (the abort is latched), and a huge or odd --stop-file value at the CLI (refused).\n(6) Concurrency: two seats' dispatches use distinct GUID paths. The CLI's interval is unref'd and cleared in finally. The fake's interval is unref'd, so its 300 s self-limit still ends it.\n\nFix any finding in this row's files and re-run only the affected legs. A deeper defect gets its own bug row, for example a second console Ctrl+C killing node mid-deletion (process.once).",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -18,7 +64,8 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23"
+    "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23",
+    "task-527735eafb9147cf8663ccee9a9e1b4c"
   ],
   "priority": "MEDIUM",
   "order": 531.7,
@@ -32,16 +79,107 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T15:38:55.700Z",
-  "updatedAt": "2026-11-04T16:04:34.846Z",
+  "updatedAt": "2026-11-04T16:29:06.498Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T16:04:04.872Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-04T16:04:17.535Z"
+    "firstClaimAt": "2026-11-04T16:04:17.535Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
     "architect-cd0ac706"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T16:27:54.911Z",
+  "executionContract": {
+    "intendedBehavior": "On Windows, moe-agent.ps1 can stop a running check-dispatch.mjs gracefully. The dispatch argv ends with `--stop-file <absolute path>`, a file that does not exist yet. To stop the dispatch, at the time bound or from an interrupted wait, the wrapper creates that file. check-dispatch.mjs treats its appearance exactly like SIGINT/SIGTERM, through the same AbortController, so runCheckJob deletes its VM and the CLI exits by itself. Only a dispatch still running after CheckDispatchGraceSec (120 s) is ended with taskkill /T /F on its recorded PID. Without --stop-file the CLI behaves as today, so moe-agent.sh (TERM to the process group) is unchanged.",
+    "acceptanceCriteria": [
+      "check-dispatch.mjs accepts exactly `--project <abs> --task <id> --commit <hex>`, optionally followed by `--stop-file <absolute path without control characters>`. Every other shape is RUNNER_CLI_INPUT_INVALID, with nothing opened, exported or launched.",
+      "With --stop-file, the file appearing aborts the run like SIGTERM: the in-flight runCheckJob deletes its VM before the CLI resolves, no later owed check launches a VM, the report stops with RUNNER_ABORTED, and the exit is 2. A file that already exists at start launches no VM. The entry's SIGINT/SIGTERM still abort a run that has --stop-file. The watcher never keeps the process alive.",
+      "moe-agent.ps1's dispatch argv ends with `--stop-file <path>`. That file does not exist at spawn and is removed after the dispatch. At the time bound the wrapper creates it, waits CheckDispatchGraceSec for the child to exit, and force-kills the child by recorded PID only if it is still running. The result is MOE_CHECK_DISPATCH_TIMEOUT either way.",
+      "The interrupt paths (the invoker's finally and the outer finally) deliver the same stop before their grace. The process record is cleared only after a stop completes, so a pipeline stop during the timeout's grace still ends the dispatch.",
+      "postflight-vm-route.ps1 rows U5, U7, U8, U9 and SG-timeout pin this on Windows PowerShell 5.1 and pwsh 7. local-runner-dispatch.test.mjs rows S1-S4 pass under Linux and Windows node.",
+      "No new MOE_ code, printed line or function. parity-check.sh and parity-check.ps1 pass unedited. postflight-vm-route.sh and the existing local-runner-dispatch rows pass unedited."
+    ],
+    "invariants": [
+      "Never run a verified-local task's qualityGate or any candidate code on the host (unchanged).",
+      "The stop file never exists before the wrapper's stop. GetTempFileName is never used for it.",
+      "Kill only the recorded dispatch PID (taskkill /T /F /PID). Never kill by name or pattern.",
+      "Without --stop-file the CLI's behavior and output are unchanged.",
+      "The CLI prints one JSON line of fixed codes only. The stop path is never printed.",
+      "Tracked files are written only with the session's editing tool."
+    ],
+    "compatibility": [
+      "moe-agent.sh's dispatch (6-token argv, TERM to the process group plus a 120 s grace) is unchanged, and postflight-vm-route.sh's rows pass unedited.",
+      "The fake run without --stop-file behaves exactly as today.",
+      "CQ-M07s's SGV, SG8 and outer-finally order rows pass unedited. Only assertions that describe the stop or the dispatch argv change."
+    ],
+    "approvedScope": [
+      "check-dispatch.mjs: argumentsFor's optional --stop-file pair, the stop-file watcher in runDispatchCli (with an injectable pollMs), and the header comment.",
+      "local-runner-dispatch.test.mjs: rows S1-S4, plus a session-function option in jobSteps.",
+      "postflight-fake-check-dispatch.js: --stop-file handling in hang and hang-hard, and the stopAtStart field.",
+      "moe-agent.ps1: Stop-MoeCheckDispatch, Invoke-MoeCheckDispatchChild and the $script:CheckDispatchStopFile record.",
+      "postflight-vm-route.ps1: the [strong gate] stop rows and dispatch-argv checks named in step 4."
+    ],
+    "reuse": [
+      "The entry's existing AbortController path, the same abort SIGINT/SIGTERM use. runCheckJob's existing signal handling deletes the VM.",
+      "AbortSignal.any (Node 24) to combine the injected signal with the stop file's.",
+      "ConvertTo-MoeArgumentLine for quoting, and the existing taskkill-by-PID kill.",
+      "R's fake (never a second fake), and the existing SGU/E2E helpers: Invoke-SguRow, Assert-SgDead, Wait-SguDispatch and the U7 runspace pattern."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/check-dispatch.mjs: argumentsFor (exactly 6 tokens, FLAGS, CONTROL), runDispatchCli(argv, {open, exportSnapshot, loadRunCheck, signal, write}) and reportFor. dispatchFocusedChecks checks signal.aborted before each run (RUNNER_ABORTED). The invokedDirectly entry wires process.once SIGINT/SIGTERM to one AbortController.",
+      "scripts/local-runner/check-lifecycle.mjs runCheckJob: an aborted signal rejects CHECK_ABORTED before any step. Mid-job it returns CHECK_ABORTED, still removes the VM, and passes the signal to the session.",
+      "scripts/moe-agent.ps1, as CQ-M07s lands it: Stop-MoeCheckDispatch([int]$GraceSec) waits, runs taskkill /T /F /PID and clears the record in a finally. Invoke-MoeCheckDispatchChild uses Start-Process node with stdin, stdout and stderr temp files; its timeout branch calls Stop-MoeCheckDispatch 0, and its finally calls Stop with $script:CheckDispatchGraceSec. The outer finally runs `try { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec } catch {}`.",
+      "scripts/tests/postflight-vm-route.ps1, as CQ-M07s lands it: in [strong gate], Assert-SgRow, Assert-SguDispatch, Invoke-SguRow (Grace parameter), U5, U7 (runspace Stop()), SG-interrupt, SG-timeout and the $names extraction list.",
+      "scripts/tests/postflight-fake-check-dispatch.js: the hang and hang-hard modes, the 300 s self-limit and record().",
+      "CI's build-all-platforms job runs local-runner-dispatch.test.mjs on ubuntu, windows and macos with Node 24."
+    ],
+    "checkRefs": [
+      "T=scripts/tests && F=$T/postflight-vm-route.ps1 && L=$(mktemp -d /mnt/d/moe-scratch/te444.XXXX) && U=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /') && r=0 && export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC && E=\"env $U\"; $E pwsh.exe -NoProfile -Command \"node -e \\\"process.exitCode=require('child_process').spawnSync('powershell',['-NoProfile','-ExecutionPolicy','Bypass','-File','$F'],{stdio:'inherit'}).status\\\"\" >$L/ps5 2>&1 & a=$!; $E pwsh.exe -NoProfile -File $F >$L/ps7 2>&1 & b=$!; for n in node node.exe; do $E $n --test $T/local-runner-dispatch.test.mjs >$L/$n 2>&1 || r=1; done; $E bash $T/postflight-vm-route.sh >$L/sh 2>&1 || r=1; wait $a || r=1; wait $b || r=1; for f in ps5 ps7; do tr -d '\\r\\0' <$L/$f | grep -qx 'PASS postflight-vm-route.ps1' || r=1; done; bash $T/parity-check.sh && pwsh.exe -NoProfile -File $T/parity-check.ps1 && npm run lint || r=1; for f in $L/*; do echo \"== $f\"; tr -d '\\r\\0' <$f | tail -n2; done; echo EXIT=$r; [ $r = 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: a --stop-file argv pair, validated by the CLI's existing strict parse. The sh wrapper never passes it, so moe-agent.sh and its rows are untouched, and no MOE_ name is added for parity to compare.\n\nRejected:\n- A stdin-close watcher. The ps1 would have to replace Start-Process with System.Diagnostics.Process and redirected pipes, copy stdout bytes asynchronously to keep the strict-UTF-8 verdict, and drain stderr. sh's </dev/null gives EOF at once, so the watcher would need an opt-in anyway.\n- A named Windows event. Node has no pure-JS API for one.\n- An env var naming the stop file. Grandchildren (multipass) and an operator's shell would inherit it. As a MOE_CHECK_DISPATCH_* name it would also need an INTERNAL_PLUMBING exemption in both parity scripts, for 7 files.\n- A Node IPC channel. PowerShell cannot open one.\n\nOut of scope (a follow-up bug if wanted): process.once means a second console Ctrl+C still kills node mid-deletion.",
+    "codebaseInsights": "- CQ-M07s's ps1 never signals the child. The timeout uses grace 0 because nothing could be delivered, and the record is cleared in a finally. That is fine for grace 0 but wrong once the timeout waits, so this row moves the clear last (the sh twin's rule).\n- PowerShell suspends pipeline stopping inside finally blocks; U7 relies on that. Outside a finally, a stop is raised at the next statement after a blocking .NET wait returns.\n- The SGU rows run the wrapper's functions in process from a fixed $names list.\n- The fake is shared by the sh and ps1 rows, so its changes must be additive.\n- CI runs local-runner-dispatch.test.mjs on all three OSes.\n- With the grace on the ps1 timeout path, the lease arithmetic matches the sh comment (bound plus a 120 s grace per round).",
+    "risks": "- GetTempFileName creates its file. Used for the stop path, it would abort every dispatch at once. S3 and stopAtStart pin it.\n- The fake's poll interval must be unref'd, or the hang modes outlive their 300 s self-limit.\n- PS: if the engine ever routes PipelineStoppedException to a general catch, it must be rethrown. U9 fails otherwise.\n- PS: JSON false versus null. Check stopAtStart as a [bool].\n- The CQ-M07s rows are still in flight, and CQ-M07t also edits Assert-SgRow (receipts). Re-read the landed bytes before editing.\n- Parallel gate legs add load. MOE_POSTFLIGHT_TIMEOUT_SEC=360 widens the per-wrapper timeouts.\n- Dependencies: CQ-M07s and CQ-M07t (both edit moe-agent.ps1 and postflight-vm-route.ps1).\n- The epic-final task's dependsOn is at its cap of 20, so this row is not wired into it. The governor was told.",
+    "keyFiles": [
+      "scripts/local-runner/check-dispatch.mjs",
+      "scripts/tests/local-runner-dispatch.test.mjs",
+      "scripts/tests/postflight-fake-check-dispatch.js",
+      "scripts/moe-agent.ps1 (Stop-MoeCheckDispatch, Invoke-MoeCheckDispatchChild, outer finally)",
+      "scripts/tests/postflight-vm-route.ps1 ([strong gate])",
+      "scripts/local-runner/check-lifecycle.mjs (runCheckJob abort; read only)",
+      "scripts/moe-agent.sh (stop_check_dispatch, run_check_dispatch; read only, the sh twin)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "da80b2d853f249f455955c374ff765e0ef028523",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T16:27:54.943Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-cd0ac706@2026-11-04T16:04:15Z",
+    "at": "2026-11-04T16:29:06.498Z"
+  }
 }

@@ -102,7 +102,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -130,18 +130,26 @@
       "author": "governor-e6142a94",
       "content": "@worker-a408f113 For your information, from the governor: by the human's decision (about 15:20Z), CQ-M07s (task-74fe4c99) now starts early, porting your landed 9e9e7345 to PowerShell in parallel with your round 2. Its step 1 (amend-1) tells it to port your 3 round-2 pins (G, D and E) as ps1 rows.\nTwo asks, both inside QA's route:\n1. Keep round 2 to postflight-vm-route.sh only, with no runtime change, as QA asked.\n2. In your completion summary, name each new row and its assertion, so the ps1 port can match it 1:1.\nYour size-exception prop still needs the human's approval. Ping #governors with the prop id the moment you file it.",
       "timestamp": "2026-11-04T15:18:30.332Z"
+    },
+    {
+      "id": "comment-8eaded7ea8f340e2954cc99b9dcea43c",
+      "author": "qa-96811257",
+      "content": "QA round 2 (qa-96811257) on completion da80b2d8: parent 95155388, tree 2c88c42b = currentCandidate cand-89b1e572. It is on moe/work-2026-10-24 and origin, recorded as this round's pushed completion.\n\n1. GATE. checkRefs[0], verbatim, on a fresh /tmp clone of da80b2d8: exit 0 after 2012 s (16:27:01Z to 17:00:33Z), with 0 failure markers.\n- [vm candidate] ok R1-R9 and [strong intent] ok G1-G7 and G8.\n- [strong gate] ok SG-pass ... protected, ok SG-interrupt, and ok SGV, SGU U1-U7 and SG8.\n- frozen candidate 106, owner guard 16, migration landing 12.\n- PASS postflight-vm-route.sh, postflight.sh and parity-check.sh; lint OK (39/30/36).\n- The clone's tracked tree was unchanged after the run, and no process was left behind.\n\n2. ROUND-1 ISSUES CLOSED. I ran a [strong gate]-only harness built from the exact da80b2d8 bytes; unmutated, it is green in 95 s.\n- Issue 2: mutant G (the cleanup_temp stop line deleted) now fails at SG-interrupt with 'the dispatch <pid> outlived the wrapper'. The fake was killed by its recorded pid and confirmed gone. Extra mutant G2 (the stop moved after finalize_postflight) fails with 'the attempt was not finalized after the dispatch stopped'.\n- Issue 3: mutant D (rstrip of every newline) fails at V-two-newlines, and mutant E (no results-is-a-list check) fails at V-results-object. Both got PASS where REPLY_INVALID was expected.\n- Issue 1, size: the epic rail 'CQ-M07r size exception' (prop-b13705c2) allows 511 changed lines (+509/-2, net 507). git show --numstat on 9e9e7345 (+486/-2) plus da80b2d8 (+23/-0) gives moe-agent.sh +138/-1, postflight-fake-check-dispatch.js +88, postflight-fake-proxy.js +5/-1 and postflight-vm-route.sh +278. That is exactly the rail. git diff --numstat 9463e77d da80b2d8 over the same 4 files matches. Only these two commits touch those files; the 3 peer commits in between (342423a3, d36d5bb7, 95155388) touch packages/ and postflight-safe*.mjs only.\n\n3. SCOPE. The round-2 delta is postflight-vm-route.sh +23/-0, all pure additions. moe-agent.sh and both fakes are byte-identical to 9e9e7345, and the harness has lost no line since then. So every existing row is unedited (DoD 3), and the landed bytes were not rewritten.\n\n4. DoD.\n- DoD 1: SG-pass.\n- DoD 2: the 7 refused rows, plus SG-env and SG-env-malformed.\n- DoD 3: SG-legacy, SG-observe, SG8 and the unedited suites.\n- DoD 4: U1-U3 and SG-protected.\n- DoD 5: the gate above.\nRound 1's substance review (comment-ce086b4f) still holds, because the runtime is unchanged. Task rails: no host gate runs under the strong profile (the canary witness is absent in the strong rows), and only the fake dispatch runs, never Multipass.\n\n5. PROCESSES. SG-interrupt kills only its own recorded fake pid, after a kill -0 probe. Its entry script TERMs only its live parent. Node 24's process.ppid is live: I measured it changing after reparenting (1366007 to 2673618).\n\n6. COMPLEXITY (ponytail-review): lean already. The inline pid probe cannot reuse sgu_pid/sgu_dead, which are defined later, without editing existing rows. net: -0 lines possible.\n\nCarry-forward:\n- CQ-M07s needs its own pin that its finally block stops the dispatch before finalize, because SG-interrupt is POSIX-only.\n- CQ-M07t must make sg_check's zero record_delivery_receipt assertion conditional on the row kind. SG-interrupt pins that an interrupted strong landing still finalizes the attempt.\nverified-local stays unavailable, and no isolation is claimed.",
+      "timestamp": "2026-11-04T17:02:09.650Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:01.667Z",
-  "updatedAt": "2026-11-04T16:22:43.701Z",
+  "updatedAt": "2026-11-04T17:03:35.275Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T11:56:07.434Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
     "executedStepCount": 14,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-04T17:02:19.915Z",
+    "wallClockMs": 18372481
   },
   "contextFetchedBy": [
     "worker-a408f113",
@@ -300,12 +308,13 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T15:12:23Z",
-    "at": "2026-11-04T16:22:43.701Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T16:22:48Z",
+    "at": "2026-11-04T17:03:35.275Z"
   },
-  "reviewCompletedAt": "2026-11-04T15:12:26.121Z",
+  "reviewCompletedAt": "2026-11-04T17:02:19.915Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -350,5 +359,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-04T17:02:19.915Z",
+  "reviewSummary": "QA round 2 (qa-96811257) on completion da80b2d8: parent 95155388, tree 2c88c42b = cand-89b1e572, on moe/work-2026-10-24 and origin. Full evidence is in comment-8eaded7e.\n- Gate: checkRefs[0], verbatim, on a fresh /tmp clone of da80b2d8: exit 0 after 2012 s, 0 failures. [strong gate] ok SG-pass ... protected, ok SG-interrupt, and ok SGV, SGU U1-U7 and SG8. PASS postflight-vm-route.sh, postflight.sh and parity-check.sh; lint OK.\n- Round-1 pins hold. I ran a [strong gate]-only harness from the exact bytes (green unmutated):\n  - mutant G (the cleanup_temp stop deleted) fails at SG-interrupt;\n  - G2 (the stop moved after finalize_postflight) fails at SG-interrupt;\n  - D fails at V-two-newlines, and E fails at V-results-object.\n- Size: the epic rail 'CQ-M07r size exception' allows +509/-2 across 4 files. 9e9e7345 (+486/-2) plus da80b2d8 (+23/-0) match it per file exactly, and no peer commit touched those files.\n- Scope: round 2 is +23/-0 of pure additions to postflight-vm-route.sh. The runtime and both fakes are byte-identical to 9e9e7345, and no existing row was edited (DoD 3).\n- DoD:\n  - DoD 1: SG-pass.\n  - DoD 2: the 7 refused rows plus the SG-env pair.\n  - DoD 3: SG-legacy, SG-observe and SG8.\n  - DoD 4: U1-U3 and SG-protected.\n  - DoD 5: the gate above.\n- Rails: no host gate runs under the strong profile; only the fake dispatch runs, never Multipass. SG-interrupt kills only its own recorded pid.\n- Complexity: lean already. net: -0 lines possible.\nverified-local stays unavailable, and no isolation is claimed.",
+  "requiredCheckAtDone": null
 }

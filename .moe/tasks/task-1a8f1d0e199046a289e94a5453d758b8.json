@@ -84,12 +84,12 @@
     "task-ba7a8c84fff44b95bf04c829791db935",
     "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23",
     "task-527735eafb9147cf8663ccee9a9e1b4c",
-    "task-d3a964a84dd14814a19f5074df52fc5f",
     "task-63e6fb62e38f45b0bedb34978b251a38",
     "task-636745311cc444f58ebb4b8ac53b96fd",
     "task-bbd7ad2d9b3b498eb581f760d0e75a4d",
     "task-1dfec7a4f43149769b332cdb151189e8",
-    "task-0bcc0b33ad354437bd6c18d9eb3a78da"
+    "task-0bcc0b33ad354437bd6c18d9eb3a78da",
+    "task-e444f6ae2fc94efda2899ba723cf5c4b"
   ],
   "priority": "MEDIUM",
   "order": 231.5,
@@ -159,11 +159,17 @@
       "author": "architect-c33f294e",
       "content": "PLAN SUBMITTED (architect-c33f294e, 2026-11-04, planRevision 1). This row is now the epic's finalTaskId. Rail 6 is met: comment-6af90ea8 and mem:decision-cq-m07-verified-local-activation. Nothing was re-asked.\n\nWhat the a..q chain left switched off (verified in code at 500e3f29):\n1. Nothing produced an authenticated CheckRun. scripts/local-runner/check-dispatch.mjs has no caller, so every verified-local qa_approve is refused. The worktree completion's L6 also runs the qualityGate ON THE HOST, on candidate bytes.\n2. Worktree landings never send record_delivery_receipt, and their journal has no candidateId. So an ARCHIVED verified-local prerequisite never satisfies a verified-local consumer (comment-7d618d92 (1)).\n3. check-dispatch's RUNNER_ENVIRONMENT_NOT_APPROVED stop hides the environment id, so nobody can fill settings.checkEnvironments.\n4. The DoD 7 docs and two QA-found test gaps (comment-1834b0bb, comment-66f37d9b).\n\nNew slices. Design: mem:decision-verified-local-check-gate.\n- CQ-M07r task-ba7a8c84: moe-agent.sh. Under verified-local, L6 runs the owed checks in check VMs via check-dispatch.mjs, never the host gate.\n- CQ-M07s task-74fe4c99: the ps1 twin, plus the parity families. Depends on r.\n- CQ-M07t task-527735ea: verified-local worktree landings record their delivery receipt, both wrappers. Depends on s.\n- CQ-M07w task-0bcc0b33: the check-dispatch stop names the environment id. Independent.\n- CQ-M07u task-d3a964a8: test rows for the two QA mutant survivors. Independent.\n- CQ-M07v1 task-63e6fb62 and CQ-M07v2 task-63674531: the docs sweep. Both depend on t.\n\nThis row's dependsOn now names all seven, plus the open M07 bug rows bbd7ad2d and 1dfec7a4. I dropped nine DONE leaf ids to stay under the 20-id cap.\n\nThis row's own plan:\n1. A composed daemon acceptance test, in the wrappers' call order.\n2. Build the plugin, post the real-VM runbook to the governor, then a deliberate dependency-less block for the human/governor runs (DoD 8; extras 2-3 of comment-8bf3a7e4).\n3. Update the CQ-M06a README from the outcome comments.\n4. Full regression in snapshots (DoD 9, extra 1).\n5. Whole-epic adversarial review, with a DoD evidence map.",
       "timestamp": "2026-11-04T12:08:34.041Z"
+    },
+    {
+      "id": "comment-bc660bd5cc6743518b693f2750e34be9",
+      "author": "governor-e6142a94",
+      "content": "Dependency edit by the governor (governor-e6142a94), 2026-11-04 16:30Z: I added task-e444f6ae (the ps1 timeout leaking its check VM on Windows, a `--stop-file` seam in check-dispatch.mjs) and removed task-d3a964a8 (CQ-M07u, DONE), because the list sits at the 20-id cap.\n- Why: comment-8bf3a7e4 made this row the board's final whole-system acceptance, with dependsOn covering every open row. The human's directive today is \"MAKE SURE BOARD FINISH\". Verified-local should not turn on with a known Windows VM leak on dispatch timeout.\n- Cost on the critical path: none expected. e444f6ae waits on CQ-M07t and then runs in parallel with v2 and v1, which take longer.\n- d3a964a8 stays DONE, and its test rows are on the target. Removing it changes no readiness, because a DONE dependency is already satisfied.\nUnmet now: r, s, t, v1, v2 and e444f6ae.",
+      "timestamp": "2026-11-04T16:29:00.552Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-04T12:46:19.567Z",
+  "updatedAt": "2026-11-04T16:29:00.553Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z",
     "plannedStepCount": 5,
@@ -172,7 +178,8 @@
   "contextFetchedBy": [
     "architect-b742aab1",
     "architect-30d804be",
-    "architect-c33f294e"
+    "architect-c33f294e",
+    "architect-cd0ac706"
   ],
   "commits": [
     {
