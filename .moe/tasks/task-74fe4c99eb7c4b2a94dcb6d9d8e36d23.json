@@ -14,10 +14,54 @@
     "Never run a verified-local task's qualityGate or any candidate code on the host. When the check VMs cannot run the owed checks, refuse the landing.",
     "No seat runs Multipass: tests use the fake dispatch CLI only."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-c33f294e",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Port contract, read before editing anything. This row is a byte-faithful port of CQ-M07r (task-ba7a8c84). Its WORKING claim is withheld until that row and task-fa0fea1a (the PS 5.1 vm-route harness fix) are DONE, so both are landed when you start.\n\n- Read CQ-M07r's completion with `git show <its completion sha> -- scripts/moe-agent.sh scripts/tests/postflight-vm-route.sh scripts/tests/postflight-fake-check-dispatch.js`. Take the sha from that task's commits in moe.get_context.\n- Read its two comments as well: the environment-id printing (comment-732e84b5 on r, comment-058a3fed on this row).\n- Write the port contract into this step's note:\n  - every new MOE_ code, warning and message string, verbatim;\n  - the env var (MOE_CHECK_DISPATCH_PATH) and its protected-mode warning;\n  - the dispatch argv, its time bound, and how the JSON line is parsed;\n  - the commit-tree identity and message R chose;\n  - the gate line format, including environment=<id>;\n  - each new postflight-vm-route.sh row: name, setup and assertions;\n  - whether R added a code family that parity-check does not compare yet.\nThis list is what steps 2-4 must match. No file changes in this step.\n\nmem:decision-verified-local-check-gate holds the design.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "moe-agent.ps1 runtime: the check-VM gate at L6 under the strong profile. Keep the file UTF-8 with a BOM, and edit it in place in the task worktree with the editing tool (scripts/CLAUDE.md: never a shell write).\n\n(a) RESOLVER, next to $script:AgentSeatCli (about line 9398):\n- `$script:CheckDispatchCli = Join-Path $script:MoeScriptRoot 'local-runner\\check-dispatch.mjs'`;\n- MOE_CHECK_DISPATCH_PATH is honored only when -not $script:MoeRuntimeProtected. Under it, write R's exact warning to stderr.\n\n(b) INVOKER, modeled on Invoke-MoeSeatCli (about line 9405):\n- the same credential scrub before node runs (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, CODEX_API_KEY), restored in finally;\n- the same UTF-8 pipe and console encodings for PS 5.1;\n- only stdout captured, $LASTEXITCODE kept;\n- the time bound from the port contract. Stop a child that outlives it by its recorded process id only, never by name.\n\n(c) L6 in Invoke-MoeWorktreeRounds (about lines 7381-7399):\n- When Test-MoeStrongLandingTask $preflightTaskId $Git.GitDir is true: keep `New-MoeFrozenCandidate $Git $m $b` and Send-MoeCandidate as today. Then `git commit-tree $m -p $b` with R's identity and message choice. Then the dispatch: `--project <control top> --task $preflightTaskId --commit <that commit>`.\n- ConvertFrom-Json reads the one line for fixed codes only.\n- Exit 0 with every owed check passed: continue to Test-MoeWorktreeStrongIntent with that frozen candidate.\n- Any other result: $Res.Code = 'MOE_COMMIT_FAILED_GATE', with R's exact $L.Msg. Append environment=<id> only when the stop's environment matches ^moe-local-vm-v1:[0-9a-f]{64}$ exactly (-cmatch). Return $false.\n- Error handling: a missing CLI, a spawn failure, a timeout, a non-JSON or multi-line reply and a commit-tree failure each fail the round the same way, with nothing published and no credential in the child.\n- An interrupt during the dispatch fails the round. The existing Ctrl+C deferral and the finally block must not record a host-gate CheckRun for a gate that never ran.\n\n(d) LEGACY. Every non-strong path (legacy, observe, task-less) keeps today's Invoke-MoeFrozenGate -WorktreeMode branch byte for byte. Under the strong branch the host Invoke-MoeFrozenGate is never called.\n\n(e) PS 5.1 SYNTAX: no `??`, ternary `? :` or `&&`/`||` pipeline-chain operators; ParseFile must parse cleanly on 5.1 and 7.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "postflight-vm-route.ps1 rows, 1:1 with CQ-M07r's postflight-vm-route.sh rows (the port contract from step 1). Reuse R's scripts/tests/postflight-fake-check-dispatch.js through node; never add a second fake.\n\nAdd a new section (for example `[strong gate]`) after the landed [strong intent] G-rows, so a peer's appended rows merge cleanly:\n- canary: the host qualityGate is a command that would write a witness file. Under strong, the witness is absent, and the target moves only after the fake passes;\n- one row per non-pass case (non-zero exit, a stopped report, RUNNER_NOTHING_OWED, RUNNER_DEPENDENCIES_UNDECLARED, a missing CLI, a crashing CLI, an unparsable reply): each is MOE_COMMIT_FAILED_GATE with nothing published, and the line byte-identical to the sh row's expected line;\n- an environment id is printed; a malformed one is not;\n- MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1, with the warning;\n- the legacy control: a non-strong completion still runs the host gate.\n\nKeep the landed [vm candidate] R1-R9 and [strong intent] G1-G8 rows unedited.\n\nFollow mem:decision-ps1-harness-pin-inline-wrapper-block and mem:gotcha-wrapper-slice-tests-execute-text. Mind PS 5.1 encodings in fake output (mem:gotcha-windows-python-text-mode-crlf-in-node-tests): compare decoded strings, never raw bytes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Parity. CQ-M07r may have added its codes in a family parity-check does not compare yet, to keep its own sh-only landing green. If so, add that family, and any new required literal (the env var name, the warning text), to BOTH scripts/tests/parity-check.sh and scripts/tests/parity-check.ps1, so that sh and ps1 must carry the same set from now on. If R reused only already-compared codes, change neither file and say so in the step note.\n\nProve it in a scratch copy, reverted after: renaming one new code in moe-agent.ps1 alone fails both parity-check.sh and parity-check.ps1. parity-check.sh:324 already enforces the moe-agent.ps1 BOM; keep it passing.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, once, from the task worktree: run checkRefs[0] exactly. It runs postflight.ps1 under pwsh.exe, then powershell.exe (5.1), with MOE_*/CLAUDE*/FAKE_* scrubbed and MOE_POSTFLIGHT_TIMEOUT_SEC=360, then parity-check.sh, parity-check.ps1 and npm run lint.\n- It takes up to about 1h45m under load. Start it detached (nohup, record $!) and poll with bounded until-loops (mem:gotcha-qa-ps1-postflight-from-wsl). Kill only that recorded PID.\n- A `UtilAcceptVsock` WSL error with no harness output is an interop flake: rerun the leg.\n- On a red row, rerun the same leg on the target's bytes before blaming this change.\n- complete_task's verification is this command. The summary gives each engine's section counts (frozen, owner, migration, worktree, vm-route) and every new [strong gate] row's result.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this diff, the final step. Use the adversarial-self-review skill.\n\n(1) Byte parity: diff every new literal in moe-agent.ps1 against the port contract. Any drift from sh is a defect.\n(2) Legacy: every hunk in Invoke-MoeWorktreeRounds is under the strong branch. Show the non-strong path's lines unchanged in `git diff -U0`.\n(3) Host never runs candidate code: no Invoke-MoeFrozenGate call and no qualityGate command can be reached under strong. Grep the strong branch.\n(4) The invoker on every exit path: credentials are restored, encodings are restored, the child is stopped by recorded PID on timeout or Ctrl+C, and a stale $LASTEXITCODE from an earlier command is never read as the dispatch's.\n(5) Inputs: a JSON line with extra keys, a huge line, an environment with uppercase hex or a trailing newline. Each fails closed or prints nothing extra.\n(6) Concurrency: two strong completions racing on the land lease each dispatch their own commit, and a round-2 retry re-dispatches for the new M. It never reuses the round-1 verdict.\n\nFix any finding in this row's files, and re-run only the affected rows before finishing. A deeper defect gets its own bug row.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -40,11 +84,90 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:19.711Z",
-  "updatedAt": "2026-11-04T12:09:42.960Z",
+  "updatedAt": "2026-11-04T12:10:48.584Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T12:08:35.564Z"
+    "firstClaimAt": "2026-11-04T12:08:35.564Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
     "architect-c33f294e"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:10:48.551Z",
+  "executionContract": {
+    "intendedBehavior": "Under verified-local, a moe-agent.ps1 worktree completion runs the task's owed checks in check VMs: L6 calls the bundled local-runner/check-dispatch.mjs on a never-published commit of exactly M with the single parent B, and lands only on exit 0. The host never runs the qualityGate or any candidate code for a strong task. Every other result is MOE_COMMIT_FAILED_GATE, with nothing published and lines byte-identical to CQ-M07r's sh port. legacy, observe and task-less completions are unchanged.",
+    "acceptanceCriteria": [
+      "Strong L6 runs check-dispatch.mjs with --project <control> --task <id> --commit <commit-tree M -p B>. The canary host gate's witness is absent, and the target moves only after the fake passes. Holds on PS 5.1 and pwsh 7.",
+      "Each non-pass case (non-zero exit, a stopped report, RUNNER_NOTHING_OWED, RUNNER_DEPENDENCIES_UNDECLARED, a missing CLI, a crashing CLI, an unparsable reply) is MOE_COMMIT_FAILED_GATE, with nothing published and the sh line byte for byte.",
+      "A stop carrying an environment that matches ^moe-local-vm-v1:[0-9a-f]{64}$ prints environment=<id>. Any other value prints nothing extra.",
+      "MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1, with the warning.",
+      "Non-strong completions run Invoke-MoeFrozenGate -WorktreeMode as before, and the existing rows pass unedited.",
+      "parity-check.sh and parity-check.ps1 pass and compare any family CQ-M07r introduced. A renamed code fails both. The BOM is kept."
+    ],
+    "invariants": [
+      "Never run a verified-local task's qualityGate or any candidate code on the host. When check VMs cannot run the owed checks, refuse the landing.",
+      "No seat runs Multipass: the fake dispatch CLI only.",
+      "legacy and observe behavior is byte-for-byte unchanged.",
+      "No credential env var reaches the dispatch child.",
+      "Kill only PIDs this session or wrapper started; never pattern-kill.",
+      "Tracked files are edited only with the session's editing tool (no shell writes)."
+    ],
+    "compatibility": [
+      "legacy and observe worktree completions: unchanged bytes and behavior.",
+      "The existing postflight-vm-route.ps1 and postflight-worktree.cjs rows pass unedited."
+    ],
+    "approvedScope": [
+      "The moe-agent.ps1 strong L6 branch, the dispatch resolver and the invoker.",
+      "The new postflight-vm-route.ps1 [strong gate] section.",
+      "parity-check.sh/.ps1 family or literal additions mirroring CQ-M07r."
+    ],
+    "reuse": [
+      "Invoke-MoeSeatCli's credential scrub and encoding handling for the dispatch invoker.",
+      "R's postflight-fake-check-dispatch.js, unchanged.",
+      "New-MoeFrozenCandidate and Send-MoeCandidate as today."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1 Invoke-MoeWorktreeRounds (about lines 7326-7400): L6 is the `if ($Settings.configuredGate)` block, running New-MoeFrozenCandidate, then Send-MoeCandidate, then Invoke-MoeFrozenGate -WorktreeMode, with a finally that records an interrupted host gate.",
+      "scripts/moe-agent.ps1 Test-MoeStrongLandingTask (about line 4398) and Test-MoeWorktreeStrongIntent (about line 7308; twin of wt_strong_intent).",
+      "scripts/moe-agent.ps1 $script:AgentSeatCli resolver (about line 9398, MOE_AGENT_SEAT_PATH / MOE_VERIFIED_LOCAL_SEAT_PATH_IGNORED) and Invoke-MoeSeatCli (about line 9405: credential scrub and UTF-8 encodings).",
+      "scripts/local-runner/check-dispatch.mjs runDispatchCli: exactly `--project <abs> --task <task-id> --commit <40|64 hex>`; one JSON line; exit 0 only when every owed check was observed passed, else 2.",
+      "scripts/tests/postflight-vm-route.ps1: the landed [vm candidate] R1-R9 and [strong intent] G1-G8 sections (CQ-M07n2).",
+      "CQ-M07r (task-ba7a8c84) lands the sh twin, the fake scripts/tests/postflight-fake-check-dispatch.js and the expected strings this row must match."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes/.worktrees/task-74fe4c99eb7c4b2a94dcb6d9d8e36d23 && P='D:\\projexts\\moes\\.worktrees\\task-74fe4c99eb7c4b2a94dcb6d9d8e36d23\\scripts\\tests' && r=0 && for e in pwsh.exe powershell.exe; do env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC $e -NoProfile -ExecutionPolicy Bypass -File \"$P\\postflight.ps1\" || r=1; done; bash scripts/tests/parity-check.sh || r=1; pwsh.exe -NoProfile -File \"$P\\parity-check.ps1\" || r=1; npm run lint || r=1; echo EXIT=$r; [ $r = 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Plan this row before CQ-M07r lands, with exact strings: rejected. r is being planned in parallel by architect-67c762f6, and inventing codes here would fork the twin. This plan pins the ps1 locations and the PS 5.1 rules, and takes every string from r's landed diff (step 1). The CQ-M07n precedent did the same.\n- A second fake dispatch for ps1: rejected. Reuse r's .js through node, so both harnesses test one contract.\n- Calling Invoke-MoeFrozenGate with a dispatch command: rejected. That helper runs the command on the host, which is exactly what the strong branch must never do.",
+    "codebaseInsights": "- At L6 the worker's attempt is still finalizing, which is in OPEN_PHASES. So check-dispatch's get_context gives a valid {taskId, attemptId, generation} owner for the check VM ledger (mem:decision-verified-local-check-gate).\n- New-MoeFrozenCandidate plus Send-MoeCandidate already record the candidate check-dispatch reads (currentCandidate.treeSha must equal the snapshot tree M).\n- Test-MoeWorktreeStrongIntent then requires that same frozen candidate.\n- Windows worker and QA seats under verified-local run only this wrapper, natively (decision 3), so this is the path JetBrains Start Agent actually launches.",
+    "risks": "- PS 5.1 lacks ?? and ternary operators; ParseFile on 5.1 catches them.\n- $LASTEXITCODE can be stale after a pipeline: capture it right after the node call.\n- The fake's CRLF and encoding under Windows node (mem:gotcha-windows-python-text-mode-crlf-in-node-tests).\n- The gate is about 1h45m: run detached.\n- The repair-activation end state on a code failure (REVIEW to WORKING before the unlanded finalize) is defined and pinned by r; mirror its row.\n- task-fa0fea1a fixes the 5.1 harness helpers. Rebase your rows on its landed bytes.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-vm-route.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "scripts/local-runner/check-dispatch.mjs",
+      "scripts/tests/postflight-fake-check-dispatch.js (from CQ-M07r)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "0fa7750ee23b15a1c174a557b723a21a8988023f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:10:48.584Z",
+  "approvedPlanRevision": 1
 }

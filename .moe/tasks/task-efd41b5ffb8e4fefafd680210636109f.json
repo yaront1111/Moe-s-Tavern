@@ -1,0 +1,28 @@
+{
+  "id": "task-efd41b5ffb8e4fefafd680210636109f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: scripts/verify-release-version.mjs checks 4 version fields (daemon, proxy and VS Code package.json, plus build.gradle.kts), but docs/RELEASING.md:7-13 lists the package-lock.json versions and moe-claude-plugin too and says the workflow \"stops on a mismatch\", so a lockfile or claude-plugin drift would tag cleanly; moe-claude-plugin/.claude-plugin/plugin.json and installer/moe-installer.iss still read 0.1.0, outside both",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 from hunt #23's held-back item (task-da51c48b, architect-cd0ac706, #governors msg-baeb96b3). The governor re-verified it at origin/moe/work-2026-10-24.\n\nPROBLEM\n- scripts/verify-release-version.mjs:10-16 compares only packages/moe-daemon/package.json, packages/moe-proxy/package.json, moe-vscode/package.json and build.gradle.kts `version =` with the tag.\n- docs/RELEASING.md:7-13 says all package versions are kept in sync and lists more fields:\n  - each package-lock.json's top-level `version` **and** `packages[\"\"].version`, for daemon, proxy, claude-plugin and vscode;\n  - packages/moe-claude-plugin/package.json.\n  RELEASING.md:22 then says \"The workflow runs the same check first and stops on a mismatch\". CLAUDE.md:86 says releases have \"all package versions synced\".\n- Today every listed field reads 0.8.0, so nothing ships wrong yet, but the guard would pass a release whose lockfiles or claude-plugin version drifted.\n- Two version strings sit outside both the list and the guard:\n  - packages/moe-claude-plugin/.claude-plugin/plugin.json `\"version\": \"0.1.0\"`;\n  - installer/moe-installer.iss:3 `AppVersion=0.1.0`.\n  release.yml builds neither of them (per the hunt).\n\nFIX DIRECTION\n- Extend the guard to every field RELEASING.md lists: the four lockfiles' two fields each, and claude-plugin package.json.\n- Decide the two stragglers explicitly. Either bring them into the sync, by guarding and bumping them to the current version, or name them in RELEASING.md as deliberately unsynced, with the reason. CLAUDE.md's \"all package versions synced\" favours syncing them.\n- Extend scripts/tests/release-version.mjs, or its runner, with cases that fail on a lockfile mismatch and a claude-plugin mismatch.\n\nSCOPE AND CHECKS\n- scripts/verify-release-version.mjs, scripts/tests/release-version.mjs and docs/RELEASING.md, plus the two straggler files only if they are synced.\n- At filing time no open row holds them.\n- Verify by running `node scripts/verify-release-version.mjs v0.8.0` in a snapshot (PASS), then its test file. Never tag or publish anything.",
+  "definitionOfDone": [
+    "verify-release-version.mjs fails on a mismatch in any field docs/RELEASING.md lists (each package-lock.json's top-level and packages[\"\"] version, and moe-claude-plugin/package.json), and the test file has failing-then-passing cases for a lockfile and a claude-plugin mismatch.",
+    "moe-claude-plugin/.claude-plugin/plugin.json and installer/moe-installer.iss are either synced and guarded, or named in RELEASING.md as deliberately unsynced with the reason. RELEASING.md's list matches what the guard checks.",
+    "`node scripts/verify-release-version.mjs v0.8.0` prints PASS at the row's tip, run in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 528.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:15:10.120Z",
+  "updatedAt": "2026-11-04T12:15:10.120Z"
+}

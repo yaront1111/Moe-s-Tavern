@@ -1,0 +1,34 @@
+{
+  "id": "task-a7f8d8d652d645de81b5ecf93a1b9c1a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-agent.sh's daemon pre-flight deletes a Docker-run daemon's .moe/daemon.json, because `kill -0 <container pid>` fails on the host (moe-agent.sh:1924-1928), and then starts a second daemon on the same .moe/; only a Windows drive-letter projectPath gets the /health liveness probe (launcher twin of task-da89f620)",
+  "description": "Filed by hunt #23 (task-da51c48b), from the same real-docker run at moe/work-2026-10-24 2037e856 as task-da89f620. Read that row's EVIDENCE first.\n- The container daemon writes {\"port\":19877,\"pid\":15,...} into the mounted project's .moe/daemon.json, and /health answers healthy for the project.\n- On the host, `kill -0 15` reports \"/bin/bash: line 1: kill: (15) - No such process\" (exit 1).\n\nPROBLEM (scripts/moe-agent.sh at 2037e856)\n- :1873-1879: FOREIGN_DAEMON is set only when projectPath has the drive-letter form (\"daemon.json written by a Windows-side daemon ... its PID is invisible here, so kill -0 would misread a live daemon as stale, delete its discovery file, and spawn a duplicate daemon onto the same .moe/\").\n- :1922-1928: a container record has a native path, so it falls through to `elif ! kill -0 \"$PID\"`. That prints \"Stale daemon.json detected (PID 15 is not running)\", runs `rm -f \"$DAEMON_INFO\"` and then autostarts a daemon. That is the duplicate the comment above warns about, and task-da89f620 demonstrates the two-writer result for the CLI.\n- bash's `kill -0` also fails on EPERM (a root-owned host pid). So even a pid that is alive on the host reads as stale.\n- moe-agent.ps1 (:986-1004) deletes nothing itself. On a dead pid it runs the daemon's own `start`, so task-da89f620 covers the ps1 path.\n\nFIX DIRECTION\n- Extend the FOREIGN_DAEMON test so a record carrying the pidNamespace from task-da89f620 that differs from `readlink /proc/self/ns/pid` also counts as foreign. A record whose value cannot be compared counts too.\n- The existing probe_daemon_health loop then decides, and the record is never removed while /health answers for this project.\n- A record without the field keeps today's kill -0 path.\n- Prefer no new parity-checked strings. If moe-agent.ps1 does need a parity line, keep the change to that line.\n\nPLACEMENT\n- dependsOn task-da89f620, which fixes the field.\n- dependsOn task-cd3887fe, which holds scripts/moe-agent.sh and moe-agent.ps1.\n- dependsOn task-bbd7ad2d and task-1dfec7a4, which hold moe-agent.ps1. Drop those two with moe.set_task_dependencies if the approved plan leaves moe-agent.ps1 untouched.\n- Edit the wrapper with a TOOL-witnessed editor (project customRules).\n- The natural test home is scripts/tests/daemon-json-cap.test.mjs, which already drives this pre-flight's daemon.json handling.",
+  "definitionOfDone": [
+    "A scripts/tests case runs moe-agent.sh's daemon pre-flight against a daemon.json that carries a foreign pidNamespace and a dead pid, with a /health stub answering for the project. The case proves that the pre-flight reports the daemon reachable, keeps daemon.json and starts no daemon. The case fails against 2037e856's moe-agent.sh.",
+    "A record without pidNamespace, or with the host's own namespace, and a dead pid is still cleaned up as stale, as today; the existing daemon-json-cap cases pass unchanged.",
+    "bash scripts/tests/parity-check.sh passes, and `bash -n scripts/moe-agent.sh` is clean."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-da89f620682e41c3892bfa7784b54ee3",
+    "task-cd3887fec2a74d24bee2da7ffba8d078",
+    "task-bbd7ad2d9b3b498eb581f760d0e75a4d",
+    "task-1dfec7a4f43149769b332cdb151189e8"
+  ],
+  "priority": "MEDIUM",
+  "order": 526.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:12:47.791Z",
+  "updatedAt": "2026-11-04T12:12:47.791Z"
+}

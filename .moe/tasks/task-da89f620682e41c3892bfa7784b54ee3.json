@@ -1,0 +1,34 @@
+{
+  "id": "task-da89f620682e41c3892bfa7784b54ee3",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a daemon run in the documented Docker container writes its container-namespace pid (15) to the mounted .moe/daemon.json, and the host daemon CLI judges that pid: `moe-daemon status` and `stop` delete the live daemon's daemon.json (\"stale daemon.json removed: pid dead\"), doctor warns it stale, and `start` brings up a second daemon on the same .moe/",
+  "description": "Filed by hunt #23 (task-da51c48b). It comes from a real-docker dry run of .github/workflows/docker.yml at moe/work-2026-10-24 2037e856. The image was built from a git-archive snapshot ($SNAP) outside the shared checkout. The host CLI is the packed tarball, installed with `npm install -g --prefix <tmp> moe-daemon-0.8.0.tgz moe-proxy-0.8.0.tgz`.\n\nPROBLEM\n- Inside the container, the daemon's `_run` process is pid 15 (pid 1 is the `start` supervisor). It writes that pid to the mounted project's .moe/daemon.json, for example {\"port\":19877,\"pid\":15,...,\"bindHost\":\"0.0.0.0\"}.\n- On the host, pid 15 is nothing, or an unrelated process. The host daemon CLI decides liveness with process.kill(pid, 0):\n  - packages/moe-daemon/src/index.ts:1094-1098: statusDaemon deletes a local record whose pid is dead.\n  - index.ts:341: validateDaemonInfoForProject returns 'pid not alive' before any /health probe. So existingDaemonBlocksStart (:577-598) cleans the record and the start proceeds, and stopDaemon (:1041-1084) removes it (\"Daemon not running or daemon.json is stale\").\n  - commands/doctor.ts:112-122 warns \"pid N not running (stale)\".\n- server/probeHost.ts:87-100 isForeignDaemonInfo already states the rule: \"the writer's pid lives in another pid namespace, so process.kill(pid, 0) proves nothing either way and only /health may judge it\". It keys only on the WSL/Windows path form, though. A container record has a native path, so it reads as local.\n- What the docs promise:\n  - docs/DEVELOPMENT.md:460: \"host clients take the port from the .moe/daemon.json the container writes\".\n  - docker-compose.yml:9-18 serves the project the same way.\n- docker.yml's Test Docker image step passes because it checks only /health and HEALTHCHECK. It never uses daemon.json the way host clients do.\n- If the host pid happens to be alive and /health answers for the project (the container does), stopDaemon :1082 sends SIGTERM to that unrelated host process.\n\nEVIDENCE (2037e856, WSL2 Ubuntu 24.04, docker 29.8.1)\n1. `docker run -d --user 1000:1000 -e MOE_DEFAULT_PORT=19877 -p 127.0.0.1:19877:19877 -v $SNAP:$SNAP -e MOE_PROJECT_PATH=$SNAP moe-daemon-hunt23:2037e856`\n   - /health reports healthy, pid 15, $SNAP.\n   - A host moe-proxy MCP handshake through that daemon.json works: serverInfo moe-daemon 0.8.0, 73 tools.\n   - Host `kill -0 15`: \"No such process\" (exit 1).\n2. `moe-daemon doctor --project $SNAP` prints \"[WARN] daemon.json: daemon.json present but pid 15 not running (stale)\" (exit 0), while /health is healthy.\n3. `moe-daemon status --project $SNAP` exits 0 and prints:\n   \"INFO: Daemon not running (stale daemon.json removed: pid dead)\"\n   \"WARN: Cleaning up stale daemon lifecycle files reason: \"pid not alive\"\"\n   - daemon.json is gone, and the container still answers /health healthy.\n   - The host proxy now loops \"[moe-proxy] Daemon not running, retrying in 1258ms (attempt 1)\".\n4. `moe-daemon start --project $SNAP --port 19878` starts a second daemon (pid 1678354, port 19878), which writes daemon.json. /health on 19877 (pid 15) and on 19878 both answer healthy for $SNAP: two writers on one .moe/.\nEvery container was removed and the host daemon stopped afterwards.\n\nFIX DIRECTION\n- The writer records its pid namespace in daemon.json. On Linux that is `readlink /proc/self/ns/pid`, for example \"pid:[4026531836]\"; the field is absent elsewhere.\n- isForeignDaemonInfo also treats as foreign a record whose pidNamespace differs from the reader's own, or one the reader cannot compare. validate, status, stop, start and doctor then all take the existing foreign path: /health with the project-identity check decides, no pid is signalled, and nothing is deleted while /health answers.\n- Pass the field at the call sites that build { projectPath } today: index.ts:93, :158 and :326, and doctor.ts:112.\n- A record without the field (an older daemon) keeps today's behavior.\n- Document the field in docs/SCHEMA.md (daemon.json).\n- Client parity is filed as separate rows: JetBrains (MoeDaemonSupervisor/MoeProjectService) and moe-agent.sh's pre-flight. moe-agent.ps1 (:986-1004) and VS Code delete nothing themselves; they run the daemon's own `start`, so this row covers them.\n\nPLACEMENT: no open row holds index.ts, probeHost.ts or doctor.ts (lanes.js -v at 12:10Z).",
+  "definitionOfDone": [
+    "Daemon unit tests use a record from another pid namespace, a pid that is dead in the reader's namespace, and a /health stub answering for the project. They prove four results: status keeps daemon.json and does not report 'not running'; stop sends no signal and removes nothing; start/init starts no second daemon; doctor does not warn 'stale'. The same tests fail against 2037e856's index.ts, probeHost.ts and doctor.ts.",
+    "A record with no pidNamespace, or with the reader's own namespace, keeps today's pid-based results, and the existing index.* and doctor tests pass unchanged.",
+    "daemon.json written by a daemon on Linux carries pidNamespace, and docs/SCHEMA.md documents the field and the foreign rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 524.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:12:00.640Z",
+  "updatedAt": "2026-11-04T12:15:01.476Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T12:14:58.170Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
+}

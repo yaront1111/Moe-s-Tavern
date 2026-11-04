@@ -1,0 +1,31 @@
+{
+  "id": "task-6796a0f9f37f49ee9b45d70dbc107926",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains plugin judges a Docker-run daemon's .moe/daemon.json by its container pid (MoeDaemonSupervisor.isReachable requires isProcessAlive(pid) unless the path has the WSL form), so on project open it deletes the live daemon's daemon.json and spawns a second daemon on the same .moe/ (JetBrains twin of task-da89f620)",
+  "description": "Filed by hunt #23 (task-da51c48b), from the same real-docker run at moe/work-2026-10-24 2037e856 as task-da89f620. Read that row's EVIDENCE first.\n- The container daemon writes {\"port\":19877,\"pid\":15,...,\"bindHost\":\"0.0.0.0\"} into the mounted project's .moe/daemon.json.\n- /health answers healthy for the project, and a host moe-proxy bridges to it.\n- On the host, `kill -0 15` reports \"No such process\".\n\nPROBLEM (code at 2037e856)\n- moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:948-952:\n  `isReachable = (isOtherSideOfWsl(info.projectPath, isWindows()) || isProcessAlive(info.pid)) && isPortOpen(info.port)`\n  - isOtherSideOfWsl only recognizes the WSL/Windows path form.\n  - A container record has a native path, so the dead host pid makes it unreachable.\n- MoeDaemonSupervisor.kt:153-176: the start path then sees no live daemon. `deleteDaemonInfoIfUnchanged(info)` removes the record (\"Removed stale daemon.json (PID 15 not reachable or another project)\"), and the supervisor spawns its own daemon.\n- MoeProjectService.kt:177-188: connect() does the same (\"Removed stale daemon.json in connect() (PID 15 not reachable)\") and schedules a reconnect that spawns one.\n- The result is the duplicate-writer outcome task-da89f620 demonstrates for the CLI: daemon pid 15 (container) and a second daemon (host) both serve one .moe/.\n- docs/DEVELOPMENT.md:460 promises that host clients use the daemon.json the container writes. CLAUDE.md makes JetBrains the primary IDE, so it must not lag the daemon fix.\n\nFIX DIRECTION\n- Read the pidNamespace field task-da89f620 adds to daemon.json, in DaemonInfo (moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt:290) and parseDaemonInfo.\n- Treat a record whose namespace differs from the plugin's own like isOtherSideOfWsl: skip the pid, and require the port plus the existing /health identity check (DaemonIdentityProbe). The plugin's own namespace is readlink of /proc/self/ns/pid on Linux. On another OS, or when the value cannot be read, any recorded value counts as different.\n- Never delete a record, and never spawn, while that check answers for this project.\n- offLoopbackBindRefusal (:957-975) and the other `isOtherSideOfWsl(...) || isProcessAlive(...)` sites (:317, :358, :386, :969) take the same rule.\n- A record without the field keeps today's behavior.\n\nPLACEMENT\n- No open row holds MoeDaemonSupervisor.kt, MoeProjectService.kt or Models.kt (lanes.js -v at 12:10Z).\n- dependsOn task-da89f620, which fixes the field's name and format.\n- Run `./gradlew test` under the jetbrains-gradle lease (mem:gotcha-architect-cannot-take-gradle-lease).",
+  "definitionOfDone": [
+    "MoeDaemonSupervisorTest (or MoeProjectForeignDaemonTest) covers a record from another pid namespace with a dead pid, an open port and /health naming this project. The test proves that isReachable is true and that neither the supervisor's start path nor MoeProjectService.connect() deletes daemon.json or spawns a daemon. The new cases fail on 2037e856.",
+    "A record without pidNamespace, or with the plugin's own namespace, keeps today's results: a dead pid is stale and gets deleted. The existing DaemonIdentity, foreign-daemon and supervisor tests pass unchanged.",
+    "`./gradlew test` in moe-jetbrains is green, with fresh results from a run under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-da89f620682e41c3892bfa7784b54ee3"
+  ],
+  "priority": "MEDIUM",
+  "order": 525.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:12:17.897Z",
+  "updatedAt": "2026-11-04T12:12:17.897Z"
+}

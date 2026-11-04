@@ -1,0 +1,28 @@
+{
+  "id": "task-2de70d2743994cb5a319d80b8147ca6d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the moe-daemon and moe-proxy npm tarballs that release.yml publishes ship no LICENSE, though both package.json files arrays name one: neither package directory holds a LICENSE, so `npm pack` at 2037e856 lists none (0 of 608 and 0 of 11 entries), and the first npm publish would ship the MIT code without its license text",
+  "description": "Filed by hunt #23 (task-da51c48b), a dry run of release.yml's non-publishing steps at moe/work-2026-10-24 2037e856, in a git-archive snapshot outside the shared checkout, under Node 24.21.0. Nothing was published.\n\nPROBLEM\n- packages/moe-daemon/package.json:37-41 and packages/moe-proxy/package.json:35-39 both declare `\"files\": [\"dist\", \"README.md\", \"LICENSE\"]`.\n- `git ls-tree 2037e856 packages/moe-daemon/ packages/moe-proxy/` lists no LICENSE in either directory.\n- The only license text is the root LICENSE (\"MIT License / Copyright (c) 2024-2026 Moe's Tavern Contributors\"). npm packs from the package directory and never pulls in the repository root's file.\n- release.yml:80-92 runs `npm publish --access public --provenance` in each package directory, so the published tarballs would carry the MIT-licensed code without the copyright and permission notice that MIT requires to accompany copies.\n- Neither name is on npm yet (`npm view moe-daemon` / `npm view moe-proxy`: E404), so the first publish is the one affected.\n- moe-vscode ships moe-vscode/LICENSE in its .vsix. Only the two npm packages lack it.\n\nEVIDENCE (2037e856)\n1. `npm ci && npm run build` in both packages: exit 0.\n2. `npm pack --dry-run --json --ignore-scripts`:\n   - moe-daemon@0.8.0: 608 files. Its only non-dist entries are README.md and package.json.\n   - moe-proxy@0.8.0: 11 files. Its only non-dist entries are README.md and package.json.\n3. `npm pack` into a scratch dir, then `tar -tzf`:\n   - moe-daemon-0.8.0.tgz: 0 LICENSE entries out of 608.\n   - moe-proxy-0.8.0.tgz: 0 LICENSE entries out of 11.\n4. Everything else in this lane works:\n   - `npm install -g --prefix <tmp>` of both tarballs installs them.\n   - `moe-daemon --version` prints 0.8.0.\n   - `moe-daemon init` / `doctor` exit 0.\n   - The moe-proxy MCP handshake (serverInfo 0.8.0, 73 tools) works on Node 18.20.8, 20.20.2, 22.23.4 and 24.21.0.\n   So the LICENSE is the one content gap.\n\nFIX DIRECTION\n- Commit a byte-identical copy of the root LICENSE as packages/moe-daemon/LICENSE and packages/moe-proxy/LICENSE. npm always includes a package-root LICENSE.\n- Add a guard that fails when either copy is missing or differs from the root file. Put it in an existing CI-run test, for example packages/moe-proxy/src/distContents.test.ts plus a daemon twin, or a scripts/tests node test listed in .github/workflows/ci.yml.\n- The IDE bundles copy dist, package.json and node_modules, so they are unaffected.\n\nPLACEMENT: no open row holds either package.json, either package directory's top level, or distContents.test.ts (lanes.js -v at 12:10Z).",
+  "definitionOfDone": [
+    "`npm pack --dry-run --json` in packages/moe-daemon and packages/moe-proxy lists LICENSE, and each packaged LICENSE is byte-identical to the root LICENSE.",
+    "A test that CI runs fails when packages/moe-daemon/LICENSE or packages/moe-proxy/LICENSE is missing or differs from the root LICENSE, and it passes once both copies are in place.",
+    "Neither package.json files array changes, and the daemon and proxy builds and test suites still pass in a snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 527.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:13:15.066Z",
+  "updatedAt": "2026-11-04T12:13:15.066Z"
+}

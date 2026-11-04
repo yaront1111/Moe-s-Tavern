@@ -9,10 +9,35 @@
     "`pwsh -NoProfile -File scripts/tests/postflight-vm-route.ps1` and, started from pwsh, `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/postflight-vm-route.ps1` each still print \"PASS postflight-vm-route.ps1\"."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2a219562",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix and test, in scripts/tests/postflight-vm-route.ps1 only (DoD 1; enables DoD 2-3). Edit in place in your task worktree W with the Edit tool (a TOOL witness: no sed, heredoc, script write or subagent edit). First run `grep -n Get-FileHash scripts/tests/postflight-vm-route.ps1`. At 0fa7750e (task-1dfec7a4 landed) it prints exactly 3 lines: :515 Get-VmcControl, :526 Get-VmcWFiles, :530 Get-VmcWIndex. bbd7ad2d and cd3887fe land before your claim and move the numbers; if either added another occurrence, replace it the same way, because DoD 1 counts every line, comments included. The reference diff, applied and proven at 0fa7750e, is /mnt/d/moe-scratch/fa0f-plan/intended.diff (+19/-3).\n\n(a) Insert at top level, directly above `function Get-VmcControl([hashtable]$V) {`:\n```\n# SHA-256 of a file as upper-case hex, through .NET only: Windows PowerShell 5.1\n# started by node under pwsh (CI's 5.1 leg) inherits pwsh's PSModulePath and cannot\n# autoload the Utility module's file-hash cmdlet. Same as postflight.ps1\n# Get-Sha256Hex, sharing-violation retry included.\nfunction Get-VmcSha256([string]$Path) {\n    $sha = [System.Security.Cryptography.SHA256]::Create()\n    try {\n        for ($attempt = 1; ; $attempt++) {\n            try { return ([BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($Path))) -replace '-', '') }\n            catch [IO.IOException] { if ($attempt -ge 5) { throw }; Start-Sleep -Milliseconds 300 }\n        }\n    } finally { $sha.Dispose() }\n}\n```\nNever put the cmdlet's literal name in a comment or message: copying the moe-agent.ps1:531 comment would make DoD 1's grep -c print 1.\n\n(b) Replace exactly:\n- Get-VmcControl: `(Get-FileHash -LiteralPath (Join-Path $V.R '.git\\index') -Algorithm SHA256).Hash,` -> `(Get-VmcSha256 (Join-Path $V.R '.git\\index')),`\n- Get-VmcWFiles: `(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash` -> `(Get-VmcSha256 $_.FullName)`\n- Get-VmcWIndex: `return (Get-FileHash -LiteralPath (Join-Path (Invoke-VmcGit $V.W @('rev-parse', '--absolute-git-dir')) 'index') -Algorithm SHA256).Hash` -> `return (Get-VmcSha256 (Join-Path (Invoke-VmcGit $V.W @('rev-parse', '--absolute-git-dir')) 'index'))`\n\n(c) The test, a known-answer check. In Invoke-VmcSections, directly after its line `    New-Item -ItemType Directory -Force -Path $hooks | Out-Null` (unique in the file), add:\n```\n    # Known answer (SHA-256 of 'abc'): every caller compares two snapshots from this helper.\n    $kat = Join-Path $dir 'kat.txt'; [IO.File]::WriteAllText($kat, 'abc')\n    if ((Get-VmcSha256 $kat) -cne 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD') { throw 'VM ROUTE FAILED ([vm candidate] sha256): Get-VmcSha256 is not the upper-case SHA-256 of abc' }\n```\nWhy: every caller compares a before snapshot with an after snapshot taken through the same helper (Invoke-VmcRow, Assert-VmcUntouched, Assert-VmcParked, the W-index check in Invoke-VmcRows). A helper that returned a constant, '' or lower-case hex would therefore pass every 'as before' check silently. The [vm candidate] section runs first, so this check fails in about 1 s: at plan time the mutant `return ''` exited 1 with the sha256 message on pwsh 7 and under the node chain. 'abc' is the FIPS 180-2 vector; .NET WriteAllText writes it as 3 bytes with no BOM on both engines.\n\nOn error handling:\n- The helper keeps postflight.ps1's IOException retry (5 tries, 300 ms apart), rethrows the last failure, and disposes the SHA256 object in finally on every path. The catch matches the MethodInvocationException that PowerShell wraps around ReadAllBytes: verified on 5.1 and 7, a missing path retries 5 times, then throws.\n- A missing file still throws, as the cmdlet did under ErrorActionPreference Stop, and the main catch reports it as a harness fault (exit 2).\n- Every argument is absolute ($V.R under $tempRoot, FullName, --absolute-git-dir). That matters because ReadAllBytes resolves a relative path against the process directory, not $PWD.\n\nKeep the file ASCII, LF, no BOM (`file` must still say 'ASCII text'). Touch nothing else: no other row, no other file. Do not call the wrapper's Get-MoeSha256Hex either; the snapshot oracle must not hash through the code under test. See mem:gotcha-ps51-under-node-under-pwsh-psmodulepath.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, once, after step 1 (DoD 1-3). Run executionContract.checkRefs[0] verbatim and fresh from W's root (/mnt/d/projexts/moes/.worktrees/task-fa0fea1ab154449fad01749b3956213b):\n\nr=0; F=scripts/tests/postflight-vm-route.ps1; S=$(mktemp -d /mnt/d/moe-scratch/tfa0f.XXXX); git archive HEAD scripts packages/moe-daemon/src/state/validators.ts | tar -x -C $S && cp $F $S/$F && test \"$(grep -c Get-FileHash $F)\" = 0 || r=1; cd $S || exit 1; export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC; pwsh.exe -NoProfile -Command \"node -e \\\"process.exitCode=require('child_process').spawnSync('powershell',['-NoProfile','-ExecutionPolicy','Bypass','-File','$F'],{stdio:'inherit'}).status\\\"\" > a.log 2>&1 & a=$!; pwsh.exe -NoProfile -File $F > b.log 2>&1 & b=$!; pwsh.exe -NoProfile -Command \"powershell -NoProfile -ExecutionPolicy Bypass -File $F\" > c.log 2>&1 & c=$!; for j in $a $b $c; do wait $j || r=1; done; for f in a b c; do tr -d '\\r\\0' < $f.log | tail -n2; tr -d '\\r\\0' < $f.log | grep -qx 'PASS postflight-vm-route.ps1' || r=1; done; echo \"snapshot=$S r=$r\"; [ $r = 0 ]\n\nWhat it does:\n1. Builds a git-archive snapshot outside the shared checkout (/mnt/d/moe-scratch/tfa0f.XXXX) from HEAD's scripts/ plus packages/moe-daemon/src/state/validators.ts, which the harness reads. It then copies your edited, still uncommitted file over the archived one; at the landed commit QA's re-run copies identical bytes, so its snapshot is a pure archive.\n2. Checks DoD 1.\n3. Runs three legs in parallel from the snapshot root, with MOE_POSTFLIGHT_TIMEOUT_SEC=360 passed to Windows through WSLENV (a Linux variable reaches pwsh.exe only that way):\n   - a = DoD 2's exact pwsh -> node -> Windows PowerShell 5.1 command;\n   - b = pwsh -NoProfile -File;\n   - c = pwsh starting powershell -NoProfile -ExecutionPolicy Bypass -File (both DoD 3).\n4. Requires every leg to exit 0 and print the exact line 'PASS postflight-vm-route.ps1', then prints each log's last 2 lines and 'snapshot=<dir> r=0'.\nExit 0 means DoD 1-3 are met.\n\nPlan-time evidence:\n- This exact command passed on a scratch clone at 0fa7750e with the reference diff: exit 0, three PASS lines, about 4m50s wall clock at load ~5 (snapshot /mnt/d/moe-scratch/tfa0f.t7Dj).\n- The unfixed tree's leg a stops after 2 s at '[vm candidate] R1' with \"The term 'Get-FileHash' is not recognized\" (/mnt/d/moe-scratch/fa0f-plan/logs/redA.log).\n\nGive the Bash call a 600000 ms timeout. If your tool caps lower, start it in the background and wait for its exit. Do not edit while it runs.\n\nOn a failure, read the failing leg's {a,b,c}.log in the printed snapshot, and run the parent revision's harness before blaming the change (mem:gotcha-qa-ps1-postflight-from-wsl). Suppose only leg a fails, with a 'not recognized' command, on a row that bbd7ad2d or cd3887fe added after plan time:\n- if the command is in this file, fix it the same .NET way;\n- if it is anywhere else, call moe.report_blocked with the log path instead of widening the scope.\nSubmit this command, its exit code and its output tail as moe.complete_task verification.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's diff only (`git diff` in W), then moe.complete_task with step 2's evidence. If this step changes any byte, run step 2 again first.\n1. Scope: only scripts/tests/postflight-vm-route.ps1 changed. The change is the helper, the 3 replaced expressions and the known-answer lines, about +19/-3 like the reference diff. `git diff --check` is clean, `file` says ASCII text, and there is no CR and no BOM.\n2. `grep -n Get-FileHash scripts/tests/postflight-vm-route.ps1` prints nothing, and Get-MoeSha256Hex is not called.\n3. Every Get-VmcSha256 argument is absolute, and each before/after pair hashes the same file through the same helper. The output is upper-case hex without separators, pinned by the known answer.\n4. Concurrency: the three legs share one snapshot. Each run has its own GUID temp root and writes nothing in the snapshot except its own log. The retry waits only on IOException and never swallows the final failure.\n5. Two cheap mutants, each in a scratch copy of the snapshot (never W):\n   - the helper body `return ''`: `pwsh.exe -NoProfile -File scripts/tests/postflight-vm-route.ps1` exits 1 in seconds with 'VM ROUTE FAILED ([vm candidate] sha256)';\n   - one call site put back to the cmdlet: DoD 1's grep fails, and leg a's command stops at '[vm candidate] R1' within seconds.\n   Name what you ran, with the results, in the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -29,11 +54,77 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:53:39.529Z",
-  "updatedAt": "2026-11-04T11:53:59.383Z",
+  "updatedAt": "2026-11-04T12:12:37.934Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T11:53:43.799Z"
+    "firstClaimAt": "2026-11-04T11:53:43.799Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
   },
   "contextFetchedBy": [
     "architect-2a219562"
-  ]
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:12:37.897Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/tests/postflight-vm-route.ps1 hashes its [vm candidate] snapshots through a harness-local .NET SHA-256 helper, Get-VmcSha256, instead of the Utility module's file-hash cmdlet. The whole harness then passes under CI's Windows PowerShell 5.1 chain (a pwsh step starts node, node starts powershell.exe; 5.1 inherits pwsh's PSModulePath and cannot autoload the cmdlet), as it already did under pwsh 7 and under 5.1 started directly by pwsh. A known-answer check pins the helper's output.",
+    "acceptanceCriteria": [
+      "`grep -c Get-FileHash scripts/tests/postflight-vm-route.ps1` prints 0 (comment lines included).",
+      "From a git-archive snapshot outside the shared checkout, DoD 2's pwsh -> node -> powershell 5.1 command prints 'PASS postflight-vm-route.ps1' and exits 0.",
+      "From the same snapshot, `pwsh -NoProfile -File` and pwsh-started `powershell -NoProfile -ExecutionPolicy Bypass -File` each print 'PASS postflight-vm-route.ps1' and exit 0.",
+      "A Get-VmcSha256 that returns a constant, '' or lower-case hex fails the harness at the known-answer check ('VM ROUTE FAILED ([vm candidate] sha256)', exit 1) on every engine."
+    ],
+    "invariants": [
+      "Snapshot values keep their format, upper-case hex SHA-256 without separators, so every before/after comparison keeps its meaning.",
+      "No other row, assertion, section or file changes; scripts/moe-agent.ps1 and its Get-MoeSha256Hex are untouched, and the harness does not call it.",
+      "postflight-vm-route.ps1 stays ASCII, LF, no BOM."
+    ],
+    "compatibility": [
+      "Windows PowerShell 5.1 (started directly, or under node under pwsh as on CI's windows-latest leg) and pwsh 7 on Windows; postflight.ps1's invocation of this file and the CI step stay unchanged."
+    ],
+    "approvedScope": [
+      "scripts/tests/postflight-vm-route.ps1: a new top-level function Get-VmcSha256 directly above Get-VmcControl; the three hash expressions in Get-VmcControl, Get-VmcWFiles and Get-VmcWIndex; three known-answer lines in Invoke-VmcSections after its `New-Item -ItemType Directory -Force -Path $hooks | Out-Null` line."
+    ],
+    "reuse": [
+      "Same shape as postflight.ps1 Get-Sha256Hex (.NET SHA256 over ReadAllBytes, IOException retry, Dispose in finally) and moe-agent.ps1 Get-MoeSha256Hex. It is a harness-local copy because the wrapper's helper is in scope only inside Invoke-VmcSections, which dot-sources the wrapper's functions, and the snapshot oracle must stay independent of the code under test."
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/postflight-vm-route.ps1 at 0fa7750e: the cmdlet appears at :515 (Get-VmcControl), :526 (Get-VmcWFiles) and :530 (Get-VmcWIndex) and nowhere else; Invoke-VmcSections' `New-Item -ItemType Directory -Force -Path $hooks | Out-Null` (:764) is unique.",
+      "Invoke-VmcSections is the first section the main try runs, so the [vm candidate] rows run first.",
+      "The harness strips MOE_/CLAUDE/FAKE_ variables at start (except MOE_POSTFLIGHT_TIMEOUT_SEC and MOE_POSTFLIGHT_KEEP_TEMP), uses a GUID temp root per run, and reads packages/moe-daemon/src/state/validators.ts.",
+      "No other scripts/**/*.ps1 calls the cmdlet; postflight.ps1 Get-Sha256Hex and moe-agent.ps1 Get-MoeSha256Hex already use .NET."
+    ],
+    "checkRefs": [
+      "r=0; F=scripts/tests/postflight-vm-route.ps1; S=$(mktemp -d /mnt/d/moe-scratch/tfa0f.XXXX); git archive HEAD scripts packages/moe-daemon/src/state/validators.ts | tar -x -C $S && cp $F $S/$F && test \"$(grep -c Get-FileHash $F)\" = 0 || r=1; cd $S || exit 1; export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC; pwsh.exe -NoProfile -Command \"node -e \\\"process.exitCode=require('child_process').spawnSync('powershell',['-NoProfile','-ExecutionPolicy','Bypass','-File','$F'],{stdio:'inherit'}).status\\\"\" > a.log 2>&1 & a=$!; pwsh.exe -NoProfile -File $F > b.log 2>&1 & b=$!; pwsh.exe -NoProfile -Command \"powershell -NoProfile -ExecutionPolicy Bypass -File $F\" > c.log 2>&1 & c=$!; for j in $a $b $c; do wait $j || r=1; done; for f in a b c; do tr -d '\\r\\0' < $f.log | tail -n2; tr -d '\\r\\0' < $f.log | grep -qx 'PASS postflight-vm-route.ps1' || r=1; done; echo \"snapshot=$S r=$r\"; [ $r = 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Call the wrapper's Get-MoeSha256Hex. Rejected: the snapshot oracle would hash through the code under test. It is in scope only inside Invoke-VmcSections, which dot-sources the wrapper's functions, and it has no retry.\n2. Import-Module Microsoft.PowerShell.Utility, or reset PSModulePath at harness start. Rejected: it fixes one engine chain by mutating process state the harness saves and restores, and the repo's settled fix for this exact defect is .NET (postflight.ps1 :2205-2215, moe-agent.ps1 :531-537).\n3. Change ci.yml or postflight.ps1's launch of this file. Out of scope (FILES: this file only), and the harness must work under CI's real chain.\n4. No known-answer check. Rejected: every use of the helper is an equality comparison of two snapshots from the same helper, so a broken helper would pass silently. Three lines close that.",
+    "codebaseInsights": "- Get-VmcControl, Get-VmcWFiles and Get-VmcWIndex feed only equality comparisons: Invoke-VmcRow before/after, Assert-VmcUntouched, Assert-VmcParked, and the W-index check in Invoke-VmcRows.\n- From WSL, a Linux variable reaches pwsh.exe only through WSLENV. Verified: MOE_ZZZ without WSLENV arrived empty; with WSLENV=MOE_ZZZ it arrived.\n- pwsh.exe launched from WSL passes its PSModulePath to its node child unchanged, so `pwsh.exe -Command \"node -e ...spawnSync('powershell',...)\"` reproduces CI's chain exactly (probe: 'Get-FileHash is not recognized'). pwsh.exe starting powershell.exe directly resets PSModulePath and works.\n- Windows git's --absolute-git-dir prints forward slashes and Join-Path adds a backslash; .NET accepts the mixed path (the green run proves it).\n- The three legs can share one snapshot: each run has a GUID temp root, and USERPROFILE/TEMP are redirected per row.\n- Plan-time timings: 245/259/245 s in parallel at 2037e856; about 4m50s for the whole checkRef at 0fa7750e.",
+    "risks": "- DoD 1 counts comment lines: never write the cmdlet's literal name anywhere in the file.\n- ReadAllBytes resolves a relative path against the process directory: keep every argument absolute.\n- bbd7ad2d and cd3887fe land after plan time and add rows, which will run under the node chain for the first time. Plan-time checks found no other module-autoloaded command in the harness or the wrapper (New-Guid, New-TemporaryFile, Format-Hex, Import-PowerShellDataFile, ConvertFrom-SddlString). If a new row fails only in leg a, step 2 says what to do.\n- The checkRef takes about 5 min: use a 600000 ms tool timeout.\n- The checkRef leaves its mktemp snapshot dirs in /mnt/d/moe-scratch on purpose: a planned command must not contain rm.",
+    "keyFiles": [
+      "scripts/tests/postflight-vm-route.ps1",
+      "scripts/tests/postflight.ps1 (Get-Sha256Hex near :2208; the vm-route call near :6143)",
+      "scripts/moe-agent.ps1 (Get-MoeSha256Hex at :534)",
+      "/mnt/d/moe-scratch/fa0f-plan/intended.diff (reference diff, scratch)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "0fa7750ee23b15a1c174a557b723a21a8988023f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:12:37.934Z",
+  "approvedPlanRevision": 1
 }
