@@ -27,19 +27,26 @@
     {
       "stepId": "step-2",
       "description": "The fix, test side only (governor comment-c35a995f: no scripts/moe-agent.* edit, no logs/ rewrite; the wrapper side is task-cd3887fe). In each of scripts/tests/prompt-cache.test.mjs, scripts/tests/prompt-cache-launcher.test.mjs and scripts/tests/onboarding.mjs, right after the import block and BEFORE any test() registration or child process (mem:gotcha-node-test-top-level-await-ends-root-early: a selected test can start while later module statements still evaluate), add:\n  // The launcher exports the seat's live usage receipt to every child; this file's fixture provider streams must never append to it (task-03418dc2).\n  delete process.env.MOE_USAGE_RECEIPT_FILE;\n  delete process.env.MOE_USAGE_CONTEXT_JSON;\nModule top level runs before node:test starts any registered test and before onboarding.mjs's bundle-mode codex-stream at :52, so every spawn in each file, present or future, inherits a clean environment: prompt-cache.test.mjs :75/:86/:95 pass no env, prompt-cache-launcher.test.mjs :366-368 spreads process.env, onboarding.mjs :52 passes none. Remove only these two keys; onboarding.mjs:65 already strips every MOE_* key for the daemon and proxy and stays as it is. Deleting an absent key is a no-op, so the files behave the same with or without the variables set; no other error handling is needed. Re-run the checkRefs command: G1 and the hunt repro now pass.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/prompt-cache.test.mjs",
         "scripts/tests/prompt-cache-launcher.test.mjs",
         "scripts/tests/onboarding.mjs"
       ],
-      "startedAt": "2026-11-04T08:25:52.198Z"
+      "modifiedFiles": [
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/onboarding.mjs"
+      ],
+      "startedAt": "2026-11-04T08:25:52.198Z",
+      "completedAt": "2026-11-04T08:26:02.714Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification, once: from the task worktree run the checkRefs command exactly as written; its fresh output ending 'GATE-OK' is moe.complete_task's verification evidence. It archives HEAD into a mktemp dir, overlays the four owned files plus the hunt repro (/mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs, copied into the snapshot only, never into the repo), runs npm ci + build for the daemon and proxy there, builds the VS Code bundle with moe-vscode/scripts/bundle-assets.mjs, and then, all under env -i with HOME a temp dir and no receipt variables: node --test on usage-receipt (G1 must print '✔ G1: '), prompt-cache, prompt-cache-launcher and the hunt repro (DoD 1-3); the plain onboarding smoke; and the bundle-mode onboarding smoke with MOE_USAGE_RECEIPT_FILE naming a one-line file that must still read exactly 'L' (the only check that reaches onboarding.mjs:52, which G1's non-bundle run never executes). Never run npm ci, a build or these tests in the shared checkout, and never in this seat's own environment without clearing both receipt variables: that is the bug (project rail; env -i in the command handles it). If onboarding fails at its second start on a loaded host, rerun once and cite both runs (mem:gotcha-onboarding-smoke-restart-health-timeout). A failure prints the failing output: fix the code, never weaken an assertion.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T08:26:03.531Z"
     },
     {
       "stepId": "step-4",
@@ -69,12 +76,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:03:50.128Z",
-  "updatedAt": "2026-11-04T08:25:52.198Z",
+  "updatedAt": "2026-11-04T08:26:03.531Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:08:47.436Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -86,7 +93,8 @@
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T08:17:47.374Z",
