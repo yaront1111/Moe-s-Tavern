@@ -55,19 +55,22 @@
     {
       "stepId": "step-4",
       "description": "DoD 2, 3. Verification: run this once, fresh, as the final gate. Work from the task worktree root: `cd \"$(git rev-parse --show-toplevel)\"`.\n\nIt takes about 30-35 min, past the Bash tool's 10-min cap, so launch it detached (setsid nohup … > log 2>&1 &), record its PID, and poll the log (mem:convention-postflight-scratch-harness):\n\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'`\n\nWhat it covers:\n- postflight.sh runs scenario AH, the launch-outage rows, unchanged (DoD 2).\n- Its last line chains postflight-vm-route.sh, which includes VR-outage and the earlier T and VR rows (DoD 3).\n\nThe launcher harnesses may run in place, as the project rail says. Never pattern-kill: stop only the PID you recorded.\n\nBefore that final run, iterate on scenario AH with a trimmed scratch harness as that memory describes. In complete_task, report the exit code and an output tail that shows the '[scenario AH]' line and '[seat job] PASS … outage'.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-03T23:06:20.114Z"
+      "note": "Full gate, fresh, in place from the task worktree at 37193cc9 (env -i, Node 24, detached setsid runner): bash -n + parity-check + postflight.sh (which chains postflight-vm-route.sh) -> EXIT=0, ~38 min (23:42-00:20Z, load ~14). Log lines: 'PASS parity-check.sh', '[scenario AH] ok' (launch-outage rows, harness unchanged), '[seat job] PASS ... taskless-idle, outage, reload', 'PASS postflight-vm-route.sh', 'PASS postflight.sh'. Skipped the separate AH scratch iteration: AH's harness is unchanged and the full run covers it. git status clean after the run.",
+      "startedAt": "2026-11-03T23:06:20.114Z",
+      "completedAt": "2026-11-04T00:20:09.371Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (final step, adversarial-self-review skill), scoped to this task's diff. Check each item below.\n\n(a) `git diff` touches only the 3 planned files. moe-agent.sh gains only the guarded block, so VM_ROUTE=false never enters it, and legacy outage text and order are unchanged.\n\n(b) Mutant proof: VR-outage must FAIL against the pre-fix wrapper.\n- Build a full-tree snapshot (the vm-route drift guard reads packages/moe-daemon/src/state/validators.ts): S=$(mktemp -d); git archive HEAD | tar -x -C \"$S\".\n- Copy this task's harness and fake proxy into it.\n- Overwrite its scripts/moe-agent.sh with `git show \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\":scripts/moe-agent.sh`.\n- Run its postflight-vm-route.sh. Expect a VR-outage failure: MOE_LAUNCH_PROBE printed, or no marked claim after the flip. Name it in the completion summary.\n\n(c) With FAKE_READINESS_AFTER unset, the fake proxy behaves exactly as before and writes no readiness-count.\n\n(d) Edge cases:\n- A held outage task on the route resumes through alreadyAssigned and is never released by launch_outage_postflight.\n- A profile flipping back to legacy restarts the host streak at 0.\n- The first VM iteration still waits out one outage backoff at the loop top (at most MOE_LAUNCH_BACKOFF_MAX_SEC). That is accepted and noted.\n\n(e) parity-check passes, and there is no new MOE_* token and no ps1 edit (twin: CQ-M07n, task-62ec51f1).\n\n(f) Error handling: the chat post can never fail the iteration.\n\nIf anything changes, re-run step 4's command and submit that fresh output as the test evidence. Optionally add FAKE_READINESS_AFTER and VR-outage to the fixture list in mem:convention-verified-local-wrapper-gate (Serena edit_memory).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight-vm-route.sh"
-      ]
+      ],
+      "startedAt": "2026-11-04T00:20:27.826Z"
     }
   ],
   "planRevision": 1,
@@ -87,7 +90,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T22:12:21.590Z",
-  "updatedAt": "2026-11-03T23:40:30.371Z",
+  "updatedAt": "2026-11-04T00:20:27.827Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-03T22:41:27.476Z",
@@ -97,7 +100,7 @@
     "firstClaimAt": "2026-11-03T22:43:02.962Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -110,7 +113,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-03T22:57:38.214Z",

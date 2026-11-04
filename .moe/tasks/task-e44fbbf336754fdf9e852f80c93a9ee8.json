@@ -84,7 +84,7 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- Caller identity: the guard keys on a supplied workerId. The proxy injects MOE_WORKER_ID only into an absent key. release_task already refuses a blank or non-string workerId with INVALID_INPUT. For qa_approve and qa_reject an empty string is falsy and takes the human path, exactly like their existing `params.workerId || 'human'` attribution. Confirm that is consistent, and invent no new rule.\n- Order: in all three tools the refusal comes before every write, touchWorker, recordReview and chat post; the byte-identical task-file assertions prove it. qa_approve's finalizing refusal and both tools' candidate gates come after it.\n- qa_reject's own park still parks. qaReject.test.ts 'parks in REVIEW for a human past the hard cap' still passes, and so does 'does not re-flip on repeated rejects past the hard cap', which uses an assigned, unflagged row.\n- Concurrency: qa_approve and qa_reject run under the dispatch-level state mutex (they are not blocking). release_task reads the task inside its own runExclusive. So the flag check and the write see one snapshot.\n- Human paths: /ws RELEASE_TASK (no workerId), set_task_status and board moves (untouched), and a workerId-less qa_approve all still work.\n- RED re-proof: in a scratch snapshot outside the repo, restore the 4 sources with `git show $(git merge-base HEAD moe/work-2026-10-24):<path>` and run only the new test file. The 4 parked cases must fail and the 2 controls pass; the architect's proof was 4 failed / 2 passed. Paste the failing test names into the completion summary, then rm -rf the literal scratch path.\n- Scope: only the six planned files changed, and the docs edits stay inside the three sections.\nIf this review changes any file, re-run step 5's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in the earlier steps' files.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/qaApprove.ts",
         "packages/moe-daemon/src/tools/qaReject.ts",
@@ -92,12 +92,22 @@
         "packages/moe-daemon/src/util/contextNextAction.ts",
         "packages/moe-daemon/src/tools/parkedReview.guard.test.ts"
       ],
-      "startedAt": "2026-11-04T00:18:37.086Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/util/contextNextAction.ts",
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial review, no file changed (so step 5's gate output stands). Identity: a falsy workerId takes the human path in qa_approve and qa_reject, matching their `params.workerId || 'human'`; any truthy value (including a whitespace or non-string id) is refused, the safe direction; release_task already refuses blank or non-string ids with INVALID_INPUT earlier. scripts/moe-call.sh injects no workerId. Order: in both qa tools the guard comes right after the REVIEW check, with only param validation before it; the release guard sits inside runExclusive before repairUpdates/handoff. Concurrency: the qa tools are non-blocking (dispatch mutex). /ws RELEASE_TASK (WebSocketServer.ts:743) sends no workerId, so it is unaffected. The governor get_context branch is unchanged. Theoretical, not fixed: an ASSIGNED row with needsHumanReview true cannot arise (the park nulls the assignee and claims refuse flagged rows), and no test pins a workerId-less qa_reject on a parked row. RED re-proof at merge-base 0f56d3a7 (the 4 sources restored with git show, identical test): 4 failed / 2 passed, the failures being \"qa_approve and qa_reject from qa-b…\", \"…from governor-x…\", \"release_task from a seat is refused…\" and \"get_context gives a QA seat no qa_approve hint…\". Scratch dirs removed. Scope: the 6 planned files only, and the docs hunks stay in the 3 sections.",
+      "startedAt": "2026-11-04T00:18:37.086Z",
+      "completedAt": "2026-11-04T00:19:39.594Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -109,12 +119,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:59:17.189Z",
-  "updatedAt": "2026-11-04T00:18:37.086Z",
+  "updatedAt": "2026-11-04T00:20:22.983Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:01:43.742Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -132,7 +142,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T00:09:59.358Z",
@@ -206,5 +217,22 @@
   },
   "planApprovedAt": "2026-11-04T00:09:59.387Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-04T00:11:10.380Z"
+  "workStartedAt": "2026-11-04T00:11:10.380Z",
+  "reviewStartedAt": "2026-11-04T00:20:22.981Z",
+  "verification": {
+    "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/me44f.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in tools/qaApprove.ts tools/qaReject.ts tools/releaseTask.ts util/contextNextAction.ts tools/parkedReview.guard.test.ts; do cp \"$R/$f\" $f || exit 1; done && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npx vitest run src/tools/parkedReview.guard.test.ts src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/tools/qaReject.failedDodItems.test.ts src/tools/releaseTask.test.ts src/tools/getContextGovernance.test.ts src/tools/waitForTask.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aq '✓ src/tools/parkedReview.guard.test.ts' ../v.log && echo \"parked ok ($L)\" )",
+    "exitCode": 0,
+    "outputTail": " Test Files  7 passed (7)\n      Tests  262 passed (262)\nparked ok (/tmp/me44f.btIr)",
+    "reportedAt": "2026-11-04T00:20:22.981Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts",
+    "packages/moe-daemon/src/util/contextNextAction.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "A REVIEW row the qa_reject hard cap parked for a human (needsHumanReview, unassigned) now refuses agent seats.\n- qa_approve and qa_reject: refuse any supplied workerId with NOT_ALLOWED ('… parked for human review …') right after the REVIEW status check, before finalizing, ownership, context, recordReview, touchWorker, chat and every write.\n- release_task: the already-unassigned unpark refuses a supplied workerId with NOT_ALLOWED inside runExclusive, before any write, so no handoff is persisted.\n- get_context: contextNextAction returns no hint for a parked REVIEW row; the governor branch is unchanged.\n- Human paths unchanged: a workerId-less qa_approve still lands DONE; /ws RELEASE_TASK and a workerId-less release still unpark; set_task_status and board moves are untouched. An unparked, unassigned REVIEW row keeps the seat path, and qa_reject's own first park still parks.\n- Tool descriptions gain one clause each. docs/MCP_SERVER.md is synced in three sections:\n  - release_task: the Ownership exception and the Side-effects bullet;\n  - qa_approve: an Errors bullet;\n  - qa_reject: Returns gains status \"REVIEW\", parkedForHuman and needsHumanReview; a Hard-cap park note; an Errors bullet.\n\nTests: the new tools/parkedReview.guard.test.ts (6 tests).\n- RED at merge-base 0f56d3a7 (sources restored, same test): 4 failed / 2 passed. The failures were \"qa_approve and qa_reject from qa-b…\", \"…from governor-x…\", \"release_task from a seat is refused NOT_ALLOWED…\" and \"get_context gives a QA seat no qa_approve hint…\".\n- GREEN: 6/6. The checkRef ran fresh: 7 files, 262 tests passed, \"parked ok\".\n- Full daemon suite in a git-archive snapshot: 279 files, 7433 passed, 24 skipped.\n- releaseTask.test.ts's human unpark case passes unchanged.\n- npm run lint is OK."
 }
