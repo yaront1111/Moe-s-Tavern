@@ -1,0 +1,34 @@
+{
+  "id": "task-edf70af0b432471e8725215afda3d5a2",
+  "epicId": "epic-be924fb8",
+  "title": "chore(deps): fold Dependabot PRs #234-#237 into moe/work-2026-10-24: ws 8.22.0 -> 8.22.1 and @types/node 26.6.5 -> 26.6.6 in packages/moe-daemon and packages/moe-proxy (package.json and package-lock.json only), so the bumps land with PR #230 instead of conflicting with it on main",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 at the human's request: \"fold the dependabot bumps into the work branch\".\n\nWHY\n- Dependabot opened 4 PRs against main on 11-04 at 00:23Z:\n  - #237: ws 8.22.0 -> 8.22.1 in /packages/moe-daemon\n  - #236: ws 8.22.0 -> 8.22.1 in /packages/moe-proxy\n  - #235: @types/node 26.6.5 -> 26.6.6 in /packages/moe-daemon\n  - #234: @types/node 26.6.5 -> 26.6.6 in /packages/moe-proxy\n- main moves only by PR (the human's decision of 11-02). PR #230 carries this branch, 581 commits ahead of main.\n- Merging the Dependabot PRs into main would make PR #230 conflict on the same package.json and lockfile lines. Folding the same bumps in here means they land with PR #230, and Dependabot then closes #234-#237 itself, because the dependency is already up to date.\n\nEXACT CHANGE. Each PR touches only its package's package.json (+1/-1) and package-lock.json (+4/-4). Read them with `gh.exe pr diff <n>` (WSL has only gh.exe).\n- package.json: dependencies.ws \"^8.22.0\" -> \"^8.22.1\"; devDependencies[\"@types/node\"] \"^26.6.5\" -> \"^26.6.6\".\n- package-lock.json:\n  - The root packages[\"\"] spec lines change the same way.\n  - packages[\"node_modules/ws\"] and packages[\"node_modules/@types/node\"] change version, resolved and integrity to exactly the values in the PR diffs. For ws 8.22.1 that is integrity sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g==, per #237.\n- The PR diffs are against main, so apply their hunks to this branch's files, which may sit at other line numbers. Use `git apply --3way` on the gh.exe diff, or edit by hand, or run `npm install <pkg>@<ver> --package-lock-only` in each package directory.\n- Whichever method you use, the result must be exactly these lines. Revert any other lockfile churn, such as an npm version re-resolving other packages or changing lockfileVersion.\n- Work only in the task worktree. Never install or build in the shared checkout: its packages/moe-daemon/dist is the live runtime.\n\nOUT OF SCOPE\n- moe-vscode and packages/moe-claude-plugin also declare ws ^8.22.0 and @types/node ^26.6.5. .github/dependabot.yml does not cover them (it covers daemon, proxy, gradle and github-actions), so the human's \"fold the dependabot bumps\" does not include them. Leave them unchanged.\n- No GitHub action on PRs #234-#237: no close, comment or merge. They close themselves when PR #230 merges.\n- No daemon swap. The live daemon picks up ws 8.22.1 at the next governor restage.\n\nRISK. ws 8.22.1's release notes:\n- IPC URL paths are no longer truncated at ':';\n- node's http.websocketMask/Unmask are used when available, instead of bufferutil;\n- Sender.frame() no longer returns empty chunks.\nThe daemon (/ws, /mcp, /runner) and the proxy (ws client) both use ws, so run both packages' tests.",
+  "definitionOfDone": [
+    "packages/moe-daemon and packages/moe-proxy package.json and package-lock.json carry ws ^8.22.1 (8.22.1) and @types/node ^26.6.6 (26.6.6), with the resolved and integrity values from Dependabot PRs #234-#237. `git diff --stat` against the target shows only those 4 files, with no other lockfile churn.",
+    "From the task worktree, `npm ci`, `npm run build` and `npm test` pass in both packages, with fresh results. `npm ls ws @types/node` shows 8.22.1 and 26.6.6 in each package.",
+    "No GitHub action is taken on PRs #234-#237. The completion summary lists them for the human as closing themselves when PR #230 merges."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-c33f294e",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 534.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T15:10:01.205Z",
+  "updatedAt": "2026-11-04T15:10:27.187Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T15:10:14.283Z"
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e"
+  ]
+}
