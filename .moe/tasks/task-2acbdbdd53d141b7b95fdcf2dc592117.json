@@ -7,10 +7,64 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-67c762f6",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix the entry in scripts/local-runner/check-dispatch.mjs (as landed by e444f6ae in e729d25b; that task is DONE). Replace the entry block at the end of the file (`if (invokedDirectly()) { const controller = new AbortController(); for (const name of ['SIGINT', 'SIGTERM']) process.once(name, () => controller.abort()); runDispatchCli(process.argv.slice(2), { signal: controller.signal }).then(...) }`) with an exported `runDispatchEntry(argv, deps = {})` and the one-line entry `if (invokedDirectly()) runDispatchEntry(process.argv.slice(2));`. The exact validated body and its JSDoc are in mem:task-task-2acbdbdd53d141b7b95fdcf2dc592117-handoff (section 'The fix'). The function makes the AbortController, arms SIGINT and SIGTERM with `process.on(name, () => controller.abort())`, and returns `runDispatchCli(argv, { ...deps, signal: controller.signal })` chained to the existing `.then(code => { process.exitCode = code; }, ...)`. Why process.on: once drops the listener after the first signal, which restores Node's default disposition, so a second Ctrl+C or TERM ends the CLI while runCheckJob is still deleting the VM. abort() on an already-aborted controller is a no-op, so with process.on the first signal aborts once and every later one is ignored. Never remove the listeners: Node unrefs signal listeners, so they never keep the process alive (S4 pins the natural exit), and a signal after the report cannot change the exit code. `deps` are runDispatchCli's own open/exportSnapshot/loadRunCheck/write seams, for the S5 driver; the entry passes none, and the entry's signal is spread last so deps can never replace it. Error handling: the rejection branch stays byte-for-byte (stderr 'Check dispatch could not emit its report.' and exit code 2), and the exit codes stay 0 only when every owed check passed, else 2. Amend the header's 'Stopping:' sentence (lines 8-11) to say only the first SIGINT or SIGTERM counts and later ones are ignored, so a second Ctrl+C or TERM cannot end the CLI mid-delete; keep the --stop-file text. Change nothing else: runDispatchCli, stopWatch, argumentsFor and the four existing exports stay byte-identical. Write with the session's editing tool only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/check-dispatch.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs"
+      ],
+      "note": "Entry block replaced by exported runDispatchEntry(argv, deps = {}) using process.on for SIGINT/SIGTERM; one-line entry `if (invokedDirectly()) runDispatchEntry(process.argv.slice(2));`; header 'Stopping:' comment amended. Rejection text and exit codes unchanged.",
+      "startedAt": "2026-11-04T21:59:49.479Z",
+      "completedAt": "2026-11-04T22:00:02.627Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add test row S5 to scripts/tests/local-runner-dispatch.test.mjs after S4, under a `// task-2acbdbdd:` comment, and change the import to `import { spawn, spawnSync } from 'node:child_process';`. Copy the architect's validated code (ENTRY_DRIVER, interruptedEntry and the row) from mem:task-task-2acbdbdd53d141b7b95fdcf2dc592117-handoff, section 'Row S5'. Keep the title exactly 'S5: a second SIGINT or SIGTERM during the VM delete is ignored: the delete completes and the entry exits 2 with its one report line', because the gate greps '^✔ S5'. Shape: (a) ENTRY_DRIVER is an inline ES module for `node --input-type=module -e`, every embedded value built with JSON.stringify. It imports runDispatchEntry by the file URL of ../local-runner/check-dispatch.mjs and runs it with argv ['--project', '/srv/project', '--task', TASK, '--commit', TREE] over a scripted daemon (get_context answers context(), every other tool { success: true }), an exportSnapshot giving { tree: TREE }, and a fake runCheck that writes the lines create, session, remove, removed to stderr. The fake holds a ref'd setInterval from create to removed, awaits onReady(ENV), then the abort, returns an infra-failure, and in its finally waits for stdin to end before calling onCleanup({ vm: 'deleted', failure: null }). (b) interruptedEntry(t, signals) spawns it with env { PATH } only. It sends signals[0] when 'session' first appears on stderr and the rest when 'remove' first appears, then ends the child's stdin. It records every child.kill result, swallows child.stdin errors, SIGKILLs the child in t.after if it still runs and after a 15 s watchdog that rejects with the partial output, and resolves { stdout, stderr, sent, code, signal } on 'close'. (c) The row is skipped on win32 with the reason 'POSIX signals: on Windows child.kill() terminates the child, and node cannot send one console Ctrl+C'. For [SIGINT, SIGINT], [SIGTERM, SIGTERM] and [SIGTERM, SIGINT, SIGTERM] it asserts code 2, signal null, stderr exactly those four lines, every kill sent, exactly one stdout line, and that line's report (dispatchId replaced by its typeof) deep-equal to { taskId: TASK, candidateId: 'cand-1', stopped: { code: 'RUNNER_ABORTED' }, results: [{ dispatchId: 'string', checkId: 'unit', command: 'npm test', outcome: 'infra-failure', vm: 'deleted', failure: null }] }. Keep every piece: a SIGINT/SIGTERM listener in the driver would mask the bug; without the ref'd interval the child exits 0 mid-session, because signal listeners are unref'd (seen in the prototype); a timer instead of the stdin gate lets a loaded run send the second signal after the delete; context() owes two checks, so the abort shows as RUNNER_ABORTED at the second check's loop top. Error handling in the test: every child is killed only through its own ChildProcess (never by name or pattern), on every path. Then show the bug on a scratch copy outside the checkout: cp -r scripts/local-runner and this test file into a mktemp dir as scripts/local-runner and scripts/tests, change the copy's process.on to process.once (grep must count exactly 1 replaced line), and run the copy's test file. S5 must fail with the child killed by the repeated signal (code null, signal SIGINT or SIGTERM). Record that result for the completion summary. Never edit a tracked file for a mutant.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "Added row S5 (ENTRY_DRIVER, interruptedEntry) after S4 and spawn to the child_process import. WSL node: 28/28 with S5 passing (~440 ms). process.once mutant on a scratch copy outside the checkout (grep counted exactly 1 replaced line): S5 fails with code null, signal SIGINT, stderr 'create\\nsession\\nremove\\n' (died before 'removed'); 27/28, only S5 red. Scratch dir removed.",
+      "startedAt": "2026-11-04T22:00:07.087Z",
+      "completedAt": "2026-11-04T22:00:41.779Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification: run checkRefs[0] fresh from the task worktree root and submit its output as complete_task's verification. It runs local-runner-dispatch.test.mjs under WSL node and node.exe with the spec reporter, requires '✔ S5' in the node log, and prints both summaries. Expect node: 28 tests, 28 pass, 0 fail, 0 skipped; node.exe: 28 tests, 27 pass, 0 fail, 1 skipped (S5's win32 reason); then EXIT=0, in about 3-10 s. The node.exe leg proves the refactored entry still runs on Windows (K and S4 spawn the real entry) and that S1-S4, e444f6ae's --stop-file rows, stay green. Error handling for a red run: read the full log at the printed path ($L/node or $L/node.exe), fix the cause in the step that owns it, and re-run the whole command. Never edit the gate or weaken an assertion to get green. The wrapper's landing gate still runs the qualityGate (parity + role-doc lint) on the merged tree; neither one reads these files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] fresh: EXIT=0. node: 28 tests, 28 pass, 0 fail, 0 skipped, with '✔ S5'. node.exe: 28 tests, 27 pass, 0 fail, 1 skipped (S5's win32 reason).",
+      "startedAt": "2026-11-04T22:00:43.776Z",
+      "completedAt": "2026-11-04T22:00:54.663Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the two-file diff (load the adversarial-self-review skill). Check: (1) git diff names only scripts/local-runner/check-dispatch.mjs and scripts/tests/local-runner-dispatch.test.mjs; the only new export is runDispatchEntry; the rejection text and both exit codes are unchanged; no added line contains a project.json globalRails.forbiddenPatterns string. (2) Importing the module never runs the entry or arms a listener: a stray run would print a second report line in S5. (3) The listeners are never removed and never hold the process: S4 still exits by itself. (4) Flakiness: run S5 alone 20 times (`node --test --test-name-pattern='^S5' scripts/tests/local-runner-dispatch.test.mjs`), then 8 copies in parallel 4 times: zero failures (the prototype had 0 of 32 at load 3). (5) Two more mutants on scratch copies: a listener that never aborts (S5 must fail at its 15 s watchdog) and one that calls process.exit(130) on a second signal (S5 must fail on the exit code). (6) Leave out of scope: SIGHUP and SIGBREAK, runCheckJob's own provider children, and moe-agent.{sh,ps1}. The moe-agent.sh stop_check_dispatch comment ('a second would end its VM deletion') goes stale with this fix: name it in the completion summary for the epic-final docs sweep, and do not edit it. Then update mem:gotcha-check-dispatch-stop-term-once: its first paragraph says a second TERM kills the CLI mid-deletion. Say instead that since task-2acbdbdd the CLI ignores later signals, and that the wrappers' one-TERM rule stays as harmless defense in depth. If the review changed any byte of either file, re-run checkRefs[0] and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "Adversarial review done; no bytes changed, so the step-3 gate run stands. (1) git diff names only the two files (+69/-6); the only new export is runDispatchEntry; rejection text and exit codes unchanged; no forbidden pattern added; check-dispatch.mjs is 291 lines. (2) Listeners are armed only inside runDispatchEntry, so importing never arms them. (3) Never removed; S4 still exits by itself. (4) Flakiness: S5 alone 0/20 failures, 8 in parallel x4 rounds 0/32 failures at load ~3.6. (5) Extra mutants on scratch copies (removed): a listener that never aborts fails at the 15 s watchdog; process.exit(130) on a second signal fails on the exit code (actual 130, expected 2). (6) Out of scope and untouched: SIGHUP/SIGBREAK, runCheckJob's provider children, moe-agent.{sh,ps1}. Residual theoretical risk: a hung VM delete now ignores further signals, so only SIGKILL/taskkill /F ends it; lifecycle.mjs bounds the delete at 120 s and both wrappers escalate after their grace. Stale comment to hand to the epic-final docs sweep: moe-agent.sh stop_check_dispatch says a second TERM would end the VM deletion.",
+      "startedAt": "2026-11-04T22:00:55.460Z",
+      "completedAt": "2026-11-04T22:02:12.173Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -32,16 +86,137 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T21:25:55.066Z",
-  "updatedAt": "2026-11-04T21:37:53.339Z",
+  "updatedAt": "2026-11-04T22:03:36.429Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T21:37:11.103Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-04T21:37:40.230Z"
+    "firstClaimAt": "2026-11-04T21:37:40.230Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-67c762f6"
-  ]
+    "architect-67c762f6",
+    "worker-d2c84c0e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T21:58:48.276Z",
+  "executionContract": {
+    "intendedBehavior": "check-dispatch.mjs's entry keeps its SIGINT and SIGTERM listeners for the life of the process (process.on, not process.once). The first signal aborts the run exactly as before: runCheckJob deletes the VM in flight, no later check launches, and the CLI prints its one JSON report line with stopped RUNNER_ABORTED and exits 2. Every later SIGINT or SIGTERM (an operator's second Ctrl+C, a second TERM) calls abort() on the already-aborted controller, which is a no-op. Today such a signal gets Node's default action instead and ends the CLI (a shell's 130 or 143) while the VM delete is still running, which leaks the check VM. The entry body moves into an exported runDispatchEntry(argv, deps) so a test can drive the shipped wiring over fakes, and the file's entry becomes `if (invokedDirectly()) runDispatchEntry(process.argv.slice(2))`. A new node --test row, S5, proves it with real signals on POSIX and kills a process.once mutant.",
+    "acceptanceCriteria": [
+      "The entry arms SIGINT and SIGTERM with process.on inside an exported runDispatchEntry(argv, deps = {}), which calls runDispatchCli(argv, { ...deps, signal: controller.signal }) and sets process.exitCode from its result; a rejection still writes 'Check dispatch could not emit its report.' to stderr and sets exit code 2. The listeners are never removed.",
+      "Row S5 in scripts/tests/local-runner-dispatch.test.mjs spawns `node --input-type=module -e <driver>`, which runs runDispatchEntry over a scripted daemon and a fake runCheck whose delete lasts until the test closes the child's stdin. For [SIGINT, SIGINT], [SIGTERM, SIGTERM] and [SIGTERM, SIGINT, SIGTERM] (the first during the session, the rest during the delete), the child exits by itself with code 2 and signal null. Its stderr is exactly create, session, remove, removed, and its one stdout line is the report with stopped RUNNER_ABORTED and one unit result (outcome infra-failure, vm deleted, failure null).",
+      "With process.once restored on a scratch copy, S5 fails: the child dies by the repeated signal (code null, signal SIGINT or SIGTERM) before 'removed'. A listener that never aborts fails at the 15 s watchdog, and one that exits 130 on a second signal fails on the exit code.",
+      "S5 is skipped on win32 with a reason. Under node.exe every other row still passes, including S1-S4 (e444f6ae's --stop-file seam) and the real-entry spawns in K and S4.",
+      "checkRefs[0] passes in seconds: under WSL node 28/28 with S5 run and passed; under node.exe 27 pass and 1 skipped."
+    ],
+    "invariants": [
+      "Exactly two files change: scripts/local-runner/check-dispatch.mjs and scripts/tests/local-runner-dispatch.test.mjs.",
+      "With no signal and with one signal, the CLI's behavior, its report line and its exit codes are unchanged; the --stop-file seam is unchanged.",
+      "Importing check-dispatch.mjs never runs the entry and never arms a listener; only runDispatchEntry does.",
+      "Signal listeners never keep the process alive (Node unrefs them); the real entry still exits by itself (S4).",
+      "The test driver registers no SIGINT or SIGTERM listener of its own, and the test kills only the ChildProcess it spawned (SIGKILL in t.after and in the 15 s watchdog), never by name or pattern.",
+      "Tracked files are written only with the session's editing tool; mutants run on scratch copies outside the checkout.",
+      "verified-local stays unavailable; no isolation is claimed."
+    ],
+    "compatibility": [
+      "moe-agent.sh stop_check_dispatch (one TERM to the dispatch's process group, the 120 s grace, then KILL) and moe-agent.ps1's --stop-file seam with taskkill are unchanged and keep working; their one-TERM and no-signal rules become defense in depth.",
+      "The four existing exports (dispatchFocusedChecks, landedRunCheck, owedChecks, runDispatchCli) keep their signatures and behavior; runDispatchEntry is additive.",
+      "The CLI's argv contract, its one JSON line of fixed codes, and its exit codes (0 only when every owed check passed, else 2) are unchanged."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/check-dispatch.mjs: new export runDispatchEntry(argv, deps = {}); the entry line `if (invokedDirectly()) runDispatchEntry(process.argv.slice(2));`; the header 'Stopping:' comment.",
+      "scripts/tests/local-runner-dispatch.test.mjs: `spawn` added to the node:child_process import; the ENTRY_DRIVER source, the interruptedEntry helper and row S5, under a `// task-2acbdbdd:` comment after S4."
+    ],
+    "reuse": [
+      "runDispatchCli's existing seams (open, exportSnapshot, loadRunCheck) carry the driver's fakes; no new seam is added.",
+      "The test file's context(), TASK, TREE and ENV build the driver's daemon answer and argv.",
+      "The entry body moves into runDispatchEntry unchanged except process.once becoming process.on."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/check-dispatch.mjs at e729d25b (e444f6ae, DONE): the entry block at the end of the file arms `process.once(name, () => controller.abort())` for SIGINT and SIGTERM and passes controller.signal to runDispatchCli.",
+      "dispatchFocusedChecks returns RUNNER_ABORTED at the top of the next check (`if (signal?.aborted)`); runOnce still records the observation of a dispatched run that resolved, with cleanup { vm: 'deleted', failure: null } from the onCleanup report.",
+      "invokedDirectly() compares realpath(process.argv[1]) with import.meta.url and answers false when argv[1] is missing, as under `node -e`.",
+      "Node unrefs process signal listeners, and removing the last one restores the default disposition. Verified in the architect's prototype: a child that awaits only an abort exits 0, and the once build dies by the second signal.",
+      "lifecycle.mjs bounds the real VM delete (DELETE_TIMEOUT_MS 120000), so ignoring later signals cannot hold the CLI forever; SIGKILL and taskkill /F stay the hard stop."
+    ],
+    "checkRefs": [
+      "L=$(mktemp -d) && r=0 && for n in node node.exe; do $n --test --test-reporter=spec scripts/tests/local-runner-dispatch.test.mjs >$L/$n 2>&1 || r=1; done; grep -q '^✔ S5' $L/node || r=1; for n in node node.exe; do echo \"== $n ($L/$n)\"; tr -d '\\r' <$L/$n | grep -E '^(ℹ (tests|pass|fail|skipped) |✖|﹣|✔ S5)'; done; echo EXIT=$r; [ $r = 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Flip once to on in the inline entry and add no test: rejected. The bug lives in the process wiring, which no existing row drives. K and S4 spawn the real entry, but it cannot reach a VM delete without a daemon /runner channel, a git export and a VM provider.\n- Export only an interrupt helper (an interruptSignal()) and keep the entry inline: a mutant in the entry's own wiring would survive. Exporting the whole entry body (runDispatchEntry) keeps the tested code identical to the shipped code; only `process.argv.slice(2)` stays outside, and K and S4 cover it.\n- In-process process.emit('SIGINT'): emit runs JS listeners only and never Node's default action, so a once build survives behaviorally. It would also arm listeners and process.exitCode inside node --test's own process.\n- Loader hooks, --import stubs or a fake multipass on PATH: heavy and fragile across Node versions.\n- A separate fixture file for the driver: the governor limited the change to two files. The driver is an inline `node --input-type=module -e` module built with JSON.stringify.\n- A timer-based slow delete: under load the second signal could land after the delete, so a once build could pass. The stdin-EOF gate makes the order certain.\n- A 'third Ctrl+C forces exit' escape hatch: rejected. The governor's DoD says later signals are ignored, and SIGKILL or taskkill /F stay the hard stop (both wrappers already escalate after their 120 s grace).\n- Windows coverage through a real Ctrl+C: node cannot send one console Ctrl+C to one child, and child.kill() terminates the child on Windows. So S5 skips on win32 with a reason, while the node.exe leg still runs every other row, with K and S4 spawning the refactored entry.",
+    "codebaseInsights": "- runDispatchCli(argv, { open, exportSnapshot, loadRunCheck, signal, pollMs, write }) already has every seam the driver needs. A --stop-file watch is combined with `signal` through AbortSignal.any, so S2 and S3 keep working unchanged.\n- An abort shows as RUNNER_ABORTED only at the next check's loop top in dispatchFocusedChecks, after the in-flight run's observation is recorded. context() owes unit and gate, so the report is { results: [unit, infra-failure, vm deleted, failure null], stopped: RUNNER_ABORTED }, exit 2.\n- Node signal listeners are unref'd. A child whose only pending work is an abort promise exits 0 mid-session (prototype). The same fact is why persistent listeners never hold the real CLI open.\n- Removing the last listener (what once does) restores the default disposition. A process-directed fatal signal then marks the whole thread group for exit at send time, so the once child can never act on input written after kill().\n- Under `node --input-type=module -e`, process.argv[1] is undefined, so invokedDirectly() answers false and importing never runs the entry.\n- The postflight VM-route harnesses use postflight-fake-check-dispatch.js, never this CLI. Only local-runner-dispatch.test.mjs exercises it, in ci.yml's local-runner node --test step on ubuntu, windows and macos.\n- task-1a8f1d0e (the epic final) already dependsOn this task. e444f6ae is DONE, so the claim is not withheld.\n- The architect's prototype ran the plan's exact code: 28/28 in about 1 s, 0 of 32 flaky at 8 in parallel, gate EXIT=0 in 3 s, and EXIT=1 for the once mutant and for the landed bytes plus the new test.",
+    "risks": "- Driver mistakes make the row vacuous: a SIGINT/SIGTERM listener in the driver (masks once), no ref'd handle for the fake VM (the child exits 0 before any signal), a timer instead of the stdin gate (order not guaranteed), or a context with one owed check (no RUNNER_ABORTED). Step 2 calls out each one.\n- Leaked children: the 15 s watchdog or t.after SIGKILLs every child. Kill only the spawned ChildProcess (global rail: no pattern kills).\n- EPIPE on child.stdin when the once child has died: the 'error' handler swallows it.\n- Because later signals are ignored, only SIGKILL or taskkill /F ends a CLI whose runCheckJob hangs. runCheckJob bounds the delete at 120 s, and both wrappers escalate after their grace (unchanged).\n- Out of scope by design: SIGHUP (a closed terminal) and Windows SIGBREAK keep Node's defaults. A terminal Ctrl+C also reaches runCheckJob's own provider children in the CLI's process group; under moe-agent.sh the dispatch has its own background group, so the terminal never signals it.\n- A stale comment after this lands: moe-agent.sh stop_check_dispatch says 'a second would end its VM deletion'. Do not edit moe-agent.sh here (the governor's scope is two files); name it in the completion summary.\n- macOS CI also runs S5. Pipe writes flush at a natural exit, which the row relies on. Exact stderr equality assumes Node prints no warning, so the child's env carries PATH only (no NODE_OPTIONS).",
+    "keyFiles": [
+      "scripts/local-runner/check-dispatch.mjs (the entry block at the end; the header 'Stopping:' comment at lines 8-11; runDispatchCli)",
+      "scripts/tests/local-runner-dispatch.test.mjs (context(), TASK, TREE and ENV at the top; S1-S4 at the end)",
+      "scripts/moe-agent.sh stop_check_dispatch (read-only context: one TERM, the grace, then KILL)",
+      "scripts/local-runner/lifecycle.mjs DELETE_TIMEOUT_MS (read-only: what bounds the delete)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "e729d25b6f51fe891051202fca01085f8ab5be5b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T21:58:48.308Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T21:59:49.479Z",
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d2c84c0e@2026-11-04T21:58:46Z",
+    "at": "2026-11-04T22:03:36.429Z"
+  },
+  "reviewStartedAt": "2026-11-04T22:02:33.309Z",
+  "verification": {
+    "command": "L=$(mktemp -d) && r=0 && for n in node node.exe; do $n --test --test-reporter=spec scripts/tests/local-runner-dispatch.test.mjs >$L/$n 2>&1 || r=1; done; grep -q '^✔ S5' $L/node || r=1; for n in node node.exe; do echo \"== $n ($L/$n)\"; tr -d '\\r' <$L/$n | grep -E '^(ℹ (tests|pass|fail|skipped) |✖|﹣|✔ S5)'; done; echo EXIT=$r; [ $r = 0 ]",
+    "exitCode": 0,
+    "outputTail": "== node: ✔ S5 (497ms); ℹ tests 28, pass 28, fail 0, skipped 0\n== node.exe: ﹣ S5 skipped (POSIX signals: on Windows child.kill() terminates the child, and node cannot send one console Ctrl+C); ℹ tests 28, pass 27, fail 0, skipped 1\nEXIT=0",
+    "reportedAt": "2026-11-04T22:02:33.309Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/check-dispatch.mjs",
+    "scripts/tests/local-runner-dispatch.test.mjs"
+  ],
+  "completionSummary": "check-dispatch.mjs now keeps its SIGINT/SIGTERM listeners for the life of the process, so a second Ctrl+C or TERM during the VM delete no longer kills the CLI and leaks the check VM.\n- Fix: the entry body moved into an exported runDispatchEntry(argv, deps = {}) that arms both signals with process.on (was process.once). The first signal aborts as before (VM deleted, one report line, stopped RUNNER_ABORTED, exit 2); later signals are no-op abort() calls. The entry is now `if (invokedDirectly()) runDispatchEntry(process.argv.slice(2));`. Rejection text, exit codes, argv contract and the --stop-file seam are unchanged. The header 'Stopping:' comment is amended.\n- Test: new row S5 in scripts/tests/local-runner-dispatch.test.mjs. It spawns a driver that runs runDispatchEntry over fakes and sends real signals for [SIGINT,SIGINT], [SIGTERM,SIGTERM] and [SIGTERM,SIGINT,SIGTERM]. The child must exit 2 with signal null, stderr exactly create/session/remove/removed, and one report line (infra-failure, vm deleted). S5 is skipped on win32 with a reason.\n- Mutants on scratch copies (removed): process.once kills the child with SIGINT before 'removed' (code null); a never-aborting listener fails at the 15 s watchdog; process.exit(130) on a second signal fails on the exit code (130 vs 2).\n- Flakiness: S5 alone 0/20 failures; 8 in parallel x4 rounds 0/32 at load ~3.6.\n- Gate checkRefs[0]: EXIT=0. node 28/28 with S5 passing; node.exe 27 pass, 1 skipped (S5).\n- Only the two planned files changed (+69/-6).\n- For the epic-final docs sweep: the moe-agent.sh stop_check_dispatch comment ('a second would end its VM deletion') is now stale; not edited here (out of scope). The wrappers' one-TERM rule stays as defense in depth.",
+  "commits": [
+    {
+      "sha": "b3b105f7d431385dbefd61f5246cd4f5ea8b188a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d2c84c0e@2026-11-04T21:58:46Z",
+      "paths": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "recordedBy": "worker-d2c84c0e",
+      "recordedAt": "2026-11-04T22:03:36.429Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
