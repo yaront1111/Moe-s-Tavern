@@ -1224,6 +1224,8 @@ async function wtUnlanded(){
     assert.deepEqual([mainOf(p),done(p).map(x=>[x.outcome,x.code,x.pushed]),f.map(x=>[x.outcome,x.unlandedReason,x.conflictPaths,x.targetTip,x.landedRevision])],
       [main,[['failed',code,false]],Array(knobs.FAKE_EVIDENCE_MODE?2:1).fill(['unlanded',reason,n==='conflict'?['src/a.txt']:[],tip,null])],`${n}: main moved, the row or the finalize`+tail(r.log));
     assert.deepEqual([revOf(p.top,ref),retryOf(p)&&[retryOf(p).rescueRef,retryOf(p).count]],[t,[ref,1]],`${n}: the rescue ref ${ref} or the stored landingRetry (a replayed finalize counts once)`);
+    // task-561d347c: a working re-check that proves origin lacks C still drops the journal.
+    if(n==='rejected')assert.equal(present(journal(p)),false,'rejected: a re-check proving C absent kept the receipt journal'+tail(r.log));
     // A typed CLI: only typeShim forwards the prompt argv to WT_CLI_RECORD.
     const mh=mhOf(p);r=await launch(p,`wt-unlanded-${n}-resume`,{WT_CLI_RECORD:rec,...net,...(n==='conflict'?{MOE_DISABLE_CHECKPOINT:'1'}:{})},{type:'claude'});
     if(!next){refused(r,'MOE_WORKTREE_RESUME_FAILED');assert.equal(readOr(path.join(p.W,'src','a.txt')),'task a\n','W lost the bytes');continue;}
@@ -1243,6 +1245,10 @@ async function wtUnlanded(){
 // push: an origin target holding C is published (MOE_PUSH_REMOTE_REJECTED_APPLIED, a pushed:true row, finalize landed,
 // the journal settled); a failed re-check fetch keeps the old route exactly, though origin holds C (MOE_PUSH_FAILED,
 // a rescue ref at T, unlanded 'remote'). wtUnlanded's 'rejected' arm (a pre-receive refusal) covers origin lacking C.
+// task-561d347c: that failed re-check keeps the journal, marked unverified, and only a fetch settles it, never a re-push:
+// the retry finds origin holding C and records C (pushed:true, finalize landed), or ('absent') finds origin lacking C,
+// drops the journal and lands a fresh C2.
+const UNVERIFIED='push remote-rejected-unverified: ',journalOf=p=>JSON.parse((readOr(journal(p))||'null').replace(/^﻿/,''));
 async function wtRemoteRejected(){
   for(const n of ['applied','fetch-fails']){
     const p=repo('wt-remote-rejected-'+n,{settings:LANDS}),b=path.join(root,`wt-remote-rejected-${n}.git`),applied=n==='applied';
@@ -1264,8 +1270,40 @@ async function wtRemoteRejected(){
         [[['failed','MOE_PUSH_FAILED',false]],[['unlanded','remote',main,null]],main,true],'fetch-fails: the row, the finalize, the local main or the fetch-off marker'+tail(r.log));
       assert.deepEqual([rescues.length,revOf(p.top,rescues[0]||'none'),retryOf(p)&&[retryOf(p).rescueRef,retryOf(p).count],said('MOE_PUSH_REMOTE_REJECTED_APPLIED')],
         [1,t,[rescues[0],1],0],'fetch-fails: the rescue ref at T, the stored landingRetry, or an applied line'+tail(r.log));
+      const j=journalOf(p);
+      assert.ok(j&&j.targetAfter===c&&String(j.pushResult).startsWith(UNVERIFIED)&&String(j.pushResult).includes("the re-check could not read origin's main"),
+        'fetch-fails: the receipt journal is gone, or not marked unverified: '+JSON.stringify(j)+tail(r.log));
+      // The retry, fetch restored and no stub: the replay keeps the journal, and L5 proves C by a fetch and records it.
+      fs.rmSync(marker);
+      const r2=await landRun(p,'wt-remote-rejected-fetch-fails-retry',{},{...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0'});
+      assert.ok(r2.code===0&&r2.log.includes(`origin's main holds ${c}, the [remote rejected] push of task ${TASK}; `),
+        `retry: exit code ${r2.code}, or no replay line keeping the journal of the held C`+tail(r2.log));
+      assert.deepEqual([finals(p),done(p).map(x=>[x.outcome,x.code||null,x.sha,x.pushed]),present(journal(p)),retryOf(p),mainOf(p),revOf(b,'refs/heads/main'),
+        (readOr(pushes)||'').trim().split(/\r?\n/)],[[['landed',c]],[['committed',null,c,true]],false,null,c,c,[c+':refs/heads/main']],
+        'retry: the finalize, the row, the journal, landingRetry, the mirror, origin, or a second push'+tail(r2.log));
+      assert.deepEqual([/MOE_COMMIT_NOTHING_TO_COMMIT/.test(r2.log),/MOE_PUSH_FAILED/.test(r2.log)],[false,false],'retry: a nothing-to-commit or push-failed line'+tail(r2.log));
     }
   }
+  // 'absent': origin refuses C1 (a pre-receive hook) and the re-check fetch fails, so the journal is kept unverified;
+  // the retry's replay fetches, finds origin lacking C1 and drops the journal, and a fresh C2 lands.
+  const p=repo('wt-remote-rejected-absent',{settings:LANDS}),b=path.join(root,'wt-remote-rejected-absent.git'),hook=path.join(b,'hooks','pre-receive');
+  const pushes=path.join(root,'wt-remote-rejected-absent.pushes'),marker=path.join(root,'wt-remote-rejected-absent.fetch-off');
+  git(root,'init','-q','--bare',b);git(p.top,'remote','add','origin',b);git(p.top,'push','-q','origin','main');
+  write(hook,'#!/bin/sh\nexit 1\n');fs.chmodSync(hook,0o755);
+  const main=mainOf(p);
+  let r=await landRun(p,'wt-remote-rejected-absent',{'src/a.txt':'done\n'},
+    {...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0',WT_GIT_PUSH_REMOTE_REJECTED:pushes,WT_GIT_FETCH_FAIL_AFTER_PUSH:marker});
+  const j=journalOf(p),c1=j&&j.targetAfter;
+  assert.ok(j&&String(j.pushResult).startsWith(UNVERIFIED),'absent: the receipt journal is gone, or not marked unverified: '+JSON.stringify(j)+tail(r.log));
+  assert.deepEqual([revOf(b,'refs/heads/main'),done(p).map(x=>[x.outcome,x.code,x.pushed]),unlanded(p).map(x=>[x.outcome,x.unlandedReason,x.targetTip,x.landedRevision])],
+    [main,[['failed','MOE_PUSH_FAILED',false]],[['unlanded','remote',main,null]]],'absent: origin moved, the row or the finalize'+tail(r.log));
+  fs.rmSync(hook);fs.rmSync(marker);
+  r=await landRun(p,'wt-remote-rejected-absent-retry',{},{...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0'});
+  const c2=revOf(b,'refs/heads/main');
+  assert.ok(r.log.includes(`origin's main does not hold ${c1}, the [remote rejected] push of task ${TASK}; dropped `)&&c2&&c2!==c1&&c2!==main,
+    `absent retry: no replay line dropping the journal, or origin's main ${c2} is not a fresh C2`+tail(r.log));
+  assert.deepEqual([parents(b,c2),git(b,'show',c2+':src/a.txt'),present(journal(p)),finals(p),done(p).map(x=>[x.outcome,x.code||null,x.sha,x.pushed]),retryOf(p)],
+    [[main],'done\n',false,[['landed',c2]],[['committed',null,c2,true]],null],'absent retry: C2, the journal, the finalize, the row or landingRetry'+tail(r.log));
 }
 // The conflict chain: the resume leaves markers and MERGE_HEAD; its checkpoint is one commit on T keeping MERGE_HEAD and
 // the unmerged stages; a completion with markers lands nothing (MOE_WORKTREE_UNRESOLVED_CONFLICT, routed conflict again);
