@@ -23,6 +23,7 @@ $out = Join-Path $tempRoot 'wrapper.out'
 $fakeProxy = Join-Path $tempRoot 'fake-proxy.js'
 $wrapperTimeoutSec = 60
 $script:VmjExtraArgs = @(); $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+$script:VmrCommand = ''; $script:VmrTimeoutSec = 0 # one-row overrides for Invoke-VmrRow; the row that sets one clears it
 if ($env:MOE_POSTFLIGHT_TIMEOUT_SEC -match '^\d+$') { $wrapperTimeoutSec = [int]$env:MOE_POSTFLIGHT_TIMEOUT_SEC }
 
 # Same timeout/owned-PID cleanup and 5.1 exit-code handling as postflight.ps1.
@@ -77,8 +78,8 @@ function Invoke-VmrRow([string]$Row, [string]$Role, [string]$Cli, [string]$Readi
     if ($script:VmrSetup) { & $script:VmrSetup }
     Push-Location $project
     try {
-        $command = if ($env:MOE_RUNTIME_PROTECTED -eq '1') { $Cli } else { Join-Path $tempRoot "$Cli.cmd" }
-        $code = Invoke-WrapperProcess (@('-Project', $project, '-WorkerId', "$Role-vmr", '-Role', $Role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $command) + $script:VmrLoop + $script:VmjExtraArgs) $out
+        $command = if ($script:VmrCommand) { $script:VmrCommand } elseif ($env:MOE_RUNTIME_PROTECTED -eq '1') { $Cli } else { Join-Path $tempRoot "$Cli.cmd" }
+        $code = Invoke-WrapperProcess (@('-Project', $project, '-WorkerId', "$Role-vmr", '-Role', $Role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $command) + $script:VmrLoop + $script:VmjExtraArgs) $out $script:VmrTimeoutSec
     } finally { Pop-Location }
     $tools = @(if (Test-Path -LiteralPath $calls) { Get-Content -LiteralPath $calls | ForEach-Object { ($_ | ConvertFrom-Json).tool } })
     [pscustomobject]@{ Row = $Row; Code = $code; Text = [IO.File]::ReadAllText($out); Tools = $tools; Ran = (Test-Path -LiteralPath $rec) }
@@ -324,6 +325,72 @@ function Invoke-VmeRows {
         [IO.File]::ReadAllText("$project\.worktrees\task-postflight\untracked.txt") -cne "preserve me`n" -or
         @($rows | Where-Object { $_.tool -ceq 'record_commit' -and $_.args.kind -ceq 'rescue' }).Count -ne 1) { Stop-Vmr $r 'helper refusal not retained on one rescue ref' }
     Write-Host '[seat failures] ok failed, missing, false, stop-failed, streak, rescue'
+    # task-bbd7ad2d (ps1 twin of postflight-vm-route.sh VR-outage, task-cc4213c0): a launch
+    # outage carried over from legacy iterations of one wrapper process ends on the first
+    # VM-route iteration. Three legacy iterations launch the notification-only host CLI,
+    # which fails fast; the third enters the outage; the 4th readiness read is verified-local.
+    $vmoLine = "[launch-outage] The verified-local VM route runs this seat's sessions in its VM, never the host CLI: launch outage over, claiming resumes."
+    $vmoPost = "worker-vmr: the verified-local VM route runs this seat's sessions in its VM, never the host CLI, after 3 host launch failures. Launch outage over: claiming resumes."
+    $vmoLegacy = '{"profile":"legacy","ready":true,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
+    New-Item -ItemType Directory -Force -Path "$tempRoot\outage-bin" | Out-Null
+    [IO.File]::WriteAllText("$tempRoot\outage-bin\outage-cli.cmd", "@echo off`r`n>>`"$calls`" echo {`"tool`":`"host-cli`",`"args`":{}}`r`nexit /b 1`r`n")
+    # Rotation off: a failed rotated claude run relaunches and zeroes the streak.
+    $vmoEnv = [ordered]@{ FAKE_CLAIM_MODE = 'idle'; FAKE_MENTION = '1'; FAKE_READINESS_AFTER = "3:$ready"; MOE_ACCOUNT_ROTATION = 'off'; MOE_LAUNCH_BACKOFF_BASE_SEC = '1'; MOE_LAUNCH_BACKOFF_MAX_SEC = '1' }
+    $vmoPrev = @{}; foreach ($n in $vmoEnv.Keys) { $vmoPrev[$n] = [Environment]::GetEnvironmentVariable($n) }
+    $vmoLoop = $script:VmrLoop
+    try {
+        foreach ($n in $vmoEnv.Keys) { [Environment]::SetEnvironmentVariable($n, $vmoEnv[$n]) }
+        # No -NoLoop (sh: --poll-interval 0): the loop relaunches only after a launch failure or probe.
+        $script:VmrLoop = @('-PollInterval', '0'); $script:VmrCommand = "$tempRoot\outage-bin\outage-cli.cmd"; $script:VmrTimeoutSec = 4 * $wrapperTimeoutSec
+        $r = Invoke-VmrRow VR-outage worker claude $vmoLegacy on
+    } finally {
+        foreach ($n in $vmoPrev.Keys) { [Environment]::SetEnvironmentVariable($n, $vmoPrev[$n]) }
+        $script:VmrLoop = $vmoLoop; $script:VmrCommand = ''; $script:VmrTimeoutSec = 0
+    }
+    $vmoCalls = Read-VmeJsonl $calls
+    $vmoAt = { param([string]$Tool) @(for ($i = 0; $i -lt $vmoCalls.Count; $i++) { if ($vmoCalls[$i].tool -ceq $Tool) { $i } }) }
+    $vmoReads = @(& $vmoAt get_execution_readiness); $vmoHost = @(& $vmoAt host-cli); $vmoClaims = @(& $vmoAt claim_next_task)
+    $vmoFlip = if ($vmoReads.Count -ge 4) { $vmoReads[3] } else { -1 }
+    $vmoSent = @(& $vmoAt chat_send | Where-Object { $vmoCalls[$_].args.content -ceq $vmoPost })
+    $vmoBefore = @($vmoClaims | Where-Object { $_ -lt $vmoFlip }); $vmoAfter = @($vmoClaims | Where-Object { $_ -gt $vmoFlip })
+    $vmoSeat = @(Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl" | Where-Object { $_.tool -ceq 'agent-seat' }).args.cmd -join ','
+    $why = if ($r.Code -ne 0) { "exit $($r.Code)" }
+    elseif (-not $r.Text.Contains('entering launch outage mode')) { 'the legacy iterations never entered the outage' }
+    elseif ($vmoReads.Count -lt 4) { "only $($vmoReads.Count) readiness reads, expected at least 4" }
+    elseif ($vmoHost.Count -ne 3 -or @($vmoHost | Where-Object { $_ -gt $vmoFlip }).Count) { "expected exactly 3 host CLI launches, all before the flip, saw $($vmoHost.Count)" }
+    elseif ($r.Text.Contains('MOE_LAUNCH_PROBE')) { 'printed MOE_LAUNCH_PROBE: the carried-over outage suppressed the claim' }
+    elseif (-not $vmoAfter.Count -or @($vmoAfter | Where-Object { $vmoCalls[$_].args.executionRoute -cne 'vm' }).Count) { 'no claim after the flip, or one without executionRoute vm' }
+    elseif (-not $vmoBefore.Count -or @($vmoBefore | Where-Object { $vmoCalls[$_].args.PSObject.Properties.Name -ccontains 'executionRoute' }).Count) { 'no legacy claim, or one marked executionRoute' }
+    elseif ([regex]::Matches($r.Text, [regex]::Escape('launch outage over, claiming resumes.')).Count -ne 1 -or -not $r.Text.Contains($vmoLine)) { 'expected exactly one outage-over line, the VM-route one' }
+    elseif ($vmoSent.Count -ne 1 -or $vmoSent[0] -le $vmoFlip -or $vmoCalls[$vmoSent[0]].args.channel -cne 'chan-general' -or $vmoCalls[$vmoSent[0]].args.workerId -cne 'worker-vmr') { "expected one #general outage-over post after the flip, saw $($vmoSent.Count)" }
+    elseif ($vmoSeat -cne 'seat-start,seat-stop') { "seat rows: $vmoSeat" }
+    if ($why) { Stop-Vmr $r $why }
+    Assert-VmrOneReason $r vm-route
+    # The run ends before the backoff, streak or held/release/announce resets could show, so run the block itself.
+    & {
+        $vmoIfs = @([Management.Automation.Language.Parser]::ParseFile($wrapper, [ref]$null, [ref]$null).FindAll({
+            param($ast) $ast -is [Management.Automation.Language.IfStatementAst] -and $ast.Clauses[0].Item1.Extent.Text -ceq '$script:MoeVmRoute -and $script:LaunchOutage' }, $true))
+        if ($vmoIfs.Count -ne 1) { throw "VM ROUTE FAILED (VR-outage block): expected exactly one guarded if block, found $($vmoIfs.Count)" }
+        $vmoBlock = [scriptblock]::Create($vmoIfs[0].Extent.Text)
+        $WorkerId = 'worker-vmr'; $vmoRec = New-Object Collections.ArrayList; $vmoRefuse = $false
+        # [Alias('Args')], not a param named $Args: in this stub $Args reads as the automatic array.
+        function Invoke-MoeRpc { param([string]$Tool, [Alias('Args')][object]$RpcArgs) [void]$vmoRec.Add(@{ Tool = $Tool; Args = $RpcArgs }); if ($vmoRefuse) { throw 'chat down' } }
+        foreach ($vmoCase in @('sent|chan-general|', 'refused|chan-general|1', 'no-channel||')) {
+            $pp = $vmoCase -split '\|'; $generalChannelId = $pp[1]; $vmoRefuse = ($pp[2] -eq '1'); $vmoRec.Clear()
+            $script:MoeVmRoute = $true; $script:LaunchOutage = $true; $script:LaunchFailStreak = 3; $script:LaunchFailBackoffSec = 8
+            $script:LaunchOutageHeldTaskId = 'task-held'; $script:LaunchOutageReleaseTried = 'task-held'; $script:LaunchOutageAnnounce = $true
+            $vmoText = @(& { . $vmoBlock } 6>&1 | ForEach-Object { "$_" }) -join "`n"
+            $vmoState = (@($script:LaunchFailStreak, $script:LaunchFailBackoffSec, $script:LaunchOutage, $script:LaunchOutageHeldTaskId, $script:LaunchOutageReleaseTried, $script:LaunchOutageAnnounce) | ForEach-Object { "[$_]" }) -join ''
+            $vmoPosts = @($vmoRec | Where-Object { $_.Tool -ceq 'chat_send' })
+            $vmoBad = if ($vmoState -cne '[0][0][False][][][False]') { "reset state $vmoState" }
+            elseif ($vmoText -cne $vmoLine) { "printed: $vmoText" }
+            elseif ($vmoPosts.Count -ne $(if ($pp[1]) { 1 } else { 0 })) { "chat_send count $($vmoPosts.Count)" }
+            elseif ($vmoPosts.Count -and ($vmoPosts[0].Args.channel -cne 'chan-general' -or $vmoPosts[0].Args.workerId -cne 'worker-vmr' -or $vmoPosts[0].Args.content -cne $vmoPost)) { 'chat_send args: ' + ($vmoPosts[0].Args | ConvertTo-Json -Compress) }
+            if ($vmoBad) { throw "VM ROUTE FAILED (VR-outage block, $($pp[0])): $vmoBad" }
+        }
+    }
+    $script:MoeVmRoute = $false
+    Write-Host '[seat outage] ok VR-outage: a carried-over legacy launch outage ends on the first VM-route iteration, which claims again with no host CLI; the block resets all six launch-success variables (sent, refused, no-channel)'
     foreach ($c in @('capacity|MOE_SEAT_CAPACITY_WAIT|0/0', 'credential|MOE_VM_CREDENTIAL_UNAVAILABLE|0/1', 'cap|Auto-resume cap reached|2/3')) {
         $a = $c -split '\|'; $script:VmrLoop = @('-Loop', '-PollInterval', '1')
         switch ($a[0]) {

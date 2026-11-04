@@ -9894,6 +9894,26 @@ do {
     # CQ-M07n1: before every pre-flight RPC, including -AutoClaim:$false seats.
     if ($Role -eq 'worker' -or $Role -eq 'qa') { Invoke-MoeVerifiedLocalGate }
 
+    # Launch outage mode is host-CLI state. The VM route never enters it (the
+    # fast-failure branch gates entry on -not $script:MoeVmRoute) and turns a probe
+    # into a no-launch, so an outage carried over from a legacy iteration of this
+    # wrapper process would suppress every claim forever (task-bbd7ad2d; sh twin
+    # task-cc4213c0). The route's own job failures restart the shared streak and
+    # backoff from 0.
+    if ($script:MoeVmRoute -and $script:LaunchOutage) {
+        Write-Host "[launch-outage] The verified-local VM route runs this seat's sessions in its VM, never the host CLI: launch outage over, claiming resumes." -ForegroundColor Green
+        if ($generalChannelId) {
+            $launchOkMsg = "${WorkerId}: the verified-local VM route runs this seat's sessions in its VM, never the host CLI, after $($script:LaunchFailStreak) host launch failures. Launch outage over: claiming resumes."
+            try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $launchOkMsg } | Out-Null } catch {}
+        }
+        $script:LaunchFailStreak = 0
+        $script:LaunchFailBackoffSec = 0
+        $script:LaunchOutage = $false
+        $script:LaunchOutageHeldTaskId = ''
+        $script:LaunchOutageReleaseTried = ''
+        $script:LaunchOutageAnnounce = $false
+    }
+
     if ($AutoClaim) {
         Write-Host "Pre-flight: joining chat, claiming task, loading context..." -ForegroundColor Cyan
 
