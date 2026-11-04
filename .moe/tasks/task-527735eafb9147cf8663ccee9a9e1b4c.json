@@ -95,8 +95,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-96811257",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -124,12 +124,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:50.151Z",
-  "updatedAt": "2026-11-04T20:32:14.346Z",
+  "updatedAt": "2026-11-04T20:48:12.407Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:11:04.157Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T20:47:29.561Z",
+    "wallClockMs": 30985404
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -223,10 +225,11 @@
     "seq": 1
   },
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d2c84c0e@2026-11-04T19:42:25Z",
-    "at": "2026-11-04T20:31:30.585Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T20:31:55Z",
+    "at": "2026-11-04T20:48:12.407Z"
   },
   "workStartedAt": "2026-11-04T19:43:38.617Z",
   "reviewStartedAt": "2026-11-04T20:30:25.294Z",
@@ -263,5 +266,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T20:47:29.561Z",
+  "reviewCompletedAt": "2026-11-04T20:47:29.561Z",
+  "reviewSummary": "Reviewed completion e6c06b00, which is on moe/work-2026-10-24 and origin. The worktree's 4 blobs equal the commit's. Size: +206/-23, net 183 (sh +35/-12, ps1 +33/-8, vm-route.sh +69/-1, vm-route.ps1 +69/-2). The ps1 BOM is kept.\n\nGate: I re-ran checkRefs[0] verbatim (it equals task.verification) from /mnt/d/moe-scratch, detached. CHAIN_EXIT=0 in 12.3 min, with all three @ lines. On sh, 5.1 and 7 alike: [strong receipt] ok T1, T2, T2-replay, T3, T4; PASS vm-route; worktree-landing 18 passed, 0 failed; [worktree] 6 ok, 0 failed. Parity-check.sh, parity-check.ps1 and lint passed.\n\nDoD:\n1. wt_land_published and Complete-MoeWorktreeLanding, strong branch: ledger row, then receipt_send/Send-MoeReceipt (only once the row is acked), then finalize. T1 pins the order and the exact args. pushResult is carried when the journal has one; a local landing stores null, as in shared mode.\n2. The CQ-V08 deferral and the journal keep are pinned by T2. The replay sends the receipt only for strong wt journals, byte-equal on sh and sorted-key on ps1; T2-replay pins it.\n3. T3: a conflict warns once, sends no retry and finalizes.\n4. Non-strong journal bytes are unchanged (same dict and key order). T4 checks the key set. The only edited old assertion is SG-pass's receipt count, a strong row. postflight-worktree.cjs is untouched.\n5. checkRefs[0] passes. The full postflight suites are deferred per the human's 18:05Z narrowing and the gate-budget rail, so I did not run them.\n\nCeilings, not blocking:\n- A conflict drops a strong journal before finalize, the shared-mode behavior the DoD says to mirror (task-a1f3723f).\n- The deferral keys on the pinned profile (task-edf2162b).\n- The format check on a malformed plan revision in the journal fails closed but has no test row.\n- Filed task-9194f182 (LOW): no row pins the replay's keep-while-open guard.\n\nComplexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

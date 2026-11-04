@@ -1,0 +1,44 @@
+{
+  "id": "task-9194f182622442b38428244c1bbf4c69",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "test: pin the replay's CQ-V08b keep for a strong journal whose replayed finalize is lost (shared and worktree, both wrappers)",
+  "description": "QA finding from task-527735ea (CQ-M07t), completion e6c06b00. Not a defect: the code is correct by inspection.\n\nGAP. receipt_replay (scripts/moe-agent.sh) and Invoke-MoeReceiptReplay (moe-agent.ps1) keep a strong journal while its attempt is not closed (\"receipt journal ... kept: attempt ... is <phase>, not closed; nothing finalized.\"). CQ-M07t relaxed that guard to cover worktree journals by dropping `[ -z \"$wt\" ]` / `-not $wt`. No test reaches that branch:\n- In [strong receipt] SR-T2-replay (postflight-vm-route.{sh,ps1}) the replayed finalize succeeds.\n- postflight.sh's reconcile-strong-finalize-lost loses finalize only in run 1, and its replay also succeeds.\nReverting the guard change survives every current row.\n\nASK. Add one row per wrapper in which the replay's finalize_attempt is refused, for example the SR-T2 kept project replayed under FAKE_EVIDENCE_MODE=finalize_attempt-refuse. Assert that the receipt is re-sent, the line above appears once, the attempt stays finalizing, and the journal stays on disk. Then add the same row for a shared strong journal if it fits the budget. Test files only; the gate stays within the 20-minute rail.",
+  "definitionOfDone": [
+    "postflight-vm-route.sh and .ps1 each have a row in which a strong worktree journal's replayed finalize_attempt is refused: the receipt is re-sent, the 'not closed; nothing finalized.' line appears exactly once, the attempt stays finalizing and the journal stays on disk.",
+    "Reverting CQ-M07t's guard relaxation in receipt_replay (or in Invoke-MoeReceiptReplay) makes that row fail.",
+    "postflight-vm-route.sh, plus postflight-vm-route.ps1 under PS 5.1 and pwsh 7, parity-check.{sh,ps1} and npm run lint pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion, 20:50Z. QA's test-gap finding from CQ-M07t: reverting its guard relaxation in receipt_replay / Invoke-MoeReceiptReplay survives every current row. It pins verified-local delivery behavior, so it goes in before the turn-on row (task-1a8f1d0e).",
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 534.7,
+  "comments": [
+    {
+      "id": "comment-1d391ea7842f4a46a34589f089b011da",
+      "author": "governor-e6142a94",
+      "content": "Governor, 20:50Z: promoted to PLANNING. It depends on task-a1f3723f (DELIVERY_RECEIPT_CONFLICT keeps a strong journal until its attempt closes) and task-edf2162b (finalize deferral keyed on the journal's own profile). Both change the same receipt/finalize/replay code and will add regression rows to the same harnesses, so plan from their landed bytes. If a1f3723f's or edf2162b's new rows already reach the replay keep branch you describe (replayed finalize_attempt refused, receipt re-sent, the \"not closed; nothing finalized.\" line exactly once, attempt still finalizing, journal on disk), on both wrappers and for the worktree journal, then this row's work is to add only what's still missing, and to prove it with the mutant (revert the `[ -z \"$wt\" ]` / `-not $wt` relaxation). The gate fits the 20-min rail, and chained refs go in subshells.",
+      "timestamp": "2026-11-04T20:47:58.416Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T20:47:17.963Z",
+  "updatedAt": "2026-11-04T20:47:58.416Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T20:47:49.250Z",
+    "seq": 1
+  },
+  "dependsOn": [
+    "task-a1f3723f87f84866b16dd107c21f0d74",
+    "task-edf2162b54e24d95a253d7415dba197b"
+  ]
+}
